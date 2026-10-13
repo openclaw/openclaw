@@ -12,7 +12,7 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   sqliteStringSet,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 
 export type MemorySourceFileStateRow = {
   path: string;
@@ -87,7 +87,7 @@ export async function inspectMemorySourceState(params: {
       ...Array.from(
         skippedRoots,
         (root) =>
-          `extra path "${root}" is a symlink root; symlinked roots are not traversed, so configure its canonical absolute directory instead`,
+          `extra path "${root}" is a symlink root; symlinked roots are not traversed, so configure its resolved absolute directory instead`,
       ),
     ],
   };

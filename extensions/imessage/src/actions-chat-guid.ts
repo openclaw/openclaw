@@ -1,9 +1,5 @@
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
-import {
-  asDateTimestampMs,
-  parseStrictInteger,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
+import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   isRecord,
   normalizeOptionalString as stringFromUnknown,
@@ -71,8 +67,7 @@ export async function resolveIMessageActionChatGuid(params: {
   const { cliPath, dbPath, remoteHost } = params.options;
   const key = `${cliPath}\0${dbPath ?? ""}\0${remoteHost ?? ""}`;
   const cached = chatListCache.get(key);
-  const now = asDateTimestampMs(Date.now());
-  if (cached && now !== undefined && cached.expiresAt > now) {
+  if (cached && cached.expiresAt > Date.now()) {
     return findChatGuid(cached.list, params.target);
   }
   chatListCache.delete(key);
@@ -85,10 +80,7 @@ export async function resolveIMessageActionChatGuid(params: {
     );
     const list =
       isRecord(result) && Array.isArray(result.chats) ? result.chats.filter(isRecord) : [];
-    const expiresAt = resolveExpiresAtMsFromDurationMs(CHAT_LIST_CACHE_TTL_MS);
-    if (expiresAt !== undefined) {
-      chatListCache.set(key, { list, expiresAt });
-    }
+    chatListCache.set(key, { list, expiresAt: Date.now() + CHAT_LIST_CACHE_TTL_MS });
     return findChatGuid(list, params.target);
   } finally {
     await client.stop();

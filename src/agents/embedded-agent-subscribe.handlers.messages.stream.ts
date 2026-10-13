@@ -15,6 +15,7 @@ import {
   parseAssistantTextSignature,
   readAssistantTextBlocksForPhase,
 } from "../shared/chat-message-content.js";
+import { toolCallXmlTextFilter } from "../shared/text/assistant-visible-text.js";
 import { trimTextPreservingCode } from "../shared/text/text-projection.js";
 import {
   findDirectiveCodePrefix,
@@ -54,18 +55,6 @@ export function isResponsesApiAssistantMessage(message: AgentMessage | undefined
 export function isOpenAiCompletionsAssistantMessage(message: AgentMessage | undefined): boolean {
   const api = readAssistantMessageApi(message);
   return api === "openai-completions" || api === "openclaw-openai-completions-transport";
-}
-
-export function isAssistantTextPhasePending(
-  message: AgentMessage | undefined,
-  eventType: string,
-): boolean {
-  const api = readAssistantMessageApi(message);
-  return (
-    api === "ollama" ||
-    isOpenAiCompletionsAssistantMessage(message) ||
-    (api === "anthropic-messages" && eventType !== "text_end")
-  );
 }
 
 export function extractStandaloneMessageToolText(
@@ -373,6 +362,37 @@ export function resolveStreamingReply(params: {
       };
     }
   }
+  if (
+    text === undefined &&
+    params.evtType !== "text_end" &&
+    params.parsedStreamDirectives &&
+    !params.parsedStreamDirectives.isSilent &&
+    params.parsedStreamDirectives.text === params.visibleDelta &&
+    params.appendDelta !== null &&
+    params.previousCleaned &&
+    params.previousText.length > params.previousCleaned.length &&
+    !/(?:^|\n)[^\S\n]*MEDIA:\s*\S[^\n]*(?:\n|$)/i.test(params.visibleDelta)
+  ) {
+    const marker = params.previousText.lastIndexOf("[[");
+    const tailStart = params.previousText.indexOf("]]", marker + 2) + 2;
+    const tail = params.previousText.slice(tailStart);
+    const source = params.rawDirectiveSource ?? params.next;
+    // Settled directives before any code opener cannot enter code on append.
+    // New markers and reference definitions still require the complete Markdown context.
+    if (
+      marker >= 0 &&
+      tailStart > marker + 2 &&
+      tail.trim() &&
+      params.previousCleaned.endsWith(tail.trimStart()) &&
+      !/[`~\t]| {4}/u.test(params.previousText.slice(0, marker)) &&
+      !source.includes("[[", params.previousText.length - 1) &&
+      !source.includes("]:")
+    ) {
+      text = params.previousCleaned + params.appendDelta;
+      delta = params.appendDelta;
+      isAppend = true;
+    }
+  }
 
   if (text === undefined) {
     directiveCodePrefix = undefined;
@@ -380,7 +400,10 @@ export function resolveStreamingReply(params: {
     const source =
       params.rawDirectiveSource === undefined
         ? params.next
-        : stripDowngradedToolCallText(params.rawDirectiveSource);
+        : toolCallXmlTextFilter(
+            { stripFunctionCallsXmlPayloads: true },
+            params.evtType !== "text_end",
+          ).transform(stripDowngradedToolCallText(params.rawDirectiveSource));
     const parsed = parseReplyDirectives(
       params.evtType === "text_end" ? source : splitTrailingDirective(source).text,
       {

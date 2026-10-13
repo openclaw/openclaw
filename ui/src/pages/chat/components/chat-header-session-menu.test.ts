@@ -1,13 +1,14 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
 import type { UiSettings } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
+import { LitContent } from "../../../lit/solid-content.tsx";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
@@ -55,36 +56,39 @@ function settings(): UiSettings {
   };
 }
 
-async function mountMenu({
-  context,
-  session,
-  ...properties
-}: Partial<
-  Pick<
-    HeaderMenuElement,
-    | "worktreePath"
-    | "onboarding"
-    | "preferencesBrowserOnly"
-    | "compact"
-    | "copyMarkdownAllowed"
-    | "splitAllowed"
-    | "panelActions"
-    | "layoutActions"
-    | "sharing"
-    | "currentOwner"
-    | "actionDisabledReasons"
-    | "forkFromLastCompleted"
-    | "archiveAllowed"
-    | "archiveShortcut"
-    | "deleteAllowed"
-    | "onOpenCommandPalette"
-    | "onSettingsChange"
-    | "onAction"
-  >
-> & {
-  session?: Partial<HeaderMenuElement["session"]>;
-  context?: ApplicationContext;
-} = {}): Promise<HeaderMenuElement> {
+async function mountMenu(
+  {
+    context,
+    session,
+    ...properties
+  }: Partial<
+    Pick<
+      HeaderMenuElement,
+      | "worktreePath"
+      | "onboarding"
+      | "preferencesBrowserOnly"
+      | "compact"
+      | "bubbleModeEnabled"
+      | "copyMarkdownAllowed"
+      | "splitAllowed"
+      | "sessionActions"
+      | "sharing"
+      | "currentOwner"
+      | "actionDisabledReasons"
+      | "forkFromLastCompleted"
+      | "archiveAllowed"
+      | "archiveShortcut"
+      | "deleteAllowed"
+      | "onOpenCommandPalette"
+      | "onSettingsChange"
+      | "onAction"
+    >
+  > & {
+    session?: Partial<HeaderMenuElement["session"]>;
+    context?: ApplicationContext;
+  } = {},
+  open = true,
+): Promise<HeaderMenuElement> {
   const container = context
     ? createApplicationContextProvider(context)
     : document.createElement("div");
@@ -102,6 +106,10 @@ async function mountMenu({
   } satisfies Partial<HeaderMenuElement>);
   container.append(menu);
   await menu.updateComplete;
+  if (open) {
+    menu.querySelector("wa-dropdown")!.dispatchEvent(new Event("wa-show"));
+    await menu.updateComplete;
+  }
   return menu;
 }
 
@@ -135,6 +143,24 @@ function select(menu: ParentNode, value: string) {
 }
 
 describe("chat header session menu", () => {
+  it("defers session actions until first open and retains them across reopening", async () => {
+    const menu = await mountMenu({}, false);
+    expect(menu.querySelector("button[slot='trigger']")).not.toBeNull();
+    expect(menu.querySelector("wa-dropdown-item")).toBeNull();
+    menu.session = { ...menu.session, label: "Latest session", pinned: true };
+    await menu.updateComplete;
+    expect(menu.querySelector("wa-dropdown-item")).toBeNull();
+    const dropdown = menu.querySelector("wa-dropdown")!;
+    dropdown.dispatchEvent(new Event("wa-show"));
+    await menu.updateComplete;
+    const pin = item(menu, "Unpin session");
+    expect(pin).not.toBeNull();
+    dropdown.dispatchEvent(new Event("wa-after-hide"));
+    dropdown.dispatchEvent(new Event("wa-show"));
+    await menu.updateComplete;
+    expect(item(menu, "Unpin session")).toBe(pin);
+  });
+
   it.each(["shown", "selected", "aborted", "retargeted"] as const)(
     "settles native opening only at the current popup boundary: %s",
     async (outcome) => {
@@ -241,9 +267,9 @@ describe("chat header session menu", () => {
     "offers session editors only for native-local workspaces: $name",
     async (testCase) => {
       setNativeGatewayTestState(testCase.nativeGateway);
-      const client = {
+      const client = createGatewayBrowserClientFixture({
         gatewayUrl: "gatewayUrl" in testCase ? testCase.gatewayUrl : "ws://localhost:18789",
-      } as GatewayBrowserClient;
+      });
       const { pane, state } = createTestChatPane({
         client,
         sessions: createSessionCapabilityFixture(),
@@ -261,18 +287,23 @@ describe("chat header session menu", () => {
       const container = document.createElement("div");
       document.body.append(container);
       containers.push(container);
-      render(
-        pane.renderPaneHeader(
-          createPaneHeaderWorkspaceFixture(state),
-          session,
-          false,
-          undefined,
-          false,
-          null,
-        ),
-        container,
+      mountSolid(
+        () =>
+          createComponent(LitContent, {
+            value: pane.renderPaneHeader(
+              createPaneHeaderWorkspaceFixture(state),
+              session,
+              false,
+              undefined,
+              false,
+              null,
+            ),
+          }),
+        { container },
       );
       const menu = container.querySelector<HeaderMenuElement>("openclaw-chat-header-session-menu");
+      await menu?.updateComplete;
+      menu?.querySelector("wa-dropdown")?.dispatchEvent(new Event("wa-show"));
       await menu?.updateComplete;
 
       expect(menu?.textContent?.includes("Open in")).toBe(true);
@@ -315,21 +346,26 @@ describe("chat header session menu", () => {
     const container = document.createElement("div");
     document.body.append(container);
     containers.push(container);
-    render(
-      pane.renderPaneHeader(
-        createPaneHeaderWorkspaceFixture(state),
-        session,
-        false,
-        undefined,
-        false,
-        null,
-      ),
-      container,
+    mountSolid(
+      () =>
+        createComponent(LitContent, {
+          value: pane.renderPaneHeader(
+            createPaneHeaderWorkspaceFixture(state),
+            session,
+            false,
+            undefined,
+            false,
+            null,
+          ),
+        }),
+      { container },
     );
     const menu = container.querySelector<HeaderMenuElement>("openclaw-chat-header-session-menu");
     if (!menu) {
       throw new Error("Expected chat header session menu");
     }
+    await menu.updateComplete;
+    menu.querySelector("wa-dropdown")!.dispatchEvent(new Event("wa-show"));
     await menu.updateComplete;
 
     const moveToGroup = item(menu, "Move to group");
@@ -343,7 +379,9 @@ describe("chat header session menu", () => {
     const onSettingsChange = vi.fn<(patch: Partial<UiSettings>) => void>();
     const menu = await mountMenu({
       onboarding,
+      bubbleModeEnabled: true,
       preferencesBrowserOnly: !onboarding,
+      session: { target: { key: "agent:main:test" } },
       onSettingsChange,
     });
     const view = item(menu, "View");
@@ -351,8 +389,13 @@ describe("chat header session menu", () => {
       view.querySelectorAll<MenuItemElement>("wa-dropdown-item[slot='submenu']"),
     );
 
-    expect(viewItems.map(itemLabel)).toEqual(["Reasoning", "Tool calls", "Keep commentary"]);
-    expect(viewItems.map((entry) => entry.checked)).toEqual([!onboarding, true, true]);
+    expect(viewItems.map(itemLabel)).toEqual([
+      "Reasoning",
+      "Tool calls",
+      "Keep commentary",
+      "Speech bubbles",
+    ]);
+    expect(viewItems.map((entry) => entry.checked)).toEqual([!onboarding, true, true, false]);
     if (onboarding) {
       expect(viewItems.every((entry) => entry.disabled)).toBe(true);
       expect(
@@ -366,6 +409,7 @@ describe("chat header session menu", () => {
     select(menu, "view:reasoning");
     select(menu, "view:tool-calls");
     select(menu, "view:commentary");
+    select(menu, "view:speech-bubbles");
     expect(onSettingsChange.mock.calls).toEqual(
       onboarding
         ? []
@@ -373,154 +417,169 @@ describe("chat header session menu", () => {
             [{ chatShowThinking: false }],
             [{ chatShowToolCalls: false }],
             [{ chatPersistCommentary: false }],
+            [
+              {
+                chatBubbleSessionKeys: ["agent:main:test"],
+                chatBubbleDisabledSessionKeys: undefined,
+              },
+            ],
           ],
     );
   });
 
-  it.each([false, true])(
-    "renders and activates session menu groups in compact=%s",
-    async (compact) => {
-      const showFiles = vi.fn();
-      const showChanges = vi.fn();
-      const splitRight = vi.fn();
-      const onOpenCommandPalette = vi.fn();
-      const onSettingsChange = vi.fn<(patch: Partial<UiSettings>) => void>();
-      const onAction = vi.fn<(action: HeaderMenuAction) => void>();
-      const currentOwner: HeaderMenuElement["currentOwner"] = { type: "agent", id: "research:one" };
-      const menu = await mountMenu({
-        compact,
-        panelActions: [
-          {
-            id: "session-files",
-            label: "Show session files",
-            icon: icons.listChecks,
-            ...(compact ? {} : { active: false }),
-            badge: 2,
-            onActivate: showFiles,
-          },
-          ...(compact
-            ? []
-            : [
-                {
-                  id: "changes",
-                  label: "Show session changes",
-                  icon: icons.diff,
-                  onActivate: showChanges,
-                },
-              ]),
-        ],
-        layoutActions: [
-          {
-            id: "split-right",
-            label: "Split right",
-            icon: icons.panelRightOpen,
-            onActivate: splitRight,
-          },
-        ],
-        ...(compact
-          ? {
-              worktreePath: "/work/openclaw",
-              context: createSessionOwnerMenuHarness().context,
-              currentOwner,
-              onOpenCommandPalette,
-              onSettingsChange,
-              onAction,
-            }
-          : {}),
+  it.each([false, true])("keeps bubble mode on the menu session in compact=%s", async (compact) => {
+    const onSettingsChange = vi.fn<(patch: Partial<UiSettings>) => void>();
+    const menu = await mountMenu({
+      compact,
+      bubbleModeEnabled: true,
+      session: { target: { key: "agent:main:other" } },
+      onSettingsChange,
+    });
+    menu.settings = { ...settings(), chatBubbleSessionKeys: ["agent:main:main"] };
+    if (compact) {
+      select(menu, "compact:open-view");
+    }
+    await menu.updateComplete;
+    const bubbleItem = item(menu, "Speech bubbles");
+    expect(bubbleItem.checked).toBe(false);
+    select(menu, "view:speech-bubbles");
+    expect(onSettingsChange).toHaveBeenLastCalledWith({
+      chatBubbleSessionKeys: ["agent:main:main", "agent:main:other"],
+      chatBubbleDisabledSessionKeys: undefined,
+    });
+    menu.settings = { ...menu.settings, ...onSettingsChange.mock.calls[0]![0] };
+    await menu.updateComplete;
+    // The open checkbox keeps its DOM identity and keyboard navigation position.
+    expect(item(menu, "Speech bubbles")).toBe(bubbleItem);
+    expect(bubbleItem.checked).toBe(true);
+    menu.session = { ...menu.session, target: { key: "agent:main:third" } };
+    await menu.updateComplete;
+    expect(item(menu, "Speech bubbles").checked).toBe(false);
+    menu.session = { ...menu.session, target: { key: "agent:main:other" } };
+    await menu.updateComplete;
+    select(menu, "view:speech-bubbles");
+    expect(onSettingsChange).toHaveBeenLastCalledWith({
+      chatBubbleSessionKeys: ["agent:main:main"],
+      chatBubbleDisabledSessionKeys: ["agent:main:other"],
+    });
+  });
+
+  it.each([false, true])("renders and activates session actions in compact=%s", async (compact) => {
+    const exportTranscript = vi.fn();
+    const stopWorker = vi.fn();
+    const onOpenCommandPalette = vi.fn();
+    const onSettingsChange = vi.fn<(patch: Partial<UiSettings>) => void>();
+    const onAction = vi.fn<(action: HeaderMenuAction) => void>();
+    const currentOwner: HeaderMenuElement["currentOwner"] = { type: "agent", id: "research:one" };
+    const menu = await mountMenu({
+      compact,
+      sessionActions: [
+        {
+          id: "plugin/export",
+          label: "Export transcript",
+          icon: icons.plug,
+          onActivate: exportTranscript,
+        },
+        {
+          id: "stop-cloud-worker",
+          label: "Stop cloud worker",
+          icon: icons.stop,
+          variant: "danger",
+          disabled: true,
+          description: "Worker is restarting",
+          onActivate: stopWorker,
+        },
+      ],
+      ...(compact
+        ? {
+            worktreePath: "/work/openclaw",
+            context: createSessionOwnerMenuHarness().context,
+            currentOwner,
+            onOpenCommandPalette,
+            onSettingsChange,
+            onAction,
+          }
+        : {}),
+    });
+    const navigate = async (value: string) => {
+      select(menu, `compact:${value}`);
+      await menu.updateComplete;
+    };
+    const initialLabels = rootLabels(menu);
+    expect(initialLabels).not.toContain("Panels");
+    expect(initialLabels).not.toContain("Layout");
+    const stopItem = item(menu, "Stop cloud workerWorker is restarting");
+    expect(stopItem.disabled).toBe(true);
+    expect(stopItem.getAttribute("variant")).toBe("danger");
+    expect(stopItem.querySelector(".session-menu__description")?.textContent).toBe(
+      "Worker is restarting",
+    );
+    select(menu, "quick:plugin/export");
+    select(menu, "quick:stop-cloud-worker");
+    expect(exportTranscript).toHaveBeenCalledOnce();
+    expect(stopWorker).not.toHaveBeenCalled();
+    if (compact) {
+      expect(initialLabels).toEqual([
+        "Open command palette",
+        "View",
+        "Pin session",
+        "Rename…",
+        "Mark as unread",
+        "Copy link",
+        "Assign to…",
+        "Move to group",
+        "Archive session",
+        "Export transcript",
+        "Stop cloud workerWorker is restarting",
+        "Advanced",
+      ]);
+      expect(menu.querySelector("[slot='submenu']")).toBeNull();
+      select(menu, "open-command-palette");
+      expect(onOpenCommandPalette).toHaveBeenCalledOnce();
+      await navigate("open-copy");
+      expect(rootLabels(menu)).toEqual([
+        "Back",
+        "Preview link",
+        "Conversation as Markdown",
+        "Session ID",
+      ]);
+      await navigate("back");
+      await navigate("open-open-in");
+      expect(rootLabels(menu)).toEqual([
+        "Back",
+        "New tab",
+        "New window",
+        "Continue in terminal…",
+        "Cursor",
+        "VS Code",
+        "Windsurf",
+        "Zed",
+      ]);
+      await navigate("back");
+      await navigate("open-view");
+      expect(rootLabels(menu)).toEqual(["Back", "Reasoning", "Tool calls", "Keep commentary"]);
+      expect(menu.querySelector("[slot='submenu']")).toBeNull();
+      select(menu, "view:reasoning");
+      expect(onSettingsChange).toHaveBeenCalledWith({ chatShowThinking: false });
+      await navigate("back");
+      await navigate("open-assign-owner");
+      expect(rootLabels(menu)).toEqual(["Back", "Me", "Research"]);
+      select(menu, "assign-owner:human:profile-ada");
+      expect(onAction).toHaveBeenCalledWith({
+        kind: "assign-owner",
+        owner: { type: "human", id: "profile-ada" },
       });
-      const navigate = async (value: string) => {
-        select(menu, `compact:${value}`);
-        await menu.updateComplete;
-      };
-      const initialLabels = rootLabels(menu);
-      if (compact) {
-        expect(initialLabels).toEqual([
-          "Open command palette",
-          "Panels",
-          "Layout",
-          "View",
-          "Pin session",
-          "Rename…",
-          "Mark as unread",
-          "Archive session",
-          "Session settings",
-          "Move to group",
-          "Fork conversation",
-          "Copy",
-          "Open in",
-          "Delete…",
-        ]);
-        expect(menu.querySelector("[slot='submenu']")).toBeNull();
-        select(menu, "open-command-palette");
-        expect(onOpenCommandPalette).toHaveBeenCalledOnce();
-        await navigate("open-copy");
-        expect(rootLabels(menu)).toEqual([
-          "Back",
-          "Session link",
-          "Preview link",
-          "Conversation as Markdown",
-          "Session ID",
-        ]);
-        await navigate("back");
-        await navigate("open-open-in");
-        expect(rootLabels(menu)).toEqual([
-          "Back",
-          "New tab",
-          "New window",
-          "Continue in terminal…",
-          "Cursor",
-          "VS Code",
-          "Windsurf",
-          "Zed",
-        ]);
-        await navigate("back");
-        await navigate("open-view");
-        expect(rootLabels(menu)).toEqual(["Back", "Reasoning", "Tool calls", "Keep commentary"]);
-        expect(menu.querySelector("[slot='submenu']")).toBeNull();
-        select(menu, "view:reasoning");
-        expect(onSettingsChange).toHaveBeenCalledWith({ chatShowThinking: false });
-        await navigate("back");
-        await navigate("open-panels");
-      } else {
-        const panelItems = Array.from(
-          item(menu, "Panels").querySelectorAll<MenuItemElement>(
-            "wa-dropdown-item[slot='submenu']",
-          ),
-        );
-        expect(panelItems.map(itemLabel)).toEqual(["Show session files", "Show session changes"]);
-        expect(panelItems[0]?.checked).toBe(false);
-        expect(
-          Array.from(
-            item(menu, "Layout").querySelectorAll<MenuItemElement>(
-              "wa-dropdown-item[slot='submenu']",
-            ),
-          ).map(itemLabel),
-        ).toEqual(["Split right"]);
-      }
+      menu.querySelector("wa-dropdown")!.dispatchEvent(new Event("wa-show"));
+      await menu.updateComplete;
+      expect(rootLabels(menu)).toEqual(initialLabels);
+    } else {
       expect(
-        item(menu, "Show session files").querySelector('[slot="details"]')?.textContent?.trim(),
-      ).toBe("2");
-      select(menu, "quick:panels:session-files");
-      expect(showFiles).toHaveBeenCalledOnce();
-      if (compact) {
-        await navigate("open-assign-owner");
-        expect(rootLabels(menu)).toEqual(["Back", "Me", "Research"]);
-        select(menu, "assign-owner:human:profile-ada");
-        expect(onAction).toHaveBeenCalledWith({
-          kind: "assign-owner",
-          owner: { type: "human", id: "profile-ada" },
-        });
-        menu.querySelector("wa-dropdown")!.dispatchEvent(new Event("wa-show"));
-        await menu.updateComplete;
-        expect(rootLabels(menu)).toEqual(initialLabels);
-      } else {
-        select(menu, "quick:panels:changes");
-        select(menu, "quick:layout:split-right");
-        expect(showChanges).toHaveBeenCalledOnce();
-        expect(splitRight).toHaveBeenCalledOnce();
-      }
-    },
-  );
+        Array.from(
+          item(menu, "View").querySelectorAll<MenuItemElement>("wa-dropdown-item[slot='submenu']"),
+        ).map(itemLabel),
+      ).toEqual(["Reasoning", "Tool calls", "Keep commentary"]);
+    }
+  });
 
   it("drills into session sharing only from the compact menu", async () => {
     const onOpen = vi.fn();

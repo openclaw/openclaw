@@ -1,6 +1,6 @@
 import { isPromise } from "node:util/types";
 import { deserialize, serialize } from "node:v8";
-import { parentPort, workerData } from "node:worker_threads";
+import { parentPort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { routeLogsToStderr } from "../logging/console.js";
 import { flushLogger } from "../logging/logger.js";
@@ -150,6 +150,10 @@ function assertSynchronousResult(value: unknown, phase: string, beforeReject?: (
 }
 
 async function receive(request: SqliteWorkerRequest): Promise<void> {
+  const timing = request.timing;
+  if (timing) {
+    timing.received = performance.now();
+  }
   let reply: SqliteWorkerReply;
   let executed = pendingResult !== undefined;
   let retire = false;
@@ -170,7 +174,11 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         }
         operationAdmission = {
           actor: request.actor,
-          context: { port: request.operationAdmission },
+          context: {
+            port: request.operationAdmission,
+            requestCustody: request.requestCustody,
+            executionAuthority: request.executionAuthority,
+          },
         };
       }
       if (request.stateContext) {
@@ -262,11 +270,19 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
                 await admitted;
               }
             }
-            const execute = () =>
-              runInActorContext(request.actor, () => ({
+            const execute = () => {
+              if (timing) {
+                timing.executeStarted = performance.now();
+              }
+              const result = runInActorContext(request.actor, () => ({
                 // SAFETY: The typed host command is serialized once; framing validates complete reconstruction.
                 result: backend.execute(typedCommand),
               })).result;
+              if (timing) {
+                timing.executeFinished = performance.now();
+              }
+              return result;
+            };
             const fence = runInActorContext(request.actor, () =>
               backend[SQLITE_WORKER_SOURCE_FENCE]?.(typedCommand),
             );
@@ -449,6 +465,9 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       await executeCommand(deserialize(request.input));
     }
     const serialized = serialize(value);
+    if (timing) {
+      timing.serialized = performance.now();
+    }
     if (serialized.byteLength > SQLITE_WORKER_MAX_RESULT_BYTES) {
       if (!completeResult) {
         throw new Error("SQLite worker frame exceeds the transport byte limit");
@@ -469,13 +488,13 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       };
     }
   } catch (error) {
-    if (openNotEntered && request.type === "open") {
+    const refusedOpen = request.type === "open" && error instanceof SqliteWorkerOpenRefusedError;
+    if (openNotEntered || refusedOpen) {
       stateContexts.delete(request.actor);
     }
     transfers.cancel();
     pendingResult = undefined;
     pendingInput = undefined;
-    const refusedOpen = request.type === "open" && error instanceof SqliteWorkerOpenRefusedError;
     const originalError = refusedOpen ? error.originalError : error;
     const admissionRefused =
       commandAdmissionRefused ||
@@ -527,6 +546,10 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
     reply.cleanupFailure = nativeCleanupFailure;
     nativeCleanupFailure = undefined;
   }
+  if (timing) {
+    timing.replied = performance.now();
+    reply.timing = timing;
+  }
   if (reply.ok) {
     if (complete && !reply.cleanupFailure && !nativeRuntimeAdmissionSent) {
       const admission = captureSqliteNativeRuntimeAdmission();
@@ -543,20 +566,6 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
   if (complete) {
     scheduleWorkerIdleGc();
   }
-}
-
-// Preparation has no actor, native locator, input, or admission grant.
-const runtimeData: unknown = workerData;
-if (isRecord(runtimeData) && runtimeData.sqliteRuntimePreparation !== undefined) {
-  const source = runtimeData.sqliteRuntimePreparation;
-  if (
-    !isRecord(source) ||
-    typeof source.moduleUrl !== "string" ||
-    (source.sourceLoaderUrl !== undefined && typeof source.sourceLoaderUrl !== "string")
-  ) {
-    throw new Error("SQLite runtime preparation is invalid");
-  }
-  await loadBackendModule(source.moduleUrl, source.sourceLoaderUrl);
 }
 
 // The broker sends one request at a time, including module initialization.

@@ -1,3 +1,6 @@
+// Register dispatch mocks before modules that consume them.
+// oxfmt-ignore
+import { emptyConfig, ttsMocks } from "./dispatch-from-config.shared.test-harness.js";
 import path from "node:path";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -11,7 +14,6 @@ import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-paylo
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
-import { emptyConfig, ttsMocks } from "./dispatch-from-config.shared.test-harness.js";
 import {
   describe0BeforeEach0,
   dispatchReplyFromConfig,
@@ -208,9 +210,10 @@ describe("source completion", () => {
           "../../config/sessions/session-accessor.js",
         )
       : undefined;
+    const storePath = path.join(tempDirs.make("openclaw-source-completion-"), "sessions.json");
     const preparedScope = actualSessions
       ? {
-          storePath: path.join(tempDirs.make("openclaw-source-completion-"), "sessions.json"),
+          storePath,
           sessionKey: "agent:main:discord:direct:source-completion",
         }
       : undefined;
@@ -324,7 +327,7 @@ describe("source completion", () => {
                 intentId: "source-intent",
                 sessionId: "session-1",
                 sessionKey: "agent:main:main",
-                storePath: "/tmp/mock-sessions.json",
+                storePath,
               },
             });
           }

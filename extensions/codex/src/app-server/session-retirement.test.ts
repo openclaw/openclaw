@@ -11,7 +11,13 @@ import {
   isCodexAppServerLiveThreadClaimed,
 } from "./client-runtime.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
-import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
+import {
+  bindingStoreKey,
+  createCodexAppServerBindingStore,
+  type CodexAppServerBindingStore,
+  type StoredCodexAppServerBinding,
+} from "./session-binding.js";
+import { createCodexTestBindingStateStore } from "./session-binding.test-helpers.js";
 import {
   withCodexAppServerSessionDeletion,
   withCodexAppServerSessionContextReset,
@@ -52,7 +58,32 @@ describe("Codex session deletion subscriptions", () => {
     const harness = createClientHarness();
     clients.push(harness);
     const { client } = harness;
-    const bindingStore = createCodexTestBindingStore();
+    const values = new Map<string, StoredCodexAppServerBinding>();
+    const storedBindings = createCodexAppServerBindingStore(
+      createCodexTestBindingStateStore(values),
+    );
+    // These cases own subscription ordering. The host native-binding suite owns
+    // real worker deletion, compensation, and exact persisted-row authority.
+    const bindingStore: CodexAppServerBindingStore = {
+      ...storedBindings,
+      async withSessionDeletion(identity, assertCurrent, run) {
+        assertCurrent();
+        const key = bindingStoreKey(identity);
+        const record = values.get(key);
+        return run(storedBindings.read(identity), {
+          commit() {
+            assertCurrent();
+            values.delete(key);
+          },
+          rollback() {
+            assertCurrent();
+            if (record) {
+              values.set(key, record);
+            }
+          },
+        });
+      },
+    };
     const binding = {
       threadId: `thread-${randomUUID()}`,
       clientId: client.getInstanceId(),

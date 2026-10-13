@@ -23,7 +23,7 @@ Codex's native `skills` namespace or install marketplace skills. See
 Codex dynamic tools default to `searchable` loading. OpenClaw normally does
 not expose dynamic tools that duplicate Codex-native workspace operations:
 `read`, `write`, `edit`, `apply_patch`, `exec`, `process`,
-`get_goal`, `create_goal`, `update_goal`, `tool_call`, `tool_describe`,
+`get_goal`, `create_goal`, `update_goal`, `dispatch_action`, `tool_describe`,
 and `tool_search`. Goal operations stay native to Codex,
 so OpenClaw does not project a second goal store into Codex turns. Most
 remaining OpenClaw integration tools, such as messaging, media, cron,
@@ -52,7 +52,7 @@ replaced by a selected managed provider. OpenClaw keeps Codex's standalone
 its user-defined `web` namespace. `tools.web.search.enabled: false`
 disables both paths, as do tool-disabled LLM-only runs. Codex treats
 `"cached"` as a preference and resolves it to live external access for
-unrestricted app-server turns. Automatic managed fallback fails closed when
+unrestricted app-server turns. Automatic managed fallback is blocked when
 native `allowedDomains` are set so the allowlist cannot be bypassed.
 Persistent effective search-policy changes rotate the bound Codex thread
 before the next turn; transient per-turn restrictions use a temporary
@@ -81,7 +81,7 @@ debugging the full tool payload.
 Long tool results have a collapsed preview in the Control UI. **Show full output**
 opens the saved result as plain text; copy and download use that text, not the
 preview. Reloading the conversation reads the same saved result. Inspection is
-subject to the Gateway's message-size limits and configured transcript redaction.
+subject to the Gateway's message-size limits. Tool-result text is not secret-masked.
 Tool-output inspection requests the supported maximum of 2,000,000 characters per
 text field; a result that remains capped is explicitly marked unavailable.
 A preview limit does not mean Codex truncated the model's input.

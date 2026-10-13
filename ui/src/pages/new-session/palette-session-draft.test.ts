@@ -20,9 +20,17 @@ class PaletteDraftHost extends OpenClawLightDomElement {
   paletteOpen = true;
   readonly started = vi.fn();
   readonly attachmentReady = createDeferred();
+  readonly settingsReady = createDeferred();
   readonly coldOutcome = createDeferred();
   observeColdSubmission = false;
   override updated() {
+    const remember = this.querySelector<HTMLInputElement>(
+      ".palette-session-settings__remember input",
+    );
+    const worktree = this.querySelector<HTMLButtonElement>('[role="switch"]');
+    if (remember && !remember.disabled && worktree && !worktree.disabled) {
+      this.settingsReady.resolve();
+    }
     if (this.observeColdSubmission && (!this.draft.messageLocked || this.draft.submitting)) {
       this.coldOutcome.resolve();
     }
@@ -103,6 +111,8 @@ describe("PaletteSessionDraft", () => {
     vi.mocked(context.placementStartup.start).mockImplementation(() => submitted.resolve());
     host.draft.setMessage("Carry my cold Send into the required worker");
     host.draft.adoptImageFiles([new File(["cold attachment"], "cold.txt", { type: "text/plain" })]);
+    await host.updateComplete;
+    expect(host.querySelector('.chat-attachment-loading[data-state="reading"]')).not.toBeNull();
     await host.attachmentReady.promise;
     host.observeColdSubmission = true;
     host.draft.submitCold();
@@ -110,6 +120,8 @@ describe("PaletteSessionDraft", () => {
     expect(host.draft.messageLocked).toBe(true);
     expect(context.sessions.createResult).not.toHaveBeenCalled();
     policy.resolve({ sessionPlacement: { requiredProfile: profile } });
+    await context.agents.refreshList();
+    host.requestUpdate();
     await host.coldOutcome.promise;
     expect(host.draft.submitting).toBe(true);
     expect(host.draft.error).toBeNull();
@@ -519,8 +531,10 @@ async function mountPreferences(initial: Record<string, unknown> = {}) {
       fixture.host.querySelector<HTMLButtonElement>('[role="switch"]'),
       "palette worktree switch",
     );
-  await vi.waitFor(() => expect(remember().disabled).toBe(false));
-  await vi.waitFor(() => expect(worktree().disabled).toBe(false));
+  // Cold preference imports can outlive vi.waitFor's one-second polling deadline.
+  await fixture.host.settingsReady.promise;
+  expect(remember().disabled).toBe(false);
+  expect(worktree().disabled).toBe(false);
   return {
     ...fixture,
     entries,

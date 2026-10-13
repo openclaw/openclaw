@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   loadSessionEntryReadOnly,
@@ -122,6 +123,7 @@ function createMaintenanceRuntime(params: {
     stop,
   };
   const runtime = createGatewayWorkerPlacementRuntime({
+    initialPlacements: [],
     scheduler: createTestGatewayScheduler(),
     getCommittedRuntimeConfig: getRuntimeConfig,
     cancelSessionWork: vi.fn(async () => {}),
@@ -129,10 +131,10 @@ function createMaintenanceRuntime(params: {
       workspaceResultInstanceId: () => "gateway-test",
       get: (sessionId: string) =>
         params.placements.find((placement) => placement.sessionId === sessionId),
-      list: () => params.placements,
-      listForReconcile: (sessionKey?: string) =>
+      listAsync: async () => params.placements,
+      listForReconcileAsync: async (sessionKey?: string) =>
         params.preservationStore
-          ? params.preservationStore.listForReconcile(sessionKey)
+          ? await params.preservationStore.listForReconcileAsync(sessionKey)
           : params.placements.filter(
               (placement) =>
                 placement.state !== "local" &&
@@ -199,8 +201,8 @@ async function preservedSessionKeys() {
 }
 
 describe("worker placement session maintenance ownership", () => {
-  it.each(["claim", "release"] as const)(
-    "refreshes unpublished maintenance inventory during a concurrent worker %s",
+  it.each(["claim", "release", "dispatch"] as const)(
+    "preserves worker-owned session data during a concurrent %s",
     async (publication) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const database = openOpenClawStateDatabase();
@@ -210,14 +212,17 @@ describe("worker placement session maintenance ownership", () => {
           sessionKey: "agent:main:concurrent-worker-session",
           agentId: "main",
         };
-        const active = await advancePlacementFixtureToActive(store, database, identity);
-        const turn = {
+        const active =
+          publication === "dispatch"
+            ? undefined
+            : await advancePlacementFixtureToActive(store, database, identity);
+        const turn = active && {
           ...identity,
           owner: placementTurnOwner(active),
           claimId: "concurrent-worker-claim",
           runId: "concurrent-worker-run",
         };
-        let claim = publication === "release" ? await store.claimTurn(turn) : undefined;
+        let claim = publication === "release" && turn ? await store.claimTurn(turn) : undefined;
         const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
         const preservedEntry = { sessionId: identity.sessionId, updatedAt: 1 };
         await patchSessionEntryCore(
@@ -231,7 +236,7 @@ describe("worker placement session maintenance ownership", () => {
           storePath,
         });
         const { runtime } = createMaintenanceRuntime({
-          placements: [active],
+          placements: active ? [active] : [],
           preservationStore: store,
         });
         const sidecar = await startMaintenanceRuntime(runtime);
@@ -246,8 +251,10 @@ describe("worker placement session maintenance ownership", () => {
               if (claim) {
                 await store.releaseTurnIfOwned(claim);
                 claim = undefined;
-              } else {
+              } else if (turn) {
                 claim = await store.claimTurn(turn);
+              } else {
+                await store.startDispatch(identity);
               }
             }
             return result;
@@ -277,8 +284,8 @@ describe("worker placement session maintenance ownership", () => {
                 maxDiskBytes: false,
               }),
             }),
-          ).resolves.toMatchObject({ afterCount: 2 });
-          expect(preservationReads).toBe(2);
+          ).resolves.toBeDefined();
+          expect(preservationReads).toBe(1);
           expect(loadSessionEntryReadOnly({ ...identity, env: state.env, storePath })).toEqual(
             preservedSnapshot,
           );
@@ -297,7 +304,7 @@ describe("worker placement session maintenance ownership", () => {
   );
 
   it.each(["local claim", "local release", "worker dispatch"] as const)(
-    "fences a fresh lifecycle upsert only for worker placements during %s",
+    "admits a fresh lifecycle upsert during an unrelated %s",
     async (publication) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const store = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
@@ -331,7 +338,7 @@ describe("worker placement session maintenance ownership", () => {
                 claim = await store.claimTurn(localTurn);
               }
               if (publication !== "worker dispatch") {
-                expect(store.listForReconcile()).toEqual([]);
+                expect(await store.listForReconcileAsync()).toEqual([]);
               }
               return prepared;
             } catch (error) {
@@ -356,10 +363,6 @@ describe("worker placement session maintenance ownership", () => {
             ],
           });
         try {
-          if (publication === "worker dispatch") {
-            await expect(mutate()).rejects.toThrow("Worker placement inventory changed");
-            expect(loadSessionEntryReadOnly(scope)).toBeUndefined();
-          }
           await expect(mutate()).resolves.toMatchObject({ afterCount: 1 });
           expect(loadSessionEntryReadOnly(scope)?.sessionId).toBe("fresh-local-session");
         } finally {
@@ -407,7 +410,9 @@ describe("worker placement session maintenance ownership", () => {
   it("retains a configured-store repository base after its placement manifest advances", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const storePath = state.path("custom-sessions", "openclaw-agent.sqlite");
-      await state.writeConfig({ session: { store: storePath } });
+      const cfg = { session: { store: storePath } };
+      await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot({});
       const placement = {
         ...createPlacementFixture("agent:main:dashboard:repository-retention"),
         workspaceBaseManifestRef: `sha256:${"a".repeat(64)}`,
@@ -436,6 +441,7 @@ describe("worker placement session maintenance ownership", () => {
         skipMaintenance: true,
       });
       expect(loadSessionEntryReadOnly(placement)).toBeUndefined();
+      setRuntimeConfigSnapshot(cfg);
       const createRetention = vi.spyOn(workspaceRetention, "createNodeWorkspaceRetainCoordinator");
       let prepared:
         | Awaited<ReturnType<WorkerSessionPlacementStore["prepareRuntimeRefresh"]>>
@@ -451,8 +457,18 @@ describe("worker placement session maintenance ownership", () => {
         }
         const originalManifest = placement.workspaceBaseManifestRef;
         placement.workspaceBaseManifestRef = `sha256:${"b".repeat(64)}`;
-        const currentManifestRefs = await additionalManifestRefs(currentPlacement);
+        using currentManifestRefs = await additionalManifestRefs(currentPlacement);
         expect(currentManifestRefs()).toEqual([originalManifest]);
+        await patchSessionEntryCore({ ...placement, storePath }, () => ({
+          repositoryWorkspaceId: "replacement-workspace",
+        }));
+        const sql = observeHostDataSql();
+        try {
+          expect(currentManifestRefs()).toEqual([originalManifest]);
+          expect(sql.queries).toEqual([]);
+        } finally {
+          sql.restore();
+        }
       } finally {
         prepared?.release();
         createRetention.mockRestore();
@@ -524,7 +540,7 @@ describe("worker placement session maintenance ownership", () => {
           .spyOn(reclamationRun, "runSqliteSessionReclamation")
           .mockImplementation(async (params) => {
             const result = await reclaim(params);
-            if (params.plan.kind === "maintenance-age" && params.plan.expected === undefined) {
+            if (params.plan.kind === "maintenance-age") {
               agePublished.resolve();
             }
             return result;

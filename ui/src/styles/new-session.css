@@ -1,6 +1,7 @@
 /* Full-page new-session draft: the welcome and draft form one top-anchored
    composition, with the target row and composer between hero and recents. */
-openclaw-new-session-page {
+openclaw-new-session-page,
+.new-session-page {
   display: flex;
   flex: 1 1 0;
   min-width: 0;
@@ -9,12 +10,8 @@ openclaw-new-session-page {
 
 .new-session-page {
   position: relative;
-  display: flex;
   flex-direction: column;
-  flex: 1 1 0;
   width: 100%;
-  min-width: 0;
-  min-height: 0;
 }
 
 /* Opposite end of the fixed shell-control rail: new-thread privacy belongs to
@@ -72,6 +69,17 @@ openclaw-new-session-page {
   border-color: color-mix(in srgb, var(--accent) 42%, transparent);
   background: color-mix(in srgb, var(--accent) 18%, var(--bg-elevated));
   color: var(--accent);
+}
+
+.new-session-page__incognito-toggle--active.shell-chrome-controls__button {
+  width: auto;
+  padding-inline: 10px;
+  gap: 7px;
+}
+
+.new-session-page__incognito-toggle-label {
+  font-size: 12px;
+  font-weight: 600;
 }
 
 html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__incognito-rail {
@@ -174,9 +182,8 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   pointer-events: none;
   transform: translateY(-2px);
   visibility: hidden;
-  white-space: nowrap;
+  white-space: normal;
   transition:
-    max-height 160ms cubic-bezier(0.2, 0, 0, 1),
     margin 160ms cubic-bezier(0.2, 0, 0, 1),
     opacity 120ms ease-out,
     filter 120ms ease-out,
@@ -185,7 +192,7 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 }
 
 .new-session-page__incognito-notice--visible {
-  max-height: 20px;
+  max-height: none;
   margin-top: 0;
   opacity: 1;
   filter: blur(0);
@@ -353,7 +360,8 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 }
 
 .new-session-page__trigger:hover:not(:disabled),
-.new-session-page__trigger[aria-expanded="true"] {
+.new-session-page__trigger[aria-expanded="true"],
+.new-session-page__browser-nav:hover:not(:disabled) {
   color: var(--text);
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
 }
@@ -649,13 +657,17 @@ wa-popover.new-session-page__picker-popover
 
 .new-session-page__project-search input {
   width: 100%;
-  min-width: 0;
   padding: 6px 8px;
+  background: var(--bg);
+  font: inherit;
+}
+
+.new-session-page__project-search input,
+.new-session-page__menu-field input {
+  min-width: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--bg);
   color: var(--text);
-  font: inherit;
   font-size: 12px;
   outline: none;
 }
@@ -695,14 +707,8 @@ wa-popover.new-session-page__picker-popover
 
 .new-session-page__menu-field input {
   flex: 1 1 auto;
-  min-width: 0;
   padding: 4px 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--text);
-  font-size: 12px;
-  outline: none;
 }
 
 .new-session-page__menu-field input:focus-visible {
@@ -932,8 +938,8 @@ wa-popover.new-session-page__where-popover {
 
 .connect-machine-dialog .login-gate__command code {
   min-width: 0;
-  overflow-x: auto;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
   user-select: all;
 }
 
@@ -1019,11 +1025,6 @@ wa-popover.new-session-page__where-popover {
   background: transparent;
   color: var(--muted);
   cursor: var(--cursor-action);
-}
-
-.new-session-page__browser-nav:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  color: var(--text);
 }
 
 .new-session-page__browser-nav:disabled {
@@ -1437,16 +1438,11 @@ wa-popover.new-session-page__where-popover {
   .new-session-page__incognito-notice {
     align-items: flex-start;
     width: calc(100% - 2 * var(--chat-mobile-edge-inset));
-    max-height: 0;
     max-width: var(--chat-thread-max-width, 48rem);
     margin-inline: auto;
     padding-inline: 0;
     white-space: normal;
     text-align: left;
-  }
-
-  .new-session-page__incognito-notice--visible {
-    max-height: 48px;
   }
 }
 
@@ -1494,8 +1490,23 @@ wa-popover.new-session-page__where-popover {
 }
 
 .new-session-page__environment-option[aria-disabled="true"] {
-  opacity: 0.5;
+  color: var(--muted);
   cursor: default;
+}
+
+.new-session-page__unavailable-status {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+  color: var(--warn);
+  font-size: 11px;
+}
+
+.new-session-page__unavailable-status svg {
+  display: block;
+  width: 13px;
+  height: 13px;
 }
 
 .new-session-page__environment-heading {

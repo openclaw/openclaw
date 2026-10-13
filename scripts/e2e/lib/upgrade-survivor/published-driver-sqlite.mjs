@@ -125,6 +125,37 @@ export function seedPublishedDriverLegacySqlite(state) {
         INSERT INTO published_driver_discarded VALUES(42,zeroblob(4194304));
         DELETE FROM published_driver_discarded;`);
       database.prepare("INSERT INTO published_driver_retained VALUES(41,?)").run(retained);
+      if (target.role === "global") {
+        // This launch schema is shared with 2026.10.1; its boot companion did not exist yet.
+        const schema = fs.readFileSync(
+          new URL("./fixtures/node-worker-launch-v2026.10.1.sql", import.meta.url),
+          "utf8",
+        );
+        database.exec(schema);
+        database
+          .prepare(`INSERT INTO node_worker_launches (
+          launch_id,plan_hash,gateway_namespace,environment_id,session_id,owner_epoch,
+          placement_generation,run_id,state,supervisor_pid,supervisor_start_time,
+          created_at_ms,updated_at_ms
+        ) VALUES(?,?,?,?,?,1,0,?,'pending',2147483647,0,?,?)`)
+          .run(
+            "published-driver-node-launch",
+            "a".repeat(64),
+            "survivor",
+            "node-environment",
+            "node-session",
+            "node-run",
+            seededAt,
+            seededAt,
+          );
+        assert.equal(
+          database
+            .prepare("SELECT name FROM sqlite_schema WHERE name='node_worker_launch_boots'")
+            .get(),
+          undefined,
+          "Baseline unexpectedly has boot metadata",
+        );
+      }
       if (target.agentId) {
         const rowMap = rowMapIdentity(database);
         const key = `agent:${target.agentId}:reclamation`;
@@ -193,6 +224,10 @@ export function inspectPublishedDriverSqlite(state, expectedMode) {
       let schema;
       let sessions;
       let importedSession;
+      const nodeLaunches =
+        target.role === "global"
+          ? database.prepare("SELECT * FROM node_worker_launches ORDER BY launch_id").all()
+          : undefined;
       if (target.agentId) {
         importedSession = inspectImportedSession(database, target.agentId);
         const identity = rowMapIdentity(database);
@@ -275,6 +310,7 @@ export function inspectPublishedDriverSqlite(state, expectedMode) {
         rowMap,
         sessions,
         importedSession,
+        nodeLaunches,
         discarded,
         deletedIdsAbsent: [42],
         logicalSha256: createHash("sha256")
@@ -285,6 +321,7 @@ export function inspectPublishedDriverSqlite(state, expectedMode) {
               matches: searchContent(matches),
               sessions,
               importedSession,
+              nodeLaunches,
               discarded,
             }),
           )

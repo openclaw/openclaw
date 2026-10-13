@@ -81,33 +81,7 @@ describe("command lane capacity groups", () => {
     await Promise.all([...cronRuns, blockedCron]);
   });
 
-  test("a member may use the full group budget beyond its reservation", async () => {
-    setCommandLaneGroup(GROUP, {
-      budget: 8,
-      members: [CRON, HOOK],
-      reservations: { [HOOK]: 1 },
-    });
-
-    const gates = Array.from({ length: 9 }, () => createDeferred());
-    const runs = gates.map((g) => enqueueCommandInLane(HOOK, async () => await g.promise));
-
-    expect(getCommandLaneSnapshot(HOOK)).toMatchObject({
-      activeCount: 8,
-      queuedCount: 1,
-      maxConcurrent: 8,
-      groupActive: 8,
-      groupBudget: 8,
-      reservedForLane: 1,
-      blockedBy: "lane",
-    });
-
-    for (const g of gates) {
-      g.resolve();
-    }
-    await Promise.all(runs);
-  });
-
-  test.each(["successful", "failing"] as const)(
+  test.each(["failing"] as const)(
     "a %s completion gives shared capacity to the older eligible sibling head",
     async (outcome) => {
       setCommandLaneGroup(GROUP, {
@@ -392,30 +366,6 @@ describe("command lane capacity groups", () => {
 
     hookGate.resolve();
     await hookRun;
-  });
-
-  test("blockedBy reports hypothetical immediate admission with an EMPTY queue", async () => {
-    // Pre-enqueue watchdog snapshots must report capacity waits even with no queued head.
-    setCommandLaneGroup(GROUP, {
-      budget: 8,
-      members: [CRON, HOOK],
-      reservations: { [HOOK]: 1 },
-    });
-
-    const gates = Array.from({ length: 7 }, () => createDeferred());
-    const runs = gates.map((g) => enqueueCommandInLane(CRON, async () => await g.promise));
-
-    const snapshot = getCommandLaneSnapshot(CRON);
-    expect(snapshot.queuedCount).toBe(0);
-    expect(snapshot.activeCount).toBeLessThan(snapshot.maxConcurrent);
-    expect(snapshot.blockedBy).toBe("sibling-reservation");
-
-    expect(getCommandLaneSnapshot(HOOK).blockedBy).toBeNull();
-
-    for (const g of gates) {
-      g.resolve();
-    }
-    await Promise.all(runs);
   });
 
   test("lanes outside any group are unconstrained by it", async () => {

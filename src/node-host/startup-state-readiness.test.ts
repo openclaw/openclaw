@@ -47,6 +47,7 @@ vi.mock("../infra/bun-sqlite-library.js", async (importOriginal) => ({
 vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
   getRuntimeConfig: () => ({}),
+  captureRuntimeConfigAsyncReader: () => async () => ({}),
 }));
 vi.mock("./config.js", () => ({
   loadNodeHostConfig: async () => null,

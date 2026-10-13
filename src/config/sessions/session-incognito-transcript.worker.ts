@@ -1,16 +1,10 @@
-import { randomUUID } from "node:crypto";
 import { err, ok } from "@openclaw/normalization-core/result";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
-import {
-  runWithSqliteWorkerStateContext,
-  type SqliteWorkerStateContext,
-} from "../../infra/sqlite-worker-state-context.js";
+import type { SqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
-import { createAgentDatabaseDomainOwner } from "../../state/openclaw-agent-execution-domain.js";
 import { ensureSessionGoalOperationsSchema } from "../../state/openclaw-agent-goal-operations-schema.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import {
@@ -25,11 +19,11 @@ import { readSessionEntrySelectionSnapshot } from "./session-accessor.sqlite-ent
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
 import type { TranscriptReportWorkerOperations } from "./session-accessor.sqlite-transcript-reports.types.js";
-import type { TranscriptReportWorkerTarget } from "./session-accessor.sqlite-transcript-reports.worker.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
-import { readClosedTranscriptTurnInDatabase } from "./session-accessor.transcript-range.js";
+import { readClosedTranscriptTurnInDatabase } from "./session-accessor.transcript-range.worker.js";
 import { readSessionTranscriptRuntimeTarget } from "./session-accessor.transcript-target.js";
+import { createIncognitoDomainWorker } from "./session-incognito-domain.worker.js";
 import type { IncognitoManagerOperations } from "./session-incognito-manager-contract.js";
 import {
   isIncognitoTranscriptReceiptCommand,
@@ -79,13 +73,11 @@ export function createIncognitoTranscriptWorker(
     acceptValidation(validation);
     return validation;
   };
-  const domain = createAgentDatabaseDomainOwner({
-    databasePath: database.path,
-    assertCurrent: () => database.db,
-    assertCleanupCurrent() {},
-    admit: (stage) => admit(stage, keys),
-  });
-  let binding: { id: string; moduleUrl: string; input: TranscriptReportWorkerTarget } | undefined;
+  const domain = createIncognitoDomainWorker<TranscriptReportWorkerOperations>(
+    database,
+    (stage) => admit(stage, keys),
+    env,
+  );
   let workerTranscript:
     | typeof import("../../gateway/worker-environments/transcript-commit.kernel.js")
     | undefined;
@@ -126,13 +118,10 @@ export function createIncognitoTranscriptWorker(
         ensureSessionGoalOperationsSchema(database.db);
       }
       if (command.type !== "session.keyById.read" && command.type.startsWith("session.report.")) {
-        binding = {
-          id: randomUUID(),
-          moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptReports)
-            .href,
-          input: { resolved: resolved(command.input), fence: command.input.fence },
-        };
-        await domain.prepare({ type: "database.domain.bind", input: binding });
+        await domain.prepare(runtimeProcessEntrypoints.sessionTranscriptReports, {
+          resolved: resolved(command.input),
+          fence: command.input.fence,
+        });
       }
     },
     execute(command: Command) {
@@ -143,32 +132,11 @@ export function createIncognitoTranscriptWorker(
       }
       keys = [command.input.sessionKey];
       recoverValue = isIncognitoTranscriptReceiptCommand(command.type);
-      const bound = binding;
-      const executeReport = <Key extends keyof TranscriptReportWorkerOperations>(inner: {
-        type: Key;
-        input: TranscriptReportWorkerOperations[Key]["input"];
-      }): TranscriptReportWorkerOperations[Key]["output"] => {
-        if (!bound) {
-          throw new Error("Incognito report domain was not prepared");
-        }
-        const result = domain.execute({
-          type: "database.domain.execute",
-          input: { id: bound.id, command: inner },
-        });
-        // SAFETY: the fixed report backend owns these command/result pairs.
-        return result as TranscriptReportWorkerOperations[Key]["output"];
-      };
-      try {
-        if (bound) {
-          // The reused report backend captures its environment during connection binding.
-          runWithSqliteWorkerStateContext({ environment: env }, () =>
-            domain.execute({ type: "database.domain.bind", input: bound }),
-          );
-        }
-        const reply = <Key extends keyof IncognitoTranscriptOperations>(
-          value: IncognitoTranscriptOperations[Key]["output"],
-        ) => ({ value, keys });
-        return withSqlitePostCommitPublications(database.db, () => {
+      const reply = <Key extends keyof IncognitoTranscriptOperations>(
+        value: IncognitoTranscriptOperations[Key]["output"],
+      ) => ({ value, keys });
+      return domain.run(() =>
+        withSqlitePostCommitPublications(database.db, () => {
           const target = resolved(command.input);
           switch (command.type) {
             case "session.workerTranscript.commit":
@@ -355,7 +323,7 @@ export function createIncognitoTranscriptWorker(
                 }),
               );
             case "session.report.latestCustomReport": {
-              const result = executeReport({
+              const result = domain.execute({
                 type: "prepare",
                 input: { kind: "custom", customTypes: command.input.customTypes },
               });
@@ -364,7 +332,7 @@ export function createIncognitoTranscriptWorker(
               );
             }
             case "session.report.prepare": {
-              const result = executeReport({ type: "prepare", input: command.input.selection });
+              const result = domain.execute({ type: "prepare", input: command.input.selection });
               return reply<"session.report.prepare">(
                 result.ok
                   ? ok({
@@ -381,7 +349,7 @@ export function createIncognitoTranscriptWorker(
               );
             }
             case "session.report.append": {
-              const prepared = executeReport({
+              const prepared = domain.execute({
                 type: "prepare",
                 input: command.input.prepared.selection,
               });
@@ -405,16 +373,16 @@ export function createIncognitoTranscriptWorker(
                 );
               }
               return reply<"session.report.append">(
-                executeReport({ type: "append", input: command.input.report }),
+                domain.execute({ type: "append", input: command.input.report }),
               );
             }
             case "session.report.assistant":
               return reply<"session.report.assistant">(
-                executeReport({ type: "assistant", input: command.input.report }),
+                domain.execute({ type: "assistant", input: command.input.report }),
               );
             case "session.report.abortedPartial":
               return reply<"session.report.abortedPartial">(
-                executeReport({ type: "abortedPartial", input: command.input.report }),
+                domain.execute({ type: "abortedPartial", input: command.input.report }),
               );
             case "session.message.append":
               return reply<"session.message.append">(
@@ -473,18 +441,11 @@ export function createIncognitoTranscriptWorker(
             }
           }
           throw new Error("Unsupported incognito transcript operation");
-        });
-      } finally {
-        if (bound) {
-          domain.assertSettled();
-          domain.execute({ type: "database.domain.close", input: { id: bound.id } });
-          binding = undefined;
-        }
-      }
+        }),
+      );
     },
     assertSettled() {
       domain.assertSettled();
-      binding = undefined;
     },
     close: () => domain.close(),
   };

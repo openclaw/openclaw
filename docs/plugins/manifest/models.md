@@ -110,7 +110,7 @@ Hydration adds eligible model ids and fills only undefined metadata. Explicit ma
 
 This field is publication-time authoring metadata, not a Gateway discovery hook. It does not add runtime network calls or hot reload; the existing [hosted catalog update lifecycle](/concepts/models#hosted-catalog-updates) is unchanged.
 
-`aliases` participates in provider ownership lookup for model-catalog planning. Alias targets must be top-level providers owned by the same plugin. When a provider-filtered list uses an alias, OpenClaw can read the owning manifest and apply alias API/base URL overrides without loading provider runtime. Aliases do not expand unfiltered catalog listings; broad lists emit the owning canonical provider rows only.
+`aliases` participates in provider ownership lookup for model-catalog planning. Alias targets must be top-level providers owned by the same plugin. When a provider-filtered list uses an alias, OpenClaw can read the owning manifest and apply alias API/base URL overrides without loading provider runtime. Aliases do not expand unfiltered catalog listings; broad lists emit the owning primary provider rows only.
 
 `suppressions` replaces the old provider runtime `suppressBuiltInModel` hook. Suppression entries are honored only when the provider is owned by the plugin or declared as a `modelCatalog.aliases` key that targets an owned provider. Runtime suppression hooks are no longer called during model resolution.
 
@@ -145,11 +145,9 @@ If publication fails or the process stops between replacements, inspect the
 and recovery directories. Stop competing writers, compare the current outputs with
 these artifacts, and explicitly restore or finish the pair before retrying. There
 is no automatic rollback or replay that could overwrite another writer's replacement.
-Identity checks detect observed changes but are not filesystem compare-and-swap;
+Concurrent publishers and replacement of private recovery files are unsupported;
 this protocol does not promise power-loss durability. After successful publication,
 cleanup failures warn with retained paths without reporting the pair as unpublished.
-Cleanup retains recovery entries when their device or inode is unknown (zero)
-or differs from the captured identity.
 
 Model fields:
 

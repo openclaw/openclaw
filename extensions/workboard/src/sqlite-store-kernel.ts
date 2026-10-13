@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   normalizeWorkboardSessionsBoardSpec,
   type WorkboardCard,
@@ -6,14 +5,18 @@ import {
   type WorkboardExecution,
 } from "@openclaw/workboard-contract";
 import {
+  runEngineStoreReadSnapshot,
+  type DatabaseEngineInput,
+} from "openclaw/plugin-sdk/database-engine-worker-runtime";
+import {
   executeSqliteQueryTakeFirstSync,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
-  runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
   sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { definedFields } from "../record-fields.js";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -29,7 +32,6 @@ import type {
 } from "./persistence-types.js";
 import {
   blobToBase64,
-  definedFields,
   jsonValue,
   loadCardChildRows,
   numberValue,
@@ -42,7 +44,7 @@ import {
   type Row,
   type WorkboardCardDatabase,
 } from "./sqlite-store-records.js";
-import { createWorkboardDatabase } from "./sqlite-store-schema.js";
+import { createWorkboardDatabase, type WorkboardSqlConnection } from "./sqlite-store-schema.js";
 import { WorkboardSqliteSessionsBoardStore } from "./sqlite-store-sessions-board.js";
 import { bindNull, insertCard, prepareWorkboardUpsert } from "./sqlite-store-write.js";
 import {
@@ -59,6 +61,10 @@ export type WorkboardSqliteKernel = {
   [K in keyof WorkboardPersistence]: SyncStore<WorkboardPersistence[K]>;
 } & {
   close(this: void): void;
+  withWriteTransaction<T>(
+    operation: () => T,
+    options?: Parameters<typeof runSqliteImmediateTransactionSync>[2],
+  ): T;
 };
 
 function keyedEntries<T>(rows: Iterable<Row>, read: (row: Row) => T) {
@@ -69,7 +75,7 @@ function keyedEntries<T>(rows: Iterable<Row>, read: (row: Row) => T) {
 }
 
 class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
-  constructor(private readonly db: DatabaseSync) {}
+  constructor(private readonly db: WorkboardSqlConnection) {}
 
   private matchesUpdatedAt(key: string, expectedUpdatedAt: number): boolean {
     const current = executeSqliteQueryTakeFirstSync(
@@ -263,7 +269,7 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
   entries(scope?: WorkboardCardReadScope): Array<{ key: string; value: PersistedWorkboardCard }> {
     // Selection and hydration must agree if another connection changes a parent or sibling.
     return scope?.kind === "worker-context"
-      ? runSqliteDeferredTransactionSync(this.db, () => this.readEntries(scope))
+      ? runEngineStoreReadSnapshot(this.db, () => this.readEntries(scope))
       : this.readEntries(scope);
   }
 
@@ -452,7 +458,7 @@ function readBoard(row: Row): PersistedWorkboardBoard {
 class WorkboardSqliteBoardStore implements SyncStore<WorkboardKeyedStore<PersistedWorkboardBoard>> {
   private readonly rowsQuery;
 
-  constructor(private readonly db: DatabaseSync) {
+  constructor(private readonly db: WorkboardSqlConnection) {
     this.rowsQuery = getNodeSqliteKysely<{ workboard_boards: Row }>(db)
       .selectFrom("workboard_boards")
       .selectAll();
@@ -564,7 +570,7 @@ function readSubscription(row: Row): PersistedWorkboardNotificationSubscription 
 class WorkboardSqliteSubscriptionStore implements SyncStore<WorkboardSubscriptionStore> {
   private readonly rowsQuery;
 
-  constructor(private readonly db: DatabaseSync) {
+  constructor(private readonly db: WorkboardSqlConnection) {
     this.rowsQuery = getNodeSqliteKysely<{ workboard_notification_subscriptions: Row }>(db)
       .selectFrom("workboard_notification_subscriptions")
       .selectAll();
@@ -634,7 +640,7 @@ class WorkboardSqliteAttachmentStore implements SyncStore<
 > {
   private readonly rowsQuery;
 
-  constructor(private readonly db: DatabaseSync) {
+  constructor(private readonly db: WorkboardSqlConnection) {
     this.rowsQuery = getNodeSqliteKysely<{
       workboard_card_attachments: Row;
       workboard_attachment_blobs: Row;
@@ -689,8 +695,9 @@ class WorkboardSqliteAttachmentStore implements SyncStore<
 export function createWorkboardSqliteKernel(
   dbPath: string,
   retainClose?: (close: () => void) => void,
+  postgresInput?: DatabaseEngineInput,
 ): WorkboardSqliteKernel {
-  const { db, close } = createWorkboardDatabase(dbPath, retainClose);
+  const { db, close } = createWorkboardDatabase(dbPath, retainClose, postgresInput);
   const boards = new WorkboardSqliteBoardStore(db);
   return {
     cards: new WorkboardSqliteCardStore(db),
@@ -699,5 +706,7 @@ export function createWorkboardSqliteKernel(
     subscriptions: new WorkboardSqliteSubscriptionStore(db),
     attachments: new WorkboardSqliteAttachmentStore(db),
     close,
+    withWriteTransaction: (operation, options) =>
+      runSqliteImmediateTransactionSync(db, operation, options),
   };
 }

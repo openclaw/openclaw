@@ -44,17 +44,43 @@ export function isRestartRecoveryTombstone(
 /** Stable Gateway error detail for stale session lifecycle requests. */
 export const SESSION_LIFECYCLE_CHANGED_ERROR_REASON = "session-changed";
 
-/** Lifecycle-owned expired, initializing, restart-tombstoned, and archived sessions reject work. */
-export function resolveSessionWorkStartError(
+type SessionWorkStartBlockReason =
+  | "deleted"
+  | "changed"
+  | "expired"
+  | "initialization_pending"
+  | "provider_review"
+  | "restart_tombstone"
+  | "archived"
+  | "workspace_pending";
+
+export class SessionWorkStartError extends Error {
+  constructor(
+    readonly reason: SessionWorkStartBlockReason,
+    message: string,
+    readonly retryable = false,
+  ) {
+    super(message);
+  }
+}
+
+/** One work-start policy supplies both user errors and recovery disposition. */
+export function resolveSessionWorkStartBlock(
   sessionKey: string,
   entry: SessionWorkStartEntry | null | undefined,
   options?: SessionWorkStartOptions,
-): string | undefined {
+): SessionWorkStartError | undefined {
   if (options?.expectedSessionId && !entry) {
-    return `Session "${sessionKey}" was deleted while starting work. Retry.`;
+    return new SessionWorkStartError(
+      "deleted",
+      `Session "${sessionKey}" was deleted while starting work. Retry.`,
+    );
   }
   if (options?.expectedSessionId && entry?.sessionId !== options.expectedSessionId) {
-    return `Session "${sessionKey}" changed while starting work. Retry.`;
+    return new SessionWorkStartError(
+      "changed",
+      `Session "${sessionKey}" changed while starting work. Retry.`,
+    );
   }
   const incognitoExpiresAt = entry ? resolveIncognitoSessionExpiresAt(entry) : undefined;
   if (
@@ -62,15 +88,25 @@ export function resolveSessionWorkStartError(
     incognitoExpiresAt !== undefined &&
     Date.now() >= incognitoExpiresAt
   ) {
-    return `Incognito session "${sessionKey}" expired. Start a new Incognito session.`;
+    return new SessionWorkStartError(
+      "expired",
+      `Incognito session "${sessionKey}" expired. Start a new Incognito session.`,
+    );
   }
   if (entry?.initializationPending === true) {
-    return `Session "${sessionKey}" is still initializing. Retry after initialization completes.`;
+    return new SessionWorkStartError(
+      "initialization_pending",
+      `Session "${sessionKey}" is still initializing. Retry after initialization completes.`,
+      true,
+    );
   }
   if (entry?.providerReview && options?.purpose !== "accepted-result-settlement") {
     try {
       if (!options?.providerReviewAcknowledgment) {
-        return `Session "${sessionKey}" is paused as a precaution. Review the provider findings in chat before continuing.`;
+        return new SessionWorkStartError(
+          "provider_review",
+          `Session "${sessionKey}" is paused as a precaution. Review the provider findings in chat before continuing.`,
+        );
       }
       assertProviderReviewAcknowledgment(options.providerReviewAcknowledgment, {
         sessionKey,
@@ -78,7 +114,10 @@ export function resolveSessionWorkStartError(
         runId: options.runId,
       });
     } catch {
-      return `Session "${sessionKey}" provider review changed. Refresh the findings before continuing.`;
+      return new SessionWorkStartError(
+        "provider_review",
+        `Session "${sessionKey}" provider review changed. Refresh the findings before continuing.`,
+      );
     }
   }
   const restartRecoveryTombstone = isRestartRecoveryTombstone(entry);
@@ -87,18 +126,36 @@ export function resolveSessionWorkStartError(
     if (options?.allowRestartTombstoneReplacement === true && !entry?.providerReview) {
       return undefined;
     }
-    return entry?.modelSelectionLocked === true
-      ? `Session "${sessionKey}" ended during restart recovery and cannot be replaced while model selection is locked. Open it in WebChat and use Resume in new session.`
-      : `Session "${sessionKey}" ended during restart recovery. Use /new or /reset to start a replacement session.`;
+    return new SessionWorkStartError(
+      "restart_tombstone",
+      entry?.modelSelectionLocked === true
+        ? `Session "${sessionKey}" ended during restart recovery and cannot be replaced while model selection is locked. Open it in WebChat and use Resume in new session.`
+        : `Session "${sessionKey}" ended during restart recovery. Use /new or /reset to start a replacement session.`,
+    );
   }
   if (entry?.archivedAt !== undefined) {
-    return `Session "${sessionKey}" is archived. Restore it before starting new work.`;
+    return new SessionWorkStartError(
+      "archived",
+      `Session "${sessionKey}" is archived. Restore it before starting new work.`,
+    );
   }
   if (
     !options?.allowPendingWorkspace &&
     (entry?.pendingProjectGitUrl !== undefined || entry?.pendingWorktree !== undefined)
   ) {
-    return `Session "${sessionKey}" workspace is not ready. Wait for setup to finish or retry in chat.`;
+    return new SessionWorkStartError(
+      "workspace_pending",
+      `Session "${sessionKey}" workspace is not ready. Wait for setup to finish or retry in chat.`,
+      true,
+    );
   }
   return undefined;
+}
+
+export function resolveSessionWorkStartError(
+  sessionKey: string,
+  entry: SessionWorkStartEntry | null | undefined,
+  options?: SessionWorkStartOptions,
+): string | undefined {
+  return resolveSessionWorkStartBlock(sessionKey, entry, options)?.message;
 }

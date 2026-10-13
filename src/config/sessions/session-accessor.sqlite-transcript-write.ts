@@ -1,7 +1,6 @@
 import { isMainThread } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ok, type Result } from "@openclaw/normalization-core/result";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -40,7 +39,6 @@ import {
   resolveSqliteTranscriptScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
-  transcriptWriteScopeIsCurrent,
 } from "./session-accessor.sqlite-scope.js";
 import {
   appendTranscriptMessageInTransaction,
@@ -77,6 +75,7 @@ import type {
   SessionTranscriptRuntimeTarget,
   SessionTranscriptWriteLockAccessorContext,
 } from "./session-accessor.types.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import {
@@ -90,33 +89,10 @@ import { collectSessionEntryLookupKeys } from "./store-entry.js";
 import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
 import {
   assertOwnedTranscriptWriteCommit,
-  SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
 } from "./transcript-write-context.js";
 
 export { withTranscriptWriteTransaction } from "./session-accessor.sqlite-transcript-write-snapshot.js";
-
-export async function replaceTranscriptEvents(
-  scope: SessionTranscriptAccessScope,
-  events: TranscriptEvent[],
-): Promise<void> {
-  const resolved = resolveSqliteTranscriptScope(scope);
-  const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
-  await restoreSessionColdTranscript({ ...scope, sessionId: resolved.sessionId });
-  await runExclusiveSqliteSessionWrite(
-    resolved,
-    async () => {
-      runOpenClawAgentWriteTransaction(
-        (database) => {
-          replaceSqliteTranscriptEventsInTransaction(database, resolved, events);
-        },
-        toDatabaseOptions(resolved),
-        { operationLabel: "session.transcript.replace" },
-      );
-    },
-    "session.transcript.replace",
-  );
-}
 
 /** Replaces the active session identity and its prepared branch in one commit. */
 export async function replaceSessionWithBranchedTranscript(
@@ -258,33 +234,6 @@ export async function rewriteTranscriptEventRowsExact(
   );
 }
 
-/** Fully replaces rows for one transcript synchronously for sync session runtimes. */
-export function replaceTranscriptEventsSync(
-  scope: SessionTranscriptWriteScope,
-  events: TranscriptEvent[],
-): boolean {
-  // Every sync replacement inherits and enforces the admitted writer claim.
-  const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
-  const resolved = resolveSqliteTranscriptScope(fencedScope);
-  const replaced = runOpenClawAgentWriteTransaction(
-    (database) => {
-      assertOwnedTranscriptWriteCommit(fencedScope);
-      const fresh = readSessionEntryRow(database, resolved.sessionKey);
-      if (!transcriptWriteScopeIsCurrent(fresh?.entry, resolved.sessionId, fencedScope)) {
-        return false;
-      }
-      replaceSqliteTranscriptEventsInTransaction(database, resolved, events);
-      return true;
-    },
-    toDatabaseOptions(resolved),
-    { operationLabel: "session.transcript.replace" },
-  );
-  if (fencedScope.expectedWriterRunId !== undefined && !replaced) {
-    throw new SessionTranscriptWriterClaimReboundError();
-  }
-  return replaced;
-}
-
 export { replaceTranscriptSuffixEventsSync } from "./session-accessor.sqlite-transcript-suffix-write.js";
 
 /** Appends one raw transcript event to the additive SQLite transcript store. */
@@ -292,21 +241,36 @@ export async function appendTranscriptEvent(
   scope: SessionTranscriptAccessScope,
   event: TranscriptEvent,
   options: TranscriptEventAppendOptions = {},
-): Promise<void> {
+): Promise<boolean> {
   assertNonMessageTranscriptEvent(event);
   const resolved = resolveSqliteTranscriptScope(scope);
+  if (isMainThread && supportsOpenClawAgentDatabaseExecution(toDatabaseOptions(resolved))) {
+    if (options.beforeCommitInTransaction) {
+      throw new Error(
+        "Transcript transaction callbacks require worker-local execution; use a prepared transcript event",
+      );
+    }
+    const { appendTranscriptEventInWorker } = await import("./session-transcript-event.js");
+    return appendTranscriptEventInWorker({
+      scope: captureLifecycleDatabaseScope(resolved),
+      event,
+      appendIntent: options.appendIntent,
+    });
+  }
   const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
   await restoreSessionColdTranscript({ ...scope, sessionId: resolved.sessionId });
-  await runExclusiveSqliteSessionWrite(
+  return runExclusiveSqliteSessionWrite(
     resolved,
     async () => {
-      runOpenClawAgentWriteTransaction(
+      return runOpenClawAgentWriteTransaction(
         (database) => {
           options.beforeCommitInTransaction?.();
-          appendTranscriptEventInTransaction(
-            database,
-            resolved,
-            resolveTranscriptEventAppendParent(database, resolved.sessionId, event, options),
+          return (
+            appendTranscriptEventInTransaction(
+              database,
+              resolved,
+              resolveTranscriptEventAppendParent(database, resolved.sessionId, event, options),
+            ) !== false
           );
         },
         toDatabaseOptions(resolved),
@@ -315,16 +279,6 @@ export async function appendTranscriptEvent(
     },
     "session.transcript.event-append",
   );
-}
-
-/** Appends one raw non-message transcript event synchronously for sync session runtimes. */
-export function appendTranscriptEventSync(
-  scope: SessionTranscriptWriteScope,
-  event: TranscriptEvent,
-  options: TranscriptEventAppendOptions = {},
-): Result<boolean, TranscriptAppendRefusal> {
-  const snapshot = appendTranscriptEventSnapshotSync(scope, event, options);
-  return snapshot.ok ? ok(snapshot.value.result.appended) : snapshot;
 }
 
 export function appendTranscriptEventSnapshotSync(
@@ -409,7 +363,6 @@ export function appendTranscriptMessageSnapshotSync<TMessage>(
   options: TranscriptMessageAppendOptions<TMessage>,
   preparedMessage?: PreparedTranscriptMessageAppend<TMessage>,
   workerOptions?: {
-    messageAlreadyRedacted?: true;
     scheduleProjectionReconcile?: boolean;
     onProjectionReconcileNeeded?: () => void;
   },
@@ -422,9 +375,7 @@ export function appendTranscriptMessageSnapshotSync<TMessage>(
       const committed = appendTranscriptMessageInTransaction(
         database,
         resolved,
-        workerOptions?.messageAlreadyRedacted
-          ? { ...options, messageAlreadyRedacted: true }
-          : options,
+        options,
         preparedMessage,
         workerOptions,
       );
@@ -484,6 +435,12 @@ export async function withTranscriptWriteSequence<T>(
   scope: SessionTranscriptWriteScope,
   run: (context: SessionTranscriptWriteLockAccessorContext) => Promise<T> | T,
 ): Promise<T> {
+  const memory = getSessionActorStorageBinding(scope);
+  if (memory) {
+    const { withActorTranscriptWriteSequence } =
+      await import("./session-actor-transcript-sequence.js");
+    return withActorTranscriptWriteSequence(scope, memory, run);
+  }
   const actor = captureIncognitoSessionOperation(scope);
   if (!actor) {
     return withHostTranscriptWriteLock(scope, run);
@@ -511,12 +468,7 @@ async function withHostTranscriptWriteLock<T>(
     return runNativeTranscriptWriteLock(fenced, run);
   }
   const captured = captureLifecycleDatabaseScope(resolved);
-  const identity = readDatabasePathIdentitySync(captured.path);
   const { withWorkerTranscriptWriteLock } = await import("./session-transcript-locked-write.js");
-  const current = readDatabasePathIdentitySync(captured.path);
-  if (current.key !== identity.key || current.birthtime !== identity.birthtime) {
-    throw new Error("Transcript lock changed its physical store");
-  }
   // Physical admission uses captured.path; writer authority retains the captured selector.
   return withWorkerTranscriptWriteLock(
     { ...fenced, ...captured, storePath: captured.path },

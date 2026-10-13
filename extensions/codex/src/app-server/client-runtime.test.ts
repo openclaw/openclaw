@@ -55,12 +55,14 @@ describe("Codex app-server client runtime", () => {
     }
     clients.length = 0;
     vi.useRealTimers();
+    vi.restoreAllMocks();
     mocks.refreshAuth.mockClear();
     mocks.mergeRateLimitUpdate.mockClear();
   });
 
   it("retains ephemeral policy and history beyond persistent idle and capacity limits", async () => {
     vi.useFakeTimers();
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     const { client } = createClientHarness();
     clients.push(client);
     ensureCodexAppServerClientRuntime(client, { agentDir: "/tmp/agent" });
@@ -602,6 +604,7 @@ describe("Codex app-server client runtime", () => {
 
   it("renews a failed expiry instead of spinning and retries the same native owner", async () => {
     vi.useFakeTimers();
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     const harness = createRuntimeHarness();
     const release = vi
       .fn<(threadId: string) => Promise<void>>()
@@ -686,6 +689,7 @@ describe("Codex app-server client runtime", () => {
 
   it("protects native-child parents and renews their idle clock after the final child", async () => {
     vi.useFakeTimers();
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     const harness = createRuntimeHarness();
     const release = vi.fn(async (_threadId: string) => undefined);
     const unprotect = protectCodexAppServerLiveThread(harness.client, "thread-parent");

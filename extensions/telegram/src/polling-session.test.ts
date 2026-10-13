@@ -651,7 +651,7 @@ describe("TelegramPollingSession", () => {
     });
   });
 
-  it("recovers offset persistence and suppresses restart replay", async (context) => {
+  it("suppresses restart replay after checkpoint persistence fails", async (context) => {
     await withTempSpool(async (tempDir) => {
       let durableUpdateId = 40;
       const writeUpdateId = vi
@@ -663,7 +663,7 @@ describe("TelegramPollingSession", () => {
         initialUpdateId: durableUpdateId,
         writeUpdateId,
         onInvalidUpdateId: vi.fn(),
-        onRetry: vi.fn(),
+        onError: vi.fn(),
       });
       const handleUpdate = vi.fn(async () => undefined);
       const firstAbort = new AbortController();
@@ -696,25 +696,23 @@ describe("TelegramPollingSession", () => {
           updateId: 42,
         });
         await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledOnce());
-        await waitForTelegramTestState(() =>
-          expect(firstOffsetPersistence.getCommittedUpdateId()).toBe(42),
-        );
         await waitForTelegramTestState(async () =>
           expect(await pendingUpdateIds(tempDir, "all")).toEqual([]),
         );
+        expect(firstOffsetPersistence.getCommittedUpdateId()).toBe(40);
       } finally {
         await firstLifetime.close();
       }
 
-      expect(writeUpdateId).toHaveBeenCalledTimes(2);
-      expect(durableUpdateId).toBe(42);
+      expect(writeUpdateId).toHaveBeenCalledTimes(1);
+      expect(durableUpdateId).toBe(40);
 
       const restartWriteUpdateId = vi.fn(async () => undefined);
       const restartedOffsetPersistence = createTelegramUpdateOffsetPersistence({
         initialUpdateId: durableUpdateId,
         writeUpdateId: restartWriteUpdateId,
         onInvalidUpdateId: vi.fn(),
-        onRetry: vi.fn(),
+        onError: vi.fn(),
       });
       const restartAbort = new AbortController();
       const restartWorker = createListeningIngressWorker();
@@ -745,7 +743,9 @@ describe("TelegramPollingSession", () => {
           updateId: 42,
         });
         expect(handleUpdate).toHaveBeenCalledOnce();
-        expect(restartWriteUpdateId).not.toHaveBeenCalled();
+        await waitForTelegramTestState(() =>
+          expect(restartWriteUpdateId).toHaveBeenCalledExactlyOnceWith(42),
+        );
       } finally {
         await restartedLifetime.close();
       }

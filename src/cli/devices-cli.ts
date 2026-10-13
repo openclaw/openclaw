@@ -9,6 +9,7 @@ const DEFAULT_DEVICES_TIMEOUT_MS = 10_000;
 
 // Keep device-pairing crypto/table dependencies out of root help startup.
 const deviceAction = createLazyRuntimeMethodBinder(() => import("./devices-cli.runtime.js"));
+const joinAction = createLazyRuntimeMethodBinder(() => import("./devices-cli-join.js"));
 
 export function registerDevicesCli(program: Command) {
   const devices = program
@@ -27,7 +28,7 @@ export function registerDevicesCli(program: Command) {
     .description(
       "Mint a single-use node onboarding URL (not a mobile app setup code; use `openclaw qr` for that)",
     )
-    .action(deviceAction((runtime) => runtime.runDevicesJoinCodeCommand));
+    .action(joinAction((runtime) => runtime.runDevicesJoinCodeCommand));
 
   devices
     .command("remove")

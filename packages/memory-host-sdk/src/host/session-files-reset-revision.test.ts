@@ -1,25 +1,24 @@
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
 import {
+  captureRuntimeConfigAsyncReader,
   clearConfigCache,
   clearRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   appendTranscriptEvent,
+  appendTranscriptMessage,
   patchSessionEntryCore,
   persistSessionTranscriptTurn,
   readActiveTranscriptEntryAnchor,
   readTranscriptStatsSync,
-  replaceTranscriptEventsSync,
   resetSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../../../../src/config/sessions/session-accessor.js";
+import { replaceTranscriptEventsSync } from "../../../../src/config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { runWithSessionTranscriptReadFence } from "../../../../src/config/sessions/session-transcript-read-fence.js";
-import { WorkerTaskPool } from "../../../../src/infra/worker-task-pool.js";
 import { registerSecretValueForRedaction } from "../../../../src/logging/secret-redaction-registry.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -31,6 +30,7 @@ import {
 } from "../../../../src/state/openclaw-state-db.js";
 import {
   buildSessionEntry,
+  buildSessionEntries,
   matchesSessionEntryPrefixHash,
   type SessionFileEntry,
 } from "./session-files.js";
@@ -80,6 +80,86 @@ afterEach(async () => {
 });
 
 describe("SQLite session snapshots and reset content revision", () => {
+  it("keeps batched incremental exports current across sessions, appends and rewrites", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "incremental-export",
+      sessionKey: "agent:main:chat:incremental-export",
+      storePath: path.join(tmpDir, "agents", "main", "sessions", "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const sibling = {
+      ...scope,
+      sessionId: "batch-sibling",
+      sessionKey: "agent:main:chat:batch-sibling",
+    };
+    await upsertSessionEntryCore(sibling, { sessionId: sibling.sessionId, updatedAt: 1 });
+    await appendTranscriptMessage(sibling, {
+      eventId: "sibling-question",
+      message: { role: "user", content: "A separate session preference." },
+    });
+    const first = {
+      type: "message",
+      id: "heartbeat",
+      message: {
+        role: "user",
+        content: "Internal poll.",
+        provenance: { kind: "internal_system", sourceTool: "heartbeat" },
+      },
+    };
+    expect(replaceTranscriptEventsSync(scope, [first])).toBe(true);
+    const fullExport = () =>
+      buildSessionEntry(scope.sessionKey, { ...scope, onTranscriptMessage() {} });
+    let expectedSibling = "User: A separate session preference.";
+    const workerExport = async () => {
+      const [entry, siblingEntry] = await buildSessionEntries([
+        { absPath: scope.sessionKey, options: scope },
+        { absPath: sibling.sessionKey, options: sibling },
+      ]);
+      expect(siblingEntry?.content).toBe(expectedSibling);
+      expect(siblingEntry).toEqual(
+        await buildSessionEntry(sibling.sessionKey, { ...sibling, onTranscriptMessage() {} }),
+      );
+      return entry ?? null;
+    };
+    expect(await workerExport()).toEqual(await fullExport());
+
+    await appendTranscriptMessage(scope, {
+      eventId: "heartbeat-answer",
+      message: { role: "assistant", content: "Excluded heartbeat continuation." },
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "question",
+      message: {
+        role: "user",
+        content: "A searchable new preference.",
+        __openclaw: { senderIsOwner: true },
+      },
+    });
+    const appended = requireSessionEntry(await workerExport());
+    expect(appended).toEqual(await fullExport());
+    expect(appended.content).toBe("User: A searchable new preference.");
+    expect(appended.lineMap).toEqual([3]);
+    expect(appended.lineProvenance[0]?.originClass).toBe("owner");
+    expect(await workerExport()).toEqual(appended);
+
+    await appendTranscriptMessage(sibling, {
+      eventId: "sibling-answer",
+      message: { role: "assistant", content: "The sibling's committed update." },
+    });
+    expectedSibling += "\nAssistant: The sibling's committed update.";
+
+    expect(
+      replaceTranscriptEventsSync(scope, [
+        { ...first, message: { role: "user", content: "Rewritten searchable preference." } },
+      ]),
+    ).toBe(true);
+    const rewritten = requireSessionEntry(await workerExport());
+    expect(rewritten).toEqual(await fullExport());
+    expect(rewritten.content).toBe("User: Rewritten searchable preference.");
+    expect(rewritten.lineMap).toEqual([1]);
+  });
+
   it.each(["interactive", "dreaming", "cron"])(
     "preserves SQLite/archive output and callback observations for %s transcripts",
     async (kind) => {
@@ -209,91 +289,40 @@ describe("SQLite session snapshots and reset content revision", () => {
     },
   );
 
-  it.each([1, 2])(
-    "handles %i redaction changes while an export is pending",
-    async (invalidations) => {
-      const scope = {
-        agentId: "main",
-        sessionId: `redaction-refresh-${invalidations}`,
-        sessionKey: `agent:main:chat:redaction-refresh-${invalidations}`,
-        storePath: path.join(tmpDir, "agents", "main", "sessions", "sessions.json"),
-      };
-      const secrets = Array.from(
-        { length: invalidations },
-        (_, index) => `session-export-${invalidations}-${index}-registered-fixture`,
-      );
-      const sessionEntry = { sessionId: scope.sessionId, updatedAt: 1 };
-      await patchSessionEntryCore(scope, () => sessionEntry, {
-        fallbackEntry: sessionEntry,
-        skipMaintenance: true,
-      });
-      expect(
-        replaceTranscriptEventsSync(scope, [
-          {
-            type: "message",
-            id: "late-secret",
-            message: { role: "user", content: secrets.join(" ") },
-          },
-        ]),
-      ).toBe(true);
-      // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the intercepted pool receiver.
-      const run = WorkerTaskPool.prototype.run;
-      let replies = 0;
-      const spy = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(async function (
-        this: WorkerTaskPool<unknown, unknown>,
-        ...args
-      ) {
-        const result = await Reflect.apply(run, this, args);
-        const input = asOptionalRecord(args[0]);
-        if (
-          input?.kind === "session-entry" &&
-          asOptionalRecord(input.options)?.sessionId === scope.sessionId
-        ) {
-          const secret = secrets[replies++];
-          if (secret) {
-            registerSecretValueForRedaction(secret);
-          }
-        }
-        return result;
-      });
-      const sql = [
-        vi.spyOn(DatabaseSync.prototype, "prepare"),
-        vi.spyOn(DatabaseSync.prototype, "exec"),
-        vi.spyOn(StatementSync.prototype, "get"),
-        vi.spyOn(StatementSync.prototype, "all"),
-        vi.spyOn(StatementSync.prototype, "run"),
-        vi.spyOn(StatementSync.prototype, "iterate"),
-      ];
-      try {
-        const pending = buildSessionEntry(scope.sessionKey, scope);
-        if (invalidations === 2) {
-          await expect(pending).rejects.toThrow(
-            "Session transcript redaction changed during preparation; retry the operation.",
-          );
-        } else {
-          const entry = requireSessionEntry(await pending);
-          expect(entry.content).toBe("User: sessio…ture");
-          expect(entry.lineMap).toEqual([1]);
-        }
-        expect(replies).toBe(2);
-        for (const operation of sql) {
-          expect(operation).not.toHaveBeenCalled();
-        }
-      } finally {
-        for (const operation of sql) {
-          operation.mockRestore();
-        }
-        spy.mockRestore();
-      }
-      const stable = requireSessionEntry(await buildSessionEntry(scope.sessionKey, scope));
-      expect(stable.content).toBe(`User: ${secrets.map(() => "sessio…ture").join(" ")}`);
-      expect(stable.lineMap).toEqual([1]);
-      const current = requireSessionEntry(
-        await buildSessionEntry(scope.sessionKey, { ...scope, parseYieldEveryLines: 1 }),
-      );
-      expect(stable.hash).toBe(current.hash);
-    },
-  );
+  it("preserves registered secret text in worker and inline transcript exports", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "registered-secret-export",
+      sessionKey: "agent:main:chat:registered-secret-export",
+      storePath: path.join(tmpDir, "agents", "main", "sessions", "sessions.json"),
+    };
+    const content = "API_TOKEN = computeToken() sk-abc123456789012345678";
+    registerSecretValueForRedaction(content);
+    const sessionEntry = { sessionId: scope.sessionId, updatedAt: 1 };
+    await patchSessionEntryCore(scope, () => sessionEntry, {
+      fallbackEntry: sessionEntry,
+      skipMaintenance: true,
+    });
+    expect(
+      replaceTranscriptEventsSync(scope, [
+        {
+          type: "message",
+          id: "source-text",
+          message: { role: "user", content },
+        },
+      ]),
+    ).toBe(true);
+    const worker = requireSessionEntry(await buildSessionEntry(scope.sessionKey, scope));
+    const inline = requireSessionEntry(
+      await buildSessionEntry(scope.sessionKey, {
+        ...scope,
+        parseYieldEveryLines: 1,
+      }),
+    );
+    expect(worker.content).toBe(`User: ${content}`);
+    expect(inline.content).toBe(worker.content);
+    expect(inline.hash).toBe(worker.hash);
+  });
 
   it.each([false, true])(
     "keeps missing and incognito exports non-persisting (incognito=%s)",
@@ -440,6 +469,7 @@ describe("SQLite session snapshots and reset content revision", () => {
   });
 
   it("accepts a transcript append but invalidates its prefix hash after reset", async () => {
+    await captureRuntimeConfigAsyncReader()();
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     const storePath = path.join(sessionsDir, "sessions.json");
     const sessionKey = "agent:main:chat:reset-revision";

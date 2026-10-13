@@ -14,6 +14,10 @@ Doctor keeps the config from before that hook, reports the failure, and continue
 with the remaining repairs. Warning-only results stay visible without changing
 config. Repair the affected plugin, then run `openclaw doctor --fix` again.
 
+Doctor keeps plugin repair and diagnostic contracts available through later health
+checks and service finalization. It releases its private plugin resources when
+the flow ends, including failed runs.
+
 ## Runtime config migration
 
 Runtime config reads require per-model context budgets and current GitHub Copilot
@@ -27,6 +31,48 @@ Run `openclaw doctor --fix` before starting with these retired keys. Updates app
 the same transforms before candidate config validation, through the existing
 backup and include-aware write flow. Ordinary reads leave the authored values
 untouched so Doctor can report and persist the repair.
+
+## Direct Ollama Cloud routing
+
+Older Cloud-only setup stored hosted Ollama models under `models.providers.ollama`.
+When that provider points to `https://ollama.com`, Doctor moves it to
+`ollama-cloud` and rewrites its model references in agent defaults, model
+allowlists, per-agent settings, heartbeat, utility, subagent and compaction
+models, cron jobs, and session overrides. URL paths and trailing slashes do not
+change the hosted classification. An existing `ollama-cloud` catalog keeps its
+models and gains missing migrated models without duplicates.
+Role model-policy allow and deny rules move together, preserving restrictions.
+
+Localhost, LAN, and custom endpoints stay unchanged, including cloud models
+served through a signed-in local Ollama daemon. Other provider keys also stay
+unchanged. Doctor does not infer hosted routing from a model name.
+
+An explicit `remote.baseUrl` on a provider/model route is checked independently:
+local or custom memory embedding endpoints keep `ollama` even when chat moves
+to `ollama-cloud`. Empty endpoints continue to inherit the chat provider's route.
+Per-agent `agents.entries.<id>.memory.search` overrides resolve provider, model,
+and endpoint independently against `memory.search`. Doctor preserves that
+effective route, adding an explicit per-agent provider or model only when moving
+the shared defaults would otherwise change it.
+
+Both providers use `OLLAMA_API_KEY`, so environment-backed URLs, credentials, and
+SecretRefs keep their authored references without a credential-store migration.
+Doctor leaves saved `ollama` auth profiles untouched; if the key exists only in
+that saved profile, run `openclaw onboard --auth-choice ollama-cloud` to configure
+Cloud authentication.
+
+Migrated model references drop their `@profile` suffix rather than moving an
+account pin across providers. Doctor emits one reminder to re-pin with
+`/model <provider/model>@<profile>` if needed. Saved credentials are not modified.
+
+Run `openclaw doctor --fix` to apply the migration. Updates use the same repair.
+Doctor repairs cron and session
+references through their existing state owners, then backs up and publishes the
+config last. The Cloud provider is already available through the Ollama plugin.
+If interrupted before config publication, the hosted `ollama` entry remains and
+the next Doctor run finishes the idempotent repair. Once config publication
+completes, new local Ollama selections are left alone; Doctor never replays old
+config backups to infer a provider rename.
 
 ## Claude CLI model routing
 
@@ -70,10 +116,13 @@ format when rewriting existing data also counts as a writer. A format last
 written before the cutoff may be retired together with its Doctor checks.
 When Doctor refuses a retired input, it names an intermediate release to upgrade
 through before retrying. Retirement must leave persisted source data untouched.
+Doctor checks retired runtime files and referenced OAuth sidecars before entering
+repair maintenance or preparing database migrations. A refusal leaves the database
+schemas and running Gateway unchanged, so the intermediate upgrade remains usable.
 
 Except for the deferred readers recorded below, legacy normalization belongs to
 Doctor and migration owners, with the existing backup and verification flow.
-Runtime readers consume canonical state.
+Runtime readers consume the current state format.
 
 ### Deferred compaction checkpoints
 
@@ -106,7 +155,7 @@ inputs because July releases still wrote them.
 
 Global and project `settings.json` readers refuse retired settings before
 discovering agent resources. They preserve the original file and name the fields
-to repair. Back up the file, keep any existing canonical values, and replace:
+to repair. Back up the file, keep any existing current-format values, and replace:
 
 - `queueMode` with `steeringMode`.
 - `websockets` with `transport`: `true` becomes `"websocket"`, and `false` becomes `"sse"`.
@@ -124,7 +173,7 @@ config migrations, but does not rewrite these retired session settings.
 
 The `keybindings.json` reader also refuses retired action names such as `interrupt`
 and `submit`, naming their replacements (`app.interrupt` and `tui.input.submit`).
-Back up the file and rename the reported entries, keeping existing canonical
+Back up the file and rename the reported entries, keeping existing current-format
 bindings when both names occur. A refused reload preserves the last accepted
 bindings and leaves the file untouched. Unknown custom action names remain
 supported. OpenClaw `2026.9.7` retains the former keybinding reader; current Doctor
@@ -190,8 +239,8 @@ Voice Call config migration remains supported for `provider: "log"`,
 `twilio.from`, flat streaming provider settings, and
 `realtime.agentContext.includeSystemPrompt`. Published `2026.9.7` can preserve
 and rewrite these settings while plugin repair is deferred. Doctor owns their
-normalization, preserves canonical values, and backs up config before writing;
-runtime parsing accepts only the canonical shape.
+normalization, preserves current-format values, and backs up config before writing;
+runtime parsing accepts only the current shape.
 
 OpenClaw `v2026.9.7` can still write ownerless and mode-less cron jobs, and its
 migration/import writers can preserve null, `deliver`, or mixed-case delivery
@@ -265,7 +314,7 @@ Doctor also refuses these retired config inputs:
   or flat streaming settings (`streamMode`, `chunkMode`, `blockStreaming`,
   `blockStreamingCoalesce`, and `draftChunk`), including account overrides.
 - Nextcloud Talk `allowPrivateNetwork`; use the intermediate migration before the
-  canonical `network.dangerouslyAllowPrivateNetwork` setting.
+  current `network.dangerouslyAllowPrivateNetwork` setting.
 - Matrix `dm.policy: "trusted"`, flat `allowPrivateNetwork`, and `allow` in
   `groups.<room>` or `rooms.<room>`, including account overrides.
 - Slack `channels.<id>.allow`, including account overrides.
@@ -307,7 +356,7 @@ definitions, ownership, and runtime state. Archived supported quarantine JSON
 keeps its original bytes.
 
 An owner recorded only in the SQLite owner column is copied into the job's
-canonical definition by Doctor. Its agent identity and runtime state stay the
+current-format definition by Doctor. Its agent identity and runtime state stay the
 same; a different system-agent selection does not override it.
 
 Ordinary config writes do not repair cron ownership. A roster change that would
@@ -357,7 +406,7 @@ entries become objects with stable IDs. Obsolete `commandText` and unrecognized
 source labels remain in the backup; current command-use metadata, socket
 credentials, and the row's update timestamp are preserved.
 
-Runtime readers require canonical policy and report `openclaw doctor --fix`
+Runtime readers require the current policy format and report `openclaw doctor --fix`
 guidance for a legacy row without replacing it. The update-time Doctor pass
 runs the same migration. Repeating Doctor leaves the normalized row and its IDs
 unchanged. Published SDK and operator input normalization remain available at
@@ -374,7 +423,7 @@ Doctor and the update-time Doctor pass use the existing shared-state schema
 repair. Doctor preserves a verified pre-migration database snapshot even when
 the numeric schema version is already current, then adds the missing nullable
 columns. Install records, package references, timestamps, and consent-bound v1
-resume plans retain their values. Repeating the repair is idempotent.
+resume plans retain their values. Repeating the repair has no additional effect.
 
 ## Channel account routing during an update
 
@@ -429,7 +478,7 @@ directly, run `openclaw doctor --fix` before starting the Gateway. Explicit
 
 ## Agent roster migration
 
-Ordinary config reads require canonical keyed `agents.entries`; they do not
+Ordinary config reads require the current keyed `agents.entries` format; they do not
 convert a populated `agents.list` or remove legacy `default` markers. Run
 `openclaw doctor --fix` before starting a directly replaced binary with those
 inputs. The normal `openclaw update` flow invokes the candidate Doctor. Fresh
@@ -455,7 +504,7 @@ by hand: Doctor still needs that provenance to migrate data ownership.
 
 Run `openclaw doctor --fix` or retry the update with that single-file config.
 After repair completes and `openclaw config validate` succeeds, split the
-canonical config back into includes if desired, then validate it again. Keep
+updated config back into includes if desired, then validate it again. Keep
 the backups until the repaired config and migrated state have been verified.
 
 ## Channel private-network opt-ins
@@ -463,7 +512,7 @@ the backups until the repaired config and migrated state have been verified.
 Matrix, Mattermost, and Tlon runtime paths read only
 `network.dangerouslyAllowPrivateNetwork` at the channel or account scope.
 Tlon retains its plugin-owned Doctor transform for the older flat
-`allowPrivateNetwork` key. It preserves an explicit canonical boolean, including
+`allowPrivateNetwork` key. It preserves an explicit current-format boolean, including
 `false`. Run `openclaw doctor --fix` before using that legacy config with a
 directly replaced binary. Updates invoke the same transform through Doctor and
 the normal config backup flow. Deferred plugin migrations retain their inputs
@@ -502,14 +551,17 @@ Keep this marker when removing a pin. Subsequent Doctor runs, restarts, and
 updates will not recreate it. Account pins cover only accounts present during
 migration. For trusted official plugins with older Doctor contracts, Doctor uses
 historical listener facts shipped with the Gateway. The installed plugin retains
-ownership of its other config migrations. Other plugins can remain pending while
+ownership of its other config migrations. During an update, these listener repairs
+also run when an installed official plugin is deferred until package convergence;
+its deferred code is not loaded, and replacement plugins retain their ownership.
+Other plugins can remain pending while
 other channels finish. Replacing a pending plugin runs the same migration through
 the installer's backed-up config publication before its new runtime starts.
 Update a retained older standalone plugin before removing its pin; older plugin
 versions can still open their historical default port.
 
 Startup leaves config bytes unchanged. When the completion marker is the sole
-required change, startup records it in canonical SQLite machine state, including
+required change, startup records it in stored SQLite machine state, including
 when no config file exists yet. If endpoints or other channel settings need
 repair, startup refuses with `openclaw doctor --fix` guidance. For a read-only
 external config source, update that source and its completion marker as directed
@@ -587,17 +639,17 @@ copy the settings into Talk.
 ## ACP session metadata
 
 Doctor moves historical raw, agent-prefixed, and ownerless ACP metadata keys to
-canonical keys bound to the owning session. It also imports ACP metadata embedded
+normalized keys bound to the owning session. It also imports ACP metadata embedded
 in SQLite session entries. Before rewriting a source database, Doctor saves a
 verified private SQLite backup and reports its path. Rekeying preserves every
-metadata column except the key. Embedded imports keep the canonical ACP fields,
+metadata column except the key. Embedded imports keep the current ACP fields,
 including identity and runtime-options JSON, lifecycle binding, and last activity;
 the entry's update timestamp becomes the metadata update timestamp. Unknown
 embedded fields remain in the source backup. Embedded JSON follows the session
 decoder's last-value semantics for duplicate properties. Ambiguous ownership and conflicting
 payloads remain intact with a warning naming the affected session.
 
-Runtime reads and writes use canonical metadata only. Startup refuses unmigrated
+Runtime reads and writes use current-format metadata only. Startup refuses unmigrated
 ACP state with a current session binding before handing session stores to
 runtime, with offline repair instructions. Historical shared rows whose binding
 is absent or stale remain intact and do not block startup; runtime does not serve
@@ -605,7 +657,7 @@ their metadata. Unreadable candidate stores and unresolved recorded owners still
 block admission. Run `openclaw doctor --fix` after restoring older state; the update-time
 Doctor pass runs the same repair.
 Embedded metadata imports record durable receipts before removing the source
-field, so retrying interrupted cleanup cannot reopen a session after its canonical
+field, so retrying interrupted cleanup cannot reopen a session after its stored
 metadata was cleared. Legacy `sessions.json` imports retain their existing backups
 and source receipts.
 
@@ -626,18 +678,23 @@ selection.
 
 ## Missing plugins during migration
 
+Doctor owns deferred plugin migrations. Normal CLI commands, Gateway startup,
+and config reads do not inspect pending migration records or apply their
+validation exemptions. They consume canonical config and state.
+
 A configured plugin that is missing or cannot finish installation does not block
-Doctor, updates, or Gateway startup. OpenClaw records a warning that names the
+Doctor from repairing independent state. Doctor records a warning that names the
 plugin, its pending migration, and the command to finish installation or repair.
-The Gateway continues serving the available plugins.
+Available plugins can run when the retained config passes normal validation.
+If a retained legacy setting is rejected, install or repair its owning plugin,
+then run `openclaw doctor --fix` before starting the Gateway.
 
 `doctor --fix` repairs an older shared database schema before recording pending
 plugin migrations. Missing plugins therefore do not prevent the database repair;
 their inputs stay available for a later retry.
 
-Deferred migrations keep their state and legacy config inputs in place. Config
-repairs can still update unrelated settings, while the pending plugin's retired
-fields remain inactive. After installing or repairing the plugin, run
+Doctor keeps deferred state and legacy config inputs in place during its repairs,
+including when it changes unrelated settings. After installing or repairing the plugin, run
 `openclaw doctor --fix` to complete its migration and clear the pending warning.
 During an update driven by an older version, plugin installation can remain
 deferred until that updater finishes; its pending inputs receive the same
@@ -660,13 +717,21 @@ Update rehearsals leave unavailable-owner settlement to live update finalization
 If retained settings or an explicit state/inspection requirement remain, Doctor
 keeps the obligation pending and names the plugin to install or enable. A retired
 plugin may need its maintainer's supported recovery path. Disabling or uninstalling
-the plugin does not by itself complete its migration. Update status and startup
-read the same settled receipts after Doctor finishes; an updating parent that
+the plugin does not by itself complete its migration. Update status reads the settled receipts after Doctor finishes; an updating parent that
 still owns plugin installation continues to defer the work.
 
-While a migration is pending, explicit config edits that would change or remove
-its retained inputs are refused with the recovery command. Unrelated settings
-remain writable. Complete the plugin migration before editing those inputs.
+While a migration is pending, Doctor's migration-aware writes refuse edits that
+would change or remove its retained inputs and recheck pending obligations before
+publication. Ordinary config edits use normal validation and do not inspect
+migration records. Complete the plugin migration before editing its retained
+settings.
+
+`openclaw update` runs the candidate's Doctor during update and plugin convergence,
+including for older supported updaters. After a direct Git/source or package-manager
+upgrade, run `openclaw doctor --fix` before normal commands or Gateway startup.
+Package installation does not perform operator-state migrations. Doctor and
+`openclaw update status` report pending plugin upgrades even when no update run
+exists.
 
 ## Blocked local plugins
 
@@ -821,7 +886,7 @@ bytes unchanged. It never needs credentials or a running Gateway.
 
 A second fixture covers `messages.tts` moving to `tts` before retired TTS fields
 are removed. Doctor preserves the old preference-file path in shared machine
-state before removing `prefsPath`; existing canonical settings and stored state
+state before removing `prefsPath`; existing current-format settings and stored state
 keep precedence, and the preferences file stays intact.
 
 The fixture combines a two-agent `agents.list` roster, the legacy model
@@ -862,7 +927,7 @@ without preventing independent credential-field repairs or safe aliases.
 
 The conversion moves a recognized `mode` to a missing `type`, changes
 `type: "apiKey"` to `api_key`, and moves usable `apiKey` or `api_key` values to
-`key`. Usable canonical keys and references take precedence; empty or malformed
+`key`. Usable current-format keys and references take precedence; empty or malformed
 keys do not discard a usable legacy value. These aliases may also hold SecretRefs.
 A SecretRef in the credential type's `key` or `token` moves to the matching
 `keyRef` or `tokenRef` only when that reference is missing or invalid. Fields for
@@ -870,9 +935,9 @@ other credential types and aliases that did not supply a replacement stay intact
 Doctor removes converted field names, verifies source rows before
 committing, and does nothing on a second run. Runtime rejects convertible legacy
 fields with `openclaw doctor --fix` instructions. Malformed extras do not prevent
-an otherwise valid canonical credential from loading.
+an otherwise valid current-format credential from loading.
 
-JSON import retains its existing canonical projection: recognized credential
+JSON import retains its existing current-format projection: recognized credential
 types and supported fields enter SQLite, string metadata is retained, and unknown
 fields or malformed sibling entries are omitted from the active import. The
 original JSON bytes are archived exactly with the existing migration receipt, so
@@ -960,7 +1025,7 @@ against the current SQLite owners before the import can rename profiles.
     | `plugins.entries.voice-call.config.twilio.from`                                                  | `plugins.entries.voice-call.config.fromNumber`                              |
     | `plugins.entries.voice-call.config.streaming.sttProvider`                                        | `plugins.entries.voice-call.config.streaming.provider`                      |
     | `plugins.entries.voice-call.config.streaming.openaiApiKey`/`sttModel`/`silenceDurationMs`/`vadThreshold` | `plugins.entries.voice-call.config.streaming.providers.openai.*`             |
-    | `models.providers.*.api: "openai"`                                                               | `"openai-completions"` (gateway startup also skips providers whose `api` is a future/unknown enum value rather than failing closed) |
+    | `models.providers.*.api: "openai"`                                                               | `"openai-completions"` (gateway startup also skips providers whose `api` is a future/unknown enum value rather than refusing to start) |
     | `mcp.servers.*.type`, `nodeHost.mcp.servers.*.type` (CLI-native aliases)                           | corresponding `transport` field                                            |
     | `mcp.servers.*.disabled`                                                                         | inverse `mcp.servers.*.enabled`                                              |
     | MCP timeout aliases `connectTimeout`/`connect_timeout`/`timeout`                                 | `connectionTimeoutMs`/`requestTimeoutMs`                                    |
@@ -1013,9 +1078,9 @@ against the current SQLite owners before the import can rename profiles.
 
     <Note>
       The Voice Call plugin supplies the migration for its legacy config keys.
-      `openclaw doctor --fix` invokes it and persists the canonical shape in
+      `openclaw doctor --fix` invokes it and persists the current shape in
       `openclaw.json`; runtime config parsing accepts only current keys.
-      Existing canonical settings win over legacy values, including streaming
+      Existing current-format settings win over legacy values, including streaming
       provider credentials, models, and timing. Doctor reports retained
       destinations instead of claiming those legacy values were moved.
     </Note>

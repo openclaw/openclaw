@@ -170,6 +170,10 @@ function resolveMemoryToolOptions(
 
 function createLazyMemoryRuntime(host: MemoryCoreRuntimeHost): MemoryPluginRuntime {
   return {
+    async searchForCli(params) {
+      const { createMemoryRuntime } = await loadRuntimeProviderModule();
+      return await createMemoryRuntime(host).searchForCli(params);
+    },
     supportsWorkspaceMemoryReadSources: true,
     prepareReload: prepareMemoryManagerReload,
     async getMemorySearchManager(params) {
@@ -313,7 +317,7 @@ export default definePluginEntry({
                 ? module.createMemorySearchTool(options)
                 : module.createMemoryGetTool(options),
           }),
-        { names: [contract.name] },
+        { names: [contract.name], workspaceAccess: "execute" },
       );
     }
 
@@ -325,7 +329,7 @@ export default definePluginEntry({
             api.logger.warn(`memory-core: intent tool unavailable: ${reason}`);
           }),
       },
-      { names: ["intent"] },
+      { names: ["intent"], workspaceAccess: "execute" },
     );
 
     api.on("before_prompt_build", async (event, ctx) => {

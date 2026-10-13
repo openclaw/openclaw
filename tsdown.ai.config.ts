@@ -2,6 +2,7 @@
 // the already-parallel main package graph.
 import type { UserConfig } from "tsdown";
 import { createDeclarationBoundaryHooks } from "./scripts/lib/tsdown-declaration-boundary.mts";
+import { cacheTsdownRuntimeConfigs } from "./scripts/lib/tsdown-runtime-cache.mts";
 
 const externalDependencies = [
   "@anthropic-ai/sdk",
@@ -49,4 +50,4 @@ const config = {
   },
 } satisfies UserConfig;
 
-export default config;
+export default cacheTsdownRuntimeConfigs([config])[0]!;

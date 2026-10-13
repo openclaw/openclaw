@@ -32,7 +32,6 @@ type EmbeddedSessionPromptState = {
   systemPrompt?: SystemPromptSeries;
   pendingSystemPrompt?: SystemPromptSeries;
   systemPromptRouteKey?: string;
-  prunedImageMessages?: Set<string>;
   removedRuntimeContextKeys?: Set<string>;
   runtimeContextCarrierPositions?: number[];
 };
@@ -287,7 +286,7 @@ export function recordToolResultPromptProjection(
   });
 }
 
-export function getEmbeddedSessionPromptState(sessionId: string): EmbeddedSessionPromptState {
+function getEmbeddedSessionPromptState(sessionId: string): EmbeddedSessionPromptState {
   const existing = sessionPromptStates.get(sessionId);
   const current: EmbeddedSessionPromptState = existing ?? {
     activeAttempts: 0,

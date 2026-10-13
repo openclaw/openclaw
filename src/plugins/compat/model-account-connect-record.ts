@@ -22,7 +22,7 @@ export const MODEL_ACCOUNT_CONNECT_COMPAT_RECORD = {
     "getPluginRuntimeGatewayRequestScope().context.modelAccountConnectService",
   ],
   diagnostics: [
-    "TypeScript @deprecated annotations and one DEP_SESSION_PERSISTENCE warning per plugin and method per process; unscoped callers warn once per method",
+    "TypeScript @deprecated annotations and one DEP_SESSION_PERSISTENCE warning per plugin and capability family per process; unscoped callers share one SDK-level family warning",
   ],
   tests: [
     "src/plugins/compat/registry.test.ts",

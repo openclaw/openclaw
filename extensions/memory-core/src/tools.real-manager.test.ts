@@ -57,7 +57,6 @@ describe("memory_search real manager", () => {
     score: 1,
     snippet: "Alpha wiki entry",
   };
-  const alphaQuery = Object.freeze({ query: "alpha", corpus: "memory" });
   const zebraQuery = { query: "zebra", corpus: "memory" };
 
   function keywordConfig(sources: Array<"memory" | "sessions"> = ["memory"]) {
@@ -86,14 +85,6 @@ describe("memory_search real manager", () => {
       sessionKey,
       messages: [{ role, content, timestamp: "2026-08-30T09:00:00.000Z" }],
     });
-  }
-
-  function requireFormatRepair() {
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
-    db.prepare(
-      "UPDATE memory_index_meta SET value = json_set(value, '$.provenanceVersion', 0) WHERE key = 'memory_index_meta_v1'",
-    ).run();
-    return db;
   }
 
   function withWiki() {
@@ -263,29 +254,6 @@ describe("memory_search real manager", () => {
     });
   });
 
-  it("recovers when the memory manager closes after repair without another rebuild", async () => {
-    const cfg = createConfig({ vectorEnabled: false, minScore: 0 });
-    cfg.memory = { ...cfg.memory, search: { ...cfg.memory?.search, cache: { enabled: false } } };
-    const manager = await indexedManager(cfg, undefined, "cli");
-    const embeddingCalls = provider.embedBatchCalls;
-    requireFormatRepair();
-    const search = manager.search.bind(manager);
-    vi.spyOn(manager, "search").mockImplementationOnce(async (...args) => {
-      const results = await search(...args);
-      await manager.close();
-      return results;
-    });
-    const tool = searchTool(cfg);
-    const result = await tool.execute("closed-memory-manager", alphaQuery);
-    expect(result.details).not.toHaveProperty("error");
-    expect(result.details).toMatchObject({
-      results: [expect.objectContaining({ path: memoryPath })],
-    });
-    expect(result.details).not.toHaveProperty("unavailable");
-    expect(provider.embedBatchCalls).toBe(embeddingCalls + 1);
-    expect(result.details).toHaveProperty("warning", expect.stringContaining("provider cost"));
-  });
-
   it("preserves reindex guidance alongside wiki results after an embedding model change", async () => {
     const manager = await indexedManager(
       createConfig({ model: "old-embed", vectorEnabled: false }),
@@ -322,7 +290,7 @@ describe("memory_search real manager", () => {
     expect(provider.embedQueryCalls).toBe(0);
   });
 
-  it("keeps routine transcript refresh silent during memory_search", async () => {
+  it("serves memory_search without flushing pending transcript changes", async () => {
     const cfg = keywordConfig(["memory", "sessions"]);
     await session("refresh-proof", "The transcript refresh marker is cobalt orchid.");
     const manager = await indexedManager(cfg, undefined, "baseline");
@@ -333,34 +301,12 @@ describe("memory_search real manager", () => {
     );
     Reflect.set(manager, "sessionsDirty", true);
 
-    const maintenanceReady = createDeferred<void>();
-    const releaseMaintenance = createDeferred<void>();
-    const originalGet = MemoryIndexManager.get.bind(MemoryIndexManager);
-    const getSpy = vi.spyOn(MemoryIndexManager, "get").mockImplementation(async (params) => {
-      const acquired = await originalGet(params);
-      if (params.purpose !== "maintenance" || !acquired) {
-        return acquired;
-      }
-      const fields = acquired as unknown as {
-        syncArchiveFiles: (params: { needsFullReindex: boolean }) => Promise<unknown>;
-      };
-      const syncArchiveFiles = fields.syncArchiveFiles.bind(acquired);
-      vi.spyOn(fields, "syncArchiveFiles").mockImplementation(async (syncParams) => {
-        const result = await syncArchiveFiles(syncParams);
-        maintenanceReady.resolve();
-        await releaseMaintenance.promise;
-        return result;
-      });
-      return acquired;
-    });
-
+    const getSpy = vi.spyOn(MemoryIndexManager, "get");
     try {
       const tool = searchTool(cfg, {
         agentSessionKey: "agent:main:telegram:direct:active-refresh-proof",
       });
-      const execution = tool.execute("routine-refresh", zebraQuery);
-      await maintenanceReady.promise;
-      const result = await execution;
+      const result = await tool.execute("routine-refresh", zebraQuery);
 
       expect(result.details).toMatchObject({
         results: [expect.objectContaining({ snippet: expect.stringContaining("Zebra") })],
@@ -368,8 +314,9 @@ describe("memory_search real manager", () => {
       expect(result.details).not.toHaveProperty("stale");
       expect(result.details).not.toHaveProperty("warning");
       expect(result.details).not.toHaveProperty("action");
+      expect(getSpy.mock.calls.some(([params]) => params.purpose === "maintenance")).toBe(false);
+      expect(Reflect.get(manager, "sessionsDirty")).toBe(true);
     } finally {
-      releaseMaintenance.resolve();
       getSpy.mockRestore();
     }
   });
@@ -534,7 +481,7 @@ describe("memory_search real manager", () => {
       unavailable: true,
       error: expect.stringContaining("openclaw doctor --fix"),
       warning:
-        "Memory search is unavailable because the session catalog requires canonical-key migration.",
+        "Memory search is unavailable because the session catalog requires session-key migration.",
       action:
         "Stop the Gateway and run openclaw doctor --fix, then restart the Gateway and retry memory_search.",
     };

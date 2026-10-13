@@ -11,7 +11,7 @@ import {
   isCronStateWorkerCommand,
   prepareCronStateWorkerCommand,
 } from "../cron/store/dispatch.worker.js";
-import { readPendingRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication.kernel.js";
+import { readPendingRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication-read.worker.js";
 import { mutateSessionGroupCatalogInDatabase } from "../gateway/session-group-catalog.kernel.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
@@ -30,6 +30,7 @@ import { executeSessionStateCommand } from "../sessions/session-state-events.wor
 import { listWatchedSessionUpstreamLinksInDatabase } from "../sessions/session-upstream-links.kernel.js";
 import { executeSessionUpstreamCommand } from "../sessions/session-upstream-links.worker.js";
 import { executeTranscriptRead } from "../transcripts/store-worker-read.js";
+import { TUI_LAST_SESSION_STATE_KEY_PREFIX } from "../tui/tui-last-session.contract.js";
 import { clearRetiredTuiPointers } from "../tui/tui-last-session.kernel.js";
 import { assertAgentDeletionRecoveryHoldPredicate } from "./agent-deletion-journal-recovery.kernel.js";
 import {
@@ -51,7 +52,10 @@ import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "./openclaw-state-db-readonly.js";
-import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
+import {
+  isOpenClawStateDatabaseOpen,
+  runOpenClawStateWriteTransaction,
+} from "./openclaw-state-db.js";
 import type {
   OpenClawStateWorkerBackend,
   OpenClawStateWorkerRuntimeCommand,
@@ -81,12 +85,19 @@ export function executeSharedStateCommand(
   if (stateWorkerRegistry.has(command)) {
     return stateWorkerRegistry.execute(command, { open, write, writeAdmitted, stateOptions });
   }
-  if (command.type === "updateRuns.recordStep" || command.type === "updateRuns.recordPhase") {
+  if (
+    command.type === "updateRuns.recordStep" ||
+    command.type === "updateRuns.recordPhase" ||
+    command.type === "updateRuns.create" ||
+    command.type === "updateRuns.finish" ||
+    command.type === "updateRuns.recordVerification" ||
+    command.type === "updateRuns.recordDiagnostics"
+  ) {
     return recordUpdateRunMutationInWorker(
       command,
       stateOptions(),
       (stage) => requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
-      updateRunWriter(),
+      updateRunWriter,
     );
   }
   if (command.type === "updateRuns.reconcile") {
@@ -116,6 +127,20 @@ export function executeSharedStateCommand(
   }
   if (command.type === "tui.lastSession.clear") {
     return clearRetiredTuiPointers(new Set(command.input.retiredSessionKeys), stateOptions(), open);
+  }
+  if (command.type === "backup.recordOutcome") {
+    // A best-effort ledger must not initialize or change a refused backup source.
+    // An already-admitted writer carries ownership; cold admission stays read-only.
+    if (!isOpenClawStateDatabaseOpen(context.databasePath)) {
+      const existing = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
+        assertOpenClawStateDatabaseOwner(db, { pathname: context.databasePath });
+        return true;
+      }, stateOptions());
+      if (!existing) {
+        return undefined;
+      }
+    }
+    return write(({ db }) => recordBackupRunInDatabase(db, command.input));
   }
   const database = open();
   if (command.type === "githubPublication.prepareSessionReceiptDeletion") {
@@ -162,7 +187,11 @@ export function executeSharedStateCommand(
     ...stateOptions(),
   };
   if (command.type === "tui.lastSession.write") {
-    return writeConfigMachineState(command.input.stateKey, command.input.sessionKey, writeOptions);
+    return writeConfigMachineState(
+      `${TUI_LAST_SESSION_STATE_KEY_PREFIX}${command.input.scopeKey}`,
+      command.input.sessionKey,
+      writeOptions,
+    );
   }
   if (command.type === "sandboxRegistry.insertIfMissing") {
     return importSandboxRegistryRow(command.input, writeOptions);
@@ -242,7 +271,6 @@ export function executeSharedStateCommand(
     );
   }
   if (
-    command.type === "sessionUpstream.current" ||
     command.type === "sessionUpstream.settle" ||
     command.type === "sessionUpstream.upsert" ||
     command.type === "sessionUpstream.delete"
@@ -261,12 +289,6 @@ export function executeSharedStateCommand(
   }
   if (command.type === "subagents.persistChanges") {
     return persistSubagentRunChangesInWorker(command.input, writeOptions);
-  }
-  if (command.type === "backup.recordOutcome") {
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => recordBackupRunInDatabase(db, command.input),
-      writeOptions,
-    );
   }
   if (command.type === "config.health.patch") {
     const { configPath, patch, expected, updatedAtMs } = command.input;

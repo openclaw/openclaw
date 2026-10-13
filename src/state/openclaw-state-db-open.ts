@@ -11,7 +11,6 @@ import {
 import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
-import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { prepareSqliteDatabaseDirectory } from "../infra/sqlite-wal-filesystem.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
@@ -21,7 +20,10 @@ import {
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
 import { readDatabaseIdentityBirthtime } from "../infra/sqlite-worker-identity.js";
-import { getSqliteWorkerExistingDatabaseIdentity } from "../infra/sqlite-worker-state-context.js";
+import {
+  captureSqliteWorkerWalMaintenanceSuspension,
+  getSqliteWorkerExistingDatabaseIdentity,
+} from "../infra/sqlite-worker-state-context.js";
 import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getStateRuntimeSchemaAdmission } from "./openclaw-state-db-admission.js";
@@ -38,6 +40,7 @@ import {
 import { assertStateDatabaseIntegrityOnce } from "./openclaw-state-db-integrity-admission.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
 import {
+  admitStateSchemaFacts,
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
@@ -53,6 +56,9 @@ function assertStateDatabaseIntegrityBeforeMutation(
     return;
   }
   const contentVersion = readStateSchemaContentVersion(database);
+  if (contentVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
+    return;
+  }
   const hasApplicationSchema = database // sqlite-allow-raw -- Cold-open schema presence probe before Kysely exposure.
     .prepare("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1")
     .get();
@@ -66,10 +72,8 @@ function assertStateDatabaseIntegrityBeforeMutation(
       toVersion: OPENCLAW_STATE_SCHEMA_VERSION,
     });
   }
-  if (contentVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
-    // Older content is verified before the migration owner can mutate it.
-    assertStateDatabaseIntegrityOnce(database, pathname);
-  }
+  // Older content is verified before the migration owner can mutate it.
+  assertStateDatabaseIntegrityOnce(database, pathname);
 }
 
 type UnpublishedStateDatabaseOptions = {
@@ -151,9 +155,7 @@ function openNativeStateDatabase(
     assertSameFile();
     enableNodeSqliteKyselyStatementCache(db);
     setSqliteBusyTimeout(db, busyTimeoutMs);
-    if (getStateRuntimeSchemaAdmission(db)) {
-      admitSqliteSchema(db);
-    }
+    admitStateSchemaFacts(db, params.pathname);
     assertOpenClawStateWriteAllowed({
       database: db,
       databasePath: params.pathname,
@@ -196,6 +198,7 @@ function openNativeStateDatabase(
             assertStateDatabaseAccessAllowed(params.pathname);
             return operation();
           },
+          isScheduledMaintenanceSuspended: captureSqliteWorkerWalMaintenanceSuspension(),
           foreignKeys: true,
           synchronous: "NORMAL",
         });

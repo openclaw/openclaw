@@ -15,7 +15,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
-import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
+import { prepareConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import {
   buildConversationToolPolicyPipelineSteps,
   resolveConversationToolPolicies,
@@ -53,13 +53,14 @@ import {
 } from "../../utils/delivery-context.read.js";
 import { getConnectedNodePluginToolsVersion } from "../node-plugin-tool-snapshot.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { loadGatewaySessionEntryReadOnly, resolveSessionModelRef } from "../session-utils.js";
+import { withGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
+import { resolveSessionModelRef, type loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
 type TrustedToolsEffectiveContext = NonNullable<
-  ReturnType<typeof resolveTrustedToolsEffectiveContext>
+  Awaited<ReturnType<typeof resolveTrustedToolsEffectiveContext>>
 >;
 
 const TOOLS_EFFECTIVE_FRESH_TTL_MS = 10_000;
@@ -431,7 +432,7 @@ async function projectMcpCatalog(params: {
   }
 }
 
-function resolveTrustedToolsEffectiveContext(
+async function resolveTrustedToolsEffectiveContext(
   params: {
     sessionKey: string;
     requestedAgentId?: string;
@@ -513,7 +514,7 @@ function resolveTrustedToolsEffectiveContext(
   };
   return {
     ...context,
-    capabilityProfile: resolveConversationCapabilityProfile({
+    capabilityProfile: await prepareConversationCapabilityProfile({
       config: context.cfg,
       sessionKey: context.sessionKey,
       preparedSessionEntry: { sessionKey: canonicalKey, entry: loaded.entry },
@@ -560,7 +561,7 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
         >,
         assertSourceCurrent: () => void,
       ) => {
-        const trustedContext = resolveTrustedToolsEffectiveContext(
+        const trustedContext = await resolveTrustedToolsEffectiveContext(
           {
             sessionKey: params.sessionKey,
             requestedAgentId: sessionOwner.agentId,
@@ -590,9 +591,14 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
               consume({ cfg, canonicalKey: params.sessionKey, entry }, assertCurrent),
           );
         } else {
-          await consume(
-            loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: sessionOwner.agentId }),
-            () => {},
+          await withGatewaySessionEntryReadOnly(
+            {
+              cfg,
+              key: params.sessionKey,
+              agentId: sessionOwner.agentId,
+              assertActive: authority.assertCurrent,
+            },
+            consume,
           );
         }
       } catch (err) {

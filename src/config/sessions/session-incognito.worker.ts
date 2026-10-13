@@ -6,10 +6,7 @@ import {
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-store.js";
-import {
-  isIncognitoSessionKey,
-  resolveIncognitoSessionExpiresAt,
-} from "../../shared/incognito-session-key.js";
+import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import type { AgentDatabaseIncognitoIdentity } from "../../state/openclaw-agent-execution-contract.js";
@@ -20,7 +17,6 @@ import {
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { assertSessionCreationLabelAvailable } from "./session-accessor.sqlite-creation-read.js";
 import { readSessionIdentityEvidenceInDatabase } from "./session-accessor.sqlite-entry-availability.js";
-import { projectSessionSharingEntry } from "./session-accessor.sqlite-entry-cache.types.js";
 import { listSqliteSessionEntriesFromDatabase } from "./session-accessor.sqlite-entry-list.read.js";
 import {
   readExactSessionEntryRow,
@@ -30,9 +26,7 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { resolveSqliteScope } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
-import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
 import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
-import { projectSessionEntryCapabilityFacts } from "./session-entry-capability-facts.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
 import {
   isIncognitoComputeCommand,
@@ -48,6 +42,10 @@ import { isIncognitoEntryCreationCommand } from "./session-incognito-entry-creat
 import { createIncognitoEntryCreationWorker } from "./session-incognito-entry-creation.worker.js";
 import { isIncognitoEntryPatchCommand } from "./session-incognito-entry-patch-contract.js";
 import { createIncognitoEntryPatchWorker } from "./session-incognito-entry-patch.worker.js";
+import {
+  createIncognitoSessionSnapshotReader,
+  withIncognitoSessionFacts,
+} from "./session-incognito-facts.worker.js";
 import {
   incognitoHistoryKeys,
   isIncognitoHistoryCommand,
@@ -66,8 +64,6 @@ import {
 import { createIncognitoManagerWorker } from "./session-incognito-manager.worker.js";
 import { isIncognitoOutboxCommand } from "./session-incognito-outbox-contract.js";
 import { createIncognitoOutboxWorker } from "./session-incognito-outbox.worker.js";
-import { projectIncognitoSessionReadRevisions } from "./session-incognito-read-revisions.js";
-import { projectIncognitoSessionRuntimeFacts } from "./session-incognito-runtime-facts.js";
 import {
   incognitoSideDataKeys,
   isIncognitoSideDataWrite,
@@ -88,7 +84,6 @@ import type {
   PendingInputCustodyGrant,
   PendingInputMutationReceipt,
 } from "./session-pending-input-operations.types.js";
-import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import type { SessionSourceValidation } from "./session-source-authority.js";
 import { prepareSessionTurnPredicates } from "./session-turn-predicate.js";
 import { applySessionTurn, prepareSessionTurn } from "./session-turn.worker.js";
@@ -102,41 +97,10 @@ export function createIncognitoSessionWorker(
   let revision = 0;
   const sessionRevisions = new Map<string, number>();
   const history = createIncognitoHistoryWorker(database, env);
-  const read = (sessionKey: string): IncognitoSessionSnapshot => {
-    const entry = readExactSessionEntryRow(database, sessionKey)?.entry;
-    return {
-      entry,
-      facts: [
-        {
-          identity,
-          sessionKey,
-          revision: sessionRevisions.get(sessionKey) ?? 0,
-          completionSources: history.completionFacts(sessionKey),
-          capability: entry ? projectSessionEntryCapabilityFacts(entry) : undefined,
-          ...projectIncognitoSessionReadRevisions(entry),
-          ...projectIncognitoSessionRuntimeFacts(entry),
-          cliHistory:
-            entry?.cliHistoryBoundary?.state === "known"
-              ? {
-                  boundary: entry.cliHistoryBoundary,
-                  watermark: readSessionTranscriptWatermarkInDatabase(database, entry.sessionId),
-                }
-              : undefined,
-          sharing: entry
-            ? {
-                entry: projectSessionSharingEntry(entry),
-                membership: new Set(
-                  listSessionMembersInDatabase(database, sessionKey).map(
-                    (member) => member.identityId,
-                  ),
-                ),
-              }
-            : undefined,
-          expiresAt: entry ? resolveIncognitoSessionExpiresAt(entry) : undefined,
-        },
-      ],
-    };
-  };
+  const read = createIncognitoSessionSnapshotReader(database, identity, {
+    revision: (sessionKey) => sessionRevisions.get(sessionKey) ?? 0,
+    completionSources: (sessionKey) => history.completionFacts(sessionKey),
+  });
   const assertKey = (sessionKey: string) => {
     assertCanonicalSessionKeyWrite(sessionKey, database.agentId);
     if (!isIncognitoSessionKey(sessionKey)) {
@@ -273,6 +237,14 @@ export function createIncognitoSessionWorker(
       stage: "prepare",
       facts: { identity, sessions: facts },
     });
+  const withFacts = <Result extends { value: unknown; keys: readonly string[] }>({
+    value,
+    keys,
+  }: Result) =>
+    withIncognitoSessionFacts<Result["value"]>(
+      value,
+      keys.flatMap((key) => read(key).facts),
+    );
   return {
     async prepare(command: SqliteWorkerCommand<IncognitoSessionOperations>) {
       if (command.type === "session.turn.prepare" || command.type === "session.turn.commit") {
@@ -360,11 +332,11 @@ export function createIncognitoSessionWorker(
           assertKey(command.input.sessionKey);
         }
         const execute = () => {
-          const { value, keys } = isIncognitoEntryCreationCommand(command)
+          const result = isIncognitoEntryCreationCommand(command)
             ? entryCreation.execute(command)
             : entryPatch.execute(command);
-          keys.forEach(assertKey);
-          return { value, facts: keys.flatMap((key) => read(key).facts) };
+          result.keys.forEach(assertKey);
+          return withFacts(result);
         };
         return command.type.endsWith(".commit")
           ? execute()
@@ -410,14 +382,11 @@ export function createIncognitoSessionWorker(
             receipt = committed;
           },
         );
-        return { value, facts: read(sessionKey).facts };
+        return withIncognitoSessionFacts(value, read(sessionKey).facts);
       }
       if (isIncognitoManagerCommand(command)) {
         assertKey(command.input.sessionKey);
-        const execute = () => {
-          const { value, keys } = manager.execute(command);
-          return { value, facts: keys.flatMap((key) => read(key).facts) };
-        };
+        const execute = () => withFacts(manager.execute(command));
         return isIncognitoManagerWrite(command.type)
           ? execute()
           : readOnly(() => {
@@ -444,16 +413,13 @@ export function createIncognitoSessionWorker(
             receipt = committed;
           },
         );
-        return { value, facts: read(sessionKey).facts };
+        return withIncognitoSessionFacts(value, read(sessionKey).facts);
       }
       if (isIncognitoComputeCommand(command)) {
         if (!isIncognitoStoreComputeCommand(command)) {
           assertKey(command.input.sessionKey);
         }
-        const execute = () => {
-          const { value, keys } = compute.execute(command);
-          return { value, facts: keys.flatMap((key) => read(key).facts) };
-        };
+        const execute = () => withFacts(compute.execute(command));
         if (isIncognitoComputeWrite(command.type)) {
           return execute();
         }
@@ -488,9 +454,9 @@ export function createIncognitoSessionWorker(
       if (isIncognitoLifecycleCommand(command)) {
         incognitoLifecycleKeys(command, identity).forEach(assertKey);
         const execute = () => {
-          const { value, keys } = lifecycle.execute(command);
-          keys.forEach(assertKey);
-          return { value, facts: keys.flatMap((key) => read(key).facts) };
+          const result = lifecycle.execute(command);
+          result.keys.forEach(assertKey);
+          return withFacts(result);
         };
         return isIncognitoLifecycleWrite(command.type) ? execute() : readOnly(execute);
       }
@@ -555,7 +521,7 @@ export function createIncognitoSessionWorker(
                 },
                 identity.incarnation,
               );
-        return { value, facts: read(sessionKey).facts };
+        return withIncognitoSessionFacts(value, read(sessionKey).facts);
       }
       if (command.type !== "session.entry.create" && command.type !== "session.entry.read") {
         const keys = incognitoSideDataKeys(command);
@@ -631,6 +597,11 @@ export function createIncognitoSessionWorker(
       sideData.assertSettled();
       transcript.assertSettled();
       outbox.assertSettled();
+    },
+    recordExternalWrite(sessionKey: string) {
+      assertKey(sessionKey);
+      revision += 1;
+      sessionRevisions.set(sessionKey, revision);
     },
     close() {
       sessionRevisions.clear();

@@ -6,6 +6,8 @@ import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../../config/io.js";
+import type { readDeferredPluginMigrationsAsync } from "../../infra/deferred-plugin-migrations.js";
+import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import {
   consumeUpdatePostInstallDoctorResult,
   createDeferredConfiguredPluginRepairDoctorResult,
@@ -45,6 +47,7 @@ const mocks = vi.hoisted(() => ({
   resolveEntrypoint: vi.fn(),
   command: vi.fn(),
   runUtf8: vi.fn<typeof import("../../process/exec.js").runUtf8CommandWithTimeout>(),
+  pendingMigrations: vi.fn<typeof readDeferredPluginMigrationsAsync>(),
 }));
 
 vi.mock("../../config/config.js", async (importOriginal) => ({
@@ -58,7 +61,7 @@ vi.mock("../../daemon/gateway-entrypoint.js", () => ({
 
 vi.mock("../../infra/deferred-plugin-migrations.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/deferred-plugin-migrations.js")>()),
-  readDeferredPluginMigrationsAsync: async () => [],
+  readDeferredPluginMigrationsAsync: mocks.pendingMigrations,
 }));
 
 vi.mock("../../process/exec.js", async (importOriginal) => {
@@ -131,6 +134,7 @@ const validConfigSnapshot = {
 };
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let restoreTempRoot = () => {};
 const readinessExit = {
   code: 0,
   signal: null,
@@ -141,15 +145,21 @@ const readinessExit = {
 } as const;
 
 afterEach(() => {
+  restoreTempRoot();
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
 });
 
 describe("post-plugin update readiness", () => {
   beforeEach(() => {
+    const coordinator = vi
+      .spyOn(tempRoot, "resolvePreferredOpenClawTmpDir")
+      .mockReturnValue(tempDirs.make("fresh-doctor-coordinator-"));
+    restoreTempRoot = () => coordinator.mockRestore();
     mocks.readConfig.mockReset().mockResolvedValue(validConfigSnapshot);
     mocks.resolveEntrypoint.mockReset().mockResolvedValue("/opt/openclaw/dist/index.js");
     mocks.command.mockReset().mockResolvedValue({ stdout: "", stderr: "" });
+    mocks.pendingMigrations.mockReset().mockResolvedValue([]);
     mocks.runUtf8.mockReset().mockResolvedValue({
       ...readinessExit,
       stdout: JSON.stringify({ ok: true, checksRun: 1, checksSkipped: 0, findings: [] }),
@@ -304,7 +314,10 @@ describe("post-plugin update readiness", () => {
         if (outcome === "advisory") {
           await writeUpdatePostInstallDoctorResult({
             resultPath: options.env![UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]!,
-            result: createDeferredConfiguredPluginRepairDoctorResult(["Plugin repair deferred"]),
+            result: {
+              ...createDeferredConfiguredPluginRepairDoctorResult(["Plugin repair deferred"]),
+              deferredInspectionCheckIds: ["core/doctor/new-target-inspection"],
+            },
           });
         }
         if (outcome !== "success") {
@@ -341,6 +354,8 @@ describe("post-plugin update readiness", () => {
       expect(onDoctorStep).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           name: `${phase} doctor`,
+          deferredInspectionCheckIds:
+            outcome === "advisory" ? ["core/doctor/new-target-inspection"] : null,
           exitCode:
             outcome === "success"
               ? 0

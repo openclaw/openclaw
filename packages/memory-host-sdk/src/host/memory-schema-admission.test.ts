@@ -65,6 +65,8 @@ describe("memory physical schema admission", () => {
 
   it("reuses admission across handles while backfilling newly imported rows", () => {
     const filename = path.join(tempDirs.make("memory-admission-"), "memory.sqlite");
+    using sibling = openNodeSqliteDatabase(filename);
+    admitSqliteSchema(sibling);
     const observed = observeHostDataSql();
     try {
       for (let opening = 0; opening < 2; opening++) {

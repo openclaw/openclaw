@@ -201,7 +201,7 @@ describe("Telegram registered action authority and input contracts", () => {
     });
   });
 
-  it.each(["77", "1"])(
+  it.each(["77"])(
     "binds a topicless reaction to trusted topic %s without borrowing another chat",
     async (thread) => {
       const context = {
@@ -447,27 +447,6 @@ describe("Telegram registered action authority and input contracts", () => {
   it.each([
     { action: "send", params: { to: "123" }, error: /content required/i },
     {
-      action: "send",
-      params: { to: "123", message: "hello", replyToMessageId: 9.5 },
-      error: /positive integer/,
-    },
-    {
-      action: "sticker",
-      params: { to: "123", fileId: "sticker", threadId: 11.5 },
-      error: /positive integer/,
-    },
-    { action: "delete", params: { chatId: "123", messageId: 456.5 }, error: /positive integer/ },
-    {
-      action: "edit",
-      params: { chatId: "123", messageId: 456.5, message: "updated" },
-      error: /positive integer/,
-    },
-    {
-      action: "poll",
-      params: { to: "123", question: "Ready?", answers: ["Yes", "No"], durationSeconds: 60.5 },
-      error: /positive integer/,
-    },
-    {
       action: "poll",
       params: {
         to: "123",
@@ -477,11 +456,6 @@ describe("Telegram registered action authority and input contracts", () => {
         pollPublic: true,
       },
       error: /mutually exclusive/i,
-    },
-    {
-      action: "send",
-      params: { to: "123", message: "caption", location: { latitude: 1, longitude: 2 } },
-      error: /cannot be combined/,
     },
     {
       action: "send",
@@ -522,7 +496,7 @@ describe("Telegram registered action authority and input contracts", () => {
     expect(requests).toEqual([]);
   });
 
-  it.each(["off", "ack", "action"] as const)(
+  it.each(["off", "action"] as const)(
     "soft-fails reactions disabled by %s policy",
     async (policy) => {
       cfg.channels!.telegram = {

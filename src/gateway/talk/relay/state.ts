@@ -4,8 +4,8 @@ import type { OpenClawConfig } from "../../../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import type { BoundedSerialQueue } from "../../../shared/bounded-serial-queue.js";
 import type { RealtimeVoiceAgentControlResult } from "../../../talk/agent-run-control.js";
-import type { createClientVoiceConfirmationReadiness } from "../../../talk/client-voice-confirmation-readiness.js";
 import type { ClientVoiceSessionSource } from "../../../talk/client-voice-session-source.js";
+import type { createClientVoiceTranscriptReadiness } from "../../../talk/client-voice-transcript-readiness.js";
 import type { InternalRealtimeVoiceProviderCapabilities } from "../../../talk/provider-internal.js";
 import type {
   RealtimeVoiceAudioClearReason,
@@ -21,6 +21,7 @@ import type { TalkEvent, TalkEventInput } from "../../../talk/talk-session-contr
 import { abortChatRunById } from "../../chat-abort.js";
 import type { GatewayRequestContext } from "../../server-methods/shared-types.js";
 import type { TalkAgentConsultAuthority } from "../client-gateway-control.js";
+import type { TalkClientRunAuthority } from "../client-run-authority.js";
 import type { PreparedTalkSessionTarget } from "../session-target.types.js";
 import type { RelayToolCallLedger } from "./tool-call-ledger.js";
 
@@ -295,7 +296,8 @@ export type RelaySession = {
   voiceSessionCreation?: Promise<boolean>;
   voiceTranscriptSeq: number;
   voiceTranscriptQueue: BoundedSerialQueue;
-  confirmationReadiness: ReturnType<typeof createClientVoiceConfirmationReadiness>;
+  runAuthority?: TalkClientRunAuthority;
+  transcriptReadiness: ReturnType<typeof createClientVoiceTranscriptReadiness>;
   voiceSessionClose?: Promise<void>;
   closing?: {
     reason: "completed" | "error";
@@ -310,6 +312,7 @@ export type CreateTalkRealtimeRelaySessionParams = {
   connId: string;
   cfg?: OpenClawConfig;
   consultAuthority?: TalkAgentConsultAuthority;
+  runAuthority?: TalkClientRunAuthority;
   provider: RealtimeVoiceProviderPlugin;
   providerConfig: RealtimeVoiceProviderConfig;
   controlSource: "delegation" | "transcript";

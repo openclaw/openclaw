@@ -177,7 +177,7 @@ describe("bootstrap publication atomicity", () => {
     }
   });
 
-  it("fails closed when the workspace does not support hard links", async () => {
+  it("publishes complete bootstrap bytes without hard-link support", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     const agentsPath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
     const linkSpy = vi.spyOn(syncFs, "linkSync").mockImplementation(() => {
@@ -185,10 +185,11 @@ describe("bootstrap publication atomicity", () => {
     });
 
     try {
-      await expect(publishBootstrapFile(agentsPath, "complete\n")).rejects.toThrow(
-        /filesystem does not support atomic bootstrap publication/u,
-      );
-      await expectPathMissing(agentsPath);
+      await expect(publishBootstrapFile(agentsPath, "complete\n")).resolves.toBe(true);
+      await expect(publishBootstrapFile(agentsPath, "replacement\n")).resolves.toBe(false);
+      expect(await fs.readFile(agentsPath, "utf8")).toBe("complete\n");
+      expect((await fs.lstat(agentsPath)).nlink).toBe(1);
+      expect(await listTempSiblings(tempDir)).toEqual([]);
     } finally {
       linkSpy.mockRestore();
     }

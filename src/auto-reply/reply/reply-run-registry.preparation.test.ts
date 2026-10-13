@@ -1,8 +1,8 @@
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { bindWorkerToolPreparation } from "../../agents/harness/host-private-capabilities.js";
 import { createNativeSessionBindingAuthority } from "../../agents/harness/native-session/binding-authority.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,
@@ -10,9 +10,9 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import * as sessionReads from "../../config/sessions/session-entry-read-runtime.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
@@ -45,6 +45,19 @@ async function createPolicyOperation(
   const policyKey = incognito
     ? `agent:main:dashboard:incognito-${name}`
     : `agent:main:${name}-policy`;
+  const config: OpenClawConfig = {
+    ...(mainAlias || options.store
+      ? {
+          session: {
+            ...(mainAlias ? { mainKey: `${name}-policy` } : {}),
+            ...(options.store ? { store: options.store } : {}),
+          },
+        }
+      : {}),
+    agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {} } },
+    tools: { sandbox: { tools: { deny: ["exec"] } } },
+  };
+  setRuntimeConfigSnapshot(config);
   const policyEntry = await upsertSessionEntryCore(
     { agentId: "main", sessionKey: policyKey, storePath: options.policyStorePath },
     {
@@ -64,18 +77,7 @@ async function createPolicyOperation(
     sessionKey: `agent:main:${name}`,
     runtimePolicySessionKey: mainAlias ? "agent:main:main" : policyKey,
     senderIsOwner: true,
-    config: {
-      ...(mainAlias || options.store
-        ? {
-            session: {
-              ...(mainAlias ? { mainKey: `${name}-policy` } : {}),
-              ...(options.store ? { store: options.store } : {}),
-            },
-          }
-        : {}),
-      agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {} } },
-      tools: { sandbox: { tools: { deny: ["exec"] } } },
-    },
+    config,
   });
   const operation = createTestReplyOperation({ sessionKey: run.run.sessionKey, sessionId: name });
   await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
@@ -116,7 +118,8 @@ function attachPreparedNativeBackend(
 it.each(["worker", "compatibility"] as const)(
   "retains supplied %s source policy alongside an overlay through final native admission",
   async (kind) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const source = await createPolicyOperation("source");
       const target = await createPolicyOperation("target");
       const assertSourcePolicy = (fingerprint: string | undefined) => {
@@ -167,18 +170,9 @@ it.each(["worker", "compatibility"] as const)(
           "Native admission was not reached",
         );
         calls?.expectIdle();
-        const foreign = new DatabaseSync(
-          resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
-        );
-        try {
-          foreign
-            .prepare(
-              "UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.sandboxMode') WHERE session_key = ?",
-            )
-            .run(source.policyKey);
-        } finally {
-          foreign.close();
-        }
+        await updateSessionEntry({ agentId: "main", sessionKey: source.policyKey }, () => ({
+          sandboxMode: undefined,
+        }));
         calls?.clear();
         resume.resolve();
         expect((await attempt.outcome).status).toBe(kind === "worker" ? "rejected" : "failed");
@@ -211,6 +205,7 @@ it.each([
   "retains $storage policy lineage in $admission admission after $change",
   async ({ storage, change, admission }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const multipleStores = change.startsWith("other-store") || change === "missing-store";
       const store = state.statePath(
         "configured",

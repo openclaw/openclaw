@@ -5,7 +5,6 @@ import type { WorkerExecutionMode, WorkerProfile } from "../../plugins/types.js"
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerEnvironmentNodeTunnel } from "./environment-access.js";
 import type { WorkerInferenceStore } from "./inference-store.js";
-import type { WorkerInferenceExecutor } from "./inference.js";
 import type { WorkerLiveEventReceiver } from "./live-events.js";
 import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
 import type { WorkerNodePortalCarrier } from "./portal-node-carrier.js";
@@ -58,7 +57,6 @@ export type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOption
       WorkerLiveEventReceiver,
       "apply" | "clear" | "clearEnvironment" | "rotateCredential"
     >;
-    executeInference: WorkerInferenceExecutor;
     inferenceStore?: WorkerInferenceStore;
     createGatewayTools?: (params: {
       identity: WorkerConnectionIdentity;

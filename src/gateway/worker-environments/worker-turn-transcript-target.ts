@@ -1,34 +1,28 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import nodePath from "node:path";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
+import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import {
-  loadSessionEntry,
-  loadSessionEntryReadOnly,
-} from "../../config/sessions/session-accessor.js";
-import {
-  resolveSqliteScope,
-  toDatabaseOptions,
-} from "../../config/sessions/session-accessor.sqlite-scope.js";
+  retainPreparedSessionEntryPredicate,
+  retainPreparedSessionSharingFacts,
+} from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { projectSessionSharingEntry } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
+import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import {
+  composeSessionSourceAssertion,
   releaseSessionSourceAuthorities,
   type PreparedSessionSourceAuthority,
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
 import { retainSessionHistoryWorkerDatabase } from "../../config/sessions/session-transcript-worker-runtime.js";
-import { captureSessionTranscriptStorageEnvironment } from "../../config/sessions/transcript-target-binding.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
-import {
-  assertExistingDatabaseIdentity,
-  readDatabasePathIdentitySync,
-} from "../../infra/sqlite-worker-identity.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseRuntime } from "../../state/openclaw-agent-db.js";
-import {
-  isIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.paths.js";
+import { resolveExplicitIncognitoAgentSqliteTarget } from "../../state/openclaw-agent-db.paths.js";
 import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js";
 
 type WorkerTranscriptSourceIdentity = Pick<
@@ -40,6 +34,146 @@ type WorkerTranscriptTurn = Pick<
   SessionPlacementTurnParams,
   "agentId" | "sessionId" | "sessionKey" | "sessionTarget"
 >;
+
+type PreparedWorkerTranscript = {
+  target: BoundAgentRunSessionTarget;
+  source: CapturedSessionEntryReadSource & { databaseIdentity: string };
+  env: NodeJS.ProcessEnv;
+  readCurrent: (target: BoundAgentRunSessionTarget) => WorkerTranscriptSourceIdentity | undefined;
+  assertCurrent: () => void;
+  release: () => void | Promise<void>;
+};
+
+const preparedWorkerTranscript = new AsyncLocalStorage<PreparedWorkerTranscript>();
+
+/** Keep receipt-published facts alive from the worker read through the final effect. */
+async function prepareWorkerTranscript(
+  target: BoundAgentRunSessionTarget,
+  assertPreparing: () => void,
+): Promise<PreparedWorkerTranscript> {
+  let facts: ReturnType<typeof retainPreparedSessionSharingFacts> | undefined;
+  let predicate: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
+  let settlementPredicate: typeof predicate;
+  let source: PreparedWorkerTranscript["source"] | undefined;
+  let prepared: PreparedWorkerTranscript | undefined;
+  try {
+    return await withSessionEntryReadOnlyInWorker(
+      target,
+      assertPreparing,
+      async (read, owner) => {
+        if (!read.ok) {
+          throw read.error;
+        }
+        if (!source || !facts || !owner.scope) {
+          throw new Error("Cloud worker transcript has no durable source");
+        }
+        const snapshot = facts.initialize({
+          entry: read.value && projectSessionSharingEntry(read.value),
+          membership: new Set(),
+        });
+        // Transfer the acquired identity before releasing its receipt subscription.
+        const databaseIdentity = `file:${source.databaseIdentity}`;
+        const retainPredicate = (writerBound: boolean) =>
+          retainPreparedSessionEntryPredicate({
+            databaseIdentity,
+            sessionKey: target.sessionKey,
+            entry: snapshot.entry,
+            matches: (before, after) =>
+              before?.sessionId === after?.sessionId &&
+              before?.lifecycleRevision === after?.lifecycleRevision &&
+              (!writerBound || before?.activeWriterRunId === after?.activeWriterRunId) &&
+              before?.archivedAt === after?.archivedAt,
+          });
+        predicate = retainPredicate(target.expectedWriterRunId !== undefined);
+        // Completed results retain the session while their caller releases its writer.
+        settlementPredicate =
+          target.expectedWriterRunId === undefined ? predicate : retainPredicate(false);
+        facts.release();
+        const currentFacts = predicate;
+        const settlementFacts = settlementPredicate;
+        const env = owner.scope.env ?? process.env;
+        const retained = retainSessionHistoryWorkerDatabase({
+          agentId: source.agentId,
+          path: source.path,
+          env,
+        });
+        let active = true;
+        prepared = {
+          target: { ...target, storePath: source.path },
+          source,
+          env,
+          readCurrent: (requested) =>
+            (requested.expectedWriterRunId === undefined
+              ? settlementFacts
+              : currentFacts
+            ).readCurrent()?.entry,
+          assertCurrent: () => {
+            if (!active) {
+              throw new Error("Cloud worker transcript authority has been released");
+            }
+            retained.owner.assertCurrent();
+          },
+          release: () => {
+            active = false;
+            currentFacts.release();
+            settlementFacts.release();
+            return retained.release();
+          },
+        };
+        return prepared;
+      },
+      (database, identity) => {
+        if (!identity.key.startsWith("file:")) {
+          throw new Error("Cloud worker transcript has no durable source");
+        }
+        source = {
+          agentId: database.agentId,
+          path: database.path,
+          databaseIdentity: identity.key.slice("file:".length),
+          databaseBirthtime: identity.birthtime,
+        };
+        facts = retainPreparedSessionSharingFacts({
+          databaseIdentity: identity.key,
+          sessionKey: target.sessionKey,
+          acquiring: true,
+        });
+      },
+    );
+  } catch (error) {
+    if (prepared) {
+      await releaseSessionSourceAuthorities([prepared], [error]);
+    } else {
+      facts?.release();
+      predicate?.release();
+      settlementPredicate?.release();
+    }
+    throw error;
+  }
+}
+
+function findPreparedTranscript(target: BoundAgentRunSessionTarget) {
+  const prepared = preparedWorkerTranscript.getStore();
+  if (
+    !prepared ||
+    prepared.target.agentId !== target.agentId ||
+    prepared.target.sessionKey !== target.sessionKey ||
+    nodePath.resolve(prepared.target.storePath) !== nodePath.resolve(target.storePath)
+  ) {
+    return undefined;
+  }
+  return prepared;
+}
+
+function currentPreparedTranscript(
+  target: BoundAgentRunSessionTarget,
+  prepared = findPreparedTranscript(target),
+) {
+  if (!prepared) {
+    throw new Error("Cloud worker transcript requires prepared authority");
+  }
+  prepared.assertCurrent();
+  return prepared;
+}
 
 function captureWorkerTurnTranscriptTarget(turn: WorkerTranscriptTurn): BoundAgentRunSessionTarget {
   if (
@@ -75,18 +209,32 @@ export function resolveWorkerTurnTranscriptTarget(
   turn: WorkerTranscriptTurn,
 ): BoundAgentRunSessionTarget {
   const target = captureWorkerTurnTranscriptTarget(turn);
-  const binding = captureIncognitoSessionBinding(target);
-  const currentEntry = binding
-    ? binding.actor.sessions.readSharing(target.sessionKey)?.entry
-    : loadSessionEntry(target);
-  if (
-    currentEntry?.sessionId !== target.sessionId ||
-    (target.expectedLifecycleRevision !== undefined &&
-      currentEntry.lifecycleRevision !== target.expectedLifecycleRevision) ||
-    (target.expectedWriterRunId !== undefined &&
-      currentEntry.activeWriterRunId !== target.expectedWriterRunId)
-  ) {
-    throw new Error("Cloud worker transcript identity is no longer current");
+  const memory = getSessionActorStorageBinding(target);
+  const binding = memory ? undefined : captureIncognitoSessionBinding(target);
+  const currentEntry = memory
+    ? memory.actor.snapshot(memory.authority)?.entry
+    : binding
+      ? binding.actor.sessions.readSharing(target.sessionKey)?.entry
+      : resolveExplicitIncognitoAgentSqliteTarget(target.storePath, { agentId: target.agentId })
+        ? loadSessionEntryReadOnly(target)
+        : currentPreparedTranscript(target).readCurrent(target);
+  const mismatchedFields = [
+    currentEntry?.sessionId !== target.sessionId ? "sessionId" : undefined,
+    target.expectedLifecycleRevision !== undefined &&
+    currentEntry?.lifecycleRevision !== target.expectedLifecycleRevision
+      ? "lifecycleRevision"
+      : undefined,
+    target.expectedWriterRunId !== undefined &&
+    currentEntry?.activeWriterRunId !== target.expectedWriterRunId
+      ? "activeWriterRunId"
+      : undefined,
+  ].filter((field) => field !== undefined);
+  if (!currentEntry || mismatchedFields.length > 0) {
+    throw new Error(
+      `Cloud worker transcript identity is no longer current (target resolution: ${
+        currentEntry ? `mismatched ${mismatchedFields.join(", ")}` : "missing projection"
+      })`,
+    );
   }
   return target;
 }
@@ -103,7 +251,8 @@ export async function withWorkerTurnTranscriptDatabase<T>(
 ): Promise<T> {
   const captured = captureWorkerTurnTranscriptTarget(turn);
   const target = { ...captured, storePath: nodePath.resolve(captured.storePath) };
-  const binding = captureIncognitoSessionBinding(target);
+  const memory = getSessionActorStorageBinding(target);
+  const binding = memory ? undefined : captureIncognitoSessionBinding(target);
   let executing = false;
   let authority: Awaited<ReturnType<typeof controls.prepareAuthority>> | undefined;
   const assertPreparing = () => {
@@ -140,6 +289,16 @@ export async function withWorkerTurnTranscriptDatabase<T>(
     }
   };
   controls.assertCurrent();
+  if (memory) {
+    authority = await controls.prepareAuthority();
+    try {
+      assertPreparing();
+      return await runAdmitted(target);
+    } finally {
+      authority.release();
+      authority = undefined;
+    }
+  }
   if (binding) {
     return binding.actor.sessions.withSharedState(async () => {
       await binding.actor.sessions.read(
@@ -161,32 +320,32 @@ export async function withWorkerTurnTranscriptDatabase<T>(
       }
     });
   }
-  return withSessionEntryReadOnlyInWorker(target, assertPreparing, async (read, owner) => {
-    controls.assertCurrent();
-    if (!read.ok) {
-      throw read.error;
-    }
-    if (!read.value || read.value.sessionId !== target.sessionId) {
-      throw new Error("Cloud worker transcript identity is no longer current");
-    }
+  if (resolveExplicitIncognitoAgentSqliteTarget(target.storePath, { agentId: target.agentId })) {
+    return withSessionEntryReadOnlyInWorker(target, assertPreparing, async () => {
+      authority = await controls.prepareAuthority();
+      try {
+        assertPreparing();
+        return await runAdmitted(target);
+      } finally {
+        authority.release();
+        authority = undefined;
+      }
+    });
+  }
+  const prepared = await prepareWorkerTranscript(target, assertPreparing);
+  try {
     authority = await controls.prepareAuthority();
     try {
       controls.assertCurrent();
-      const scope = owner.scope;
-      if (!scope) {
-        assertPreparing();
-        return await runAdmitted(target);
-      }
-      const pinned = { ...target, storePath: scope.storePath };
       const assertAdmission = () => {
-        owner.assertCurrent();
+        prepared.assertCurrent();
         assertPreparing();
       };
       return await withOpenClawAgentDatabaseRuntime(
-        { agentId: scope.databaseAgentId, path: scope.storePath, env: scope.env },
+        { agentId: prepared.source.agentId, path: prepared.source.path, env: prepared.env },
         () => {
           assertAdmission();
-          return runAdmitted(pinned);
+          return preparedWorkerTranscript.run(prepared, () => runAdmitted(prepared.target));
         },
         assertAdmission,
         controls.signal,
@@ -195,7 +354,9 @@ export async function withWorkerTurnTranscriptDatabase<T>(
       authority.release();
       authority = undefined;
     }
-  });
+  } finally {
+    await prepared.release();
+  }
 }
 
 /** Reuse the accepted turn identity as a transaction-local source predicate. */
@@ -207,68 +368,17 @@ export function captureWorkerTurnTranscriptSource(
     refuse: () => never;
   },
 ): SessionSourceAssertion {
-  const binding = captureIncognitoSessionBinding(target);
-  if (binding) {
-    const claim = binding.actor.sessions.captureCurrent(target.sessionKey);
-    const expected = predicate
-      ? { ...predicate.expected }
-      : {
-          sessionId: target.sessionId,
-          ...(target.expectedLifecycleRevision !== undefined && {
-            lifecycleRevision: target.expectedLifecycleRevision,
-          }),
-          ...(target.expectedWriterRunId !== undefined && {
-            activeWriterRunId: target.expectedWriterRunId,
-          }),
-        };
-    const fields = predicate
-      ? [...predicate.fields]
-      : (["sessionId", "lifecycleRevision", "activeWriterRunId"] as const).filter((field) =>
-          Object.hasOwn(expected, field),
-        );
-    return () => {
-      binding.admissionSignal?.throwIfAborted();
-      binding.actor.assertReadable();
-      claim.assertCurrent();
-      const entry = binding.actor.sessions.readSharing(target.sessionKey)?.entry;
-      if (!entry || fields.some((field) => entry[field] !== expected[field])) {
-        if (predicate) {
-          predicate.refuse();
-        }
-        throw new Error("Cloud worker transcript identity is no longer current");
-      }
-    };
-  }
-  const env = captureSessionTranscriptStorageEnvironment(process.env);
-  const resolved = resolveSqliteScope({ ...target, env });
-  const options = toDatabaseOptions(resolved);
-  const path = resolveOpenClawAgentSqlitePath(options);
-  const incognito = isIncognitoOpenClawAgentSqlitePath(path, options);
-  const identity = readDatabasePathIdentitySync(path);
-  const refuse =
-    predicate?.refuse ??
-    ((): never => {
-      throw new Error("Cloud worker transcript identity is no longer current");
-    });
-  const captured = { ...target, sessionKey: resolved.sessionKey, storePath: path };
-  const assertCurrent = () => {
-    if (incognito) {
-      return;
-    }
-    if (!identity.key.startsWith("file:")) {
-      refuse();
-    }
-    assertExistingDatabaseIdentity(path, identity.key, identity.birthtime);
-  };
+  const memory = getSessionActorStorageBinding(target);
+  const binding = memory ? undefined : captureIncognitoSessionBinding(target);
   const expected: WorkerTranscriptSourceIdentity = predicate
     ? { ...predicate.expected }
     : {
-        sessionId: captured.sessionId,
-        ...(captured.expectedLifecycleRevision !== undefined
-          ? { lifecycleRevision: captured.expectedLifecycleRevision }
+        sessionId: target.sessionId,
+        ...(target.expectedLifecycleRevision !== undefined
+          ? { lifecycleRevision: target.expectedLifecycleRevision }
           : {}),
-        ...(captured.expectedWriterRunId !== undefined
-          ? { activeWriterRunId: captured.expectedWriterRunId }
+        ...(target.expectedWriterRunId !== undefined
+          ? { activeWriterRunId: target.expectedWriterRunId }
           : {}),
       };
   const fields: (keyof WorkerTranscriptSourceIdentity)[] = predicate
@@ -276,66 +386,110 @@ export function captureWorkerTurnTranscriptSource(
     : (["sessionId", "lifecycleRevision", "activeWriterRunId"] as const).filter((field) =>
         Object.hasOwn(expected, field),
       );
+  const refuse: (facts?: { entry?: WorkerTranscriptSourceIdentity }) => never =
+    predicate?.refuse ??
+    ((facts): never => {
+      throw new Error(
+        `Cloud worker transcript identity is no longer current (source callback: ${
+          facts === undefined
+            ? "worker predicate rejected"
+            : facts.entry
+              ? `mismatched ${fields.filter((field) => facts.entry?.[field] !== expected[field]).join(", ")}`
+              : "missing projection"
+        })`,
+      );
+    });
   const assertEntry = (entry: WorkerTranscriptSourceIdentity | undefined) => {
     if (!entry || fields.some((field) => entry[field] !== expected[field])) {
-      refuse();
+      refuse({ entry });
     }
   };
-  const assertNative = () => {
-    assertCurrent();
-    assertEntry(loadSessionEntryReadOnly({ ...captured, env }));
-  };
-  if (incognito) {
-    return Object.assign(assertNative, { nativeSource: true });
+  if (memory) {
+    return () => assertEntry(memory.actor.snapshot(memory.authority)?.entry);
   }
-  return Object.assign(assertNative, {
+  if (binding) {
+    const claim = binding.actor.sessions.captureCurrent(target.sessionKey);
+    return () => {
+      binding.admissionSignal?.throwIfAborted();
+      binding.actor.assertReadable();
+      claim.assertCurrent();
+      assertEntry(binding.actor.sessions.readSharing(target.sessionKey)?.entry);
+    };
+  }
+  if (resolveExplicitIncognitoAgentSqliteTarget(target.storePath, { agentId: target.agentId })) {
+    return Object.assign(() => assertEntry(loadSessionEntryReadOnly(target)), {
+      nativeSource: true,
+    });
+  }
+  // RPC callbacks run in the connection context, outside the launching turn scope.
+  const captured = findPreparedTranscript(target);
+  const assertCurrent = () =>
+    assertEntry(currentPreparedTranscript(target, captured).readCurrent(target));
+  return Object.assign(assertCurrent, {
     async prepareSessionSource(): Promise<PreparedSessionSourceAuthority> {
-      assertCurrent();
-      const retained = retainSessionHistoryWorkerDatabase({ ...options, path, env });
+      const current = captured ?? findPreparedTranscript(target);
+      const prepared = current ?? (await prepareWorkerTranscript(target, () => {}));
       try {
-        const snapshot = await retained.owner.readExactEntries({
-          env,
-          sessionKeys: [captured.sessionKey],
-          projection: "exact",
-          snapshotFields: [],
-        });
-        const entry = snapshot.entries[0]?.entry;
-        const assertPrepared = () => {
-          assertCurrent();
-          retained.owner.assertCurrent();
-          if (
-            snapshot.source?.databaseIdentity !== identity.key.slice("file:".length) ||
-            snapshot.source.databaseBirthtime !== identity.birthtime
-          ) {
-            refuse();
-          }
-          assertEntry(entry);
-        };
-        assertPrepared();
+        prepared.assertCurrent();
         return {
-          assertCurrent: assertPrepared,
+          assertCurrent: prepared.assertCurrent,
           checks: [
             {
               predicate: {
-                source: {
-                  agentId: options.agentId,
-                  path,
-                  databaseIdentity: identity.key.slice("file:".length),
-                  databaseBirthtime: identity.birthtime,
-                },
-                sessionKey: captured.sessionKey,
+                source: prepared.source,
+                sessionKey: target.sessionKey,
                 fields,
                 expected,
               },
               refuse,
             },
           ],
-          release: retained.release,
+          release: current ? undefined : prepared.release,
         };
       } catch (error) {
-        await releaseSessionSourceAuthorities([retained], [error]);
+        if (!current) {
+          await releaseSessionSourceAuthorities([prepared], [error]);
+        }
         throw error;
       }
     },
   });
+}
+
+/** Callers retaining a source outside a turn must own its prepared lifetime. */
+export async function prepareWorkerTurnTranscriptSource(
+  ...args: Parameters<typeof captureWorkerTurnTranscriptSource>
+) {
+  const source = captureWorkerTurnTranscriptSource(...args);
+  const prepared =
+    source.prepareSessionSource && !findPreparedTranscript(args[0])
+      ? await prepareWorkerTranscript(args[0], () => {})
+      : undefined;
+  try {
+    const captured = prepared
+      ? preparedWorkerTranscript.run(prepared, () =>
+          captureWorkerTurnTranscriptSource(prepared.target, args[1]),
+        )
+      : source;
+    if (source.prepareSessionSource) {
+      captured();
+    }
+    let active = true;
+    const retained = composeSessionSourceAssertion([captured], (assertSource) => {
+      if (!active) {
+        throw new Error("Cloud worker transcript authority has been released");
+      }
+      assertSource();
+    });
+    const release = async () => {
+      if (active) {
+        active = false;
+        await prepared?.release();
+      }
+    };
+    return Object.assign(retained, { release, [Symbol.asyncDispose]: release });
+  } catch (error) {
+    await releaseSessionSourceAuthorities(prepared ? [prepared] : [], [error]);
+    throw error;
+  }
 }

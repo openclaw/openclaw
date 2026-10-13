@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { expectObjectFields } from "../../test-utils/mock-call-assertions.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
@@ -86,9 +87,9 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     "keeps delivery target failure separate from execution (agent failed: %s)",
     async (agentFailed) => {
       await useRealOutcome();
-      const reply = agentFailed ? "AUTOMATION_FAILED\nTask blocked" : "REPORT_COMPLETE";
+      const reply = agentFailed ? "Task blocked" : "REPORT_COMPLETE";
       mockAgentRun({
-        payloads: [{ text: reply }],
+        payloads: [{ text: reply, ...(agentFailed ? { isError: true } : {}) }],
         meta: { finalAssistantVisibleText: reply },
       });
       const deliveryError = "Channel is required (no configured channels detected).";
@@ -189,22 +190,21 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
   });
 
   it.each([
-    {
-      // Transient-looking prose must not turn the agent's verdict into a scheduler retry.
-      reply: "AUTOMATION_FAILED\nNetwork timeout: no shell tool is available in this run.",
-      expected: {
-        status: "error",
-        error: "Network timeout: no shell tool is available in this run.",
-        errorClassification: { kind: "permanent", reportedByAgent: true },
-      },
-    },
-  ])("settles the run from a reported failure line: $expected.status", async (testCase) => {
+    "AUTOMATION_FAILED\nNetwork timeout: no shell tool is available in this run.",
+    "Task blocked: no shell tool is available in this run.",
+  ])("keeps task-failure prose as ordinary successful output: %s", async (reply) => {
     await useRealOutcome();
     mockAgentRun({
-      payloads: [{ text: testCase.reply }],
-      meta: { finalAssistantVisibleText: testCase.reply },
+      payloads: [{ text: reply }],
+      meta: { finalAssistantVisibleText: reply },
     });
-    expectObjectFields(await runTurn(), testCase.expected);
+    expectObjectFields(await runTurn(), {
+      status: "ok",
+      error: undefined,
+      errorClassification: undefined,
+      summary: reply,
+      outputText: reply,
+    });
   });
 
   it("preserves a heartbeat-only accepted child handoff failure as a cron error", async () => {
@@ -247,7 +247,7 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
       deliveryPayloads: [mediaPayload],
     });
     const result = await runTurn();
-    expectDispatch({ spawnOnlyHandoff: false, deliveryPayloadHasStructuredContent: true });
+    expectDispatch({ spawnOnlyHandoff: false });
     expectObjectFields(result, { status: "ok", deliveryError: error });
   });
 
@@ -313,9 +313,11 @@ describe("delivered report outcome", () => {
       },
     });
 
+    const cfg = {};
+    setRuntimeConfigSnapshot(cfg);
     const result = await runCronIsolatedAgentTurn({
       deliveryAttemptFence: null,
-      cfg: {},
+      cfg,
       deps: {} as never,
       job: {
         id: "delivered-report",

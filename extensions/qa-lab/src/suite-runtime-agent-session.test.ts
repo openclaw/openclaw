@@ -4,6 +4,10 @@ import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
   loadTranscriptEventsSync,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -29,6 +33,7 @@ const { cleanup, makeTempDir } = createTempDirHarness({
 afterEach(() => {
   vi.useRealTimers();
   resetPluginStateStoreForTests({ closeDatabase: false });
+  clearRuntimeConfigSnapshot();
 });
 
 afterAll(cleanup);
@@ -43,6 +48,7 @@ describe("qa suite runtime agent session helpers", () => {
   } as never;
 
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     gatewayCall.mockReset();
   });
 
@@ -127,55 +133,6 @@ describe("qa suite runtime agent session helpers", () => {
     expect(method).toBe("skills.status");
     expect(params).toEqual({ agentId: "qa" });
     expect(options?.timeoutMs).toBe(45_000);
-  });
-
-  it("retries transient FTS integrity mismatches while child transcripts settle", async () => {
-    const readEntries = vi
-      .fn()
-      .mockImplementationOnce(() => {
-        throw new Error(
-          'SQLite integrity_check failed for qa.sqlite: fts5: checksum mismatch for table "session_transcript_fts"',
-        );
-      })
-      .mockReturnValueOnce([
-        {
-          sessionKey: "session-1",
-          entry: { sessionId: "session-1", updatedAt: 10 },
-        },
-      ]);
-    vi.useFakeTimers();
-
-    const pending = readRawQaSessionStore(
-      { gateway: { tempRoot: "/tmp/qa-fts-settle" } } as never,
-      { readEntries, retryDelaysMs: [1] },
-    );
-    await vi.advanceTimersByTimeAsync(1);
-
-    await expect(pending).resolves.toEqual({
-      "session-1": { sessionId: "session-1", updatedAt: 10 },
-    });
-    expect(readEntries).toHaveBeenCalledTimes(2);
-  });
-
-  it("fails closed when an FTS integrity mismatch does not settle", async () => {
-    const mismatch = new Error(
-      'SQLite integrity_check failed for qa.sqlite: fts5: checksum mismatch for table "session_transcript_fts"',
-    );
-    const readEntries = vi.fn(() => {
-      throw mismatch;
-    });
-    vi.useFakeTimers();
-
-    const assertion = expect(
-      readRawQaSessionStore({ gateway: { tempRoot: "/tmp/qa-fts-persistent" } } as never, {
-        readEntries,
-        retryDelaysMs: [1],
-      }),
-    ).rejects.toThrow(mismatch.message);
-    await vi.runAllTimersAsync();
-
-    await assertion;
-    expect(readEntries).toHaveBeenCalledTimes(2);
   });
 
   it("seeds QA session metadata and transcript messages in SQLite", async () => {

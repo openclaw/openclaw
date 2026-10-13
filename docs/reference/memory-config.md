@@ -97,6 +97,15 @@ reply.
 
 ## Provider selection
 
+Use `openclaw configure --section memory` for optional interactive provider/model
+and credential setup. Local guided and classic onboarding offer the same step.
+The selected cloud or local HTTP route must return a valid vector for synthetic text before
+you can save it. Existing settings and per-agent overrides survive skipping or
+failed verification; SecretRefs stay references in the saved config. The check
+does not open the memory index, download a local model, or re-index your files.
+Ollama and LM Studio use their running servers and already-downloaded embedding
+models; see [interactive memory setup](/cli/configure#memory-section).
+
 | Key        | Type      | Default          | Description                                                                                                                                                                                                                                                                                 |
 | ---------- | --------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                                                                                                                                                                                                                             |
@@ -198,12 +207,34 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
 <ParamField path="remote.baseUrl" type="string">
   Custom API base URL. Provider credentials and headers are inherited only when this resolves to the provider's configured destination.
 </ParamField>
+
+OpenAI-compatible, Gemini, and LM Studio embeddings use the same private-network policy as model inference.
+For OpenAI-compatible and Gemini embeddings, configured custom and local origins are
+trusted by default, without extending that trust to redirects to another origin.
+LM Studio defaults to allowing private-network requests, including redirects, matching
+its inference behavior. The selected provider's
+`models.providers.<id>.request.allowPrivateNetwork` also applies: `false` blocks private
+destinations, while `true` explicitly permits private-network requests. Known provider hostnames
+that resolve to private addresses (for example, Azure OpenAI private endpoints or
+split-horizon DNS) require `models.providers.<id>.request.allowPrivateNetwork: true`
+after upgrading. Set this on the embedding provider's ID: `openai` for OpenAI,
+`google` for Gemini, or the configured LM Studio provider ID. A setting on a
+differently named chat provider does not carry over.
+
 <ParamField path="remote.apiKey" type="string">
   API key owned by the remote destination. Set this when `remote.baseUrl` points somewhere other than the provider's configured destination.
 </ParamField>
 <ParamField path="remote.headers" type="object">
   Extra HTTP headers owned by the remote destination. Provider defaults are merged only for the provider's configured destination.
 </ParamField>
+
+Header values must be strings. Environment references in memory headers are
+resolved during secret preparation; an unresolved reference stops indexing or
+search with an error naming the setting, before any embedding request is sent.
+Already-resolved values are used literally. LM Studio and generic OpenAI-compatible
+servers that do not require authentication still work without credentials,
+including on LAN hosts; configuring a broken reference is different from omitting
+authentication.
 
 ```json5
 {
@@ -411,10 +442,10 @@ it and the active profile or container hint. See [memory index](/cli/memory#memo
 
 All under `memory.search.query`:
 
-| Key          | Type     | Default | Description                               |
-| ------------ | -------- | ------- | ----------------------------------------- |
-| `maxResults` | `number` | `6`     | Max memory hits returned before injection |
-| `minScore`   | `number` | `0.35`  | Minimum relevance score to include a hit  |
+| Key          | Type     | Default | Description                                                                              |
+| ------------ | -------- | ------- | ---------------------------------------------------------------------------------------- |
+| `maxResults` | `number` | `6`     | Max memory hits returned before injection                                                |
+| `minScore`   | `number` | `0.35`  | Minimum relevance score before recency decay, including importance and project weighting |
 
 Without a per-call `maxResults`, primary-only `memory_search` calls use this
 configured limit, including `corpus=memory` and `corpus=sessions`. Wiki and

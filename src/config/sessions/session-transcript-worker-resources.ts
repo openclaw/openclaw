@@ -22,13 +22,15 @@ import {
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { runOutsideOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
+import type {
+  CombinedSessionStoreTopologyRequest,
+  CombinedSessionStoreTopologyResult,
+} from "./combined-store.types.js";
 import {
-  sessionHistoryCleanupError,
   decodeSessionTranscriptWorkerReadError,
   unwrapSessionTranscriptWorkerReply,
 } from "./session-history-worker-errors.js";
 import {
-  isSessionStoreReadCandidateCurrent,
   measureSessionStoreTargetInventoryInputBytes,
   type SessionStoreReadCandidate,
 } from "./session-store-read-candidates.js";
@@ -63,7 +65,6 @@ export type SessionHistoryDatabaseTarget = OpenClawAgentDatabaseOptions & {
 
 export type HistoryDatabaseResource = {
   database: { agentId: string; path: string };
-  generation: number;
   pending: number;
   revoked: boolean;
   nativeSequences: Map<SessionDatabaseWorkerLane, number>;
@@ -73,12 +74,13 @@ export type HistoryDatabaseResource = {
   closing?: Promise<void>;
   unregister: () => void;
   retainAlias: (alias: string) => void;
+  matchesPath: (pathname: string) => boolean;
+  retire: () => Promise<void>;
 };
 
 const historyDatabases = new Map<string, HistoryDatabaseResource>();
 const historySetTimeout = setTimeout;
 export const historyClearTimeout = clearTimeout;
-let historyGeneration = 0;
 export const {
   historyLane,
   transcriptSearchLane,
@@ -236,16 +238,7 @@ async function closeDatabaseWorkerResource(
     return;
   }
   const through = lane.nativeSequence;
-  try {
-    await pool.closeResources(JSON.stringify([{ path: resource.database.path }]));
-  } catch (error) {
-    try {
-      await rotateDatabaseWorkers(lane);
-    } catch (retirementError) {
-      throw sessionHistoryCleanupError(error, retirementError, "worker retirement");
-    }
-    throw error;
-  }
+  await pool.closeResources(JSON.stringify([{ path: resource.database.path }]));
   const sequence = resource.nativeSequences.get(lane);
   if (sequence !== undefined && sequence <= through) {
     resource.nativeSequences.delete(lane);
@@ -264,6 +257,25 @@ export async function settleSessionHistoryWorkerEviction(
   }
 }
 
+/** Finish admitted usage cleanup while deletion still permits its retained writers to settle. */
+export async function retireSessionHistoryWorkerDatabases(options: {
+  agentId: string;
+  paths: readonly string[];
+}): Promise<void> {
+  const agentId = normalizeAgentId(options.agentId);
+  const paths = [...new Set(options.paths.map((pathname) => path.resolve(pathname)))];
+  const selected = [...historyDatabases.values()].filter(
+    (resource) =>
+      resource.database.agentId === agentId &&
+      paths.some((pathname) => resource.matchesPath(pathname)),
+  );
+  const results = await Promise.allSettled(selected.map((resource) => resource.retire()));
+  const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "Session database work is still draining");
+  }
+}
+
 export function acquireHistoryDatabaseResource(
   options: SessionHistoryDatabaseTarget,
 ): HistoryDatabaseResource {
@@ -274,11 +286,14 @@ export function acquireHistoryDatabaseResource(
   const key = JSON.stringify(database);
   let resource = historyDatabases.get(key);
   let created = false;
-  if (!resource || resource.revoked) {
+  if (resource?.revoked) {
+    // Failed retirement keeps cleanup custody until the existing close/prune owner settles it.
+    throw new WorkerTaskError("Session database work is still draining", "unavailable");
+  }
+  if (!resource) {
     const aliases = new Map<string, () => void>();
     const owned: HistoryDatabaseResource = {
       database,
-      generation: ++historyGeneration,
       pending: 0,
       revoked: false,
       nativeSequences: new Map(),
@@ -286,6 +301,11 @@ export function acquireHistoryDatabaseResource(
       cleanups: new Set(),
       aborters: new Set(),
       unregister: () => {},
+      matchesPath: (pathname) => pathname === database.path || aliases.has(pathname),
+      retire() {
+        revoke();
+        return close();
+      },
       retainAlias(alias) {
         if (!aliases.has(alias)) {
           aliases.set(
@@ -386,6 +406,9 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
     readTargetInventory: (
       request: Omit<SessionStoreTargetInventoryRequest, "candidates">,
     ) => Promise<SessionStoreTargetInventoryResult>;
+    readCombinedTopology: (
+      request: Omit<CombinedSessionStoreTopologyRequest, "candidates">,
+    ) => Promise<CombinedSessionStoreTopologyResult>;
   }) => Promise<T>,
   lane: SessionHistoryWorkerLane = historyLane,
 ): Promise<T> {
@@ -409,12 +432,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
   refreshDatabaseWorkerPressureSubscription();
   try {
     let revoked = false;
-    let closing: Promise<void> | undefined;
-    let nativeCleanupPending = false;
-    let candidateCleanupPending = false;
     let dispatched = false;
-    let discoveryFailed = false;
-    let outcome: { value: T } | { error: unknown };
     const assertCurrent = () => {
       if (revoked) {
         throw new WorkerTaskError("Session target discovery was revoked", "unavailable");
@@ -426,103 +444,65 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
         unregister();
       }
     };
-    const retire = (): Promise<void> => {
-      closing ??= (async () => {
-        nativeCleanupPending = true;
-        try {
-          await rotateDatabaseWorkers(lane);
-          nativeCleanupPending = false;
-        } finally {
-          closing = undefined;
-        }
-      })();
-      return closing;
-    };
     const settleCandidates = async () => {
-      // Failed discovery can retain handles outside candidate custody even on a proven worker.
-      if (discoveryFailed || revoked || !lane.pool.canCloseNativeResources()) {
-        await retire();
+      if (!dispatched) {
+        return;
+      }
+      dispatched = false;
+      if (!lane.pool.canCloseNativeResources()) {
+        await rotateDatabaseWorkers(lane);
         return;
       }
       const through = lane.nativeSequence;
-      candidateCleanupPending = true;
-      try {
-        const retained = new Map<string, HistoryDatabaseResource>();
-        for (const resource of historyDatabases.values()) {
-          if (resource.revoked || resource.closing || !resource.nativeSequences.has(lane)) {
-            continue;
-          }
-          for (const candidate of capturedCandidates) {
-            if (
-              !matchesAgentDatabaseReadCandidatePath(
-                { ...candidate, path: candidate.physicalPath },
-                resource.database.path,
-              )
-            ) {
-              continue;
-            }
-            const alias = candidate.scope
-              ? path.join(path.dirname(candidate.path), path.basename(resource.database.path))
-              : candidate.path;
-            if (
-              !isSessionStoreReadCandidateCurrent({
-                path: alias,
-                physicalPath: resource.database.path,
-              })
-            ) {
-              throw new Error("Session discovery alias changed before reader custody transfer");
-            }
-            // The known owner must retain lexical close custody before discovery releases it.
-            if (alias !== resource.database.path) {
-              resource.retainAlias(alias);
-            }
-            retained.set(resource.database.path, resource);
-          }
+      const retained = new Set<string>();
+      for (const resource of historyDatabases.values()) {
+        if (resource.revoked || !resource.nativeSequences.has(lane)) {
+          continue;
         }
-        await lane.pool.closeResources(
-          encodeAgentDatabaseReaderRequest({
-            kind: "close",
-            candidates: selected,
-            retainedPaths: [...retained.keys()],
-            deleted: false,
-          }),
-        );
-        if (
-          revoked ||
-          [...retained.values()].some((resource) => resource.revoked || Boolean(resource.closing))
-        ) {
-          throw new WorkerTaskError(
-            "Session reader custody was revoked during discovery cleanup",
-            "unavailable",
-          );
-        }
-        candidateCleanupPending = false;
-        for (const resource of historyDatabases.values()) {
-          const sequence = resource.nativeSequences.get(lane);
+        for (const candidate of capturedCandidates) {
           if (
-            sequence !== undefined &&
-            sequence <= through &&
-            !retained.has(resource.database.path) &&
-            selected.some((candidate) =>
-              matchesAgentDatabaseReadCandidatePath(candidate, resource.database.path),
+            !matchesAgentDatabaseReadCandidatePath(
+              { ...candidate, path: candidate.physicalPath },
+              resource.database.path,
             )
           ) {
-            resource.nativeSequences.delete(lane);
+            continue;
           }
+          const alias = candidate.scope
+            ? path.join(path.dirname(candidate.path), path.basename(resource.database.path))
+            : candidate.path;
+          if (alias !== resource.database.path) {
+            resource.retainAlias(alias);
+          }
+          retained.add(resource.database.path);
         }
-        pruneHistoryDatabases();
-      } catch (error) {
-        try {
-          await retire();
-          candidateCleanupPending = false;
-        } catch (retirementError) {
-          throw sessionHistoryCleanupError(error, retirementError, "worker retirement");
-        }
-        throw error;
       }
+      // Discovery uses its captured paths; changing aliases mid-read is best effort.
+      await lane.pool.closeResources(
+        encodeAgentDatabaseReaderRequest({
+          kind: "close",
+          candidates: selected,
+          retainedPaths: [...retained],
+          deleted: false,
+        }),
+      );
+      for (const resource of historyDatabases.values()) {
+        const sequence = resource.nativeSequences.get(lane);
+        if (
+          sequence !== undefined &&
+          sequence <= through &&
+          !retained.has(resource.database.path) &&
+          selected.some((candidate) =>
+            matchesAgentDatabaseReadCandidatePath(candidate, resource.database.path),
+          )
+        ) {
+          resource.nativeSequences.delete(lane);
+        }
+      }
+      pruneHistoryDatabases();
     };
     const close = async () => {
-      await retire();
+      await rotateDatabaseWorkers(lane);
       release();
     };
     const retained = new Set<string>();
@@ -546,15 +526,13 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
           );
         }
       }
-      assertCurrent();
-      const readStoreTargetResult = async (
-        request: Omit<SessionStoreTargetReadRequest, "candidates">,
-      ): Promise<Result<SessionStoreTargetReadResult, unknown>> => {
-        const preparedRequest = {
-          ...request,
-          env: captureSessionTranscriptStorageEnvironment(request.env),
-          candidates: capturedCandidates,
-        };
+      const runRead = async (
+        input: Extract<
+          SessionHistoryWorkerInput,
+          { kind: "session-store-target" | "session-target-inventory" | "combined-store-topology" }
+        >,
+        inputBytes: number,
+      ) => {
         const reply = await runWithSqliteDatabaseAdmissionTurn(
           admissionPaths,
           () =>
@@ -563,13 +541,26 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
                 assertCurrent();
                 dispatched = true;
                 lane.nativeSequence++;
-                return { kind: "session-store-target", request: preparedRequest };
+                return input;
               },
-              { inputBytes: JSON.stringify(preparedRequest).length * 2, timeoutMs: 60_000 },
+              { inputBytes, timeoutMs: 60_000 },
             ),
           admissionFamilies,
         );
-        const result = unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
+        return unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
+      };
+      const readStoreTargetResult = async (
+        request: Omit<SessionStoreTargetReadRequest, "candidates">,
+      ): Promise<Result<SessionStoreTargetReadResult, unknown>> => {
+        const preparedRequest = {
+          ...request,
+          env: captureSessionTranscriptStorageEnvironment(request.env),
+          candidates: capturedCandidates,
+        };
+        const result = await runRead(
+          { kind: "session-store-target", request: preparedRequest },
+          JSON.stringify(preparedRequest).length * 2,
+        );
         if (
           typeof result === "boolean" ||
           Array.isArray(result) ||
@@ -578,14 +569,37 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
         ) {
           throw new Error("Session history worker returned another result instead of store target");
         }
-        assertCurrent();
-        discoveryFailed ||= "readError" in result;
         return "readError" in result
           ? err(decodeSessionTranscriptWorkerReadError(result.readError))
           : ok(result);
       };
-      const value = await operation({
+      return await operation({
         assertCurrent,
+        readCombinedTopology: async (request) => {
+          const preparedRequest = {
+            ...request,
+            options: {
+              ...request.options,
+              discovery: {
+                ...request.options.discovery,
+                env: captureSessionTranscriptStorageEnvironment(request.options.discovery.env),
+              },
+            },
+            candidates: capturedCandidates,
+          };
+          const result = await runRead(
+            { kind: "combined-store-topology", request: preparedRequest },
+            JSON.stringify(preparedRequest).length * 2,
+          );
+          if (
+            typeof result === "boolean" ||
+            Array.isArray(result) ||
+            result.kind !== "combined-store-topology"
+          ) {
+            throw new Error("Session history worker returned another result instead of topology");
+          }
+          return result;
+        },
         readStoreTargetResult,
         readStoreTarget: async (request) => {
           const read = await readStoreTargetResult(request);
@@ -600,25 +614,10 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
             env: captureSessionTranscriptStorageEnvironment(request.env),
             candidates: capturedCandidates,
           };
-          const reply = await runWithSqliteDatabaseAdmissionTurn(
-            admissionPaths,
-            () =>
-              lane.pool.run(
-                () => {
-                  assertCurrent();
-                  dispatched = true;
-                  lane.nativeSequence++;
-                  return { kind: "session-target-inventory", request: preparedRequest };
-                },
-                {
-                  inputBytes: measureSessionStoreTargetInventoryInputBytes(preparedRequest),
-                  timeoutMs: 60_000,
-                },
-              ),
-            admissionFamilies,
+          const result = await runRead(
+            { kind: "session-target-inventory", request: preparedRequest },
+            measureSessionStoreTargetInventoryInputBytes(preparedRequest),
           );
-          const result =
-            unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
           if (
             typeof result === "boolean" ||
             Array.isArray(result) ||
@@ -629,53 +628,20 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
               "Session history worker returned another result instead of target inventory",
             );
           }
-          if (result.kind === "session-target-inventory") {
-            // Best-effort inventory can encode a failed read instead of throwing it.
-            discoveryFailed ||= result.agents.some(
-              ({ result: inventory }) =>
-                !inventory.available && inventory.reason !== "database-missing",
-            );
-          }
           if (result.kind === "session-target-registry-required") {
             // Release native readers before registry work without discarding a healthy worker.
-            discoveryFailed ||= result.readFailed === true;
             await settleCandidates();
           }
-          assertCurrent();
           return result;
         },
       });
-      assertCurrent();
-      outcome = { value };
-    } catch (error) {
-      outcome = { error };
-    }
-    // Discovery custody includes lexical aliases. Keep it until physical readers
-    // settle; a later close through an alias must never miss a retained handle.
-    if (dispatched) {
+    } finally {
       try {
-        if ("error" in outcome) {
-          await retire();
-        } else {
-          await settleCandidates();
-        }
-      } catch (cleanupError) {
-        outcome = {
-          error:
-            "error" in outcome
-              ? sessionHistoryCleanupError(outcome.error, cleanupError, "worker retirement")
-              : cleanupError,
-        };
+        await settleCandidates();
+      } finally {
+        release();
       }
     }
-    if (!nativeCleanupPending && !candidateCleanupPending) {
-      release();
-    }
-    if ("error" in outcome) {
-      throw outcome.error;
-    }
-    assertCurrent();
-    return outcome.value;
   } finally {
     lane.pending--;
     armDatabaseWorkerIdleRetirement(lane);

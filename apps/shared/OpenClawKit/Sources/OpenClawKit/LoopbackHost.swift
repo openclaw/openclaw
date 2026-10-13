@@ -1,8 +1,6 @@
+import Darwin
 import Foundation
 import Network
-#if canImport(Darwin)
-import Darwin
-#endif
 
 public enum LoopbackHost {
     public static func isLoopbackHost(_ rawHost: String) -> Bool {
@@ -58,15 +56,11 @@ public enum LoopbackHost {
     }
 
     public static func isPrivateIPv6Literal(_ value: String) -> Bool {
-        #if canImport(Darwin)
         var addr = in6_addr()
         guard value.withCString({ inet_pton(AF_INET6, $0, &addr) }) == 1 else {
             return false
         }
         return value.hasPrefix("fc") || value.hasPrefix("fd") || value.hasPrefix("fe80:")
-        #else
-        return false
-        #endif
     }
 
     static func normalizedHost(_ rawHost: String) -> String {

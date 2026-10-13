@@ -72,7 +72,7 @@ import { installChatComposerPickerDismissal } from "./components/chat-picker-ove
 import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
-import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
+import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
 import { hasDirectSessionRun } from "./run-lifecycle.ts";
 import { canAutoFollowChat, handleChatScrollTakeover } from "./scroll.ts";
 import {
@@ -455,6 +455,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       swarm: target && this.swarmEnabled ? { ...target, sessions: sessions ?? [] } : undefined,
       subagentSessions: sessions,
       subagentSessionsHydrated: Boolean(target && this.swarmHydrator?.hydrated),
+      subagentSessionsPending: Boolean(target && this.swarmHydrator?.pendingChildRead),
       subagentSessionsRead: Boolean(target && this.swarmHydrator?.childrenRead),
       // Carry the admitted owner forward; route aliases do not identify child ancestry.
       subagentParentKey: target
@@ -513,10 +514,17 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
         selfInstanceId: snapshot?.client?.instanceId,
       })
     ) {
-      this.requestUpdate("presencePayload", previous);
+      this.chatState.requestBackgroundUpdate();
     }
   }
-  @litState() protected sessionSharingStates = new Map<string, ChatSessionSharingState>();
+  private sessionSharingStatesValue = new Map<string, ChatSessionSharingState>();
+  protected get sessionSharingStates(): Map<string, ChatSessionSharingState> {
+    return this.sessionSharingStatesValue;
+  }
+  protected set sessionSharingStates(value: Map<string, ChatSessionSharingState>) {
+    this.sessionSharingStatesValue = value;
+    this.chatState.requestBackgroundUpdate();
+  }
   protected readonly sessionSharingHydrationTargets = new Map<string, string>();
   protected readonly sessionParticipationTracker = new SessionParticipationTracker();
   @litState() protected resetConfirmation:
@@ -550,6 +558,13 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       config: SessionDiscussionPanelConfig;
     }
   >();
+  protected presentationUserId: string | null = null;
+  protected readonly retrySessionPlacementStartup = () => {
+    const sessionKey = this.state?.sessionKey;
+    if (sessionKey) {
+      this.context.placementStartup.retry(sessionKey);
+    }
+  };
   protected headerRenameInitialValue = "";
   @litState({ hasChanged: (next, previous) => Boolean(next) !== Boolean(previous) })
   protected headerRenameSession: Pick<GatewaySessionRow, "key" | "sessionId" | "label"> | null =
@@ -640,6 +655,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
             notify();
           }),
       )
+      .watchStore(() => this.context?.config)
       .watchStore(() => this.context?.theme)
       .watchStore(() => this.context?.plugins)
       .watch(

@@ -1,15 +1,18 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { buildControlUiPublicSessionCardPath } from "@openclaw/session-url-contract/public-share";
 import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import { resolveSessionPublicShare } from "../config/sessions/session-public-share.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ControlUiPublicSessionRequestGate } from "./control-ui-public-session-admission.js";
+import { buildPublicSessionMediaBaseUrl } from "./control-ui-public-session-attachments.js";
 import { isSecurePublicSessionIngress } from "./control-ui-public-session-ingress.js";
 import {
   PUBLIC_SESSION_CONTENT_SECURITY_POLICY,
   renderPublicSessionDocument,
 } from "./control-ui-public-session-render.js";
 import { servePublicSessionRepresentation } from "./control-ui-public-session-response.js";
+import { mintExistingPublicSessionShareToken } from "./control-ui-public-session-token.js";
 import {
   buildControlUiSessionEntryUrl,
   parseControlUiSessionReturnPath,
@@ -136,6 +139,7 @@ export async function serveControlUiPublicChat(params: {
       shareId: share.id,
     };
     const offset = Number(offsetText);
+    const token = await mintExistingPublicSessionShareToken(locator);
     return await servePublicSessionRepresentation({
       ...params,
       locator,
@@ -152,11 +156,14 @@ export async function serveControlUiPublicChat(params: {
       ]),
       document: {
         latestUrl: url.pathname,
+        ...(token ? { mediaBaseUrl: buildPublicSessionMediaBaseUrl(basePath, token) } : {}),
         entryUrl,
         clientAuthBasePath,
         assetBasePath: basePath,
         canonicalUrl: `${origin}${url.pathname}`,
-        cardUrl: `${origin}${basePath}/share/card.png`,
+        cardUrl: token
+          ? `${origin}${buildControlUiPublicSessionCardPath({ basePath, token })}`
+          : `${origin}${basePath}/share/card.png`,
       },
       olderUrl: (olderOffset) => `${url.pathname}?offset=${olderOffset}`,
       unavailable,

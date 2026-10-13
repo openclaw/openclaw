@@ -7,14 +7,11 @@ import {
 } from "../../config/sessions/restart-recovery-state.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { readSessionEntrySummariesInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import {
-  prepareSessionSourceScope,
-  releaseSessionSourceAuthorities,
-  type PreparedSessionSourceAuthority,
-} from "../../config/sessions/session-source-authority.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import { resolveSessionWorkStartBlock } from "../../config/sessions/session-work-start.js";
 import { isTerminalSessionStatus } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveAgentSessionWorkStartError } from "../../gateway/agent-turn/agent-handler-helpers.js";
+import { canPrepareAgentSessionWorktree } from "../../gateway/agent-turn/agent-handler-helpers.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -22,9 +19,9 @@ import { findDeliveryIntentOwners } from "../../infra/outbound/delivery-queue-st
 import {
   getOwedHarnessCompletionTask,
   createHarnessCompletionSourceAssertion,
-  readAdmittedHarnessCompletionInput,
+  readAdmittedHarnessCompletionInputAsync,
 } from "../agent-harness-completion-recovery.js";
-import { resolveExecDefaults } from "../exec-defaults.js";
+import { resolveExecDefaultsAsync } from "../exec-defaults.js";
 import type { MainSessionRecoveryAdmission } from "./main-session-recovery-admission.js";
 import { buildMainSessionRecoverySettlementPatch } from "./main-session-recovery-clear.js";
 import { createCurrentProcessOwnerLookup } from "./main-session-recovery-live-owners.js";
@@ -36,16 +33,16 @@ import {
   commitMainSessionRecovery,
   type MainSessionRecoveryStoreTarget,
 } from "./main-session-recovery-store.js";
-import {
-  hasRestartRecoveryMessageActionAuthority,
-  requiresRestartRecoveryMessageActionAuthority,
-  resumeMainSession,
-} from "./main-session-restart-dispatch.js";
+import { resumeMainSession } from "./main-session-restart-dispatch.js";
 import {
   markSessionCompletedAfterRecoveryCheckpoint,
   readMainSessionRecoveryCheckpoint,
   reconcileInvalidHarnessCompletion,
 } from "./main-session-restart-recovery-checkpoint.js";
+import {
+  hasRestartRecoveryMessageActionAuthority,
+  requiresRestartRecoveryMessageActionAuthority,
+} from "./main-session-restart-recovery-delivery.js";
 import {
   skippedMainSessionRecoveryDecision,
   type MainSessionRecoveryDecision,
@@ -162,6 +159,7 @@ export async function recoverStore(params: {
   observationOnly?: boolean;
   onExhaustedTarget?: (target: ExhaustedRestartRecoveryTarget) => void;
   onSkipped?: (reason: MainSessionRecoverySkipReason) => void;
+  onPreparationPending?: (target: ExhaustedRestartRecoveryTarget) => void;
   passId?: string;
   storePath: string;
   stateDir?: string;
@@ -202,8 +200,7 @@ export async function recoverStore(params: {
     a.sessionKey.localeCompare(b.sessionKey),
   )) {
     let entry = loadedEntry;
-    let completionSource: PreparedSessionSourceAuthority | undefined;
-    const recoveryErrors: unknown[] = [];
+    let completionSource: SessionSourceAssertion | undefined;
     const isRecoveryCandidate =
       !loadedEntry.mainRestartRecovery?.tombstone &&
       hasMainSessionRecoveryClaim(loadedEntry) &&
@@ -238,11 +235,7 @@ export async function recoverStore(params: {
         skip("not_main_session");
         continue;
       }
-      if (resolveAgentSessionWorkStartError(sessionKey, entry)) {
-        skip("work_start_blocked");
-        continue;
-      }
-      const dispatchTarget = resolveRestartRecoveryDispatchTarget({
+      const dispatchTarget = await resolveRestartRecoveryDispatchTarget({
         agentId: params.expectedTarget?.agentId,
         storeAgentId: params.storeAgentId,
         cfg: params.cfg,
@@ -255,6 +248,28 @@ export async function recoverStore(params: {
       }
       const agentId = dispatchTarget.agentId;
       const target = { agentId, sessionKey, storePath: params.storePath };
+      const workStartBlock = resolveSessionWorkStartBlock(
+        sessionKey,
+        entry,
+        canPrepareAgentSessionWorktree(sessionKey, entry)
+          ? { allowPendingWorkspace: true }
+          : undefined,
+      );
+      if (workStartBlock) {
+        skip(
+          workStartBlock.reason === "archived"
+            ? "archived"
+            : workStartBlock.retryable
+              ? "work_start_pending"
+              : "work_start_blocked",
+        );
+        decision.reason = workStartBlock.reason;
+        if (workStartBlock.retryable) {
+          params.onPreparationPending?.({ ...target, sessionId: entry.sessionId });
+        }
+        continue;
+      }
+
       const dispatchSessionKey =
         params.expectedTarget?.canonicalSessionKey ?? dispatchTarget.sessionKey;
       if (hasCurrentProcessOwner(entry, sessionKey)) {
@@ -386,16 +401,12 @@ export async function recoverStore(params: {
           if (!harnessCompletion) {
             return false;
           }
-          const assertion = createHarnessCompletionSourceAssertion({
+          completionSource = createHarnessCompletionSourceAssertion({
             claim: harnessCompletion,
             storePath: params.storePath,
+            mode: "committed",
           });
-          completionSource = await prepareSessionSourceScope(assertion);
-          if (completionSource) {
-            completionSource.assertCurrent();
-            return true;
-          }
-          return readAdmittedHarnessCompletionInput({
+          return readAdmittedHarnessCompletionInputAsync({
             claim: harnessCompletion,
             entry,
             storePath: params.storePath,
@@ -455,7 +466,7 @@ export async function recoverStore(params: {
         continue;
       }
 
-      const execPolicy = resolveExecDefaults({
+      const execPolicy = await resolveExecDefaultsAsync({
         cfg: params.cfg,
         agentId,
         sessionKey: dispatchSessionKey,
@@ -497,9 +508,14 @@ export async function recoverStore(params: {
       if (stopped()) {
         return result;
       }
+      // Steering changes the transcript tail, not the executing turn's source claim.
+      const hasRetainedHumanSource =
+        expectedRecoverySourceRunId !== undefined &&
+        (entry.restartRecoverySourceIngress === "control-ui" ||
+          entry.restartRecoverySourceIngress === "channel");
       if (
         !recoverableHarnessCompletion &&
-        (source === "inter_session" ||
+        ((source === "inter_session" && !hasRetainedHumanSource) ||
           ((source === undefined ||
             source === "internal_system" ||
             source === "harness_completion") &&
@@ -590,7 +606,7 @@ export async function recoverStore(params: {
         cfg: params.cfg,
         entry,
         observation: recoveryView.observation,
-        assertCompletionCurrent: completionSource?.assertCurrent,
+        completionSource,
         recoveryAttempt: recoveryView.nextAttempt,
         recoveryAdmission: params.recoveryAdmission,
         gatewayRuntime: params.gatewayRuntime,
@@ -632,13 +648,7 @@ export async function recoverStore(params: {
           });
         }
       }
-    } catch (error) {
-      recoveryErrors.push(error);
-      throw error;
     } finally {
-      if (completionSource) {
-        await releaseSessionSourceAuthorities([completionSource], recoveryErrors);
-      }
       if (isRecoveryCandidate && isMainRestartRecoveryCandidate(loadedEntry, sessionKey)) {
         mainSessionRecoveryLog.info(
           `main-session restart recovery candidate ${JSON.stringify({

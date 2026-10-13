@@ -126,21 +126,13 @@ export function registerManagedCampaignFailureTests(
               .spyOn(handoff, "transferManagedServiceUpdateHandoff")
               .mockImplementationOnce(async () => {
                 if (diagnosticFailure) {
-                  const codec = await import("./update-run-codec.js");
-                  const encode = codec.encodeRun;
+                  const worker = await import("../state/openclaw-state-worker-store.js");
+                  const execute = worker.runOpenClawStateWorkerOperation;
                   const write = vi
-                    .spyOn(codec, "encodeRun")
-                    .mockImplementation((record, options) => {
-                      if (
-                        record.steps.some((step) =>
-                          step.failureFacts?.some((fact) => fact.check === "managed-service"),
-                        )
-                      ) {
-                        write.mockRestore();
-                        throw new Error("diagnostic ledger is read-only");
-                      }
-                      return encode(record, options);
-                    });
+                    .spyOn(worker, "runOpenClawStateWorkerOperation")
+                    // Keep the requested failure durable, then reject its optional diagnostics.
+                    .mockImplementationOnce(execute)
+                    .mockRejectedValueOnce(new Error("diagnostic ledger is read-only"));
                   restoreDiagnosticFailure = () => write.mockRestore();
                 }
                 throw new Error("automatic transfer failed");

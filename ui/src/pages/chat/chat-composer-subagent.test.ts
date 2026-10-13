@@ -6,13 +6,14 @@ import type { GatewaySessionRow, ModelCatalogResult } from "../../api/types.ts";
 import { disposeQuestionPromptState } from "../../app/question-prompt.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
-import { resetComposerFixture } from "./chat-composer.test-support.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import { createComposerContainer, resetComposerFixture } from "./chat-composer.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { ChatPane } from "./chat-pane-render.ts";
 import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
 import { refreshChatMetadata, retireChatMetadataRequests } from "./chat-state-refresh.ts";
 import { renderChat, type ChatProps } from "./chat-view.ts";
-import { renderChatComposer } from "./components/chat-composer.ts";
+import { renderChatComposer } from "./components/chat-composer.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -34,7 +35,7 @@ function createRecoveringComposer(draft: string) {
   state.currentSessionId = null;
   state.chatMessage = draft;
   state.handleSendChat = vi.fn();
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   const draw = () => {
     pane.render();
     assert(pane.chatProps);
@@ -82,18 +83,25 @@ class SuggestionRecoveryPane extends ChatPane {
 customElements.define("openclaw-suggestion-recovery-test", SuggestionRecoveryPane);
 
 it.each([
-  { draft: "Keep this draft", control: false },
-  { draft: "/stop", control: true },
-  { draft: "/approve approval-123 allow-once", control: true },
+  { draft: "Keep this draft", control: false, cached: false },
+  { draft: "/stop", control: true, cached: false },
+  { draft: "/approve approval-123 allow-once", control: true, cached: false },
+  { draft: "Keep the cached reader in place", control: false, cached: true },
 ])(
   "holds early input until recovery is ready, preserving live controls: $draft",
-  ({ draft, control }) => {
+  ({ draft, control, cached }) => {
     const { state, container, draw, finishRecovery } = createRecoveringComposer(draft);
+    if (cached) {
+      state.currentSessionId = "cached-session";
+      state.chatMessages = [{ role: "assistant", content: "Cached reply", timestamp: 1 }];
+      state.chatLoading = false;
+    }
     try {
       const held = draw();
       expect(held.input.disabled).toBe(false);
       expect(held.input.value).toBe(draft);
       expect(held.send.disabled).toBe(!control);
+      expect(container.querySelector(".agent-chat__composer-status")).toBeNull();
       if (!control) {
         expect(held.send.getAttribute("aria-label")).toBe(
           "Finishing connection recovery. Try sending again when it is ready.",
@@ -111,7 +119,7 @@ it.each([
 
       finishRecovery();
       const ready = draw();
-      expect(state.chatLoading).toBe(true);
+      expect(state.chatLoading).toBe(!cached);
       expect(ready.input.value).toBe(draft);
       expect(ready.send.disabled).toBe(false);
       expect(ready.send.getAttribute("aria-busy")).toBe("false");
@@ -139,6 +147,22 @@ it("keeps ordinary input usable while the initial placement turn is pending", ()
     expect(send.disabled).toBe(false);
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     expect(state.handleSendChat).toHaveBeenCalledOnce();
+  } finally {
+    render(nothing, container);
+  }
+});
+
+it("explains an unresolved initial turn while offline without blocking the outbox", () => {
+  const { state, container, draw } = createRecoveringComposer("Queue this follow-up");
+  state.hasPendingInitialTurn = () => true;
+  state.connected = false;
+  try {
+    const { input, send } = draw();
+    expect(container.querySelector(".agent-chat__composer-status-band")?.textContent).toBe(
+      "The initial message is unresolved. Reconnect if needed, then review it before sending another message.",
+    );
+    expect(input.disabled).toBe(false);
+    expect(send.disabled).toBe(false);
   } finally {
     render(nothing, container);
   }
@@ -249,7 +273,7 @@ it.each([
   state.sessionsResult = { ts: 1, path: "", count: 1, defaults, sessions: [row] };
   state.chatMessage = "Keep this draft";
   state.handleSendChat = vi.fn();
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   const draw = () => {
     pane.render();
     assert(pane.chatProps);
@@ -323,7 +347,7 @@ it.each([
       expect(pane.chatProps.modelRequiredReason).toBe(
         "No models are permitted by your administrator.",
       );
-      const container = document.createElement("div");
+      const container = createComposerContainer();
       render(renderChatComposer(pane.chatProps), container);
       expect(container.querySelector(".agent-chat__disabled-banner-detail")?.textContent).toBe(
         "No models are permitted by your administrator.",
@@ -415,7 +439,7 @@ it.each([
     const historyRow = state.sessionsResult.sessions[0];
     state.handleSendChat = vi.fn();
     const pending = refreshChatMetadata(state);
-    const container = document.createElement("div");
+    const container = createComposerContainer();
     const draw = () => {
       pane.render();
       assert(pane.chatProps);
@@ -512,7 +536,7 @@ describe("subagent composer", () => {
     };
     state.chatMessage = "Continue this work";
     pane.render();
-    const container = document.createElement("div");
+    const container = createComposerContainer();
     render(renderChatComposer(pane.chatProps!), container);
 
     expect(container.querySelector("textarea")).not.toBeNull();
@@ -555,10 +579,13 @@ describe("subagent composer", () => {
           __openclaw: { id: "review-result", seq: 1 },
         },
       ];
-      const container = document.body.appendChild(document.createElement("div"));
+      const container = document.body.appendChild(createComposerContainer());
       try {
         pane.render();
         render(renderChat(pane.chatProps!), container);
+        pane.chatProps!.transcript.hostConnected();
+        pane.chatProps!.transcript.hostUpdated();
+        flush();
         expect(container.textContent).toContain("The workspace review is complete.");
         expect(container.querySelector("textarea")).toBeNull();
         expect(container.querySelector(".chat-reply-btn")).toBeNull();
@@ -613,7 +640,7 @@ describe("subagent composer", () => {
       state.handleSendChat = vi.fn();
       pane.render();
       const props = pane.chatProps!;
-      const container = document.createElement("div");
+      const container = createComposerContainer();
       render(renderChatComposer({ ...props, canAbort: true, onAbort: vi.fn() }), container);
       expect(props.canSend).toBe(false);
       void props.onSend();
@@ -659,7 +686,7 @@ describe("subagent composer", () => {
       state.chatModelCatalogInitialized = true;
       state.chatMessage = "Keep this draft";
       state.chatMessages = [{ role: "assistant", content: "Review complete.", timestamp: 1_000 }];
-      const container = document.body.appendChild(document.createElement("div"));
+      const container = document.body.appendChild(createComposerContainer());
       const draw = () => {
         pane.render();
         render(renderChat(pane.chatProps!), container);

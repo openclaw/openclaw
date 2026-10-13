@@ -8,14 +8,10 @@ import { serveOwnedWorkerTasks } from "../../infra/worker-task-server.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import type { SessionIdentityEvidenceResult } from "./session-accessor.sqlite-entry-availability.js";
 import {
-  isSessionHistoryReadOperation,
-  prepareSessionHistoryReadOperation,
-} from "./session-history-read-operation.worker.js";
-import {
   encodeSessionTranscriptWorkerError,
   encodeSessionTranscriptRequestError,
 } from "./session-history-worker-errors.js";
-import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
+import { withSessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts-scope.js";
 import {
   withHistoryDatabase,
   pruneClosedHistoryDatabaseScopes,
@@ -91,6 +87,13 @@ serveOwnedWorkerTasks(
         return usageCostWorkerFailure(error);
       }
     }
+    const [
+      { isSessionHistoryReadOperation, prepareSessionHistoryReadOperation },
+      { runWithSessionTranscriptReadFence },
+    ] = await Promise.all([
+      import("./session-history-read-operation.worker.js"),
+      import("./session-transcript-read-fence.js"),
+    ]);
     const readRequest = async (): Promise<
       SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]
     > => {
@@ -98,29 +101,22 @@ serveOwnedWorkerTasks(
         if (!channel) {
           throw new Error("Transcript search requires its host status channel");
         }
-        const { searchSessionTranscriptsReadOnlySync, isSessionTranscriptSearchCurrentSync } =
+        const { searchSessionTranscriptsReadOnlySync } =
           await import("./session-transcript-search.js");
         const options = {
           ...request.database,
           env: cloneEnvWithPlatformSemantics(request.params.env ?? process.env),
         };
-        const { found, revision, ...result } = searchSessionTranscriptsReadOnlySync(
-          request.params,
-          options,
-        );
+        const { found, ...result } = searchSessionTranscriptsReadOnlySync(request.params, options);
         let indexing = false;
         if (found) {
-          // Keep the connection in this task while the host checks its writer's status.
-          // A second pool request can run on another connection with an unrelated revision.
+          // Search hits describe their read snapshot; readiness comes from the projection owner.
           const status = await channel.request("transcript-index-status");
           try {
             if (typeof status.input !== "boolean") {
               throw new Error("Invalid transcript search index status");
             }
-            indexing =
-              status.input ||
-              revision === undefined ||
-              !isSessionTranscriptSearchCurrentSync(revision, options);
+            indexing = status.input;
           } finally {
             status.consumed();
           }
@@ -215,6 +211,36 @@ serveOwnedWorkerTasks(
         return {
           kind: "session-pending-archives" as const,
           pending: result.found && result.value,
+        };
+      }
+      if (request.kind === "transcript-stats-batch") {
+        const { readTranscriptStatsBatchReadOnlySync } =
+          await import("./session-accessor.sqlite-read.js");
+        return {
+          kind: request.kind,
+          stats: readTranscriptStatsBatchReadOnlySync(
+            request.sessionIds.map((sessionId) => ({
+              ...request.database,
+              storePath: request.database.path,
+              sessionId,
+              env: request.env,
+            })),
+          ),
+        };
+      }
+      if (request.kind === "session-transcript-instances") {
+        const { listSessionTranscriptInstances } = await import("./session-history.js");
+        return {
+          kind: request.kind,
+          instances: listSessionTranscriptInstances(
+            {
+              ...request.scope,
+              storePath: request.database.path,
+              env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
+            },
+            request.options,
+            request.continuation,
+          ),
         };
       }
       if (request.kind === "memory-session-targets") {
@@ -326,12 +352,13 @@ serveOwnedWorkerTasks(
         };
       }
       if (request.kind === "session-entry-current") {
-        const { readSessionEntryCurrentFacts } = await import("./session-entry-read.worker.js");
+        const { readSessionEntryCurrentFacts } =
+          await import("./session-entry-current-admission.worker.js");
         return readSessionEntryCurrentFacts(request);
       }
       if (request.kind === "session-row-backfill") {
         const { readSessionRowTranscriptFields } =
-          await import("../../gateway/session-row-transcript-backfill.kernel.js");
+          await import("../../gateway/session-row-transcript-backfill.worker.js");
         return {
           kind: "session-row-backfill" as const,
           fields: readSessionRowTranscriptFields(request.params),
@@ -341,6 +368,11 @@ serveOwnedWorkerTasks(
         const { readSessionStoreTargetInventory } =
           await import("./session-store-target-inventory.js");
         return readSessionStoreTargetInventory(request.request);
+      }
+      if (request.kind === "combined-store-topology") {
+        const { readCombinedSessionStoreTopology } =
+          await import("./combined-store-topology.worker.js");
+        return readCombinedSessionStoreTopology(request.request);
       }
       if (request.kind === "session-identity-evidence") {
         const { withOpenClawAgentDatabaseReadOnly } =
@@ -404,14 +436,6 @@ serveOwnedWorkerTasks(
           await import("../../talk/client-voice-session-lookup.worker.js");
         return readOpenVoiceSessions({ ...request.database, env: request.env }, request.request);
       }
-      if (request.kind === "usage-cache") {
-        const { readSessionCostUsageCache } =
-          await import("../../infra/session-cost-usage-cache-read.js");
-        return readSessionCostUsageCache(
-          { ...request.database, env: request.env },
-          request.request,
-        );
-      }
       if (request.kind === "session-membership-facts") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
@@ -467,6 +491,16 @@ serveOwnedWorkerTasks(
           ...(result.found ? result.value : { entry: undefined, members: [] }),
         };
       }
+      if (request.kind === "session-reactions") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const { listSessionReactionsInDatabase } = await import("./session-reaction-store.read.js");
+        const result = withOpenClawAgentDatabaseReadOnly(
+          (database) => listSessionReactionsInDatabase(database, request.sessionKey, request),
+          { ...request.database, env: request.env },
+        );
+        return { kind: "session-reactions" as const, reactions: result.found ? result.value : {} };
+      }
       if (request.kind === "session-suggestions") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
@@ -515,11 +549,9 @@ serveOwnedWorkerTasks(
       if (request.kind === "goal-operation-receipt") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
-        const {
-          assertSessionGoalOperationTime,
-          readSessionGoalOperationInDatabase,
-          SessionGoalOperationError,
-        } = await import("./goals-operations.js");
+        const { readSessionGoalOperationInDatabase, SessionGoalOperationError } =
+          await import("./goals-operations.js");
+        const { assertSessionGoalOperationTime } = await import("./goals-operation-policy.js");
         try {
           assertSessionGoalOperationTime(request.operation, Date.now());
           const result = withOpenClawAgentDatabaseReadOnly(
@@ -561,12 +593,16 @@ serveOwnedWorkerTasks(
           loadSessionEntryReadOnlyInScope({ ...request.scope, projection: "list" }) !== undefined
         );
       }
+      if (request.kind === "session-entries") {
+        const { prepareSessionMemoryEntries } = await import("./session-memory-entry.worker.js");
+        return { entries: await prepareSessionMemoryEntries(request.entries) };
+      }
       return await runWithSessionTranscriptReadFence(
         request.admission,
         async (): Promise<SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]> => {
           if (request.kind === "session-activity-summary-source") {
             const { readActivitySummaryBatch } =
-              await import("../../gateway/session-activity-summary-source.js");
+              await import("../../gateway/session-activity-summary-source.worker.js");
             return {
               kind: "session-activity-summary-source" as const,
               source: readActivitySummaryBatch(request),
@@ -596,20 +632,13 @@ serveOwnedWorkerTasks(
               await import("../../../packages/memory-host-sdk/src/host/session-reset-recall-read.js");
             return { cutoff: readSessionResetRecallCutoffInProcess(request.scope) };
           }
-          const { buildSessionEntryInProcess, readSessionEntryResetRecallCutoff } =
-            await import("../../../packages/memory-host-sdk/src/host/session-files.js");
-          const { createSensitiveTextRedactor } = await import("../../logging/redact.js");
-          const entry = await buildSessionEntryInProcess(
-            request.absPath,
-            request.options,
-            createSensitiveTextRedactor(request.redaction),
-          );
-          return {
-            entry,
-            resetRecallCutoff: entry
-              ? readSessionEntryResetRecallCutoff(entry)
-              : { state: "absent" },
-          };
+          if (request.mode === "snapshot") {
+            const { readSessionEntrySnapshotRequest } =
+              await import("./session-transcript-hydration-read.worker.js");
+            return readSessionEntrySnapshotRequest(request);
+          }
+          const { prepareSessionMemoryEntry } = await import("./session-memory-entry.worker.js");
+          return prepareSessionMemoryEntry(request);
         },
       );
     };
@@ -624,7 +653,7 @@ serveOwnedWorkerTasks(
                 ? `history.${request.request.params.query.kind}`
                 : `history.${request.request.kind}`
               : request.kind,
-            readRequest,
+            () => withSessionTranscriptProjectionReceipt(request.projectionReceipt, readRequest),
             request.validation,
           )
         : { ok: true, value: await readRequest() };

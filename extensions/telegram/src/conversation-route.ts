@@ -1,8 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ConversationBindingInspection } from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
 import {
   getSessionBindingService,
   resolveConfiguredBindingRoute,
-  resolveRuntimeConversationBindingRoute,
+  inspectRuntimeConversationBindingRoute,
   resolveRuntimeConversationBindingRouteAsync,
   type ConfiguredBindingRouteResult,
   type RuntimeConversationBindingRouteResult,
@@ -46,9 +47,7 @@ type TelegramConversationRouteResult = {
   route: TelegramResolvedRoute;
   bindingMode: TelegramConversationBindingMode;
   bindingOwnerAvailable: boolean;
-  runtimeBinding?: NonNullable<
-    ReturnType<typeof resolveRuntimeConversationBindingRoute>["bindingRecord"]
-  >;
+  runtimeBinding?: NonNullable<RuntimeConversationBindingRouteResult["bindingRecord"]>;
 };
 
 type ResolveTelegramConversationRouteParams = {
@@ -200,14 +199,29 @@ export async function resolveTelegramConversationRoute(
   );
 }
 
-/** Revalidates route ownership without extending runtime-binding liveness. */
-export function inspectTelegramConversationRoute(
+/** Prepare route policy once; the supplied binding facts are checked at the effect. */
+export function prepareTelegramConversationRouteInspection(
   params: ResolveTelegramConversationRouteParams,
-): TelegramConversationRouteResult {
+) {
+  const prepared = prepareTelegramConversationRoute(params);
+  return {
+    conversation: prepared.conversation,
+    resolve(inspection: ConversationBindingInspection) {
+      return applyTelegramRuntimeRoute(
+        prepared,
+        inspectRuntimeConversationBindingRoute({ route: prepared.route, inspection }),
+      );
+    },
+  };
+}
+
+export async function inspectTelegramConversationRouteAsync(
+  params: ResolveTelegramConversationRouteParams,
+): Promise<TelegramConversationRouteResult> {
   const prepared = prepareTelegramConversationRoute(params);
   return applyTelegramRuntimeRoute(
     prepared,
-    resolveRuntimeConversationBindingRoute({ ...prepared, touchBinding: false }),
+    await resolveRuntimeConversationBindingRouteAsync({ ...prepared, touchBinding: false }),
   );
 }
 
@@ -220,22 +234,7 @@ export async function touchTelegramConversationRoute(
     return;
   }
   const bindings = getSessionBindingService();
-  const assertRouteCurrent = () => {
-    const current = bindings.resolveByConversation(captured.conversation);
-    if (
-      !current ||
-      current.bindingId !== captured.bindingId ||
-      current.targetSessionKey !== captured.targetSessionKey ||
-      current.targetKind !== captured.targetKind ||
-      current.boundAt !== captured.boundAt ||
-      current.status !== captured.status
-    ) {
-      throw new Error("Telegram command route changed; send a new request.");
-    }
-  };
-  assertRouteCurrent();
   await bindings.touchAsync(captured.bindingId, undefined, captured.conversation);
-  assertRouteCurrent();
 }
 
 export function resolveTelegramConversationBaseSessionKey(

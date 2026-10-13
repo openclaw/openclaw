@@ -769,6 +769,12 @@ export function createChangedCheckPlan(
       "--base",
       options.base ?? (options.staged ? "HEAD" : "origin/main"),
     ]);
+    add("SQLite dialect ratchet", [
+      "check:database-dialect-ratchet",
+      ...(options.staged ? ["--staged"] : []),
+      "--base",
+      options.base ?? (options.staged ? "HEAD" : "origin/main"),
+    ]);
   }
   if (
     result.paths.some(
@@ -1880,8 +1886,7 @@ function isDirectRun() {
   return isDirectRunUrl(process.argv[1], import.meta.url);
 }
 
-async function main() {
-  const argv = process.argv.slice(2);
+export async function main(argv = process.argv.slice(2)) {
   let args: ReturnType<typeof parseArgs>;
   try {
     args = parseArgs(argv);
@@ -1956,19 +1961,11 @@ async function main() {
       ) {
         const delegated = await runChangedCheckViaCrabbox(argv, process.env);
         if (delegated.backendUnavailable) {
-          // Say this loudly: the proof below is local, so whoever reads the run
-          // knows which machine produced it and that Linux-only lanes are unproven.
           console.error(
-            "[check:changed] the remote backend never ran the checks (no run summary). Falling back to local execution; note this in the proof summary.",
+            "[check:changed] remote proof is unavailable. Use PR CI or explicitly select a qualified local scope; platform-specific requirements remain unproven. Local checks were not started.",
           );
         }
-        process.exitCode = delegated.backendUnavailable
-          ? await runChangedCheck(result, {
-              ...args,
-              typecheckResult,
-              explicitPaths: args.paths.length > 0,
-            })
-          : delegated.exitCode;
+        process.exitCode = delegated.exitCode;
       } else {
         process.exitCode = await runChangedCheck(result, {
           ...args,

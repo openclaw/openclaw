@@ -8,11 +8,7 @@ import {
   buildGuardedModelFetch,
   resolveModelRequestTimeoutMs,
 } from "../agents/provider-transport-fetch.js";
-import {
-  redactModelVisibleSecrets,
-  redactSecrets,
-  redactToolPayloadText,
-} from "../logging/redact.js";
+import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAnthropicInlineContentBlocks } from "../media/anthropic-inline-images.js";
 import { swapSecretSentinelsInText } from "../secrets/sentinel.js";
@@ -49,7 +45,6 @@ configureAiTransportHost({
     }
     return swapped.text;
   },
-  redactModelVisibleSecrets,
   redactToolPayloadText,
   normalizeAnthropicInlineContentBlocks,
   resolveOpenAIStrictToolSetting,

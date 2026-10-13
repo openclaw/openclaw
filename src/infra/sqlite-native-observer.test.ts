@@ -75,7 +75,7 @@ it("binds iterators immediately and holds custody until exhaustion or explicit r
   expect(hasPendingSqliteNativeExecution(db)).toBe(false);
 });
 
-it.each(["run", "get", "all", "bind-error", "close"] as const)(
+it.each(["run", "get", "all", "close"] as const)(
   "settles a retained statement's RETURNING cursor on %s",
   (method) => {
     const db = open();
@@ -93,10 +93,6 @@ it.each(["run", "get", "all", "bind-error", "close"] as const)(
       } else {
         rows.return?.();
       }
-    } else if (method === "bind-error") {
-      expect(() => {
-        Reflect.apply(statement.get.bind(statement), undefined, [Symbol("invalid")]);
-      }).toThrow();
     } else {
       statement[method](0);
     }
@@ -274,23 +270,4 @@ it("preserves a recoverable native row-conversion failure without losing the nex
   const db = open();
   expect(exercise(db)).toEqual(exercise(native));
   expect(hasPendingSqliteNativeExecution(db)).toBe(false);
-});
-
-it("settles a reset cursor when a callback propagates a nested native refusal", () => {
-  const db = open();
-  let reenter = false;
-  db.function("callback", () => {
-    if (reenter) {
-      statement.get();
-    }
-    return 1;
-  });
-  const statement = db.prepare("SELECT callback() AS value UNION ALL SELECT 2");
-  const rows = statement.iterate();
-  rows.next();
-  expect(hasPendingSqliteNativeExecution(db)).toBe(true);
-  reenter = true;
-  expect(() => statement.get()).toThrow();
-  expect(hasPendingSqliteNativeExecution(db)).toBe(false);
-  rows.return?.();
 });

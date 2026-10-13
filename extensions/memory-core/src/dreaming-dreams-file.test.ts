@@ -12,12 +12,6 @@ import {
   updateDreamsFile,
   writeBackfillDiaryEntries,
 } from "./dreaming-dreams-file.js";
-import {
-  SHORT_TERM_LOCK_MAX_ENTRIES,
-  SHORT_TERM_LOCK_NAMESPACE,
-  memoryCoreWorkspaceStateKey,
-  openMemoryCoreStateStore,
-} from "./dreaming-state.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
@@ -54,18 +48,11 @@ describe("dream diary file behavior", () => {
     let forgotten: ReturnType<typeof forgetMemoryEntries> | undefined;
     try {
       await prepared.promise;
-      const writerOwnsLock = await openMemoryCoreStateStore({
-        namespace: SHORT_TERM_LOCK_NAMESPACE,
-        maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-      }).lookup(memoryCoreWorkspaceStateKey(workspaceDir));
       forgotten = forgetMemoryEntries({
         cfg: { agents: { entries: { main: { workspace: workspaceDir } } } },
         agentId: "main",
         sessionIds: ["forgotten"],
       });
-      if (!writerOwnsLock) {
-        await forgotten;
-      }
       publish.resolve();
       await Promise.all([update, forgotten]);
       const content = await fs.readFile(dreamsPath, "utf8");

@@ -9,7 +9,7 @@ import { resolveFastModeState } from "../../agents/fast-mode.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { listModelAliasCandidates } from "../../agents/model-selection-shared.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
-import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
+import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox/runtime-status.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
@@ -22,6 +22,7 @@ import {
   expandExplicitSkillReferences,
   hasSkillReferenceCandidate,
 } from "../../skills/discovery/chat-command-invocation.js";
+import { resolveCommandAuthorizationAsync } from "../command-auth.js";
 import { isExplicitCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
 import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
@@ -129,7 +130,7 @@ export async function resolveReplyDirectives(params: {
   const targetSessionEntry = sessionStore[sessionKey] ?? sessionEntry;
 
   const commandText = sessionCtx.commandText;
-  const command = buildCommandContext({
+  const commandContext = {
     ctx,
     cfg,
     agentId,
@@ -137,7 +138,11 @@ export async function resolveReplyDirectives(params: {
     isGroup,
     triggerBodyNormalized,
     commandAuthorized,
-  });
+  };
+  const command = buildCommandContext(
+    commandContext,
+    await resolveCommandAuthorizationAsync(commandContext),
+  );
   const allowTextCommands = shouldHandleTextCommands({
     cfg,
     surface: command.surface,
@@ -279,17 +284,16 @@ export async function resolveReplyDirectives(params: {
   if (directives.hasElevatedDirective && (!elevatedEnabled || !elevatedAllowed)) {
     typing.cleanup();
     recordReplyPreRunRejection(resolveReplyOperationRunState(opts), "session-directive-rejected");
-    const runtimeSandboxed = resolveSandboxRuntimeStatus({
-      cfg,
-      agentId,
-      sessionKey,
-      classificationSessionKey: resolveRuntimePolicySessionKey({
-        agentId,
+    const policySessionKey = resolveRuntimePolicySessionKey({ agentId, cfg, ctx, sessionKey });
+    const runtimeSandboxed = (
+      await resolveSandboxRuntimeStatusAsync({
         cfg,
-        ctx,
+        agentId,
         sessionKey,
-      }),
-    }).sandboxed;
+        classificationSessionKey: policySessionKey,
+        ...(policySessionKey === sessionKey ? { preparedSessionEntry: targetSessionEntry } : {}),
+      })
+    ).sandboxed;
     return {
       kind: "reply" as const,
       reply: {

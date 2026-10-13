@@ -9,16 +9,9 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  redactModelVisibleSecrets,
-  redactModelVisibleSensitiveFieldValueWithConfig,
-  redactModelVisibleToolPayloadText,
-  redactSensitiveFieldValue,
-  redactToolPayloadText,
-} from "../logging/redact.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
-import { createToolResultPreparation } from "./embedded-agent-tool-result-preparation.js";
+import { readNodePermissionError } from "./node-permission-error.js";
 import {
   isToolResultError,
   readToolResultDetails,
@@ -30,15 +23,6 @@ const TOOL_ERROR_MAX_CHARS = 400;
 const LIVE_EXEC_OUTPUT_MAX_CHARS = 8000;
 const TOOL_DENIAL_ERROR_CODES = ["SYSTEM_RUN_DENIED", "INVALID_REQUEST"] as const;
 const OPAQUE_STRUCTURED_RESULT_FIELDS = new Set(["encrypted_content", "encrypted_stdout"]);
-const SENSITIVE_STRUCTURED_HEADER_FIELDS = new Set([
-  "authorization",
-  "proxy-authorization",
-  "cookie",
-  "set-cookie",
-  "x-api-key",
-  "x-auth-token",
-]);
-
 /** Recognize work accepted by a tool whose background task owns completion. */
 export function isAsyncStartedToolResult(result: unknown): boolean {
   const details = readToolResultDetails(result);
@@ -154,23 +138,15 @@ function readDenialErrorCodeFromMessage(value: unknown): string | undefined {
   return TOOL_DENIAL_ERROR_CODES.find((code) => message === code || message.startsWith(`${code}:`));
 }
 
-function readNestedErrorCodeField(value: unknown): string | undefined {
+function extractErrorCodeField(value: unknown, nested = false): string | undefined {
   const record = asOptionalObjectRecord(value);
+  const cause = nested
+    ? (readDenialErrorCodeFromMessage(record?.message) ??
+      readDenialErrorCodeFromMessage(record?.error))
+    : (extractErrorCodeField(record?.error, true) ??
+      extractErrorCodeField(record?.nodeError, true));
   return (
-    readDenialErrorCodeFromMessage(record?.message) ??
-    readDenialErrorCodeFromMessage(record?.error) ??
-    normalizeOptionalString(record?.code) ??
-    normalizeOptionalString(record?.gatewayCode)
-  );
-}
-
-function extractDirectErrorCodeField(value: unknown): string | undefined {
-  const record = asOptionalObjectRecord(value);
-  return (
-    readNestedErrorCodeField(record?.error) ??
-    readNestedErrorCodeField(record?.nodeError) ??
-    normalizeOptionalString(record?.code) ??
-    normalizeOptionalString(record?.gatewayCode)
+    cause ?? normalizeOptionalString(record?.code) ?? normalizeOptionalString(record?.gatewayCode)
   );
 }
 
@@ -181,6 +157,7 @@ export function buildToolLifecycleErrorResult(error: unknown): {
   const errorRecord = readRecord(error);
   const rawDetails = readRecord(errorRecord?.details);
   const nodeError = readRecord(rawDetails?.nodeError);
+  const permissionMissing = readNodePermissionError(error);
   const gatewayCode =
     normalizeOptionalString(errorRecord?.gatewayCode) ?? normalizeOptionalString(errorRecord?.code);
   const message = error instanceof Error ? error.message : String(error);
@@ -191,21 +168,14 @@ export function buildToolLifecycleErrorResult(error: unknown): {
       error: message,
       ...(gatewayCode ? { gatewayCode } : {}),
       ...(nodeError ? { nodeError } : {}),
+      ...(permissionMissing ? { permissionMissing } : {}),
     },
   };
 }
 
-export function sanitizeToolArgs(args: unknown): unknown {
-  return redactToolPayloadValue(args, "args");
-}
-
-/** A string result keeps its string type: only model-visible redaction is applied to it. */
 export function sanitizeToolResult(result: string): string;
 export function sanitizeToolResult(result: unknown): unknown;
 export function sanitizeToolResult(result: unknown): unknown {
-  if (typeof result === "string") {
-    return redactModelVisibleToolPayloadText(result);
-  }
   if (!result || typeof result !== "object") {
     return result;
   }
@@ -213,22 +183,17 @@ export function sanitizeToolResult(result: unknown): unknown {
 }
 
 export function prepareToolResult(result: unknown): () => unknown {
-  return result && typeof result === "object"
-    ? createToolResultPreparation(result, () => sanitizeStructuredToolResult(result))
-    : () => sanitizeToolResult(result);
+  return () => sanitizeToolResult(result);
 }
 
 function sanitizeStructuredToolResult(result: object): object {
   if (Array.isArray(result)) {
-    return redactModelVisibleSecrets(result);
+    return result;
   }
   const record = result as Record<string, unknown>;
-  // Strip image data first so the deep redaction pass doesn't waste work
-  // scanning base64 payloads (and so we capture the original byte counts).
-  const preCleaned: Record<string, unknown> = { ...record };
-  const originalContent = Array.isArray(record.content) ? record.content : null;
-  if (originalContent) {
-    preCleaned.content = originalContent.map((item) => {
+  const out: Record<string, unknown> = { ...record };
+  if (Array.isArray(record.content)) {
+    out.content = record.content.map((item) => {
       if (!item || typeof item !== "object") {
         return item;
       }
@@ -241,23 +206,9 @@ function sanitizeStructuredToolResult(result: object): object {
         delete cleaned.data;
         return Object.assign(cleaned, { bytes, omitted: true });
       }
-      return entry;
-    });
-  }
-  // Deep-redact the entire result so any top-level or nested string is
-  // protected, not just `details` and text content blocks.
-  const out = redactModelVisibleSecrets(preCleaned);
-  const content = Array.isArray(out.content) ? out.content : null;
-  if (content) {
-    out.content = content.map((item) => {
-      if (!item || typeof item !== "object") {
-        return item;
-      }
-      const entry = item as Record<string, unknown>;
       if (readStringValue(entry.type) === "text" && typeof entry.text === "string") {
-        const text = truncateToolText(entry.text);
-        // Nonplain blocks can still be caller-owned; spread keeps JSON keys as own data.
-        return Object.assign({ ...entry }, { text });
+        // Spread keeps caller-owned JSON keys as own data.
+        return Object.assign({ ...entry }, { text: truncateToolText(entry.text) });
       }
       return entry;
     });
@@ -268,7 +219,7 @@ function sanitizeStructuredToolResult(result: object): object {
 const INLINE_DATA_URI_VALUE_PATTERN =
   /^data:(?:[a-z][a-z0-9.+-]*\/[a-z0-9.+-]+)?(?:;[a-z0-9.+-]+(?:=[^,;"'\s]+)?)*,/i;
 
-function redactInlineDataUriValue(value: string): string {
+function omitInlineDataUriValue(value: string): string {
   const trimmed = value.trimStart();
   if (!INLINE_DATA_URI_VALUE_PATTERN.test(trimmed)) {
     return value;
@@ -290,35 +241,23 @@ function carriesBinaryData(record: Record<string, unknown>): boolean {
   );
 }
 
-function redactToolPayloadValue(
+function prepareStructuredToolResultValue(
   value: unknown,
-  mode: "args" | "result",
   key?: string,
   parentCarriesBinaryData = false,
   seen = new WeakSet<object>(),
 ): unknown {
   if (typeof value === "string") {
-    if (mode === "args") {
-      return key === undefined
-        ? redactToolPayloadText(value)
-        : redactSensitiveFieldValue(key, value);
-    }
-    const field = key ?? "";
-    if (SENSITIVE_STRUCTURED_HEADER_FIELDS.has(field.toLowerCase())) {
-      return "***";
-    }
-    if (field === "blob" || (field === "data" && parentCarriesBinaryData)) {
+    if (key === "blob" || (key === "data" && parentCarriesBinaryData)) {
       return `[binary omitted: ${value.length} chars]`;
     }
     // Claude CLI result blocks carry replay-only ciphertext that is not useful display text.
-    if (OPAQUE_STRUCTURED_RESULT_FIELDS.has(field)) {
+    if (key && OPAQUE_STRUCTURED_RESULT_FIELDS.has(key)) {
       return `[opaque data omitted: ${value.length} chars]`;
     }
-    return truncateToolText(
-      redactInlineDataUriValue(redactModelVisibleSensitiveFieldValueWithConfig(field, value)),
-    );
+    return truncateToolText(omitInlineDataUriValue(value));
   }
-  if (mode === "result" && typeof value === "bigint") {
+  if (typeof value === "bigint") {
     return value.toString();
   }
   if (!value || typeof value !== "object") {
@@ -329,19 +268,16 @@ function redactToolPayloadValue(
   }
   seen.add(value);
   if (Array.isArray(value)) {
-    // Structured results retain credential keys through arrays; argument arrays
-    // use the same free-text policy as root argument strings.
-    const arrayKey = mode === "result" ? key : undefined;
     return value.map((item) =>
-      redactToolPayloadValue(item, mode, arrayKey, parentCarriesBinaryData, seen),
+      prepareStructuredToolResultValue(item, key, parentCarriesBinaryData, seen),
     );
   }
   const record = value as Record<string, unknown>;
-  const hasBinaryData = mode === "result" && carriesBinaryData(record);
+  const hasBinaryData = carriesBinaryData(record);
   return Object.fromEntries(
     Object.entries(record).map(([childKey, child]) => [
       childKey,
-      redactToolPayloadValue(child, mode, childKey, hasBinaryData, seen),
+      prepareStructuredToolResultValue(child, childKey, hasBinaryData, seen),
     ]),
   );
 }
@@ -356,9 +292,8 @@ function stringifyStructuredToolResultContent(block: unknown): string | undefine
     return undefined;
   }
   try {
-    const serialized = JSON.stringify(redactToolPayloadValue(record, "result"));
-    const redacted = serialized ? redactModelVisibleToolPayloadText(serialized) : serialized;
-    return redacted && redacted !== "{}" ? redacted : undefined;
+    const serialized = JSON.stringify(prepareStructuredToolResultValue(record));
+    return serialized && serialized !== "{}" ? serialized : undefined;
   } catch {
     return undefined;
   }
@@ -384,7 +319,7 @@ function resolveToolResultContentBlocks(result: object): unknown[] {
 
 export function extractToolResultText(result: unknown): string | undefined {
   if (typeof result === "string") {
-    const trimmed = redactModelVisibleToolPayloadText(redactInlineDataUriValue(result)).trim();
+    const trimmed = omitInlineDataUriValue(result).trim();
     return trimmed ? truncateToolText(trimmed) : undefined;
   }
   if (!result || typeof result !== "object") {
@@ -401,7 +336,7 @@ export function extractToolResultText(result: unknown): string | undefined {
 
 export function extractToolErrorCode(result: unknown): string | undefined {
   const record = asOptionalObjectRecord(result);
-  return extractDirectErrorCodeField(record?.details) ?? extractDirectErrorCodeField(record);
+  return extractErrorCodeField(record?.details) ?? extractErrorCodeField(record);
 }
 
 export function isToolResultTimedOut(result: unknown): boolean {

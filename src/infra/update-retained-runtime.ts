@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { hasErrnoCode } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { withUserPathBaseDirectory } from "./home-dir.js";
@@ -16,6 +16,7 @@ import {
   registerRetainedUpdateRuntime,
   removeTemporaryArtifacts,
   reportRetainedUpdateRuntime,
+  resolveRetainedUpdateRuntimeParents,
 } from "./temp-artifact-cleanup.js";
 import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
 import { withUpdateCandidateIoBudget } from "./update-candidate-io.js";
@@ -86,8 +87,11 @@ async function runWithRetainedUpdateRuntime<T>(
           }
           const sourceRoot = await fs.realpath(root);
           assertCurrent();
+          // Boundaries use the same native spelling as sourceRoot. Windows 8.3
+          // names and case-insensitive volumes otherwise hide that the update
+          // replaces this runtime, and its workers load from the new package.
           const mutations = mutationRoots.map((entry) =>
-            resolvePathViaExistingAncestorSync(path.resolve(entry)),
+            resolveIdentityPathViaExistingAncestorSync(path.resolve(entry)),
           );
           const packageOwner = installTarget
             ? (resolveNativePackageProjectRoot(installTarget, env) ?? installTarget.globalRoot)
@@ -95,12 +99,12 @@ async function runWithRetainedUpdateRuntime<T>(
           const mutationBoundaries = [
             ...mutations,
             ...(packageOwner
-              ? [resolvePathViaExistingAncestorSync(path.resolve(packageOwner))]
+              ? [resolveIdentityPathViaExistingAncestorSync(path.resolve(packageOwner))]
               : []),
           ];
           const cwd = tryProcessCwd();
           if (!parkedCwd && cwd) {
-            const physicalCwd = resolvePathViaExistingAncestorSync(cwd);
+            const physicalCwd = resolveIdentityPathViaExistingAncestorSync(cwd);
             if (mutationBoundaries.some((entry) => isPathInside(entry, physicalCwd))) {
               const parked = path.parse(process.execPath).root;
               assertCurrent();
@@ -125,19 +129,11 @@ async function runWithRetainedUpdateRuntime<T>(
           // Package inventories include their module owner, and native activation
           // replaces its whole project. Scratch must be a sibling of both boundaries.
           const boundaries = [sourceRoot, ...mutationBoundaries];
-          let parent = path.dirname(sourceRoot);
-          while (boundaries.some((entry) => isPathInside(entry, parent))) {
-            const ancestor = path.dirname(parent);
-            if (ancestor === parent) {
-              break;
-            }
-            parent = ancestor;
-          }
+          const parent = resolveRetainedUpdateRuntimeParents(sourceRoot, mutationBoundaries).at(
+            -1,
+          )!;
           const outsideMutation = (candidate: string) =>
             !boundaries.some((entry) => isPathInside(entry, candidate));
-          // An unselected module install can copy its entire enclosing module
-          // owner. Keep its scratch outside that owner; standalone checkouts
-          // can retain current-main same-volume placement.
           if (
             (installTarget || !sourceRoot.split(path.sep).includes("node_modules")) &&
             outsideMutation(parent)
@@ -161,7 +157,7 @@ async function runWithRetainedUpdateRuntime<T>(
             }
           }
           if (!directory) {
-            const temporary = resolvePathViaExistingAncestorSync(path.resolve(os.tmpdir()));
+            const temporary = resolveIdentityPathViaExistingAncestorSync(path.resolve(os.tmpdir()));
             if (!outsideMutation(temporary)) {
               throw new Error(
                 "Updater temporary directory is inside an installation being replaced",
@@ -202,6 +198,11 @@ async function runWithRetainedUpdateRuntime<T>(
             targetStateDir: privateRoot,
             candidateRoot,
             retainedHostRoot: sourceRoot,
+            // Missing optional peers must not pull unrelated ancestor installations
+            // into a retained runtime. Explicit linked dependency owners still travel.
+            retainedDependencyRoot: packageOwner
+              ? resolveIdentityPathViaExistingAncestorSync(path.resolve(packageOwner))
+              : sourceRoot,
             onProgress: assertCurrent,
           });
           const inventoryMs = Math.round(performance.now() - inventoryStartedAt);

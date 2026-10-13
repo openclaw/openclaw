@@ -1,18 +1,16 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   listSessionEntriesCore,
-  loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import {
-  upsertSessionUpstreamLink,
-  upsertSessionUpstreamLinkAsync,
-} from "../../sessions/session-upstream-links.js";
+import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
@@ -25,12 +23,14 @@ import type { GatewayClient, GatewayRequestContext } from "./types.js";
 const mocks = { upstreamFork: vi.fn() };
 const sessionKey = "agent:main:rewind-handler";
 const sourceSessionId = "rewind-handler-source";
+const cfg = { agents: { entries: { main: {} } } };
 let state: OpenClawTestState;
 
 beforeEach(async () => {
   mocks.upstreamFork.mockReset();
   setActivePluginRegistry(createEmptyPluginRegistry());
   state = await createOpenClawTestState({ label: "rewind-upstream", layout: "state-only" });
+  setRuntimeConfigSnapshot(cfg);
   await upsertSessionEntryCore(
     { agentId: "main", sessionKey },
     { sessionId: sourceSessionId, updatedAt: Date.now() },
@@ -70,7 +70,7 @@ async function invoke(
     context: {
       broadcastToConnIds: vi.fn(),
       chatAbortControllers: new Map(),
-      getRuntimeConfig: runtimeConfig ?? (() => ({ agents: { entries: { main: {} } } })),
+      getRuntimeConfig: runtimeConfig ?? (() => cfg),
       getSessionEventSubscriberConnIds: () => new Set(),
     } as unknown as GatewayRequestContext,
     client,
@@ -227,44 +227,12 @@ describe("upstream session message-cut methods", () => {
     },
   );
 
-  it("rejects a worker-committed upstream source change before deferred native fork I/O", async () => {
-    linkToUpstreamConversation();
-    installUpstreamForkHarness();
-    const nativeWrite = vi.fn();
-    mocks.upstreamFork.mockImplementation(
-      async ({ assertCurrent }: { assertCurrent: () => void }) => {
-        assertCurrent();
-        await Promise.resolve();
-        expect(
-          await upsertSessionUpstreamLinkAsync({
-            agentId: "main",
-            catalogId: "codex",
-            hostId: "gateway:local",
-            marker: null,
-            sessionKey,
-            threadId: "replacement-thread",
-            upstreamKind: "codex-app-server",
-            upstreamRef: { connectionFingerprint: "fingerprint", threadId: "replacement-thread" },
-          }),
-        ).toBe(true);
-        assertCurrent();
-        nativeWrite();
-        return { status: "created", key: "agent:main:dashboard:forked" };
-      },
-    );
-
-    await expect(invoke("sessions.fork", "user-entry")).rejects.toThrow(
-      "changed during fork initialization",
-    );
-    expect(nativeWrite).not.toHaveBeenCalled();
-    expect(loadSessionEntry({ agentId: "main", sessionKey })?.sessionId).toBe(sourceSessionId);
-  });
-
   it.each(["dual", "legacy", "v2"] as const)(
     "rejects the current creator's required sandbox before invoking a host-only %s upstream fork",
     async (contract) => {
       const profile = ensureProfileForEmail(`sandbox-required-${contract}-fork@example.com`);
       setUserProfileRole(profile.id, "guest");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const client = {
         connect: { scopes: ["operator.write"] },
         authenticatedUserProfile: {

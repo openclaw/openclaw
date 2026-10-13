@@ -1,14 +1,13 @@
+import { addAbortListener } from "node:events";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import {
-  createSessionWorkStartChangedError,
-  resolveSessionWorkStartError,
-} from "../config/sessions/lifecycle.js";
+import { createSessionWorkStartChangedError } from "../config/sessions/lifecycle.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../config/sessions/restart-recovery-types.js";
 import {
   captureIncognitoSessionSource,
   withIncognitoSessionEntry,
 } from "../config/sessions/session-incognito-binding.js";
+import { resolveSessionWorkStartBlock } from "../config/sessions/session-work-start.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
@@ -20,6 +19,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { isSubagentCoordinationInputProvenance } from "../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { classifySessionStateActor } from "../sessions/session-state-events.js";
@@ -100,6 +100,17 @@ async function agentCommandInternal(
     prepared.opts.preserveUserFacingSessionModelState === true;
   const lifecycleAbortController = new AbortController();
   const preparedOpts = resolveCommandRecoveryOptions(prepared);
+  const parentAbortSignal = preparedOpts.abortSignal;
+  if (parentAbortSignal?.aborted) {
+    lifecycleAbortController.abort(parentAbortSignal.reason);
+  }
+  // Node 24's AbortSignal.any can replace an unread reason when another source aborts.
+  using _ =
+    parentAbortSignal && !parentAbortSignal.aborted
+      ? addAbortListener(parentAbortSignal, () => {
+          lifecycleAbortController.abort(parentAbortSignal.reason);
+        })
+      : undefined;
   const compactionSessionIdReporter = createCompactionSessionIdReporter(
     prepared.sessionId,
     preparedOpts.onSessionIdChanged,
@@ -107,9 +118,7 @@ async function agentCommandInternal(
   let opts: AgentCommandOpts = {
     ...preparedOpts,
     onSessionIdChanged: compactionSessionIdReporter.onSessionIdChanged,
-    abortSignal: preparedOpts.abortSignal
-      ? AbortSignal.any([preparedOpts.abortSignal, lifecycleAbortController.signal])
-      : lifecycleAbortController.signal,
+    abortSignal: lifecycleAbortController.signal,
   };
   const preparedContext = { ...prepared };
   const {
@@ -166,7 +175,6 @@ async function agentCommandInternal(
   let releaseForeground: (() => void) | undefined;
   let maintenanceRequest: SessionMaintenanceRequest | undefined;
   let preparedRunAdmission: ReturnType<typeof prepareAgentCommandExecutionIdentity> | undefined;
-  let completionSource: Awaited<ReturnType<typeof bindCommandHarnessCompletionAssertion>>["source"];
   let commandError: unknown;
   try {
     const operatorSession =
@@ -194,11 +202,27 @@ async function agentCommandInternal(
     // Reset marks its mutation before interrupting work. An aborted run must not
     // queue behind that mutation or reset would wait on the run holding the queue.
     sessionWorkAdmission = await beginSessionWorkAdmission({
+      agentId: sessionAgentId,
       scope: storePath ?? `agent:${sessionAgentId}`,
       isSettling: opts.isTerminalOutcomeObserved,
       identities: [sessionKey, sessionId],
+      run: {
+        runId,
+        sessionKey,
+        sessionId,
+        agentId: sessionAgentId,
+        controlUiVisible:
+          !suppressVisibleSessionEffects &&
+          !isSubagentCoordinationInputProvenance(opts.inputProvenance),
+      },
       signal: opts.abortSignal,
-      onInterrupt: (reason) => lifecycleAbortController.abort(reason),
+      onInterrupt: (reason) => {
+        if (opts.abortSignal?.aborted) {
+          return undefined;
+        }
+        lifecycleAbortController.abort(reason);
+        return { runId };
+      },
       assertAllowed: async () => {
         const scope = { agentId: sessionAgentId, storePath, sessionKey: sessionKey ?? "" };
         const currentEntry =
@@ -214,7 +238,10 @@ async function agentCommandInternal(
                   },
                   async (entry) => entry,
                 )
-              : sessionStoreRuntime.loadSessionEntry({ ...scope, readConsistency: "latest" })
+              : await sessionStoreRuntime.readSessionEntryInWorker({
+                  ...scope,
+                  readConsistency: "latest",
+                })
             : sessionEntry;
         if (!currentEntry && preparedSessionId) {
           throw createSessionWorkStartChangedError(sessionKey ?? sessionId);
@@ -224,12 +251,9 @@ async function agentCommandInternal(
         if (currentEntry && currentEntry.sessionId !== sessionId && !matchesIntentionalRollover) {
           throw createSessionWorkStartChangedError(sessionKey ?? sessionId);
         }
-        const archivedSessionError = resolveSessionWorkStartError(
-          sessionKey ?? sessionId,
-          currentEntry,
-        );
-        if (archivedSessionError) {
-          throw new Error(archivedSessionError);
+        const workStartError = resolveSessionWorkStartBlock(sessionKey ?? sessionId, currentEntry);
+        if (workStartError) {
+          throw workStartError;
         }
         operatorSession?.assertAuthorized(currentEntry);
         sessionEntry = currentEntry;
@@ -372,7 +396,7 @@ async function agentCommandInternal(
         // cancellation invalidates the task during the awaited session write.
         sessionEntry = persisted;
         trackedRestartRecoveryDeliveryClaim = persisted?.restartRecoveryDeliveryRunId === runId;
-        const completion = await bindCommandHarnessCompletionAssertion({
+        const completion = bindCommandHarnessCompletionAssertion({
           claim: guardedHarnessCompletion,
           persisted,
           sessionKey,
@@ -380,7 +404,6 @@ async function agentCommandInternal(
           opts,
         });
         opts = completion.opts;
-        completionSource = completion.source;
         if (operatorSession && (!persisted || persisted.sessionId !== sessionId)) {
           throw createSessionWorkStartChangedError(sessionKey);
         }
@@ -558,7 +581,6 @@ async function agentCommandInternal(
       sessionWorkAdmission,
       cleanupInternalModelRunTargets,
       releaseForeground,
-      completionSource,
     });
     if (maintenanceRequest) {
       scheduleSessionMaintenance(maintenanceRequest);

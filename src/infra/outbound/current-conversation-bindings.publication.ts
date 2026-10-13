@@ -38,7 +38,7 @@ type CurrentConversationBindingFactChange =
       kind: "pending" | "settled";
       identity: string;
       operation: object;
-      outcome?: "published" | "unknown";
+      outcome?: "published" | "unchanged" | "unknown";
     };
 
 type BindingChange = {
@@ -297,8 +297,10 @@ export function withCurrentConversationBindingPublication(
             identity: identity(),
             operation,
             outcome:
-              published && !unknown && owner.admission.settlement?.kind === "completed"
-                ? "published"
+              !unknown && owner.admission.settlement?.kind === "completed"
+                ? published
+                  ? "published"
+                  : "unchanged"
                 : "unknown",
           });
         }

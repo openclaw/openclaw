@@ -2,6 +2,11 @@ import type { ModelCostConfig } from "@openclaw/llm-core";
 import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
 import type { MemoryTranscriptProjectionFrame } from "../config/sessions/session-transcript-reconcile-memory.js";
+import type {
+  UsageOverviewOptions,
+  UsageOverviewSession,
+  UsageOverviewSlice,
+} from "../shared/usage-types.js";
 import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
 import type {
   SessionCostUsageRollupByteRow,
@@ -51,6 +56,12 @@ export type UsageCostWorkerOperation =
   | ({ kind: "summary"; pricingFingerprint: string } & UsageCostWorkerRange)
   | {
       kind: "sessions";
+      projection?: "overview";
+      overview?: {
+        sessions: UsageOverviewSession[];
+        options: UsageOverviewOptions;
+        compact?: boolean;
+      };
       pricingFingerprint: string;
       sessions: Array<{ sessionId?: string; sessionFile: string }>;
       startMs?: number;
@@ -77,6 +88,8 @@ export type UsageCostWorkerInput = {
   transcriptFiles?: string[];
 };
 
+export type UsageCostPendingFile = { sessionFile: string; rollupId: string };
+
 export type UsageCostWorkerResult =
   | {
       kind: "inventory";
@@ -90,7 +103,14 @@ export type UsageCostWorkerResult =
       staleSessionFiles: string[];
       invalidRows: SessionCostUsageRollupRow[];
     }
-  | { kind: "refresh"; changed: boolean };
+  | {
+      kind: "overview";
+      result: UsageOverviewSlice;
+      cacheStatus: UsageCacheStatus;
+      staleSessionFiles: string[];
+      invalidRows: SessionCostUsageRollupRow[];
+    }
+  | { kind: "refresh"; changed: boolean; remainingFiles?: UsageCostPendingFile[] };
 
 export type UsageCostWorkerFailure = {
   message: string;
@@ -98,6 +118,16 @@ export type UsageCostWorkerFailure = {
   hostOrigin?: number;
   hostFailureOnly?: boolean;
 };
+
+export class UsageCostHostEffectError extends Error {
+  constructor(
+    readonly origin: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "UsageCostHostEffectError";
+  }
+}
 
 /** Retain the domain failure while the pool proves native retirement. */
 export class UsageCostWorkerReplyError extends Error {
@@ -113,10 +143,12 @@ export type UsageCostWorkerReply =
 
 type UsageCostPreparedRollup = {
   key: string;
-  previousValue: Uint8Array | null;
   value: Uint8Array;
   blob: Uint8Array;
   updatedAt: number;
+  partitions?: import("./session-cost-usage-partitions.js").UsageCostPartition[];
+  removedDates?: string[];
+  replacePartitions?: boolean;
 };
 
 type UsageCostPruneRow = {

@@ -313,21 +313,6 @@ function continuationHistoryMatches(
       return false;
     }
   }
-  const previousCalls = responseToolCalls(previousInput);
-  const currentCalls = responseToolCalls(currentInput);
-  if (previousCalls.length !== currentCalls.length) {
-    return false;
-  }
-  for (const [index, previousCall] of previousCalls.entries()) {
-    const currentCall = currentCalls[index];
-    if (!currentCall) {
-      return false;
-    }
-    const previousShapes = toolCallReplayShapes(previousCall);
-    if (![...toolCallReplayShapes(currentCall)].some((shape) => previousShapes.has(shape))) {
-      return false;
-    }
-  }
   const normalizedPrevious = normalizeContinuationHistory(previousInput);
   const normalizedCurrent = normalizeContinuationHistory(currentInput);
   return (
@@ -614,11 +599,6 @@ export function claimOpenAIResponsesHttpContinuation(
         );
         // Serialized-content budget, not JavaScript heap overhead.
         const retainedBytes = Buffer.byteLength(JSON.stringify(state), "utf8");
-        // Serialization can invoke caller-owned toJSON/getters that clean up or
-        // reclaim this session. Fence stale commits before eviction or mutation.
-        if (httpContinuationEntries.get(key) !== claimed) {
-          return;
-        }
         if (retainedBytes > MAX_HTTP_CONTINUATION_RETAINED_BYTES) {
           // Keep other sessions when this baseline cannot fit alone. Its next
           // request sends full history; the completed response remains valid.

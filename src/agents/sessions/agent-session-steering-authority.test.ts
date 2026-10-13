@@ -1,4 +1,3 @@
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import {
@@ -18,10 +17,15 @@ import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-regis
 import { testing } from "../../auto-reply/reply/reply-run-registry.test-support.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -52,6 +56,7 @@ registerAgentSessionLoopTestLifecycle();
 afterEach(() => {
   embeddedTesting.resetActiveEmbeddedRuns();
   testing.resetReplyRunRegistry();
+  clearRuntimeConfigSnapshot();
   vi.useRealTimers();
 });
 
@@ -186,6 +191,11 @@ it.each([
   "revalidates an independent policy row at $surface enqueue after reader cleanup (policy changed: $changePolicy)",
   async ({ surface, changePolicy }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const config: OpenClawConfig = {
+        agents: { defaults: { sandbox: { mode: "all" } } },
+        tools: { sandbox: { tools: { deny: ["exec"] } } },
+      };
+      setRuntimeConfigSnapshot(config);
       const sessionKey = `agent:main:execution-${surface}-${changePolicy}`;
       const policyKey = `agent:main:policy-${surface}-${changePolicy}`;
       const sessionId = `execution-${surface}-${changePolicy}`;
@@ -202,10 +212,7 @@ it.each([
         sessionId,
         runtimePolicySessionKey: policyKey,
         senderIsOwner: true,
-        config: {
-          agents: { defaults: { sandbox: { mode: "all" } } },
-          tools: { sandbox: { tools: { deny: ["exec"] } } },
-        },
+        config,
       });
       const operation = createTestReplyOperation({ sessionKey, sessionId });
       await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
@@ -306,6 +313,10 @@ it.each([
   "retains $surface authority after delayed recorder preparation: $change",
   async ({ change, surface }) => {
     await withOpenClawTestState({ label: `steering-${change}` }, async ({ env }) => {
+      const config = createCanonicalAgentConfigFixture({
+        agents: { defaults: { sandbox: { mode: "all" } } },
+      }).config;
+      setRuntimeConfigSnapshot(config);
       const database = openOpenClawAgentDatabase({ agentId: "main", env });
       const sessionKey = "agent:main:steering-execution";
       const policyKey = "agent:main:steering-policy";
@@ -321,9 +332,7 @@ it.each([
         sessionId: "original",
         sessionKey,
         runtimePolicySessionKey: policyKey,
-        config: createCanonicalAgentConfigFixture({
-          agents: { defaults: { sandbox: { mode: "all" } } },
-        }).config,
+        config,
         senderIsOwner: true,
         clientCaps: ["ui-commands"],
         gatewayUiCommandTarget: { connId: "browser", profileId: "viewer" },
@@ -419,7 +428,6 @@ it.each([
       operation.setPhase("running");
       setActiveEmbeddedRun("original", handle, sessionKey);
       const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey)!;
-      const peer = new DatabaseSync(database.path);
       try {
         const options = {
           isInboundUserMessage: true,
@@ -456,11 +464,10 @@ it.each([
                   : { label: "renamed" },
           );
         } else if (change !== "worker-revoked") {
-          peer
-            .prepare(
-              "UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.sandboxMode') WHERE session_key = ?",
-            )
-            .run(policyKey);
+          await updateSessionEntry(
+            { agentId: "main", sessionKey: policyKey, storePath: database.path },
+            () => ({ sandboxMode: undefined }),
+          );
         }
         releaseRecorder.resolve();
         if (change === "worker-revoked") {
@@ -480,7 +487,6 @@ it.each([
       } finally {
         releaseRecorder.resolve();
         releasePolicy.resolve();
-        peer.close();
         operation.complete();
       }
     });

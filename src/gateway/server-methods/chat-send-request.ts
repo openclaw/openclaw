@@ -301,7 +301,7 @@ export function normalizeChatSendRequest(params: {
       : {}),
     ...(params.goalResume ? { goalOperation: params.goalResume } : {}),
     explicitOrigin: explicitOriginResult.value,
-    inboundMessage: workContext ? modelMessage : inboundMessage,
+    inboundMessage: modelMessage,
     ...(workContext ? { workContext } : {}),
     systemInputProvenance,
     systemProvenanceReceipt,

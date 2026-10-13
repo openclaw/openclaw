@@ -532,41 +532,68 @@ describe("memory embedding policy", () => {
     }
   });
 
-  it("uses an explicit item limit while preserving paired inputs and persisting each slice once", async () => {
-    const items = Array.from({ length: 33 }, (_, index) => ({
-      input: index,
-      cacheCandidate: `candidate-${index}`,
-    }));
-    const completed: Array<{ candidates: string[]; outputs: string[] }> = [];
-    const run = vi.fn(async (batch: typeof items) => {
-      if (batch.length > 10) {
-        throw new Error("embeddings max input length is 10");
-      }
-      return batch.map((item) => `output-${item.input}`);
-    });
+  it.each([
+    { declared: undefined, requests: [33, 10, 10, 10, 3] },
+    { declared: 10, requests: [10, 10, 10, 3] },
+    { declared: 20, requests: [20, 10, 10, 13, 10, 3] },
+  ])(
+    "preserves paired inputs and persists each slice once with declared cap $declared",
+    async ({ declared, requests }) => {
+      const items = Array.from({ length: 33 }, (_, index) => ({
+        input: index,
+        cacheCandidate: `candidate-${index}`,
+      }));
+      const completed: Array<{ candidates: string[]; outputs: string[] }> = [];
+      const run = vi.fn(async (batch: typeof items) => {
+        if (batch.length > 10) {
+          throw new Error("embeddings max input length is 10");
+        }
+        return batch.map((item) => `output-${item.input}`);
+      });
 
+      await expect(
+        runMemoryEmbeddingBatchRetryWithSplit({
+          items,
+          maxInputsPerRequest: declared,
+          run,
+          onSuccess: (batch, outputs) => {
+            completed.push({
+              candidates: batch.map((item) => item.cacheCandidate),
+              outputs,
+            });
+          },
+          waitForRetry: async () => {},
+        }),
+      ).resolves.toEqual(items.map((item) => `output-${item.input}`));
+      expect(run.mock.calls.map(([batch]) => batch.length)).toEqual(requests);
+      expect(completed).toEqual(
+        [items.slice(0, 10), items.slice(10, 20), items.slice(20, 30), items.slice(30)].map(
+          (batch) => ({
+            candidates: batch.map((item) => item.cacheCandidate),
+            outputs: batch.map((item) => `output-${item.input}`),
+          }),
+        ),
+      );
+    },
+  );
+
+  it.each([
+    { cap: 1, requests: [[0], [1], [2]] },
+    ...[undefined, 0, -1, 1.5, Number.NaN, Infinity, Number.MAX_SAFE_INTEGER + 1].map((cap) => ({
+      cap,
+      requests: [[0, 1, 2]],
+    })),
+  ])("uses only positive safe integer declarations: $cap", async ({ cap, requests }) => {
+    const run = vi.fn(async (items: number[]) => items);
     await expect(
       runMemoryEmbeddingBatchRetryWithSplit({
-        items,
+        items: [0, 1, 2],
+        maxInputsPerRequest: cap,
         run,
-        onSuccess: (batch, outputs) => {
-          completed.push({
-            candidates: batch.map((item) => item.cacheCandidate),
-            outputs,
-          });
-        },
         waitForRetry: async () => {},
       }),
-    ).resolves.toEqual(items.map((item) => `output-${item.input}`));
-    expect(run.mock.calls.map(([batch]) => batch.length)).toEqual([33, 10, 10, 10, 3]);
-    expect(completed).toEqual(
-      [items.slice(0, 10), items.slice(10, 20), items.slice(20, 30), items.slice(30)].map(
-        (batch) => ({
-          candidates: batch.map((item) => item.cacheCandidate),
-          outputs: batch.map((item) => `output-${item.input}`),
-        }),
-      ),
-    );
+    ).resolves.toEqual([0, 1, 2]);
+    expect(run.mock.calls.map(([items]) => items)).toEqual(requests);
   });
 
   it("falls back to recursive splitting for unusable or stale limits", async () => {

@@ -12,6 +12,10 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import * as gitExec from "../../infra/git-exec.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
@@ -33,7 +37,6 @@ import {
 } from "./base-ref.js";
 import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
-import * as preparation from "./service-preparation.js";
 import { ManagedWorktreeService } from "./service.js";
 
 const execFileAsync = promisify(execFile);
@@ -118,6 +121,7 @@ describe("ManagedWorktreeService branch discovery", () => {
     await fs.writeFile(path.join(repo, "README.md"), "base\n");
     await git(repo, "add", "README.md");
     await git(repo, "commit", "-m", "initial");
+    setRuntimeConfigSnapshot({});
     service = new ManagedWorktreeService({
       env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
     });
@@ -128,12 +132,15 @@ describe("ManagedWorktreeService branch discovery", () => {
     vi.unstubAllEnvs();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("coalesces concurrent default discovery and fetch without retaining settled refs", async ({
+  it("coalesces default discovery and refreshes settled refs after their freshness window", async ({
     signal,
   }) => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
     const remote = await createRemote();
     const head = await git(repo, "rev-parse", "HEAD");
     const nested = path.join(repo, "nested");
@@ -194,6 +201,7 @@ describe("ManagedWorktreeService branch discovery", () => {
       );
       await git(remote, "update-ref", "refs/heads/next", next);
       await git(remote, "symbolic-ref", "HEAD", "refs/heads/next");
+      clock.mockReturnValue(now + 30_000);
       await expect(resolveWorktreeBase(repo)).resolves.toMatchObject({
         commit: next,
         recordRef: "origin/next",
@@ -219,69 +227,6 @@ describe("ManagedWorktreeService branch discovery", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it("shares a prepared default with creators queued past its fetch settlement", async ({
-    signal,
-  }) => {
-    await createRemote();
-    const head = await git(repo, "rev-parse", "HEAD");
-    const secondAdmitted = createDeferred();
-    const releaseSecond = createDeferred();
-    const allocate = preparation.createWithWorktreeAllocation;
-    const caller = new AsyncLocalStorage<"first" | "second">();
-    vi.spyOn(preparation, "createWithWorktreeAllocation").mockImplementation(async (...args) => {
-      if (caller.getStore() === "first") {
-        await secondAdmitted.promise;
-      } else if (caller.getStore() === "second") {
-        secondAdmitted.resolve();
-        await releaseSecond.promise;
-      }
-      return await allocate(...args);
-    });
-    const execute = gitExec.executeGitCommand;
-    let fetches = 0;
-    vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
-      if (args[0] === "fetch") {
-        fetches++;
-      }
-      return await execute(cwd, args, options);
-    });
-    const first = caller.run("first", () =>
-      service.create({ repoRoot: repo, name: "cohort-first" }),
-    );
-    const second = caller.run("second", () =>
-      service.create({ repoRoot: repo, name: "cohort-second" }),
-    );
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(
-          secondAdmitted.promise,
-          first,
-          "second creator did not reach allocation",
-        ),
-        signal,
-      );
-      const createdFirst = await withinTest(first, signal);
-      expect(fetches).toBe(1);
-      releaseSecond.resolve();
-      const createdSecond = await withinTest(second, signal);
-      expect(fetches).toBe(1);
-      expect(await git(createdFirst.path, "rev-parse", "HEAD")).toBe(head);
-      expect(await git(createdSecond.path, "rev-parse", "HEAD")).toBe(head);
-      expect(
-        await git(createdSecond.path, "rev-parse", "--symbolic-full-name", "@{upstream}"),
-      ).toBe("refs/remotes/origin/main");
-      const repeated = await service.create({ repoRoot: repo, name: "cohort-second" });
-      expect(repeated.id).toBe(createdSecond.id);
-      expect(fetches).toBe(1);
-      await service.create({ repoRoot: repo, name: "cohort-fresh" });
-      expect(fetches).toBe(2);
-    } finally {
-      secondAdmitted.resolve();
-      releaseSecond.resolve();
-      await Promise.allSettled([first, second]);
-    }
-  });
-
   it.for([
     ...["aborted", "revoked"].flatMap((mode) =>
       [
@@ -297,7 +242,6 @@ describe("ManagedWorktreeService branch discovery", () => {
     "settles shared default fetching after its owner is $mode ($outcome)",
     async ({ mode, outcome }, { signal }) => {
       await createRemote();
-      const head = await git(repo, "rev-parse", "HEAD");
       const entered = createDeferred();
       const joined = createDeferred();
       const release = createDeferred();
@@ -381,8 +325,8 @@ describe("ManagedWorktreeService branch discovery", () => {
         );
         if (outcome === "settled") {
           expect(firstOutcome).toBe(failure);
-          expect(secondOutcome).toMatchObject({ commit: head, fetchSucceeded: true });
-          expect({ discoveries, fetches }).toEqual({ discoveries: 2, fetches: 2 });
+          expect(secondOutcome).toBe(failure);
+          expect({ discoveries, fetches }).toEqual({ discoveries: 1, fetches: 1 });
         } else {
           expect(hasWorktreeUnknownOutcome(firstOutcome)).toBe(true);
           expect(hasWorktreeUnknownOutcome(secondOutcome)).toBe(true);

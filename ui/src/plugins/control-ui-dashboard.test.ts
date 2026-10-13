@@ -6,14 +6,11 @@ import type { ControlUiHost, ControlUiViewContext } from "../../../src/plugin-sd
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import {
-  acquireBoardProviderForSession,
-  type BoardProvider,
-  type BoardProviderLease,
-} from "../lib/board/provider.ts";
+import { acquireBoardProviderForSession, type BoardProviderLease } from "../lib/board/provider.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
-import "./control-ui-dashboard.ts";
-import "./control-ui-view.runtime.ts";
+import "./control-ui-dashboard.tsx";
+import "./control-ui-view.solid.tsx";
+import "./control-ui-contributions.solid.tsx";
 
 type DashboardElement = HTMLElementTagNameMap["openclaw-plugin-session-dashboard"] & {
   updateComplete: Promise<boolean>;
@@ -76,17 +73,17 @@ async function mountDashboard(
   element.canGrant = capabilities.canGrant ?? false;
   container.append(element);
   mounted.push(element);
-  // The provider is acquired in updated(), after the first DOM render.
-  // Await the real lifecycle so a loaded runner cannot observe the toggle early.
+  // Settle the custom-element property bridge before observing rendered controls.
   await element.updateComplete;
   expect(element.querySelector(".plugin-session-dashboard__toggle")).not.toBeNull();
   return element;
 }
 
-afterEach(() => {
+afterEach(async () => {
   for (const element of mounted.splice(0)) {
     element.remove();
   }
+  await Promise.resolve();
 });
 
 describe("Plugin session dashboard", () => {
@@ -277,7 +274,7 @@ describe("Plugin session dashboard", () => {
   ])(
     "shares $session.sessionKey gateway state without leaking dashboard capabilities in $order order",
     async ({ order, session }) => {
-      const { client, request, removeListener } = createClient();
+      const { client, request, removeListener } = createClient([widget()]);
       let chat: BoardProviderLease | undefined;
       let dashboard: DashboardElement | undefined;
 
@@ -298,28 +295,25 @@ describe("Plugin session dashboard", () => {
 
         await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
         expect(request).toHaveBeenCalledWith("board.get", session);
-        const dashboardProvider = Reflect.get(dashboard, "provider") as BoardProvider;
-
-        expect(chat.provider).not.toBe(dashboardProvider);
-        expect(chat.provider.snapshot$).toBe(dashboardProvider.snapshot$);
+        await vi.waitFor(() =>
+          expect(dashboard?.querySelector("openclaw-board-view")).not.toBeNull(),
+        );
+        const board = dashboard.querySelector("openclaw-board-view")!;
         expect(chat.provider).toMatchObject({
           canPinWidgets: true,
           canPinMcpApps: true,
           canMutate: true,
           canGrant: true,
         });
-        expect(dashboardProvider).toMatchObject({
-          canPinWidgets: false,
-          canPinMcpApps: false,
-          canMutate: true,
-          canGrant: false,
-        });
+        expect(board.canMutate).toBe(true);
+        expect(board.canGrant).toBe(false);
 
         dashboard.canMutate = false;
         await dashboard.updateComplete;
+        await board.updateComplete;
 
-        expect(Reflect.get(dashboard, "provider")).toBe(dashboardProvider);
-        expect(dashboardProvider.canMutate).toBe(false);
+        expect(dashboard.querySelector("openclaw-board-view")).toBe(board);
+        expect(board.canMutate).toBe(false);
         expect(chat.provider.canMutate).toBe(true);
         expect(chat.provider.canPinWidgets).toBe(true);
         expect(chat.provider.canPinMcpApps).toBe(true);
@@ -327,6 +321,7 @@ describe("Plugin session dashboard", () => {
         expect(request).toHaveBeenCalledOnce();
 
         dashboard.remove();
+        await dashboard.updateComplete;
         expect(removeListener).not.toHaveBeenCalled();
         chat.release();
         expect(removeListener).toHaveBeenCalledOnce();
@@ -358,25 +353,6 @@ describe("Plugin session dashboard", () => {
     await element.updateComplete;
     await board.updateComplete;
     expect(board.active).toBe(true);
-  });
-
-  it("keeps an empty dashboard compact until the operator expands its hint", async () => {
-    const { client, request } = createClient();
-    const element = await mountDashboard({ sessionKey: "agent:main:workboard-empty" }, client);
-
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("board.get", expect.anything()));
-    await vi.waitFor(() =>
-      expect(element.textContent).toContain("This session has no dashboard widgets yet."),
-    );
-    expect(
-      element.querySelector(".plugin-session-dashboard__toggle")?.getAttribute("aria-expanded"),
-    ).toBe("false");
-
-    element.querySelector<HTMLButtonElement>(".plugin-session-dashboard__toggle")?.click();
-    await element.updateComplete;
-    expect(element.querySelector(".plugin-session-dashboard__body")?.textContent).toContain(
-      "This session has no dashboard widgets yet.",
-    );
   });
 
   it("reacts when the embedded board selects another tab", async () => {

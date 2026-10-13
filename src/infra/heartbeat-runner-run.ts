@@ -8,6 +8,10 @@ import {
 } from "../auto-reply/reply/reply-operation-run-state.js";
 import { withReplySystemEventContext } from "../auto-reply/reply/system-event-session-key.js";
 import type { MsgContext } from "../auto-reply/templating.js";
+import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
+import { parseSessionDeliveryRoute } from "../routing/session-key.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { formatErrorMessage } from "./errors.js";
 import { execRequestAbortSignal, readExecRequestOwners } from "./exec-request-context.js";
 import { resolveHeartbeatTimeoutOverrideSeconds } from "./heartbeat-config.js";
@@ -61,6 +65,18 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
     });
     return { status: "skipped", reason: "alerts-disabled" };
   }
+  // Message tools infer external destinations from encoded session routes.
+  const sourceRoute = parseSessionDeliveryRoute(runSessionKey);
+  const internalSource =
+    prepared.run.kind === "shared" &&
+    delivery.channel === "none" &&
+    (!sourceRoute || sourceRoute.channel === INTERNAL_MESSAGE_CHANNEL)
+      ? prepared.internalProjection
+      : undefined;
+  const sourceScope = internalSource
+    ? { agentId, storePath: prepared.storePath, ...internalSource }
+    : undefined;
+  let releaseSource: (() => void) | undefined;
   const policy = createHeartbeatDispatch(opts, wake, prepared);
   const state: ReplyOperationRunState = {
     heartbeat: policy,
@@ -119,6 +135,43 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
         })
       : undefined;
   try {
+    let assertSourceCurrent: SessionSourceAssertion | undefined;
+    if (sourceScope) {
+      const { prepareSessionMutationFacts } =
+        await import("../gateway/session-sharing-preparation.js");
+      const facts = await prepareSessionMutationFacts({
+        cfg,
+        agentId,
+        sessionKey: sourceScope.sessionKey,
+      });
+      releaseSource = facts.release;
+      const refuse = (): never => {
+        throw new Error("heartbeat source generation changed before reply admission");
+      };
+      const assertGeneration = () => {
+        const { target } = facts.readCurrent(cfg);
+        if (
+          target.storePath !== sourceScope.storePath ||
+          target.canonicalKey !== sourceScope.sessionKey ||
+          target.entry.sessionId !== sourceScope.sessionId ||
+          target.entry.lifecycleRevision !== sourceScope.lifecycleRevision
+        ) {
+          refuse();
+        }
+      };
+      assertGeneration();
+      const { captureSessionEntrySourceAssertion } =
+        await import("../config/sessions/session-entry-source-authority.js");
+      assertSourceCurrent = captureSessionEntrySourceAssertion({
+        scope: sourceScope,
+        readSource: facts.readCurrent(cfg).target.readSource,
+        expected: sourceScope,
+        fields: ["sessionId", "lifecycleRevision"],
+        assertCurrent: assertGeneration,
+        assertHostCurrent: assertGeneration,
+        refuse,
+      });
+    }
     const { dispatchInboundMessageWithRoutedChannelDispatcher } =
       await import("../auto-reply/dispatch.js");
     await typing?.onReplyStart();
@@ -132,6 +185,18 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
       AccountId: delivery.accountId,
       ChatType: delivery.chatType,
       MessageThreadId: delivery.threadId,
+      // Internal delivery records have no external route. Carry the admitted
+      // WebChat source into prompts and tools instead of the heartbeat placeholder.
+      ...(internalSource
+        ? {
+            Provider: INTERNAL_MESSAGE_CHANNEL,
+            Surface: INTERNAL_MESSAGE_CHANNEL,
+            OriginatingChannel: INTERNAL_MESSAGE_CHANNEL,
+            OriginatingTo: internalSource.sessionKey,
+            To: internalSource.sessionKey,
+            ChatType: "direct",
+          }
+        : {}),
       InternalTurnSource: prepared.hasExecCompletion
         ? "exec"
         : prepared.hasCronEvents
@@ -153,90 +218,99 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
       SessionKey: runSessionKey,
       AgentId: agentId,
     } satisfies MsgContext;
-    await dispatchInboundMessageWithRoutedChannelDispatcher({
-      cfg,
-      ctx: heartbeatContext,
-      replyResolver: opts.deps?.getReplyFromConfig,
-      suppressOutboundHooks: true,
-      replyOptions: withReplySystemEventContext<InternalGetReplyOptions>(
-        {
-          isHeartbeat: true,
-          useHeartbeatFailureCopy: prepared.useHeartbeatFailureCopy,
-          // Isolated heartbeats mint a fresh session ID per run, so nothing later
-          // reuses this run's bundle MCP runtime; retire it at settlement.
-          ...(prepared.run.kind === "isolated" ? { cleanupBundleMcpOnRunEnd: true } : {}),
-          replyConversation: prepareReplyConversation({
-            ctx: heartbeatContext,
-            sessionEntry: suppressOriginatingContext ? undefined : prepared.conversationEntry,
+    const dispatch = () =>
+      dispatchInboundMessageWithRoutedChannelDispatcher({
+        cfg,
+        ctx: heartbeatContext,
+        replyResolver: opts.deps?.getReplyFromConfig,
+        suppressOutboundHooks: true,
+        replyOptions: withReplySystemEventContext<InternalGetReplyOptions>(
+          {
             isHeartbeat: true,
-          }),
-          [REPLY_OPERATION_RUN_STATE]: state,
-          heartbeatModelOverride: heartbeat?.model?.trim(),
-          ...(prepared.usesHeartbeatResponseTool
-            ? {
-                enableHeartbeatTool: true,
-                forceHeartbeatTool: true,
-                sourceReplyDeliveryMode: "message_tool_only",
+            useHeartbeatFailureCopy: prepared.useHeartbeatFailureCopy,
+            requireExplicitMessageTarget: !internalSource,
+            // Isolated heartbeats mint a fresh session ID per run, so nothing later
+            // reuses this run's bundle MCP runtime; retire it at settlement.
+            ...(prepared.run.kind === "isolated" ? { cleanupBundleMcpOnRunEnd: true } : {}),
+            replyConversation: prepareReplyConversation({
+              ctx: heartbeatContext,
+              sessionEntry: suppressOriginatingContext ? undefined : prepared.conversationEntry,
+              isHeartbeat: true,
+            }),
+            [REPLY_OPERATION_RUN_STATE]: state,
+            heartbeatModelOverride: heartbeat?.model?.trim(),
+            ...(prepared.usesHeartbeatResponseTool
+              ? {
+                  enableHeartbeatTool: true,
+                  forceHeartbeatTool: true,
+                  sourceReplyDeliveryMode: "message_tool_only",
+                }
+              : {}),
+            abortSignal: signal,
+            // Admitted task continuations retain their ordinary agent budget even after wake coalescing.
+            timeoutOverrideSeconds: prepared.hasTaskContinuation
+              ? undefined
+              : resolveHeartbeatTimeoutOverrideSeconds(cfg, heartbeat),
+            // A conversation's continuation keeps its full context and cached prompt prefix.
+            bootstrapContextMode:
+              heartbeat?.lightContext === true && !wake.preflight.conversationRoute
+                ? "lightweight"
+                : undefined,
+            continuesConversation: Boolean(wake.preflight.conversationRoute),
+            disableBlockStreaming: true,
+            suppressToolProgressMessages: true,
+            suppressDefaultToolProgressMessages: true,
+            onModelSelected: prepared.replyPrefix.onModelSelected,
+            onSessionPrepared: (binding) => {
+              // Capture initialization's exact identity once; later replacements cannot inherit delivery.
+              if (
+                !policy.prepared.policySessionEntry &&
+                !prepared.outboundPolicySessionKey &&
+                binding.sessionKey === prepared.sessionKey &&
+                binding.storePath === prepared.storePath &&
+                binding.lifecycleRevision !== undefined
+              ) {
+                policy.prepared = {
+                  ...prepared,
+                  policySessionEntry: {
+                    sessionId: binding.sessionId,
+                    lifecycleRevision: binding.lifecycleRevision,
+                    updatedAt: startedAt,
+                  },
+                };
               }
-            : {}),
-          abortSignal: signal,
-          // Admitted task continuations retain their ordinary agent budget even after wake coalescing.
-          timeoutOverrideSeconds: prepared.hasTaskContinuation
-            ? undefined
-            : resolveHeartbeatTimeoutOverrideSeconds(cfg, heartbeat),
-          // A conversation's continuation keeps its full context and cached prompt prefix.
-          bootstrapContextMode:
-            heartbeat?.lightContext === true && !wake.preflight.conversationRoute
-              ? "lightweight"
-              : undefined,
-          continuesConversation: Boolean(wake.preflight.conversationRoute),
-          disableBlockStreaming: true,
-          suppressToolProgressMessages: true,
-          suppressDefaultToolProgressMessages: true,
-          onModelSelected: prepared.replyPrefix.onModelSelected,
-          onSessionPrepared: (binding) => {
-            // Capture initialization's exact identity once; later replacements cannot inherit delivery.
-            if (
-              !policy.prepared.policySessionEntry &&
-              !prepared.outboundPolicySessionKey &&
-              binding.sessionKey === prepared.sessionKey &&
-              binding.storePath === prepared.storePath &&
-              binding.lifecycleRevision !== undefined
-            ) {
-              policy.prepared = {
-                ...prepared,
-                policySessionEntry: {
-                  sessionId: binding.sessionId,
-                  lifecycleRevision: binding.lifecycleRevision,
-                  updatedAt: startedAt,
-                },
-              };
-            }
+            },
           },
-        },
-        {
-          sessionKey: prepared.inspectsRunQueue ? prepared.sessionKey : runSessionKey,
-          execRequestOwners,
-          events: prepared.inspectsRunQueue ? prepared.genericEvents : [],
-          deferredEventIds: [...deferredGenericIds, ...ordinaryGenericIds].filter(
-            (id): id is string => typeof id === "string",
-          ),
-          onEventsAdmitted: (events) => {
-            admittedGenericEvents.push(
-              ...events.filter((event) => ordinaryGenericIds.has(event.id)),
-            );
+          {
+            sessionKey: prepared.inspectsRunQueue ? prepared.sessionKey : runSessionKey,
+            heartbeatEventQueueSessionKey: eventQueueKey,
+            execRequestOwners,
+            events: prepared.inspectsRunQueue ? prepared.genericEvents : [],
+            deferredEventIds: [...deferredGenericIds, ...ordinaryGenericIds].filter(
+              (id): id is string => typeof id === "string",
+            ),
+            onEventsAdmitted: (events) => {
+              admittedGenericEvents.push(
+                ...events.filter((event) => ordinaryGenericIds.has(event.id)),
+              );
+            },
           },
+        ),
+        dispatcherOptions: {
+          deliver: (payload) =>
+            deliverHeartbeatDispatch(
+              policy,
+              payload,
+              execRequestAbortSignal(
+                execRequestOwners,
+                state.agentTurnOwner?.abortSignal ?? signal,
+              ),
+            ),
         },
-      ),
-      dispatcherOptions: {
-        deliver: (payload) =>
-          deliverHeartbeatDispatch(
-            policy,
-            payload,
-            execRequestAbortSignal(execRequestOwners, state.agentTurnOwner?.abortSignal ?? signal),
-          ),
-      },
-    });
+      });
+    await (sourceScope && assertSourceCurrent
+      ? withSessionTranscriptWriteAssertion(sourceScope, assertSourceCurrent, dispatch)
+      : dispatch());
     const settled = settledResult();
     if (settled) {
       return settled;
@@ -273,6 +347,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
     ) {
       consumeSelectedSystemEventEntries(eventQueueKey, admittedGenericEvents);
     }
+    releaseSource?.();
     typing?.onCleanup?.();
   }
 }

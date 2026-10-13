@@ -36,6 +36,36 @@ async function executeTool(tool: AgentTool, callId: string) {
 }
 
 describe("agent tool definition adapter", () => {
+  it("retains a wrapped native permission refusal for the transcript Grant card", async () => {
+    const permissionMissing = {
+      nodeId: "mac-node",
+      nodeName: "Test Mac",
+      command: "computer.act",
+      capabilities: ["accessibility", "screenRecording"],
+      state: "denied",
+    };
+    const message =
+      "Accessibility and Screen Recording required. Do not retry until the user confirms.";
+    const cause = Object.assign(new Error(message), { details: { permissionMissing } });
+    const result = await executeTool(
+      {
+        name: "nodes",
+        label: "Nodes",
+        description: "Node commands",
+        parameters: Type.Object({}),
+        execute: async () => {
+          throw new Error(message, { cause });
+        },
+      },
+      "permission-call",
+    );
+    expect(result.details).toEqual({
+      status: "error",
+      tool: "nodes",
+      error: message,
+      permissionMissing,
+    });
+  });
   it.each(["direct", "wrapped", "composed"] as const)(
     "preserves signal and update identity through %s execution",
     async (route) => {

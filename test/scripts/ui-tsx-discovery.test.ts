@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -40,6 +40,38 @@ function fixture(files: Record<string, string>) {
 }
 
 describe("TSX discovery", () => {
+  it.each([false, true])("retains indexed TSX owners in sparse checkouts (linked=%s)", (linked) => {
+    const cwd = fixture({ "ui/src/view.tsx": "export {};\n", "kept/marker": "retained\n" });
+    const options = { cwd, env: createNestedGitEnv(), encoding: "utf8" } as const;
+    execFileSync("git", ["init", "-q"], options);
+    execFileSync("git", ["add", "."], options);
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.test",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-qm",
+        "test: seed sparse owners",
+      ],
+      options,
+    );
+    const checkout = linked ? temporary.make("ui-sparse-worktree-") : cwd;
+    if (linked) {
+      execFileSync("git", ["worktree", "add", "--detach", "--quiet", checkout], options);
+    }
+    execFileSync("git", ["sparse-checkout", "set", "--no-cone", "/kept/"], {
+      ...options,
+      cwd: checkout,
+    });
+    expect(existsSync(path.join(checkout, "ui/src/view.tsx"))).toBe(false);
+    expect(resolveUiTypeScriptPath("ui/src/view.ts", checkout)).toBe("ui/src/view.tsx");
+  });
+
   it("retains isolated execution ownership for an unstaged TSX rename", () => {
     const original = "ui/src/app/bootstrap.test.ts";
     const renamed = `${original}x`;
@@ -107,7 +139,7 @@ describe("TSX discovery", () => {
   });
 
   it("retains bootstrap and E2E helper ownership in the UI compiler shards", () => {
-    for (const shard of ["app", "components", "pages", "e2e", "other", "chat"]) {
+    for (const shard of ["app", "components", "pages", "e2e", "e2e-chat", "other", "chat"]) {
       const config: { include: string[]; exclude?: string[] } = JSON.parse(
         readFileSync(
           new URL(`../tsconfig/tsconfig.core.test.ui-${shard}.json`, import.meta.url),
@@ -116,15 +148,18 @@ describe("TSX discovery", () => {
       );
       for (const extension of ["ts", "tsx"]) {
         expect(config.include, shard).toContain(`../../ui/src/main.${extension}`);
-        if (shard === "e2e" || shard === "other") {
-          const helper = `../../ui/src/test-helpers/control-ui-e2e-example.test.${extension}`;
+        for (const [file, owner] of [
+          [`../../ui/src/test-helpers/control-ui-e2e-example.test.${extension}`, "e2e"],
+          [`../../ui/src/e2e/about.e2e.test.${extension}`, "e2e"],
+          [`../../ui/src/e2e/chat-example.e2e.test.${extension}`, "e2e-chat"],
+        ] as const) {
           const selected = filterFilesByPatterns(
-            [helper],
+            [file],
             config.include,
             config.exclude ?? [],
             matchesVitestGlob,
           );
-          expect(selected, shard).toEqual(shard === "e2e" ? [helper] : []);
+          expect(selected, shard).toEqual(shard === owner ? [file] : []);
         }
       }
     }

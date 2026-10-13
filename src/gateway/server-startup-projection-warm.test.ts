@@ -1,4 +1,10 @@
+import type { ServerResponse } from "node:http";
 import { expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
@@ -6,15 +12,15 @@ import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
+import { buildControlUiSessionEntryUrl } from "./control-ui-session-entry-path.js";
 import { createGatewayKernel } from "./server-kernel.js";
-import * as rowReads from "./session-row-projection-read.js";
+import type { GatewayServer } from "./server-public.js";
+import * as rowReads from "./session-row-database-facts.js";
 import * as projections from "./session-row-projection.js";
 
-it("refuses startup and disposes its projection when initial rows fail after the first batch", async () => {
-  const port = await getFreePort();
-  const token = "startup-projection-synthetic-token";
-  const state = await createOpenClawTestState({
-    label: "startup-projection-warm",
+function createStartupState(label: string) {
+  return createOpenClawTestState({
+    label,
     layout: "home",
     env: {
       OPENCLAW_GATEWAY_PASSWORD: undefined,
@@ -29,6 +35,187 @@ it("refuses startup and disposes its projection when initial rows fail after the
       VITEST: "1",
     },
   });
+}
+
+it("overlaps early services with retained projection startup and waits for both before finishing", async ({
+  signal,
+}) => {
+  const basePath = "/health";
+  const port = await getFreePort();
+  const token = "startup-projection-synthetic-token";
+  const state = await createStartupState("startup-projection-http");
+  const projectionEntered = createDeferred();
+  const releaseProjection = createDeferred();
+  const listenerBound = createDeferred();
+  const releaseListening = createDeferred();
+  const earlyRuntimeEntered = createDeferred();
+  const releaseEarlyRuntime = createDeferred();
+  const entryReceived = createDeferred<ServerResponse>();
+  const secondEntryReceived = createDeferred<ServerResponse>();
+  const entryClosed = createDeferred();
+  const requests = new AbortController();
+  const earlyRequest = new AbortController();
+  const requestSignal = AbortSignal.any([signal, requests.signal]);
+  const entryPath = `${buildControlUiSessionEntryUrl(`${basePath}/chat/main/topic`, basePath)}&probe=1`;
+  let startup: Promise<GatewayServer> | undefined;
+  let startupFinished = false;
+  let earlyEntryRequest: Promise<Response> | undefined;
+  let entryRequest: Promise<Response> | undefined;
+  try {
+    await state.writeConfig({
+      gateway: { auth: { mode: "token", token }, controlUi: { enabled: true, basePath }, port },
+      agents: { defaults: { model: "unit-test/model", utilityModel: "" } },
+      plugins: { enabled: false },
+      discovery: { mdns: { mode: "off" } },
+      cron: { enabled: false },
+    });
+    state.applyEnv();
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: "agent:main:topic" },
+      { sessionId: "startup-http-topic", updatedAt: 1 },
+    );
+    const createProjection = projections.createSessionRowProjection;
+    vi.spyOn(projections, "createSessionRowProjection").mockImplementation(async (params) => {
+      projectionEntered.resolve();
+      await releaseProjection.promise;
+      return createProjection(params);
+    });
+    const transportModule = await import("./server-runtime-state.js");
+    const createTransport = transportModule.createGatewayHttpTransport;
+    vi.spyOn(transportModule, "createGatewayHttpTransport").mockImplementation(async (params) => {
+      const transport = await createTransport(params);
+      const entryResponses = [entryReceived, secondEntryReceived];
+      transport.httpServer.on("request", (req, res) => {
+        if (req.url === entryPath) {
+          entryResponses.shift()?.resolve(res);
+          res.once("close", entryClosed.resolve);
+        }
+      });
+      return {
+        ...transport,
+        startListening: async () => {
+          await transport.startListening();
+          listenerBound.resolve();
+          await releaseListening.promise;
+        },
+      };
+    });
+    const earlyModule = await import("./server-startup-early.js");
+    const startEarlyRuntime = earlyModule.startGatewayEarlyRuntime;
+    vi.spyOn(earlyModule, "startGatewayEarlyRuntime").mockImplementation(async (...args) => {
+      earlyRuntimeEntered.resolve();
+      await releaseEarlyRuntime.promise;
+      return startEarlyRuntime(...args);
+    });
+    const { startGatewayServerCore } = await import("./server-start.js");
+    startup = startGatewayServerCore(port, {
+      auth: { mode: "token", token },
+      bind: "loopback",
+      controlUiEnabled: true,
+      sidecarStartup: "defer",
+    }).then((server) => {
+      startupFinished = true;
+      return server;
+    });
+    await withinTest(
+      awaitGateBeforeSettlement(
+        listenerBound.promise,
+        startup,
+        "Gateway startup completed before its listener was available",
+      ),
+      signal,
+    );
+    const read = (path: string, fetchSignal = requestSignal) =>
+      fetch(`http://127.0.0.1:${port}${path}`, {
+        headers: { authorization: `Bearer ${token}` },
+        signal: fetchSignal,
+      });
+    earlyEntryRequest = read(entryPath, AbortSignal.any([requestSignal, earlyRequest.signal]));
+    void earlyEntryRequest.catch(() => {});
+    const entryResponse = await withinTest(
+      awaitGateBeforeSettlement(
+        entryReceived.promise,
+        earlyEntryRequest,
+        "Session entry request did not reach the Gateway listener",
+      ),
+      signal,
+    );
+    await withinTest(
+      awaitGateBeforeSettlement(
+        projectionEntered.promise,
+        earlyEntryRequest,
+        "Session entry request completed without preparing its session projection",
+      ),
+      signal,
+    );
+    for (const [path, expectedStatus, expectedBody] of [
+      ["/health", 200, { ok: true, status: "live" }],
+      ["/healthz", 200, { ok: true, status: "live" }],
+      ["/startup", 503, { ok: false, status: "starting" }],
+      ["/startupz", 503, { ok: false, status: "starting" }],
+      ["/ready", 503, { ready: false }],
+      ["/readyz", 503, { ready: false }],
+    ] as const) {
+      const response = await fetch(`http://127.0.0.1:${port}${path}`, { signal: requestSignal });
+      expect(response.status, path).toBe(expectedStatus);
+      expect(await response.json(), path).toMatchObject(expectedBody);
+    }
+    expect(entryResponse.writableEnded).toBe(false);
+    earlyRequest.abort();
+    await withinTest(entryClosed.promise, signal);
+    entryRequest = read(entryPath);
+    const secondEntryResponse = await withinTest(
+      awaitGateBeforeSettlement(
+        secondEntryReceived.promise,
+        entryRequest,
+        "Second session entry request did not reach the Gateway listener",
+      ),
+      signal,
+    );
+    expect(secondEntryResponse.writableEnded).toBe(false);
+    releaseListening.resolve();
+    await withinTest(
+      awaitGateBeforeSettlement(
+        earlyRuntimeEntered.promise,
+        startup,
+        "Gateway startup completed without starting its early services",
+      ),
+      signal,
+    );
+    expect(secondEntryResponse.writableEnded).toBe(false);
+    releaseProjection.resolve();
+    expect((await entryRequest).status).toBe(204);
+    // Minimal Gateways bypass sidecar readiness, but startup still joins early services.
+    expect(startupFinished).toBe(false);
+    releaseEarlyRuntime.resolve();
+    const server = await startup;
+    await server.startupSettled;
+    const unauthorized = await fetch(`http://127.0.0.1:${port}${entryPath}`, {
+      signal: requestSignal,
+    });
+    expect(unauthorized.status).toBe(401);
+    await unauthorized.arrayBuffer();
+  } finally {
+    releaseProjection.resolve();
+    releaseListening.resolve();
+    releaseEarlyRuntime.resolve();
+    requests.abort();
+    try {
+      const server = await startup?.catch(() => undefined);
+      await server?.close();
+      await earlyEntryRequest?.catch(() => undefined);
+      await entryRequest?.catch(() => undefined);
+    } finally {
+      vi.restoreAllMocks();
+      await state.cleanup();
+    }
+  }
+});
+
+it("refuses startup and disposes its projection when initial rows fail after the first batch", async () => {
+  const port = await getFreePort();
+  const token = "startup-projection-synthetic-token";
+  const state = await createStartupState("startup-projection-warm");
   let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
   const disposed = vi.fn();
   try {

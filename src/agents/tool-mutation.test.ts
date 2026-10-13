@@ -311,7 +311,7 @@ describe("tool mutation helpers", () => {
     expect(isReplaySafeToolCall("subagents", {})).toBe(true);
     expect(isReplaySafeToolCall("subagents", { action: "list" })).toBe(true);
     expect(isReplaySafeToolCall("subagents", { action: "kill" })).toBe(false);
-    expect(isReplaySafeToolCall("tool_call", { id: "sessions_list" })).toBe(false);
+    expect(isReplaySafeToolCall("dispatch_action", { id: "sessions_list" })).toBe(false);
     expect(isReplaySafeToolCall("unknown_plugin_tool", { action: "list" })).toBe(false);
     expect(isReplaySafeToolCall("survey_actions", { action: "list" })).toBe(false);
     expect(isReplaySafeToolCall("survey_actions", { action: "poll" })).toBe(false);

@@ -109,13 +109,16 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_gateway_rpc_handler_seconds`                    | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_admission_seconds`                  | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_queue_wait_seconds`                 | histogram | `method`                                                                                  |
-| `openclaw_chat_send_phase_seconds`                        | histogram | `phase`, `stage` (`request` or `startup`)                                                 |
+| `openclaw_chat_send_phase_seconds`                        | histogram | `phase`, `stage` (`request`, `startup`, `steer`, or `queued`)                             |
 | `openclaw_gateway_rpc_stage_seconds`                      | histogram | `method`, `phase`                                                                         |
 | `openclaw_gateway_rpc_stage_thread_cpu_seconds`           | histogram | `method`, `phase`                                                                         |
 | `openclaw_worktree_preparation_seconds`                   | histogram | `kind`, `template`, `outcome`, `phase`                                                    |
 | `openclaw_gateway_rpc_outcomes_total`                     | counter   | `phase`, `outcome`                                                                        |
 | `openclaw_run_completed_total`                            | counter   | `channel`, `model`, `outcome`, `provider`, `trigger`                                      |
 | `openclaw_run_duration_seconds`                           | histogram | `channel`, `model`, `outcome`, `provider`, `trigger`                                      |
+| `openclaw_secret_egress_requests_total`                   | counter   | `outcome`, `substituted`                                                                  |
+| `openclaw_tool_catalog_total`                             | counter   | `mode`, `source`                                                                          |
+| `openclaw_tool_catalog_tools_total`                       | counter   | `mode`, `source`                                                                          |
 | `openclaw_model_call_total`                               | counter   | `api`, `error_category`, `model`, `observation_unit`, `outcome`, `provider`, `transport`  |
 | `openclaw_model_call_duration_seconds`                    | histogram | `api`, `error_category`, `model`, `observation_unit`, `outcome`, `provider`, `transport`  |
 | `openclaw_model_failover_total`                           | counter   | `from_model`, `from_provider`, `lane`, `reason`, `suspended`, `to_model`, `to_provider`   |
@@ -167,11 +170,11 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_payload_large_bytes`                            | histogram | `action`, `channel`, `plugin`, `reason`, `surface`                                        |
 | `openclaw_memory_bytes`                                   | gauge     | `kind`                                                                                    |
 | `openclaw_heap_space_bytes`                               | gauge     | `space`, `stat`                                                                           |
-| `openclaw_worker_count`                                   | gauge     | none                                                                                      |
+| `openclaw_worker_count`                                   | gauge     | none (aggregate), `script`                                                                |
 | `openclaw_worker_queue_depth`                             | gauge     | `kind`                                                                                    |
 | `openclaw_worker_queue_wait_seconds`                      | histogram | `kind`, `request_class`                                                                   |
 | `openclaw_worker_request_seconds`                         | histogram | `kind`, `request_class`                                                                   |
-| `openclaw_worker_heap_sampled_count`                      | gauge     | none                                                                                      |
+| `openclaw_worker_heap_sampled_count`                      | gauge     | none (aggregate), `script`                                                                |
 | `openclaw_worker_heap_used_bytes`                         | gauge     | `script`                                                                                  |
 | `openclaw_worker_started_total`                           | counter   | `script`                                                                                  |
 | `openclaw_worker_retired_total`                           | counter   | `script`, `reason`                                                                        |
@@ -400,7 +403,7 @@ The allowlists bound cardinality without publishing session IDs, database paths,
 command suffixes, or caller-provided names. The exporter's shared series cap still
 applies.
 
-The `transcripts` request family includes canonical event appends and retention.
+The `transcripts` request family includes stored event appends and retention.
 
 Shared-state reads use kind `stateRead` (formerly `state_read`) and the same
 bounded operation-family classifier as SQLite writers. Examples include
@@ -451,11 +454,17 @@ most one outstanding request per Worker. Samples expire after 60 seconds and
 are removed when the Worker exits. Compare `openclaw_worker_heap_sampled_count`
 with `openclaw_worker_count`: startup, unavailable APIs, and stalled Workers can
 produce partial totals. No heap snapshot or extra sampling timer is created.
+Both count metrics also expose `script="..."` series: `openclaw_worker_count`
+counts all live Workers for that script, including those awaiting or missing a
+fresh sample, while `openclaw_worker_heap_sampled_count` counts its fresh samples.
+The original unlabeled series retain the aggregate totals. Select
+`{script!=""}` when summing script series to avoid counting the aggregate again.
 `openclaw_worker_heap_used_bytes{script="..."}` sums fresh heap samples for each
 Worker script. Labels use a fixed allowlist of runtime-entrypoint, pooled, and bundled plugin Worker basenames, normalized to
 `.js` in source and packaged runs; unknown, eval, and unwrapped third-party Workers
 use `other`. Full paths and eval source are never recorded. A script's series
-disappears when it has no live, fresh samples. Memory-pressure logs include the
+disappears when it has no live, fresh samples; its count series disappear when
+it has no live Workers. Memory-pressure logs include the
 same byte counts and Worker coverage counts, plus `workerHeaps`: the five largest
 individual fresh Worker heaps as `{script, heapUsed, heapTotal}` (bytes), using the same
 bounded script names.

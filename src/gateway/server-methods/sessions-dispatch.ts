@@ -39,7 +39,7 @@ import {
 } from "../worker-environments/placement-record.js";
 import {
   resolveWorkerPlacementCapabilities,
-  resolveWorkerPlacementSessionRuntime,
+  resolveWorkerPlacementSessionRuntimeAsync,
 } from "../worker-environments/placement-session-runtime.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/placement-target.js";
 import type { WorkerPlacementDispatchRequest } from "../worker-environments/service-contract.js";
@@ -165,7 +165,7 @@ async function resolveSessionWorkspace(params: {
 }): Promise<WorkerSessionWorkspace | undefined> {
   const article = params.method === "sessions.dispatch" ? "a" : "the";
   try {
-    const resolved = await resolveWorkerPlacementSessionTarget({
+    using resolved = await resolveWorkerPlacementSessionTarget({
       sessionRuntime: await loadWorkerPlacementSessionRuntimeModule(),
       config: params.config,
       sessionId: params.entry.sessionId,
@@ -268,11 +268,12 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
         respondInvalidWorkerSession(respond, "cannot dispatch an archived session");
         return;
       }
-      const sessionRuntime = resolveWorkerPlacementSessionRuntime({
+      const sessionRuntime = await resolveWorkerPlacementSessionRuntimeAsync({
         cfg,
         entry,
         agentId,
         sessionKey,
+        assertCurrent: sessionMutationAuthorization?.assertCurrent,
       });
       const { executionMode, devicePlacement } = resolveWorkerPlacementCapabilities(sessionRuntime);
       if (!executionMode) {

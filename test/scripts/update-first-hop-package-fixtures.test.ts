@@ -55,6 +55,20 @@ function makePackageFixture(version = "2026.8.1") {
 }
 
 describe("first-hop package fixtures", () => {
+  it.each([true, false])("excludes newer-schema sources (supported source: %s)", (supported) => {
+    const root = makePackageFixture();
+    writeJson(path.join(root, "dist/update-compat-inventory.json"), {
+      schemaVersion: 1,
+      releases: [
+        ...(supported ? [{ version: "2026.9.1", schemaVersions: { state: 1, agent: 1 } }] : []),
+        { version: "2026.10.1-beta.1", schemaVersions: { state: 2, agent: 1 } },
+        { version: "2026.10.1-beta.2", schemaVersions: { state: 1, agent: 2 } },
+      ],
+    });
+    expect(listFirstHopSourceVersions(root)).toEqual(supported ? ["2026.9.1"] : []);
+    expect(() => listFirstHopSourceVersions(root, "2026.10.1-beta.1")).toThrow("unsupported");
+  });
+
   it("selects recorded baselines and verifies their bytes before choosing restart controls", () => {
     const root = makePackageFixture();
     const createSource = (version: string) => {
@@ -200,6 +214,39 @@ describe("first-hop package fixtures", () => {
       `dist/${stable}`,
       `dist/${native}`,
     ]);
+  });
+
+  it("reads harness records for candidates that no longer pack their inventory", () => {
+    const harness = JSON.parse(
+      fs.readFileSync("scripts/lib/update-compat-inventory.json", "utf8"),
+    ) as { releases: { version: string; chunks: { path: string }[] }[] };
+    const latest = harness.releases.at(-1)!;
+    const root = makePackageFixture();
+    const manifestPath = path.join(root, "package.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.openclaw.schemaVersions = { state: 1_000, agent: 1_000 };
+    writeJson(manifestPath, manifest);
+    const inventoryPath = path.join(root, "dist/postinstall-inventory.json");
+    const legacyPaths = new Set(LEGACY_UPDATE_COMPAT_CHUNKS.map((name) => `dist/${name}`));
+    for (const name of LEGACY_UPDATE_COMPAT_CHUNKS) {
+      fs.rmSync(path.join(root, "dist", name));
+    }
+    // One recorded chunk is a candidate bridge; the rest were never built here.
+    const bridge = latest.chunks.find((chunk) => /-[A-Za-z0-9_-]{8}\.m?js$/.test(chunk.path))!;
+    fs.writeFileSync(
+      path.join(root, "dist", bridge.path),
+      `${UPDATE_COMPATIBILITY_CHUNK_HEADER}\nexport {};\n`,
+    );
+    writeJson(inventoryPath, [
+      ...JSON.parse(fs.readFileSync(inventoryPath, "utf8")).filter(
+        (entry: string) => !legacyPaths.has(entry),
+      ),
+      `dist/${bridge.path}`,
+    ]);
+
+    expect(listFirstHopSourceVersions(root, latest.version)).toEqual([latest.version]);
+    expect(removeLegacyUpdateCompatChunks(root)).toEqual([`dist/${bridge.path}`]);
+    expect(fs.existsSync(path.join(root, "dist", bridge.path))).toBe(false);
   });
 
   it.each(["corrupt member", "missing advertised inventory"])(

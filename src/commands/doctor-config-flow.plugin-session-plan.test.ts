@@ -7,7 +7,7 @@ import { runSessionTranscriptsHealth } from "../flows/doctor-health-contribution
 import { resolveLivePluginDoctorStateMigrationInventory } from "../plugins/doctor-contract-registry.js";
 import { clearPluginDoctorContractRegistryCache } from "../plugins/doctor-contract-registry.test-fixtures.js";
 import {
-  readPersistedInstalledPluginIndexInstallRecords,
+  readPersistedInstalledPluginIndexInstallRecordsAsync,
   writePersistedInstalledPluginIndexInstallRecordsWithLease,
 } from "../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
@@ -104,7 +104,8 @@ module.exports = { stateMigrations: [{
               ).toEqual(existingOwner ? ["early-owner"] : []);
               return await withPluginLifecycleLease({ env }, async (lease) => {
                 const indexOptions = { config: cfg, env, filePath: lease.databasePath, lease };
-                const records = readPersistedInstalledPluginIndexInstallRecords(indexOptions) ?? {};
+                const records =
+                  (await readPersistedInstalledPluginIndexInstallRecordsAsync(indexOptions)) ?? {};
                 await beforePersistentEffect?.();
                 lease.assertOwned();
                 writePlugin("late-owner");
@@ -123,7 +124,7 @@ module.exports = { stateMigrations: [{
               });
             });
 
-          const ctx = await prepareDoctorContext(configPath);
+          await using ctx = await prepareDoctorContext(configPath);
           expect(install).toHaveBeenCalledOnce();
           for (const pluginId of pluginIds) {
             expect(fs.existsSync(path.join(stateDir, `${pluginId}-migrated`))).toBe(false);

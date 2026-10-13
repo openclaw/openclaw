@@ -45,9 +45,10 @@ vi.mock("../../model-auth.js", async (importOriginal) => ({
     profileId,
   }),
 }));
+// mock-isolation: Runtime preparation uses synthetic credentials without host auth reads.
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: async () => ({ mode: "token", apiKey: "fixture-token" }),
-  resolveProviderAuthProfileMetadata: () => ({}),
+  resolveProviderAuthProfileMetadataAsync: async () => ({}),
 }));
 vi.mock("openclaw/plugin-sdk/provider-catalog-live-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-catalog-live-runtime")>()),

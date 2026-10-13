@@ -1,5 +1,6 @@
 // Session/runtime facade for memory transcript helpers.
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { cloneEnvWithPlatformSemantics } from "../../../../src/config/config-env-vars.js";
 import {
@@ -7,17 +8,22 @@ import {
   readTranscriptStatsBatchReadOnlySync as readAccessorTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync as readAccessorTranscriptStatsSync,
 } from "../../../../src/config/sessions/session-accessor.js";
+import { getSessionActorStorageBinding } from "../../../../src/config/sessions/session-actor-storage-binding.js";
 import {
   captureIncognitoSessionSource,
   captureIncognitoSessionHistoryBinding,
   withIncognitoSessionBinding,
 } from "../../../../src/config/sessions/session-incognito-binding.js";
 import { captureSessionTranscriptStorageEnvironment } from "../../../../src/config/sessions/transcript-target-binding.js";
+import { warnPluginSdkDeprecation } from "../../../../src/plugins/sdk-deprecation.js";
 import { IncognitoSessionSyncAccessError } from "../../../../src/state/incognito-session-error.js";
 
 export { readAccessorTranscriptStatsSync as readTranscriptStatsSync };
+export { readTranscriptStatsAsync } from "../../../../src/config/sessions/session-transcript-stats.js";
+export { warnPluginSdkDeprecation };
 export { readTranscriptExportSnapshotReadOnlySync };
 export { readRestoredSessionTranscript } from "../../../../src/config/sessions/session-cold-storage-read.js";
+export { readTranscriptStatsBatchReadOnlyAsync } from "../../../../src/config/sessions/session-transcript-stats-batch.js";
 export { SessionTranscriptColdError } from "../../../../src/config/sessions/session-cold-storage-state.js";
 export {
   listSessionEntriesCore,
@@ -33,19 +39,30 @@ export function assertBoundIncognitoMemorySyncAccess(
   method: string,
   replacement: string,
 ) {
-  if (captureIncognitoSessionSource(scope)) {
+  if (
+    getSessionActorStorageBinding({ agentId: scope?.agentId, storePath: scope?.storePath }) ||
+    captureIncognitoSessionSource(scope)
+  ) {
     throw new IncognitoSessionSyncAccessError(method, replacement);
   }
 }
 
+/** @deprecated Use readTranscriptStatsBatchReadOnlyAsync; removed in the next Plugin SDK major. */
 export function readTranscriptStatsBatchReadOnlySync(
   scopes: Parameters<typeof readAccessorTranscriptStatsBatchReadOnlySync>[0],
 ) {
+  if (isMainThread) {
+    warnPluginSdkDeprecation({
+      family: "session-store",
+      method: "readTranscriptStatsBatchReadOnlySync",
+      replacement: "readTranscriptStatsBatchReadOnlyAsync",
+    });
+  }
   for (const scope of scopes) {
     assertBoundIncognitoMemorySyncAccess(
       scope,
       "readTranscriptStatsBatchReadOnlySync",
-      "buildSessionEntry",
+      "readTranscriptStatsBatchReadOnlyAsync",
     );
   }
   return readAccessorTranscriptStatsBatchReadOnlySync(scopes);
@@ -55,6 +72,61 @@ export function readTranscriptStatsBatchReadOnlySync(
 export function captureIncognitoMemoryReader(
   scope: Parameters<typeof captureIncognitoSessionHistoryBinding>[0],
 ) {
+  const memory = getSessionActorStorageBinding({
+    agentId: scope.agentId,
+    storePath: scope.storePath,
+  });
+  if (memory) {
+    const selectedId = scope.sessionId ?? scope.sessionEntry?.sessionId;
+    const selectedKey = scope.sessionKey;
+    const storage = memory.actor.storage!;
+    const selection = { sessionId: selectedId, sessionKey: selectedKey };
+    const assertDisclosure = (sessionId: string) => {
+      const selected = storage.readCurrent(
+        { type: "session.entry.readById", input: { sessionId } },
+        memory.authority,
+      );
+      if (!selected) {
+        throw new Error("Incognito Memory session is no longer available");
+      }
+    };
+    return {
+      async memoryEntry(
+        absPath: string,
+        options: import("./session-files.js").BuildSessionEntryOptions,
+      ) {
+        const { buildSessionEntryFromSnapshot } = await import("./session-files.js");
+        const snapshot = await storage.read(
+          {
+            type: "session.memory.entry",
+            input: { ...selection, includeMessages: Boolean(options.onTranscriptMessage) },
+          },
+          memory.authority,
+        );
+        if (!snapshot) {
+          return null;
+        }
+        return buildSessionEntryFromSnapshot(
+          absPath,
+          {
+            ...options,
+            agentId: memory.agentId,
+            storePath: memory.path,
+            sessionId: snapshot.sessionId,
+            sessionKey: snapshot.sessionKey,
+          },
+          snapshot,
+          () => assertDisclosure(snapshot.sessionId),
+        );
+      },
+      memoryResetRecall() {
+        return storage.read(
+          { type: "session.memory.resetRecall", input: selection },
+          memory.authority,
+        );
+      },
+    };
+  }
   const shared = captureIncognitoSessionSource(scope);
   if (!shared) {
     return undefined;
@@ -209,6 +281,16 @@ export function readBoundIncognitoMemoryCorpus(
   scope: import("./session-transcript-corpus.types.js").SessionTranscriptCorpusScope,
   options: import("./session-transcript-corpus.types.js").SessionTranscriptCorpusOptions,
 ) {
+  const memory = getSessionActorStorageBinding({
+    agentId: scope.normalizedAgentId,
+    storePath: scope.storePath,
+  });
+  if (memory) {
+    return memory.actor.storage!.read(
+      { type: "session.corpus.list", input: { options } },
+      memory.authority,
+    );
+  }
   const binding = captureIncognitoSessionSource({
     agentId: scope.normalizedAgentId,
     // Corpus discovery captures ambient env; the configured sentinel owns its physical root.
@@ -305,6 +387,16 @@ export function readBoundIncognitoMemoryCorpus(
 }
 
 /** Keep worker launch machinery behind the memory host's existing lazy runtime bridge. */
+export async function prepareSessionEntriesInWorker(
+  ...args: Parameters<
+    typeof import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js").prepareSessionEntriesInWorker
+  >
+) {
+  const { prepareSessionEntriesInWorker: prepare } =
+    await import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js");
+  return prepare(...args);
+}
+
 export async function prepareSessionEntryInWorker(
   ...args: Parameters<
     typeof import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js").prepareSessionEntryInWorker
@@ -313,6 +405,16 @@ export async function prepareSessionEntryInWorker(
   const { prepareSessionEntryInWorker: prepare } =
     await import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js");
   return prepare(...args);
+}
+
+export async function readSessionEntrySnapshotInWorker(
+  ...args: Parameters<
+    typeof import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js").readSessionEntrySnapshotInWorker
+  >
+) {
+  const { readSessionEntrySnapshotInWorker: read } =
+    await import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js");
+  return read(...args);
 }
 
 export async function readSessionTranscriptCorpusInWorker(
@@ -357,18 +459,29 @@ export {
   resolveStorePath,
 } from "../../../../src/plugin-sdk/session-store-runtime.js";
 export { hasInterSessionUserProvenance } from "../../../../src/sessions/input-provenance.js";
-export { isCronRunSessionKey } from "../../../../src/sessions/session-key-utils.js";
 export { onSessionTranscriptUpdate } from "../../../../src/sessions/transcript-events.js";
 
-/** Returns an opaque revision that changes for every canonical transcript mutation. */
+/**
+ * Returns an opaque revision that changes for every canonical transcript mutation.
+ * Read-only callers stay on the read-only reader; a missing transcript has no revision.
+ */
 export function readTranscriptContentRevisionSync(params: {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   sessionId: string;
   sessionKey?: string;
   storePath?: string;
-}): string {
-  const stats = readAccessorTranscriptStatsSync(params);
+  readOnly?: boolean;
+}): string | undefined {
+  const { readOnly, ...scope } = params;
+  // Inventory runs in pooled history Workers; a writable open there would claim an
+  // agent-database lease that only that Worker's process exit could release.
+  const stats = readOnly
+    ? readTranscriptStatsBatchReadOnlySync([scope])[0]
+    : readAccessorTranscriptStatsSync(scope);
+  if (!stats) {
+    return undefined;
+  }
   return [
     "sqlite",
     stats.maxSeq,
@@ -423,23 +536,10 @@ export function extractAgentIdFromSessionPath(absPath: string): string | null {
   }
 }
 
-/** Session-key prefix marking transcripts generated by memory dreaming runs. */
-export const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
-
-/** True when a session-store key belongs to a dreaming narrative run. */
-export function isDreamingNarrativeSessionStoreKey(sessionKey: string): boolean {
-  const trimmed = sessionKey.trim();
-  if (!trimmed) {
-    return false;
-  }
-  const firstSeparator = trimmed.indexOf(":");
-  if (firstSeparator < 0) {
-    return trimmed.startsWith(DREAMING_NARRATIVE_RUN_PREFIX);
-  }
-  const secondSeparator = trimmed.indexOf(":", firstSeparator + 1);
-  const sessionSegment = secondSeparator < 0 ? trimmed : trimmed.slice(secondSeparator + 1);
-  return sessionSegment.startsWith(DREAMING_NARRATIVE_RUN_PREFIX);
-}
+export {
+  DREAMING_NARRATIVE_RUN_PREFIX,
+  isDreamingNarrativeSessionStoreKey,
+} from "./session-transcript-corpus-policy.js";
 
 export async function readSessionResetRecallCutoffInWorker(
   ...args: Parameters<

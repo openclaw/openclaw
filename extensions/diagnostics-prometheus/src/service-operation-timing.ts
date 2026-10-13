@@ -31,6 +31,8 @@ export function recordOperationTimingEvent(
         | "gateway.rpc"
         | "diagnostic.phase.completed"
         | "gateway.http.cancelled"
+        | "secret.egress"
+        | "tool.catalog"
         | "diagnostic.gc"
         | "gateway.event_loop.sample";
     }
@@ -38,6 +40,24 @@ export function recordOperationTimingEvent(
   metadata: DiagnosticEventMetadata,
 ): void {
   switch (evt.type) {
+    case "secret.egress":
+      store.counter(
+        "openclaw_secret_egress_requests_total",
+        "Secret egress proxy requests by outcome and credential substitution.",
+        { outcome: evt.outcome, substituted: String(evt.substituted) },
+      );
+      return;
+    case "tool.catalog": {
+      const labels = { source: evt.source, mode: evt.mode };
+      store.counter("openclaw_tool_catalog_total", "Tool catalogs prepared.", labels);
+      store.counter(
+        "openclaw_tool_catalog_tools_total",
+        "Tools cataloged during preparation.",
+        labels,
+        evt.toolCount,
+      );
+      return;
+    }
     case "gateway.http.cancelled":
       store.counter(
         "openclaw_gateway_http_cancelled_total",
@@ -78,10 +98,10 @@ export function recordOperationTimingEvent(
       const sendPhase = CHAT_SEND_PHASE.exec(evt.name)?.[1];
       if (sendPhase) {
         const stage = evt.details?.stage;
-        if (stage === "request" || stage === "startup") {
+        if (stage === "request" || stage === "startup" || stage === "steer" || stage === "queued") {
           store.histogram(
             "openclaw_chat_send_phase_seconds",
-            "Elapsed chat.send owner phases before acknowledgement and during run startup.",
+            "Elapsed chat.send owner phases before acknowledgement, during startup, or awaiting steering and queued follow-up delivery.",
             { phase: sendPhase, stage },
             seconds(evt.durationMs),
           );

@@ -40,7 +40,11 @@ import type {
   StreamBlockState,
 } from "./embedded-agent-subscribe.handlers.types.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
-import { createThinkingTagStreamState, THINKING_TAG_SCAN_RE } from "./embedded-agent-utils.js";
+import {
+  createAssistantStreamBlockState,
+  createThinkingTagStreamState,
+  THINKING_TAG_SCAN_RE,
+} from "./embedded-agent-utils.js";
 
 const STREAM_STRIPPED_BLOCK_TAG_NAMES = [
   "final",
@@ -700,11 +704,7 @@ export function createStreamRendering({
     state.hasFlushedPartialText = false;
     blockChunker.reset();
     resetPartialReplyDirectives();
-    state.partialBlockState = {
-      thinking: false,
-      final: false,
-      inlineCode: createInlineCodeState(),
-    };
+    state.partialBlockState = createAssistantStreamBlockState();
     state.assistantStream = undefined;
     state.currentSourceMessagingToolHeldPartial = undefined;
     state.lastBlockReplyText = undefined;

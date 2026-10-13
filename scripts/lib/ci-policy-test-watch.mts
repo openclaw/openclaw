@@ -102,7 +102,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   ].map((testFile): PolicyTestWatch => ({
     testFile,
     watchGlobs: [
-      "src/gateway/worker-environments/placement-dispatch-store.worker.ts",
+      "src/gateway/worker-environments/placement-lifecycle.worker.ts",
       "src/gateway/worker-environments/placement-turn-claims.worker.ts",
     ],
   })),
@@ -293,6 +293,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   },
   ...[
     "src/agents/embedded-agent-runner/run/attempt-prompt-submit.test.ts",
+    "src/agents/embedded-agent-runner/run/attempt-prompt-submit.runtime-replay.test.ts",
     "src/agents/embedded-agent-runner/run/attempt-stream-custody.test.ts",
     "src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle-prepare.test.ts",
     "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts",
@@ -928,7 +929,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   },
   ...[
-    "src/gateway/talk/client-spoken-confirmation.test.ts",
     "src/gateway/talk/handlers/client-native-control.test.ts",
     "src/gateway/talk/handlers/native-consult-target.test.ts",
     "src/gateway/talk/handlers/target.test.ts",
@@ -1380,11 +1380,20 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["scripts/lib/bounded-command.mts"],
   },
   {
+    testFile: "test/scripts/run-vitest-bounded.test.ts",
+    watchGlobs: [
+      "package.json",
+      "scripts/lib/vitest-cli-bootstrap.mts",
+      "scripts/test-extension-batch.mts",
+    ],
+  },
+  {
     testFile: "test/scripts/vitest-report-owner.test.ts",
     watchGlobs: [
       "scripts/lib/vitest-report-capture.mts",
       "scripts/run-vitest.mts",
       "scripts/test-extension-batch.mts",
+      "scripts/test-extension-batch-run.mts",
       "scripts/test-projects-run.mts",
     ],
   },

@@ -8,6 +8,10 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import {
+  readSqliteDatabaseScopedWriteToken,
+  sqliteSessionIdWriteScope,
+} from "../infra/sqlite-database-admission.js";
 import { retainAgentDatabase } from "../state/openclaw-agent-db-lifecycle.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
@@ -22,12 +26,14 @@ import {
   prepareTrajectoryRuntimeRetention,
 } from "./runtime-retention.sqlite.js";
 import {
-  appendSqliteTrajectoryRuntimeEvents,
   appendSqliteTrajectoryRuntimeEventsWithWriter,
   loadSqliteTrajectoryRuntimeEventRowsSync,
   loadSqliteTrajectoryRuntimeEvents,
 } from "./runtime-store.sqlite.js";
-import { createTrajectoryEvent } from "./runtime-store.test-support.js";
+import {
+  appendSqliteTrajectoryRuntimeEvents,
+  createTrajectoryEvent,
+} from "./runtime-store.test-support.js";
 import type { TrajectoryEvent } from "./types.js";
 
 type TrajectoryRuntimeTestDatabase = Pick<OpenClawAgentKyselyDatabase, "trajectory_runtime_events">;
@@ -102,7 +108,7 @@ describe("SQLite trajectory runtime retention", () => {
     },
   );
 
-  it("drops old runs while retaining recent runs", async () => {
+  it("drops old runs while retaining recent runs and session transcript receipts", async () => {
     const now = Date.parse("2026-07-26T00:00:00.000Z");
     vi.useFakeTimers();
     vi.setSystemTime(now);
@@ -110,6 +116,11 @@ describe("SQLite trajectory runtime retention", () => {
       createTrajectoryEvent({ type: "current", ts: new Date(now).toISOString() }),
     ]);
     await addSession("history");
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath() });
+    const scopes = [sqliteSessionIdWriteScope("session-1"), sqliteSessionIdWriteScope("history")];
+    using _ = { [Symbol.dispose]: retainAgentDatabase(database.db) };
+    const token = readSqliteDatabaseScopedWriteToken(database.db, scopes);
+    expect(token).toBeTypeOf("string");
     appendSqliteTrajectoryRuntimeEvents({ sessionId: "history", storePath }, [
       createTrajectoryEvent({
         runId: "old-run",
@@ -124,6 +135,7 @@ describe("SQLite trajectory runtime retention", () => {
         ts: new Date(now - 13 * 24 * 60 * 60 * 1_000).toISOString(),
       }),
     ]);
+    expect(readSqliteDatabaseScopedWriteToken(database.db, scopes)).toBe(token);
 
     vi.advanceTimersByTime(60 * 60 * 1_000);
     appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
@@ -131,6 +143,7 @@ describe("SQLite trajectory runtime retention", () => {
     ]);
 
     await expect(runtimeEventTypes("history")).resolves.toEqual(["recent"]);
+    expect(readSqliteDatabaseScopedWriteToken(database.db, scopes)).toBe(token);
   });
 
   it("rejects only changed runs while draining an eviction plan under competing writes", async () => {
@@ -198,7 +211,11 @@ describe("SQLite trajectory runtime retention", () => {
             );
           } else {
             appendSqliteTrajectoryRuntimeEventsWithWriter(
-              { sessionId: "session-1", events: [trigger], discardPrevious: true },
+              {
+                sessionId: "session-1",
+                events: [{ runId: trigger.runId, ts: trigger.ts, line: JSON.stringify(trigger) }],
+                discardPrevious: true,
+              },
               (operationLabel, write) =>
                 runOpenClawAgentWriteTransaction(
                   write,
@@ -360,7 +377,10 @@ describe("SQLite trajectory runtime retention", () => {
         });
         arrivals++;
         appendSqliteTrajectoryRuntimeEventsWithWriter(
-          { sessionId: "history", events: [event] },
+          {
+            sessionId: "history",
+            events: [{ runId: event.runId, ts: event.ts, line: JSON.stringify(event) }],
+          },
           (operationLabel, write) =>
             runOpenClawAgentWriteTransaction(
               write,

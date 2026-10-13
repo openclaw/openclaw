@@ -1,5 +1,6 @@
 import type { WorkboardChange } from "@openclaw/workboard-contract";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { WORKBOARD_DRAFT_DEFAULTS } from "./card-state.ts";
 import { normalizeWorkboardChange } from "./change-payload.ts";
 import { WORKBOARD_STATUSES, type WorkboardUiState } from "./types.ts";
 
@@ -9,11 +10,6 @@ export type WorkboardClientContext = {
   host: WorkboardHost;
   client: GatewayBrowserClient | null;
   requestUpdate?: () => void;
-};
-
-export type WorkboardLoadToken = {
-  queuedAfterGeneration?: number;
-  catalogOnly: boolean;
 };
 
 type WorkboardLiveRefreshEntry = {
@@ -27,13 +23,10 @@ type WorkboardRuntime = {
   state?: WorkboardUiState;
   cardsRevision?: WorkboardChange | null;
   loadPromise?: Promise<boolean>;
-  loadToken?: WorkboardLoadToken;
+  loadClient?: GatewayBrowserClient;
+  loadCatalogOnly?: boolean;
   loadError?: string;
-  loadGeneration?: number;
-  liveRefreshGeneration?: number;
-  liveChangeEpoch?: string;
-  liveHighestSeenRevision?: number;
-  liveAppliedRevision?: number;
+  liveLastChange?: WorkboardChange;
   liveRefreshPending?: boolean;
   liveRefreshPromise?: Promise<void>;
   liveRefreshRetryTimer?: ReturnType<typeof setTimeout>;
@@ -41,17 +34,6 @@ type WorkboardRuntime = {
 };
 
 const workboardRuntimes = new WeakMap<WorkboardHost, WorkboardRuntime>();
-export function nextWorkboardLoadGeneration(host: WorkboardHost): number {
-  const runtime = getWorkboardRuntime(host);
-  const generation = (runtime.loadGeneration ?? 0) + 1;
-  runtime.loadGeneration = generation;
-  return generation;
-}
-
-export function isCurrentWorkboardLoadGeneration(host: WorkboardHost, generation: number): boolean {
-  return getWorkboardRuntime(host).loadGeneration === generation;
-}
-
 export function invalidateWorkboardLoads(host: WorkboardHost) {
   const runtime = getWorkboardRuntime(host);
   const state = runtime.state;
@@ -66,24 +48,21 @@ export function invalidateWorkboardLoads(host: WorkboardHost) {
     }
   }
   delete runtime.cardsRevision;
-  nextWorkboardLoadGeneration(host);
   delete runtime.loadPromise;
-  delete runtime.loadToken;
+  delete runtime.loadClient;
+  delete runtime.loadCatalogOnly;
 }
 
 export function stopWorkboardLiveRefresh(host: WorkboardHost): void {
   const runtime = getWorkboardRuntime(host);
   const loadInFlight = Boolean(runtime.loadPromise);
-  runtime.liveRefreshGeneration = (runtime.liveRefreshGeneration ?? 0) + 1;
   if (runtime.liveRefreshRetryTimer) {
     clearTimeout(runtime.liveRefreshRetryTimer);
     delete runtime.liveRefreshRetryTimer;
   }
   delete runtime.liveRefreshEntry;
   delete runtime.liveRefreshPromise;
-  delete runtime.liveChangeEpoch;
-  delete runtime.liveHighestSeenRevision;
-  delete runtime.liveAppliedRevision;
+  delete runtime.liveLastChange;
   delete runtime.liveRefreshPending;
   if (loadInFlight) {
     invalidateWorkboardLoads(host);
@@ -136,20 +115,8 @@ function createDefaultState(): WorkboardUiState {
     expandedEmptyStatuses: new Set(),
     lastRefreshAt: null,
     lastRefreshError: null,
-    draftOpen: false,
-    draftDiscardOpen: false,
+    ...WORKBOARD_DRAFT_DEFAULTS,
     draftSaving: false,
-    editingCardId: null,
-    editingCardBase: null,
-    draftTitle: "",
-    draftNotes: "",
-    draftStatus: "todo",
-    draftPriority: "normal",
-    draftLabels: "",
-    draftAgentId: "",
-    draftSessionKey: "",
-    draftTemplateId: "",
-    draftCommentBody: "",
     detailCardId: null,
     detailTab: "overview",
     detailCommentBody: "",

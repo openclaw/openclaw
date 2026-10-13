@@ -21,6 +21,23 @@ let unpinMessageMSTeams: GraphMessagesTestModule["unpinMessageMSTeams"];
 let unreactMessageMSTeams: GraphMessagesTestModule["unreactMessageMSTeams"];
 let searchMessagesMSTeams: GraphMessagesTestModule["searchMessagesMSTeams"];
 
+const NAMED_ACCOUNT_CFG = {
+  channels: {
+    msteams: {
+      appId: "default-app-id",
+      appPassword: "default-secret",
+      tenantId: "tenant-id",
+      accounts: {
+        secondary: {
+          appId: "secondary-app-id",
+          appPassword: "secondary-secret",
+          webhook: { path: "/api/messages/secondary" },
+        },
+      },
+    },
+  },
+} as OpenClawConfig;
+
 beforeAll(async () => {
   ({
     getMessageMSTeams,
@@ -136,6 +153,24 @@ describe("getMessageMSTeams", () => {
       path: "/teams/team-id-1/channels/channel-id-1/messages/msg-2",
     });
   });
+
+  it("resolves Graph tokens with the named account id", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      id: "msg-1",
+      body: { content: "Hello world" },
+    });
+
+    await getMessageMSTeams({
+      cfg: NAMED_ACCOUNT_CFG,
+      accountId: "secondary",
+      to: CHAT_ID,
+      messageId: "msg-1",
+    });
+
+    expect(mockState.resolveGraphToken).toHaveBeenCalledWith(NAMED_ACCOUNT_CFG, {
+      accountId: "secondary",
+    });
+  });
 });
 
 describe("listPinsMSTeams", () => {
@@ -212,6 +247,20 @@ describe("listPinsMSTeams", () => {
       }),
     ).rejects.toThrow("not supported for channels");
   });
+
+  it("resolves Graph tokens with the named account id", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({ value: [] });
+
+    await listPinsMSTeams({
+      cfg: NAMED_ACCOUNT_CFG,
+      accountId: "secondary",
+      to: CHAT_ID,
+    });
+
+    expect(mockState.resolveGraphToken).toHaveBeenCalledWith(NAMED_ACCOUNT_CFG, {
+      accountId: "secondary",
+    });
+  });
 });
 
 describe("listReactionsMSTeams", () => {
@@ -220,9 +269,9 @@ describe("listReactionsMSTeams", () => {
       id: "msg-1",
       body: { content: "Hello" },
       reactions: [
-        { reactionType: "like", user: { id: "u1", displayName: "Alice" } },
-        { reactionType: "like", user: { id: "u2", displayName: "Bob" } },
-        { reactionType: "heart", user: { id: "u1", displayName: "Alice" } },
+        { reactionType: "like", user: { user: { id: "u1", displayName: "Alice" } } },
+        { reactionType: "like", user: { user: { id: "u2", displayName: "Bob" } } },
+        { reactionType: "heart", user: { user: { id: "u1", displayName: "Alice" } } },
       ],
     });
 
@@ -268,16 +317,19 @@ describe("listReactionsMSTeams", () => {
     expect(result.reactions).toStrictEqual([]);
   });
 
-  it("counts reactions from users without an ID", async () => {
+  it("counts missing and application identities without treating them as users", async () => {
     mockState.fetchGraphJson.mockResolvedValue({
       id: "msg-1",
       body: { content: "Hello" },
       reactions: [
-        { reactionType: "like", user: { id: "u1", displayName: "Alice" } },
-        { reactionType: "like", user: { displayName: "Deleted User" } },
-        { reactionType: "like", user: undefined },
+        { reactionType: "like", user: { user: { id: "u1", displayName: "Alice" } } },
+        { reactionType: "like", user: { user: { displayName: "Deleted User" } } },
+        { reactionType: "like", user: { application: { id: "app-1", displayName: "Bot" } } },
+        { reactionType: "like", user: null },
+        { reactionType: "like", user: { user: null } },
         { reactionType: "like" },
-        { reactionType: "heart", user: { id: "u2", displayName: "Bob" } },
+        { reactionType: "like", user: { user: { id: "u3", displayName: null } } },
+        { reactionType: "heart", user: { user: { id: "u2", displayName: "Bob" } } },
       ],
     });
 
@@ -292,8 +344,11 @@ describe("listReactionsMSTeams", () => {
         reactionType: "like",
         name: "like",
         emoji: "\u{1F44D}",
-        count: 4,
-        users: [{ id: "u1", displayName: "Alice" }],
+        count: 7,
+        users: [
+          { id: "u1", displayName: "Alice" },
+          { id: "u3", displayName: undefined },
+        ],
       },
       {
         reactionType: "heart",
@@ -309,7 +364,9 @@ describe("listReactionsMSTeams", () => {
     mockState.fetchGraphJson.mockResolvedValue({
       id: "msg-2",
       body: { content: "Channel msg" },
-      reactions: [{ reactionType: "surprised", user: { id: "u3", displayName: "Carol" } }],
+      reactions: [
+        { reactionType: "surprised", user: { user: { id: "u3", displayName: "Carol" } } },
+      ],
     });
 
     const result = await listReactionsMSTeams({
@@ -330,6 +387,25 @@ describe("listReactionsMSTeams", () => {
     expect(mockState.fetchGraphJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: "/teams/team-id-1/channels/channel-id-1/messages/msg-2",
+    });
+  });
+
+  it("resolves Graph tokens with the named account id", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      id: "msg-1",
+      body: { content: "Hello" },
+      reactions: [],
+    });
+
+    await listReactionsMSTeams({
+      cfg: NAMED_ACCOUNT_CFG,
+      accountId: "secondary",
+      to: CHAT_ID,
+      messageId: "msg-1",
+    });
+
+    expect(mockState.resolveGraphToken).toHaveBeenCalledWith(NAMED_ACCOUNT_CFG, {
+      accountId: "secondary",
     });
   });
 });
@@ -438,7 +514,10 @@ describe("MSTeams reactions", () => {
       await expect(invoke({ cfg: {}, to, messageId: "msg-1", reactionType })).resolves.toEqual({
         ok: true,
       });
-      expect(mockState.resolveGraphToken).toHaveBeenCalledWith({}, { preferDelegated: true });
+      expect(mockState.resolveGraphToken).toHaveBeenCalledWith(
+        {},
+        { preferDelegated: true, accountId: undefined },
+      );
       expect(mockState.mutateGraphJson).toHaveBeenCalledWith({
         token: TOKEN,
         path: `${path}/messages/msg-1/${action}`,
@@ -459,6 +538,19 @@ function readFirstGraphPath(): string {
 }
 
 describe("searchMessagesMSTeams", () => {
+  it("searches with the selected account token", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({ value: [] });
+    await searchMessagesMSTeams({
+      cfg: NAMED_ACCOUNT_CFG,
+      accountId: "secondary",
+      to: CHAT_ID,
+      query: "hello",
+    });
+    expect(mockState.resolveGraphToken).toHaveBeenCalledWith(NAMED_ACCOUNT_CFG, {
+      accountId: "secondary",
+    });
+  });
+
   it("filters chat messages locally and normalizes HTML content", async () => {
     mockState.fetchGraphJson.mockResolvedValue({
       value: [

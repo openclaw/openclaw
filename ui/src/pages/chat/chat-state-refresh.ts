@@ -28,6 +28,7 @@ import {
 import { isPersistedSessionRow } from "../../lib/sessions/session-row-reconcile.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
+import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import type { ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { flushChatQueueAfterIdleSessionReconciliation } from "./chat-queue-reconnect.ts";
@@ -131,6 +132,7 @@ export function applyChatAgentOwnerTransition(
   retireChatModelSelectionOwnership(host);
   host.assistantIdentityRequestVersion += 1;
   host.assistantAgentId = selectedAgentId;
+  host.chatSessionApprovalQueue = [];
   host.assistantName = "";
   host.assistantAvatar = null;
   host.assistantAvatarStatus = null;
@@ -266,23 +268,12 @@ export async function refreshChatMetadata(
     host.requestUpdate?.();
     const ownsRefresh = () =>
       binding.isCurrent() && refresh.isCurrent() && binding.refreshPending?.refresh === refresh;
-    let retryRetiredCatalog = false;
     const catalog = refresh.catalog
       .then(
         async (result) => {
-          // Applying a current cooldown response may expire it; that must not create a retry loop.
-          retryRetiredCatalog = !refresh.isCurrent();
           if (!result || !binding.isCurrent() || binding.refreshPending?.refresh !== refresh) {
             return;
           }
-          // Another pane can discover expiry after this snapshot was canonically accepted.
-          if (
-            retryRetiredCatalog &&
-            peekModelCatalog(binding.client, binding.scope, { allowStale: true }) !== result
-          ) {
-            return;
-          }
-          retryRetiredCatalog = false;
           // The receipt signals completion; the model owner supplies current or stale display data.
           applyCachedChatModelCatalog(host, binding);
           if (!ownsRefresh()) {
@@ -295,7 +286,6 @@ export async function refreshChatMetadata(
           }
         },
         (error: unknown) => {
-          retryRetiredCatalog = !refresh.isCurrent();
           if (ownsRefresh() && !applyChatModelCatalogSnapshot(host) && ownsRefresh()) {
             host.chatModelCatalogError = formatUiError(error);
             host.chatModelsLoading = false;
@@ -312,11 +302,7 @@ export async function refreshChatMetadata(
     const promise = Promise.allSettled([refresh.completed, catalog]).then(() => {
       if (binding.refreshPending?.refresh === refresh) {
         binding.refreshPending = undefined;
-        if (retryRetiredCatalog && binding.isCurrent()) {
-          return refreshChatMetadata(host, { automatic: true });
-        }
       }
-      return undefined;
     });
     binding.refreshPending = { refresh, promise };
     return promise;
@@ -367,10 +353,6 @@ function refreshChatSessionFacts(host: ChatPageHost, binding: ChatMetadataBindin
       if (!binding.isCurrent() || binding.version !== version) {
         return;
       }
-      if (outcome.status === "invalidated") {
-        binding.sessionFactsInvalidated = true;
-        binding.sessionFactsRequest = undefined;
-      }
       if (outcome.status === "current" && host.sessionsResult) {
         host.sessionsResult = {
           ...host.sessionsResult,
@@ -400,13 +382,11 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost) {
     return;
   }
   const client = host.client;
-  const connectionEpoch = host.connectionEpoch;
+  const connectionIsCurrent = captureChatConnectionOwner(host);
   const agentId = resolveChatAgentId(host);
   const requestVersion = ++host.modelAuthStatusRequestVersion;
   const ownsRequest = () =>
-    host.client === client &&
-    host.connected &&
-    host.connectionEpoch === connectionEpoch &&
+    connectionIsCurrent() &&
     host.modelAuthStatusRequestVersion === requestVersion &&
     resolveChatAgentId(host) === agentId;
   try {
@@ -558,16 +538,13 @@ async function refreshChat(
   opts: ChatRefreshOptions,
   onStartupMetadata: ChatStartupMetadataHandler,
 ) {
-  const refreshedClient = host.client;
   const refreshedSessions = host.sessions;
-  const refreshedEpoch = host.connectionEpoch;
+  const connectionIsCurrent = captureChatConnectionOwner(host);
   const refreshedSessionKey = host.sessionKey;
   const refreshedAgentId = resolveAgentIdForSession(host);
   const ownsRefresh = () =>
-    host.connected &&
+    connectionIsCurrent() &&
     host.sessions === refreshedSessions &&
-    host.client === refreshedClient &&
-    host.connectionEpoch === refreshedEpoch &&
     host.sessionKey === refreshedSessionKey &&
     resolveAgentIdForSession(host) === refreshedAgentId;
   const requestUpdate = () => host.requestUpdate?.();
@@ -717,15 +694,9 @@ export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
     }
   });
   const sessionKey = host.sessionKey;
-  const client = host.client;
-  const epoch = host.connectionEpoch;
+  const connectionIsCurrent = captureChatConnectionOwner(host);
   scheduleChatMetadataRefresh(() => {
-    if (
-      !host.connected ||
-      host.client !== client ||
-      host.connectionEpoch !== epoch ||
-      host.sessionKey !== sessionKey
-    ) {
+    if (!connectionIsCurrent() || host.sessionKey !== sessionKey) {
       return;
     }
     void Promise.allSettled([

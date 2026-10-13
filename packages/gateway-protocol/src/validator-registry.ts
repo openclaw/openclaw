@@ -26,6 +26,7 @@ export {
 // Validator names mirror schemas so callers can pair them with wire contracts.
 export const validateCommandsListParams = compile(S.CommandsListParamsSchema);
 export const validateBackupStatusParams = compile(S.BackupStatusParamsSchema);
+export const validateBackupRecordOutcomeParams = compile(S.BackupRecordOutcomeParamsSchema);
 export const validateStorageLocationsListParams = compile(S.StorageLocationsListParamsSchema);
 export const validateStorageLocationsProbeParams = compile(S.StorageLocationsProbeParamsSchema);
 export const validateComputerStatusParams = compile(S.ComputerStatusParamsSchema);
@@ -382,6 +383,7 @@ export const validateConfigSchemaLookupResult = compile(S.ConfigSchemaLookupResu
 export const validateSystemAgentChatParams = compile(S.SystemAgentChatParamsSchema);
 export const validateSystemAgentChatHistoryParams = compile(S.SystemAgentChatHistoryParamsSchema);
 export const validateSystemChangesListParams = compile(S.SystemChangesListParamsSchema);
+export const validateSystemAgentSetupAutoParams = compile(S.SystemAgentSetupAutoParamsSchema);
 export const validateSystemAgentSetupDetectParams = compile(S.SystemAgentSetupDetectParamsSchema);
 export const validateSystemAgentSetupVerifyParams = compile(S.SystemAgentSetupVerifyParamsSchema);
 export const validateSystemAgentSetupActivateParams = compile(
@@ -485,6 +487,7 @@ export const validateSkillsWorkshopChangesParams = compile(S.SkillsWorkshopChang
 export const validateSkillsWorkshopReadParams = compile(S.SkillsWorkshopReadParamsSchema);
 export const validateSkillsWorkshopArchiveParams = compile(S.SkillsWorkshopArchiveParamsSchema);
 export const validateSkillsWorkshopRestoreParams = compile(S.SkillsWorkshopRestoreParamsSchema);
+export const validateSkillsWorkshopUndoParams = compile(S.SkillsWorkshopUndoParamsSchema);
 export const validateSkillsSecurityVerdictsParams = compile(S.SkillsSecurityVerdictsParamsSchema);
 export const validateSkillsSkillCardParams = compile(S.SkillsSkillCardParamsSchema);
 export const validateCronListParams = compile(S.CronListParamsSchema);

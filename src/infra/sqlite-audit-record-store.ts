@@ -21,10 +21,6 @@ export function createSqliteAuditRecordStore<T>(
     createSqliteAuditRecordKernel<T>(database, { scope, maxEntries });
   const prepare = (record: SqliteAuditRecordEntry<T>) => prepareSqliteAuditRecord(scope, record);
   return {
-    register(key: string, value: T, createdAt = Date.now()): void {
-      const record = prepare({ key, value, createdAt });
-      runOpenClawStateWriteTransaction(({ db }) => kernel(db).register(record), options);
-    },
     upsert(key: string, value: T, createdAt = Date.now()): void {
       const record = prepare({ key, value, createdAt });
       runOpenClawStateWriteTransaction(({ db }) => kernel(db).upsert(record), options);

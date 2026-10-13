@@ -33,6 +33,9 @@ const kyselyRawAllowPaths = new Set(["src/infra/kysely-sync.ts"]);
 const compiledRawAllowPaths = new Set(["src/infra/kysely-node-sqlite.ts"]);
 
 const rawSqliteAllowPathGroups = {
+  "offline canonical port preserves native cell bytes and 64-bit allocation state": [
+    "src/infra/database-engine/port.worker.ts",
+  ],
   "native close conformance on disposable probe databases": [
     "src/infra/bun-sqlite-close-probe.worker.ts",
   ],
@@ -42,6 +45,9 @@ const rawSqliteAllowPathGroups = {
     "src/infra/kysely-sync.ts",
   ],
   "SQLite database lifecycle, schema, transactions, and pragmas": [
+    // Engine admission owns anchor metadata and schema bootstrap, not application queries.
+    "src/infra/database-engine/adapters.ts",
+    "src/infra/database-engine/open.ts",
     "src/infra/node-sqlite.ts",
     "src/infra/sqlite-index-schema.ts",
     "src/infra/sqlite-integrity.ts",

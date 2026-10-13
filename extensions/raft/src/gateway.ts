@@ -295,16 +295,8 @@ export async function startRaftGatewayAccount(
             await dispatchRaftWake(ctx);
           },
         );
-        if (result.kind === "duplicate") {
-          return false;
-        }
-        if (result.kind === "inflight") {
-          if (await result.pending) {
-            return false;
-          }
-          throw new WakeRequestError(503, "Raft wake delivery is retrying.");
-        }
-        return true;
+        // The account FIFO settles each replay claim before admitting the next.
+        return result.kind === "processed";
       });
       sendJson(response, 202, {
         ok: true,

@@ -1,7 +1,6 @@
 import { collectConfiguredModelRefValues } from "@openclaw/model-catalog-core/configured-model-refs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { splitTrailingAuthProfile } from "openclaw/plugin-sdk/model-ref-parse";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
@@ -15,12 +14,10 @@ import {
   type ProviderAugmentModelCatalogContext,
   type ProviderCatalogContext,
   type ProviderPlugin,
-  type ProviderReplayPolicy,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { coerceSecretRef, isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import { findNormalizedProviderKey } from "openclaw/plugin-sdk/provider-model-metadata";
 import type {
   ModelDefinitionConfig,
@@ -33,6 +30,7 @@ import {
   normalizeResolvedModel,
   resolveThinkingProfile as resolveOllamaThinkingProfile,
 } from "./provider-policy-api.js";
+import { createOllamaCloudAuthMethod } from "./src/cloud-auth.js";
 import {
   DEFAULT_OLLAMA_EMBEDDING_MODEL,
   OLLAMA_CLOUD_BASE_URL,
@@ -45,6 +43,7 @@ import {
 import {
   OLLAMA_DEFAULT_API_KEY,
   OLLAMA_PROVIDER_ID,
+  getUnlistedOllamaConfiguredModelIds,
   isLocalOllamaBaseUrl,
   readOllamaStringValue,
   resolveOllamaDiscoveryResult,
@@ -52,6 +51,7 @@ import {
   shouldUseSyntheticOllamaAuth,
   type OllamaPluginConfig,
 } from "./src/discovery-shared.js";
+import { ollamaMediaUnderstandingProvider } from "./src/media-understanding-provider.js";
 import {
   createLazyOllamaNodeHostCommands,
   createLazyOllamaNodeInferenceTool,
@@ -82,6 +82,7 @@ import {
 } from "./src/stream-compat.js";
 import { OLLAMA_INCOMPLETE_STREAM_ERROR } from "./src/stream-contract.js";
 import { createLazyConfiguredOllamaStreamFn } from "./src/stream-registration.js";
+import { createOllamaUsageHooks } from "./src/usage-registration.js";
 import { createLazyOllamaWebSearchProvider } from "./src/web-search-provider-registration.js";
 
 const loadOllamaSetup = createLazyRuntimeModule(() => import("./src/setup.runtime.js"));
@@ -99,13 +100,6 @@ const lazyOllamaMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter =
     await (await loadOllamaMemoryEmbeddingProviderAdapter()).create(options),
 };
 
-const ollamaMediaUnderstandingProvider: MediaUnderstandingProvider = {
-  id: OLLAMA_PROVIDER_ID,
-  capabilities: ["image"],
-  describeImage: undefined,
-  describeImages: undefined,
-};
-
 async function checkWsl2CrashLoopRiskLazily(api: OpenClawPluginApi): Promise<void> {
   try {
     const { isWSL2Sync } = await import("openclaw/plugin-sdk/runtime-env");
@@ -119,15 +113,6 @@ async function checkWsl2CrashLoopRiskLazily(api: OpenClawPluginApi): Promise<voi
   }
 }
 
-function buildNativeOllamaReplayPolicy(): ProviderReplayPolicy {
-  return {
-    ...buildOpenAICompatibleReplayPolicy("openai-completions", {
-      sanitizeToolCallIds: false,
-    }),
-    sanitizeToolCallIds: false,
-  };
-}
-
 function matchesOllamaContextOverflowError(errorMessage: string): boolean {
   return (
     /\bollama\b.*(?:context length|too many tokens|context window)/i.test(errorMessage) ||
@@ -135,7 +120,6 @@ function matchesOllamaContextOverflowError(errorMessage: string): boolean {
   );
 }
 
-const OLLAMA_CLOUD_DEFAULT_MODEL_REF = `${OLLAMA_CLOUD_PROVIDER_ID}/${OLLAMA_CLOUD_DEFAULT_MODELS[0].id}`;
 const OLLAMA_CONFIGURED_SHOW_CONCURRENCY = 4;
 const OLLAMA_CONFIGURED_SHOW_MAX_MODELS = 8;
 
@@ -637,6 +621,7 @@ async function augmentConfiguredOllamaCatalogModels(params: {
 const createOllamaSharedProviderHooks = (api: OpenClawPluginApi) =>
   ({
     ...buildProviderToolCompatFamilyHooks("llamacpp-gbnf"),
+    supportsSystemPromptCacheBoundary: true,
     createStreamFn: ({ config, model, provider }) => {
       if (model.api !== "ollama") {
         return undefined;
@@ -655,7 +640,13 @@ const createOllamaSharedProviderHooks = (api: OpenClawPluginApi) =>
     },
     buildReplayPolicy: ({ modelApi }) =>
       modelApi === "ollama"
-        ? buildNativeOllamaReplayPolicy()
+        ? {
+            ...buildOpenAICompatibleReplayPolicy("openai-completions", {
+              sanitizeToolCallIds: false,
+              dropReasoningFromHistory: false,
+            }),
+            sanitizeToolCallIds: false,
+          }
         : buildOpenAICompatibleReplayPolicy(modelApi),
     resolveReasoningOutputMode: () => "native",
     resolveThinkingProfile: resolveOllamaThinkingProfile,
@@ -665,19 +656,7 @@ const createOllamaSharedProviderHooks = (api: OpenClawPluginApi) =>
       matchesOllamaContextOverflowError(errorMessage),
     classifyFailoverReason: ({ errorMessage }) =>
       errorMessage.trim() === OLLAMA_INCOMPLETE_STREAM_ERROR ? "server_error" : undefined,
-  }) satisfies Pick<
-    ProviderPlugin,
-    | "createStreamFn"
-    | "normalizeToolSchemas"
-    | "inspectToolSchemas"
-    | "buildReplayPolicy"
-    | "resolveReasoningOutputMode"
-    | "resolveThinkingProfile"
-    | "normalizeResolvedModel"
-    | "wrapStreamFn"
-    | "matchesContextOverflowError"
-    | "classifyFailoverReason"
-  >;
+  }) satisfies Partial<ProviderPlugin>;
 
 export default definePluginEntry({
   id: "ollama",
@@ -711,29 +690,7 @@ export default definePluginEntry({
       label: "Ollama Cloud",
       docsPath: "/providers/ollama",
       envVars: ["OLLAMA_API_KEY"],
-      auth: [
-        createProviderApiKeyAuthMethod({
-          providerId: OLLAMA_CLOUD_PROVIDER_ID,
-          methodId: "api-key",
-          label: "Ollama Cloud API key",
-          hint: "Hosted models via ollama.com",
-          optionKey: "ollamaCloudApiKey",
-          flagName: "--ollama-cloud-api-key",
-          envVar: "OLLAMA_API_KEY",
-          promptMessage: "Enter Ollama Cloud API key",
-          defaultModel: OLLAMA_CLOUD_DEFAULT_MODEL_REF,
-          noteTitle: "Ollama Cloud",
-          noteMessage: "Manage API keys at https://ollama.com/settings/keys",
-          wizard: {
-            choiceId: "ollama-cloud",
-            choiceLabel: "Ollama Cloud",
-            choiceHint: "Hosted models via ollama.com",
-            groupId: "ollama",
-            groupLabel: "Ollama",
-            groupHint: "Cloud and local open models",
-          },
-        }),
-      ],
+      auth: [createOllamaCloudAuthMethod()],
       catalog: {
         order: "simple",
         run: async (ctx: ProviderCatalogContext) => {
@@ -792,6 +749,7 @@ export default definePluginEntry({
       label: "Ollama",
       docsPath: "/providers/ollama",
       envVars: ["OLLAMA_API_KEY"],
+      ...createOllamaUsageHooks(),
       auth: [
         {
           id: "local",
@@ -875,6 +833,7 @@ export default definePluginEntry({
       ],
       catalog: {
         order: "late",
+        getUnlistedConfiguredModelIds: getUnlistedOllamaConfiguredModelIds,
         run: async (ctx: ProviderCatalogContext) =>
           await resolveOllamaDiscoveryResult({
             ctx,

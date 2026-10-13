@@ -4,7 +4,6 @@ import { MessageChannel } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import type { OpenClawAgentDatabaseWriteAdmission } from "../../state/openclaw-agent-db.js";
-import type { ReclamationDatabaseOptions } from "./session-accessor.sqlite-lifecycle-types.js";
 import { runReclamationWorkerPort } from "./session-accessor.sqlite-mutation-worker.runtime.js";
 import type {
   SqliteReclamationWorkerCloseRequest,
@@ -64,14 +63,6 @@ vi.mock("../../state/openclaw-agent-db.js", () => {
       }),
   };
 });
-vi.mock("./session-accessor.sqlite-worker-coordination.js", () => ({
-  runWithSqliteMutationWorkerCoordination: <T>(
-    _coordination: unknown,
-    _operationId: number,
-    options: ReclamationDatabaseOptions,
-    run: (options: ReclamationDatabaseOptions) => Promise<T>,
-  ) => run(options),
-}));
 // mock-isolation: Exercise worker settlement without opening a reclamation database.
 vi.mock("./session-accessor.sqlite-reclamation.js", () => ({
   reclaimSqliteSessionInTransaction: () => ({
@@ -108,7 +99,6 @@ it("keeps idle collection after buffered admission replies and cancels it for th
       {
         type: "reclaim",
         operationId: ++operationId,
-        commitGate: new SharedArrayBuffer(4),
         plan: {
           kind: "maintenance-finalize",
           agentId: databaseOptions.agentId,
@@ -126,7 +116,6 @@ it("keeps idle collection after buffered admission replies and cancels it for th
       {
         type: "admission",
         operationId: reply.operationId,
-        admissionId: reply.admissionId,
         allowed: true,
       },
       [],

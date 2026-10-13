@@ -42,6 +42,7 @@ export function registerSessionsSpawnVisibleCleanupTests({
       expect(callGateway).toHaveBeenCalledTimes(2);
       expect(callGateway).toHaveBeenNthCalledWith(2, "sessions.delete", {
         key: "agent:main:dashboard:child",
+        agentId: "main",
         expectedSessionId: "created-child",
         expectedLifecycleRevision: "birth-revision",
         deleteTranscript: true,
@@ -138,6 +139,44 @@ export function registerSessionsSpawnVisibleCleanupTests({
         error: expect.stringContaining("Session cleanup unconfirmed."),
         childSessionKey: "agent:main:dashboard:child",
       });
+      expect(callGateway).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([undefined, "", " \t\n "])(
+    "refuses a started visible run with missing or blank session identity %j",
+    async (sessionId) => {
+      const callGateway = vi.fn().mockResolvedValueOnce({
+        key: "agent:main:dashboard:child",
+        sessionId,
+        entry: { lifecycleRevision: "birth-revision" },
+        runStarted: true,
+        runId: "child-run",
+      });
+      const registerRun = vi.fn();
+      const tool = createTool({
+        agentSessionKey: "agent:main:main",
+        config: { agents: { entries: { main: {} } } },
+        callGateway,
+        registerRun,
+        countActiveRuns: () => 0,
+      });
+
+      const result = await tool.execute("visible-missing-identity", {
+        task: "inspect",
+        visible: true,
+      });
+
+      expect(result.details).toMatchObject({
+        status: "error",
+        childSessionKey: "agent:main:dashboard:child",
+        runId: "child-run",
+        error: expect.stringContaining("sessions.create did not return its sessionId"),
+      });
+      expect(result.details).toMatchObject({
+        error: expect.stringContaining("inspect this child session and run before retrying"),
+      });
+      expect(registerRun).not.toHaveBeenCalled();
       expect(callGateway).toHaveBeenCalledTimes(1);
     },
   );

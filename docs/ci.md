@@ -12,6 +12,10 @@ CI continues during Full Release Validation; the legacy release-priority variabl
 does not pause workflow admission. See [deferred CI recovery](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery)
 for runs already deferred by older workflow revisions.
 
+The existing `live-cache` release job has a 30-minute budget for three sequential
+eight-minute checks on one runner: stored cache floors, transport prefixes, and
+agent-turn prefixes. See [prompt-cache regression coverage](/help/testing/suites#prompt-cache-regression-coverage).
+
 Native video smoke coverage uses four shards of four providers. Each provider has a ten-minute operation timeout plus 30 seconds of test overhead; each shard has a 50-minute job budget, leaving eight minutes for setup. These shards keep full-mode video testing disabled.
 
 Broad PRs retain their compact selected-owner Node plan when time-based splitting
@@ -20,7 +24,12 @@ would exceed the 130-row matrix cap. See [Node test lanes](/ci/scope-and-routing
 This page is an index. CI is documented on nine pages, one per reader
 job. Open the page that matches your task.
 
+Storage-engine PRs and scheduled main runs include a hosted PostgreSQL 17
+[conformance job](/help/testing/suites#postgresql-conformance), required by the CI gate when selected.
+
 Full hybrid extension lint packs the same canonical chunks into three existing rows, sharing setup and SDK preparation within each row. Targeted plans and frozen routes retain their existing layout; see [runner profiles](/ci/runners#runner-backend-modes).
+
+Full hybrid PR checks share central formatting and scripts lint with core lint stripe 1 when those are the complete central command inventory. The existing 16-class runner executes them sequentially within its 15-minute deadline, removing one checkout and dependency setup. Additional central checks, targeted core stripes, and plans without another required check row retain their separate lint job. Central lint still runs after a core lint failure and fails the shared job if it fails.
 
 Default fork first attempts run their existing core lint stripes on Blacksmith16, retaining the same core and extension chunk assignments and restore-only caches. Retries and the GitHub override remain hosted; see [runner placement](/ci/runners#runners).
 
@@ -28,15 +37,21 @@ Default fork first attempts run their existing core lint stripes on Blacksmith16
 no-op events before runner allocation and concurrency, keeping automation on
 GitHub-hosted runners.
 
-First-attempt PR Node matrices let the scoped monitor classify failures before
-cancelling eligible same-repository work. Fork monitoring is read-only. Exact
-known hourly-main test and supported static failures can remain advisory when the PR leaves their
-subjects unchanged and all remaining checks finish. Canonical PR reruns let every
-Node matrix leg finish so inherited failures do not cancel the remaining proof
-needed for an explicit admin landing. Add the `ci:no-fail-fast` label before a PR
-run to keep its complete matrix running after a failure. Native matrix fail-fast
-applies only to unlabeled PRs in other repositories. Main and manual runs retain complete matrices. See
-[failure cancellation](/ci/pipeline#fail-fast-order).
+PR jobs run to completion after a sibling failure. `pr-failure-report` compares
+every failed or timed-out job with the newest completed scheduled main CI run
+and publishes a **pre-existing**, **new**, or **unknown** classification in its
+summary and `openclaw/ci-gate`, with machine-readable JSON output. Reasons identify
+matched signatures or job-name-only matches. The existing known-main-red
+allowance and gate result stay unchanged. Detected build-verifier or lint-mode
+scope differences are **unknown**; other reasons say when selected scope was
+not compared. See
+[job ordering and failure reporting](/ci/pipeline#fail-fast-order).
+
+Add `ci:full` before a PR run to select every `checks-ui` unit shard, all
+`checks-ui-e2e` shards (Control UI and browser extension), and every
+`checks-ui-e2e-real-gateway` shard, including desktop resize proof. These use the
+same UI inventories and shard budgets as scheduled `main` CI. Unlabeled PRs keep
+change-selected UI coverage; the label does not expand unrelated platform lanes.
 
 First-hop compatibility uses a 3,200-second container budget and a 3,500-second lane
 budget, based on hosted 4-vCPU measurements with a slow-host margin. The release
@@ -69,7 +84,7 @@ and Wear store capture script in one hosted Ubuntu job. The final CI gate requir
 capture to succeed; unit-test-only and documentation changes omit it. See
 [the job graph](/ci/pipeline#pipeline-overview) for capture evidence and scope details.
 
-Eligible core-source and core-test PRs use targeted type checks when every selected path exists in the checkout. GitHub and hybrid profiles distribute the selected consumers across their existing core stripes; the Blacksmith profile checks them in the central row. Ambiguous ownership and deleted core tests keep the full type-check coverage.
+Eligible core-source and core-test PRs use targeted type checks when every selected compiler input exists in the checkout. Deleted Markdown files and UI stylesheets do not prevent narrowing for accompanying code changes. GitHub and hybrid profiles distribute the selected consumers across their existing core stripes; the Blacksmith profile checks them in the central row. Ambiguous ownership and deleted compiler inputs keep the full type-check coverage.
 
 Preflight passes the complete changed-path manifest between steps as a local JSON
 file, so large PRs do not lose test-planning inputs to Actions output or environment
@@ -89,17 +104,26 @@ Additional checks and narrow-PR guards and dependency scans start directly after
 
 Changed compiler planning reads every selected program from one native compiler snapshot. With `OPENCLAW_CI_TYPE_PLAN_SERIAL` unset, this avoids serial compiler discovery without changing graph membership or full fallback. Cold Linux replays reduced compiler planning from 77–91 seconds to 17–21 seconds on four available CPUs; the complete materializer reached 14.8 GiB peak RSS. Canonical first-attempt `check-plan` jobs use the 16-class when the backend is unset, `blacksmith`, or `hybrid`, including fork PRs. Fork type stripes also use the 16-class with an unset or `blacksmith` backend; their logical GitHub profile and restore-only cache policy stay intact. Existing hybrid health admission, the explicit GitHub override, retries, and frozen routing remain in effect. Set `OPENCLAW_CI_TYPE_PLAN_SERIAL` to `true` or `1` to restore serial queries.
 
-The extension package boundary row has a 30-minute job budget for SDK preparation,
+The extension package boundary row has a 40-minute job budget for SDK preparation,
 all selected plugin compiles, input-receipt validation, the required negative
 canary, and cleanup. Hosted four-CPU runs spent about 19 minutes in the compile
 command alone; one completed compile and canary but exceeded the former
-20-minute whole-job deadline. Other additional-check rows retain 20 minutes.
+20-minute whole-job deadline. Release validation on hosted `ubuntu-24.04` later
+spent about 6 minutes preparing and 23 minutes compiling 128 plugins, passed
+both checks, and was cancelled at the former 30-minute deadline.
 Optional hybrid hosted overflow retains this row on Blacksmith: compiled receipt
 archives include checkout-specific paths and links, and hosted cold runs exceeded
 22 minutes. Explicit hosted overrides, retry and trust fallbacks remain available.
 Other jobs keep their existing admission thresholds; the hosted row total counts
 only the rows actually offloaded. Compiler concurrency, coverage and cache guards
 are unchanged.
+
+The Plugin SDK API diff row also has a 30-minute job budget. Two hosted runs took
+722 and 725 seconds to render the base revision, then reached the former
+20-minute deadline while rendering the candidate. The budget allows both full
+revision renders plus setup and cleanup. Rendering stays serial below eight CPUs
+or 24 GiB of memory; larger hosts retain two render workers. Other
+additional-check rows retain 20 minutes.
 
 Core lint discovers separate source and UI TypeScript projects, retaining shared ambient declarations and imported dependencies. The source project also includes `src/**/*.test-support.cjs`; unrelated JavaScript files are not added as roots. See [local checks](/ci/local-proof#local-equivalents).
 
@@ -190,6 +214,11 @@ coverage plus qualified Bun coverage; see
 [test runtime selection](/ci/pipeline#test-runtime-selection).
 Both runtimes group uncached, non-isolated UI files by environment in batches
 to reduce worker restarts while retaining native shard ownership and worker budgets.
+Bun UI workers also use an [allocation-based collection trigger](/ci/scope-and-routing/job-budgets)
+to preserve memory headroom across the three native shards.
+Main runs UI on Node, so a PR changing the runtime owner
+(`scripts/lib/ci-test-runtime.mts`) selects the three existing UI unit shards on
+Bun; see [scope selection](/ci/scope-and-routing/selection).
 
 Frozen-target CI loads its Node shard planner, planning helpers, and measured
 costs from the pinned `workflow_sha` checkout. Test discovery and execution still
@@ -224,9 +253,10 @@ The generator records successful hosted job walls, including setup, in the exist
 spans and survive the daily refit. The hosted full planner splits measured rows
 above 12 minutes after file bundling, retaining exact coverage and worker settings.
 Complete split generations keep subsequent plans from recombining expensive work.
-The whole Gateway-methods owner retains its completed hosted cost when files are
-added or removed, until a complete observation covers the new inventory. Partial
-generations never supply that floor. Its full-validation rows use the existing
+Agents-support, CLI-process, Gateway chat, Gateway methods, and runtime-config
+owners retain their completed hosted cost when files are added or removed, until
+a complete observation covers the new inventory. Partial generations never supply
+that floor. Their full-validation rows use the existing
 `-hosted-N` split, while compact main and PR routing retain their existing policy.
 An indivisible over-budget test fails planning with its owner named; unmeasured
 rows still need native timing evidence before claiming the 20-minute objective.
@@ -297,7 +327,7 @@ The complete [startup corpus](/ci/pipeline) uses eight state test files so exist
 
 | Page                                                           | Read it when                                                                                                        |
 | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| [CI pipeline jobs](/ci/pipeline)                               | The job table, the fail-fast order, and the Control UI size budgets.                                                |
+| [CI pipeline jobs](/ci/pipeline)                               | The job table, job ordering and failure reporting, and the Control UI size budgets.                                 |
 | [Watch a CI run](/ci/watching-runs)                            | Wait on one pull request head, recover a stuck run, and pass the evidence gate.                                     |
 | [CI checkout ownership](/ci/checkout)                          | Shared checkout anchors, fetch retry budgets, and trusted action policy.                                            |
 | [CI scope and routing](/ci/scope-and-routing)                  | Why a job did or did not run: changed-scope detection and manual dispatch.                                          |
@@ -312,7 +342,7 @@ The complete [startup corpus](/ci/pipeline) uses eight state test files so exist
 Every section heading from the previous single-page version keeps its anchor here, so an existing link such as `/ci#pipeline-overview` still resolves. Each entry points at the page that now holds the content.
 
 - <a id="pipeline-overview" />[Pipeline overview](/ci/pipeline#pipeline-overview)
-- <a id="fail-fast-order" />[Fail-fast order](/ci/pipeline#fail-fast-order)
+- <a id="fail-fast-order" />[Job ordering and failure reporting](/ci/pipeline#fail-fast-order)
 - <a id="control-ui-size-budgets" />[Control UI size budgets](/ci/pipeline#control-ui-size-budgets)
 - <a id="watching-pull-request-ci" />[Watching pull request CI](/ci/watching-runs#watching-pull-request-ci)
 - <a id="recover-an-existing-pr-run-first" />[Recover an existing PR run first](/ci/watching-runs#recover-an-existing-pr-run-first)

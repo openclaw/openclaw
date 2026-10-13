@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveMemoryDreamingPluginConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  parseAgentSessionKey,
+  resolveMemoryDreamingPluginConfig,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   MEMORY_DREAMING_SYSTEM_EVENT_TEXT as DREAMING_SYSTEM_EVENT_TEXT,
   resolveMemoryDeepDreamingConfig,
@@ -28,7 +31,6 @@ import { resolveMemoryPromotionFileMaxChars } from "./memory-budget.js";
 import type { PromotionRejectionCategory } from "./short-term-promotion-types.js";
 
 const RUNTIME_CRON_RECONCILE_INTERVAL_MS = 60_000;
-const HEARTBEAT_ISOLATED_SESSION_SUFFIX = ":heartbeat";
 
 type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
 
@@ -52,32 +54,19 @@ function formatRepairSummary(repair: {
   return actions.join(", ");
 }
 
-function resolveDreamingTriggerSessionKeys(sessionKey?: string): string[] {
-  const normalized = normalizeOptionalString(sessionKey);
-  if (!normalized) {
-    return [];
-  }
-
-  const keys = [normalized];
-  // Isolated heartbeat runs execute in a sibling `:heartbeat` session while cron
-  // system events stay queued on the base main session.
-  if (normalized.endsWith(HEARTBEAT_ISOLATED_SESSION_SUFFIX)) {
-    const baseSessionKey = normalized.slice(0, -HEARTBEAT_ISOLATED_SESSION_SUFFIX.length).trim();
-    if (baseSessionKey) {
-      keys.push(baseSessionKey);
-    }
-  }
-
-  return uniqueStrings(keys);
-}
-
 function hasPendingManagedDreamingCronEvent(sessionKey?: string, agentId?: string): boolean {
-  return resolveDreamingTriggerSessionKeys(sessionKey).some((candidateSessionKey) =>
-    peekSystemEventEntries(candidateSessionKey, agentId).some(
-      (event) =>
-        event.contextKey?.startsWith("cron:") === true &&
-        normalizeOptionalString(event.text) === DREAMING_SYSTEM_EVENT_TEXT,
-    ),
+  if (
+    !sessionKey ||
+    (!parseAgentSessionKey(sessionKey) &&
+      sessionKey !== "global" &&
+      sessionKey !== "global:heartbeat")
+  ) {
+    return false;
+  }
+  return peekSystemEventEntries(sessionKey, agentId).some(
+    (event) =>
+      event.contextKey?.startsWith("cron:") === true &&
+      normalizeOptionalString(event.text) === DREAMING_SYSTEM_EVENT_TEXT,
   );
 }
 
@@ -384,7 +373,6 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
   let startupDreamingCleanupTimer: ReturnType<typeof setTimeout> | null = null;
   const dreamingTasks = new Set<Promise<unknown>>();
   let runtimeCronReconcileTimer: ReturnType<typeof setInterval> | null = null;
-  let gatewayLifecycleGeneration = 0;
   let disposed = true;
   let serviceStartedAtMs: number | undefined;
 
@@ -393,7 +381,6 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
 
   const disposeDreaming = (): void => {
     disposed = true;
-    gatewayLifecycleGeneration += 1;
     if (startupDreamingCleanupTimer) {
       clearTimeout(startupDreamingCleanupTimer);
       startupDreamingCleanupTimer = null;
@@ -481,14 +468,13 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
 
   const startDreamingSessionCleanup = async (
     config: OpenClawConfig,
-    generation: number,
     startupStartedAtMs: number,
   ): Promise<void> => {
     // Previous releases persisted narrative sessions. Reclaim those historical artifacts
     // at startup; new prompt-only completions create no sessions to scrub.
     const { DREAMING_ORPHAN_MIN_AGE_MS, scrubDreamingNarrativeArtifacts } =
       await import("./dreaming-session-cleanup.js");
-    if (disposed || generation !== gatewayLifecycleGeneration) {
+    if (disposed) {
       return;
     }
     const scrubConfiguredAgents = async (
@@ -501,7 +487,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         ),
       );
       for (const agentId of agentIds) {
-        if (disposed || generation !== gatewayLifecycleGeneration) {
+        if (disposed) {
           return;
         }
         try {
@@ -521,17 +507,13 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
 
     // Cron reconciliation can itself stall; never classify sessions admitted after startup.
     await scrubConfiguredAgents(config, startupStartedAtMs);
-    if (disposed || generation !== gatewayLifecycleGeneration) {
+    if (disposed) {
       return;
     }
     // Interrupted runs are initially indistinguishable from live runs; revisit once their
     // persisted activity ages past the same guard used by normal narrative cleanup.
-    const cleanupTimer = setTimeout(() => {
-      if (
-        disposed ||
-        generation !== gatewayLifecycleGeneration ||
-        startupDreamingCleanupTimer !== cleanupTimer
-      ) {
+    startupDreamingCleanupTimer = setTimeout(() => {
+      if (disposed) {
         return;
       }
       startupDreamingCleanupTimer = null;
@@ -548,7 +530,6 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         );
       });
     }, DREAMING_ORPHAN_MIN_AGE_MS);
-    startupDreamingCleanupTimer = cleanupTimer;
     startupDreamingCleanupTimer.unref?.();
   };
 
@@ -593,9 +574,8 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       clearTimeout(startupDreamingCleanupTimer);
       startupDreamingCleanupTimer = null;
     }
-    const generation = ++gatewayLifecycleGeneration;
     await trackDreamingTask(() =>
-      startDreamingSessionCleanup(ctx.config ?? api.config, generation, startupStartedAtMs),
+      startDreamingSessionCleanup(ctx.config ?? api.config, startupStartedAtMs),
     ).catch((error: unknown) => {
       api.logger.warn(`memory-core: dreaming startup cleanup failed: ${formatErrorMessage(error)}`);
     });
@@ -608,22 +588,27 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         if (ctx.trigger !== "heartbeat" && ctx.trigger !== "cron") {
           return undefined;
         }
-        const currentConfig = resolveCurrentConfig();
-        const hasManagedDreamingToken = includesSystemEventToken(
-          event.cleanedBody,
-          DREAMING_SYSTEM_EVENT_TEXT,
-        );
-        const isManagedTrigger =
-          ctx.trigger === "cron" || hasPendingManagedDreamingCronEvent(ctx.sessionKey, ctx.agentId);
-        if (!hasManagedDreamingToken || !isManagedTrigger) {
+        if (!includesSystemEventToken(event.cleanedBody, DREAMING_SYSTEM_EVENT_TEXT)) {
           return undefined;
         }
+        const currentConfig = resolveCurrentConfig();
         const config = resolveMemoryDeepDreamingConfig({
           pluginConfig: resolveMemoryDreamingPluginConfig(currentConfig),
           cfg: currentConfig,
         });
         if (!config.enabled) {
-          return { handled: true, reason: "memory-core: short-term dreaming disabled" };
+          return ctx.trigger === "cron"
+            ? { handled: true, reason: "memory-core: short-term dreaming disabled" }
+            : undefined;
+        }
+        if (
+          ctx.trigger === "heartbeat" &&
+          !hasPendingManagedDreamingCronEvent(
+            ctx.heartbeatEventQueueSessionKey ?? ctx.sessionKey,
+            ctx.agentId,
+          )
+        ) {
+          return undefined;
         }
         return await runShortTermDreamingPromotion({
           runInBackground: ctx.trigger === "cron" ? trackDreamingTask : undefined,

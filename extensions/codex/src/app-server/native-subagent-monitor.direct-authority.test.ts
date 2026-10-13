@@ -3,7 +3,6 @@ import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plu
 import { describe, expect, it, vi, onTestFinished } from "vitest";
 import { createCodexNativeHookRelay } from "./native-hook-relay.js";
 import {
-  type CodexThreadReadResponse,
   directSpawnItem,
   successfulSendInputOutput,
   CodexNativeSubagentMonitor,
@@ -404,41 +403,6 @@ describe("CodexNativeSubagentMonitor", () => {
       await monitor.dispose();
     },
   );
-
-  it("collects a terminal revision after its last held reader releases", async () => {
-    const { client, monitor } = monitorFixture();
-    let resolveRead: ((value: CodexThreadReadResponse) => void) | undefined;
-    const pendingRead = new Promise<CodexThreadReadResponse>((resolve) => {
-      resolveRead = resolve;
-    });
-    client.setThreadReadFactory("child-thread", async () => await pendingRead);
-    const firstClaim = vi.fn(() => () => undefined);
-    const first = await monitor.registerParent({
-      parentThreadId: "parent-thread",
-      claimDirectChild: firstClaim,
-    });
-    first.bindTurn("turn-1");
-    await notifyChildStarted(client);
-    const reconciliation = monitor.reconcileChildThread("child-thread");
-    await client.notify(nativeCompletionNotification({ result: "done" }));
-    await first.unregister();
-    resolveRead?.(threadRead({ status: "inProgress" }));
-    await reconciliation;
-
-    const nextClaim = vi.fn(() => () => undefined);
-    const next = await monitor.registerParent({
-      parentThreadId: "parent-thread",
-      claimDirectChild: nextClaim,
-    });
-    next.bindTurn("turn-2");
-    await client.notify(
-      itemNotification(directSpawnItem("v1", "parent-thread", "child-thread"), "turn-2"),
-    );
-
-    expect(firstClaim).not.toHaveBeenCalled();
-    expect(nextClaim).toHaveBeenCalledWith("child-thread");
-    await monitor.dispose();
-  });
 });
 
 function interactionNotification(

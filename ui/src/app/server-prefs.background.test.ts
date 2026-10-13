@@ -16,7 +16,11 @@ import {
   resolveServerUiPrefWriteStatus,
 } from "./server-prefs-controls.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
-import { extractServerUiPrefs } from "./server-prefs-state.ts";
+import {
+  extractServerUiPrefs,
+  applyServerUiPrefs,
+  resolveServerUiPrefState,
+} from "./server-prefs-reconcile.ts";
 import {
   configWithPrefs,
   createServerPrefsWriter,
@@ -24,12 +28,10 @@ import {
   refreshServerPrefsProfile,
 } from "./server-prefs.test-support.ts";
 import {
-  applyServerUiPrefs,
   isApplyingServerUiPrefs,
   flushServerUiPrefs,
   pushServerUiPrefs,
   resetServerUiPrefsSync,
-  resolveServerUiPrefState,
   subscribeServerUiPrefWrites,
 } from "./server-prefs.ts";
 import {

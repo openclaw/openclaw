@@ -103,15 +103,20 @@ Plugins register a compaction provider via `registerCompactionProvider()` on the
 - Providers receive the same compaction instructions and identifier-preservation policy as the built-in path, and the safeguard still preserves recent-turn and split-turn suffix context after provider output.
 - Safeguard recovery stays within the latest reset or compaction replay window, even when retained messages precede the stored compaction marker. Older transcript entries remain stored but are not sent to the summarizer again.
 - Built-in safeguard summarization re-distills prior summaries with new messages instead of preserving the full previous summary verbatim.
-- Safeguard mode enables built-in summary quality audits by default. After final budgeting, the retained generated body must contain the required headings, and the exact artifact to be persisted must retain pending asks and exact identifiers. Corrective attempts stay within `qualityGuard.maxRetries`; exhaustion or a corrective generation failure cancels before append and leaves the original transcript authoritative. A summary timeout in an automatic compaction is the exception: OpenClaw commits the compaction without a summary (see [Auto-compaction](/concepts/compaction#auto-compaction)). This includes a corrective attempt that goes silent past the timeout window; a corrective attempt that gets HTTP 408 still cancels. Set `qualityGuard.enabled: false` to skip this behavior. Configured compaction-provider output remains outside the built-in audit loop.
+- Safeguard mode enables built-in summary quality audits by default. It checks the finalized summary's structure, pending asks, and exact identifiers, with at most `qualityGuard.maxRetries` corrective attempts. Exhausted audits or infeasible retention commit the best available generated summary marked `details.qualityDegraded`, keeping the session compactable. The attempt with the fewest audit violations wins; ties keep the earlier attempt. Required-fact retention becomes best-effort: older details, identifiers, and pending requests may be lost. A corrective generation failure reuses an earlier summary when available; an initial generation, model-resolution, or credentials failure leaves the original history authoritative. Automatic summary timeouts also have a separate fallback when no earlier summary can be reused (see [Auto-compaction](/concepts/compaction#auto-compaction)). Set `qualityGuard.enabled: false` to skip the audit. Configured compaction-provider output remains outside the built-in audit loop.
 - If the provider fails or returns an empty result, OpenClaw falls back to built-in LLM summarization automatically. Provider-local failures, including timeouts, stay in that guarded fallback and use the built-in quality audit when enabled. Abort/timeout signals the caller explicitly triggered are re-thrown, not swallowed, so cancellation is always respected.
 
 Source: `src/plugins/compaction-provider.ts`, `src/agents/agent-hooks/compaction-safeguard.ts`.
 
 ## User-visible surfaces
 
-- `/status` in any chat session
+- `/status` in any chat session, including a degraded-summary indicator when recorded
 - `openclaw status` (CLI)
 - `openclaw sessions` / `openclaw sessions --json`
 - Gateway logs (`pnpm gateway:watch` or `openclaw logs --follow`): `embedded run auto-compaction start` + `complete`
 - Verbose mode: `🧹 Auto-compaction complete` plus the compaction count
+
+A degraded summary always produces a visible warning, even with `notifyUser: false`.
+It names the possible loss of older details, identifiers, or pending requests and
+suggests `/new` or a larger model. The transcript's `details.qualityDegraded` field
+is durable; `reasonCode=quality_guard_degraded_fallback` in logs is diagnostic only.

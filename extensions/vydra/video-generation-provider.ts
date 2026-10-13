@@ -1,4 +1,4 @@
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import type { VideoGenerationProvider } from "openclaw/plugin-sdk/video-generation";
 import { DEFAULT_VYDRA_VIDEO_MODEL } from "./defaults.js";
 import { runVydraGeneration } from "./shared.js";
@@ -12,7 +12,7 @@ export function buildVydraVideoGenerationProvider(): VideoGenerationProvider {
     label: "Vydra",
     defaultModel: DEFAULT_VYDRA_VIDEO_MODEL,
     models: [DEFAULT_VYDRA_VIDEO_MODEL, VYDRA_KLING_MODEL],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "vydra", ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "vydra", ...ctx }),
     capabilities: {
       generate: {
         maxVideos: 1,

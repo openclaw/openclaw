@@ -205,7 +205,7 @@ export function createCrabboxWarmImageManager(dependencies: {
     phase: "allocation" | "teardown" | "maintenance",
     entries: { key: string; value: WarmProfileRecord }[],
   ) => {
-    const deadline = Date.now() + WARM_IMAGE_COMMAND_TIMEOUT_MS;
+    const deadline = performance.now() + WARM_IMAGE_COMMAND_TIMEOUT_MS;
     assertCurrent(context);
     const paused = entries
       .flatMap(({ value }) => {
@@ -240,7 +240,7 @@ export function createCrabboxWarmImageManager(dependencies: {
       if (value.operation && phase === "allocation") {
         continue;
       }
-      const remaining = () => deadline - Date.now();
+      const remaining = () => deadline - performance.now();
       if (remaining() <= 0) {
         break;
       }
@@ -287,7 +287,7 @@ export function createCrabboxWarmImageManager(dependencies: {
   };
 
   const makeRoom = async (context: LeaseContext) => {
-    const deadline = Date.now() + WARM_IMAGE_COMMAND_TIMEOUT_MS;
+    const deadline = performance.now() + WARM_IMAGE_COMMAND_TIMEOUT_MS;
     const entries = await openStore().entries();
     if (entries.length < WARM_IMAGE_MAX_ENTRIES) {
       return;
@@ -304,7 +304,7 @@ export function createCrabboxWarmImageManager(dependencies: {
         if ((await openStore().count()) < WARM_IMAGE_MAX_ENTRIES) {
           return;
         }
-        const remaining = () => deadline - Date.now();
+        const remaining = () => deadline - performance.now();
         if (remaining() <= 0) {
           break;
         }
@@ -599,6 +599,17 @@ export function createCrabboxWarmImageManager(dependencies: {
       );
     },
     lookupLease,
+    /** Runtime attested when this checkpoint was captured; undefined once its record is gone. */
+    checkpointRuntimeIdentity: async (checkpointId: string) => {
+      for (const { value } of await openStore().entries()) {
+        for (const image of [value.image, value.previous]) {
+          if (image?.checkpointId === checkpointId) {
+            return image.runtimeIdentity;
+          }
+        }
+      }
+      return undefined;
+    },
     markPrepared: (id: string, baseCommit: string, assertOwnerCurrent?: () => void) =>
       openStore().markPrepared(id, baseCommit, assertOwnerCurrent),
     markEnrolled: (id: string, assertOwnerCurrent?: () => void) =>
@@ -622,8 +633,8 @@ export function createCrabboxWarmImageManager(dependencies: {
         delete allocations[context.id];
         return { ...record, allocations };
       });
-      const deadline = Date.now() + WARM_IMAGE_COMMAND_TIMEOUT_MS;
-      const remaining = () => deadline - Date.now();
+      const deadline = performance.now() + WARM_IMAGE_COMMAND_TIMEOUT_MS;
+      const remaining = () => deadline - performance.now();
       const current = await openStore().lookup(owner.key);
       if (current) {
         await retireImage(context, owner.key, current, remaining);

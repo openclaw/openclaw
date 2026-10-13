@@ -5,11 +5,11 @@ import {
 import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import {
+  findModelInCatalog,
   prepareModelRunCapabilities,
   type PreparedModelThinkingCapability,
 } from "../../agents/model-catalog-lookup.js";
 import {
-  needsThinkHydration,
   normalizeThinkingCatalogProviders,
   resolveCandidateThinkingLevel,
 } from "../../agents/thinking-runtime.js";
@@ -37,6 +37,12 @@ import {
   mintMessageActionTurnCapability,
   resolveMessageActionTurnCapabilityLifetime,
 } from "../../gateway/message-action-turn-capability.js";
+import {
+  buildAgentHookContextChannelFields,
+  buildAgentHookContextIdentityFields,
+} from "../../plugins/hook-agent-context.js";
+import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
+import { readUserTurnPromptReactionSource } from "../../sessions/user-turn-transcript-admission.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { TemplateContext } from "../templating.js";
@@ -316,6 +322,25 @@ function buildTemplateSenderContext(sessionCtx: TemplateContext) {
   };
 }
 
+/** Reuse the candidate's channel and sender projection for early model routing. */
+export function buildModelResolveContext(
+  params: Parameters<typeof buildEmbeddedContextFromTemplate>[0] & {
+    trigger: PluginHookAgentContext["trigger"];
+  },
+) {
+  const context = {
+    ...buildEmbeddedContextFromTemplate(params),
+    ...buildTemplateSenderContext(params.sessionCtx),
+    ...buildReplyRunStateParams(params.run),
+    trigger: params.trigger,
+  };
+  return {
+    trigger: context.trigger,
+    ...buildAgentHookContextChannelFields(context),
+    ...buildAgentHookContextIdentityFields(context),
+  };
+}
+
 /** Bind either runtime to the same trusted source turn and requester. */
 export function mintReplyMessageActionTurnCapability(
   turn: Pick<
@@ -330,11 +355,7 @@ export function mintReplyMessageActionTurnCapability(
   }
   const channelIngress = isTrustedMessageActionTurnIngress(turn.sessionCtx.Provider);
   const dashboardAdmission = turn.opts?.dashboardReadAdmission;
-  if (
-    turn.isHeartbeat ||
-    (!channelIngress &&
-      (turn.sessionCtx.Provider !== "webchat" || dashboardAdmission?.runId !== runId))
-  ) {
+  if (turn.isHeartbeat || (!channelIngress && turn.sessionCtx.Provider !== "webchat")) {
     return undefined;
   }
   const context = buildEmbeddedContextFromTemplate({
@@ -348,23 +369,34 @@ export function mintReplyMessageActionTurnCapability(
     return undefined;
   }
   if (!channelIngress) {
-    // Queue options may come from another input. Match the original admission,
-    // not opts.runId, which followup execution replaces with its own run ID.
-    if (
-      !dashboardAdmission ||
-      dashboardAdmission.agentId !== context.agentId ||
-      dashboardAdmission.sessionKey !== sessionKey ||
-      dashboardAdmission.sessionId !== context.sessionId
-    ) {
+    // Read permission stays tied to its original run. A queued prompt instead
+    // brings its own native source custody, bound below to this new execution.
+    const dashboard =
+      dashboardAdmission?.runId === runId &&
+      dashboardAdmission.agentId === context.agentId &&
+      dashboardAdmission.sessionKey === sessionKey &&
+      dashboardAdmission.sessionId === context.sessionId
+        ? dashboardAdmission
+        : undefined;
+    const recorder = turn.followupRun.userTurnTranscriptRecorder;
+    const source = readUserTurnPromptReactionSource(recorder);
+    const promptSource =
+      source && source.agentId === context.agentId && source.sessionKey === sessionKey
+        ? source
+        : undefined;
+    if (!dashboard && !promptSource) {
       return undefined;
     }
-    dashboardAdmission.assertCurrent();
+    dashboard?.assertCurrent();
+    promptSource?.assertCurrent();
     return mintMessageActionTurnCapability({
       agentId: context.agentId,
       runId,
       sessionKey,
       sessionId: context.sessionId,
-      assertDashboardReadCurrent: dashboardAdmission.assertCurrent,
+      assertDashboardReadCurrent: dashboard?.assertCurrent,
+      promptReactionSource:
+        promptSource && recorder ? { source: promptSource, recorder } : undefined,
       expiresWithRun: true,
     });
   }
@@ -422,24 +454,23 @@ export async function buildEmbeddedRunExecutionParams(params: {
     resolveModelFallbackOptions(snapshot.run);
   let modelThinkingCapability: PreparedModelThinkingCapability | undefined;
   if (snapshot.agentRuntime) {
-    let thinkingCatalog = snapshot.run.thinkingCatalog;
-    if (
-      needsThinkHydration(thinkingCatalog, snapshot.provider, snapshot.model, snapshot.agentRuntime)
-    ) {
-      const { loadProviderScopedThinkingCatalog } =
-        await import("../../agents/model-catalog.runtime.js");
-      thinkingCatalog = normalizeThinkingCatalogProviders(
-        await loadProviderScopedThinkingCatalog({
-          config,
-          provider: snapshot.provider,
-          model: snapshot.model,
-          agentRuntime: snapshot.agentRuntime,
-          agentId: snapshot.run.agentId,
-          agentDir: snapshot.run.agentDir,
-          workspaceDir: snapshot.run.workspaceDir,
-        }),
-      );
-    }
+    // Keep the lifecycle-owned catalog module lazy until this turn has a selected runtime.
+    const { loadProviderScopedThinkingCatalog } =
+      await import("../../agents/model-catalog.runtime.js");
+    const observedCatalog = normalizeThinkingCatalogProviders(
+      await loadProviderScopedThinkingCatalog({
+        config,
+        provider: snapshot.provider,
+        model: snapshot.model,
+        agentRuntime: snapshot.agentRuntime,
+        agentId: snapshot.run.agentId,
+        agentDir: snapshot.run.agentDir,
+        workspaceDir: snapshot.run.workspaceDir,
+      }),
+    );
+    const thinkingCatalog = findModelInCatalog(observedCatalog, snapshot.provider, snapshot.model)
+      ? observedCatalog
+      : snapshot.run.thinkingCatalog;
     modelThinkingCapability = prepareModelRunCapabilities(
       [thinkingCatalog, []],
       [snapshot.provider, snapshot.model, snapshot.agentRuntime],

@@ -3,7 +3,11 @@ import { randomUUID } from "node:crypto";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import type { RawData } from "ws";
 import { WebSocket } from "../../../../packages/gateway-client/src/websocket.test-support.js";
-import type { HelloOk, ResponseFrame } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  EventFrame,
+  HelloOk,
+  ResponseFrame,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import type { SkillLibraryFile } from "../../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { VERSION } from "../../../../src/version.js";
@@ -44,9 +48,16 @@ export class SkillLibraryWireClient {
     }
   >();
 
-  private constructor(private readonly socket: WebSocket) {
+  private constructor(
+    private readonly socket: WebSocket,
+    onEvent?: (event: EventFrame) => void,
+  ) {
     socket.on("message", (data) => {
-      const frame = JSON.parse(rawDataToString(data)) as ResponseFrame;
+      const frame = JSON.parse(rawDataToString(data)) as ResponseFrame | EventFrame;
+      if (frame.type === "event") {
+        onEvent?.(frame);
+        return;
+      }
       if (frame.type !== "res") {
         return;
       }
@@ -83,6 +94,7 @@ export class SkillLibraryWireClient {
       email?: string;
       scopes?: string[];
       buildId?: string;
+      onEvent?: (event: EventFrame) => void;
     } = {},
   ): Promise<{ client: SkillLibraryWireClient; hello: HelloOk }> {
     // This socket acts as a synthetic same-host proxy: an actual Upgrade request reaches
@@ -102,7 +114,7 @@ export class SkillLibraryWireClient {
           }
         : {}),
     });
-    const client = new SkillLibraryWireClient(socket);
+    const client = new SkillLibraryWireClient(socket, options.onEvent);
     try {
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error("Gateway challenge timed out")), 30_000);
@@ -212,7 +224,7 @@ export async function createSkillLibraryWireInstance(): Promise<OpenClawTestInst
       bind: "loopback",
       port: instance.port,
       trustedProxies: ["127.0.0.1", "::1"],
-      // The Gateway approves the local device; the fixture approves its command surface.
+      // The Gateway approves the local device and its initial command surface.
       nodes: { pairing: { autoApproveLocal: true } },
       auth: {
         mode: "trusted-proxy",

@@ -7,6 +7,7 @@ import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { composeConfigWriteAssertions } from "../config/write-authority.js";
+import { readDeferredPluginMigrationsAsync } from "../infra/deferred-plugin-migrations.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
@@ -49,7 +50,7 @@ import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
 import { applySlotSelectionForPlugin } from "./slot-selection.js";
 import { withPluginSourceCleanup } from "./source-cleanup.js";
-import { buildPluginSnapshotReport } from "./status.js";
+import { buildPluginSnapshotReportAsync } from "./status.js";
 import { recordPluginPackageUninstallPlan } from "./uninstall-package-plan.js";
 import {
   applyPluginUninstallDirectoryRemoval,
@@ -76,12 +77,12 @@ function removeInstalledPluginFromDenylist(cfg: OpenClawConfig, pluginId: string
   };
 }
 
-function logShadowedNpmInstallWarning(params: {
+async function logShadowedNpmInstallWarning(params: {
   config: OpenClawConfig;
   pluginId: string;
   install: Omit<PluginInstallUpdate, "pluginId">;
   warn: (message: string, managementMessage: string) => void;
-}): void {
+}): Promise<void> {
   // Warn when a newly installed npm plugin is shadowed by an explicit config source.
   if (params.install.source !== "npm") {
     return;
@@ -90,7 +91,7 @@ function logShadowedNpmInstallWarning(params: {
   if (!installedSource) {
     return;
   }
-  const report = buildPluginSnapshotReport({
+  const report = await buildPluginSnapshotReportAsync({
     config: params.config,
     effectiveOnly: true,
     onlyPluginIds: [params.pluginId],
@@ -290,7 +291,12 @@ async function persistPluginInstallOwned(
       }
       const ownedPluginIds = manifests.map((plugin) => plugin.id).toSorted();
       const prepareMigration = async () => {
-        const prepared = await readConfigFileSnapshotForWrite();
+        const deferredPluginMigrations = await readDeferredPluginMigrationsAsync();
+        assertOwned();
+        params.beforePersistentApply?.();
+        const prepared = await readConfigFileSnapshotForWrite({
+          deferredPluginMigrations,
+        });
         assertOwned();
         params.beforePersistentApply?.();
         if (
@@ -413,6 +419,7 @@ async function persistPluginInstallOwned(
               beforePersistentEffect: params.beforePersistentEffect,
               writeOptions: {
                 ...params.snapshot.writeOptions,
+                deferredPluginMigrations: migration?.deferredPluginMigrations,
                 afterWrite:
                   params.applyRuntime || params.deferRuntime || migration?.activationWarning
                     ? { mode: "none", reason: "plugin lifecycle applies runtime" }
@@ -436,15 +443,12 @@ async function persistPluginInstallOwned(
       if (activationWarning) {
         warn(activationWarning, activationWarning);
       } else {
-        params.deferRuntime?.record(
-          {
-            operation: "install",
-            pluginId: params.pluginId,
-            sourceDigests: source?.sourceDigests ?? {},
-            write: receipt,
-          },
-          source?.assertSourceCurrent,
-        );
+        params.deferRuntime?.record({
+          operation: "install",
+          pluginId: params.pluginId,
+          sourceDigests: source?.sourceDigests ?? {},
+          write: receipt,
+        });
         await refreshManagedPluginMetadata({
           config: next,
           assertCurrent: params.beforePersistentApply,
@@ -533,7 +537,7 @@ async function persistPluginInstallOwned(
             ? `Installed plugin package ${params.pluginId}: ${ownedPluginIds.join(", ")}`
             : `Installed plugin: ${params.pluginId}`),
       );
-      logShadowedNpmInstallWarning({
+      await logShadowedNpmInstallWarning({
         config: next,
         pluginId: params.pluginId,
         install: params.install,
