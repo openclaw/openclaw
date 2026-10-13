@@ -161,7 +161,7 @@ describe("buildRestartRecoveryTerminalDeliveryEvidence", () => {
     },
     parentOnly: false,
     requesterSessionBound: true,
-    deliveryTarget: undefined,
+    deliveryTarget: {},
     shouldDeliverAgentFinal: true,
     requiresMessageToolDelivery: false,
     isSubagentCompletion: false,
@@ -347,9 +347,10 @@ describe("buildRestartRecoveryTerminalDeliveryEvidence", () => {
         deliveryStatus: { status: "suppressed", reason: { message: "invalid" } },
       },
     ])!;
-    expect(receipt.meta).toBeUndefined();
-    expect(receipt.requesterContinuationSettled).toBeUndefined();
-    expect(receipt.deliveryStatus?.reason).toBeUndefined();
+    expect(receipt).toBeDefined();
+    expect(receipt?.meta).toBeUndefined();
+    expect(receipt?.requesterContinuationSettled).toBeUndefined();
+    expect(receipt?.deliveryStatus?.reason).toBeUndefined();
   });
 
   it.each([false, true])(

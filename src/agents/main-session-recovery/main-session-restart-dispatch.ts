@@ -9,6 +9,7 @@ import {
   loadExactSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import type { SessionEntryCurrentFacts } from "../../config/sessions/session-entry-current.types.js";
 import { isNativeSessionEntryRead } from "../../config/sessions/session-entry-read-request.js";
 import { withSessionEntriesFromStoreInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
@@ -168,7 +169,7 @@ export async function resumeMainSession(
       ? source.actor.sessions.captureCurrent(params.sessionKey)
       : undefined;
   const native = !source && isNativeSessionEntryRead(params, params.agentId);
-  const matchesRequester = (current: SessionEntry | undefined) =>
+  const matchesRequester = (current: SessionEntryCurrentFacts | undefined) =>
     current?.sessionId === params.entry.sessionId &&
     current.lifecycleRevision === params.entry.lifecycleRevision;
   let retained: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;

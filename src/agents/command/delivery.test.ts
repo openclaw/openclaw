@@ -635,6 +635,7 @@ describe("deliverAgentCommandResult payload normalization", () => {
     expect(onDeliveryResult).toHaveBeenCalledWith(delivered, expect.any(Array));
     expect(buildRestartRecoveryTerminalDeliveryEvidence(delivered)).toEqual({
       captured: true,
+      requesterContinuationSettled: true,
       restartUnsafeSideEffectsDetected: true,
     });
   });
