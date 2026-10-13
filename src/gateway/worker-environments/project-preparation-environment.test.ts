@@ -1,22 +1,57 @@
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { copyTreeCloseOnExec } from "../../../test/helpers/close-on-exec-copy.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
+import { resolveExecutablePath } from "../../infra/executable-path.js";
 import { readWorkerProjectEnvironmentRecipe } from "./project-preparation.js";
 import { createProjectPreparationFixture } from "./project-preparation.test-support.js";
 import { prepareWorkerProjectSnapshot } from "./workspace-git-base.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function fixture(files: Record<string, string>) {
-  return createProjectPreparationFixture(
+async function fixture(files: Record<string, string>) {
+  const f = await createProjectPreparationFixture(
     tempDirs.make("project-preparation-environment-"),
     undefined,
     false,
     { ".gitignore": "build/\n", ...files },
   );
+  const bin = path.join(f.home, "fixture-bin");
+  await fs.mkdir(bin);
+  // Linux selects tools beside process.execPath; a symlink to host Node would select host tools.
+  copyTreeCloseOnExec(process.execPath, path.join(bin, "node"), { dereference: true });
+  const libraries = path.resolve(path.dirname(process.execPath), "../lib");
+  if (existsSync(libraries)) {
+    await fs.symlink(libraries, path.join(f.home, "lib"));
+  }
+  for (const command of ["sh", "git", "uname", "mkdir", "cat"]) {
+    const executable = resolveExecutablePath(command);
+    if (!executable) {
+      throw new Error(`Project preparation fixture requires ${command}`);
+    }
+    await fs.symlink(executable, path.join(bin, command));
+  }
+  for (const command of ["npm", "npx", "corepack", "pnpm", "yarn"]) {
+    await fs.writeFile(path.join(bin, command), "#!/bin/sh\nexit 254\n", { mode: 0o755 });
+  }
+  f.runScript.mockImplementation(async (script) =>
+    execFileSync(path.join(bin, "sh"), ["-c", script], {
+      env: {
+        PATH: bin,
+        HOME: f.home,
+        LANG: "C.UTF-8",
+        PREPARATION_UNRELATED_ENV: "must-not-forward",
+      },
+      encoding: "utf8",
+      timeout: 30_000,
+      stdio: ["ignore", "pipe", "pipe"],
+    }),
+  );
+  return { ...f, bin };
 }
 
 describe("repository environment preparation", () => {
@@ -113,13 +148,12 @@ describe("repository environment preparation", () => {
     async (lockfile) => {
       const packageContent = '{"name":"fixture","private":true}\n';
       const f = await fixture({ [lockfile]: "fixture lock\n", "package.json": packageContent });
-      const bin = path.join(f.home, "fixture-bin");
-      await fs.mkdir(bin);
+      const { bin } = f;
       const manager = lockfile === "yarn.lock" ? "yarn" : "pnpm";
       await fs.writeFile(
         path.join(bin, "corepack"),
         '#!/bin/sh\nset -eu\ntest "$1" = enable\ntest "$2" = --install-directory\ntest "$3" = "$HOME/.local/bin"\n' +
-          `cp "$(dirname "$0")/package-manager" "$3/${manager}"\n`,
+          `node -e 'const fs = require("node:fs"); const path = require("node:path"); fs.copyFileSync(path.join(path.dirname(fs.realpathSync(process.argv[1])), "package-manager"), path.join(process.argv[2], "${manager}"))' "$0" "$3"\n`,
         { mode: 0o755 },
       );
       await fs.writeFile(path.join(bin, manager), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
@@ -127,14 +161,6 @@ describe("repository environment preparation", () => {
         path.join(bin, "package-manager"),
         '#!/bin/sh\nif [ "${COREPACK_ENABLE_AUTO_PIN:-}" != 0 ]; then printf \'{"packageManager":"fixture"}\\n\' > package.json; fi\n',
         { mode: 0o755 },
-      );
-      f.runScript.mockImplementation(async (script) =>
-        execFileSync("sh", ["-c", script], {
-          env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: f.home },
-          encoding: "utf8",
-          timeout: 30_000,
-          stdio: ["ignore", "pipe", "pipe"],
-        }),
       );
       const operation = await f.preparedOperation();
       try {
@@ -157,20 +183,11 @@ describe("repository environment preparation", () => {
     "continues cold with bounded diagnostics when a detected install fails (%s)",
     async (encoding) => {
       const f = await fixture({ "package-lock.json": "{}\n" });
-      const bin = path.join(f.home, "fixture-bin");
-      await fs.mkdir(bin);
+      const { bin } = f;
       await fs.writeFile(
         path.join(bin, "npm"),
-        `#!/bin/sh\nexec '${process.execPath}' -e 'process.stderr.write(${encoding === "UTF-8" ? '"é".repeat(20000)' : "Buffer.alloc(20000, 255)"}); process.exit(23)'\n`,
+        `#!/bin/sh\nexec node -e 'process.stderr.write(${encoding === "UTF-8" ? '"é".repeat(20000)' : "Buffer.alloc(20000, 255)"}); process.exit(23)'\n`,
         { mode: 0o755 },
-      );
-      f.runScript.mockImplementation(async (script) =>
-        execFileSync("sh", ["-c", script], {
-          env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: f.home },
-          encoding: "utf8",
-          timeout: 30_000,
-          stdio: ["ignore", "pipe", "pipe"],
-        }),
       );
       const recordRecipePreparation = vi.fn();
       const operation = await f.preparedOperation();
