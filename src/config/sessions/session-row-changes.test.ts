@@ -19,112 +19,179 @@ import {
 } from "./session-accessor.sqlite-entry-cache.js";
 import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import type { InternalSessionEntry } from "./types.js";
 
-it.each([false, true])(
-  "publishes only committed entry changes (incognito=%s)",
-  async (incognito) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const scope = {
-        agentId: "main",
-        sessionKey: incognito
-          ? "agent:main:dashboard:incognito-row-change"
-          : "agent:main:row-change",
-        ...(incognito
-          ? { storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }) }
-          : {}),
-      };
-      const entry: InternalSessionEntry = incognito
-        ? {
-            sessionId: "private-row-change",
-            createdAt: 1,
-            updatedAt: 1,
-            label: "Private label must not enter lifetime facts",
-            incognito: true,
-          }
-        : { sessionId: "row-change", updatedAt: 1, label: "before" };
-      replaceSessionEntrySync(scope, entry);
-      const options = { agentId: scope.agentId, path: scope.storePath };
-      const database = openOpenClawAgentDatabase(options);
-      const snapshot = incognito ? undefined : readSessionEntryCache(database, { cache: true });
-      const prepared: Array<string | undefined> = [];
-      const projections: SessionRowChange[] = [];
-      const seen: Array<{
-        change: SessionRowChange;
-        label?: string;
-        transaction: boolean;
-        prepared: Array<string | undefined>;
-      }> = [];
-      const unsubscribe = sessionChanges.subscribe((change) => {
-        seen.push({
-          change,
-          label: snapshot?.entries.get(scope.sessionKey)?.label,
-          transaction: database.db.isTransaction,
-          prepared: [...prepared],
-        });
+it("publishes only committed durable entry changes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:row-change",
+    };
+    const entry: InternalSessionEntry = { sessionId: "row-change", updatedAt: 1, label: "before" };
+    replaceSessionEntrySync(scope, entry);
+    const options = { agentId: scope.agentId };
+    const database = openOpenClawAgentDatabase(options);
+    const snapshot = readSessionEntryCache(database, { cache: true });
+    const prepared: Array<string | undefined> = [];
+    const projections: SessionRowChange[] = [];
+    const seen: Array<{
+      change: SessionRowChange;
+      label?: string;
+      transaction: boolean;
+      prepared: Array<string | undefined>;
+    }> = [];
+    const unsubscribe = sessionChanges.subscribe((change) => {
+      seen.push({
+        change,
+        label: snapshot.entries.get(scope.sessionKey)?.label,
+        transaction: database.db.isTransaction,
+        prepared: [...prepared],
       });
-      const stopProjection = sessionChanges.subscribeProjection((change) => {
-        projections.push(change);
-        prepared.push(snapshot?.entries.get(scope.sessionKey)?.label);
-      });
-      const write = (label: string) => {
-        replaceSessionEntrySync(
-          scope,
-          incognito ? { ...entry, updatedAt: 2 } : { ...entry, label },
-        );
-        expect(seen).toEqual([]);
-        expect(projections).toEqual([]);
-      };
-      try {
-        expect(() =>
-          runOpenClawAgentWriteTransaction(() => {
-            write("rolled-back");
-            throw new Error("rollback");
-          }, options),
-        ).toThrow("rollback");
-        expect(seen).toEqual([]);
-        expect(prepared).toEqual([]);
-        expect(projections).toEqual([]);
-        runOpenClawAgentWriteTransaction(() => {
-          if (!incognito) {
-            write("intermediate");
-          }
-          write("committed");
-        }, options);
-        if (incognito) {
-          expect(projections).toEqual([
-            {
-              ...scope,
-              scope: "session-entry",
-              facts: expect.objectContaining({ kind: "entry", sessionId: entry.sessionId }),
-            },
-          ]);
-          expect(seen.map(({ change }) => change)).toEqual([{ ...scope, scope: "session-entry" }]);
-        } else {
-          expect(seen).toEqual(
-            Array.from({ length: 2 }, () => ({
-              change: { ...scope, storePath: database.path, scope: "session-entry" },
-              label: "committed",
-              transaction: false,
-              prepared: ["committed", "committed"],
-            })),
-          );
-          seen.length = 0;
-          publishSessionEntryCacheInvalidation(database, { sessionKey: scope.sessionKey });
-          expect(seen.map(({ change }) => change)).toEqual([
-            { ...scope, storePath: database.path },
-          ]);
-          unsubscribe();
-          replaceSessionEntrySync(scope, entry);
-          expect(seen).toHaveLength(1);
-        }
-      } finally {
-        unsubscribe();
-        stopProjection();
-      }
     });
-  },
-);
+    const stopProjection = sessionChanges.subscribeProjection((change) => {
+      projections.push(change);
+      prepared.push(snapshot.entries.get(scope.sessionKey)?.label);
+    });
+    const write = (label: string) => {
+      replaceSessionEntrySync(scope, { ...entry, label });
+      expect(seen).toEqual([]);
+      expect(projections).toEqual([]);
+    };
+    try {
+      expect(() =>
+        runOpenClawAgentWriteTransaction(() => {
+          write("rolled-back");
+          throw new Error("rollback");
+        }, options),
+      ).toThrow("rollback");
+      expect(seen).toEqual([]);
+      expect(prepared).toEqual([]);
+      expect(projections).toEqual([]);
+      runOpenClawAgentWriteTransaction(() => {
+        write("intermediate");
+        write("committed");
+      }, options);
+      expect(seen).toEqual(
+        Array.from({ length: 2 }, () => ({
+          change: { ...scope, storePath: database.path, scope: "session-entry" },
+          label: "committed",
+          transaction: false,
+          prepared: ["committed", "committed"],
+        })),
+      );
+      seen.length = 0;
+      publishSessionEntryCacheInvalidation(database, { sessionKey: scope.sessionKey });
+      expect(seen.map(({ change }) => change)).toEqual([{ ...scope, storePath: database.path }]);
+      unsubscribe();
+      replaceSessionEntrySync(scope, entry);
+      expect(seen).toHaveLength(1);
+    } finally {
+      unsubscribe();
+      stopProjection();
+    }
+  });
+});
+
+it("publishes committed memory changes after projection without exposing private row facts", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:incognito-row-change",
+      storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    };
+    const owner = memorySessionActorOwners.get({ agentId: scope.agentId, path: scope.storePath });
+    const authority = { assertCurrent() {}, authorize() {} };
+    const actor = await owner.acquire(
+      { database: owner.identity, sessionKey: scope.sessionKey },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    const entry: InternalSessionEntry = {
+      sessionId: "private-row-change",
+      createdAt: 1,
+      updatedAt: 1,
+      label: "Private label must not enter lifetime facts",
+      incognito: true,
+    };
+    expect(
+      await actor.storage!.mutate(
+        {
+          type: "session.entry.create",
+          input: { entry },
+        },
+        authority,
+      ),
+    ).toMatchObject({ kind: "committed" });
+    const original = actor.storage!.readCurrent(
+      { type: "session.entry.read", input: {} },
+      authority,
+    );
+    const order: string[] = [];
+    const projections: SessionRowChange[] = [];
+    const seen: SessionRowChange[] = [];
+    const stopProjection = sessionChanges.subscribeProjection((change) => {
+      projections.push(change);
+      expect(owner.readSession(scope.sessionKey, authority)?.entry?.updatedAt).toBe(2);
+      order.push("projection");
+    });
+    const unsubscribe = sessionChanges.subscribe((change) => {
+      seen.push(change);
+      order.push("observer");
+    });
+    const write = (rollback: boolean) =>
+      actor.storage!.mutate(
+        {
+          type: "session.entry.replace",
+          input: { expected: original, entry: { ...original!, updatedAt: 2 } },
+        },
+        authority,
+        {
+          beforeCommit() {
+            expect(seen).toEqual([]);
+            expect(projections).toEqual([]);
+            if (rollback) {
+              throw new Error("rollback");
+            }
+          },
+        },
+      );
+    try {
+      await expect(write(true)).resolves.toMatchObject({
+        kind: "rolled-back",
+        error: { message: "rollback" },
+      });
+      expect(owner.readSession(scope.sessionKey, authority)?.entry?.updatedAt).toBe(1);
+      expect(seen).toEqual([]);
+      expect(projections).toEqual([]);
+      await expect(write(false)).resolves.toMatchObject({ kind: "committed" });
+      expect(projections).toEqual([
+        {
+          ...scope,
+          facts: {
+            kind: "replacement",
+            communicationBinding:
+              '["private-row-change",null,null,null,null,null,null,null,null,null,null,null]',
+            membership: [
+              scope.sessionKey,
+              null,
+              [],
+              { participants: undefined, participantCount: undefined },
+              entry.sessionId,
+            ],
+            lifecycleChanged: false,
+          },
+        },
+      ]);
+      expect(seen).toEqual([scope]);
+      expect(order).toEqual(["projection", "observer"]);
+    } finally {
+      unsubscribe();
+      stopProjection();
+      await actor.release();
+      memorySessionActorOwners.closeDatabase(owner);
+    }
+  });
+});
 
 it.each(["delete", "retain-windows", "first-transcript"] as const)(
   "publishes only the changed key for a cold %s write after commit",

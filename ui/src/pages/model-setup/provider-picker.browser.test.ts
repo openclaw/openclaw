@@ -1,6 +1,6 @@
 import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AgentSelect } from "../../components/agent-select.ts";
+import type { AgentSelectElement } from "../../components/agent-select.ts";
 import "../../components/agent-select-registration.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import "../../components/web-awesome.ts";
@@ -55,7 +55,7 @@ describe.runIf("__vitest_browser__" in globalThis)("selected dropdown opening", 
         host.append(picker);
       }
       document.body.append(host);
-      const agentPicker = host.querySelector<AgentSelect>("openclaw-agent-select");
+      const agentPicker = host.querySelector<AgentSelectElement>("openclaw-agent-select");
       await agentPicker?.updateComplete;
       if (kind === "agent") {
         const trigger = host.querySelector<HTMLButtonElement>(".agent-select__trigger")!;

@@ -2,10 +2,10 @@ import { randomUUID } from "node:crypto";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { bindSessionEntryPublicationSource } from "./session-accessor.sqlite-entry-cache-publication.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
-import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
+import type { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import { runSessionCollaborationWrite } from "./session-sharing-store.async.js";
-import {
+import type {
   addSessionSuggestion,
   claimSessionSuggestionDispatch,
   finalizeSessionSuggestionClaim,
@@ -26,7 +26,6 @@ export function assignSessionOwnerInWorker(
   return runSessionCollaborationWrite(
     scope,
     { type: "owner.assign", input: { scope, params: capturedParams } },
-    (capturedScope) => assignSessionOwner(capturedScope, capturedParams),
     (result, location, database, currentKeys) => {
       if (result.value && (!currentKeys || currentKeys.has(location.sessionKey))) {
         if (!database) {
@@ -66,7 +65,6 @@ export function addSessionSuggestionInWorker(
   return runSessionCollaborationWrite(
     scope,
     { type: "suggestion.add", input: { scope, params: capturedParams } },
-    (capturedScope) => addSessionSuggestion(capturedScope, capturedParams),
     (result) => result,
     assertCurrent,
   );
@@ -81,7 +79,6 @@ export function claimSessionSuggestionDispatchInWorker(
   return runSessionCollaborationWrite(
     scope,
     { type: "suggestion.claim", input: { scope, params: capturedParams } },
-    (capturedScope) => claimSessionSuggestionDispatch(capturedScope, capturedParams),
     (result) => result,
     assertCurrent,
   );
@@ -96,7 +93,6 @@ export function releaseSessionSuggestionDispatchInWorker(
   return runSessionCollaborationWrite(
     scope,
     { type: "suggestion.release", input: { scope, params: capturedParams } },
-    (capturedScope) => releaseSessionSuggestionDispatch(capturedScope, capturedParams),
     (result) => result,
     assertCurrent,
   );
@@ -111,7 +107,6 @@ export function finalizeSessionSuggestionClaimInWorker(
   return runSessionCollaborationWrite(
     scope,
     { type: "suggestion.finalize", input: { scope, params: capturedParams } },
-    (capturedScope) => finalizeSessionSuggestionClaim(capturedScope, capturedParams),
     (result) => result,
     assertCurrent,
   );

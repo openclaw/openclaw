@@ -348,14 +348,11 @@ export function createSessionActorWorker(
     const current = physicalIdentity();
     const requested = target.database;
     const matches =
-      current.kind === "file" && requested.kind === "file"
-        ? current.physicalIdentity === requested.physicalIdentity &&
-          current.birthtime === requested.birthtime &&
-          current.nativeLocation === requested.nativeLocation
-        : current.kind === "ephemeral" &&
-          requested.kind === "ephemeral" &&
-          current.handle === requested.handle &&
-          current.incarnation === requested.incarnation;
+      current.kind === "file" &&
+      requested.kind === "file" &&
+      current.physicalIdentity === requested.physicalIdentity &&
+      current.birthtime === requested.birthtime &&
+      current.nativeLocation === requested.nativeLocation;
     if (closed || !matches) {
       throw new Error("Session actor lost its physical database owner");
     }
@@ -535,56 +532,52 @@ export function createSessionActorWorker(
                 : value && "turn" in value
                   ? value.turn
                   : undefined;
-            if (context.captureCommitReceipt) {
-              context.captureCommitReceipt(opened.db, accepted);
-            } else {
-              const serialized = serialize(accepted);
-              if (serialized.byteLength > SQLITE_WORKER_MAX_MESSAGE_BYTES) {
-                const transfer = createSqliteWorkerTransferOwner();
-                const handle = transfer.start([{ kind: "outcome", serialized }].values(), {
-                  kinds: ["outcome"],
-                });
-                try {
-                  let frame = transfer.next(handle.id);
-                  let finalFrames;
-                  for (;;) {
-                    const next = transfer.next(handle.id);
-                    if (next.done) {
-                      finalFrames = [frame, next];
-                      break;
-                    }
-                    admit("transaction", {
-                      kind: "session-actor-admission",
-                      snapshot: projectSessionActorAuthority(working.hot),
-                      publication: {
-                        kind: "session-actor-outcome",
-                        transfer: { handle, frames: [frame] },
-                      },
-                    });
-                    frame = next;
+            const serialized = serialize(accepted);
+            if (serialized.byteLength > SQLITE_WORKER_MAX_MESSAGE_BYTES) {
+              const transfer = createSqliteWorkerTransferOwner();
+              const handle = transfer.start([{ kind: "outcome", serialized }].values(), {
+                kinds: ["outcome"],
+              });
+              try {
+                let frame = transfer.next(handle.id);
+                let finalFrames;
+                for (;;) {
+                  const next = transfer.next(handle.id);
+                  if (next.done) {
+                    finalFrames = [frame, next];
+                    break;
                   }
-                  const receipt = {
-                    kind: "session-actor-committed-transfer" as const,
-                    transferId: handle.id,
-                  };
-                  deferSqliteWorkerCommitReceipt(opened.db, receipt);
-                  admit("commit", {
+                  admit("transaction", {
                     kind: "session-actor-admission",
                     snapshot: projectSessionActorAuthority(working.hot),
                     publication: {
                       kind: "session-actor-outcome",
-                      transfer: { handle, frames: finalFrames },
-                      publication: turn ?? commitPublication,
+                      transfer: { handle, frames: [frame] },
                     },
-                    final: true,
                   });
-                  return accepted;
-                } finally {
-                  transfer.cancel();
+                  frame = next;
                 }
+                const receipt = {
+                  kind: "session-actor-committed-transfer" as const,
+                  transferId: handle.id,
+                };
+                deferSqliteWorkerCommitReceipt(opened.db, receipt);
+                admit("commit", {
+                  kind: "session-actor-admission",
+                  snapshot: projectSessionActorAuthority(working.hot),
+                  publication: {
+                    kind: "session-actor-outcome",
+                    transfer: { handle, frames: finalFrames },
+                    publication: turn ?? commitPublication,
+                  },
+                  final: true,
+                });
+                return accepted;
+              } finally {
+                transfer.cancel();
               }
-              deferSqliteWorkerCommitReceipt(opened.db, accepted);
             }
+            deferSqliteWorkerCommitReceipt(opened.db, accepted);
             admit("commit", {
               kind: "session-actor-admission",
               snapshot: projectSessionActorAuthority(working.hot),

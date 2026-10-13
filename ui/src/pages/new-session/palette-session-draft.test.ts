@@ -5,7 +5,7 @@ import { html } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { AgentSelect } from "../../components/agent-select.ts";
+import type { AgentSelectElement } from "../../components/agent-select.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { writeSessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
 import * as toast from "../../lib/toast.ts";
@@ -160,7 +160,7 @@ describe("PaletteSessionDraft", () => {
       ],
     });
     const picker = expectDefined(
-      host.querySelector<AgentSelect>("openclaw-agent-select"),
+      host.querySelector<AgentSelectElement>("openclaw-agent-select"),
       "palette agent picker",
     );
     await picker.updateComplete;
@@ -562,7 +562,7 @@ async function mountPreferences(initial: Record<string, unknown> = {}) {
     );
   const select = () =>
     expectDefined(
-      fixture.host.querySelector<AgentSelect>("openclaw-agent-select"),
+      fixture.host.querySelector<AgentSelectElement>("openclaw-agent-select"),
       "palette agent select",
     );
   const worktree = () =>
@@ -688,7 +688,7 @@ describe("palette-only remembered settings", () => {
         );
         if (edited) {
           const select = expectDefined(
-            current.querySelector<AgentSelect>("openclaw-agent-select"),
+            current.querySelector<AgentSelectElement>("openclaw-agent-select"),
             "replacement agent",
           );
           select.onSelect("other");
@@ -707,7 +707,7 @@ describe("palette-only remembered settings", () => {
               ?.checked,
           ).toBe(!edited),
         );
-        expect(current.querySelector<AgentSelect>("openclaw-agent-select")?.value).toBe(
+        expect(current.querySelector<AgentSelectElement>("openclaw-agent-select")?.value).toBe(
           edited ? "main" : "other",
         );
       } finally {

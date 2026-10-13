@@ -7,7 +7,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils.js";
+import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store-lookup.js";
 
 describe("sessions.patchMany orchestration", () => {
   const context = (overrides: Record<string, unknown> = {}) =>

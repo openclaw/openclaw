@@ -13,7 +13,7 @@ import { Icon } from "./solid/icon.tsx";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 import { Menu, type MenuItem, type MenuHandle } from "./solid/menu.tsx";
 
-export type AgentSelectProps = {
+type AgentSelectProps = {
   options: readonly AgentSelectOption[];
   value: string;
   placeholder: string;
@@ -26,8 +26,7 @@ export type AgentSelectProps = {
   onCreateAgent: (() => void) | null;
 };
 export type AgentSelectElement = SolidBridgeElement<AgentSelectProps>;
-export type AgentSelect = AgentSelectElement;
-export const AgentSelect = defineSolidBridge<AgentSelectProps>(
+defineSolidBridge<AgentSelectProps>(
   "openclaw-agent-select",
   (props) => {
     const id = `agent-select-${generateUUID()}`;

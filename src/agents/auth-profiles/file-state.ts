@@ -8,12 +8,17 @@ import {
 import { hasErrnoCode } from "../../infra/errno.js";
 import { observeOwnedDirectory } from "../../infra/owned-directory-observation.js";
 import {
+  captureSqliteReadOnlyWorkerScope,
+  readOnlyWorkerScope,
+} from "../../infra/sqlite-readonly-worker-context.js";
+import {
   inspectDatabasePathIdentitySync,
   readDatabasePathIdentity,
   databaseFileIdentityKey,
   readDatabaseIdentityBirthtime,
   type DatabasePathIdentity,
 } from "../../infra/sqlite-worker-identity.js";
+import { getSpawnBroker, runWithSpawnBroker } from "../../process/spawn-broker/context.js";
 import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-maintenance-context.js";
@@ -31,6 +36,7 @@ type DirectoryState = {
   presence: Map<string, boolean>;
   sourceVersions: Map<string, string | undefined>;
   observation: { close(): void };
+  publishChange: (change: FileChange) => Promise<void>;
   refresh?: Promise<void>;
   dirty: boolean;
 };
@@ -171,19 +177,13 @@ function refreshDirectory(directory: string, state: DirectoryState): Promise<voi
           }
         }
         if (state.identities.size || sourcesChanged) {
-          await Promise.all(
-            Array.from(listeners, (listener) =>
-              Promise.resolve(
-                listener({
-                  directory,
-                  identityChanged,
-                  sourcesChanged,
-                  contentsChanged,
-                  createdPaths,
-                }),
-              ),
-            ),
-          );
+          await state.publishChange({
+            directory,
+            identityChanged,
+            sourcesChanged,
+            contentsChanged,
+            createdPaths,
+          });
         }
       }
     } finally {
@@ -191,6 +191,31 @@ function refreshDirectory(directory: string, state: DirectoryState): Promise<voi
     }
   });
   return state.refresh;
+}
+
+function captureFileChangePublisher(): DirectoryState["publishChange"] {
+  const broker = getSpawnBroker();
+  const runWithReaders = captureSqliteReadOnlyWorkerScope();
+  const signal = readOnlyWorkerScope.getStore()?.controller.signal;
+  // Restore only host readers at publication, after physical file facts settle.
+  // A scan spanning a restart uses the current publisher, never old request authority.
+  return async (change) => {
+    if (signal?.aborted) {
+      return;
+    }
+    await runWithSpawnBroker(broker, () =>
+      runWithReaders(() =>
+        Promise.all(Array.from(listeners, (listener) => Promise.resolve(listener(change)))),
+      ),
+    );
+  };
+}
+
+/** Retained shared state survives a restart; its observers must use the new Gateway readers. */
+export function bindAuthProfileFileObservationReaders(): void {
+  for (const state of directories.values()) {
+    state.publishChange = captureFileChangePublisher();
+  }
 }
 
 function directoryState(directory: string): DirectoryState {
@@ -204,6 +229,7 @@ function directoryState(directory: string): DirectoryState {
     presence: new Map(),
     sourceVersions: new Map(),
     dirty: false,
+    publishChange: captureFileChangePublisher(),
     observation: observeOwnedDirectory(directory, (filename) => {
       if (
         filename === undefined ||

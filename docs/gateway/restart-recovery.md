@@ -731,10 +731,14 @@ interrupted by a restart and to continue from the existing transcript. If a
 final reply had already been produced but not delivered, its text is included
 so the agent can deliver it instead of redoing the work.
 
-Startup recovery prepares and admits one continuation at a time to bound database
-and worker pressure. Once execution starts, the normal main lane owns concurrency;
-a long recovered turn does not hold a separate startup slot. Deferred database
-admissions join the same startup scheduler. Shutdown stops new preparation and
+Startup recovery prepares one continuation at a time. Automatic continuations
+execute in the one-wide background command lane, retaining its slot until the turn
+finishes. Interactive turns use the main lane, so a large recovery backlog cannot
+fill their execution slots. Later interrupted turns keep their durable claims
+while waiting; a long recovered turn delays other automatic continuations.
+Optional startup database maintenance and page-cache warming wait for this
+backlog to drain; runtime timers and cron startup proceed independently. Deferred
+database admissions join the same startup scheduler. Shutdown stops new preparation and
 joins the current pass, leaving unstarted interruptions available for the next boot.
 
 Recovery follows retained transcript-window ownership when a session moves to a

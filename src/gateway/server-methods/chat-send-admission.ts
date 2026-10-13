@@ -547,8 +547,13 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
       entry: activeRunAbort.entry,
       abortSession,
     });
-    releaseCallerAuthority = () =>
-      releaseChatSendCallerAuthority({ operator: capturedOperator, request });
+    releaseCallerAuthority = () => {
+      try {
+        releaseChatSendCallerAuthority({ operator: capturedOperator, request });
+      } finally {
+        session.releaseSessionStorage?.();
+      }
+    };
     // Authority stays fresh per segment; effects check cancellation themselves.
     // A cancelled admission callback must still reach the handler's abort settlement.
     const consumeCurrent = <T>(consume: () => T): Promise<T | undefined> =>

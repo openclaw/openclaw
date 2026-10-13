@@ -1,8 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import {
+  getSessionActorStorageBinding,
+  captureSessionActorStorageOwner,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { withCanonicalSessionValidationDeferral } from "../config/sessions/session-canonical-validation-deferral.js";
-import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -342,7 +344,6 @@ export function createSessionRowPlacementProjection(
     ): ReturnType<typeof withPreparedSessionRows<T>> {
       const signal = getAsyncWorkSignal();
       const memory = getSessionActorStorageBinding({});
-      const binding = memory ? undefined : captureIncognitoSessionBinding();
       const assertActive = () => {
         signal?.throwIfAborted();
         if (disposed || !isActive()) {
@@ -354,6 +355,7 @@ export function createSessionRowPlacementProjection(
         | Extract<ReturnType<typeof withCanonicalSessionValidationDeferral>, { kind: "pending" }>
         | undefined;
       let preparedQueries: readonly Lookup[] = [];
+      let hasPrivateQueries = false;
       let selectedIds: readonly string[] = [];
       const privateTargets = new Map<string, PrivatePlacementTarget>();
       const privateRepositories = new Map<string, PreparedPrivateSessionRepository>();
@@ -369,54 +371,40 @@ export function createSessionRowPlacementProjection(
           privateSelections = [];
           privateTargets.clear();
           preparedQueries = queries(cfg);
+          hasPrivateQueries = false;
           const ids: string[] = [];
           for (const query of preparedQueries) {
             const key = privateSessionRowReadKey(cfg, query);
-            const privateMemory =
-              key && memory
-                ? getSessionActorStorageBinding({ ...query, sessionKey: query.key })
-                : undefined;
-            const privateBinding =
-              key && binding
-                ? captureIncognitoSessionBinding({ ...query, sessionKey: query.key, env })
-                : undefined;
-            const entry = privateMemory
-              ? privateMemory.actor.snapshot(privateMemory.authority)?.entry
-              : privateBinding?.actor.sessions.readSharing(query.key)?.entry;
+            hasPrivateQueries ||= key !== undefined;
+            const privateMemory = key
+              ? captureSessionActorStorageOwner(
+                  { ...query, sessionKey: query.key, sessionActor: memory, env },
+                  { assertCurrent: assertActive, authorize: assertActive },
+                )
+              : undefined;
+            const snapshot = privateMemory?.owner?.readSession(query.key, privateMemory.authority);
+            const assertSessionCurrent = privateMemory?.owner?.captureSessionReadGuard(query.key);
             const row = privateMemory
-              ? entry &&
+              ? snapshot?.entry &&
                 createIncognitoSessionRow({
                   cfg,
                   key: query.key,
                   agentId: query.agentId,
                   storePath: privateMemory.path,
-                  entry,
+                  entry: snapshot.entry,
+                  membership: new Set(snapshot.members.map((member) => member.identityId)),
                   source: {
-                    identity:
-                      privateMemory.actor.target.database.kind === "memory"
-                        ? privateMemory.actor.target.database.incarnation
-                        : "",
-                    assertCurrent: () => {
-                      privateMemory.actor.assertReadable();
+                    identity: snapshot.version.epoch,
+                    assertCurrent() {
+                      assertActive();
+                      assertSessionCurrent?.();
+                      privateMemory.binding?.actor.assertReadable();
                       privateMemory.authority.assertCurrent();
                     },
                   },
                 })
-              : privateBinding
-                ? entry &&
-                  createIncognitoSessionRow({
-                    cfg,
-                    key: query.key,
-                    agentId: query.agentId,
-                    storePath: privateBinding.actor.path,
-                    entry,
-                    source: {
-                      identity: privateBinding.actor.identity.incarnation,
-                      assertCurrent: () => privateBinding.actor.assertReadable(),
-                    },
-                  })
-                : inOwnerContext(() => lookup(query));
-            if (key && !privateBinding && row?.entry?.repositoryWorkspaceId) {
+              : inOwnerContext(() => lookup(query));
+            if (key && row?.entry?.repositoryWorkspaceId) {
               privateSelections.push({ key, row, workspaceId: row.entry.repositoryWorkspaceId });
             }
             if (row?.entry) {
@@ -512,7 +500,7 @@ export function createSessionRowPlacementProjection(
             exact = previous;
           }
         };
-        return memory || binding
+        return hasPrivateQueries
           ? withBoundIncognitoSessionRows(cfg, preparedQueries, consumePrepared, env)
           : consumePrepared();
       };
@@ -526,7 +514,7 @@ export function createSessionRowPlacementProjection(
       };
       const assertPublicationCurrent = (placementCurrent = true) => {
         // Only actor-backed preparation retains resources past the synchronous consumer.
-        if (!memory && !binding) {
+        if (!hasPrivateQueries) {
           return;
         }
         assertActive();

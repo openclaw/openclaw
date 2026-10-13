@@ -4,8 +4,6 @@ import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.
 import type { MultiSelectProps } from "./multi-select-types.ts";
 import { MultiSelectView } from "./multi-select-view.tsx";
 
-export type { MultiSelectOption, MultiSelectProps } from "./multi-select-types.ts";
-
 export type MultiSelect = SolidBridgeElement<MultiSelectProps>;
 
 export const MultiSelect = defineSolidBridge<MultiSelectProps>(

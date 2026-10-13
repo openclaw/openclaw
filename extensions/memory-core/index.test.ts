@@ -324,7 +324,7 @@ describe("memory-core plugin runtime registration", () => {
     expect(subagentRun).not.toHaveBeenCalled();
   });
 
-  it("scopes both reply hooks to scheduled turns across three registrations", () => {
+  it("scopes the dreaming reply hook to scheduled turns across three registrations", () => {
     for (let cycle = 1; cycle <= 3; cycle += 1) {
       const replyHookTriggers: unknown[] = [];
       plugin.register(
@@ -338,10 +338,7 @@ describe("memory-core plugin runtime registration", () => {
         }),
       );
 
-      expect(replyHookTriggers, `cycle ${cycle}`).toEqual([
-        ["heartbeat", "cron"],
-        ["heartbeat", "cron"],
-      ]);
+      expect(replyHookTriggers, `cycle ${cycle}`).toEqual([["heartbeat", "cron"]]);
     }
   });
 

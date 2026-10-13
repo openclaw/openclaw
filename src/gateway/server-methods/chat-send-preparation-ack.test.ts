@@ -131,7 +131,7 @@ it("retries a failed custody write with the same request identity without acknow
   }
 });
 
-it.for(["durable", "native-incognito"] as const)(
+it.for(["durable", "memory"] as const)(
   "acknowledges %s chat input while unrelated history cannot dispatch",
   async (storage, { signal }) => {
     const fixture = await createFixture({ active: false, storage });
@@ -163,7 +163,7 @@ it.for(["durable", "native-incognito"] as const)(
     const respond = vi.fn<RespondFn>((ok) => {
       if (ok) {
         entryAtAck = loadSessionEntry(fixture.scope);
-        transcriptAtAck = loadTranscriptEventsSync(fixture.scope);
+        transcriptAtAck = fixture.readTranscript();
       }
       acknowledged.resolve();
     });
@@ -185,7 +185,7 @@ it.for(["durable", "native-incognito"] as const)(
         lifecycleRunId: fixture.params.idempotencyKey,
         restartRecoveryDeliveryRunId: fixture.params.idempotencyKey,
         restartRecoveryDeliverySourceRunId: fixture.params.idempotencyKey,
-        ...(storage === "native-incognito" ? { incognito: true } : {}),
+        ...(storage === "memory" ? { incognito: true } : {}),
       });
       expect(transcriptAtAck).toHaveLength(fixture.activeTranscript.length + 1);
       expect(transcriptAtAck?.at(-1)).toMatchObject({

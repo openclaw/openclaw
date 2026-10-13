@@ -21,7 +21,6 @@ import type {
   SessionActorTarget,
 } from "./session-actor-contract.js";
 import type {
-  EphemeralTarget,
   FileTarget,
   ReplicaCell,
   ReplicaPool,
@@ -568,16 +567,11 @@ export function retainSessionActorEntryFacts(
 }
 
 /** Handles retain their own authority; complete physical postimages survive handle release. */
-export function createSessionActorReplica(
-  params: { lifetime: SessionActorLifetime } & (
-    | { target: FileTarget; currentWriteToken?: never; currentGeneration: () => string | undefined }
-    | {
-        target: EphemeralTarget;
-        currentWriteToken: (state: SessionActorHotState) => string | undefined;
-        currentGeneration?: never;
-      }
-  ),
-) {
+export function createSessionActorReplica(params: {
+  lifetime: SessionActorLifetime;
+  target: FileTarget;
+  currentGeneration: () => string | undefined;
+}) {
   ensureReplicaSubscription();
   const target = freezeJsonSnapshot(structuredClone(params.target));
   const key = targetKey(target);
@@ -597,18 +591,13 @@ export function createSessionActorReplica(
   };
   const generation = (): string | undefined => {
     try {
-      return target.database.kind === "file"
-        ? params.currentGeneration?.()
-        : target.database.incarnation;
+      return params.currentGeneration();
     } catch {
       return undefined;
     }
   };
   const currentToken = (state: SessionActorHotState): string | undefined => {
     const { database, sessionKey } = target;
-    if (database.kind !== "file") {
-      return params.currentWriteToken?.(state);
-    }
     try {
       const identity = readDatabasePathIdentitySync(database.nativeLocation);
       if (

@@ -5,6 +5,13 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  bindAuthProfileFileObservationReaders,
+  readAuthProfileDatabaseIdentity,
+  refreshAuthProfileFileState,
+  registerAuthProfileFileChangeListener,
+} from "../agents/auth-profiles/file-state.js";
+import { watchAuthProfileNativeCommits } from "../agents/auth-profiles/store-update-commit.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { createScheduledGatewayRunner } from "../gateway/scheduled-run-gateway-context.js";
 import { GatewayConnectionWork } from "../gateway/server-connection-work.js";
@@ -16,6 +23,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { revokeAgentDatabaseResources } from "../state/openclaw-agent-db-resources.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import {
@@ -37,6 +45,83 @@ afterEach(() => {
   vi.mocked(spawn).mockReset();
 });
 const skipBroker = process.platform === "win32";
+
+it.skipIf(skipBroker)(
+  "reuses the Gateway reader through detached observations and retained-state restart",
+  async () => {
+    vi.spyOn(fs, "watch").mockImplementation(() => {
+      throw new Error("synthetic unavailable watcher");
+    });
+    const { source, store } = createAuthDatabase();
+    const writer = openNodeSqliteDatabase(source);
+    admitSqliteSchema(writer);
+    const broker = createSpawnBrokerHost();
+    const scope = createSqliteReadOnlyWorkerScope();
+    const restartedScope = createSqliteReadOnlyWorkerScope();
+    let publication: ReturnType<typeof watchAuthProfileNativeCommits> | undefined;
+    let pendingRefresh: Promise<void> | undefined;
+    const observed: unknown[] = [];
+    let refresh = () => read(source, "canonical");
+    const unsubscribe = registerAuthProfileFileChangeListener(async ({ directory }) => {
+      if (directory !== path.dirname(source)) {
+        return;
+      }
+      const rows = await refresh();
+      observed.push(rows.store);
+      // Credential publication can replace the observation's refresh callback.
+      refresh = () => read(source, "canonical");
+    });
+    try {
+      await broker.ready();
+      const brokerSpawn = vi.spyOn(broker, "spawn");
+      vi.mocked(spawn).mockClear();
+      runWithSpawnBroker(broker, () => scope.run(() => readAuthProfileDatabaseIdentity(source)));
+      writer
+        .prepare("UPDATE auth_profile_state SET state_json = ?")
+        .run('{"lastGood":{"fixture":"fixture-next"}}');
+      await runInDetachedAsyncContext(refreshAuthProfileFileState);
+      const rotated = { ...store, profiles: {} };
+      writer.prepare("UPDATE auth_profile_store SET store_json = ?").run(JSON.stringify(rotated));
+      await runInDetachedAsyncContext(refreshAuthProfileFileState);
+      clearAuthState(source);
+      await runInDetachedAsyncContext(refreshAuthProfileFileState);
+      expect(observed).toEqual([
+        { status: "readable", raw: store },
+        { status: "readable", raw: rotated },
+        { status: "readable", raw: rotated },
+      ]);
+      expect(brokerSpawn).toHaveBeenCalledTimes(1);
+      expect(spawn).not.toHaveBeenCalled();
+      publication = watchAuthProfileNativeCommits(source);
+      pendingRefresh = runInDetachedAsyncContext(refreshAuthProfileFileState);
+      await scope.close();
+      expect(brokerSpawn.mock.results[0]?.value.exitCode).toBe(0);
+      expect(observed).toHaveLength(3);
+      runWithSpawnBroker(broker, () => restartedScope.run(bindAuthProfileFileObservationReaders));
+      writer.prepare("UPDATE auth_profile_store SET store_json = ?").run(JSON.stringify(store));
+      publication.dispose();
+      await pendingRefresh;
+      expect(observed).toHaveLength(4);
+      expect(observed[3]).toEqual({ status: "readable", raw: store });
+      expect(brokerSpawn).toHaveBeenCalledTimes(2);
+      expect(spawn).not.toHaveBeenCalled();
+      await restartedScope.close();
+      expect(brokerSpawn.mock.results[1]?.value.exitCode).toBe(0);
+      clearAuthState(source);
+      await runInDetachedAsyncContext(refreshAuthProfileFileState);
+      expect(observed).toHaveLength(4);
+    } finally {
+      publication?.dispose();
+      await Promise.allSettled(pendingRefresh ? [pendingRefresh] : []);
+      unsubscribe();
+      await closeOpenClawStateDatabaseAsync();
+      await scope.close();
+      await restartedScope.close();
+      await broker.close();
+      writer.close();
+    }
+  },
+);
 
 function createAuthDatabase(key = "synthetic", metadata?: Record<string, string>) {
   const source = path.join(tempDirs.make("openclaw-auth-transport-"), "source.sqlite");

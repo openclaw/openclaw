@@ -4,8 +4,8 @@ import { listAgentIds } from "../agents/agent-scope.js";
 import { listSubagentSessionListRunsForControllers } from "../agents/subagents/registry/subagent-registry-read.js";
 import { resolveAgentMainSessionKey, type SessionEntry } from "../config/sessions.js";
 import { collectCanonicalSessionLookupKeys } from "../config/sessions/main-session-key.js";
+import { captureMemoryExactSessionReader } from "../config/sessions/session-accessor.memory-exact-read.js";
 import type { SessionEntryReadScope } from "../config/sessions/session-accessor.types.js";
-import { listIncognitoSessionChildEntriesReadOnly } from "../config/sessions/session-entry-children-incognito.js";
 import { SessionEntryChangedDuringReadError } from "../config/sessions/session-entry-read-errors.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionMember } from "../config/sessions/session-membership-facts.types.js";
@@ -315,7 +315,6 @@ export async function withGatewaySessionStoreTarget<T>(
       env: params.env,
       includeMembership: params.includeMembership,
       identity,
-      resolve: () => resolveGatewaySessionStoreTargetWithStore(normalized),
       consume: (target, membership, assertCurrent) =>
         consume(target, membership, assertCurrent, []),
     });
@@ -612,20 +611,14 @@ function includeIncognitoDirectChildEntries(
   try {
     const parentKeys = new Set([target.canonicalKey, ...target.storeKeys]);
     const childKeys = new Set<string>();
-    for (const parentKey of parentKeys) {
-      for (const { sessionKey, entry } of listIncognitoSessionChildEntriesReadOnly({
-        agentId: target.agentId,
-        env,
-        clone: false,
-        projection: "list",
-        sessionKey: parentKey,
-        storePath: target.storePath,
-      })) {
-        // Child discovery must not replace a selected full entry with metadata.
-        if (!parentKeys.has(sessionKey)) {
-          target.store[sessionKey] = entry;
-        }
-      }
+    const memory = captureMemoryExactSessionReader({
+      agentId: target.agentId,
+      env,
+      sessionKey: target.canonicalKey,
+      storePath: target.storePath,
+    });
+    for (const { sessionKey, entry } of memory?.children([...parentKeys], "list") ?? []) {
+      target.store[sessionKey] = entry;
     }
     for (const { childSessionKey } of listSubagentSessionListRunsForControllers([...parentKeys])) {
       childKeys.add(childSessionKey);
