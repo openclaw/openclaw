@@ -7665,7 +7665,6 @@
 ["src/gateway/server.sessions.fixture-lifecycle.test.ts","./server-runtime-state.js","be09a9a1e124aa76847e4218e782c00ebdab73adece4eaf204b13b81a21a7677",1]
 ["src/gateway/server.spawn-broker.test.ts","../logging/subsystem.js","d4eecaf978f0f05f2435be156c194be4c367e18d4b9d23917ff3ca7b538f5798",1]
 ["src/gateway/server.spawn-broker.test.ts","./server-start.js","3c58cbb5b59f7fd4bba0f2f37dd5c93db9e219de0d2d5f838b77f418f4c38c50",1]
-["src/gateway/server.sqlite-capability.test.ts","../infra/bun-sqlite-library.js","b8e24933954078650a0a7cc60d14796fca9baaf456044ec7f037a2350ef88baa",1]
 ["src/gateway/server.sqlite-capability.test.ts","../infra/gateway-lock.js","dfe3fff0d0c2c2235aa957510915e2df0258de1be8c13f05108af903beaa07cf",1]
 ["src/gateway/server.state-owner.test.ts","../state/openclaw-state-lease-heartbeat.js","01f94b818c19226a9d6c5577e1a5d35a1c046c47728641d2c9e7355d32acce55",1]
 ["src/gateway/server.state-owner.test.ts","./server-start.js","361d44a310c9a6545b2a2455d9ab63a86e810961d551d54db8c60961ec64ffa8",1]

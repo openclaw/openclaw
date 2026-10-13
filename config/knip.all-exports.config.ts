@@ -55,6 +55,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/scripts/pr-review-artifacts.node.mjs!",
   // SHA-pinned dispatch tests load this admission transport by a generated file URL.
   "test/scripts/full-release-validation-at-sha.admission-fixture.mjs!",
+  // The state-reader build test launches this native dependency fixture by path.
+  "test/scripts/state-read-worker-dependency.test-support.mts!",
   // tsgo:test:root checks these compile-only contracts without runtime imports.
   "test/type-contracts/**/*.ts!",
   // The corpus README runs this generator by path; remove with that proof command.

@@ -2112,8 +2112,11 @@ retention, and update behavior are unchanged.
 
 Completed full expected-schema descriptions are shared across bundled module
 copies and inherited by newly created workers through that same launcher. The
-Gateway prepares the canonical shared-state and agent descriptions during boot
-admission, after SQLite runtime selection and before starting database workers.
+Gateway prepares these descriptions only when boot admission needs schema
+comparison. A valid clean-close receipt skips both comparison and template
+construction. Cold shared-state inspection publishes its completed description;
+agent admission misses and empty installations prepare the agent description
+before starting their runtime workers.
 The cache is keyed by complete canonical SQL, so same-version additive definitions
 remain distinct. Actual admitted facts are shared separately by physical database
 identity; the first admission still refuses newer database versions. Retained
@@ -2129,9 +2132,10 @@ table, and column checks consume them. Newer headers still refuse before catalog
 inspection; the content-version marker still handles delayed updater publication.
 Current content skips historical migration discovery and shares one table-contract
 reader between maintenance and runtime validation. Canonical shape and index
-checks remain required even at the current version. Shared state has no durable
-clean-close integrity receipt, so restarting still checks physical integrity and
-foreign keys; an agent database's clean-close proof does not certify shared state.
+checks remain required even at the current version unless that database has a
+valid clean-close integrity receipt. Unclean shutdowns and changed files still
+require physical integrity and foreign-key checks; an agent database's
+clean-close proof does not certify shared state.
 Updates keep their existing migrations and publication policy, and explicit
 Doctor integrity inspection remains uncached.
 
