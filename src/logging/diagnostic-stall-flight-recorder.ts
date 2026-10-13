@@ -97,7 +97,7 @@ export function createStallFlightRecorder(
               (_match, name: string, location: string, url: string) =>
                 `"functionName":${JSON.stringify(name)}${location}${JSON.stringify(url)}}`,
             ),
-          ) as NativeCpuProfile;
+          ) as NativeCpuProfile; // SAFETY: V8 owns the profile shape and numeric script IDs.
           const nodes = new Map(profile.nodes.map((node) => [node.id, node]));
           const parents = new Map<number, number>();
           for (const node of profile.nodes) {
