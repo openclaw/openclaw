@@ -6,7 +6,6 @@ import {
   type SessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
 import {
-  isSessionMember,
   listSessionMembers,
   readSessionMembersInWorker,
 } from "../config/sessions/session-sharing-store.js";
@@ -155,7 +154,6 @@ it("reads sibling sharing from the captured owner after leaving the actor scope"
         authority,
       ),
     ).toMatchObject({ kind: "committed" });
-    expect(isSessionMember(scope, "sibling-reader")).toBe(true);
     expect(listSessionMembers(scope)).toEqual([
       { identityId: "sibling-reader", addedBy: "owner", addedAt: 1 },
     ]);
@@ -164,7 +162,6 @@ it("reads sibling sharing from the captured owner after leaving the actor scope"
       { type: "session.collaboration.remove", input: { identityId: "sibling-reader" } },
       authority,
     );
-    expect(isSessionMember(scope, "sibling-reader")).toBe(false);
     expect(listSessionMembers(scope)).toEqual([]);
     expect(
       await readSessionMembersInWorker({

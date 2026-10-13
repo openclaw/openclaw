@@ -101,6 +101,13 @@ describe("prepared project retention compatibility", () => {
       return {
         project,
         setupRecipe: "e".repeat(40),
+        recipe: {
+          source: "script",
+          identity: "e".repeat(40),
+          inputs: { ".openclaw/worktree-setup.sh": "e".repeat(40) },
+          env: {},
+          onCreate: ["./.openclaw/worktree-setup.sh"],
+        },
         assertCurrent: () => {
           if (!current) {
             throw new Error("Repository owner changed");
@@ -145,6 +152,7 @@ describe("prepared project retention compatibility", () => {
     sourceAdmission.mockResolvedValue({
       project,
       setupRecipe: undefined,
+      recipe: { source: "none", inputs: {}, env: {} },
       assertCurrent: () => {},
       revalidate: async () => {},
       prepareGitPack,

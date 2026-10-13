@@ -1,8 +1,9 @@
 import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiEnvironment } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
-import { AppTopbar } from "./app-topbar.ts";
+import "./app-topbar.ts";
 import { MacosTitlebarControls } from "./macos-titlebar-controls.runtime.ts";
 import { renderNewSessionLink } from "./new-session-link.ts";
 
@@ -12,7 +13,7 @@ afterEach(() => {
 });
 
 describe("Solid shell chrome", () => {
-  it("updates the topbar's environment and drawer state while retaining its action target", () => {
+  it("updates the topbar's environment and drawer state while retaining its action target", async () => {
     const [environment, setEnvironment] = createSignal<ControlUiEnvironment | null>(null);
     const [open, setOpen] = createSignal(false);
     const [newSessionAction, setNewSessionAction] = createSignal<unknown>(undefined);
@@ -20,15 +21,17 @@ describe("Solid shell chrome", () => {
     const palette = vi.fn();
     const openSession = vi.fn();
     const view = mountSolid(() => (
-      <AppTopbar
-        environment={environment()}
-        navDrawerOpen={open()}
-        newSessionAction={newSessionAction()}
-        resourceBasePath="/control"
-        onToggleDrawer={toggle}
-        onOpenPalette={palette}
+      <openclaw-app-topbar
+        prop:environment={environment()}
+        prop:navDrawerOpen={open()}
+        prop:newSessionAction={newSessionAction()}
+        prop:resourceBasePath="/control"
+        prop:onToggleDrawer={toggle}
+        prop:onOpenPalette={palette}
       />
     ));
+    const topbar = view.container.querySelector<SolidBridgeElement<object>>("openclaw-app-topbar")!;
+    await topbar.updateComplete;
     const drawer = view.container.querySelector<HTMLButtonElement>(".topbar-nav-toggle")!;
     expect(view.container.querySelector<HTMLElement>("openclaw-app-topbar")?.style.display).toBe(
       "contents",
@@ -54,6 +57,7 @@ describe("Solid shell chrome", () => {
       }),
     );
     flush();
+    await topbar.updateComplete;
     const newSession = view.container.querySelector<HTMLAnchorElement>(
       ".topnav-shell__actions .header-new-session",
     )!;
@@ -63,12 +67,14 @@ describe("Solid shell chrome", () => {
 
     setNewSessionAction(undefined);
     flush();
+    await topbar.updateComplete;
     expect(view.container.querySelector(".header-new-session")).toBeNull();
     expect(view.container.querySelector(".topbar-search")).toBe(search);
 
     setEnvironment({ label: "edge", color: "amber" });
     setOpen(true);
     flush();
+    await topbar.updateComplete;
     expect(view.container.querySelector(".control-ui-environment-pill")?.textContent).toBe("edge");
     expect(view.container.querySelector(".topbar-nav-toggle")).toBe(drawer);
     expect(drawer.getAttribute("aria-expanded")).toBe("true");
@@ -76,6 +82,7 @@ describe("Solid shell chrome", () => {
 
     setEnvironment(null);
     flush();
+    await topbar.updateComplete;
     expect(view.container.querySelector(".control-ui-environment-pill")).toBeNull();
   });
 

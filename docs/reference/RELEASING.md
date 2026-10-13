@@ -25,7 +25,10 @@ For switching channels, see [Release channels](/install/development-channels).
 Extended-stable includes the Gateway, official npm plugins, and Docker images.
 It does not include native apps or ClawHub publication, and it does not change
 the regular stable channel. Its GitHub release is not marked Latest. A monthly
-line retires when `main` advances into the next month.
+line retires when `main` advances into the next month. Maintain only one
+extended-stable line: the trailing completed month relative to `main`'s version;
+older `.33+` lines are retired. Publishing a retired line requires an explicit
+maintainer decision; never bypass the release guards.
 
 ## Version naming
 

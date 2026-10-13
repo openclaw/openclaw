@@ -23,6 +23,7 @@ import { createSessionsSendTool } from "../agents/tools/sessions-send-tool.js";
 import { createReplyTurnParticipants } from "../auto-reply/reply/reply-run-registry.tool-authority.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import * as pendingInputs from "../config/sessions/session-accessor.pending-inputs.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
 import {
   resolveSqliteStoreScope,
@@ -311,7 +312,7 @@ describe("spawn input ownership transfer", () => {
           await release.promise;
           return request;
         });
-      const stage = vi.spyOn(sessionAccessor, "stageSessionPendingInput");
+      const stage = vi.spyOn(pendingInputs, "stageSessionPendingInput");
       let sending: Promise<unknown> | undefined;
       try {
         const pending = withPluginRuntimeGatewayRequestScope(
@@ -477,9 +478,9 @@ describe("spawn input ownership transfer", () => {
             return execution;
           });
         restoreExecution = () => executionSpy.mockRestore();
-        const stage = sessionAccessor.stageSessionPendingInput;
+        const stage = pendingInputs.stageSessionPendingInput;
         const stageSpy = vi
-          .spyOn(sessionAccessor, "stageSessionPendingInput")
+          .spyOn(pendingInputs, "stageSessionPendingInput")
           .mockImplementationOnce(async (...args) => {
             if (boundary === "before staging") {
               const entered = createDeferred();
@@ -684,9 +685,9 @@ describe("spawn input ownership transfer", () => {
         execution = releaseExecution.promise.then(() => execute(params));
         return execution;
       });
-    const stage = sessionAccessor.stageSessionPendingInput;
+    const stage = pendingInputs.stageSessionPendingInput;
     const stageSpy = vi
-      .spyOn(sessionAccessor, "stageSessionPendingInput")
+      .spyOn(pendingInputs, "stageSessionPendingInput")
       .mockImplementationOnce(async (...args) => {
         if (boundary === "before staging") {
           const entered = createDeferred();

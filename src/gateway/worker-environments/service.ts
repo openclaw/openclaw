@@ -208,6 +208,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     ...options,
     store,
     getCleanupError: (record) => sessionAttachments.getCleanupError(record),
+    readStartStatus: providerLifecycle.readStartStatus,
     prepareCurrentBundle: async () => await prepareInstallation("bundle"),
     now,
     identityResolverFor: providerLifecycle.identityResolverFor,

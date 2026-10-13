@@ -9,6 +9,7 @@ import {
   SessionDeliveryDeadLetteredError,
   type SessionDeliveryRequesterBinding,
 } from "../../../infra/session-delivery-queue.records.js";
+import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { defaultRuntime } from "../../../runtime.js";
 import {
   INTERNAL_PROVENANCE_SOURCE_CHANNEL,
@@ -60,6 +61,8 @@ import {
   resolveGeneratedMediaSessionDeliveryRoute,
 } from "./subagent-announce-origin.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
+
+const log = createSubsystemLogger("agents/subagent-announce");
 
 export {
   loadRequesterSessionEntry,
@@ -316,6 +319,7 @@ async function deliverSubagentAnnouncementBound(
       })
     : undefined;
 
+  let directError: unknown;
   const delivery = await runSubagentAnnounceDispatch({
     expectsCompletionMessage: params.expectsCompletionMessage,
     requireDirectDelivery: params.requireDirectDelivery || params.completionTarget === "parent",
@@ -352,11 +356,17 @@ async function deliverSubagentAnnouncementBound(
       return await sendSubagentAnnounceDirectly({
         ...params,
         createUserTurnTranscriptRecorder: createCompletionUserTurnTranscriptRecorder,
+        onDeliveryError: (error) => {
+          directError = error;
+          params.onDeliveryError?.(error);
+        },
       });
     },
   });
   const failedDirect =
-    params.expectsCompletionMessage || params.sourceTool === "subagent_announce"
+    params.expectsCompletionMessage ||
+    params.sourceTool === "subagent_announce" ||
+    params.sourceTool === "subagent_settle"
       ? delivery.phases?.find(
           (phase) =>
             phase.phase === "direct-primary" && !phase.delivered && phase.path === "direct",
@@ -366,9 +376,14 @@ async function deliverSubagentAnnouncementBound(
     const source = params.sourceRunId
       ? `run ${params.sourceRunId}`
       : `session ${params.sourceSessionKey ?? params.requesterSessionKey}`;
-    defaultRuntime.log(
-      `[warn] Subagent completion direct announce failed for ${source}: ${failedDirect.error}${delivery.delivered ? "; recovered via steered" : ""}`,
-    );
+    log.warn(`Subagent completion direct announce failed for ${source}`, {
+      err: directError ?? failedDirect.error,
+      runId: params.sourceRunId,
+      requesterSessionKey: params.targetRequesterSessionKey,
+      sourceTool: params.sourceTool,
+      directIdempotencyKey: params.directIdempotencyKey,
+      recoveredViaSteered: delivery.delivered,
+    });
   }
   return delivery;
 }

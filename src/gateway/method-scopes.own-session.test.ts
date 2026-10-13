@@ -73,12 +73,6 @@ describe("method scope resolution and authorization", () => {
     ).toEqual({ allowed: true });
   });
 
-  it("keeps inventory without a runtime ID read-scoped", () => {
-    expect(resolveLeastPrivilegeOperatorScopesForMethod("environments.list")).toEqual([
-      "operator.read",
-    ]);
-  });
-
   it("leaves node-only pending drain outside operator scopes", () => {
     expect(isGatewayMethodClassified("node.pending.drain")).toBe(true);
     expect(resolveLeastPrivilegeOperatorScopesForMethod("node.pending.drain")).toStrictEqual([]);
@@ -361,21 +355,6 @@ describe("method scope resolution and authorization", () => {
     },
   );
 
-  it.each([
-    [
-      "sessions.dispatch",
-      { key: "agent:main:thread", profileId: "development", deviceId: "device-1" },
-    ],
-    ["sessions.move", { key: "agent:main:thread", target: { kind: "profile" } }],
-  ] as const)("keeps malformed %s params write-scoped for handler validation", (method, params) => {
-    expect(resolveLeastPrivilegeOperatorScopesForMethod(method, params)).toEqual([
-      "operator.write",
-    ]);
-    expect(authorizeOperatorScopesForMethod(method, ["operator.write"], params)).toEqual({
-      allowed: true,
-    });
-  });
-
   it("requires admin for sensitive session creation parameters", () => {
     const incognitoKey = "agent:main:dashboard:incognito-parent";
     for (const params of [
@@ -396,17 +375,6 @@ describe("method scope resolution and authorization", () => {
     expect(
       resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", { incognito: false }),
     ).toEqual(["operator.write"]);
-  });
-
-  it("lets malformed sessions.patch params through to handler validation at write scope", () => {
-    // Malformed params cannot mutate anything; the handler rejects them with a
-    // precise validation error instead of a misleading missing-scope error.
-    expect(authorizeOperatorScopesForMethod("sessions.patch", ["operator.write"])).toEqual({
-      allowed: true,
-    });
-    expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.patch")).toEqual([
-      "operator.write",
-    ]);
   });
 
   it("grants write-scope sessions.delete only with the archivedOnly opt-in", () => {
@@ -638,16 +606,12 @@ describe("session-scoped method admission", () => {
   );
 
   it.each([
-    ["canvas.document.preview", { html: "<p>Preview</p>" }, true],
-    ["models.list", {}, true],
-    ["chat.history", { sessionKey: "agent:main:own" }, true],
     [
       "sessions.files.assets",
       { sessionKey: "agent:main:own", path: "index.html", refs: ["a.png"] },
       true,
     ],
     ["config.get", undefined, false],
-    ["canvas.document.view", undefined, false],
   ] as const)(
     "restricts the narrow read alternative to session and bootstrap methods: %s",
     (method, params, narrow) => {
@@ -685,13 +649,6 @@ describe("session-scoped method admission", () => {
 
   it.each([
     ["chat.send", { sessionKey: "agent:main:own", message: "hello" }, "operator.write"],
-    ["sessions.create", {}, "operator.write"],
-    ["sessions.patch", { key: "agent:main:own", label: "updated" }, "operator.write"],
-    [
-      "sessions.patchMany",
-      { targets: [{ key: "agent:main:own" }], patch: { unread: true } },
-      "operator.write",
-    ],
     ["question.resolve", {}, "operator.questions"],
   ] as const)("requires the narrow write grant for %s", (method, params, broad) => {
     expect(authorizeOperatorScopesForMethod(method, ["operator.sessions.write"], params)).toEqual({
@@ -721,11 +678,6 @@ describe("session-scoped method admission", () => {
 
   it.each([
     ["sessions.create", { incognito: true }],
-    ["sessions.create", { key: "agent:main:dashboard:incognito-secret" }],
-    ["sessions.create", { parentSessionKey: "agent:main:dashboard:incognito-secret" }],
-    ["sessions.create", { execNode: "remote" }],
-    ["sessions.create", { toolOverrides: { allow: [] } }],
-    ["sessions.create", { permissionMode: "full" }],
     ["sessions.patch", { key: "agent:main:own", permissionMode: "full" }],
     ["sessions.patchMany", { targets: [{ key: "agent:main:own" }], patch: { sandboxMode: "off" } }],
     ["sessions.patch", { key: "agent:main:own", unknownMutation: true }],

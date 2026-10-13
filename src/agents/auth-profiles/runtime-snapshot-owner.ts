@@ -6,6 +6,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { cloneAuthProfileStore } from "./clone.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { observeCanonicalAuthProfileCredentials } from "./credential-observation.js";
+import { admitAuthProfileLegacySources } from "./file-state.js";
 import {
   assertAuthProfileMigrationCandidates,
   assertAuthProfileMigrationStateAtDatabasePath,
@@ -192,6 +193,11 @@ export function loadRuntimeAuthProfileOwnerSnapshot(
     inheritedStore?: AuthProfileStore;
   } = {},
 ): RuntimeAuthProfileStore {
+  if (options.candidates) {
+    admitAuthProfileLegacySources(
+      [...options.candidates.local, ...options.candidates.shared].map((source) => source.path),
+    );
+  }
   // Only lifecycle clear owns a recorded migration refusal; a committed write cannot bypass it.
   assertAuthProfileMigrationStateAtDatabasePath(owner.databasePath);
   assertAuthProfileMigrationStateAtDatabasePath(owner.sharedDatabasePath);

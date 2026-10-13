@@ -17,7 +17,7 @@ import { loadPluginManifestRegistryCore } from "../../../plugins/manifest-regist
 import { createPluginCache, withPluginCache } from "../../../plugins/plugin-cache.js";
 import { seedInstalledPluginIndex } from "../../../plugins/test-helpers/installed-plugin-index.js";
 import { convergePluginReleaseCohort } from "../../../plugins/update-cohort.js";
-import { closeOpenClawStateDatabaseByPath } from "../../../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { runPostCorePluginConvergence } from "./post-core-plugin-convergence.js";
 
@@ -352,7 +352,7 @@ describe("post-core convergence on source checkouts", () => {
           }
         });
       } finally {
-        closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(env));
+        await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
       }
     },
   );

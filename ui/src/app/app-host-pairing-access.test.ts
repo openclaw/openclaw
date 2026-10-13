@@ -8,10 +8,10 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import { visibleSettingsNavigationGroups } from "../app-navigation.ts";
 import { createApplicationRouter } from "../app-routes.ts";
-import type { AppTopbar } from "../components/app-topbar.ts";
 import type { SessionDataController } from "../components/session-data-controller.ts";
 import { createStoredChatOutboxReader } from "../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../lib/chat/outbox-store.ts";
+import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
 import {
   admitStoredChatComposerQueueItem,
   persistChatComposerState,
@@ -293,8 +293,7 @@ describe("application shell pairing access", () => {
         };
       }
       const sidebar = await renderSidebar();
-      const topbar =
-        container.querySelector<InstanceType<typeof AppTopbar.Element>>("openclaw-app-topbar")!;
+      const topbar = container.querySelector<SolidBridgeElement<object>>("openclaw-app-topbar")!;
       document.body.append(sidebar, topbar);
       await settleLitElements([sidebar, topbar]);
       await vi.dynamicImportSettled();
@@ -464,6 +463,11 @@ describe("application shell pairing access", () => {
     { name: "legacy unadvertised", auth: null, canPair: true },
     { name: "read-only", auth: { role: "operator", scopes: ["operator.read"] }, canPair: false },
     { name: "write-only", auth: { role: "operator", scopes: ["operator.write"] }, canPair: false },
+    {
+      name: "pairing-only",
+      auth: { role: "operator", scopes: ["operator.pairing"] },
+      canPair: false,
+    },
     { name: "explicitly ungranted", auth: { role: "operator", scopes: [] }, canPair: false },
     {
       name: "disconnected",
@@ -483,7 +487,7 @@ describe("application shell pairing access", () => {
     if (scenario.nextAuth) {
       snapshot.hello = { auth: scenario.nextAuth } as ApplicationGatewaySnapshot["hello"];
       const sidebar = await renderSidebar();
-      expect(sidebar.canPairDevice).toBe(true);
+      expect(sidebar.canPairDevice).toBe(false);
       sidebar.onPairMobile?.();
       expect(openDevicePairSetup).toHaveBeenCalledOnce();
     }
@@ -491,7 +495,7 @@ describe("application shell pairing access", () => {
 
   it.each([false, true])("keeps the lazy pairing dialog visible (failed: %s)", async (failed) => {
     const { shell, renderSidebar, container } = createPairingShell({
-      auth: { role: "operator", scopes: ["operator.pairing"] },
+      auth: { role: "operator", scopes: ["operator.admin"] },
       setupCode: "pair-mobile-secret",
     });
     const loadRenderer = vi.fn();
@@ -576,7 +580,7 @@ describe("application shell pairing access", () => {
     Object.defineProperty(document, "execCommand", { configurable: true, value: execCommand });
     const schedule = vi.spyOn(window, "setTimeout");
     const { container, renderPairingDialog } = createPairingShell({
-      auth: { role: "operator", scopes: ["operator.pairing"] },
+      auth: { role: "operator", scopes: ["operator.admin"] },
       setupCode: "pair-mobile-secret",
     });
     document.body.append(container);
@@ -604,7 +608,7 @@ describe("application shell pairing access", () => {
   it("expires a node setup link from the pairing clock", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(4_000);
     const { container, renderSidebar, refresh } = createPairingShell({
-      auth: { role: "operator", scopes: ["operator.pairing"] },
+      auth: { role: "operator", scopes: ["operator.admin"] },
       setupCode: "pair-node-secret",
       access: "node",
       expiresAtMs: 5_000,

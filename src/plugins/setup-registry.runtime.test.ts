@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
@@ -43,17 +43,14 @@ vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => {
   };
 });
 
-afterEach(() => {
-  clearPluginMetadataLifecycleCaches();
-  resetPluginRuntimeStateForTest();
-  loadPluginMetadataSnapshotMock.mockReset();
-  vi.restoreAllMocks();
-});
-
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
+  afterEach(async () => {
+    clearPluginMetadataLifecycleCaches();
+    resetPluginRuntimeStateForTest();
+    loadPluginMetadataSnapshotMock.mockReset();
+    vi.restoreAllMocks();
     for (const stateDir of tempDirs.dirs) {
-      closeOpenClawStateDatabaseByPath(
+      await closeOpenClawStateDatabaseByPathAsync(
         resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir }),
       );
     }

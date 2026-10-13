@@ -659,7 +659,7 @@ describe("config cli", () => {
       await expect(runConfigCommand(["config", "get", "gateway.port", "--json"])).rejects.toThrow(
         ExitError,
       );
-      expect(mockReadConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
+      expect(mockReadConfigFileSnapshot.mock.calls.at(-1)?.[0]?.observe).toBe(false);
       expect(mockWriteStdout).not.toHaveBeenCalled();
       expect(mockError).not.toHaveBeenCalled();
       expect(parseLastLogPayload()).toMatchObject({

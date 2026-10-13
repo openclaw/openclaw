@@ -311,7 +311,7 @@ export function createResponsesTerminalController(params: {
     >["response"],
     responseId = response.id,
   ) => {
-    options?.onServiceTier?.(response.service_tier);
+    options?.onServiceTier?.(response.service_tier, response);
     output.responseId = responseId || output.responseId;
     output.responseModel = options?.resolveResponseModel
       ? options.resolveResponseModel()?.trim() || undefined

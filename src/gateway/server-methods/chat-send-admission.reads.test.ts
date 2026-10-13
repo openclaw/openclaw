@@ -15,14 +15,21 @@ import { retainGatewayPluginMetadata } from "../../plugins/plugin-metadata-lifec
 import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import * as sessionLifecycle from "../../sessions/session-lifecycle-admission.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
-import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
+import {
+  roleClient,
+  rolePolicyConfig,
+  sharingPolicyClient,
+} from "../session-sharing.test-utils.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
+import { stagePlacementTurnClaimWorkerPublication } from "../worker-environments/placement-turn-authority.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import { runChatSendPreAdmission } from "./chat-send-pre-admission.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
@@ -514,8 +521,11 @@ it.each([
     const scope = { agentId: "main", sessionKey };
     const entry: SessionEntry = { sessionId: "placement-session", updatedAt: 1 };
     replaceSessionEntrySync(scope, entry);
+    const client = sharingPolicyClient({
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+    });
     const request = await normalizeChatSendRequest({
-      client: null,
+      client,
       params: { sessionKey, message: "Hello", idempotencyKey: runId },
     });
     if (!request.ok) {
@@ -529,12 +539,13 @@ it.each([
     });
     const prepared = await prepareChatSendSession({
       request: request.value,
-      client: null,
+      client,
       context,
     });
     if (!prepared.ok) {
       throw new Error("Session preparation failed");
     }
+    expect(prepared.value.restartSafeRequest).toBeDefined();
     const session = await qualifyChatSendSession(prepared.value);
     const initialEntry = structuredClone(sessionAccessor.loadSessionEntry(scope));
     const observed = createDeferred();
@@ -554,7 +565,7 @@ it.each([
     const pending = admitChatSend({
       request: request.value,
       session,
-      client: null,
+      client,
       context,
       respond,
       assertCurrent: () => {
@@ -600,6 +611,151 @@ it.each([
       resume.resolve();
       await Promise.allSettled([pending]);
       delayed.mockRestore();
+      if (admitted?.ok) {
+        admitted.value.cleanupAdmittedRun();
+      }
+      clearAgentRunContext(runId);
+    }
+  });
+});
+
+it.each([
+  {
+    name: "ineligible internal backend",
+    external: false,
+    initialRequired: false,
+    required: false,
+    allowed: true,
+    reloadDuringRead: false,
+  },
+  {
+    name: "required-profile external backend",
+    external: true,
+    initialRequired: true,
+    required: true,
+    allowed: true,
+    reloadDuringRead: false,
+  },
+  {
+    name: "local-to-required policy reload",
+    external: true,
+    initialRequired: false,
+    required: true,
+    allowed: true,
+    reloadDuringRead: false,
+  },
+  {
+    name: "local-to-required during placement preparation",
+    external: true,
+    initialRequired: false,
+    required: true,
+    allowed: true,
+    reloadDuringRead: true,
+  },
+  {
+    name: "required-to-local policy reload",
+    external: true,
+    initialRequired: true,
+    required: false,
+    allowed: false,
+    reloadDuringRead: false,
+  },
+])("preserves pending placement fences for $name", async (testCase) => {
+  await withOpenClawTestState({ label: "backend-chat-pending-placement" }, async () => {
+    let cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { main: {} } },
+      ...(testCase.initialRequired ? { cloudWorkers: { requiredProfile: "native" } } : {}),
+    };
+    setRuntimeConfigSnapshot(cfg, cfg);
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:backend-pending-placement",
+      sessionId: "backend-pending-placement",
+    };
+    const runId = "backend-pending-placement-send";
+    replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const placements = createWorkerSessionPlacementStore();
+    const requested = await placements.startDispatch(scope);
+    const client = sharingPolicyClient({
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+    });
+    client.connect.client = {
+      id: "gateway-client",
+      version: "test",
+      platform: "test",
+      mode: "backend",
+    };
+    const context = createDirectChatContext({
+      getRuntimeConfig: () => cfg,
+      workerSessionPlacementService: placements,
+    });
+    const request = await normalizeChatSendRequest({
+      client,
+      params: { sessionKey: scope.sessionKey, message: "Hello", idempotencyKey: runId },
+    });
+    if (!request.ok) {
+      throw new Error(request.error);
+    }
+    const prepared = await prepareChatSendSession({
+      request: request.value,
+      client,
+      context,
+      isDirectExternalUser: testCase.external,
+    });
+    if (!prepared.ok) {
+      throw new Error("Session preparation failed");
+    }
+    expect(Boolean(prepared.value.restartSafeRequest)).toBe(testCase.external);
+    const session = await qualifyChatSendSession(prepared.value);
+    const reloadPolicy = () => {
+      cfg = {
+        ...cfg,
+        cloudWorkers: testCase.required ? { requiredProfile: "native" } : undefined,
+      };
+      setRuntimeConfigSnapshot(cfg, cfg);
+    };
+    if (testCase.required !== testCase.initialRequired && !testCase.reloadDuringRead) {
+      reloadPolicy();
+    }
+    const read = await placements.prepareSessionPlacement(scope.sessionId);
+    const pending = stagePlacementTurnClaimWorkerPublication(
+      requireOpenClawStateDatabaseIdentity({ db: openOpenClawStateDatabase().db }),
+      requested,
+      undefined,
+      requested.state,
+      requested,
+    );
+    const preparePlacement = placements.prepareSessionPlacement.bind(placements);
+    const reloadingRead = testCase.reloadDuringRead
+      ? vi
+          .spyOn(placements, "prepareSessionPlacement")
+          .mockImplementationOnce(async (sessionId) => {
+            const facts = await preparePlacement(sessionId);
+            reloadPolicy();
+            return facts;
+          })
+      : undefined;
+    const respond = vi.fn();
+    let admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined;
+    try {
+      expect(() => read.current()).toThrow("placement authority changed");
+      admitted = await admitChatSend({
+        request: request.value,
+        session,
+        client,
+        context,
+        respond,
+      });
+      expect(admitted.ok, JSON.stringify(respond.mock.calls)).toBe(testCase.allowed);
+      expect(context.chatAbortControllers.has(runId)).toBe(testCase.allowed);
+      if (!testCase.allowed) {
+        expect(respond.mock.calls[0]?.[2]?.message).toContain("placement authority changed");
+      }
+      expect(() => read.current()).toThrow("placement authority changed");
+    } finally {
+      reloadingRead?.mockRestore();
+      pending.rollback();
+      read.release();
       if (admitted?.ok) {
         admitted.value.cleanupAdmittedRun();
       }

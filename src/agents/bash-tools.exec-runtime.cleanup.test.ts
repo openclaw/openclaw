@@ -305,8 +305,7 @@ it.each([
     const entered = createDeferred();
     const cleanupScope = createAgentCleanupScope();
     const scopeKey = "scope:sandbox-artifact-cleanup";
-    const cleanupFailure =
-      "sandbox artifact cleanup failed: API_TOKEN = computeToken(); Authorization: Bearer sk-fixture1234567890";
+    const cleanupFailure = "sandbox artifact cleanup failed";
     supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput): Promise<ManagedRun> => ({
       activity: { resultSettled: true, lastOutputAtMs: Date.now() },
       runId: input.runId ?? "test-run",

@@ -168,6 +168,7 @@ describe("startGatewayEarlyRuntime", () => {
         expect(mocks.startGatewayMaintenanceTimers).toHaveBeenCalledTimes(
           closesDuringImport ? 0 : 1,
         );
+        expect(mocks.refreshSkillsDiscovery).toHaveBeenCalledTimes(closesDuringImport ? 0 : 1);
         if (closesDuringImport) {
           expect(maintenance).toBeNull();
         } else {
@@ -179,7 +180,7 @@ describe("startGatewayEarlyRuntime", () => {
     },
   );
 
-  it("wires non-minimal skills runtime through lazy startup imports", async () => {
+  it("registers skills changes before readiness and joins discovery during maintenance", async () => {
     const nodeRegistry = { node: { id: "node" } };
     const config = { skills: { load: { watch: false } } };
     const scanStarted = createDeferredCore();
@@ -195,15 +196,14 @@ describe("startGatewayEarlyRuntime", () => {
       getRuntimeConfig: () => config,
       nodeRegistry: nodeRegistry as never,
     });
-    let ready = false;
-    const starting = startGatewayEarlyRuntime(input).then((earlyRuntime) => {
-      ready = true;
-      return earlyRuntime;
-    });
+    const earlyRuntime = await startGatewayEarlyRuntime(input);
+    expect(mocks.refreshSkillsDiscovery).not.toHaveBeenCalled();
+    expect(mocks.registerSkillsChangeListener).toHaveBeenCalledOnce();
+    const starting = earlyRuntime.startMaintenance({});
     await scanStarted.promise;
-    expect(ready).toBe(false);
+    expect(mocks.startGatewayMaintenanceTimers).not.toHaveBeenCalled();
     scanFinished.resolve();
-    const earlyRuntime = await starting;
+    await starting;
 
     expect(mocks.setSkillsRemoteRegistry).toHaveBeenCalledWith(nodeRegistry);
     expect(mocks.refreshSkillsDiscovery).toHaveBeenCalledExactlyOnceWith({ config });
@@ -229,6 +229,7 @@ describe("startGatewayEarlyRuntime", () => {
     const earlyRuntime = await startGatewayEarlyRuntime(
       earlyRuntimeInput({ minimalTestGateway: false, log: { ...log, warn } }),
     );
+    await earlyRuntime.startMaintenance({});
     expect(warn).toHaveBeenCalledWith(
       "failed to refresh skills during startup: Error: skills scan failed",
     );

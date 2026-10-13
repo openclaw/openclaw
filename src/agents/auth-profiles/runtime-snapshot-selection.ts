@@ -186,9 +186,72 @@ export function createRuntimeAuthProfileSnapshotSelection(
     };
   }
 
+  /** Reads a cloned runtime auth profile store snapshot for an agent dir. */
+  function getRuntimeAuthProfileStoreSnapshotCore(
+    agentDir?: string,
+  ): RuntimeAuthProfileStore | undefined {
+    return getRuntimeAuthProfileStoreSnapshotAtDatabasePath(resolveRuntimeStoreKey(agentDir));
+  }
+
+  function getRuntimeAuthProfileStoreSnapshotAtDatabasePath(
+    databasePath: string,
+  ): RuntimeAuthProfileStore | undefined {
+    const store = snapshots.get(databasePath)?.store;
+    if (store) {
+      observeCachedCanonicalAuthProfileCredentials(store.profiles);
+    }
+    return store ? cloneAuthProfileStore(store) : undefined;
+  }
+
+  /**
+   * Reads the effective prepared auth store without falling back to persisted storage.
+   * Lifecycle consumers use this after auth publication so request paths never reopen SQLite.
+   */
+  function getPreparedRuntimeAuthProfileStoreSnapshotCore(
+    agentDir?: string,
+    inheritedAuthDir?: string,
+    env?: NodeJS.ProcessEnv,
+  ): RuntimeAuthProfileStore | undefined {
+    const inheritedKey = resolveRuntimeStoreKey(inheritedAuthDir, env);
+    const requestedKey = resolveRuntimeStoreKey(agentDir, env);
+    const inherited = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(inheritedKey);
+    if (requestedKey === inheritedKey) {
+      return inherited;
+    }
+    const requested = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(requestedKey);
+    // With no agent, the shared snapshot wins without merging the inherited store.
+    if (agentDir && inherited && requested) {
+      return mergeAuthProfileStores(inherited, requested, {
+        preserveBaseRuntimeExternalProfiles: true,
+      });
+    }
+    if (agentDir && !requested && inherited) {
+      // The shared snapshot owns its order; this agent has no local override to reset.
+      return { ...inherited, runtimeLocalOrderProviderIds: [] };
+    }
+    return requested ?? inherited;
+  }
+
+  /** Checks the owned profile keys without copying private credential data out of the owner. */
+  function hasRuntimeAuthProfileStoreSource(agentDir?: string, env?: NodeJS.ProcessEnv): boolean {
+    const store = snapshots.get(resolveRuntimeStoreKey(agentDir, env))?.store;
+    return Boolean(store && Object.keys(store.profiles).length > 0);
+  }
+
+  /** Returns true when requested or main runtime snapshots contain profiles. */
+  function hasAnyRuntimeAuthProfileStoreSource(agentDir?: string): boolean {
+    return (
+      hasRuntimeAuthProfileStoreSource(agentDir) ||
+      (Boolean(agentDir) && hasRuntimeAuthProfileStoreSource())
+    );
+  }
+
   return {
     /** Newer incremental views can still omit this write; discard matching owner views on failure. */
-    invalidateRuntimeAuthProfileStoreSnapshotsForOwner: (owner: AuthProfileStoreOwner) => {
+    invalidateRuntimeAuthProfileStoreSnapshotsForOwner: (
+      owner: AuthProfileStoreOwner,
+      isCurrent?: (databasePath: string) => boolean,
+    ) => {
       const targets = [
         {
           databasePath: owner.databasePath,
@@ -203,6 +266,9 @@ export function createRuntimeAuthProfileSnapshotSelection(
       ];
       for (const target of targets) {
         try {
+          if (isCurrent && !isCurrent(target.databasePath)) {
+            continue;
+          }
           const entry = snapshots.get(target.databasePath);
           if (!entry || runtimeAuthProfileSnapshotSharesOwner(entry.owner, owner)) {
             invalidate(target.databasePath, target.agentDir);
@@ -213,6 +279,11 @@ export function createRuntimeAuthProfileSnapshotSelection(
       }
     },
     createPreparedRuntimeAuthProfileUsageReader,
+    getRuntimeAuthProfileStoreSnapshotCore,
+    getRuntimeAuthProfileStoreSnapshotAtDatabasePath,
+    getPreparedRuntimeAuthProfileStoreSnapshotCore,
+    hasRuntimeAuthProfileStoreSource,
+    hasAnyRuntimeAuthProfileStoreSource,
     getOwnedRuntimeAuthProfileStoreSnapshotAtDatabasePath: (databasePath: string) => {
       const entry = snapshots.get(databasePath);
       if (entry) {

@@ -196,7 +196,7 @@ describe("parseTtsDirectives provider-aware routing", () => {
 
   const ttsExample =
     "[[tts:text]]hidden example[[/tts:text]] [[tts]]visible example[[/tts]] " +
-    "[[tts:provider=elevenlabs speed=1.2]] [[tts]] [[/tts:text]]";
+    "[[tts:provider=elevenlabs speed=1.2]] [[tts:Here is your answer]] [[tts]] [[/tts:text]]";
 
   it.each([
     {
@@ -240,6 +240,41 @@ describe("createTtsDirectiveTextStreamCleaner", () => {
 
     expect(cleaner.push("Shown [[tts:text]]hid")).toBe("Shown ");
     expect(cleaner.push("den[[/tts:text]] visible")).toBe(" visible");
+    expect(cleaner.flush()).toBe("");
+  });
+
+  it.each([
+    [["Some [[tts:hello there]] note"], "Some hello there note"],
+    [["Go [[tts:", "answered aloud]] back"], "Go answered aloud back"],
+    [["Done. [[tts:first line\nsecond line]] more"], "Done. first line\nsecond line more"],
+    [["Go [[tts:\nhello]] now"], "Go hello now"],
+    [["[[tts]]read", " this[[/tts]] now"], "read this now"],
+    [["See [[note"], "See [[note"],
+    [
+      ["[[tts:text]]Press the ` key.[[/tts:text]] Visible. [[tts:text]]Audio only.[[/tts:text]]"],
+      " Visible. ",
+    ],
+    [
+      [
+        "[[tts:text]]Press the ` key.[[/tts:text]]",
+        " Visible. [[tts:text]]Audio only.[[/tts:text]]",
+      ],
+      " Visible. ",
+    ],
+  ] as const)("preserves visible reply text across chunks: %j", (chunks, expected) => {
+    const cleaner = createTtsDirectiveTextStreamCleaner();
+    expect(chunks.map((chunk) => cleaner.push(chunk)).join("") + cleaner.flush()).toBe(expected);
+  });
+
+  it.each([
+    [["```\n", "[[tts:literal", " speech]]\n", "```\n"], "```\n\n```\n"],
+    [["Use `", "[[tts:literal", " speech]]", "` here."], "Use `` here."],
+    [["~~~\n~~~ [[note]]\n[[tts:Literal speech]]\n~~~"], "~~~\n~~~ [[note]]\n\n~~~"],
+    [["~~~\n~~~ [[tts:voice=alloy]]\n[[tts:Literal speech]]\n~~~"], "~~~\n~~~ \n\n~~~"],
+  ] as const)("does not recover code literals as prose: %j", (chunks, expected) => {
+    const cleaner = createTtsDirectiveTextStreamCleaner();
+    expect(chunks.map((chunk) => cleaner.push(chunk)).join("")).toBe(expected);
+    expect(cleaner.push("\n[[tts:Visible speech]]")).toBe("\nVisible speech");
     expect(cleaner.flush()).toBe("");
   });
 });

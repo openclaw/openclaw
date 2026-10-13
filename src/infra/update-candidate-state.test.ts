@@ -7,8 +7,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -34,6 +35,7 @@ beforeEach(async () => {
   await materializeUpdateCandidateStateWorker(root);
 });
 afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   await fs.rm(root, { recursive: true, force: true });
 });
@@ -101,7 +103,7 @@ it.each(["DELETE"])(
         now,
         now,
       );
-    closeOpenClawStateDatabaseByPath(shared);
+    await closeOpenClawStateDatabaseByPathAsync(shared);
     const sources = [shared, canonical, external];
     for (const file of sources) {
       const database = openNodeSqliteDatabase(file);
@@ -357,7 +359,7 @@ it.each([
         1,
       );
     const shared = path.join(source, "state", "openclaw.sqlite");
-    closeOpenClawStateDatabaseByPath(shared);
+    await closeOpenClawStateDatabaseByPathAsync(shared);
     const before = await fs.readFile(shared);
     await runSnapshotWorker({ stateDir: source, targetStateDir: target, config: {} });
     expect((await fs.readFile(shared)).equals(before)).toBe(true);
@@ -457,7 +459,7 @@ it.each([
         JSON.stringify({ revision: 1, index: { installRecords: {} } }),
         1,
       );
-    closeOpenClawStateDatabaseByPath(path.join(source, "state", "openclaw.sqlite"));
+    await closeOpenClawStateDatabaseByPathAsync(path.join(source, "state", "openclaw.sqlite"));
     const config: OpenClawConfig = {
       plugins: {
         load: { paths: [entry] },

@@ -6,6 +6,7 @@ export const databaseWorkerExtensionTestRoots = [
 ];
 
 export const databaseWorkerExtensionTestFiles = [
+  "extensions/alibaba/video-generation-provider.test.ts",
   "extensions/codex/src/conversation-binding.test.ts",
   "extensions/codex/src/conversation-control.test.ts",
   "extensions/codex/src/app-server/native-execution-policy.incognito.test.ts",
@@ -60,6 +61,7 @@ export const databaseWorkerExtensionTestFiles = [
   // Provider-owned embedding auth resolves shared-store ownership through the host broker.
   "extensions/google/embedding-provider.test.ts",
   "extensions/openai/binary-transport.test.ts",
+  "extensions/openai/embedding-provider.test.ts",
   "extensions/openai/tts.test.ts",
   "extensions/microsoft/speech-provider.test.ts",
   "extensions/minimax/speech-provider.test.ts",

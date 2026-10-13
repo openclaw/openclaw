@@ -116,7 +116,8 @@ export function createInterruptedRecoveryCoordinator(params: {
       }
       if (
         entry.execution.restartRecovery === undefined &&
-        entry.terminalOwner !== "interrupted-recovery" &&
+        (entry.terminalOwner !== "interrupted-recovery" ||
+          typeof entry.cleanupCompletedAt === "number") &&
         (getAgentRunContext(runId) || typeof entry.execution.endedAt === "number")
       ) {
         return false;

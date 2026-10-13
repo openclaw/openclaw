@@ -31,6 +31,7 @@ import {
   areUiSessionKeysEquivalent,
   canArchiveSessionRow,
   isPinnableUiSessionRow,
+  isNativeCatalogAdoptionSessionKey,
   parseAgentSessionKey,
   isSubagentSessionKey,
   resolveUiConfiguredMainKey,
@@ -188,6 +189,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   }
 
   protected async handleHeaderSessionAction(action: HeaderMenuAction, row: GatewaySessionRow) {
+    if (action.kind === "delete" && isNativeCatalogAdoptionSessionKey(row.key)) {
+      return;
+    }
     if (action.kind === "stop-cloud-worker") {
       return this.changeHeaderPlacement(row, "reclaim");
     }
