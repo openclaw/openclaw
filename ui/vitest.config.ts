@@ -125,6 +125,7 @@ const webkitTestFiles = [
   "src/components/appearance-picker.browser.test.ts",
   "src/components/confirm-dialog.browser.test.ts",
   "src/lib/toast.browser.test.ts",
+  "src/components/session-menu.browser.test.ts",
   "src/components/web-awesome-dropdown.browser.test.ts",
   "src/components/web-awesome-dropdown-owner.browser.test.ts",
   "src/components/web-awesome-select-controls.browser.test.ts",

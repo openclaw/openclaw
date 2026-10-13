@@ -25,6 +25,15 @@ Memory Core's private shadow-index owner uses
 `memory-core-host-engine-storage` facade before draining its private queue and
 closing the connection.
 
+Memory Core's publication worker uses `stageMemoryIndexSchemaExtension(db)` from
+the private `memory-core-host-engine-schema` facade before replacing derived
+indexes in a managed transaction. Successful commit republishes the already
+admitted memory table contracts, so a clean restart can reuse their seal without
+repeating schema setup. Full-index publication supplies the replacement's FTS
+availability; a missing required index leaves admission invalid for repair.
+Rollback publishes no replacement receipt, and an unclean restart still performs
+normal integrity and schema admission.
+
 ## State, config, and system namespaces
 
 <AccordionGroup>

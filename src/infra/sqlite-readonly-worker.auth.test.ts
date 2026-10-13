@@ -23,11 +23,13 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { revokeAgentDatabaseResources } from "../state/openclaw-agent-db-resources.js";
+import { ensureOpenClawAgentDatabaseSchema } from "../state/openclaw-agent-db-schema.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import {
   createSqliteReadOnlyWorkerScope,
+  runSqliteReadOnlyOperation,
   runSqliteReadOnlyWorker,
   withSqliteReadOnlyWorkerScope,
 } from "./sqlite-readonly-worker.js";
@@ -186,6 +188,50 @@ function read(
     signal,
   });
 }
+
+it("observes agent initialization after a cold auth read in the same worker", async () => {
+  const root = tempDirs.make("openclaw-auth-bootstrap-");
+  const source = path.join(root, "openclaw-agent.sqlite");
+  const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+  new (requireNodeSqlite().DatabaseSync)(source).close();
+  const expectedIdentity = readDatabasePathIdentitySync(source).key;
+  const store = {
+    version: 1,
+    profiles: {
+      "fixture:default": { type: "api_key", provider: "fixture", key: "synthetic" },
+    },
+  };
+  await withSqliteReadOnlyWorkerScope(async () => {
+    expect(await read(source, "canonical", undefined, env)).toMatchObject({
+      store: { status: "missing", reason: "table" },
+      state: { status: "missing", reason: "table" },
+    });
+    const child = vi.mocked(spawn).mock.results[0]?.value;
+    using database = openNodeSqliteDatabase(source);
+    ensureOpenClawAgentDatabaseSchema(database, { agentId: "main", path: source, env });
+    database
+      .prepare("INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)")
+      .run("plugin-model-catalog-v1", "fixture", "synthetic catalog", 1);
+    database
+      .prepare(
+        "INSERT INTO auth_profile_store (store_key, store_json, updated_at) VALUES (?, ?, ?)",
+      )
+      .run("primary", JSON.stringify(store), 1);
+    await expect(
+      runSqliteReadOnlyOperation(
+        source,
+        { type: "pluginCatalog.read", input: { agentId: "main", pluginIds: ["fixture"] } },
+        { source: "canonical", expectedIdentity, env },
+      ),
+    ).resolves.toEqual([{ pluginId: "fixture", contents: "synthetic catalog" }]);
+    expect((await read(source, "canonical", undefined, env)).store).toEqual({
+      status: "readable",
+      raw: store,
+    });
+    expect(child.connected).toBe(true);
+    expect(spawn).toHaveBeenCalledOnce();
+  });
+});
 
 describe.each([
   // Snapshots must bypass an active broker; also keep native proof where brokers are unsupported.

@@ -35,15 +35,26 @@ export type SkillsSourcePlanInput = {
   acpRuntimeAvailable: boolean;
 };
 
+export type SkillsDiscoverySourceSelection =
+  | {
+      kind: "selected";
+      request: WorkspaceSkillSourceRequest;
+      plan?: { input: SkillsSourcePlanInput; scope?: "gateway" };
+    }
+  | {
+      kind: "planned";
+      request: Omit<WorkspaceSkillSourceRequest, "sourcePlan">;
+      plan: { input: SkillsSourcePlanInput };
+    };
+
 export type SkillsDiscoveryInput =
   | { kind: "plan"; input: SkillsSourcePlanInput }
   | {
       kind: "scan";
       requests: Array<{
         key: string;
-        request: WorkspaceSkillSourceRequest;
         environment: SkillsDiscoveryEnvironment;
-        plan?: { input: SkillsSourcePlanInput; scope?: "gateway" };
+        selection: SkillsDiscoverySourceSelection;
       }>;
       path: string | undefined;
     }

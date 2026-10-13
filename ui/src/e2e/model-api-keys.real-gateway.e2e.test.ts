@@ -19,7 +19,8 @@ const suite = createControlUiE2eSuite({
   async startServer() {
     instance = await createOpenClawTestInstance({
       name: "shared-model-api-keys",
-      env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
+      reserveIdlePort: false,
+      env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined, NODE_ENV: undefined },
       config: {
         gateway: { controlUi: { enabled: true } },
         agents: {
@@ -137,6 +138,14 @@ suite.define(() => {
             "main",
             "--yes",
           ];
+          const refused = await instance.cli(logoutArgs);
+          observations.push({ action: "cli-remove-while-owned", args: logoutArgs, ...refused });
+          expect(refused.code, refused.stderr).toBe(1);
+          expect(refused.stderr).toContain("stop the Gateway");
+          expect(await persistedAuth()).toEqual(saved);
+
+          // CLI logout is offline-only; transfer custody after proving live-owner refusal.
+          await instance.stopGateway();
           const loggedOut = await instance.cli(logoutArgs);
           observations.push({
             action: "cli-remove",
@@ -148,6 +157,7 @@ suite.define(() => {
           expect(loggedOut.stdout).toContain("Removed auth profile");
           expect(loggedOut.stderr).not.toContain("could not refresh");
           expect(await persistedAuth()).toEqual(removed);
+          await instance.startGateway();
           await page.reload();
           await waitForControlUiGatewayReady(page);
           await expect

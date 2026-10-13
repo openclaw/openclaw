@@ -1,9 +1,9 @@
-import type { ReactiveControllerHost } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
+import type { ControllerHost } from "../../lit/subscriptions-controller.ts";
 import type { NewSessionDraftController } from "./draft-controller.ts";
 import {
   environmentPlacementRuntime,
@@ -44,7 +44,7 @@ export class PaletteSessionSettings {
   private query = "";
 
   constructor(
-    private readonly host: ReactiveControllerHost &
+    private readonly host: Pick<ControllerHost, "requestUpdate" | "updateComplete"> &
       Pick<HTMLElement, "ownerDocument" | "querySelector" | "querySelectorAll">,
     private readonly id: string,
   ) {}

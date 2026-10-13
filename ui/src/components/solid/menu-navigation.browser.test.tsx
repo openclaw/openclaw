@@ -12,11 +12,103 @@ import {
   surface,
   trigger,
 } from "../../test-helpers/solid-menu.tsx";
-import { Menu, type MenuItem } from "./menu.tsx";
+import { Menu, type MenuItem, type MenuProps } from "./menu.tsx";
 
 afterEach(cleanup);
 
 describe("Solid menu navigation", () => {
+  it("owns Tab dismissal with caller-selected focus destinations", async () => {
+    let credential!: HTMLInputElement;
+    let veto = true;
+    render(() => (
+      <>
+        <button>Before picker</button>
+        <Menu
+          id="provider"
+          label="Provider"
+          items={[{ id: "beta", label: "Beta" }]}
+          tabFocusTarget={(backward) => (backward ? trigger("provider") : credential)}
+          onBeforeHide={(event) => {
+            if (veto) {
+              event.preventDefault();
+            }
+          }}
+        />
+        <input ref={(node) => (credential = node)} aria-label="Credential" />
+      </>
+    ));
+    flush();
+    credential.value = "synthetic-key";
+    await openMenu("provider");
+    await userEvent.tab();
+    expect(surface("provider").matches(":popover-open")).toBe(true);
+    expect(document.activeElement).toBe(item("Beta", "provider"));
+    veto = false;
+    await userEvent.tab();
+    await phase(surface("provider"), "hidden");
+    expect(document.activeElement).toBe(credential);
+    expect(credential.value).toBe("synthetic-key");
+    await openMenu("provider");
+    await userEvent.tab({ shift: true });
+    await phase(surface("provider"), "hidden");
+    expect(document.activeElement).toBe(trigger("provider"));
+  });
+
+  it("reopens at the selected item with a custom root trigger and preserves navigation", async () => {
+    const [selected, setSelected] = createSignal("alpha");
+    const choices = [
+      { id: "alpha", label: "Alpha" },
+      { id: "beta", label: "Beta" },
+      { id: "gamma", label: "Gamma" },
+    ];
+    const view = mountMenu({
+      get triggerAttributes(): MenuProps["triggerAttributes"] {
+        return { id: "provider-trigger", "data-value": selected(), "aria-busy": "false" };
+      },
+      get items() {
+        return choices.map<MenuItem>((choice) => ({
+          id: choice.id,
+          label: choice.label,
+          type: "radio",
+          checked: choice.id === selected(),
+          attributes: { "data-initial-focus": choice.id === selected() ? "" : undefined },
+        }));
+      },
+      onSelect: (entry) => setSelected(entry.id),
+    });
+    const button = view.getByRole("button", { name: "People" });
+    expect(button.id).toBe("provider-trigger");
+    expect(button.getAttribute("aria-busy")).toBe("false");
+    expect(button.getAttribute("aria-controls")).toBe(surface().id);
+    expect(surface().getAttribute("aria-labelledby")).toBe("provider-trigger");
+    button.focus();
+    await userEvent.keyboard("{Enter}");
+    await phase(surface(), "open");
+    expect(document.activeElement).toBe(item("Alpha"));
+    await userEvent.keyboard("{ArrowDown}{Enter}");
+    flush();
+    await phase(surface(), "hidden");
+    expect(button.getAttribute("data-value")).toBe("beta");
+    expect(document.activeElement).toBe(button);
+    await userEvent.keyboard("{Enter}");
+    await phase(surface(), "open");
+    expect(item("Beta").getAttribute("aria-checked")).toBe("true");
+    expect(document.activeElement).toBe(item("Beta"));
+    await userEvent.keyboard("{Home}");
+    expect(document.activeElement).toBe(item("Alpha"));
+    await userEvent.keyboard("{End}");
+    expect(document.activeElement).toBe(item("Gamma"));
+    await userEvent.keyboard("{Escape}");
+    await phase(surface(), "hidden");
+    expect(document.activeElement).toBe(button);
+    await userEvent.keyboard("{ArrowUp}");
+    await phase(surface(), "open");
+    expect(document.activeElement).toBe(item("Gamma"));
+    await userEvent.keyboard("{Escape}");
+    await phase(surface(), "hidden");
+    expect(document.activeElement).toBe(button);
+  });
+
   it.each(["ArrowDown", "ArrowUp"])(
     "skips disabled submenu triggers when opened with %s",
     async (key) => {
