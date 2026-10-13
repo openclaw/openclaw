@@ -40,7 +40,7 @@ function writeSpawn(response: ServerResponse, name: string, ordinal: number) {
     id: `fc_spawn_${ordinal}`,
     call_id: `call_spawn_${ordinal}`,
     name,
-    arguments: JSON.stringify(name === "tool_call" ? { id: "sessions_spawn", args } : args),
+    arguments: JSON.stringify(name === "dispatch_action" ? { id: "sessions_spawn", args } : args),
   };
   writeOpenAiResponsesSse(response, [
     { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
@@ -165,7 +165,7 @@ async function startProvider(signal: AbortSignal) {
           calls.push({ kind: "parent", input });
           parentCalls += 1;
           if (parentCalls === 1) {
-            const tool = tools.includes("sessions_spawn") ? "sessions_spawn" : "tool_call";
+            const tool = tools.includes("sessions_spawn") ? "sessions_spawn" : "dispatch_action";
             expect(tools).toContain(tool);
             writeSpawn(response, tool, calls.length);
           } else {
