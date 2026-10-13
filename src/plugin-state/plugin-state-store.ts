@@ -148,7 +148,9 @@ function createKeyedStoreForPluginId<T>(
         moduleSource,
       );
     },
+    /** @deprecated Use observe and compareAndApply; removal follows a stable deprecation period. */
     update: async (...args) => getLegacyStore().update(...args),
+    /** @deprecated Use observe and compareAndApply; removal follows a stable deprecation period. */
     deleteIf: async (...args) => getLegacyStore().deleteIf(...args),
   };
   return bindPluginStateNativeBindingStore(

@@ -12,6 +12,9 @@ import type { GatewayRunSignalAction } from "./run-loop-request.js";
 
 type NativeStopTimeout = { timeoutMs: number; source: string };
 
+// A stop must reach cancellation and durable cleanup before the 30s deployer window.
+const STOP_DRAIN_TIMEOUT_MS = 20_000;
+
 // Only an inconclusive probe may retain the startup budget; a confirmed absence
 // of a native deadline must not constrain an in-process restart.
 async function readNativeStopTimeout(stopping: boolean): Promise<{
@@ -145,7 +148,7 @@ export function resolveGatewayShutdownDrainBudget(params: {
         : Math.max(0, (restartDrainDeadlineAt ?? Date.now()) - Date.now()),
     drainTimeoutMs: isRestart
       ? restartDrainTimeoutMs
-      : Math.max(0, budget.timeoutMs - budget.reserveMs),
+      : Math.min(STOP_DRAIN_TIMEOUT_MS, Math.max(0, budget.timeoutMs - budget.reserveMs)),
     // A supervisor SIGTERM owns the stop deadline. Its shorter drain request
     // must not discard time still available for checkpointing and native close.
     forceExitMs:

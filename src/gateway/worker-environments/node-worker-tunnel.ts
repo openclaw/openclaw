@@ -46,7 +46,7 @@ import {
 import { drainNodeWorkerWorkspace } from "./node-worker-workspace-drain.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
-import { readWorkerProjectPreparation } from "./preparation-identity.js";
+import { readWorkerProjectPreparation } from "./preparation-identity.schema.js";
 import { WorkerEnvironmentInventoryClosedError } from "./store-errors.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 import {

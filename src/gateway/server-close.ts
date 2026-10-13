@@ -165,9 +165,9 @@ export type GatewayCloseParams = {
   stopChannel: (name: ChannelId, accountId?: string) => Promise<void>;
   pluginServices: PluginServicesHandle | null;
   disposeAllBundleLspRuntimes: () => Promise<void>;
+  drainWorktreeRunEnd: () => Promise<void>;
   drainRetainedOpenAiEmbeddingProviders: () => Promise<void>;
   stopGmailWatcher: () => Promise<void>;
-  disposeAllCodeModeRuns: () => Promise<void> | void;
   closeProviderTransportDispatcherPool: () => Promise<void>;
   cron: { stop: () => void; stopAndDrain?: () => Promise<void> };
   stopCronMaintenance?: () => Promise<void>;
@@ -197,6 +197,7 @@ export type GatewayCloseParams = {
 };
 
 export type GatewayClosePrepareParams = GatewayRunShutdownParams & {
+  disposeAllCodeModeRuns: () => Promise<void> | void;
   preparePluginRegistryClose: ReturnType<typeof createPluginRegistryOwner>["prepareClose"];
   updateCheckStop?: (() => Promise<void> | void) | null;
   configReloader: { stop: () => Promise<void> };
@@ -221,8 +222,8 @@ export async function prepareGatewayClose(
   const { reason } = notice;
   const restartExpectedMs = notice.restartExpectedMs ?? null;
   const restart = restartExpectedMs !== null;
-  const { measureCloseStep, shutdownStep } = createCloseSteps(reason, warnings);
   const cleanupWork = new AsyncWorkScope();
+  const { measureCloseStep, shutdownStep } = createCloseSteps(reason, warnings);
   // Fence async session-state writes before the first awaited shutdown step.
   fenceSessionSuspensionWritesForGatewayShutdown();
   // Debug-level: the signal handler already announced the stop/restart at
@@ -270,6 +271,8 @@ export async function prepareGatewayClose(
         warnings,
       }),
     );
+    // Cancel code cells before received work joins their pending bridge calls.
+    await shutdownStep("code-mode-runs", () => params.disposeAllCodeModeRuns());
     // ACPX owns agent-process cleanup; memory retirement must not overtake its drain.
     await shutdownStep("acp-session-manager", () => disposeAcpSessionManager("gateway-shutdown"));
     // Memory owns database borrows independent of stalled model/tool finalizers.
@@ -383,7 +386,6 @@ async function closeGatewayResources(
         await shutdownStep(`channel/${channelId}`, () => params.stopChannel(channelId));
       }
     });
-    await shutdownStep("code-mode-runs", () => params.disposeAllCodeModeRuns());
     await disposeRuntime("agent-harnesses", disposeRegisteredAgentHarnesses);
     await shutdownStep("ai-session-resources", () => cleanupSessionResources());
     await shutdownStep("provider-transport-dispatchers", () =>
@@ -515,6 +517,9 @@ async function closeGatewayResources(
   } catch (error) {
     closeFailure = { error };
   } finally {
+    // Runtime shutdown releases run leases; join their final writes before
+    // registry retirement can close the workers needed to persist them.
+    await measureCloseStep("worktree-run-end", params.drainWorktreeRunEnd);
     // Grace lets independent teardown advance; raw cleanup and its descendants
     // still join before registry and shared-state retirement.
     await measureCloseStep("cleanup-work", () => cleanupWork.runWhenIdle(() => {}));

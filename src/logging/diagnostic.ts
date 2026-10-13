@@ -991,6 +991,7 @@ export function startGatewayDiagnosticHeartbeat(
     id: "diagnostic-heartbeat",
     atMs: scheduler.now() + DIAGNOSTIC_HEARTBEAT_INTERVAL_MS,
     everyMs: DIAGNOSTIC_HEARTBEAT_INTERVAL_MS,
+    phase: "maintenance",
     run: tick,
   });
   heartbeatJob = job;
