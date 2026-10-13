@@ -382,6 +382,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       session,
       runId: params.runId,
       sessionKey: params.sessionKey,
+      terminalLifecyclePhase: "finishing",
       codeModeExecToolNames: new Set(toolSurfaceRuntime?.codeModeControlsEnabled ? ["exec"] : []),
     });
     const unsubscribe = session.subscribe(liveRuntime.handleSessionEvent);
