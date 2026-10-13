@@ -806,6 +806,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     return true;
   };
 
+  const streamingRecoveries = new WeakMap<
+    FeishuReplyDeliveryResult,
+    Map<string, Promise<FeishuReplyDeliveryResult>>
+  >();
+
   const ensureVisibleStreamingDelivery = async (
     result: FeishuReplyDeliveryResult | undefined,
     content: string | undefined,
@@ -819,14 +824,28 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     ) {
       return result;
     }
-    const delivered = await sendChunkedTextReply({
+    let recoveries = result && streamingRecoveries.get(result);
+    const pending = recoveries?.get(content);
+    if (pending) {
+      return pending;
+    }
+    const recovery = sendChunkedTextReply({
       text: content,
       useCard: withinCardTableLimit(content),
       infoKind,
       preparedPostText: true,
+    }).then((delivered) => {
+      lastStreamingSettlement = { disposition: "closed", result: delivered, content };
+      return delivered;
     });
-    lastStreamingSettlement = { disposition: "closed", result: delivered, content };
-    return delivered;
+    if (result) {
+      if (!recoveries) {
+        recoveries = new Map();
+        streamingRecoveries.set(result, recoveries);
+      }
+      recoveries.set(content, recovery);
+    }
+    return recovery;
   };
 
   function queueIdleSideEffects(): Promise<void> {

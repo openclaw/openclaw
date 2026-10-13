@@ -1023,25 +1023,12 @@ describe("FeishuStreamingSession", () => {
     const deps = mockFetches(updateBodies, new Set<number>(), replaceBodies, new Map([[0, 500]]));
     const log = vi.fn();
 
-    const session = new FeishuStreamingSession(
-      {} as never,
-      {
-        appId: "app_final_update_after_stream_closed",
-        appSecret: "secret",
-      },
-      log,
-      deps,
-    );
-    setStreamingSessionInternals(session, {
-      state: {
-        cardId: "card_8",
-        messageId: "om_8",
-        sequence: 1,
-        currentText: "working",
-        sentText: "working",
-        hasNote: false,
-      },
+    const session = createActiveSession(deps, {
+      cardId: "card_8",
+      messageId: "om_8",
+      text: "working",
       lastUpdateTime: 3_000,
+      log,
     });
 
     await expect(session.closeWithResult("working\n\nfinal answer")).rejects.toMatchObject({
@@ -1058,9 +1045,6 @@ describe("FeishuStreamingSession", () => {
     expect(replaceBodies).toHaveLength(0);
     expect(log).toHaveBeenCalledWith(
       "Final update failed: Error: Update card content failed with HTTP 500",
-    );
-    expect(log).toHaveBeenCalledWith(
-      "Final text not accepted by streaming card; reply must be delivered outside the card",
     );
   });
 

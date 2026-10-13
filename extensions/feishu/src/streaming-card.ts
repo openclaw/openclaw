@@ -565,19 +565,11 @@ export class FeishuStreamingSession {
     this.pendingText = null;
 
     this.log?.(`Closed streaming: cardId=${finalState.cardId}`);
-    // A frozen preview is visible but is not the delivered answer when the final write
-    // was rejected (CardKit closes streaming mode after ~10 minutes or an idle window).
-    const finalTextAccepted = finalWriteError === undefined;
-    if (!finalTextAccepted && visibleContentSent) {
-      this.log?.(
-        `Final text not accepted by streaming card; reply must be delivered outside the card`,
-      );
-    }
     const result: FeishuStreamingCloseResult = {
       visibleReplySent: visibleContentSent,
       ...(visibleContentSent ? { content: finalState.sentText } : {}),
       ...(finalState.messageId ? { messageId: finalState.messageId } : {}),
-      ...(finalTextAccepted ? {} : { finalTextAccepted: false }),
+      ...(finalWriteError === undefined ? {} : { finalTextAccepted: false }),
     };
     if (finalWriteError !== undefined || closeError !== undefined) {
       const cause =
