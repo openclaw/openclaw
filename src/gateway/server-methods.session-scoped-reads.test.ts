@@ -814,10 +814,15 @@ function expectHiddenSession(respond: ReturnType<typeof vi.fn>) {
 
 describe("sessions.diff retained read boundary", () => {
   it("hides a foreign draft from a broad operator reader", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const reader = diffReader("diff-broad-reader", ["operator.read"]);
       const owner = roleClient("view", "diff-broad-owner");
-      const context = createDirectChatContext({ getRuntimeConfig: diffRoleConfig });
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      prepareGatewayRecipientProfile(reader);
+      const cfg = diffRoleConfig();
+      setRuntimeConfigSnapshot(cfg);
+      await state.writeConfig(cfg);
+      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
       const io = prepareDiff(async () => {});
       await seedDiffSession("draft", owner.authenticatedUserProfile!.profileId);
       const respond = vi.fn();
@@ -837,10 +842,15 @@ describe("sessions.diff retained read boundary", () => {
   it.each(["visibility", "reassignment", "authority"] as const)(
     "refuses the final response when %s changes while the diff loads",
     async (change) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const reader = diffReader("diff-inflight-reader", ["operator.read"]);
         const owner = roleClient("view", "diff-inflight-owner");
-        const context = createDirectChatContext({ getRuntimeConfig: diffRoleConfig });
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+        prepareGatewayRecipientProfile(reader);
+        const cfg = diffRoleConfig();
+        setRuntimeConfigSnapshot(cfg);
+        await state.writeConfig(cfg);
+        const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
         await seedDiffSession("shared", owner.authenticatedUserProfile!.profileId);
         const entered = createDeferredCore();
         const release = createDeferredCore();
@@ -908,10 +918,15 @@ describe("sessions.diff retained read boundary", () => {
   );
 
   it("keeps serving a diff loaded while a label update lands", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const reader = diffReader("diff-metadata-reader", ["operator.read"]);
       const owner = roleClient("view", "diff-metadata-owner");
-      const context = createDirectChatContext({ getRuntimeConfig: diffRoleConfig });
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      prepareGatewayRecipientProfile(reader);
+      const cfg = diffRoleConfig();
+      setRuntimeConfigSnapshot(cfg);
+      await state.writeConfig(cfg);
+      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
       await seedDiffSession("shared", owner.authenticatedUserProfile!.profileId);
       const io = prepareDiff(async () => {
         await seedDiffSession("shared", owner.authenticatedUserProfile!.profileId, "Renamed");
@@ -936,13 +951,18 @@ describe("sessions.diff retained read boundary", () => {
   });
 
   it("keeps the missing-row contract, which has no workspace to retain", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const reader = diffReader("diff-missing-reader", ["operator.read"]);
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      prepareGatewayRecipientProfile(reader);
+      const cfg = diffRoleConfig();
+      setRuntimeConfigSnapshot(cfg);
+      await state.writeConfig(cfg);
       const respond = vi.fn();
       await requestSessionRead({
         method: "sessions.diff",
         client: reader,
-        context: createDirectChatContext({ getRuntimeConfig: diffRoleConfig }),
+        context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
         respond,
         id: "diff-missing",
       });
@@ -961,10 +981,15 @@ describe("sessions.diff retained read boundary", () => {
         fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-diff-scoped-")),
       );
       try {
-        await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
           const reader = diffReader("diff-real-reader", ["operator.read"]);
           const owner = roleClient("view", "diff-real-owner");
-          const context = createDirectChatContext({ getRuntimeConfig: diffRoleConfig });
+          using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+          prepareGatewayRecipientProfile(reader);
+          const cfg = diffRoleConfig();
+          setRuntimeConfigSnapshot(cfg);
+          await state.writeConfig(cfg);
+          const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
           createCheckoutRepo(checkout);
           let visible: unknown;
           for (const visibility of ["shared", "draft"] as const) {
@@ -1014,10 +1039,14 @@ describe("sessions.diff retained read boundary", () => {
   );
 
   it("keeps a caller without an operator boundary on its existing access", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const reader = sharingPolicyClient({ user: "role-less-diff", scopes: ["operator.read"] });
       const owner = roleClient("view", "role-less-diff-owner");
-      const context = createDirectChatContext();
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      const cfg = {};
+      setRuntimeConfigSnapshot(cfg);
+      await state.writeConfig(cfg);
+      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
       const io = prepareDiff(async () => {});
       vi.spyOn(workspace, "listSessionWorkspaceFiles").mockImplementation(async () => ({
         files: [],
