@@ -2,6 +2,13 @@
  * @deprecated Broad public SDK barrel. Prefer focused media-store, media-mime,
  * outbound-media, and capability runtime subpaths.
  */
+import {
+  resolveAutoMediaKeyProvidersCore as resolvePreparedAutoMediaKeyProviders,
+  resolveDefaultMediaModelCore as resolvePreparedDefaultMediaModel,
+} from "../media-understanding/defaults.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
+import { prepareBundledDiscoveryModeNative } from "../plugins/bundled-discovery-state.native.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 
 const loadAudioPreflight = createLazyRuntimeModule(
@@ -60,10 +67,53 @@ export { buildAgentMediaPayload } from "./agent-media-payload.js";
 /** Transcribes the first audio attachment without loading the runner during plugin registration. */
 export const transcribeFirstAudio: typeof import("../media-understanding/audio-preflight.js").transcribeFirstAudio =
   async (...args) => (await loadAudioPreflight()).transcribeFirstAudio(...args);
-export {
-  resolveAutoMediaKeyProviders,
-  resolveDefaultMediaModel,
-} from "../media-understanding/defaults.js";
+/** @deprecated Await resolveAutoMediaKeyProvidersAsync for worker-backed discovery. */
+export function resolveAutoMediaKeyProviders(
+  params: Parameters<typeof resolvePreparedAutoMediaKeyProviders>[0],
+): ReturnType<typeof resolvePreparedAutoMediaKeyProviders> {
+  warnPluginSdkDeprecation({
+    family: "media-discovery",
+    method: "resolveAutoMediaKeyProviders",
+    replacement: "resolveAutoMediaKeyProvidersAsync",
+  });
+  if (!params.providerRegistry) {
+    prepareBundledDiscoveryModeNative();
+  }
+  return resolvePreparedAutoMediaKeyProviders(params);
+}
+
+export async function resolveAutoMediaKeyProvidersAsync(
+  params: Parameters<typeof resolvePreparedAutoMediaKeyProviders>[0],
+): Promise<ReturnType<typeof resolvePreparedAutoMediaKeyProviders>> {
+  if (!params.providerRegistry) {
+    await prepareBundledDiscoveryMode();
+  }
+  return resolvePreparedAutoMediaKeyProviders(params);
+}
+
+/** @deprecated Await resolveDefaultMediaModelAsync for worker-backed discovery. */
+export function resolveDefaultMediaModel(
+  params: Parameters<typeof resolvePreparedDefaultMediaModel>[0],
+): ReturnType<typeof resolvePreparedDefaultMediaModel> {
+  warnPluginSdkDeprecation({
+    family: "media-discovery",
+    method: "resolveDefaultMediaModel",
+    replacement: "resolveDefaultMediaModelAsync",
+  });
+  if (!params.providerRegistry) {
+    prepareBundledDiscoveryModeNative();
+  }
+  return resolvePreparedDefaultMediaModel(params);
+}
+
+export async function resolveDefaultMediaModelAsync(
+  params: Parameters<typeof resolvePreparedDefaultMediaModel>[0],
+): Promise<ReturnType<typeof resolvePreparedDefaultMediaModel>> {
+  if (!params.providerRegistry) {
+    await prepareBundledDiscoveryMode();
+  }
+  return resolvePreparedDefaultMediaModel(params);
+}
 export { describeImageWithModel } from "../media-understanding/image-runtime.ts";
 /** Resolves an image model through the media runner when selection is requested. */
 export const resolveAutoImageModel: typeof import("../media-understanding/runner.js").resolveAutoImageModel =

@@ -10,7 +10,9 @@ export type PluginCapabilityCatalogContext = {
   isProviderAuthProfileConfiguredAsync?: typeof import("./provider-auth-availability.js").isProviderAuthProfileConfiguredAsync;
   resolveAgentDir: typeof import("../agents/agent-scope-config.js").resolveAgentDir;
   createRealtimeTranscriptionWebSocketSession: typeof import("../realtime-transcription/websocket-session.js").createRealtimeTranscriptionWebSocketSession;
+  /** @deprecated Use resolveProviderRequestHeadersAsync; removed after stable deprecation. */
   resolveProviderRequestHeaders: typeof import("../agents/provider-request-config.js").resolveProviderRequestHeaders;
+  resolveProviderRequestHeadersAsync?: typeof import("../agents/provider-request-config.js").resolveProviderRequestHeadersAsync;
   resolveProviderAuthProfileApiKey: typeof import("./provider-auth-availability.js").resolveProviderAuthProfileApiKey;
   resolveApiKeyForProvider: typeof import("./runtime/runtime-model-auth.runtime.js").resolveProviderRuntimeApiKey;
   /** @deprecated Use the host context's captureWsEventAsync; retained for shipped plugins. */
@@ -32,6 +34,7 @@ export type PluginCapabilityCatalogEntry =
 
 /** Native hosts supply asynchronous capture while preserving the legacy plugin context. */
 export type PluginCapabilityCatalogHostContext = PluginCapabilityCatalogContext & {
+  resolveProviderRequestHeadersAsync: typeof import("../agents/provider-request-config.js").resolveProviderRequestHeadersAsync;
   isProviderApiKeyConfiguredAsync: typeof import("./provider-auth-availability.js").isProviderApiKeyConfiguredAsync;
   isProviderAuthProfileConfiguredAsync: typeof import("./provider-auth-availability.js").isProviderAuthProfileConfiguredAsync;
   captureWsEventAsync: typeof import("../proxy-capture/runtime.js").captureWsEventAsync;

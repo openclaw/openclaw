@@ -90,11 +90,12 @@ export async function finalizeReadConfigSnapshotInternalResult(
 export async function collectInvalidConfigLegacyIssues(
   raw: unknown,
   sourceRaw: unknown,
+  env?: NodeJS.ProcessEnv,
 ): Promise<LegacyConfigIssue[]> {
   if (!raw || typeof raw !== "object") {
     return [];
   }
   const { findDoctorLegacyConfigIssues } =
     await import("../commands/doctor/shared/legacy-config-issues.js");
-  return findDoctorLegacyConfigIssues(raw, sourceRaw);
+  return findDoctorLegacyConfigIssues(raw, sourceRaw, undefined, env);
 }

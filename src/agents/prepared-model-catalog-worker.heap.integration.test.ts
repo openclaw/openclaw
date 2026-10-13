@@ -123,6 +123,7 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
           request: {
             kind: "catalog",
             syntheticAuth: [],
+            bundledDiscoveryMode: undefined,
             clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: fixture.env }),
           },
         },
@@ -147,6 +148,7 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
         request: {
           kind: "catalog",
           syntheticAuth: [],
+          bundledDiscoveryMode: undefined,
           clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: fixture.env }),
         },
       },
@@ -294,6 +296,7 @@ export function register(api) {
         request: {
           kind: "catalog",
           syntheticAuth: [],
+          bundledDiscoveryMode: undefined,
           clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: fixture.env }),
         },
       },

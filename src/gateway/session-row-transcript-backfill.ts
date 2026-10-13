@@ -5,13 +5,19 @@ import {
 import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { readSessionFallbackModel } from "../status/session-fallback-model.js";
 import type { SessionRowTranscriptReadParams } from "./session-row-transcript-backfill.types.js";
 
 /** Optional transcript facts are published by the resident row owner. */
 export async function backfillSessionRowTranscriptFields(
   params: Omit<SessionRowTranscriptReadParams, "includeTerminalModel"> & {
-    model?: { selectedProvider: string; selectedModel: string; config?: OpenClawConfig };
+    model?: {
+      selectedProvider: string;
+      selectedModel: string;
+      config?: OpenClawConfig;
+      metadataSnapshot?: PluginMetadataSnapshot | null;
+    };
   },
 ): Promise<{ lastMessagePreview?: string; fallbackModel?: { provider: string; model: string } }> {
   const { sessionEntry, model, ...scope } = params;

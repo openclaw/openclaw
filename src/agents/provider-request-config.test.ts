@@ -17,7 +17,10 @@ import {
   sanitizeConfiguredModelProviderRequest,
   sanitizeConfiguredProviderRequest,
 } from "./provider-request-config.js";
+import { installProviderRequestMetadataFixture } from "./provider-request.test-support.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
+
+installProviderRequestMetadataFixture();
 
 function buildProviderMetadataOwners(
   endpoints: NonNullable<PluginMetadataSnapshotOwnerMaps["providerEndpoints"]> = [],

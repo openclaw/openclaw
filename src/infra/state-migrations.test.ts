@@ -22,11 +22,13 @@ import { readMemoryHostEventRecords } from "../memory-host-sdk/events.js";
 import { loadNodeHostConfig } from "../node-host/config.js";
 import { readChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
 import { definePluginDoctorMigrationFromPlans } from "../plugin-sdk/runtime-doctor-migrations.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
 } from "../plugins/doctor-contract-module.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
+import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
@@ -81,25 +83,37 @@ type CoreMigrationParams<T> = Omit<T, "legacySessionSurfaces"> & {
 
 // This broad core suite intentionally exercises migration mechanics without plugin-owned keys.
 // Package-shaped coverage owns configured plugin resolution and setup-sidecar loading.
-function detectLegacyStateMigrations(params: CoreMigrationParams<DetectLegacyStateParams>) {
-  return detectLegacyStateMigrationsWithSurfaces({
-    legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-    ...params,
+function withCorePluginMetadata<T>(run: () => T): T {
+  return withPluginMetadataSnapshotScope(createEmptyPluginMetadataSnapshot(), run, {
+    trustConfigIdentity: true,
   });
+}
+
+function detectLegacyStateMigrations(params: CoreMigrationParams<DetectLegacyStateParams>) {
+  return withCorePluginMetadata(() =>
+    detectLegacyStateMigrationsWithSurfaces({
+      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      ...params,
+    }),
+  );
 }
 
 function runLegacyStateMigrations(params: CoreMigrationParams<RunLegacyStateParams>) {
-  return runLegacyStateMigrationsWithSurfaces({
-    legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-    ...params,
-  });
+  return withCorePluginMetadata(() =>
+    runLegacyStateMigrationsWithSurfaces({
+      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      ...params,
+    }),
+  );
 }
 
 function autoMigrateLegacyState(params: CoreMigrationParams<AutoMigrateLegacyStateParams>) {
-  return autoMigrateLegacyStateWithSurfaces({
-    legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-    ...params,
-  });
+  return withCorePluginMetadata(() =>
+    autoMigrateLegacyStateWithSurfaces({
+      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      ...params,
+    }),
+  );
 }
 
 // Static helpers can retain earlier cohorts after resetModules; close every cohort at teardown.

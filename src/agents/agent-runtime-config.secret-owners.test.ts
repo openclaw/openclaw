@@ -14,6 +14,8 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ModelsConfigSchema } from "../config/zod-schema.core.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { getPath, setPathCreateStrict } from "../secrets/path-utils.js";
 import * as secretResolver from "../secrets/resolve.js";
 import { resolveCommandSecretsFromActiveRuntimeSnapshot } from "../secrets/runtime-command-secrets.js";
@@ -319,28 +321,33 @@ describe("agent execution respects prepared secret owners", () => {
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not treat an unrecorded snapshot as config-ref preparation authority", async () => {
-    const source = providerConfig();
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: source,
-      includeConfigRefs: false,
-      agentDirs: [state.agentDir()],
-      loadAuthStore: () => ({ version: 1, profiles: {} }),
-    });
-    activateSecretsRuntimeSnapshotState({
-      snapshot,
-      refreshContext: null,
-      refreshHandler: null,
-    });
-    vi.stubEnv("TEST_HEALTHY_PROVIDER_KEY", "local-fixture-key");
-    await expect(resolveQueuedReplyExecutionConfig(source)).rejects.toThrow(
-      "models.providers.ollama.apiKey is unresolved",
-    );
-    await expect(resolveAgentRuntimeConfig(runtime)).rejects.toThrow(
-      "models.providers.ollama.apiKey is unresolved",
-    );
-    expect(callGatewayMock).toHaveBeenCalledTimes(2);
-  });
+  it("does not treat an unrecorded snapshot as config-ref preparation authority", () =>
+    withPluginMetadataSnapshotScope(
+      createPluginMetadataSnapshotFixture(),
+      async () => {
+        const source = providerConfig();
+        const snapshot = await prepareSecretsRuntimeSnapshot({
+          config: source,
+          includeConfigRefs: false,
+          agentDirs: [state.agentDir()],
+          loadAuthStore: () => ({ version: 1, profiles: {} }),
+        });
+        activateSecretsRuntimeSnapshotState({
+          snapshot,
+          refreshContext: null,
+          refreshHandler: null,
+        });
+        vi.stubEnv("TEST_HEALTHY_PROVIDER_KEY", "local-fixture-key");
+        await expect(resolveQueuedReplyExecutionConfig(source)).rejects.toThrow(
+          "models.providers.ollama.apiKey is unresolved",
+        );
+        await expect(resolveAgentRuntimeConfig(runtime)).rejects.toThrow(
+          "models.providers.ollama.apiKey is unresolved",
+        );
+        expect(callGatewayMock).toHaveBeenCalledTimes(2);
+      },
+      { trustConfigIdentity: true },
+    ));
 
   it("keeps foreign-provider reply configs on the strict command path", async () => {
     const snapshot = await activateProviderConfig();

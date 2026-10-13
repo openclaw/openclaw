@@ -9,6 +9,7 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 const mocks = vi.hoisted(() => ({
   plugins: [] as PluginManifestRecord[],
   warn: vi.fn(),
+  loadRegistry: vi.fn(),
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
@@ -19,8 +20,12 @@ vi.mock("./manifest-registry.js", () => ({
   loadPluginManifestRegistryCore: () => ({ diagnostics: [], plugins: mocks.plugins }),
 }));
 
+// mock-isolation: Bundle contributions use the fixture registry without reading installed plugin state.
 vi.mock("./plugin-registry-contributions.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: mocks.plugins }),
+  loadPluginManifestRegistryForPluginRegistry: () => {
+    mocks.loadRegistry();
+    return { diagnostics: [], plugins: mocks.plugins };
+  },
 }));
 
 vi.mock("./config-state.js", () => ({
@@ -42,6 +47,7 @@ const tempDirs = createTempDirTracker();
 afterEach(() => {
   mocks.plugins = [];
   mocks.warn.mockReset();
+  mocks.loadRegistry.mockReset();
   tempDirs.cleanup();
 });
 
@@ -94,6 +100,21 @@ function expectEnabledClaudeBundleCommands(
 }
 
 describe("loadEnabledClaudeBundleCommands", () => {
+  it("skips registry discovery when all plugins are disabled", () => {
+    expect(
+      loadEnabledClaudeBundleCommands({
+        workspaceDir: "/unused-disabled-plugin-workspace",
+        cfg: {
+          plugins: {
+            enabled: false,
+            entries: { "disabled-bundle": { enabled: true } },
+          },
+        },
+      }),
+    ).toEqual([]);
+    expect(mocks.loadRegistry).not.toHaveBeenCalled();
+  });
+
   it("loads enabled Claude bundle markdown commands and honors invocation policy", async () => {
     const homeDir = tempDirs.make("openclaw-bundle-commands-home-");
     const workspaceDir = tempDirs.make("openclaw-bundle-commands-workspace-");

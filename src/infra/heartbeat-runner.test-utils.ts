@@ -20,6 +20,7 @@ import { createCronServiceState } from "../cron/service/state.js";
 import { resolveCronJobsStorePath } from "../cron/store.js";
 import { cronStoreKey } from "../cron/store/key.js";
 import { loadCronStoreFromDatabase } from "../cron/store/load.kernel.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -130,6 +131,7 @@ export async function seedSessionStore(
   sessionKey: string,
   session: Partial<HeartbeatSessionSeed>,
 ): Promise<void> {
+  await preparePluginMetadataMachineStateAsync({});
   const {
     deliveryContext,
     lastAccountId,

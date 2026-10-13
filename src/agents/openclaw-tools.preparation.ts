@@ -1,5 +1,6 @@
 import { selectApplicableRuntimeConfig } from "../config/config.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import {
@@ -28,6 +29,7 @@ export async function prepareOpenClawTools(
   shared: PreparedToolConstruction,
 ) {
   const captured = { ...options, config: shared.config };
+  await prepareBundledDiscoveryMode(shared.env);
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: captured.runSessionKey ?? captured.agentSessionKey,
     config: captured.config,

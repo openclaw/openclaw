@@ -3,6 +3,7 @@ import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/strin
 import { getRuntimeConfigSnapshot } from "../config/config.js";
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import {
   prepareProviderSyntheticAuthWithPlugin,
   resolveProviderSyntheticAuthWithPlugin,
@@ -245,6 +246,7 @@ export async function prepareRuntimeAvailableProviderAuth(
   params: RuntimeProviderAuthParams & { signal?: AbortSignal },
 ): Promise<boolean> {
   params.signal?.throwIfAborted();
+  await preparePluginMetadataMachineStateAsync({ env: params.env });
   return resolveRuntimeAvailableProviderAuth(params, async (provider) =>
     Boolean(await prepareSyntheticLocalProviderAuth({ ...params, cfg: params.cfg, provider })),
   );

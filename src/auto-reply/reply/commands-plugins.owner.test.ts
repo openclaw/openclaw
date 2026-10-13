@@ -9,6 +9,7 @@ import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../../plug
 import { writePersistedInstalledPluginIndex } from "../../plugins/installed-plugin-index-store-write.js";
 import { loadInstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { createColdPluginFixture } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { handlePluginsCommand } from "./commands-plugins.js";
@@ -116,6 +117,7 @@ describe("/plugins live owner authority", () => {
                 },
               }
             : {};
+        await resolvePluginMetadataSnapshotAsync({ config, env: process.env, installRecords });
         await writePersistedInstalledPluginIndex(
           loadInstalledPluginIndex({ config, env: process.env, installRecords }),
         );

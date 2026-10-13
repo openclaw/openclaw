@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import {
@@ -17,6 +18,7 @@ async function withAuthProfileTestDir(
 ): Promise<void> {
   await withTestDir({ prefix }, async (dir) => {
     try {
+      await resolvePluginMetadataSnapshotAsync({ config: {} });
       await run(dir);
     } finally {
       closeAuthProfileReadPool({ kind: "root", rootPath: dir });

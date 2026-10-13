@@ -77,6 +77,7 @@ export function collectChannelLegacyConfigRules(
   raw?: unknown,
   touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
   excludedChannelIds?: ReadonlySet<ChannelId>,
+  env?: NodeJS.ProcessEnv,
 ): LegacyConfigRule[] {
   const channelIds = collectRelevantChannelIdsForTouchedPaths({
     raw,
@@ -86,7 +87,9 @@ export function collectChannelLegacyConfigRules(
   const rules: LegacyConfigRule[] = [];
   const unresolvedChannelIds: ChannelId[] = [];
   for (const channelId of channelIds) {
-    const contractApi = loadBundledChannelDoctorContractApi(channelId);
+    const contractApi = env
+      ? loadBundledChannelDoctorContractApi(channelId, env)
+      : loadBundledChannelDoctorContractApi(channelId);
     const contractRules = contractApi?.legacyConfigRules;
     if (Array.isArray(contractRules)) {
       rules.push(...contractRules);
@@ -111,6 +114,7 @@ export function collectChannelLegacyConfigRules(
       ...listPluginDoctorLegacyConfigRules({
         config: raw as OpenClawConfig,
         pluginIds: unresolvedChannelIds,
+        env,
       }),
     );
   }

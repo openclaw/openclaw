@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it } from "vitest";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { ModelDefinitionConfig } from "../../../config/types.models.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { prepareBundledDiscoveryMode } from "../../../plugins/bundled-discovery-state.js";
 import { clearPluginMetadataLifecycleCaches } from "../../../plugins/plugin-metadata-lifecycle.js";
 import {
   createOpenClawTestState,
@@ -23,6 +24,7 @@ beforeEach(async () => {
       "xai:fixture": { type: "token", provider: "xai", token: "synthetic-subscription-token" },
     },
   });
+  await prepareBundledDiscoveryMode(state.env);
 });
 afterEach(async () => {
   clearPluginMetadataLifecycleCaches();

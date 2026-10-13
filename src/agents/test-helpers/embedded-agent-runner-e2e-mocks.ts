@@ -109,9 +109,10 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
       return { configured: ref, configuredId: "legacy", fallback: ref };
     }),
   }));
+  // mock-isolation: Embedded-runner fixtures provide empty registries without loading plugin runtimes.
   vi.doMock("../runtime-plugins.js", () => ({
     loadAgentRuntimePluginRegistryHandle: vi.fn(
-      () => options?.pluginRegistry ?? createEmptyPluginRegistry(),
+      async () => options?.pluginRegistry ?? createEmptyPluginRegistry(),
     ),
   }));
   vi.doMock("../prepared-model-runtime.js", () => {

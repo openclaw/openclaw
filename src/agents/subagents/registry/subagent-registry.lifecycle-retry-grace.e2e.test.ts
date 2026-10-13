@@ -87,12 +87,13 @@ const loadConfigMock = vi.mocked(getRuntimeConfig);
 vi.mock("../../../config/config.js", { spy: true });
 vi.mock("../../../gateway/call.js", { spy: true });
 vi.mock("../../../infra/agent-events.js", { spy: true });
+// mock-isolation: Retry-grace fixtures keep plugin acquisition outside the lifecycle under test.
 vi.mock("../../runtime-plugins.js", async () => {
   const { createEmptyPluginRegistry } = await import("../../../plugins/registry-empty.js");
   return {
     loadAgentRuntimePluginRegistryHandle: vi.fn<
       typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle
-    >(() => createEmptyPluginRegistry()),
+    >(async () => createEmptyPluginRegistry()),
   };
 });
 

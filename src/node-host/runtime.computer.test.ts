@@ -17,8 +17,9 @@ vi.mock("../infra/path-env.js", () => ({ ensureOpenClawCliOnPath: vi.fn() }));
 vi.mock("./mcp.js", () => ({
   startNodeHostMcpManager: vi.fn(async () => ({ descriptors: [], close: async () => {} })),
 }));
+// mock-isolation: Computer runtime fixtures supply the active test registry without plugin discovery.
 vi.mock("../plugins/loader.js", () => ({
-  loadPluginRegistryHandle: () => getActivePluginRegistry(),
+  loadPluginRegistryHandleAsync: async () => getActivePluginRegistry(),
 }));
 
 afterEach(() => resetPluginRuntimeStateForTest());

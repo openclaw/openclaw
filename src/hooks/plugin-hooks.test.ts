@@ -9,7 +9,10 @@ import { buildPluginCapabilitySummary } from "../plugins/capability-summary.js";
 import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { projectInstalledPluginComponents } from "../plugins/installed-plugin-components.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  resolvePluginMetadataSnapshotAsync,
+  type PluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
@@ -123,8 +126,7 @@ describe("bundle plugin hooks", () => {
     return entry;
   }
 
-  function projectBundleComponents(pluginId: string, config: OpenClawConfig) {
-    const metadata = loadPluginMetadataSnapshot({ config, workspaceDir, env: process.env });
+  function projectBundleComponents(pluginId: string, metadata: PluginMetadataSnapshot) {
     const manifest = metadata.manifestRegistry.plugins.find(({ id }) => id === pluginId);
     if (!manifest) {
       throw new Error(`Expected bundle manifest for ${pluginId}`);
@@ -143,7 +145,12 @@ describe("bundle plugin hooks", () => {
     async ({ format, withJsonHooks, root, supported }) => {
       const bundleRoot = await writeBundleHookFixture(format, withJsonHooks, root);
       const config = createConfig(true);
-      const entries = loadWorkspaceHookEntries(workspaceDir, { config });
+      const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+        config,
+        workspaceDir,
+        env: process.env,
+      });
+      const entries = loadWorkspaceHookEntries(workspaceDir, { config, metadataSnapshot });
 
       if (supported.length > 0) {
         const entry = requireOnlyHookEntry(entries);
@@ -158,7 +165,7 @@ describe("bundle plugin hooks", () => {
         expect(entries).toHaveLength(0);
       }
 
-      const { declared, components } = projectBundleComponents("sample-bundle", config);
+      const { declared, components } = projectBundleComponents("sample-bundle", metadataSnapshot);
       expect(declared.hooks).toEqual(withJsonHooks ? [root, "hooks/hooks.json"] : [root]);
       expect(components).toMatchObject({
         mapped: supported.length > 0 ? ["hooks"] : [],
@@ -171,7 +178,11 @@ describe("bundle plugin hooks", () => {
   it("reuses published plugin metadata without rescanning manifests", async () => {
     const bundleRoot = await writeBundleHookFixture();
     const config = createConfig(true);
-    const snapshot = loadPluginMetadataSnapshot({ config, workspaceDir, env: process.env });
+    const snapshot = await resolvePluginMetadataSnapshotAsync({
+      config,
+      workspaceDir,
+      env: process.env,
+    });
     setCurrentPluginMetadataSnapshot(snapshot, { config, workspaceDir });
     const hookDir = fs.realpathSync.native(path.join(bundleRoot, "hooks"));
     const manifestRegistry = await import("../plugins/manifest-registry-installed.js");
@@ -189,7 +200,11 @@ describe("bundle plugin hooks", () => {
   it("commits candidate plugin hook policy from the immutable Gateway inventory", async () => {
     await writeBundleHookFixture();
     const config = createConfig(true);
-    const snapshot = loadPluginMetadataSnapshot({ config, workspaceDir, env: process.env });
+    const snapshot = await resolvePluginMetadataSnapshotAsync({
+      config,
+      workspaceDir,
+      env: process.env,
+    });
     setGatewayPluginMetadataSnapshot(snapshot, { config, workspaceDir });
     const manifestRegistry = await import("../plugins/manifest-registry-installed.js");
     const scanManifests = vi.spyOn(manifestRegistry, "loadPluginManifestRegistryForInstalledIndex");
@@ -216,7 +231,11 @@ describe("bundle plugin hooks", () => {
     async (failure) => {
       const bundleRoot = await writeBundleHookFixture();
       const config = createConfig(true);
-      const snapshot = loadPluginMetadataSnapshot({ config, workspaceDir, env: process.env });
+      const snapshot = await resolvePluginMetadataSnapshotAsync({
+        config,
+        workspaceDir,
+        env: process.env,
+      });
       setGatewayPluginMetadataSnapshot(snapshot, { config, workspaceDir });
       (await prepareInternalHooks(config, workspaceDir)).commit();
       const hookRoot = path.join(bundleRoot, "hooks");
@@ -254,10 +273,15 @@ describe("bundle plugin hooks", () => {
       hooks: { internal: { enabled: true } },
       plugins: { entries: { "claude-bundle": { enabled: true } } },
     };
-    const entries = loadWorkspaceHookEntries(workspaceDir, { config });
+    const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+      config,
+      workspaceDir,
+      env: process.env,
+    });
+    const entries = loadWorkspaceHookEntries(workspaceDir, { config, metadataSnapshot });
     expect(entries).toHaveLength(0);
 
-    const { declared, components } = projectBundleComponents("claude-bundle", config);
+    const { declared, components } = projectBundleComponents("claude-bundle", metadataSnapshot);
     expect(declared.hooks).toEqual(["hooks/hooks.json"]);
     expect(components).toMatchObject({
       mapped: [],

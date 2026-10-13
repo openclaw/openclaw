@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
@@ -91,12 +92,24 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
           await Promise.all([priorDisposal, priorSessionWork].filter((work) => work !== undefined));
           store.scheduler.signal.throwIfAborted();
           const reload = store.configReload;
-          acquired = await acquire({
+          const selected = {
             ...params,
             requester,
             ...(reload && reload !== publication
               ? { cfg: reload.cfg, manifestRegistry: reload.manifestRegistry }
               : {}),
+          };
+          const manifestRegistry =
+            selected.manifestRegistry ??
+            (
+              await resolvePluginMetadataSnapshotAsync({
+                config: selected.cfg,
+                workspaceDir: selected.workspaceDir,
+              })
+            ).manifestRegistry;
+          acquired = await acquire({
+            ...selected,
+            manifestRegistry,
           });
           store.scheduler.signal.throwIfAborted();
           return acquired;

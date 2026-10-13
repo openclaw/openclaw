@@ -9,6 +9,7 @@ import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/types.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
+import { preparePluginMetadataMachineStateAsync } from "../../plugins/installed-plugin-index-record-state.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createTestRuntime } from "../test-runtime-config-helpers.js";
@@ -226,9 +227,10 @@ vi.mock("../../agents/model-auth-env-vars.js", () => ({
   resolveProviderEnvAuthLookupMaps: mocks.resolveProviderEnvAuthLookupMaps,
   listKnownProviderEnvApiKeyNames: mocks.listKnownProviderEnvApiKeyNames,
 }));
+// mock-isolation: Status tests control credential realms without discovering host providers.
 vi.mock("../../agents/provider-auth-aliases.js", () => ({
   resolveProviderAuthAliasMap: vi.fn(() => ({ "codex-cli": "openai" })),
-  resolveProviderIdForAuth: vi.fn((provider: string) =>
+  resolvePreparedProviderIdForAuth: vi.fn((provider: string) =>
     provider === "codex-cli" ? "openai" : provider,
   ),
 }));
@@ -511,6 +513,7 @@ describe("modelsStatusCommand auth overview", () => {
       expect(replacement).toBeDefined();
       expect(getCurrentPluginMetadataSnapshot(scope)).toBeUndefined();
       clearPluginMetadataLifecycleCaches();
+      await preparePluginMetadataMachineStateAsync({ env: scope.env });
       setCurrentPluginMetadataSnapshot(replacement!, scope);
       releaseCatalog.resolve();
       await commandPromise;

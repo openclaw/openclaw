@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
+import { resolveProviderRequestHeadersAsync } from "../agents/provider-request-config.js";
 import type {
   ProviderCatalogContext,
   ProviderCatalogOutcome,
@@ -12,6 +12,7 @@ import {
   getCachedLiveProviderModelRows,
   getCachedUpstreamProviderCatalog,
   liveModelCatalogAuthCacheKey,
+  prepareLiveModelCatalogAuth,
   type FetchLiveProviderModelIdsParams,
   type FetchLiveProviderModelRowsParams,
   type LiveModelCatalogFetchGuard,
@@ -202,18 +203,19 @@ export async function buildLiveModelProviderConfig<T extends ModelDefinitionConf
     ...(params.apiKey ? { apiKey: params.apiKey } : {}),
     models: [...params.models],
   };
-  const cacheKeyParts =
-    params.discoveryMode === "strict"
-      ? [
-          params.providerId,
-          "model-rows",
-          params.endpoint,
-          liveModelCatalogAuthCacheKey(params),
-          "strict",
-          params.cacheKeyParts,
-        ]
-      : params.cacheKeyParts;
   try {
+    await prepareLiveModelCatalogAuth(params);
+    const cacheKeyParts =
+      params.discoveryMode === "strict"
+        ? [
+            params.providerId,
+            "model-rows",
+            params.endpoint,
+            liveModelCatalogAuthCacheKey(params),
+            "strict",
+            params.cacheKeyParts,
+          ]
+        : params.cacheKeyParts;
     // The authenticated listing owns model existence; static rows only enrich
     // listed ids, so unfamiliar chat models appear without a release.
     const models = await projectCachedLiveModelRows<ModelDefinitionConfig>({
@@ -267,16 +269,19 @@ export function createUpstreamProviderCatalog(params: {
   const projectRows = params.projectRows ?? projectProviderCatalogSnapshotRows;
   // Discovery identifies the client the same way inference does; the attribution
   // owner decides which providers and endpoints receive those headers.
-  const buildRequestHeaders = (ctx: LiveModelCatalogHeaderContext): HeadersInit => ({
-    ...resolveProviderRequestHeaders({
+  const prepareRequestHeaders = async () => {
+    const attributionHeaders = await resolveProviderRequestHeadersAsync({
       provider: params.providerId,
       api: params.providerConfig.api,
       baseUrl: params.providerConfig.baseUrl,
       capability: "llm",
       transport: "http",
-    }),
-    ...buildDefaultLiveModelCatalogHeaders(ctx),
-  });
+    });
+    return (ctx: LiveModelCatalogHeaderContext): HeadersInit => ({
+      ...attributionHeaders,
+      ...buildDefaultLiveModelCatalogHeaders(ctx),
+    });
+  };
   const buildStaticProvider = (apiKey?: string): ModelProviderConfig => ({
     ...params.providerConfig,
     ...(apiKey ? { apiKey } : {}),
@@ -325,7 +330,7 @@ export function createUpstreamProviderCatalog(params: {
         signal: request.signal,
         timeoutMs: params.timeoutMs,
         auditContext: params.starterModelAuditContext,
-        buildRequestHeaders,
+        buildRequestHeaders: await prepareRequestHeaders(),
       });
       const preferredModelId = request.preferredModelRef.replace(`${params.providerId}/`, "");
       return liveModelIds.includes(preferredModelId) ? request.preferredModelRef : undefined;
@@ -357,7 +362,7 @@ export function createUpstreamProviderCatalog(params: {
         timeoutMs: params.timeoutMs,
         ttlMs: params.ttlMs,
         auditContext: params.auditContext,
-        buildRequestHeaders,
+        buildRequestHeaders: await prepareRequestHeaders(),
         projectRows: (rows) => projectRows(rows, snapshot),
       });
     },

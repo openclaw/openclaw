@@ -4,6 +4,7 @@ import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { shouldRejectHardlinkedPluginFiles } from "../../plugins/hardlink-policy.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { readWorkspaceSkillStatusFacts } from "../discovery/status-files.js";
@@ -333,10 +334,26 @@ async function prepareCapturedWorkspaceSkillEntries(
         assertCurrent,
       )
     : [];
+  const preparedOptions =
+    !opts?.workspaceOnly &&
+    opts?.config?.plugins?.enabled !== false &&
+    !opts?.pluginMetadataSnapshot
+      ? {
+          ...opts,
+          pluginMetadataSnapshot: await resolvePluginMetadataSnapshotAsync({
+            workspaceDir,
+            config: opts?.config,
+          }),
+        }
+      : opts;
   assertCurrent();
   if (!access?.loadSkills) {
     return {
-      entries: mergeSkillTiers(loadLocalSkillTiers(workspaceDir, opts), opts, libraryEntries),
+      entries: mergeSkillTiers(
+        loadLocalSkillTiers(workspaceDir, preparedOptions),
+        opts,
+        libraryEntries,
+      ),
     };
   }
   const bundledOnly = opts?.bundledSkillName !== undefined;
@@ -350,7 +367,7 @@ async function prepareCapturedWorkspaceSkillEntries(
     workspacePlan,
     gatewayExecutionWorkspaceDir,
     workspaceExecutionWorkspaceDir,
-  } = splitSkillSourcePlan(resolveWorkspaceSkillSourcePlan(agentWorkspaceDir, opts), {
+  } = splitSkillSourcePlan(resolveWorkspaceSkillSourcePlan(agentWorkspaceDir, preparedOptions), {
     executionWorkspaceDir,
     executionWorkspaceFileHost: opts?.executionWorkspaceFileHost,
   });

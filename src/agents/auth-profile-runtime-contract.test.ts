@@ -13,7 +13,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { resolveOpenAIRuntimeProvider } from "./openai-routing.js";
-import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+import { resolvePreparedProviderIdForAuth as resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 import { buildAgentRuntimeAuthPlan } from "./runtime-plan/auth.js";
 
 const pluginMetadataMocks = vi.hoisted(() => ({

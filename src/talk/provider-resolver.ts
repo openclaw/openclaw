@@ -15,7 +15,12 @@ import {
   readInternalRealtimeVoiceProviderApi,
   type InternalRealtimeVoiceProviderCapabilities,
 } from "./provider-internal.js";
-import { getRealtimeVoiceProvider, listRealtimeVoiceProviders } from "./provider-registry.js";
+import {
+  getRealtimeVoiceProvider,
+  getRealtimeVoiceProviderAsync,
+  listRealtimeVoiceProviders,
+  listRealtimeVoiceProvidersAsync,
+} from "./provider-registry.js";
 import type {
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceProviderConfig,
@@ -177,8 +182,13 @@ function prepareRealtimeVoiceProviderSelection(
     cfg: params.cfg,
     cfgForResolve: params.cfgForResolve ?? params.cfg ?? {},
     getConfiguredProvider: (providerId: string | undefined) =>
-      params.providers?.find((entry) => entry.id === providerId) ??
-      getRealtimeVoiceProvider(providerId, params.cfg),
+      params.providers
+        ? params.providers.find(
+            (entry) =>
+              entry.id === providerId?.trim().toLowerCase() ||
+              entry.aliases?.includes(providerId?.trim().toLowerCase() ?? ""),
+          )
+        : getRealtimeVoiceProvider(providerId, params.cfg),
     listProviders: () =>
       params.providers ??
       listRealtimeVoiceProviders(params.cfg, Object.keys(params.providerConfigs ?? {})),
@@ -274,9 +284,24 @@ export function resolveConfiguredRealtimeVoiceProvider(
 export async function resolveConfiguredRealtimeVoiceProviderAsync(
   params: ResolveConfiguredRealtimeVoiceProviderParams,
 ): Promise<ResolvedRealtimeVoiceProvider> {
+  let providers = params.providers;
+  if (!providers) {
+    const configuredProviderId = params.configuredProviderId?.trim();
+    const provider = configuredProviderId
+      ? await getRealtimeVoiceProviderAsync(configuredProviderId, params.cfg)
+      : undefined;
+    providers = configuredProviderId
+      ? provider
+        ? [provider]
+        : []
+      : await listRealtimeVoiceProvidersAsync(
+          params.cfg,
+          Object.keys(params.providerConfigs ?? {}),
+        );
+  }
   const resolution = requireRealtimeVoiceProvider(
     await resolveConfiguredCapabilityProviderAsync({
-      ...prepareRealtimeVoiceProviderSelection(params),
+      ...prepareRealtimeVoiceProviderSelection({ ...params, providers }),
       resolveProviderConfig: async ({ provider, cfg, rawConfig }) => {
         const context = prepareRealtimeVoiceProviderConfig(params, provider, cfg, rawConfig);
         return (

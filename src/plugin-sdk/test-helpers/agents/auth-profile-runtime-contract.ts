@@ -2,7 +2,7 @@
  * Shared contract fixtures for agent auth profile runtime behavior.
  */
 import {
-  resolveProviderIdForAuth,
+  resolvePreparedProviderIdForAuth as resolveProviderIdForAuth,
   type ProviderAuthAliasLookupParams,
 } from "../../../agents/provider-auth-aliases.js";
 import type { PluginManifestRegistry } from "../../../plugins/manifest-registry.js";

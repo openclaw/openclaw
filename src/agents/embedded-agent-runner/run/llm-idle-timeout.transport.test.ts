@@ -14,6 +14,7 @@ import {
 } from "../../../../test/helpers/promise.js";
 import { loadBundledPluginFacade } from "../../../test-utils/bundled-plugin-public-surface.js";
 import { reserveTestPortListener } from "../../../test-utils/port-claims.js";
+import { attachPreparedProviderModelFixture } from "../../provider-request.test-support.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { recoverAfterTransportDrop } from "./attempt-recovery.test-support.js";
 import {
@@ -28,11 +29,23 @@ const { createOllamaStreamFn } = await loadBundledPluginFacade<{
 
 const providers = {
   "openai-responses": (model, context, options) =>
-    streamSimpleOpenAIResponses({ ...model, api: "openai-responses" }, context, options),
+    streamSimpleOpenAIResponses(
+      attachPreparedProviderModelFixture({ ...model, api: "openai-responses" }),
+      context,
+      options,
+    ),
   "openai-completions": (model, context, options) =>
-    streamSimpleOpenAICompletions({ ...model, api: "openai-completions" }, context, options),
+    streamSimpleOpenAICompletions(
+      attachPreparedProviderModelFixture({ ...model, api: "openai-completions" }),
+      context,
+      options,
+    ),
   "anthropic-messages": (model, context, options) =>
-    streamSimpleAnthropic({ ...model, api: "anthropic-messages" }, context, options),
+    streamSimpleAnthropic(
+      attachPreparedProviderModelFixture({ ...model, api: "anthropic-messages" }),
+      context,
+      options,
+    ),
   ollama: (model, context, options) => createOllamaStreamFn(model.baseUrl)(model, context, options),
 } satisfies Record<string, StreamFn>;
 type Api = keyof typeof providers;
@@ -62,7 +75,7 @@ afterAll(async () => {
 });
 
 async function openRequest(api: Api, modelRequestTimeoutMs?: number, runTimeoutMs?: number) {
-  const model: Model<Api> = {
+  const model = attachPreparedProviderModelFixture({
     id: "local-model",
     name: "Local model",
     api,
@@ -73,7 +86,7 @@ async function openRequest(api: Api, modelRequestTimeoutMs?: number, runTimeoutM
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 8192,
     maxTokens: 128,
-  };
+  } satisfies Model<Api>);
   const request = createDeferred<ServerResponse>();
   const closed = createDeferred();
   receive = (response) => {

@@ -1,8 +1,13 @@
-import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  capturePluginRegistration,
+  useProviderCatalogMetadata,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 const selected = "setup-tools:latest";
 const configuredModel: ModelDefinitionConfig = {

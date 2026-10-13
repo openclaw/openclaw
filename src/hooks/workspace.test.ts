@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
 const { warnMock } = vi.hoisted(() => ({ warnMock: vi.fn() }));
@@ -97,8 +98,9 @@ function exactSizeHookPackageManifest(targetBytes: number): string {
 }
 
 describe("hooks workspace", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     warnMock.mockClear();
+    await preparePluginMetadataMachineStateAsync({});
   });
 
   it("rejects package traversal without scanning unlisted children", () => {

@@ -4,21 +4,24 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
+import { createOpenClawCodingToolsAsync } from "./agent-tools.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import {
   createToolSearchCatalogRef,
   registerHeadlessToolSearchCatalog,
 } from "./tool-search-catalog.js";
 
+// mock-isolation: Tool policy tests supply synthetic plugin tools without loading plugin runtimes.
 vi.mock("./openclaw-plugin-tools.js", () => ({
-  resolveOpenClawPluginToolsForOptions: () => [{ name: "browser" }],
+  resolveOpenClawPluginToolsForOptionsAsync: async () => [{ name: "browser" }],
 }));
 
 const baseTools = ["read", "web_search", "exec"];
 
-beforeEach(() => {
+beforeEach(async () => {
+  await preparePluginMetadataMachineStateAsync({});
   for (const name of listKnownProviderAuthEnvVarNamesCore()) {
     vi.stubEnv(name, undefined);
   }
@@ -30,12 +33,12 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function selectedTools(
+async function selectedTools(
   requestedTools: string[],
-  options?: NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>,
+  options?: NonNullable<Parameters<typeof createOpenClawCodingToolsAsync>[0]>,
 ) {
   setRuntimeConfigSnapshot(options?.config ?? {});
-  const actualTools = createOpenClawCodingTools({
+  const actualTools = await createOpenClawCodingToolsAsync({
     ...options,
     cwd: "/tmp/openclaw-agent-tools-policy-test",
     workspaceDir: "/tmp/openclaw-agent-tools-policy-test",
@@ -58,8 +61,8 @@ function toolNames(tools: { name: string }[]): string[] {
 }
 
 describe("applyModelProviderToolPolicy", () => {
-  it("keeps web_search for OpenRouter xAI model ids so OpenClaw tool routing stays authoritative", () => {
-    const filtered = selectedTools(baseTools, {
+  it("keeps web_search for OpenRouter xAI model ids so OpenClaw tool routing stays authoritative", async () => {
+    const filtered = await selectedTools(baseTools, {
       modelCompat: {
         toolSchemaProfile: "xai",
         toolCallArgumentsEncoding: "html-entities",
@@ -91,8 +94,8 @@ describe("applyModelProviderToolPolicy", () => {
     },
   ])(
     "uses one search route before tool discovery for OpenAI $label",
-    ({ baseUrl, modelBaseUrl, native, plugins }) => {
-      const filtered = selectedTools(baseTools, {
+    async ({ baseUrl, modelBaseUrl, native, plugins }) => {
+      const filtered = await selectedTools(baseTools, {
         config: {
           plugins,
           tools: { web: { search: { provider: undefined } } },
@@ -131,8 +134,8 @@ describe("applyModelProviderToolPolicy", () => {
     },
   ])(
     "selects the admitted Codex transport's search route for $name",
-    ({ modelProvider, auth, suppressManagedWebSearch, native }) => {
-      const filtered = selectedTools(baseTools, {
+    async ({ modelProvider, auth, suppressManagedWebSearch, native }) => {
+      const filtered = await selectedTools(baseTools, {
         config: {
           tools: {
             web: { search: { enabled: true, openaiCodex: { enabled: true, mode: "cached" } } },
@@ -152,8 +155,8 @@ describe("applyModelProviderToolPolicy", () => {
     },
   );
 
-  it("applies inherited lean mode to the session agent", () => {
-    const filtered = selectedTools(["read", "browser", "automations", "message", "exec"], {
+  it("applies inherited lean mode to the session agent", async () => {
+    const filtered = await selectedTools(["read", "browser", "automations", "message", "exec"], {
       config: {
         agents: {
           defaults: { experimental: { localModelLean: true } },
@@ -169,8 +172,8 @@ describe("applyModelProviderToolPolicy", () => {
     expect(toolNames(filtered)).toEqual(["read", "exec"]);
   });
 
-  it("lets a current agent disable inherited lean local-model mode", () => {
-    const filtered = selectedTools(["read", "browser", "automations", "message", "exec"], {
+  it("lets a current agent disable inherited lean local-model mode", async () => {
+    const filtered = await selectedTools(["read", "browser", "automations", "message", "exec"], {
       config: {
         agents: {
           defaults: {

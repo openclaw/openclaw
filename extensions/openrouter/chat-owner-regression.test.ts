@@ -1,10 +1,15 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
-import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  registerSingleProviderPlugin,
+  useProviderCatalogMetadata,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import openrouterPlugin from "./index.js";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 async function captureProviderPayload(
   modelId: string,

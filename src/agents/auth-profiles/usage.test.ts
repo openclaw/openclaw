@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { setLoggerOverride } from "../../logging/logger.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createApiKeyCredential,
@@ -64,7 +65,8 @@ vi.mock("./store-runtime.js", async () => {
   };
 });
 
-beforeEach(() => {
+beforeEach(async () => {
+  await resolvePluginMetadataSnapshotAsync({ config: {} });
   storeMocks.resolvePersistedAuthProfileOwnerAgentDirAsync.mockReset();
   storeMocks.resolvePersistedAuthProfileOwnerAgentDirAsync.mockImplementation(
     async (params: { agentDir?: string }) => params.agentDir,

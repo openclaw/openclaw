@@ -7,9 +7,11 @@ import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureAmbientGatewayOperatorAuthority } from "../../gateway/operator-invocation-authority.js";
 import {
-  resolveAutoMediaKeyProviders,
-  resolveDefaultMediaModel,
+  resolveAutoMediaKeyProvidersCore as resolveAutoMediaKeyProviders,
+  resolveDefaultMediaModelCore as resolveDefaultMediaModel,
 } from "../../media-understanding/defaults.js";
+import { acquireMediaUnderstandingRegistry } from "../../media-understanding/provider-registry.js";
+import type { MediaUnderstandingProvider } from "../../media-understanding/types.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -88,6 +90,7 @@ function resolveImageModelConfigForTool(params: {
   authStore?: AuthProfileStore;
   authProfileStoreSource?: boolean;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+  mediaProviders?: readonly MediaUnderstandingProvider[];
 }): ImageModelConfig | null {
   // Native-vision runs route post-prompt image bytes to the active model, not fallback config.
   const explicit = coerceImageModelConfig(params.cfg);
@@ -102,6 +105,7 @@ function resolveImageModelConfigForTool(params: {
   let verifiedSubstituteProvider: string | undefined;
   const resolveCodexMediaRoute = () => {
     const preparedProviders =
+      params.mediaProviders ??
       params.preparedModelRuntime?.mediaCapabilityProviders?.mediaUnderstandingProviders;
     const provider = preparedProviders
       ? findCapabilityProviderById({
@@ -268,13 +272,17 @@ export function createImageTool(options?: {
       : null;
   const shouldResolveAutoImageModel =
     !modelHasVision && !explicitImageModelConfig && !options?.deferAutoModelResolution;
-  const resolveInitialModelConfig = (authStore: AuthProfileStore | undefined) =>
+  const resolveInitialModelConfig = (
+    authStore: AuthProfileStore | undefined,
+    mediaProviders?: readonly MediaUnderstandingProvider[],
+  ) =>
     resolveImageModelConfigForTool({
       cfg: options?.config,
       agentDir,
       workspaceDir: options?.workspaceDir,
       authStore,
       preparedModelRuntime: options?.preparedModelRuntime,
+      mediaProviders,
     });
   const resolvedImageModelConfig = shouldResolveAutoImageModel
     ? resolveInitialModelConfig(
@@ -382,7 +390,24 @@ export function createImageTool(options?: {
           if (!imageModelConfig) {
             const authStore = await prepareToolAuthProfileStore(options);
             assertCurrent();
-            imageModelConfig = resolveInitialModelConfig(authStore);
+            const acquired = options?.preparedModelRuntime
+              ? undefined
+              : await acquireMediaUnderstandingRegistry({
+                  cfg: options?.config,
+                  providerId: "codex",
+                });
+            if (acquired) {
+              onAcquired({
+                release: async () => {
+                  try {
+                    await acquired.release();
+                  } finally {
+                    capturedOperator.release?.();
+                  }
+                },
+              });
+            }
+            imageModelConfig = resolveInitialModelConfig(authStore, acquired?.providers);
           }
           if (!imageModelConfig) {
             throw new Error(

@@ -5,7 +5,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { OpenClawConfig } from "../config/config.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { clearBundledDiscoveryModeMemo } from "./bundled-discovery-state.js";
+import {
+  clearBundledDiscoveryModeMemo,
+  prepareBundledDiscoveryMode,
+} from "./bundled-discovery-state.js";
 import { removeBundledDiscoveryStateRoot } from "./bundled-discovery.test-support.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
 import type { PluginManifestRegistry } from "./manifest-registry.types.js";
@@ -18,7 +21,7 @@ import { createPluginRecord } from "./status.test-helpers.js";
 
 let discoveryCompatRoot: string | undefined;
 let discoveryEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
-function setBundledDiscoveryCompat(): void {
+async function setBundledDiscoveryCompat(): Promise<void> {
   if (!discoveryCompatRoot) {
     discoveryCompatRoot = fs.realpathSync(
       fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-capability-compat-")),
@@ -34,6 +37,8 @@ function setBundledDiscoveryCompat(): void {
   discoveryEnvSnapshot ??= captureEnv(["OPENCLAW_STATE_DIR"]);
   setTestEnvValue("OPENCLAW_STATE_DIR", discoveryCompatRoot);
   clearBundledDiscoveryModeMemo();
+  const activate = await prepareBundledDiscoveryMode();
+  activate();
 }
 function restoreBundledDiscoveryState(): void {
   discoveryEnvSnapshot?.restore();
@@ -62,19 +67,22 @@ const mocks = vi.hoisted(() => ({
     (params?: unknown) => ReturnType<typeof createEmptyPluginRegistry> | undefined
   >(() => undefined),
   resolvePluginRegistryLoadCacheKey: vi.fn((options: unknown) => JSON.stringify(options)),
+  loadPluginRegistryHandleAsync:
+    vi.fn<(params?: unknown) => Promise<ReturnType<typeof createEmptyPluginRegistry>>>(),
   loadPluginManifestRegistryCore: vi.fn<
     (params?: Record<string, unknown>) => PluginManifestRegistry
   >(() => createEmptyMockManifestRegistry()),
   resolveInstalledManifestRegistryIndexFingerprint: vi.fn(() => "test-installed-index"),
-  loadBundledCapabilityRuntimeRegistry: vi.fn(),
+  loadBundledCapabilityRuntimeRegistryAsync: vi.fn(),
   loadPluginRegistrySnapshot: vi.fn<(_params?: unknown) => InstalledPluginIndex>(
     () => createPluginMetadataSnapshotFixture().index,
   ),
   withBundledPluginEnablementCompat: vi.fn(({ config }) => config),
 }));
 
+// mock-isolation: Capability selection fixtures control registry acquisition and cache identity without executing plugins.
 vi.mock("./loader.js", () => ({
-  resolveRuntimePluginRegistry: mocks.resolveRuntimePluginRegistry,
+  loadPluginRegistryHandleAsync: mocks.loadPluginRegistryHandleAsync,
   resolvePluginRegistryLoadCacheKey: mocks.resolvePluginRegistryLoadCacheKey,
 }));
 
@@ -90,8 +98,9 @@ vi.mock("./active-runtime-registry.js", async (importOriginal) => ({
   },
 }));
 
+// mock-isolation: Capability selection fixtures control registry acquisition and cache identity without executing plugins.
 vi.mock("./bundled-capability-runtime.js", () => ({
-  loadBundledCapabilityRuntimeRegistry: mocks.loadBundledCapabilityRuntimeRegistry,
+  loadBundledCapabilityRuntimeRegistryAsync: mocks.loadBundledCapabilityRuntimeRegistryAsync,
 }));
 
 vi.mock("./manifest-registry-installed.js", async (importOriginal) => ({
@@ -141,11 +150,22 @@ vi.mock("./plugin-registry-snapshot.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-metadata-snapshot.js")>()),
+  resolvePluginMetadataSnapshotAsync: async () => {
+    const activate = await prepareBundledDiscoveryMode(process.env, async () => undefined);
+    activate();
+    return createPluginMetadataSnapshotFixture(mocks.loadPluginManifestRegistryCore());
+  },
+}));
+
 vi.mock("./bundled-compat.js", () => ({
   withBundledPluginEnablementCompat: mocks.withBundledPluginEnablementCompat,
 }));
 let resolvePluginCapabilityProviders: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProviders;
 let resolvePluginCapabilityProvider: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProvider;
+let resolvePluginCapabilityProvidersAsync: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProvidersAsync;
+let resolvePluginCapabilityProviderAsync: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProviderAsync;
 let prepareMediaCapabilityProviders: typeof import("./capability-provider-runtime.js").prepareMediaCapabilityProviders;
 let clearPluginMetadataLifecycleCaches: typeof import("./plugin-metadata-lifecycle.js").clearPluginMetadataLifecycleCaches;
 
@@ -233,7 +253,9 @@ describe("resolvePluginCapabilityProviders", () => {
     ({
       prepareMediaCapabilityProviders,
       resolvePluginCapabilityProvider,
+      resolvePluginCapabilityProviderAsync,
       resolvePluginCapabilityProviders,
+      resolvePluginCapabilityProvidersAsync,
     } = await import("./capability-provider-runtime.js"));
     ({ clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js"));
   });
@@ -242,6 +264,14 @@ describe("resolvePluginCapabilityProviders", () => {
     clearPluginMetadataLifecycleCaches();
     mocks.resolveRuntimePluginRegistry.mockReset();
     mocks.resolveRuntimePluginRegistry.mockReturnValue(undefined);
+    mocks.loadPluginRegistryHandleAsync.mockReset();
+    mocks.loadPluginRegistryHandleAsync.mockImplementation(async (params) => {
+      const options = params as { onlyPluginIds?: string[] } | undefined;
+      return (
+        mocks.resolveRuntimePluginRegistry({ onlyPluginIds: options?.onlyPluginIds }) ??
+        createEmptyPluginRegistry()
+      );
+    });
     mocks.resolvePluginRegistryLoadCacheKey.mockReset();
     mocks.resolvePluginRegistryLoadCacheKey.mockImplementation((options: unknown) =>
       JSON.stringify(options),
@@ -250,8 +280,10 @@ describe("resolvePluginCapabilityProviders", () => {
     mocks.loadPluginRegistrySnapshot.mockReturnValue(createPluginMetadataSnapshotFixture().index);
     mocks.loadPluginManifestRegistryCore.mockReset();
     mocks.loadPluginManifestRegistryCore.mockReturnValue(createEmptyMockManifestRegistry());
-    mocks.loadBundledCapabilityRuntimeRegistry.mockReset();
-    mocks.loadBundledCapabilityRuntimeRegistry.mockImplementation(() => mocks.createMockRegistry());
+    mocks.loadBundledCapabilityRuntimeRegistryAsync.mockReset();
+    mocks.loadBundledCapabilityRuntimeRegistryAsync.mockImplementation(async () =>
+      mocks.createMockRegistry(),
+    );
     mocks.withBundledPluginEnablementCompat.mockReset();
     mocks.withBundledPluginEnablementCompat.mockImplementation(({ config }) => config);
     restoreBundledDiscoveryState();
@@ -355,26 +387,29 @@ describe("resolvePluginCapabilityProviders", () => {
     },
     { name: "denylisted", plugins: { deny: ["blocked"] } },
     { name: "outside the restrictive allowlist", plugins: { allow: ["allowed"] } },
-  ])("never imports a $name bundled provider through cold compatibility capture", ({ plugins }) => {
-    const captured = createEmptyPluginRegistry();
-    addCapabilityProvider(captured, "imageGenerationProviders", { id: "blocked" });
-    mocks.resolveRuntimePluginRegistry.mockReturnValue(createEmptyPluginRegistry());
-    mocks.loadBundledCapabilityRuntimeRegistry.mockReturnValue(captured);
-    setCapabilityManifestPlugins([
-      { id: "blocked", contracts: { imageGenerationProviders: ["blocked"] } },
-    ]);
+  ])(
+    "never imports a $name bundled provider through cold compatibility capture",
+    async ({ plugins }) => {
+      const captured = createEmptyPluginRegistry();
+      addCapabilityProvider(captured, "imageGenerationProviders", { id: "blocked" });
+      mocks.resolveRuntimePluginRegistry.mockReturnValue(createEmptyPluginRegistry());
+      mocks.loadBundledCapabilityRuntimeRegistryAsync.mockResolvedValue(captured);
+      setCapabilityManifestPlugins([
+        { id: "blocked", contracts: { imageGenerationProviders: ["blocked"] } },
+      ]);
 
-    expect(
-      resolvePluginCapabilityProviders({
-        key: "imageGenerationProviders",
-        cfg: { plugins },
-      }),
-    ).toEqual([]);
-    expect(mocks.loadBundledCapabilityRuntimeRegistry).not.toHaveBeenCalled();
-  });
+      expect(
+        await resolvePluginCapabilityProvidersAsync({
+          key: "imageGenerationProviders",
+          cfg: { plugins },
+        }),
+      ).toEqual([]);
+      expect(mocks.loadBundledCapabilityRuntimeRegistryAsync).not.toHaveBeenCalled();
+    },
+  );
 
-  it("preserves restrictive-allowlist compatibility only for known bundled active owners", () => {
-    setBundledDiscoveryCompat();
+  it("preserves restrictive-allowlist compatibility only for known bundled active owners", async () => {
+    await setBundledDiscoveryCompat();
     const active = createEmptyPluginRegistry();
     active.plugins.push({ id: "bundled-owner", origin: "bundled" } as never);
     addSpeechProvider(active, "bundled-provider", { pluginId: "bundled-owner" });
@@ -392,7 +427,7 @@ describe("resolvePluginCapabilityProviders", () => {
       })?.id,
     ).toBe("bundled-provider");
     expect(
-      resolvePluginCapabilityProvider({
+      await resolvePluginCapabilityProviderAsync({
         key: "speechProviders",
         providerId: "unknown-provider",
         cfg,
@@ -417,7 +452,7 @@ describe("resolvePluginCapabilityProviders", () => {
 
   it.each(["active", "manifest"] as const)(
     "applies current normalized policy to every %s provider lookup",
-    (source) => {
+    async (source) => {
       const registry = createEmptyPluginRegistry();
       addSpeechProvider(registry, "first");
       addSpeechProvider(registry, "second");
@@ -434,18 +469,19 @@ describe("resolvePluginCapabilityProviders", () => {
         entries: { " FIRST ": { enabled: true }, second: { enabled: false } },
       };
       const cfg: OpenClawConfig = { plugins };
-      const resolve = () => resolvePluginCapabilityProviders({ key: "speechProviders", cfg });
+      const resolve = async () =>
+        await resolvePluginCapabilityProvidersAsync({ key: "speechProviders", cfg });
 
-      expect(resolve()).toEqual([registry.speechProviders[0]?.provider]);
+      expect(await resolve()).toEqual([registry.speechProviders[0]?.provider]);
       plugins.entries[" FIRST "].enabled = false;
       plugins.entries.second.enabled = true;
-      expect(resolve()).toEqual([registry.speechProviders[1]?.provider]);
+      expect(await resolve()).toEqual([registry.speechProviders[1]?.provider]);
       plugins.deny.push(" SECOND ");
-      expect(resolve()).toEqual([]);
+      expect(await resolve()).toEqual([]);
     },
   );
 
-  it("merges enabled generation providers missing from the active registry", () => {
+  it("merges enabled generation providers missing from the active registry", async () => {
     const active = createEmptyPluginRegistry();
     addCapabilityProvider(active, "imageGenerationProviders", {
       id: "xai",
@@ -473,7 +509,7 @@ describe("resolvePluginCapabilityProviders", () => {
     );
 
     const cfg: OpenClawConfig = { plugins: { allow: ["fal", "xai", "unconfigured-image"] } };
-    const providers = resolvePluginCapabilityProviders({
+    const providers = await resolvePluginCapabilityProvidersAsync({
       key: "imageGenerationProviders",
       cfg,
     });
@@ -484,7 +520,7 @@ describe("resolvePluginCapabilityProviders", () => {
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
     expectActiveRegistryLookup(["fal", "unconfigured-image", "xai"]);
 
-    const requestedProviders = resolvePluginCapabilityProviders({
+    const requestedProviders = await resolvePluginCapabilityProvidersAsync({
       key: "imageGenerationProviders",
       cfg,
       additionalProviderIds: [" FAL ", "fal"],
@@ -507,7 +543,7 @@ describe("resolvePluginCapabilityProviders", () => {
       "realtimeVoiceProviders",
       { talk: { realtime: { provider: "voice-alias", providers: { "voice-alias": {} } } } },
     ],
-  ] as const)("loads a missing provider requested by %s", (_source, key, cfg) => {
+  ] as const)("loads a missing provider requested by %s", async (_source, key, cfg) => {
     const active = createEmptyPluginRegistry();
     addCapabilityProvider(active, key, { id: "google" });
     const loaded = createEmptyPluginRegistry();
@@ -520,7 +556,10 @@ describe("resolvePluginCapabilityProviders", () => {
       params === undefined ? active : loaded,
     );
 
-    const providers = resolvePluginCapabilityProviders({ key, cfg: cfg as OpenClawConfig });
+    const providers = await resolvePluginCapabilityProvidersAsync({
+      key,
+      cfg: cfg as OpenClawConfig,
+    });
 
     expectResolvedCapabilityProviderIds(providers, ["google", "openai"]);
     expectActiveRegistryLookup(["openai"]);
@@ -562,7 +601,7 @@ describe("resolvePluginCapabilityProviders", () => {
     },
   );
 
-  it("keeps the full media provider family available with explicit models", () => {
+  it("keeps the full media provider family available with explicit models", async () => {
     const active = createEmptyPluginRegistry();
     addCapabilityProvider(active, "mediaUnderstandingProviders", {
       id: "openai",
@@ -596,7 +635,7 @@ describe("resolvePluginCapabilityProviders", () => {
       params === undefined ? active : loaded,
     );
 
-    const providers = resolvePluginCapabilityProviders({
+    const providers = await resolvePluginCapabilityProvidersAsync({
       key: "mediaUnderstandingProviders",
       cfg: {
         plugins: { allow: ["openai", "deepgram", "google"] },
@@ -633,7 +672,7 @@ describe("resolvePluginCapabilityProviders", () => {
     expectInitialRuntimeRegistryLookup();
   });
 
-  it("uses bundled capability capture when runtime snapshot misses a requested speech provider", () => {
+  it("uses bundled capability capture when runtime snapshot misses a requested speech provider", async () => {
     const active = createEmptyPluginRegistry();
     addSpeechProvider(active, "openai");
     const loaded = createEmptyPluginRegistry();
@@ -647,9 +686,9 @@ describe("resolvePluginCapabilityProviders", () => {
     mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
       params === undefined ? active : loaded,
     );
-    mocks.loadBundledCapabilityRuntimeRegistry.mockReturnValue(captured);
+    mocks.loadBundledCapabilityRuntimeRegistryAsync.mockResolvedValue(captured);
 
-    const providers = resolvePluginCapabilityProviders({
+    const providers = await resolvePluginCapabilityProvidersAsync({
       key: "speechProviders",
       cfg: {
         tts: { provider: "google" },
@@ -657,7 +696,7 @@ describe("resolvePluginCapabilityProviders", () => {
     });
 
     expectResolvedCapabilityProviderIds(providers, ["openai", "google"]);
-    expect(mocks.loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledWith({
+    expect(mocks.loadBundledCapabilityRuntimeRegistryAsync).toHaveBeenCalledWith({
       pluginIds: ["google"],
       onlyPluginIds: ["google"],
       activate: false,
@@ -691,7 +730,7 @@ describe("resolvePluginCapabilityProviders", () => {
     ["partial alias", ["google", "edge"], [], ["google", "microsoft"]],
     ["unknown alias", ["edge", "unknown"], [], ["google", "microsoft", "elevenlabs"]],
     ["denied canonical", ["google", "edge"], ["google"], ["microsoft", "elevenlabs"]],
-  ] as const)("preserves cold %s provider coverage", (_name, requested, deny, expected) => {
+  ] as const)("preserves cold %s provider coverage", async (_name, requested, deny, expected) => {
     const loaded = createEmptyPluginRegistry();
     addSpeechProvider(loaded, "google");
     addSpeechProvider(loaded, "microsoft", { aliases: ["edge"] });
@@ -714,14 +753,14 @@ describe("resolvePluginCapabilityProviders", () => {
     };
 
     expectResolvedCapabilityProviderIds(
-      resolvePluginCapabilityProviders({ key: "speechProviders", cfg }),
+      await resolvePluginCapabilityProvidersAsync({ key: "speechProviders", cfg }),
       [...expected],
     );
   });
 
-  it("uses an explicit empty plugin scope when no bundled owner exists", () => {
+  it("uses an explicit empty plugin scope when no bundled owner exists", async () => {
     const key = "musicGenerationProviders";
-    const providers = resolvePluginCapabilityProviders({
+    const providers = await resolvePluginCapabilityProvidersAsync({
       key,
       cfg: {} as OpenClawConfig,
     });

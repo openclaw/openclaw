@@ -31,16 +31,6 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
-const metadataSnapshot = createPluginMetadataSnapshotFixture({
-  plugins: [
-    {
-      id: "model-identity-fixture",
-      providers: ["custom"],
-      modelIdNormalization: { providers: { custom: { aliases: { middle: "final" } } } },
-    },
-  ],
-});
-
 test("new unpinned sessions bind the account for the permitted operator default", async () => {
   const { storePath } = await createSessionStoreDir();
   const owner = ensureProfileForEmail("role-default-account@example.test");
@@ -146,6 +136,15 @@ test.each([
   { mode: "role-denied", model: "middle", expected: undefined },
   { mode: "role-allowed", model: "middle", expected: "middle" },
 ])("sessions.create consumes $mode model $model", async ({ mode, model, expected }) => {
+  const metadataSnapshot = createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: "model-identity-fixture",
+        providers: ["custom"],
+        modelIdNormalization: { providers: { custom: { aliases: { middle: "final" } } } },
+      },
+    ],
+  });
   const { storePath } = await createSessionStoreDir();
   const baseConfig = (await getGatewayConfigModule()).getRuntimeConfig();
   const models = ["default", "middle", "final", "custom/model"].map(

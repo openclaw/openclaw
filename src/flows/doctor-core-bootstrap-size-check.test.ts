@@ -1,7 +1,8 @@
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
 import type { HealthCheck } from "./health-checks.js";
 
@@ -20,6 +21,10 @@ function getBootstrapSizeCheck(): HealthCheck {
 describe("core/doctor/bootstrap-size", () => {
   let tmp: string | undefined;
 
+  beforeEach(async () => {
+    await preparePluginMetadataMachineStateAsync({});
+  });
+
   afterEach(async () => {
     vi.unstubAllEnvs();
     if (tmp !== undefined) {
@@ -33,6 +38,7 @@ describe("core/doctor/bootstrap-size", () => {
     await fs.writeFile(join(tmp, "AGENTS.md"), "bootstrap", "utf-8");
     const stateDir = join(tmp, "state-root");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    await preparePluginMetadataMachineStateAsync({});
 
     await expect(
       getBootstrapSizeCheck().detect({

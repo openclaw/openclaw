@@ -1,7 +1,8 @@
 // Covers shared media-generation runtime polling and timeout helpers.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { buildDashscopeVideoGenerationProvider } from "../plugin-sdk/video-generation.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import {
   normalizeDurationToClosestMax,
   resolveCapabilityModelCandidates,
@@ -14,6 +15,10 @@ import {
   runMediaGenerationCandidates,
   throwCapabilityGenerationFailure,
 } from "./runtime-shared.js";
+
+beforeEach(async () => {
+  await preparePluginMetadataMachineStateAsync({});
+});
 
 function parseModelRef(raw?: string) {
   const trimmed = raw?.trim();

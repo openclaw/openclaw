@@ -89,11 +89,16 @@ export async function resolveInitialWizardChannelTarget(
     import("../../channels/plugins/setup-registry.js"),
     import("../channel-setup/discovery.js"),
   ]);
-  const resolved = resolveChannelSetupEntries({
-    cfg,
-    installedPlugins: listActiveChannelSetupPlugins(),
-    workspaceDir: workspaceDir ?? resolveChannelSetupOwner(cfg).workspaceDir,
-  });
+  const discoveryWorkspaceDir = workspaceDir ?? resolveChannelSetupOwner(cfg).workspaceDir;
+  const resolved = await withCommandPluginMetadata(
+    { config: cfg, workspaceDir: discoveryWorkspaceDir },
+    () =>
+      resolveChannelSetupEntries({
+        cfg,
+        installedPlugins: listActiveChannelSetupPlugins(),
+        workspaceDir: discoveryWorkspaceDir,
+      }),
+  );
   const matchedEntry =
     resolved.entries.find(
       (candidate) => normalizeOptionalLowercaseString(candidate.id) === normalized,

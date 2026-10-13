@@ -7,6 +7,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import {
   authStoreMocks,
@@ -49,8 +50,10 @@ async function select(params: {
   cfg?: OpenClawConfig;
   agentId?: string;
 }) {
+  const cfg = params.cfg ?? {};
+  await resolvePluginMetadataSnapshotAsync({ config: cfg });
   return await resolveSessionAuthSelection({
-    cfg: params.cfg ?? {},
+    cfg,
     agentId: params.agentId ?? "main",
     provider: "openai",
     modelId: params.modelId ?? "gpt-5.6-sol",
@@ -195,6 +198,7 @@ describe("session auth selection prepared facts", () => {
   });
   it("still rotates a legacy source-less automatic pin on a new session", async () => {
     await withAuthState(async (state) => {
+      await resolvePluginMetadataSnapshotAsync({ config: {} });
       configureProfiles();
       const sessionEntry: SessionEntry = {
         sessionId: "s1",
@@ -221,6 +225,7 @@ describe("session auth selection prepared facts", () => {
 it("clears an incompatible global pin only in the selected agent store", async () => {
   const sessionKey = "global";
   await withAuthState(async (state) => {
+    await resolvePluginMetadataSnapshotAsync({ config: {} });
     const storePath = state.statePath("sessions.json");
     const mainScope = { agentId: "main", sessionKey, storePath };
     const opsScope = { agentId: "ops", sessionKey, storePath };

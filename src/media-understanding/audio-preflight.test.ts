@@ -13,6 +13,17 @@ vi.mock("./runner.js", async (importOriginal) => ({
   runCapability: (...args: unknown[]) => runCapabilityMock(...args),
 }));
 
+// mock-isolation: Audio preflight uses an empty fixture acquisition without loading media runtimes.
+vi.mock("./provider-registry.js", async () => {
+  const { createMediaProviderAcquisition } = await import("./runner.test-mocks.js");
+  return {
+    acquireMediaUnderstandingRegistry: async () => ({
+      ...createMediaProviderAcquisition([]),
+      registry: new Map(),
+    }),
+  };
+});
+
 vi.mock("./echo-transcript.js", () => ({
   DEFAULT_ECHO_TRANSCRIPT_FORMAT: '📝 "{transcript}"',
   sendTranscriptEcho: (...args: unknown[]) => sendTranscriptEchoMock(...args),

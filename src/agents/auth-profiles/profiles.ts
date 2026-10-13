@@ -8,7 +8,7 @@ import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { removePersistedPluginModelCatalogCredentials } from "../plugin-model-catalog-credentials.js";
-import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { resolvePreparedProviderIdForAuth as resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import {
   listCandidateAuthProfileStores,
   loadCandidateAuthProfileStoreAsync,

@@ -66,7 +66,12 @@ describe("catalog request existing directory ownership", () => {
         const { inspection, ...result } = await pool.run(
           {
             value,
-            request: { kind: "catalog", syntheticAuth: [], clawInstallSchemaVersions },
+            request: {
+              kind: "catalog",
+              syntheticAuth: [],
+              bundledDiscoveryMode: undefined,
+              clawInstallSchemaVersions,
+            },
             ...(tick === 0 ? { inspection: { copyProbePath: database.path } } : {}),
           },
           { timeoutMs: 30_000 },
@@ -143,6 +148,7 @@ describe("catalog request existing directory ownership", () => {
           request: {
             kind: "catalog",
             syntheticAuth: [],
+            bundledDiscoveryMode: undefined,
             clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: fixture.env }),
           },
           inspection: { existingAgentIds: existing },

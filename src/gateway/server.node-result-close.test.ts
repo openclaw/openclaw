@@ -10,6 +10,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { writeConfigFile } from "../config/config.js";
 import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { pairDeviceIdentity } from "./device-authz.test-helpers.js";
 import { respondToNodeShutdown } from "./node-shutdown.test-support.js";
@@ -361,6 +362,8 @@ test("publishes an offline device row on socket close without a session-list rel
   let started: Awaited<ReturnType<typeof startServer>>;
   try {
     delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+    // The shared config mock omits the real config reader's metadata preparation.
+    await preparePluginMetadataMachineStateAsync({});
     started = await startServer("secret");
   } finally {
     if (previousMinimalGateway === undefined) {

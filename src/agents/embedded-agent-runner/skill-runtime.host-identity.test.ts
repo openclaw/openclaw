@@ -13,7 +13,7 @@ import {
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
 import { recordSkillFileHost } from "../../skills/skill-file-host.js";
 import { resolveWorkspaceSkillSourcePath } from "../../skills/workspace-skill-read-path.js";
-import { createOpenClawCodingToolsInternal } from "../agent-tools.js";
+import { createOpenClawCodingToolsInternalAsync } from "../agent-tools.js";
 import { readCodeModeSkill } from "../code-mode-skills.js";
 import { getTextContent } from "../test-helpers/agent-tools-fs-helpers.js";
 import { registerAgentWorkspaceAccess } from "../workspace-access.js";
@@ -264,13 +264,15 @@ it.each([
           if (!sameName) {
             const node = requireNamedSkill(prepared.codeModeSkills, "node-guide");
             expect(node.location).toBe("workspace-skill://workspace/node-guide/SKILL.md");
-            const read = createOpenClawCodingToolsInternal(
-              {
-                config,
-                skillsSnapshot: prepared.skillsSnapshotForRun,
-                workspaceDir: gateway,
-              },
-              prepared.skillReadResources,
+            const read = (
+              await createOpenClawCodingToolsInternalAsync(
+                {
+                  config,
+                  skillsSnapshot: prepared.skillsSnapshotForRun,
+                  workspaceDir: gateway,
+                },
+                prepared.skillReadResources,
+              )
             ).find((tool) => tool.name === "read")!;
             expect(
               getTextContent(
@@ -303,13 +305,15 @@ it.each([
                   }),
                 ),
               ).toContain(user + " node instructions");
-              const relativeRead = createOpenClawCodingToolsInternal(
-                {
-                  config,
-                  skillsSnapshot: prepared.skillsSnapshotForRun,
-                  workspaceDir: nodeRoot,
-                },
-                prepared.skillReadResources,
+              const relativeRead = (
+                await createOpenClawCodingToolsInternalAsync(
+                  {
+                    config,
+                    skillsSnapshot: prepared.skillsSnapshotForRun,
+                    workspaceDir: nodeRoot,
+                  },
+                  prepared.skillReadResources,
+                )
               ).find((tool) => tool.name === "read")!;
               expect(
                 getTextContent(

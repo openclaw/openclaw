@@ -11,6 +11,7 @@ import {
   promptDefaultModel,
   promptModelAllowlist,
 } from "../flows/model-picker.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import type { WizardMultiSelectParams, WizardPrompter } from "../wizard/prompts.js";
 import { makePrompter } from "./setup/__tests__/test-utils.js";
 
@@ -18,9 +19,15 @@ const loadModelCatalog = vi.hoisted(() => vi.fn());
 const modelCatalogRouteVariants = vi.hoisted(() => ({
   value: undefined as readonly ModelCatalogEntry[] | undefined,
 }));
+// mock-isolation: Picker catalogs come from fixed rows, without discovery or provider activation.
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalogSnapshot: async (params: LoadPreparedModelCatalogParams) => {
+    await resolvePluginMetadataSnapshotAsync({
+      config: params.config,
+      env: params.env ?? process.env,
+      workspaceDir: params.workspaceDir,
+    });
     if (params.providerDiscoveryProviderIds) {
       return loadScopedModelCatalog(params);
     }

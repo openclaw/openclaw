@@ -35,7 +35,7 @@ import {
   updateAuthProfileStoreWithLock,
 } from "./store-runtime.js";
 import * as publication from "./store-update-publication.js";
-import { withEnvOnlyAuthProfileStore } from "./store.js";
+import { createAuthProfileStoreRuntime, withEnvOnlyAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
 import { reserveAuthProfileUsagePreparation } from "./usage-lifecycle.js";
 
@@ -45,6 +45,51 @@ const credential = (key: string) => ({ type: "api_key" as const, provider: "fixt
 afterEach(() => {
   vi.restoreAllMocks();
   clearRuntimeAuthProfileStoreSnapshots();
+});
+
+it("prepares external hooks before the write and evaluates them against the updated store", async () => {
+  await withOpenClawTestState(
+    { label: "auth-prepared-external-write", scenario: "minimal" },
+    async (state) => {
+      let prepared = false;
+      const currentProfiles = vi.fn((params: { store: AuthProfileStore }) => {
+        expect(prepared).toBe(true);
+        expect(params.store.profiles.current).toMatchObject({ access: "synthetic-current" });
+        return [];
+      });
+      const runtime = createAuthProfileStoreRuntime({
+        listRuntimeExternalAuthProfiles: () => {
+          throw new Error("unprepared external auth read");
+        },
+        prepareRuntimeExternalAuthProfiles: async () => {
+          prepared = true;
+          return currentProfiles;
+        },
+        overlayExternalAuthProfiles: (store) => store,
+        overlayExternalAuthProfilesAsync: async (store) => store,
+      });
+      const agentDir = state.agentDir("external-write");
+      const result = await runtime.updateAuthProfileStoreWithLock({
+        agentDir,
+        updater(store) {
+          expect(prepared).toBe(true);
+          store.profiles.current = {
+            type: "oauth",
+            provider: "custom",
+            access: "synthetic-current",
+            refresh: "synthetic-refresh",
+            expires: 4_102_444_800_000,
+          };
+          return true;
+        },
+      });
+      expect(currentProfiles).toHaveBeenCalledOnce();
+      expect(result?.profiles.current).toMatchObject({ access: "synthetic-current" });
+      expect(loadPersistedAuthProfileStore(agentDir)?.profiles.current).toMatchObject({
+        access: "synthetic-current",
+      });
+    },
+  );
 });
 
 it.each([{ target: "agent", save: true }] as const)(

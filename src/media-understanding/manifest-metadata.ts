@@ -4,6 +4,7 @@ import { normalizeMediaProviderId } from "../../packages/media-understanding-com
 import type { OpenClawConfig } from "../config/types.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
 // Defaults follow the selected immutable manifest generation, including retained
@@ -17,12 +18,15 @@ const registriesByManifest = new WeakMap<
 export function buildMediaUnderstandingManifestMetadataRegistry(
   cfg?: OpenClawConfig,
   workspaceDir?: string,
+  metadataSnapshot?: PluginMetadataSnapshot,
 ): Map<string, MediaUnderstandingProvider> {
-  const snapshot = loadManifestMetadataSnapshot({
-    config: cfg,
-    env: process.env,
-    ...(workspaceDir ? { workspaceDir } : {}),
-  });
+  const snapshot =
+    metadataSnapshot ??
+    loadManifestMetadataSnapshot({
+      config: cfg,
+      env: process.env,
+      ...(workspaceDir ? { workspaceDir } : {}),
+    });
   const cached = registriesByManifest.get(snapshot.manifestRegistry);
   if (cached) {
     return cached;

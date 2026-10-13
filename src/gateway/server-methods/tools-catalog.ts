@@ -70,11 +70,11 @@ function buildCoreGroups(params: { cfg: OpenClawConfig; agentId: string }): Tool
   }));
 }
 
-function buildPluginGroups(params: {
+async function buildPluginGroups(params: {
   cfg: OpenClawConfig;
   agentId: string;
   existingToolNames: Set<string>;
-}): ToolCatalogGroup[] {
+}): Promise<ToolCatalogGroup[]> {
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
   const agentDir = resolveAgentDir(params.cfg, params.agentId);
   const toolContext = {
@@ -83,7 +83,7 @@ function buildPluginGroups(params: {
     agentDir,
     agentId: params.agentId,
   };
-  const toolRegistry = ensureStandalonePluginToolRegistryLoaded({
+  const toolRegistry = await ensureStandalonePluginToolRegistryLoaded({
     context: toolContext,
     toolAllowlist: ["group:plugins"],
     allowGatewaySubagentBinding: true,
@@ -188,7 +188,7 @@ function buildPluginGroups(params: {
 }
 
 export const toolsCatalogHandlers: GatewayRequestHandlers = {
-  "tools.catalog": ({ params, respond, context }) => {
+  "tools.catalog": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateToolsCatalogParams, "tools.catalog", respond)) {
       return;
     }
@@ -201,14 +201,17 @@ export const toolsCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     const { cfg, agentId } = resolved;
+    const { prepareBundledDiscoveryMode } =
+      await import("../../plugins/bundled-discovery-state.js");
+    await prepareBundledDiscoveryMode();
     const groups = buildCoreGroups({ cfg, agentId });
     if (params.includePlugins !== false) {
       groups.push(
-        ...buildPluginGroups({
+        ...(await buildPluginGroups({
           cfg,
           agentId,
           existingToolNames: new Set(groups.flatMap((group) => group.tools.map((tool) => tool.id))),
-        }),
+        })),
       );
     }
     respond(

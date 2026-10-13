@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { useProviderCatalogMetadata } from "../plugin-sdk/test-helpers/provider-catalog.js";
+import { useBundledProviderPolicyArtifactsForTest } from "../plugin-sdk/test-helpers/provider-policy-artifacts.test-support.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import { evaluate, platformRoute } from "./model-auth-availability.test-support.js";
 import { resolveModelCatalogServiceTiers } from "./model-catalog-service-tiers.js";
 import { createPreparedAccountCatalogAccess } from "./prepared-model-runtime.catalog-auth.js";
+
+useProviderCatalogMetadata(new URL("../../extensions/openai/", import.meta.url));
+useBundledProviderPolicyArtifactsForTest(["openai"]);
 
 const entry = { provider: "fixture", id: "opaque-model" };
 const route = {

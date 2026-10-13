@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { validateConfigObjectRaw } from "../config/validation-core.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import {
   PREPARED_THINKING_POLICY,
   type ThinkingCatalogPolicyCarrier,
@@ -12,6 +13,9 @@ vi.mock("../plugins/provider-runtime.runtime.js", () => ({
 }));
 
 describe("configured catalog overlay", () => {
+  beforeEach(async () => {
+    await preparePluginMetadataMachineStateAsync({});
+  });
   it("clears captured capabilities when applying a previously missing base URL", () => {
     const route = {
       api: "openai-responses",

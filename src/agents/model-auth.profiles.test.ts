@@ -116,15 +116,19 @@ vi.mock("./model-auth-env-vars.js", () => {
   };
 });
 
-vi.mock("../plugins/provider-external-auth-core.js", () => ({
+vi.mock("../plugins/provider-external-auth-core.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/provider-external-auth-core.js")>()),
   createProviderExternalAuthResolver: () => ({
     resolveExternalAuthProfilesWithPlugins: () => [],
+    prepareExternalAuthProfilesWithPlugins: async () => () => [],
   }),
 }));
 
+// mock-isolation: Auth selection uses fixture credentials without loading provider plugins.
 vi.mock("../plugins/provider-runtime.js", () => ({
+  buildProviderAuthDoctorHintWithPlugin: async () => undefined,
   buildProviderMissingAuthMessageWithPlugin: () => undefined,
-  formatProviderAuthProfileApiKeyWithPlugin: async () => undefined,
+  formatProviderAuthProfileApiKeyWithPluginAsync: async () => undefined,
   refreshProviderOAuthCredentialWithPlugin: async () => null,
   resolveProviderDeprecatedAuthProfileIds: ({ provider }: { provider: string }) =>
     provider === "anthropic" || provider === "claude-cli" ? ["anthropic:claude-cli"] : [],

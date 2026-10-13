@@ -1,10 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { FailoverError } from "./failover-error.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
 import { prepareOperatorModelPolicy } from "./operator-model-policy.js";
+
+beforeEach(async () => {
+  await preparePluginMetadataMachineStateAsync({});
+});
 
 const cfg: OpenClawConfig = {
   agents: {

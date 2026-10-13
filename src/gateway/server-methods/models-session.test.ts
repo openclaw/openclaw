@@ -11,6 +11,8 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../../state/openclaw-agent-db-resources.js";
@@ -211,6 +213,7 @@ describe("direct session model catalogs", () => {
           store: { [scope.sessionKey]: entry },
           storePath: openOpenClawAgentDatabase(scope).path,
           preparedAcpMeta: null,
+          preparedModelMetadata: f.snapshot.metadataSnapshot,
           preparedRepositoryWorkspace: null,
           activeModel: null,
         });
@@ -587,7 +590,12 @@ describe("direct session model catalogs", () => {
       });
       setActivePluginRegistry(registry);
       try {
-        const direct = await f.request({ sessionKey, view: "configured" });
+        const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({ config: f.config });
+        const direct = await withPluginMetadataSnapshotScope(
+          metadataSnapshot,
+          () => f.request({ sessionKey, view: "configured" }),
+          { config: f.config },
+        );
         expect(direct.mock.calls[0]?.[1]).toMatchObject({
           models: [{ id: "gpt-5.6-luna", provider: "openai" }],
           sessionModelRevision: undefined,

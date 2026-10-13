@@ -5,7 +5,7 @@ import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { createPreparedAccountCatalogAccess } from "../../agents/prepared-model-runtime.catalog-auth.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadOpenClawPlugins } from "../../plugins/loader.js";
+import { loadOpenClawPluginsAsync } from "../../plugins/loader.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
@@ -129,7 +129,7 @@ describe("models.list configured static entries", () => {
           },
         };
         setRuntimeConfigSnapshot(cfg);
-        const pluginRegistry = loadOpenClawPlugins({
+        const pluginRegistry = await loadOpenClawPluginsAsync({
           config: cfg,
           onlyPluginIds: ["codex"],
           activate: false,

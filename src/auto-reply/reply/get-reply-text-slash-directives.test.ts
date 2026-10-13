@@ -5,6 +5,7 @@ import {
   loadExactSessionEntry,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -73,12 +74,14 @@ async function resolveTextSlashDirective(
   const sessionEntry = { sessionId: "session-1", updatedAt: 1 };
   await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
   const storedBefore = loadExactSessionEntry({ sessionKey, storePath })?.entry;
+  const cfg = markCompleteReplyConfig({
+    session: { store: storePath },
+    commands: options?.commandsText === undefined ? undefined : { text: options.commandsText },
+  });
+  await resolvePluginMetadataSnapshotAsync({ config: cfg });
   const result = await resolveReplyDirectives({
     ctx,
-    cfg: markCompleteReplyConfig({
-      session: { store: storePath },
-      commands: options?.commandsText === undefined ? undefined : { text: options.commandsText },
-    }),
+    cfg,
     agentId: "main",
     agentDir: "/tmp/agent",
     workspaceDir: "/tmp/workspace",

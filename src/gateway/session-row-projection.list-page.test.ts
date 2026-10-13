@@ -9,6 +9,7 @@ import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -264,6 +265,7 @@ it("yields while materializing only overlapping selected pages for concurrent li
 
 it("selects fresh metadata and board facts without materializing the unselected roster", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await prepareBundledDiscoveryMode();
     const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     for (let index = 0; index < 70; index++) {

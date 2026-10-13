@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
 import { findBundledPluginMetadataById } from "../plugins/bundled-plugin-metadata.js";
 import { resolvePluginConfigContractsById } from "../plugins/config-contracts.js";
 import { resolveSecretRefValues } from "./resolve.js";
@@ -18,8 +19,20 @@ const explicitMainRoster: NonNullable<OpenClawConfig["agents"]> = {
 };
 const isolatedEnv: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: process.env.OPENCLAW_TEST_HOME };
 
+async function createPreparedResolverContext(sourceConfig: OpenClawConfig, env = isolatedEnv) {
+  const metadataSnapshot = await resolveConfigWidePluginMetadataSnapshotAsync({
+    config: sourceConfig,
+    env,
+  });
+  return createResolverContext({
+    sourceConfig,
+    env,
+    manifestRegistry: metadataSnapshot.manifestRegistry,
+  });
+}
+
 describe("collectPluginConfigAssignments bundled plugin manifests", () => {
-  it("collects Codex app-server SecretRefs from bundled manifest contracts", () => {
+  it("collects Codex app-server SecretRefs from bundled manifest contracts", async () => {
     expect(
       findBundledPluginMetadataById("codex", {
         includeChannelConfigs: false,
@@ -50,6 +63,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
         },
       },
     } as OpenClawConfig;
+    const context = await createPreparedResolverContext(config);
     expect(
       resolvePluginConfigContractsById({
         config,
@@ -59,16 +73,12 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
         fallbackToBundledMetadataForResolvedBundled: true,
         pluginIds: ["codex"],
         fallbackBundledPluginIds: ["codex"],
+        manifestRegistry: context.manifestRegistry,
       }).get("codex")?.configContracts.secretInputs?.paths,
     ).toEqual([
       { path: "appServer.authToken", expected: "string" },
       { path: "appServer.headers.*", expected: "string" },
     ]);
-    const context = createResolverContext({
-      sourceConfig: config,
-      env: isolatedEnv,
-    });
-
     collectPluginConfigAssignments({
       config,
       defaults: undefined,
@@ -126,7 +136,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       },
     } as OpenClawConfig;
     const env = { ...isolatedEnv, GEMINI_GATEWAY_TOKEN: "resolved-gateway-token" };
-    const context = createResolverContext({ sourceConfig: config, env });
+    const context = await createPreparedResolverContext(config, env);
 
     collectPluginConfigAssignments({
       config,
@@ -177,7 +187,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
     } as OpenClawConfig;
     const runtimeConfig = structuredClone(sourceConfig);
     const env = { ...isolatedEnv, TAVILY_API_KEY: "resolved-tavily-key" };
-    const context = createResolverContext({ sourceConfig, env });
+    const context = await createPreparedResolverContext(sourceConfig, env);
 
     collectPluginConfigAssignments({
       config: runtimeConfig,
@@ -211,7 +221,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
     });
   });
 
-  it("collects voice-call SecretRef assignments from bundled manifest contracts", () => {
+  it("collects voice-call SecretRef assignments from bundled manifest contracts", async () => {
     expect(
       findBundledPluginMetadataById("voice-call", {
         includeChannelConfigs: false,
@@ -262,6 +272,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
         },
       },
     } as OpenClawConfig;
+    const context = await createPreparedResolverContext(config);
     expect(
       resolvePluginConfigContractsById({
         config,
@@ -271,6 +282,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
         fallbackToBundledMetadataForResolvedBundled: true,
         pluginIds: ["voice-call"],
         fallbackBundledPluginIds: ["voice-call"],
+        manifestRegistry: context.manifestRegistry,
       }).get("voice-call")?.configContracts.secretInputs?.paths,
     ).toEqual([
       { path: "twilio.authToken", expected: "string" },
@@ -278,11 +290,6 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       { path: "streaming.providers.*.apiKey", expected: "string" },
       { path: "tts.providers.*.apiKey", expected: "string" },
     ]);
-    const context = createResolverContext({
-      sourceConfig: config,
-      env: isolatedEnv,
-    });
-
     collectPluginConfigAssignments({
       config,
       defaults: undefined,
@@ -305,7 +312,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
     });
   });
 
-  it("collects google-meet realtime provider SecretRefs from its installed manifest", () => {
+  it("collects google-meet realtime provider SecretRefs from its installed manifest", async () => {
     const googleMeetPluginDir = fileURLToPath(
       new URL("../../extensions/google-meet", import.meta.url),
     );
@@ -332,18 +339,15 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
         },
       },
     } as OpenClawConfig;
+    const context = await createPreparedResolverContext(config);
     expect(
       resolvePluginConfigContractsById({
         config,
         env: isolatedEnv,
         pluginIds: ["google-meet"],
+        manifestRegistry: context.manifestRegistry,
       }).get("google-meet")?.configContracts.secretInputs?.paths,
     ).toEqual([{ path: "realtime.providers.*.apiKey", expected: "string" }]);
-    const context = createResolverContext({
-      sourceConfig: config,
-      env: isolatedEnv,
-    });
-
     collectPluginConfigAssignments({
       config,
       defaults: undefined,

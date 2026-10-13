@@ -2,12 +2,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRemoteShellSandboxSession } from "../../agents/sandbox/remote-shell-transport.js";
 import {
   registerAgentWorkspaceAccess,
   type AgentWorkspaceAccess,
 } from "../../agents/workspace-access.js";
+import { preparePluginAutoEnableTestDiscovery } from "../../config/plugin-auto-enable.test-helpers.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { withExtractedArchiveRoot } from "../../infra/install-flow.js";
 import {
@@ -25,6 +26,10 @@ import { resolveWorkspaceSkillInstallDir } from "./install-paths.js";
 import { digestClawHubSkillTree } from "./skill-tree-digest.js";
 
 const tempDirs = createTrackedTempDirs();
+
+beforeEach(() => {
+  preparePluginAutoEnableTestDiscovery();
+});
 
 async function writeZipArchive(params: {
   archivePath: string;

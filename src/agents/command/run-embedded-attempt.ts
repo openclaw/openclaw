@@ -322,6 +322,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
               provider: candidateProvider,
               entry: sessionEntryForAttempt,
               cfg,
+              metadataSnapshot: pluginsEnabled ? manifestMetadataSnapshot : null,
             }),
         },
         behavior: {

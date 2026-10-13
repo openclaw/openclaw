@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as runtimeNormalization from "../agents/provider-model-normalization.runtime.js";
 import { resolveResponseUsageLine } from "../auto-reply/reply/agent-runner-usage-line.js";
+import { preparePluginAutoEnableTestDiscovery } from "../config/plugin-auto-enable.test-helpers.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -53,6 +54,7 @@ describe("hosted model pricing", () => {
   beforeEach(async () => {
     clearRuntimeConfigSnapshot();
     resetUsageFormatCachesForTest();
+    preparePluginAutoEnableTestDiscovery();
     readStoredCatalog.mockReset().mockReturnValue({
       source_url: "https://catalog.openclaw.ai/models/v2/catalog.json",
       bundle_json: JSON.stringify({
@@ -250,6 +252,7 @@ describe("hosted model pricing", () => {
   it("accepts exact free pricing from an authoritative native source", async () => {
     const agentDir = tempDirs.make("openclaw-native-zero-policy-");
     vi.stubEnv("OPENCLAW_STATE_DIR", agentDir);
+    preparePluginAutoEnableTestDiscovery();
     const config: OpenClawConfig = {
       plugins: { allow: ["venice"], entries: { venice: { enabled: true } } },
     };
@@ -382,6 +385,7 @@ describe("hosted model pricing", () => {
       setRuntimeConfigSnapshot(runtime, source);
       const agentDir = tempDirs.make("openclaw-authored-pricing-");
       vi.stubEnv("OPENCLAW_STATE_DIR", agentDir);
+      preparePluginAutoEnableTestDiscovery();
       const fetch = vi.fn(() => {
         throw new Error("pricing display must not use the network");
       });
@@ -660,6 +664,7 @@ describe("OpenRouter routing shortcut estimates", () => {
 
   beforeEach(() => {
     resetUsageFormatCachesForTest();
+    preparePluginAutoEnableTestDiscovery();
     hostedPricing = {
       "openrouter/openai/gpt-catalog": { input: 1, output: 2 },
       "openai/gpt-catalog": { input: 4, output: 5 },

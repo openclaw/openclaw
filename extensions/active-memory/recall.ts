@@ -128,15 +128,13 @@ async function recordRecallResult(
 
 async function resolveActiveRecall(
   params: Omit<ActiveRecallParams, "runId"> & {
+    resolvedModelRef: Awaited<ReturnType<typeof getModelRef>>;
     onTimeoutCleanup?: (cleanup: Promise<void>) => void;
   },
 ): Promise<ActiveRecallResult> {
   params.abortSignal?.throwIfAborted();
   const startedAt = Date.now();
-  const resolvedModelRef = getModelRef(params.runtimeConfig, params.agentId, params.config, {
-    modelProviderId: params.currentModelProviderId,
-    modelId: params.currentModelId,
-  });
+  const { resolvedModelRef } = params;
   // Memory Core re-authorizes every conversation-recall request against live
   // session state. Never replay a cached private summary after eligibility changes.
   const cacheKey = params.conversationRecall
@@ -435,13 +433,13 @@ export async function maybeResolveActiveRecall(
   params: ActiveRecallParams,
 ): Promise<ActiveRecallResult> {
   const { runId, ...recallParams } = params;
-  if (!runId || params.requestKey === null) {
-    return await resolveActiveRecall(recallParams);
-  }
-  const model = getModelRef(params.runtimeConfig, params.agentId, params.config, {
+  const model = await getModelRef(params.runtimeConfig, params.agentId, params.config, {
     modelProviderId: params.currentModelProviderId,
     modelId: params.currentModelId,
   });
+  if (!runId || params.requestKey === null) {
+    return await resolveActiveRecall({ ...recallParams, resolvedModelRef: model });
+  }
   const scopeFingerprint = buildCacheKey({
     agentId: params.agentId,
     sessionKey: params.sessionKey,
@@ -458,6 +456,6 @@ export async function maybeResolveActiveRecall(
     resourceScope: JSON.stringify(params.conversationRecall ?? null),
   });
   return await resolveActiveRecallForRun(`${runId}:${scopeFingerprint}`, (onTimeoutCleanup) =>
-    resolveActiveRecall({ ...recallParams, onTimeoutCleanup }),
+    resolveActiveRecall({ ...recallParams, resolvedModelRef: model, onTimeoutCleanup }),
   );
 }

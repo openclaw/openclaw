@@ -57,7 +57,12 @@ type ProviderHookParams<TContext> = {
 export function createProviderHookRuntime(
   providers: ReturnType<typeof createProviderRegistryResolver>,
 ) {
-  const { resolvePluginProviderRegistryCore, resolvePluginProvidersCore } = providers;
+  const {
+    resolvePluginProviderRegistryCore,
+    resolvePluginProviderRegistryCoreAsync,
+    resolvePluginProvidersCore,
+    resolvePluginProvidersCoreAsync,
+  } = providers;
   /** Carries one attempt's prepared provider plugin through the model transport boundary. */
   function attachModelProviderRuntimePluginHandle<TModel extends object>(
     model: TModel,
@@ -68,7 +73,12 @@ export function createProviderHookRuntime(
       model,
       runtimeHandle.plugin?.reconcileLocalService,
     );
-    return { ...preparedModel, [MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL]: runtimeHandle };
+    const descriptors = Object.getOwnPropertyDescriptors(preparedModel);
+    Reflect.deleteProperty(descriptors, MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL);
+    return Object.defineProperties(
+      { ...preparedModel, [MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL]: runtimeHandle },
+      descriptors,
+    );
   }
 
   /** Reads the provider plugin handle attached to a prepared attempt model. */
@@ -123,6 +133,16 @@ export function createProviderHookRuntime(
     });
   }
 
+  function resolveProviderPluginsForHooksAsync(
+    params: Parameters<typeof resolveLoadedProviderPluginsForHooks>[0],
+  ): Promise<ProviderPlugin[]> {
+    return resolvePluginProvidersCoreAsync({
+      ...params,
+      activate: false,
+      skipIfLoadInFlight: true,
+    });
+  }
+
   function resolveSelectedProvider(
     selection: ReturnType<typeof resolvePluginProviderRegistryCore>,
     provider: string,
@@ -141,10 +161,10 @@ export function createProviderHookRuntime(
       : undefined;
   }
 
-  function resolveProviderRuntimePluginLookup(
+  function prepareProviderRuntimePluginLookup(
     params: ProviderRuntimePluginLookupParams,
     registryScope?: "loaded",
-  ): ProviderRuntimePluginHandle {
+  ) {
     const apiOwnerHint = resolveProviderConfigApiOwnerHint(params);
     const ownerRefs = [
       ...new Set(
@@ -152,7 +172,7 @@ export function createProviderHookRuntime(
       ),
     ];
     const modelId = resolveProviderRuntimeLookupModelId(params);
-    const selection = resolvePluginProviderRegistryCore({
+    const selectionParams = {
       ...params,
       providerRefs: [params.provider, ...ownerRefs],
       modelRefs: modelId
@@ -165,7 +185,15 @@ export function createProviderHookRuntime(
       registryScope,
       activate: false,
       skipIfLoadInFlight: true,
-    });
+    };
+    return { ownerRefs, selectionParams };
+  }
+
+  function providerRuntimePluginHandle(
+    params: ProviderRuntimePluginLookupParams,
+    ownerRefs: readonly string[],
+    selection: ReturnType<typeof resolvePluginProviderRegistryCore>,
+  ): ProviderRuntimePluginHandle {
     const plugin = resolveSelectedProvider(selection, params.provider, ownerRefs);
     return {
       ...params,
@@ -174,10 +202,43 @@ export function createProviderHookRuntime(
     };
   }
 
+  /** @deprecated Cold providers must be prepared with resolveProviderRuntimePluginAsync. */
+  function resolveProviderRuntimePluginLookup(
+    params: ProviderRuntimePluginLookupParams,
+    registryScope?: "loaded",
+  ): ProviderRuntimePluginHandle {
+    const { ownerRefs, selectionParams } = prepareProviderRuntimePluginLookup(
+      params,
+      registryScope,
+    );
+    return providerRuntimePluginHandle(
+      params,
+      ownerRefs,
+      resolvePluginProviderRegistryCore(selectionParams),
+    );
+  }
+
+  async function resolveProviderRuntimePluginHandleAsync(
+    params: ProviderRuntimePluginLookupParams,
+  ): Promise<ProviderRuntimePluginHandle> {
+    const { ownerRefs, selectionParams } = prepareProviderRuntimePluginLookup(params);
+    return providerRuntimePluginHandle(
+      params,
+      ownerRefs,
+      await resolvePluginProviderRegistryCoreAsync(selectionParams),
+    );
+  }
+
   function resolveProviderRuntimePlugin(
     params: ProviderRuntimePluginLookupParams,
   ): ProviderPlugin | undefined {
     return resolveProviderRuntimePluginLookup(params).plugin;
+  }
+
+  async function resolveProviderRuntimePluginAsync(
+    params: ProviderRuntimePluginLookupParams,
+  ): Promise<ProviderPlugin | undefined> {
+    return (await resolveProviderRuntimePluginHandleAsync(params)).plugin;
   }
 
   function resolveLoadedProviderRuntimePlugin(
@@ -265,7 +326,10 @@ export function createProviderHookRuntime(
     getModelProviderRuntimePluginHandle,
     resolveLoadedProviderPluginsForHooks,
     resolveProviderPluginsForHooks,
+    resolveProviderPluginsForHooksAsync,
     resolveProviderRuntimePlugin,
+    resolveProviderRuntimePluginAsync,
+    resolveProviderRuntimePluginHandleAsync,
     resolveLoadedProviderRuntimePlugin,
     resolveProviderHookPlugin,
     resolveProviderRuntimePluginHandle: resolveProviderRuntimePluginLookup,

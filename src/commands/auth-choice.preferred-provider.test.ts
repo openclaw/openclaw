@@ -1,7 +1,7 @@
 // Preferred provider tests cover auth-choice provider selection and runtime provider discovery.
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { resolvePluginProvidersCore as resolvePluginProvidersFn } from "../plugins/providers.runtime.js";
+import type { resolvePluginProvidersCoreAsync as resolvePluginProvidersFn } from "../plugins/providers.runtime.js";
 
 type ResolvePluginProvidersOptions = Parameters<typeof resolvePluginProvidersFn>[0];
 
@@ -9,7 +9,7 @@ const resolveManifestProviderAuthChoice = vi.hoisted(() => vi.fn());
 const resolveManifestDeprecatedProviderAuthChoice = vi.hoisted(() => vi.fn());
 const resolveManifestProviderAuthChoices = vi.hoisted(() => vi.fn(() => []));
 const resolveProviderPluginChoiceCore = vi.hoisted(() => vi.fn());
-const resolvePluginProvidersCore = vi.hoisted(() => vi.fn(() => []));
+const resolvePluginProvidersCore = vi.hoisted(() => vi.fn(async () => []));
 
 vi.mock("../plugins/provider-auth-choices.js", () => ({
   resolveManifestProviderAuthChoice,
@@ -21,8 +21,9 @@ vi.mock("../plugins/provider-wizard.js", () => ({
   resolveProviderPluginChoiceCore,
 }));
 
+// mock-isolation: Provider preference reads the fixture roster without activating installed providers.
 vi.mock("../plugins/providers.runtime.js", () => ({
-  resolvePluginProvidersCore,
+  resolvePluginProvidersCoreAsync: resolvePluginProvidersCore,
 }));
 
 import { resolvePreferredProviderForAuthChoice } from "../plugins/provider-auth-choice-preference.js";
@@ -33,7 +34,7 @@ describe("resolvePreferredProviderForAuthChoice", () => {
     resolveManifestProviderAuthChoice.mockReturnValue(undefined);
     resolveManifestDeprecatedProviderAuthChoice.mockReturnValue(undefined);
     resolveManifestProviderAuthChoices.mockReturnValue([]);
-    resolvePluginProvidersCore.mockReturnValue([]);
+    resolvePluginProvidersCore.mockResolvedValue([]);
     resolveProviderPluginChoiceCore.mockReturnValue(null);
   });
 
@@ -75,7 +76,7 @@ describe("resolvePreferredProviderForAuthChoice", () => {
   });
 
   it("passes untrusted-workspace filtering through setup-provider fallback lookup", async () => {
-    resolvePluginProvidersCore.mockReturnValue([
+    resolvePluginProvidersCore.mockResolvedValue([
       {
         id: "demo-provider",
         label: "Demo Provider",

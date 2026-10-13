@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import {
   makeBundledEsmFixtureRoot,
@@ -190,6 +191,7 @@ describe("bundled channel entry shape guards", () => {
   };
 
   beforeAll(async () => {
+    await prepareBundledDiscoveryMode();
     vi.doMock("../../plugins/bundled-channel-runtime.js", async (importOriginal) => {
       const actual =
         await importOriginal<typeof import("../../plugins/bundled-channel-runtime.js")>();

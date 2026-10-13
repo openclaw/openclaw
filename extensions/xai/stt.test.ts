@@ -1,6 +1,9 @@
 // Xai tests cover stt plugin behavior.
+import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { buildXaiMediaUnderstandingProvider } from "./stt.js";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 const { postTranscriptionRequestMock } = vi.hoisted(() => ({
   postTranscriptionRequestMock: vi.fn(

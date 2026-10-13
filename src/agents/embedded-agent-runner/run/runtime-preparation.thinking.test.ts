@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { setCurrentPluginMetadataSnapshot } from "../../../plugins/current-plugin-metadata.test-support.js";
+import { preparePluginMetadataMachineStateAsync } from "../../../plugins/installed-plugin-index-record-state.js";
 import { loadPluginManifest } from "../../../plugins/manifest.js";
 import { clearPluginMetadataLifecycleCaches } from "../../../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
@@ -90,6 +91,7 @@ describe("selected route thinking metadata at runtime preparation", () => {
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "effort-route", scenario: "minimal" });
     root = state.workspaceDir;
+    await preparePluginMetadataMachineStateAsync({});
     const { buildOpenAIProvider } = await loadBundledPluginFacade<{
       buildOpenAIProvider: () => ProviderPlugin;
     }>({ pluginId: "openai", artifactBasename: "api.js" });

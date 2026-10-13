@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, test } from "vitest";
-import { createOpenClawCodingTools } from "../../../../src/agents/agent-tools.js";
+import { createOpenClawCodingToolsAsync } from "../../../../src/agents/agent-tools.js";
 import { resolveAttemptWorkspaceSandbox } from "../../../../src/agents/workspace-sandbox.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -93,16 +93,18 @@ test("host:auto executes inside the resolved Docker sandbox", async () => {
     }
     runtimeId = workspace.sandbox.runtimeId;
 
-    const exec = createOpenClawCodingTools({
-      agentId: workspace.sessionAgentId,
-      config,
-      cwd: workspace.effectiveCwd,
-      exec: { host: "auto", security: "full", ask: "off" },
-      sandbox: workspace.sandbox,
-      sessionId,
-      sessionKey,
-      workspaceDir: workspace.effectiveWorkspace,
-    }).find((tool) => tool.name === "exec");
+    const exec = (
+      await createOpenClawCodingToolsAsync({
+        agentId: workspace.sessionAgentId,
+        config,
+        cwd: workspace.effectiveCwd,
+        exec: { host: "auto", security: "full", ask: "off" },
+        sandbox: workspace.sandbox,
+        sessionId,
+        sessionKey,
+        workspaceDir: workspace.effectiveWorkspace,
+      })
+    ).find((tool) => tool.name === "exec");
     expect(exec).toBeDefined();
     if (!exec) {
       throw new Error("exec tool missing from sandboxed agent surface");
@@ -139,6 +141,7 @@ test("host:auto executes inside the resolved Docker sandbox", async () => {
       await removeSandboxContainer(runtimeId);
       await execDocker(["rm", "-f", runtimeId], { allowFailure: true });
     }
+    clearRuntimeConfigSnapshot();
     env.restore();
     await fs.rm(root, { recursive: true, force: true });
   }

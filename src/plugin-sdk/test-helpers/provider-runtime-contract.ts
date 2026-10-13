@@ -6,8 +6,10 @@ import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.te
 import type { ProviderRuntimeModel } from "../plugin-entry.js";
 import { registerProviderPlugin, requireRegisteredProvider } from "../plugin-test-runtime.js";
 import { buildManifestModelProviderConfig } from "../provider-catalog-shared.js";
+import { prepareModelProviderRequestRouteFacts } from "../provider-http.js";
 import type { ProviderPlugin } from "../provider-model-shared.js";
 import { createProviderUsageFetch, makeResponse } from "../test-env.js";
+import { useProviderCatalogMetadata } from "./provider-catalog.js";
 
 const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
 
@@ -154,6 +156,7 @@ export function describeAnthropicProviderRuntimeContract(
   load: ProviderRuntimeContractPluginLoader,
 ) {
   describe("anthropic provider runtime contract", { timeout: CONTRACT_SETUP_TIMEOUT_MS }, () => {
+    useProviderCatalogMetadata(new URL("../../../extensions/anthropic/", import.meta.url));
     const requireProviderContractProvider = installRuntimeHooks([
       { providerIds: ["anthropic"], pluginId: "anthropic", name: "Anthropic", load },
     ]);
@@ -285,6 +288,7 @@ export function describeGithubCopilotProviderRuntimeContract(
         },
       ]);
       const createManifestModel = createManifestModelFactory("github-copilot", manifestCatalog);
+      useProviderCatalogMetadata(new URL("../../../extensions/github-copilot/", import.meta.url));
 
       async function resolveStaticModel(modelId: string) {
         const { createBundledStaticCatalogModelResolver } =
@@ -327,7 +331,10 @@ export function describeGithubCopilotProviderRuntimeContract(
         });
         return {
           config,
-          model: expectDefined(resolveModel({ provider: "github-copilot", modelId }), modelId),
+          model: await prepareModelProviderRequestRouteFacts(
+            expectDefined(resolveModel({ provider: "github-copilot", modelId }), modelId),
+            { config },
+          ),
         };
       }
 
@@ -548,6 +555,7 @@ export function describeOpenAIProviderRuntimeContract(
   manifestCatalog: unknown,
 ) {
   describe("openai provider runtime contract", { timeout: CONTRACT_SETUP_TIMEOUT_MS }, () => {
+    useProviderCatalogMetadata(new URL("../../../extensions/openai/", import.meta.url));
     const createManifestModel = createManifestModelFactory("openai", manifestCatalog);
     const codexProviderConfig = {
       api: "openai-chatgpt-responses",
@@ -927,6 +935,7 @@ export function describeVeniceProviderRuntimeContract(
 
 export function describeZAIProviderRuntimeContract(load: ProviderRuntimeContractPluginLoader) {
   describe("zai provider runtime contract", { timeout: CONTRACT_SETUP_TIMEOUT_MS }, () => {
+    useProviderCatalogMetadata(new URL("../../../extensions/zai/", import.meta.url));
     const requireProviderContractProvider = installRuntimeHooks([
       { providerIds: ["zai"], pluginId: "zai", name: "Z.AI", load },
     ]);

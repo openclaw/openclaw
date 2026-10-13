@@ -3,7 +3,10 @@ import path from "node:path";
 import { resolveBootstrapFilesForPreparation } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
-import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createMockPluginRegistry,
+  preparePluginTestRuntimeMetadata,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import * as sessionStoreRuntime from "openclaw/plugin-sdk/session-store-runtime";
 import {
   patchSessionEntry,
@@ -132,6 +135,7 @@ describe("Codex generation admission", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const sessionKey = "agent:main:ephemeral-helper";
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempDir, "ephemeral-state"));
+    await preparePluginTestRuntimeMetadata();
     let generation = 0;
     const turnStarts = new Map<number, ReturnType<typeof createDeferred<void>>>();
     const harness = createStartedThreadHarness(async (method) => {

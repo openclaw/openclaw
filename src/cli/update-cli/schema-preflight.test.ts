@@ -10,6 +10,7 @@ import { withTempHome, writeOpenClawConfig } from "../../config/test-helpers.js"
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { sqliteWorkerPreloadEnv } from "../../infra/sqlite-worker-preload.test-support.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { reconstructAgentDeletionJournal } from "../../state/agent-deletion-journal-recovery.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
@@ -396,6 +397,7 @@ describe("planned legacy configuration admission", () => {
             observe: false,
           }).readConfigFileSnapshotForWrite();
           expect(snapshot.valid).toBe(false);
+          await prepareBundledDiscoveryMode();
           const legacyConfigPlan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
           expect(legacyConfigPlan).toBeDefined();
           await expect(
@@ -467,6 +469,7 @@ describe("planned migration managed profile isolation", () => {
         env,
         observe: false,
       }).readConfigFileSnapshotForWrite();
+      await prepareBundledDiscoveryMode();
       const legacyConfigPlan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
       expect(legacyConfigPlan).toBeDefined();
       const replacement = JSON.stringify({ gateway: { mode: "local", bind: "lan" } });
@@ -496,6 +499,7 @@ describe("planned migration managed profile isolation", () => {
           env: callerEnv,
           observe: false,
         }).readConfigFileSnapshotForWrite();
+        await prepareBundledDiscoveryMode();
         const legacyConfigPlan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
         expect(legacyConfigPlan).toBeDefined();
         const servicePath =

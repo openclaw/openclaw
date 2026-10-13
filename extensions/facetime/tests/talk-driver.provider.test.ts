@@ -76,8 +76,11 @@ vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
 }));
 vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>()),
-  resolveProviderRequestHeaders: ({ defaultHeaders }: { defaultHeaders: Record<string, string> }) =>
+  resolveProviderRequestHeadersAsync: async ({
     defaultHeaders,
+  }: {
+    defaultHeaders: Record<string, string>;
+  }) => defaultHeaders,
 }));
 vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/proxy-capture")>()),

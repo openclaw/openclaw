@@ -15,6 +15,7 @@ import {
 import { readSessionStoreSummaryReadOnly } from "../config/sessions/session-accessor.sqlite-summary.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { spyOnSessionStoreSummaries } from "../config/sessions/session-store-summary.test-support.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -329,6 +330,7 @@ describe("getStatusSummary read-only session access", () => {
       await closeOpenClawAgentDatabasesAsync(state.root);
       closeOpenClawAgentDatabasesForTest(state.root);
 
+      await preparePluginMetadataMachineStateAsync({ env: state.env });
       const summary = await getStatusSummary({ includeChannelSummary: false, config });
       const session = summary.sessions.recent[0];
 

@@ -33,12 +33,13 @@ import { resetSubagentRegistryForTests } from "./subagent-registry.test-helpers.
 vi.mock("../../../browser-lifecycle-cleanup.js", { spy: true });
 vi.mock("../../../context-engine/registry.js", { spy: true });
 vi.mock("../../../gateway/call.js", { spy: true });
+// mock-isolation: Cancellation fixtures control prepared registries independently of plugin discovery.
 vi.mock("../../runtime-plugins.js", async () => {
   const { getActivePluginRegistry } = await import("../../../plugins/runtime.js");
   const { createEmptyPluginRegistry } = await import("../../../plugins/registry-empty.js");
   return {
     loadAgentRuntimePluginRegistryHandle: vi.fn<typeof loadAgentRuntimePluginRegistryHandle>(
-      () => getActivePluginRegistry() ?? createEmptyPluginRegistry(),
+      async () => getActivePluginRegistry() ?? createEmptyPluginRegistry(),
     ),
   };
 });

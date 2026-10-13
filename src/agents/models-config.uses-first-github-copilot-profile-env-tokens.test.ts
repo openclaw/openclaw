@@ -8,9 +8,10 @@ vi.mock("./model-auth-env.js", () => ({
   resolveEnvApiKey: () => null,
 }));
 
+// mock-isolation: Token precedence uses fixture provider IDs without reading installed aliases.
 vi.mock("./provider-auth-aliases.js", () => ({
   resolveProviderAuthAliasMap: () => ({}),
-  resolveProviderIdForAuth: (provider: string) => provider.trim().toLowerCase(),
+  resolvePreparedProviderIdForAuth: (provider: string) => provider.trim().toLowerCase(),
 }));
 
 vi.mock("./model-auth-env-vars.js", () => ({

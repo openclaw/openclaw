@@ -351,7 +351,7 @@ async function createOpenAIRealtimeBrowserSession(
     },
     context,
   );
-  const headers = resolveOpenAIRealtimeRequestHeaders(
+  const headers = await resolveOpenAIRealtimeRequestHeaders(
     context,
     "https://api.openai.com/v1/realtime/calls",
   );

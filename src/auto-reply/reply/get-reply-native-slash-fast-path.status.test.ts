@@ -5,6 +5,7 @@ import * as preparedModelCatalog from "../../agents/prepared-model-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { buildStatusReplyParts } from "../../status/status-text.js";
@@ -55,7 +56,7 @@ const createTypingController = (): TypingController => ({
 });
 
 describe("native /status channel model routing", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.restoreAllMocks();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     resetPluginRuntimeStateForTest();
@@ -78,6 +79,7 @@ describe("native /status channel model routing", () => {
     ]);
     buildStatusReplyMock.mockReset();
     buildStatusReplyMock.mockResolvedValue({ text: "selected model status" });
+    await resolvePluginMetadataSnapshotAsync({ config: {} });
   });
 
   const statusSelectionCases: NativeStatusSelectionCase[] = [

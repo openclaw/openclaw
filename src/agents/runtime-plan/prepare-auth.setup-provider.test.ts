@@ -1,6 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { aroundEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { GCP_VERTEX_CREDENTIALS_MARKER } from "../model-auth-markers.js";
 import { prepareAgentRuntimeAuth } from "./prepare-auth.js";
@@ -31,6 +33,11 @@ vi.mock("../../plugins/setup-registry.js", async (importOriginal) => ({
 }));
 
 describe("prepared setup-provider auth fallback", () => {
+  const metadataSnapshot = createPluginMetadataSnapshotFixture({
+    plugins: [{ id: "anthropic-vertex", providers: ["anthropic-vertex"] }],
+  });
+  aroundEach((runTest) => withPluginRuntimeGenerationScope({ metadataSnapshot }, runTest));
+
   it("defers setup resolution until a prepared profile attempt fails", async () => {
     const profileId = "anthropic-vertex:missing";
     const config = {
@@ -50,6 +57,7 @@ describe("prepared setup-provider auth fallback", () => {
       order: { "anthropic-vertex": [profileId] },
     } satisfies AuthProfileStore;
     const prepared = prepareAgentRuntimeAuth({
+      metadataSnapshot,
       provider: "anthropic-vertex",
       modelId: "claude-sonnet-4-6",
       config,

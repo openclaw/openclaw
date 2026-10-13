@@ -675,9 +675,10 @@ vi.mock("./model-visibility-policy.js", () => ({
   createModelVisibilityPolicy: createTestModelVisibilityPolicy,
 }));
 
+// mock-isolation: Live model switching uses fixture credential realms without plugin discovery.
 vi.mock("./provider-auth-aliases.js", () => ({
   resolveProviderAuthAliasMap: () => ({}),
-  resolveProviderIdForAuth: (provider: string) =>
+  resolvePreparedProviderIdForAuth: (provider: string) =>
     provider.trim().toLowerCase() === "codex-cli" ? "openai" : provider.trim().toLowerCase(),
 }));
 

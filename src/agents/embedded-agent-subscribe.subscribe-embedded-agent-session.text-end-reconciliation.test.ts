@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import {
   createSubscribedSessionHarness,
   emitAssistantTextDelta,
@@ -7,6 +8,10 @@ import {
   extractTextPayloads,
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
+
+beforeEach(async () => {
+  await preparePluginMetadataMachineStateAsync({});
+});
 
 type Options = Omit<Parameters<typeof createSubscribedSessionHarness>[0], "runId">;
 type NativeMessage = Pick<AssistantMessage, "role" | "content"> & {

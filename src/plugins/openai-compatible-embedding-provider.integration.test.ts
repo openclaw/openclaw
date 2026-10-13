@@ -21,7 +21,7 @@ import {
 import { UnresolvedSecretInputError } from "../config/types.secrets.js";
 import { closeOpenClawAgentDatabases } from "../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { getEmbeddingProvider } from "./embedding-provider-runtime.js";
+import { getEmbeddingProviderAsync } from "./embedding-provider-runtime.js";
 import type { EmbeddingProviderCreateOptions } from "./embedding-provider-types.js";
 import { openAICompatibleEmbeddingProviderAdapter } from "./openai-compatible-embedding-provider.js";
 
@@ -343,7 +343,7 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
           provider,
           model: "fixture-model",
         };
-        const adapter = getEmbeddingProvider(provider, options.config);
+        const adapter = await getEmbeddingProviderAsync(provider, options.config);
         expect(adapter).toBe(openAICompatibleEmbeddingProviderAdapter);
         const embed = async () => {
           const result = await adapter!.create(options);

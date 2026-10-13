@@ -3,6 +3,7 @@
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { captureEnv } from "../test-utils/env.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 
@@ -21,8 +22,9 @@ describe("gateway cli backend live helpers", () => {
     liveHelpers = await import("./gateway-cli-backend.live-helpers.js");
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useRealTimers();
+    await preparePluginMetadataMachineStateAsync({});
   });
 
   afterEach(() => {

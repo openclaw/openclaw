@@ -3,6 +3,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { AgentCompactionMode } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineInfo } from "../context-engine/types.js";
+import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
 import { resolveEffectiveCompactionReserveTokens } from "./agent-compaction-constants.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import type { SettingsManager } from "./sessions/settings-manager.js";
@@ -81,6 +82,7 @@ export function isSilentOverflowProneModel(model: {
   provider?: string | null;
   modelId?: string | null;
   baseUrl?: string | null;
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
 }): boolean {
   const provider = normalizeProviderId(typeof model.provider === "string" ? model.provider : "");
   if (provider === "zai") {
@@ -89,7 +91,8 @@ export function isSilentOverflowProneModel(model: {
   if (
     typeof model.baseUrl === "string" &&
     model.baseUrl.length > 0 &&
-    resolveProviderEndpoint(model.baseUrl).endpointClass === "zai-native"
+    resolveProviderEndpoint(model.baseUrl, model.providerMetadataOwners).endpointClass ===
+      "zai-native"
   ) {
     return true;
   }

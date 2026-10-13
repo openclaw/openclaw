@@ -25,7 +25,7 @@ import type { PluginWebSearchProviderEntry } from "../../plugins/web-provider-ty
 import { parseConcreteConfigPathTokens } from "../../shared/dot-path.js";
 import {
   isWebSearchProviderConfigured,
-  listConfiguredWebSearchProviders,
+  listConfiguredWebSearchProvidersAsync,
   resolveWebSearchProviderId,
 } from "../../web-search/runtime.js";
 import { readPreparedCatalog } from "../server-model-catalog-auth.js";
@@ -89,10 +89,10 @@ export async function prepareWebSearchStatus(
   const metadata = await resolveConfigWidePluginMetadataSnapshotAsync({ config });
   activateDiscovery();
   const sourceConfig = getRuntimeConfigSourceSnapshot() ?? config;
-  const available = listConfiguredWebSearchProviders({ config });
+  const available = await listConfiguredWebSearchProvidersAsync({ config });
   const availableIds = new Set(available.map((entry) => entry.id));
   const entries = new Map(
-    [...listSearchProviderOptions(config), ...available].map((entry) => [entry.id, entry]),
+    [...(await listSearchProviderOptions(config)), ...available].map((entry) => [entry.id, entry]),
   );
   const providers = [...entries.values()]
     .toSorted((a, b) => a.label.localeCompare(b.label))

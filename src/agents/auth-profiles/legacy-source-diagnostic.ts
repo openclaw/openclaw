@@ -6,7 +6,7 @@ import { shortenHomePath } from "../../utils.js";
 import {
   couldResolveProviderIdForAuth,
   hasUnresolvedProviderAuthEndpoint,
-  resolveProviderIdForAuth,
+  resolvePreparedProviderIdForAuth as resolveProviderIdForAuth,
 } from "../provider-auth-aliases.js";
 import {
   coerceLegacyFlatCredential,

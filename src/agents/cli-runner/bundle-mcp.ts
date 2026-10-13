@@ -14,6 +14,7 @@ import {
 import { extractMcpServerMap } from "../../plugins/bundle-mcp.js";
 import type { BundleMcpConfig, BundleMcpServerConfig } from "../../plugins/bundle-mcp.types.js";
 import type { CliBackendConfig, CliBackendPlugin } from "../../plugins/cli-backend.types.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import type { CliBundleMcpMode } from "../../plugins/types.js";
 import { acquireSessionMcpRuntime } from "../agent-bundle-mcp-manager-api.js";
 import { releaseSessionMcpRuntime } from "../agent-bundle-mcp-manager-cleanup.js";
@@ -394,9 +395,18 @@ export async function prepareCliBundleMcpConfig(params: {
     }) as BundleMcpConfig;
   }
 
+  const metadataSnapshot =
+    params.config?.plugins?.enabled === false
+      ? undefined
+      : await resolvePluginMetadataSnapshotAsync({
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          allowWorkspaceScopedCurrent: true,
+        });
   const bundleConfig = loadMergedBundleMcpConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.config,
+    manifestRegistry: metadataSnapshot?.manifestRegistry,
     toolOverrides: params.toolOverrides,
   });
   for (const diagnostic of bundleConfig.diagnostics) {

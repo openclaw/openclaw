@@ -42,7 +42,7 @@ export async function listPastTranscripts({ ctx, store, rawParams }: ReadParams)
       const { overview: _overview, ...session } = presentTranscriptSession(
         projectTranscriptSession(entry),
         undefined,
-        resolveSourceProvider(entry.session.source.providerId, ctx)?.name,
+        (await resolveSourceProvider(entry.session.source.providerId, ctx))?.name,
       );
       sessions.push(session);
       if (sessions.length === limit) {

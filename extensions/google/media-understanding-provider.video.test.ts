@@ -1,6 +1,9 @@
 // Google tests cover media understanding provider.video plugin behavior.
 import { createServer, type Server } from "node:http";
-import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createCapturedPluginRegistration,
+  useProviderCatalogMetadata,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import {
   createRequestCaptureJsonFetch,
@@ -9,6 +12,8 @@ import {
 import { describe, expect, it } from "vitest";
 import googlePlugin from "./index.js";
 import { describeGeminiVideo, transcribeGeminiAudio } from "./media-understanding-provider.js";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 installPinnedHostnameTestHooks();
 

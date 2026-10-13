@@ -11,6 +11,7 @@ import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { captureRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
 import { resolveCodexClientVersion } from "../plugin-sdk/codex-client-version-runtime.js";
+import { readBundledDiscoveryModeMemoized } from "../plugins/bundled-discovery-state.js";
 import {
   getPluginCacheRetirementSignal,
   getPluginMetadataSnapshotCache,
@@ -492,6 +493,7 @@ export function createPreparedModelCatalogWorker(
           task.onRecovery = onRecovery;
           const workerRequest = {
             ...value,
+            bundledDiscoveryMode: readBundledDiscoveryModeMemoized(input.env),
             clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: input.env }),
           };
           expectedFingerprint = fingerprintPreparedModelWorkerRequest(workerInput, workerRequest);

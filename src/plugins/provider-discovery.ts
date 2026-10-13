@@ -49,22 +49,23 @@ export type ProviderDiscoveryPlan =
 export async function planRuntimePluginDiscovery(
   params: ResolveRuntimePluginDiscoveryProvidersParams,
 ): Promise<ProviderDiscoveryPlan> {
-  return (await providerRuntimeLoader.load()).planPluginDiscoveryRuntime(params);
+  return (await providerRuntimeLoader.load()).planPluginDiscoveryRuntimeAsync(params);
 }
 
 /** Loads provider runtime discovery and filters to providers that can produce catalog order entries. */
 export async function resolveRuntimePluginDiscoveryProviders(
   params: ResolveRuntimePluginDiscoveryProvidersParams,
 ): Promise<ProviderPlugin[]> {
-  return (await providerRuntimeLoader.load())
-    .resolvePluginDiscoveryProvidersRuntime(params)
-    .filter(
-      (provider) =>
-        (provider.catalog ?? provider.staticCatalog) ||
-        (params.includeSyntheticAuthProviders === true &&
-          (typeof provider.resolveSyntheticAuth === "function" ||
-            typeof provider.prepareSyntheticAuth === "function")),
-    );
+  const providers = await (
+    await providerRuntimeLoader.load()
+  ).resolvePluginDiscoveryProvidersRuntimeAsync(params);
+  return providers.filter(
+    (provider) =>
+      (provider.catalog ?? provider.staticCatalog) ||
+      (params.includeSyntheticAuthProviders === true &&
+        (typeof provider.resolveSyntheticAuth === "function" ||
+          typeof provider.prepareSyntheticAuth === "function")),
+  );
 }
 
 /** Groups plugin providers into stable discovery phases for catalog probing. */

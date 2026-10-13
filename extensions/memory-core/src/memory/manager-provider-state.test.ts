@@ -43,11 +43,11 @@ function createSettings(params: {
 }
 
 type MemoryFallbackProviderRequest = NonNullable<
-  ReturnType<typeof resolveMemoryFallbackProviderRequest>
+  Awaited<ReturnType<typeof resolveMemoryFallbackProviderRequest>>
 >;
 
 function expectMemoryFallbackRequest(
-  request: ReturnType<typeof resolveMemoryFallbackProviderRequest>,
+  request: Awaited<ReturnType<typeof resolveMemoryFallbackProviderRequest>>,
 ): MemoryFallbackProviderRequest {
   if (!request) {
     throw new Error("Expected memory fallback provider request");
@@ -72,7 +72,7 @@ describe("memory provider requests and lifecycle", () => {
     });
   });
 
-  it("keeps the primary endpoint and credentials out of the runtime fallback", () => {
+  it("keeps the primary endpoint and credentials out of the runtime fallback", async () => {
     const provider = "ollama";
     const model = DEFAULT_OLLAMA_EMBEDDING_MODEL;
     const sharedRemote = {
@@ -116,7 +116,7 @@ describe("memory provider requests and lifecycle", () => {
     });
 
     const fallbackRequest = expectMemoryFallbackRequest(
-      resolveMemoryFallbackProviderRequest({
+      await resolveMemoryFallbackProviderRequest({
         cfg: {} as OpenClawConfig,
         settings,
         currentProviderId: "openai",
@@ -137,9 +137,9 @@ describe("memory provider requests and lifecycle", () => {
     expect(fallbackRequest.remote).toEqual(sharedRemote);
   });
 
-  it("does not activate a fallback that is already the current provider", () => {
+  it("does not activate a fallback that is already the current provider", async () => {
     expect(
-      resolveMemoryFallbackProviderRequest({
+      await resolveMemoryFallbackProviderRequest({
         cfg: {} as OpenClawConfig,
         settings: createSettings({ provider: "openai", fallback: "lmstudio" }),
         currentProviderId: "lmstudio",

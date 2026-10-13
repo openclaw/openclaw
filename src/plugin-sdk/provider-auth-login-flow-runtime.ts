@@ -8,6 +8,7 @@ import {
   createProviderBrowserAuthSession,
   ProviderBrowserSignInUnavailableError,
 } from "../gateway/provider-browser-auth.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import {
   formatProviderLoginChoiceRef,
   formatProviderOAuthLoginRef,
@@ -210,10 +211,17 @@ export async function answerProviderLoginModelAccess(params: {
     prepareProviderModelAccess,
     ProviderModelPolicyChangedError,
   } = await import("../commands/models/auth-model-policy.js");
-  const renew = (message: string, config = params.readConfig()): ProviderLoginReply => {
+  const renew = async (
+    message: string,
+    config = params.readConfig(),
+  ): Promise<ProviderLoginReply> => {
+    const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+      config,
+      allowWorkspaceScopedCurrent: true,
+    });
     assertAuthority();
     assertAuthority(config);
-    const resolved = resolveProviderChannelLoginChoice(provider, { config });
+    const resolved = resolveProviderChannelLoginChoice(provider, { config, metadataSnapshot });
     const providerLabel =
       resolved.status === "resolved" && resolved.choice.providerId === provider
         ? resolved.choice.providerLabel
@@ -399,9 +407,15 @@ export async function prepareProviderChannelLogin(params: {
       },
     };
   }
+  const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    allowWorkspaceScopedCurrent: params.workspaceDir === undefined,
+  });
   const resolution = resolveProviderChannelLoginChoice(match[1]?.trim() || undefined, {
     config: params.config,
     workspaceDir: params.workspaceDir,
+    metadataSnapshot,
   });
   if (resolution.status !== "resolved") {
     return { status: "reply", reply: buildProviderLoginChoicesReply(resolution) };
@@ -573,15 +587,19 @@ export async function runProviderChannelLoginFlow(params: {
     }
     assertCurrent();
   };
-  const browser = createProviderBrowserAuthSession({ signal: params.signal, openUrl });
   const readConfig = params.readConfig ?? (() => params.config);
+  const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+    config: readConfig(),
+    allowWorkspaceScopedCurrent: true,
+  });
+  const browser = createProviderBrowserAuthSession({ signal: params.signal, openUrl });
   const assertCurrent = () => {
     browser.assertCurrent();
     const config = readConfig();
     params.assertCurrent?.(config);
     const resolution = resolveProviderChannelLoginChoice(
       formatProviderLoginChoiceRef(params.choice),
-      { config },
+      { config, metadataSnapshot },
     );
     if (
       resolution.status !== "resolved" ||

@@ -74,6 +74,7 @@ import {
 import { readChatHistoryPage } from "../gateway/server-methods/chat-history-pages.js";
 import { enrichChatHistoryCompactionMarkers } from "../gateway/server-methods/chat-history-response-page.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
+import { prepareSessionPatchRuntimeMetadata } from "../gateway/server-methods/sessions-patch-model-selection.js";
 import { createGatewaySession } from "../gateway/session-create-service.js";
 import { performGatewaySessionReset } from "../gateway/session-reset-service.js";
 import {
@@ -457,7 +458,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const selected = await readEmbeddedHistorySession(opts);
     const { cfg, agentId: sessionAgentId, storePath, readSource, entry, canonicalKey } = selected;
     const sessionId = entry?.sessionId;
-    const runtimePluginsPrewarm = ensureEmbeddedHistoryRuntimePluginsLoaded({
+    const runtimePluginsPrewarm = await ensureEmbeddedHistoryRuntimePluginsLoaded({
       cfg,
       sessionAgentId,
     });
@@ -575,6 +576,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     await this.ready;
     await this.preparedModelRuntime.waitUntilReady();
     const cfg = getRuntimeConfig();
+    const metadataSnapshot = await prepareSessionPatchRuntimeMetadata({ cfg, patch: opts });
     const target = await resolveGatewaySessionStoreTargetInWorker({
       cfg,
       key: opts.key,
@@ -600,6 +602,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
           storeKey: primaryKey,
           agentId: target.agentId,
           patch: opts,
+          runtimeMetadataSnapshot: metadataSnapshot,
           loadGatewayModelCatalogSnapshot: () =>
             loadPreparedModelCatalogSnapshot({
               config: cfg,
@@ -622,6 +625,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       cfg,
       entry: applied.entry,
       preparedAcpMeta: acpMeta ?? null,
+      metadataSnapshot,
       storePath: target.storePath,
       targetAgentId: target.agentId,
     });

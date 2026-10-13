@@ -6,6 +6,7 @@ import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { buildMediaUnderstandingRegistry } from "../../media-understanding/provider-registry.js";
 import type { MediaUnderstandingProvider } from "../../media-understanding/types.js";
 import type { ImageDescriptionRequest } from "../../plugin-sdk/media-understanding.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { createAuthProfileStoreFixture } from "../auth-profiles/credential-fixtures.test-support.js";
 import { getApiKeyForModelCore, hasUsableCustomProviderApiKey } from "../model-auth.js";
 import { resolveImageToolFactoryAvailable } from "../openclaw-tools.media-factory-plan.js";
@@ -108,12 +109,13 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 describe("image custom provider auth regression", () => {
   let agentDir: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     agentDir = tempDirs.make("openclaw-image-auth-regression-");
     mediaRuntimeMock.optimizeImageBufferForWebMedia.mockClear();
     for (const key of USER_PROVIDER_AUTH_ENV_KEYS) {
       vi.stubEnv(key, "");
     }
+    await prepareBundledDiscoveryMode(process.env);
     testing.setProviderDepsForTest({
       buildProviderRegistry: () => new Map(),
       getMediaUnderstandingProvider: () => undefined,

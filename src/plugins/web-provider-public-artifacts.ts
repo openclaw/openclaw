@@ -167,18 +167,6 @@ export function resolveBundledWebFetchProvidersFromPublicArtifacts(
   });
 }
 
-export function resolveEnabledBundledWebSearchProvidersFromPublicArtifacts(
-  params: BundledWebProviderPublicArtifactParams & { onlyPluginIds: readonly string[] },
-): PluginWebSearchProviderEntry[] | null {
-  const candidates = resolveBundledRuntimeCandidates({
-    ...params,
-    contract: "webSearchProviders",
-  });
-  return candidates
-    ? resolveBundledExplicitWebSearchProvidersFromPublicArtifacts(candidates)
-    : null;
-}
-
 export function resolveBundledRuntimeWebFetchProvidersFromPublicArtifacts(
   params: BundledWebProviderPublicArtifactParams & {
     onlyPluginIds: readonly string[];

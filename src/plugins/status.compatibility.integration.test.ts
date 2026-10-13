@@ -2,10 +2,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { withEnv } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   cleanupPluginLoaderFixturesForTest,
-  loadOpenClawPlugins,
+  loadOpenClawPluginsForTest,
   makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
@@ -24,7 +24,7 @@ describe("plugin compatibility snapshot notices", () => {
     cleanupPluginLoaderFixturesForTest();
   });
 
-  it("reports actual hook-only registrations without activating cold plugin modules", () => {
+  it("reports actual hook-only registrations without activating cold plugin modules", async () => {
     const pluginDir = makePluginLoaderTempDir();
     const runtimeMarker = path.join(pluginDir, "runtime-loaded");
     const plugin = writePlugin({
@@ -40,24 +40,24 @@ describe("plugin compatibility snapshot notices", () => {
       },
     };
 
-    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       useNoBundledPlugins();
       const params = { config, workspaceDir: plugin.dir, env: process.env };
 
-      expect(buildPluginCompatibilitySnapshotNotices(params)).toStrictEqual([]);
+      expect(await buildPluginCompatibilitySnapshotNotices(params)).toStrictEqual([]);
       expect(fs.existsSync(runtimeMarker)).toBe(false);
 
       // Activate through the resolved runtime context like Gateway and CLI loads do:
       // the load identity includes the resolved physical sources, and the snapshot
       // path only reuses an active registry whose identity matches exactly.
-      const registry = loadOpenClawPlugins(
+      const registry = loadOpenClawPluginsForTest(
         buildPluginRuntimeLoadOptions(resolvePluginRuntimeLoadContext(params), { cache: false }),
       );
       expect(fs.existsSync(runtimeMarker)).toBe(true);
       expect(registry.typedHooks).toEqual([
         expect.objectContaining({ pluginId: plugin.id, hookName: "message_received" }),
       ]);
-      expect(buildPluginCompatibilitySnapshotNotices(params)).toEqual([
+      expect(await buildPluginCompatibilitySnapshotNotices(params)).toEqual([
         expect.objectContaining({ pluginId: plugin.id, code: "hook-only" }),
       ]);
     });

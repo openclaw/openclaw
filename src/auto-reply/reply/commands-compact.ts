@@ -17,7 +17,7 @@ import {
   resolveContextConfigProviderForRuntime,
 } from "../../agents/openai-routing.js";
 import { resolveOwnerPromptNumbers } from "../../agents/owner-display.js";
-import { resolveManualCompactionCliTarget } from "../../agents/session-runtime-compat.js";
+import { resolveManualCompactionCliTargetAsync } from "../../agents/session-runtime-compat.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -307,7 +307,7 @@ export async function handleCompactCommand(
   if (params.sessionStore) {
     params.sessionStore[params.sessionKey] = prepared.entry;
   }
-  const compactionCliTarget = resolveManualCompactionCliTarget({
+  const compactionCliTarget = await resolveManualCompactionCliTargetAsync({
     provider: params.provider,
     entry: prepared.entry,
     cfg: params.cfg,

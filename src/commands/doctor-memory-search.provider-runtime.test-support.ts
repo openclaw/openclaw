@@ -42,7 +42,7 @@ type ProviderRuntimeDoctorTestParams = {
 function configureProviderHealth(params: ProviderRuntimeDoctorTestParams, health: MemoryHealth) {
   const close = vi.fn().mockResolvedValue(undefined);
   params.stubMemorySearchConfig("none");
-  vi.mocked(resolveActiveMemoryBackendConfig).mockReturnValue({
+  vi.mocked(resolveActiveMemoryBackendConfig).mockResolvedValue({
     backend: "provider-runtime",
     providerId: "records",
   });

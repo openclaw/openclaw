@@ -17,7 +17,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import {
   loadAndActivateRootPluginRegistry,
-  loadPluginRegistryHandle,
+  loadPluginRegistryHandleAsync,
   resolveCompatibleRuntimePluginRegistry,
 } from "./loader.js";
 import {
@@ -140,7 +140,7 @@ it.each([
       ...(explicit.subagent ? { subagent: supplied.subagent } : {}),
     },
   };
-  const read = async (registry: ReturnType<typeof loadPluginRegistryHandle>) => {
+  const read = async (registry: Awaited<ReturnType<typeof loadPluginRegistryHandleAsync>>) => {
     const tool = registry.tools[0]?.factory({ config: options.config });
     if (!tool || Array.isArray(tool)) {
       throw new Error("expected one runtime owner probe tool");
@@ -160,11 +160,11 @@ it.each([
     expect(resolveRuntimeModule).not.toHaveBeenCalled();
     return;
   }
-  let previous: ReturnType<typeof loadPluginRegistryHandle> | undefined;
+  let previous: Awaited<ReturnType<typeof loadPluginRegistryHandleAsync>> | undefined;
   for (const owner of ["gateway-a", "gateway-b"]) {
     const donor = createDonor(owner);
     setActivePluginRegistry(donor.registry, owner, "gateway-bindable");
-    const registry = loadPluginRegistryHandle(options);
+    const registry = await loadPluginRegistryHandleAsync(options);
     expect(donor.reads.nodes).not.toHaveBeenCalled();
     expect(donor.reads.subagent).not.toHaveBeenCalled();
     expect(getGatewayContextResolver(getPluginRegistryRuntime(registry)!)).toBe(
@@ -180,7 +180,7 @@ it.each([
     });
     expect(donor.reads.nodes.mock.calls.length > 0).toBe(!explicit.nodes);
     expect(donor.reads.subagent.mock.calls.length > 0).toBe(!explicit.subagent);
-    expect(loadPluginRegistryHandle(options)).toBe(registry);
+    expect(await loadPluginRegistryHandleAsync(options)).toBe(registry);
     if (previous) {
       expect(registry === previous).toBe(explicit.nodes && explicit.subagent);
     }

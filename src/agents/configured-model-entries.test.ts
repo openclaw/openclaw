@@ -1,8 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { useProviderCatalogMetadata } from "../plugin-sdk/test-helpers/provider-catalog.js";
 import {
   collectConfiguredCatalogModels,
   resolveConfiguredModelEntries,
 } from "./configured-model-entries.js";
+
+useProviderCatalogMetadata(
+  new URL("../../extensions/google", import.meta.url),
+  new URL("../../extensions/openai", import.meta.url),
+  new URL("../../extensions/codex", import.meta.url),
+  new URL("../../extensions/ollama", import.meta.url),
+  new URL("../../extensions/kilocode", import.meta.url),
+);
 
 describe("resolveConfiguredModelEntries", () => {
   it("collects authored catalog candidates with scoped aliases and literal provider declarations", () => {

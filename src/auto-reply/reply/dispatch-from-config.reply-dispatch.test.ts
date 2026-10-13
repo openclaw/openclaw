@@ -166,7 +166,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     diagnosticMocks.logSessionStateChange.mockReset();
     diagnosticMocks.markDiagnosticSessionProgress.mockReset();
     runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReset();
-    runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(
+    runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockResolvedValue(
       runtimePluginMocks.pluginRegistry,
     );
     resetPluginTtsAndThreadMocks();

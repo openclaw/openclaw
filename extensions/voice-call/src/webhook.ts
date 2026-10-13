@@ -267,17 +267,26 @@ export class VoiceCallWebhookServer {
   private async initializeMediaStreaming(): Promise<void> {
     const streaming = this.config.streaming;
     const pluginConfig = this.fullConfig ?? this.coreConfig ?? undefined;
-    const { getRealtimeTranscriptionProvider, listRealtimeTranscriptionProviders } =
+    const { getRealtimeTranscriptionProviderAsync, listRealtimeTranscriptionProvidersAsync } =
       await loadRealtimeTranscriptionRuntime();
+    const configuredProvider = streaming.provider
+      ? await getRealtimeTranscriptionProviderAsync(streaming.provider, pluginConfig)
+      : undefined;
+    const providers = streaming.provider
+      ? configuredProvider
+        ? [configuredProvider]
+        : []
+      : await listRealtimeTranscriptionProvidersAsync(
+          pluginConfig,
+          Object.keys(streaming.providers),
+        );
     const resolution = await resolveConfiguredCapabilityProviderAsync({
       configuredProviderId: streaming.provider,
       providerConfigs: streaming.providers,
       cfg: pluginConfig,
       cfgForResolve: pluginConfig ?? {},
-      getConfiguredProvider: (providerId) =>
-        getRealtimeTranscriptionProvider(providerId, pluginConfig),
-      listProviders: () =>
-        listRealtimeTranscriptionProviders(pluginConfig, Object.keys(streaming.providers)),
+      getConfiguredProvider: () => configuredProvider,
+      listProviders: () => providers,
       resolveProviderConfig: ({ provider, cfg, rawConfig }) =>
         provider.resolveConfig?.({ cfg, rawConfig }) ?? rawConfig,
       isProviderConfigured: ({ provider, cfg, providerConfig }) =>

@@ -2,6 +2,7 @@ import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
+  useProviderCatalogMetadata,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { describe, expect, it, vi } from "vitest";
@@ -14,6 +15,8 @@ import {
   buildStepFunPlanProvider,
   buildStepFunProvider,
 } from "./provider-catalog.js";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 function registerStepFun() {
   return registerProviderPlugin({ plugin: stepfunPlugin, id: "stepfun", name: "StepFun" });

@@ -2,8 +2,11 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
-import { setAuthProfileOrder } from "../agents/auth-profiles/profiles.js";
-import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
+import {
+  resolveAuthProfileDatabasePath,
+  writePersistedAuthProfileStateRaw,
+  writePersistedAuthProfileStoreRaw,
+} from "../agents/auth-profiles/sqlite.js";
 import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
 import * as providerAuthPersistence from "../plugins/provider-auth-persistence.js";
 import type { ProviderPlugin } from "../plugins/types.js";
@@ -44,23 +47,39 @@ vi.mock("../plugins/setup-registry.js", () => ({
   resolvePluginSetupProviderCore: () => undefined,
   resolvePluginSetupRegistry: () => ({ providers: [] }),
 }));
-vi.mock("../plugins/providers.runtime.js", () => ({
-  resolvePluginProvidersCore: () =>
-    [
-      {
-        id: "openai",
-        label: "OpenAI",
-        auth: [
-          {
-            id: "oauth",
-            label: "OAuth",
-            kind: "oauth",
-            run: mocks.runAuth,
-          },
-        ],
-      },
-    ] satisfies ProviderPlugin[],
-}));
+// mock-isolation: Auth callbacks use synthetic providers while retaining metadata preparation.
+vi.mock("../plugins/providers.runtime.js", async () => {
+  const { resolvePluginMetadataSnapshotAsync } =
+    await import("../plugins/plugin-metadata-snapshot.js");
+  return {
+    resolvePluginProvidersCoreAsync: async (
+      params: Parameters<
+        typeof import("../plugins/providers.runtime.js").resolvePluginProvidersCoreAsync
+      >[0],
+    ) => {
+      // Keep the real async resolver's metadata preparation before auth callbacks.
+      await resolvePluginMetadataSnapshotAsync({
+        config: params.config ?? {},
+        env: params.env ?? process.env,
+        workspaceDir: params.workspaceDir,
+      });
+      return [
+        {
+          id: "openai",
+          label: "OpenAI",
+          auth: [
+            {
+              id: "oauth",
+              label: "OAuth",
+              kind: "oauth",
+              run: mocks.runAuth,
+            },
+          ],
+        },
+      ] satisfies ProviderPlugin[];
+    },
+  };
+});
 
 function makeStdinInteractive(): () => void {
   // Piped stdin has no own isTTY property; the fixture owns only its temporary override.
@@ -145,13 +164,15 @@ describe("models auth login owner integration", () => {
           auth: { order: { openai: [STALE_PROFILE_ID] } },
         });
         writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env: state.env });
-        expect(
-          await setAuthProfileOrder({
-            agentDir: state.agentDir(),
-            provider: "openai",
-            order: [STALE_PROFILE_ID],
-          }),
-        ).not.toBeNull();
+        // Seed the existing order without preparing discovery before the CLI runs.
+        writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, state.agentDir());
+        writePersistedAuthProfileStateRaw(
+          { version: 1, order: { openai: [STALE_PROFILE_ID] } },
+          state.agentDir(),
+        );
+        expect(loadPersistedAuthProfileStore(state.agentDir())?.order?.openai).toEqual([
+          STALE_PROFILE_ID,
+        ]);
         restoreStdin = makeStdinInteractive();
         const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
         const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);

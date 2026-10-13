@@ -1,6 +1,7 @@
 import { promoteAuthProfileInOrder } from "../../agents/auth-profiles/profiles.js";
-import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { resolvePreparedProviderIdForAuth as resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { ProviderCredentialsSavedError } from "../../shared/provider-auth-result.js";
 
 export async function promotePersistedAuthProfile(params: {
@@ -11,18 +12,19 @@ export async function promotePersistedAuthProfile(params: {
   assertCurrent?: () => void;
 }): Promise<void> {
   const cfg = params.config;
-  const providerAuthKey = resolveProviderIdForAuth(params.provider, { config: cfg });
+  const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({ config: cfg });
+  const aliases = { config: cfg, metadataSnapshot };
+  const providerAuthKey = resolveProviderIdForAuth(params.provider, aliases);
   const configuredOrder = Object.entries(cfg.auth?.order ?? {}).find(
     ([orderProvider, profileIds]) =>
-      profileIds.length > 0 &&
-      resolveProviderIdForAuth(orderProvider, { config: cfg }) === providerAuthKey,
+      profileIds.length > 0 && resolveProviderIdForAuth(orderProvider, aliases) === providerAuthKey,
   )?.[1];
   const order =
     configuredOrder ??
     Object.entries(cfg.auth?.profiles ?? {})
       .filter(
         ([, profile]) =>
-          resolveProviderIdForAuth(profile.provider, { config: cfg, storedCredential: true }) ===
+          resolveProviderIdForAuth(profile.provider, { ...aliases, storedCredential: true }) ===
           providerAuthKey,
       )
       .map(([profileId]) => profileId);

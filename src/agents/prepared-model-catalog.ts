@@ -513,19 +513,31 @@ export async function loadProviderScopedThinkingCatalog(params: {
         ? (await materializeRequestedModelCatalog(owner, true, undefined)).modelCatalog
         : { entries: [], routeVariants: [] };
       const agentId = params.agentId ?? resolveAmbientOwnerAgentId(params.config);
+      const workspaceDir =
+        params.workspaceDir ??
+        resolveAgentWorkspaceDir(params.config, agentId) ??
+        resolveDefaultAgentWorkspaceDir();
+      let manifestPlugins = owner?.metadataSnapshot;
+      if (!manifestPlugins) {
+        const { resolvePluginMetadataSnapshotAsync } =
+          await import("../plugins/plugin-metadata-snapshot.js");
+        manifestPlugins = await resolvePluginMetadataSnapshotAsync({
+          config: params.config,
+          workspaceDir,
+          allowWorkspaceScopedCurrent: true,
+        });
+      }
       const { augmentModelCatalogWithAgentHarness } = await import("./harness/model-catalog.js");
       snapshot = await augmentModelCatalogWithAgentHarness({
         cfg: params.config,
         agentId,
         agentDir: params.agentDir ?? resolveAgentDir(params.config, agentId),
-        workspaceDir:
-          params.workspaceDir ??
-          resolveAgentWorkspaceDir(params.config, agentId) ??
-          resolveDefaultAgentWorkspaceDir(),
+        workspaceDir,
         defaultProvider: params.provider,
         defaultModel: `${params.provider}/${params.model}`,
         agentRuntime: params.agentRuntime,
         snapshot: catalog,
+        manifestPlugins,
       });
     }
   }

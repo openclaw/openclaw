@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ClawHubRequestError } from "../../infra/clawhub-client.js";
 import { fetchClawHubPromotion, type ClawHubPromotion } from "../../infra/clawhub-promotions.js";
 import { markPromotionSlugsNotified, recordPromotionClaim } from "../../infra/promotions-feed.js";
+import { prepareBundledDiscoveryModeNative } from "../../plugins/bundled-discovery-state.native.js";
 import { enablePluginWithCapabilityConsent } from "../../plugins/enable.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import { applyAuthChoiceLoadedPluginProvider } from "../../plugins/provider-auth-choice.js";
@@ -104,6 +105,7 @@ function requireUnchangedClaimContract(
 type ResolvedAuthChoice = ReturnType<typeof resolveAuthChoice>;
 
 function resolveManifestPluginPackageNames(pluginId: string, cfg: OpenClawConfig): string[] {
+  prepareBundledDiscoveryModeNative();
   const snapshot = loadManifestMetadataSnapshot({ config: cfg });
   return [
     ...new Set(

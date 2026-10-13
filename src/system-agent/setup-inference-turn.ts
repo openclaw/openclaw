@@ -292,7 +292,7 @@ export async function loadSetupInferencePluginGeneration(params: {
         ...(index ? { index } : {}),
       }),
     };
-    const pluginRegistry = withPluginRuntimeGenerationScope(generation, () =>
+    const pluginRegistry = await withPluginRuntimeGenerationScope(generation, () =>
       loadAgentRuntimePluginRegistryHandle({
         config: params.config,
         workspaceDir: params.workspaceDir,
@@ -301,9 +301,6 @@ export async function loadSetupInferencePluginGeneration(params: {
         selections: [params.selection],
       }),
     );
-    if (!pluginRegistry) {
-      throw new Error(`Could not load the ${params.selection.runtime} runtime plugin.`);
-    }
     return { ...generation, pluginRegistry };
   });
 }

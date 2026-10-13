@@ -52,7 +52,7 @@ vi.mock("../plugins/memory-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/memory-runtime.js")>()),
   getActiveMemorySearchManagerCore: fixture.memoryManager,
   // The injected Memory Core manager uses the legacy manager contract.
-  isActiveMemoryProviderNative: () => false,
+  isActiveMemoryProviderNative: async () => false,
 }));
 
 vi.mock("../gateway/call.js", async (importOriginal) => ({

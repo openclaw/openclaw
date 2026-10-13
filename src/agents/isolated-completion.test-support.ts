@@ -91,7 +91,13 @@ vi.mock("./model-auth.js", () => ({
   hasAvailableAuthForProvider: isolatedCompletionMocks.hasAvailableAuthForProvider,
 }));
 // mock-isolation: Runtime admission uses fixture leases, never host registry or credential state.
-vi.mock("./prepared-model-runtime.js", () => ({
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
+  resolvePluginMetadataSnapshotAsync: async () =>
+    createEmptyPluginMetadataSnapshot("/tmp/workspace"),
+}));
+vi.mock("./prepared-model-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./prepared-model-runtime.js")>()),
   acquireAgentRunPreparedModelRuntime: isolatedCompletionMocks.acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime: isolatedCompletionMocks.acquireAgentRunPreparedModelRuntime,
 }));

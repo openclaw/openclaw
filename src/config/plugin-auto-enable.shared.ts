@@ -467,7 +467,9 @@ export function resolvePluginAutoEnableManifestRegistry(params: {
       allowWorkspaceScopedSnapshot: true,
       requireDefaultDiscoveryContext: true,
     });
-    if (candidate?.policyHash === resolveInstalledPluginIndexPolicyHash(params.config)) {
+    if (
+      candidate?.policyHash === resolveInstalledPluginIndexPolicyHash(params.config, params.env)
+    ) {
       snapshot = candidate;
     }
   }

@@ -12,10 +12,14 @@ vi.mock("../agents/embedded-agent.js", () => ({
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
 
-vi.mock("../agents/prepared-model-catalog.js", async () => {
+vi.mock("../agents/prepared-model-catalog.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/prepared-model-catalog.js")>();
   const { resolveAgentDir, resolveAgentWorkspaceDir, resolveDefaultAgentId } =
     await vi.importActual<typeof import("../agents/agent-scope.js")>("../agents/agent-scope.js");
+  const { createPluginMetadataSnapshotFixture } =
+    await import("../plugins/plugin-metadata.test-support.js");
   return {
+    ...actual,
     readPreparedModelCatalog,
     loadPreparedModelCatalogSnapshot: vi.fn(async (params) => ({
       entries: (await readPreparedModelCatalog(params)) ?? [],
@@ -41,6 +45,7 @@ vi.mock("../agents/prepared-model-catalog.js", async () => {
           agentDir: params.agentDir ?? resolveAgentDir(config, agentId),
           workspaceDir: params.workspaceDir ?? resolveAgentWorkspaceDir(config, agentId),
           config,
+          metadataSnapshot: createPluginMetadataSnapshotFixture(),
           modelCatalog: {
             entries: (await readPreparedModelCatalog(params)) ?? [],
             routeVariants: [],

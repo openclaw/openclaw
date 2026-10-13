@@ -8,8 +8,17 @@ import { MIN_AUDIO_FILE_BYTES } from "../../../../src/media-understanding/defaul
 import type { MediaUnderstandingProvider } from "../../../../src/media-understanding/types.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
+// mock-isolation: Explicit media fixtures supply providers without loading installed capabilities.
 vi.mock("../../../../src/plugins/capability-provider-runtime.js", () => ({
   resolvePluginCapabilityProviders: () => [],
+  preparePluginCapabilityProviderResolutionAsync: async () => ({
+    load: undefined,
+    resolve: () => [],
+  }),
+  preparePluginCapabilityProviderLookupAsync: async () => ({
+    load: undefined,
+    resolve: () => undefined,
+  }),
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

@@ -97,7 +97,12 @@ export async function prepareFullCatalogFacts(
     });
     const modelCatalog =
       catalogMode === "live" && options.includeNative !== false
-        ? await augmentPreparedModelCatalogWithAgentHarness({ input, snapshot, pluginRegistry })
+        ? await augmentPreparedModelCatalogWithAgentHarness({
+            input,
+            snapshot,
+            pluginRegistry,
+            pluginMetadataSnapshot,
+          })
         : snapshot;
     const providerStaticModels =
       input.config.models?.mode === "replace"

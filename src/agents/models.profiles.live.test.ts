@@ -1712,7 +1712,13 @@ describeLive("live models (profile keys)", () => {
           ) {
             continue;
           }
-          if (!isHighSignalLiveModelRef({ provider: model.provider, id: model.id, config: cfg })) {
+          if (
+            !(await isHighSignalLiveModelRef({
+              provider: model.provider,
+              id: model.id,
+              config: cfg,
+            }))
+          ) {
             continue;
           }
         }

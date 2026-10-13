@@ -142,7 +142,7 @@ function createFixture(options: { manifestOwner?: boolean } = {}) {
         ...overrides,
       }),
     );
-  return { cfg, defaults, custom, store, entry, inventory, registry, select };
+  return { cfg, defaults, custom, store, entry, inventory, registry, metadataSnapshot, select };
 }
 
 function createRestrictedFixture() {
@@ -164,6 +164,7 @@ function createRestrictedFixture() {
     assertCurrent: () => {},
     modelPolicy: prepareOperatorModelPolicy({
       cfg: fixture.cfg,
+      manifestPlugins: fixture.metadataSnapshot,
       policy: { sourceAgent: "main", deny: ["custom/child"] },
     }),
   });

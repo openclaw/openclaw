@@ -5,9 +5,10 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createAgentToolResultMiddlewareRunner } from "../agents/harness/tool-result-middleware.js";
 import { withEnv } from "../test-utils/env.js";
 import { createHookRunner } from "./hooks.js";
+import { preparePluginMetadataMachineState } from "./installed-plugin-index-record-state.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
-import { loadOpenClawPlugins } from "./loader.js";
 import {
+  loadOpenClawPluginsForTest,
   EMPTY_PLUGIN_SCHEMA,
   makePluginLoaderTempDir,
   mkdirSafe,
@@ -70,7 +71,7 @@ const THROWING_SETUP_ENTRY_SOURCE = `module.exports = {
 };`;
 
 function loadSetupPlugins(params: { paths: string[]; ids: string[]; enabled?: boolean }) {
-  return loadOpenClawPlugins({
+  return loadOpenClawPluginsForTest({
     cache: false,
     channelPluginLoadIntent: "setup",
     config: {
@@ -142,7 +143,7 @@ function loadBuiltArtifactScenario(scenario: BuiltArtifactScenario) {
   }
 
   const load = () =>
-    loadOpenClawPlugins({
+    loadOpenClawPluginsForTest({
       cache: false,
       preferBuiltPluginArtifacts: true,
       ...(scenario.origin === "bundled" ? { onlyPluginIds: [scenario.id] } : {}),
@@ -173,7 +174,7 @@ async function loadSourceExternalArtifactScenario(params: {
   packageLocalBody: string;
   rootBuildBody?: string;
   runtimeOverlayBody?: string;
-  loadOptions?: Parameters<typeof loadOpenClawPlugins>[0];
+  loadOptions?: Parameters<typeof loadOpenClawPluginsForTest>[0];
   sourceSelection?: "file" | "directory" | "symlink" | "plugin-mount" | "parent-mount";
   fromInstalledIndex?: boolean;
 }) {
@@ -251,6 +252,7 @@ async function loadSourceExternalArtifactScenario(params: {
           OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: undefined,
         },
         () => {
+          preparePluginMetadataMachineState({});
           let index = params.fromInstalledIndex ? loadInstalledPluginIndex({ config }) : undefined;
           if (index && mountPoint) {
             // Installed roots can retain lexical aliases while mount facts are canonical.
@@ -264,7 +266,7 @@ async function loadSourceExternalArtifactScenario(params: {
           const manifestRegistry = index
             ? loadPluginManifestRegistryForInstalledIndex({ index, config })
             : loadPluginManifestRegistryCore({ config });
-          return loadOpenClawPlugins({
+          return loadOpenClawPluginsForTest({
             cache: false,
             preferBuiltPluginArtifacts: true,
             onlyPluginIds: [id],
@@ -313,7 +315,7 @@ ${channelPluginSource({
         },
       });
 
-      const scopedSetupRegistry = loadOpenClawPlugins({
+      const scopedSetupRegistry = loadOpenClawPluginsForTest({
         cache: false,
         config: {
           plugins: {
@@ -368,7 +370,7 @@ ${channelPluginSource({
       "utf-8",
     );
 
-    const scopedSetupRegistry = loadOpenClawPlugins({
+    const scopedSetupRegistry = loadOpenClawPluginsForTest({
       cache: false,
       config: {
         channels: {
@@ -562,7 +564,7 @@ ${channelPluginSource({
       expectBundledFullRuntimeLoaded,
     }: SetupEntryScenario) => {
       const built = createSetupEntryChannelPluginFixture(fixture);
-      const registry = loadOpenClawPlugins({
+      const registry = loadOpenClawPluginsForTest({
         cache: false,
         ...(loadOptions?.setupIntent ? { channelPluginLoadIntent: "setup" as const } : {}),
         config: {
@@ -1090,7 +1092,7 @@ ${channelPluginSource({
       return;
     }
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadOpenClawPluginsForTest({
       cache: false,
       preferBuiltPluginArtifacts: true,
       config: {

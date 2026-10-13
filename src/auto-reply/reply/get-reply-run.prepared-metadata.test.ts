@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { getPreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime-generation-scope.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
@@ -33,6 +34,7 @@ it("keeps the admitted Gateway generation active through a different reply works
   const config = {};
   const workspaceDir = "/tmp/openclaw-reply-workspace";
   const gatewayWorkspaceDir = "/tmp/openclaw-configured-workspace";
+  await prepareBundledDiscoveryMode();
   const metadataSnapshot = {
     index: { plugins: [] },
     pluginIds: undefined,

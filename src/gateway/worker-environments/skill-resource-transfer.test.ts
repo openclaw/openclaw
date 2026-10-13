@@ -807,7 +807,7 @@ describe("remote-exec skill resources", () => {
         expect(resources!.snapshot.skills.map((skill) => skill.name)).toEqual(["source"]);
         expect(resources!.snapshot.resolvedSkills?.map((skill) => skill.name)).toEqual(["source"]);
         expect(resources!.snapshot.prompt).not.toContain("stale");
-        const restoreEnv = applySkillEnvOverridesFromSnapshot({
+        const restoreEnv = await applySkillEnvOverridesFromSnapshot({
           snapshot: resources!.snapshot,
           config: {
             skills: {

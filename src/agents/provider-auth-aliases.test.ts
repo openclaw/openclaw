@@ -3,6 +3,7 @@
  * Verifies plugin metadata aliases, origin priority, trust, and cache behavior.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { buildPluginMetadataProviderFacts } from "../plugins/plugin-metadata-provider-facts.js";
 import { buildDeclaredProviderOwnerIndex } from "../plugins/provider-owner-index.js";
 
@@ -66,7 +67,10 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { resolveAuthProfileOrderWithMetadata } from "./auth-profiles/order.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
-import { resolveProviderAuthAliasMap, resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+import {
+  resolveProviderAuthAliasMap,
+  resolvePreparedProviderIdForAuth as resolveProviderIdForAuth,
+} from "./provider-auth-aliases.js";
 
 function createPluginManifestRecord(
   plugin: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id" | "origin">,
@@ -252,7 +256,7 @@ describe("provider auth aliases", () => {
     expect(resolveProviderIdForAuth("arcee", { ...params, storedCredential: true })).toBe("arcee");
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     clearPluginMetadataLifecycleCaches();
     pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReset();
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReset();
@@ -265,6 +269,10 @@ describe("provider auth aliases", () => {
       snapshot: { plugins: [] },
     });
     pluginRegistryMocks.loadPluginMetadataSnapshot.mockClear();
+    await Promise.all([
+      preparePluginMetadataMachineStateAsync({}),
+      preparePluginMetadataMachineStateAsync({ env: {} }),
+    ]);
   });
 
   it("preserves alias precedence, normalized collisions and eligible declaration order", async () => {
@@ -397,9 +405,10 @@ describe("provider auth aliases", () => {
     ).toBe("first-provider");
   });
 
-  it("does not reuse implicit auth aliases across fresh operation owners", () => {
+  it("does not reuse implicit auth aliases across fresh operation owners", async () => {
     const config = {};
     const env = { HOME: "/home/owner-test" };
+    await preparePluginMetadataMachineStateAsync({ env });
     const firstOwner = createPluginCache();
     const secondOwner = createPluginCache();
     const snapshot = (target: string) =>

@@ -174,9 +174,16 @@ describe("acquireEffectiveToolInventoryRuntimeModelContext", () => {
         compat: { supportsTools: true },
       },
     });
-    expect(resolveConfiguredModelCompat({ cfg, modelProvider: provider, modelId })).toEqual({
-      supportsTools: true,
-    });
+    expect(
+      acquired.run((context) =>
+        resolveConfiguredModelCompat({
+          cfg,
+          modelProvider: provider,
+          modelId,
+          manifestPlugins: context.manifestPlugins,
+        }),
+      ),
+    ).toEqual({ supportsTools: true });
     await acquired[Symbol.asyncDispose]();
     expect(runtimeMocks.acquire).not.toHaveBeenCalled();
     expect(runtimeMocks.resolveModelAsync).not.toHaveBeenCalled();

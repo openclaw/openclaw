@@ -6,7 +6,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createProviderModelCatalogIdNormalizer } from "../plugins/provider-model-routes.js";
 import {
-  resolveProviderIdForAuth,
+  resolvePreparedProviderIdForAuth as resolveProviderIdForAuth,
   type ProviderAuthAliasLookupParams,
 } from "./provider-auth-aliases.js";
 

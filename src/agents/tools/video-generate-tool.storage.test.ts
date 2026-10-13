@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.js";
+import { preparePluginMetadataMachineStateAsync } from "../../plugins/installed-plugin-index-record-state.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { resolveVideoGenerationModeCapabilities } from "../../video-generation/capabilities.js";
 import type {
@@ -119,6 +120,7 @@ describe("video generation invocation QA", () => {
     const providerOptions = { seed: 17, draft: true };
 
     await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(root, "state") }, async () => {
+      await preparePluginMetadataMachineStateAsync({});
       const tool = requireVideoTool(
         createVideoGenerateTool({
           config,
@@ -228,6 +230,7 @@ describe("video generation invocation QA", () => {
     config.agents!.defaults!.mediaMaxMb = savedVideo.byteLength / (1024 * 1024);
 
     await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(root, "state") }, async () => {
+      await preparePluginMetadataMachineStateAsync({});
       const tool = requireVideoTool(
         createVideoGenerateTool({
           config,

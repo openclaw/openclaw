@@ -15,7 +15,11 @@ import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.
 
 vi.mock("./provider-hook-runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./provider-hook-runtime.js")>();
-  return { ...actual, resolveProviderRuntimePlugin: () => undefined };
+  return {
+    ...actual,
+    resolveProviderRuntimePlugin: () => undefined,
+    resolveProviderRuntimePluginAsync: async () => undefined,
+  };
 });
 
 function makeCodexManifestEnv(): NodeJS.ProcessEnv {

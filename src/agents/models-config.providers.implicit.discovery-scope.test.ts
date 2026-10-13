@@ -3,6 +3,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type { ModelProviderConfig } from "../config/types.models.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.js";
 import {
   createPluginManifestRecordFixture,
@@ -155,6 +156,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
           .map((key) => [key, undefined]),
       ),
     });
+    await preparePluginMetadataMachineStateAsync({ env: state.env });
     // Missing explicit home fields must never reach the operator's OS home.
     // The sentinel keeps a failing isolation regression inside this disposable fixture.
     ambientHome = vi.spyOn(os, "homedir").mockReturnValue(state.path("ambient-home-sentinel"));

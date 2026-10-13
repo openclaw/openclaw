@@ -83,7 +83,7 @@ describe("subagent registry context cleanup", () => {
         "core",
       );
       vi.mocked(getRuntimeConfig).mockReturnValue({});
-      vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(registry);
+      vi.mocked(loadAgentRuntimePluginRegistryHandle).mockResolvedValue(registry);
       vi.mocked(resolveContextEngine).mockImplementation(actualResolveContextEngine);
       vi.mocked(loadSubagentSessionEntry).mockResolvedValue({
         sessionId: "swept-session",
@@ -179,7 +179,7 @@ describe("subagent registry context cleanup", () => {
     async (boundary) => {
       const error = new Error("cleanup failed: Authorization: Bearer synthetic-cleanup-token");
       vi.mocked(getRuntimeConfig).mockReturnValue({});
-      vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(() => {
+      vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(async () => {
         throw error;
       });
       const warn = vi.fn();
@@ -290,7 +290,7 @@ describe("subagent registry context cleanup", () => {
     let engine: ContextEngine | undefined;
     let current = true;
     vi.mocked(getRuntimeConfig).mockReturnValue({});
-    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(registry);
+    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockResolvedValue(registry);
     vi.mocked(resolveContextEngine).mockImplementation(async (cfg, options) => {
       engine = await actualResolveContextEngine(cfg, options);
       resolutionStarted.resolve();

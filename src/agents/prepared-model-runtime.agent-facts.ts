@@ -1,6 +1,7 @@
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { nativePluginBindings } from "../plugins/loader-runtime-load.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { AgentCredentialMap } from "./agent-auth-credentials.js";
 import { discoverAuthStorageFacts } from "./agent-model-discovery.js";
 import { withAgentRosterFactsBatch } from "./agent-scope-config.js";
@@ -22,6 +23,7 @@ export async function prepareAgentFacts(
   assertCurrent: () => void,
   additionalProviderIds: readonly string[] = [],
   includeCredentialProviders = catalogMode === "live",
+  metadataSnapshot?: PluginMetadataSnapshot,
 ): Promise<PreparedModelRuntimeAgentBaseFacts> {
   const env = input.env ?? process.env;
   const preparedStore = await nativePluginBindings.authStore.prepareAuthProfileStoreForModelRuntime(
@@ -37,6 +39,7 @@ export async function prepareAgentFacts(
   assertCurrent();
   const authFacts = await discoverAuthStorageFacts(input.agentDir, {
     config: input.config,
+    metadataSnapshot,
     // Prepared owners consume only the already-published runtime auth generation. External CLI
     // hydration belongs to startup/control-plane and turn-time producers, never rebuilds.
     readOnly: true,

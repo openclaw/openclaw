@@ -6,6 +6,7 @@ import { formatSkillsForPromptCore } from "../skills/loading/skill-contract.js";
 import { prepareSkillsForPrompt } from "../skills/loading/skill-prompt-limits.js";
 import { createFixtureSkillEntry } from "../skills/test-support/test-helpers.js";
 import { composeSystemPromptWithHookContext } from "./embedded-agent-runner/run/attempt-thread-helpers.js";
+import { attachProviderRequestFactsFixture } from "./provider-request.test-support.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 
 const model: Model<"openai-completions"> = {
@@ -39,7 +40,11 @@ function request(session: string, reasoning = false, workspaceText = "Project in
     contextFiles: [{ path: "/tmp/project/AGENTS.md", content: workspaceText }],
   });
   return buildOpenAICompletionsParams(
-    { ...model, reasoning, compat: { supportsDeveloperRole: true } },
+    attachProviderRequestFactsFixture({
+      ...model,
+      reasoning,
+      compat: { supportsDeveloperRole: true },
+    }),
     {
       systemPrompt: composeSystemPromptWithHookContext({
         baseSystemPrompt,

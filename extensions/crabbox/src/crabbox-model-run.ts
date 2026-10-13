@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { parseModelRef } from "openclaw/plugin-sdk/model-ref-parse";
+import { parseModelRefAsync } from "openclaw/plugin-sdk/model-ref-parse";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import {
   runCommandWithTimeout,
@@ -59,7 +59,7 @@ export GIT_SSL_CAINFO="$egress_dir/ca.pem"
 }
 
 export async function runCrabboxModelCommand(params: CrabboxModelRunOptions): Promise<SpawnResult> {
-  const model = parseModelRef(params.model, "");
+  const model = await parseModelRefAsync(params.model, "", { config: params.config });
   if (!params.model.includes("/") || !model?.provider || !model.model) {
     throw new Error("--model must name an explicit provider/model");
   }

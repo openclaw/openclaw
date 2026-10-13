@@ -147,7 +147,7 @@ export function buildGoogleMusicGenerationProvider(): MusicGenerationProvider {
       // Lyria promises audio for successful Clip responses, but has returned
       // unblocked text-only payloads transiently. Never retry explicit stops.
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const client = createGoogleGenAI({
+        const client = await createGoogleGenAI({
           apiKey: auth.apiKey,
           httpOptions: {
             ...(configuredBaseUrl ? { baseUrl: configuredBaseUrl } : {}),

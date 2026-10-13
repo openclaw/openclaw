@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { attachPreparedProviderModelFixture } from "../provider-request.test-support.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -49,14 +50,14 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 let workspaceDir: string;
-const model = {
+const model = attachPreparedProviderModelFixture({
   ...testModel,
   id: "compaction-fixture",
   provider: "openai",
   baseUrl: "https://api.openai.com/v1",
   contextWindow: 128_000,
   maxTokens: 1_024,
-};
+});
 const summary = "The deployment checklist was reviewed. Compare the remaining options.";
 
 beforeAll(async () => {

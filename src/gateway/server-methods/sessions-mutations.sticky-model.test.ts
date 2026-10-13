@@ -485,9 +485,9 @@ describe("sessions.patch personal model-account ownership", () => {
       const connections = new Set([caller]);
       const requestContext = context(connections);
       const catalog = createDeferredCore<ReturnType<typeof catalogSnapshot>>();
-      const catalogEntered = createDeferredCore();
+      const catalogRequested = createDeferredCore();
       requestContext.loadGatewayModelCatalogSnapshot.mockImplementationOnce(() => {
-        catalogEntered.resolve();
+        catalogRequested.resolve();
         return catalog.promise;
       });
       const readCredential = vi.spyOn(userModelAccounts, "readUserModelAuthProfile");
@@ -518,10 +518,10 @@ describe("sessions.patch personal model-account ownership", () => {
       );
       try {
         await Promise.race([
-          catalogEntered.promise,
+          catalogRequested.promise,
           pending.then((response) => {
             throw new Error(
-              `Session patch completed before loading the model catalog: ${JSON.stringify({
+              `Session patch completed before requesting the model catalog: ${JSON.stringify({
                 loss,
                 ok: response[0],
                 error: response[2],

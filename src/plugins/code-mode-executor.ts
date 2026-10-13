@@ -5,18 +5,18 @@ import { normalizePluginsConfig } from "./config-state.js";
 import {
   hasManifestContractValue,
   isManifestPluginAvailableForControlPlane,
-  loadManifestMetadataSnapshot,
 } from "./manifest-contract-eligibility.js";
 import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
+import { resolvePluginMetadataSnapshotAsync } from "./plugin-metadata-snapshot.js";
 import { loadValidatedPublicSurfaceModule } from "./public-surface-loader.js";
 import { resolvePluginRootPublicSurfacePath } from "./public-surface-runtime.js";
 
 /** Explicit executor selection activates only its admitted manifest owner. */
-export function resolvePluginCodeModeExecutor(
+export async function resolvePluginCodeModeExecutor(
   executorId: CodeModeExecutor["id"],
   config?: OpenClawConfig,
-): CodeModeExecutor {
-  const snapshot = loadManifestMetadataSnapshot({ config });
+): Promise<CodeModeExecutor> {
+  const snapshot = await resolvePluginMetadataSnapshotAsync({ config });
   const normalizedConfig = normalizePluginsConfig(config?.plugins);
   const owners = snapshot.plugins.filter(
     (plugin) =>

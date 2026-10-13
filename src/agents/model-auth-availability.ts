@@ -237,6 +237,11 @@ export function createModelAuthAvailabilityResolver(
     env,
     metadataSnapshot: params.metadataSnapshot,
   });
+  const authAliasLookupParams = {
+    env,
+    workspaceDir: params.workspaceDir,
+    metadataSnapshot: params.metadataSnapshot,
+  };
   const synthetic = new Set(
     (params.syntheticAuthProviderRefs ?? []).map(normalizeProviderIdForAuth),
   );
@@ -251,6 +256,7 @@ export function createModelAuthAvailabilityResolver(
     primaryModel: resolveDefaultModelForAgent({
       cfg: params.cfg,
       agentId: params.agentId,
+      manifestPlugins: params.metadataSnapshot,
       allowManifestNormalization: false,
       allowPluginNormalization: false,
     }),
@@ -322,6 +328,7 @@ export function createModelAuthAvailabilityResolver(
     const resolution = prependAuthProfilePin(
       resolveAuthProfileOrderWithMetadata({
         cfg: readOnlyAuthConfig,
+        authAliasLookupParams,
         store: orderStore,
         provider: normalized,
         preferredProfile: preferredProfileId,
@@ -375,6 +382,7 @@ export function createModelAuthAvailabilityResolver(
         : { ...store, profiles: { ...store.profiles, [profileId]: credential } };
     const eligibility = resolveAuthProfileEligibility({
       cfg: readOnlyAuthConfig,
+      authAliasLookupParams,
       store: effectiveStore,
       provider: normalizeProvider(provider),
       profileId,
@@ -390,6 +398,7 @@ export function createModelAuthAvailabilityResolver(
       profileId !== undefined &&
       !resolveAuthProfileEligibility({
         cfg: readOnlyAuthConfig,
+        authAliasLookupParams,
         store: orderStore,
         provider: normalizeProvider(provider),
         profileId,
@@ -444,7 +453,14 @@ export function createModelAuthAvailabilityResolver(
     if (!allowCooldown && profileInCooldown(profileId, target)) {
       return false;
     }
-    if (isConfiguredAwsSdkAuthProfileForProvider({ cfg: params.cfg, provider, profileId })) {
+    if (
+      isConfiguredAwsSdkAuthProfileForProvider({
+        cfg: params.cfg,
+        authAliasLookupParams,
+        provider,
+        profileId,
+      })
+    ) {
       return modeAllowed(provider, target, "aws-sdk");
     }
     const storedCredential = store.profiles[profileId];
@@ -460,6 +476,7 @@ export function createModelAuthAvailabilityResolver(
   const hasMatchingProfileEvidence = (provider: string, profileId: string) => {
     const reason = resolveAuthProfileEligibility({
       cfg: params.cfg,
+      authAliasLookupParams,
       store,
       provider,
       profileId,

@@ -6,6 +6,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createAgentCleanupScope } from "../../agents/run-cleanup-timeout.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { validateConfigObject } from "../../config/validation.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as agentDatabaseDisposal from "../../state/openclaw-agent-db-disposal.js";
@@ -15,6 +17,15 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { runAuthProbes, withAuthProbeStateOwnership } from "./list.probe.js";
+
+async function runPreparedAuthProbes(params: Parameters<typeof runAuthProbes>[0]) {
+  const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+    config: params.cfg,
+    env: process.env,
+    workspaceDir: params.workspaceDir,
+  });
+  return withPluginRuntimeGenerationScope({ metadataSnapshot }, () => runAuthProbes(params));
+}
 
 const runner = vi.hoisted(() =>
   vi.fn<(params: { agentDir: string; abortSignal?: AbortSignal }) => Promise<{ text: string }>>(),
@@ -134,7 +145,7 @@ it("holds state ownership for an in-flight sibling after progress rejects the pr
   let operation: Promise<unknown> | undefined;
   try {
     operation = parent.track(() =>
-      runAuthProbes({
+      runPreparedAuthProbes({
         ...probeParams(state, cfg, signals, 2),
         onProgress(update) {
           expect(update.total).toBe(2);
@@ -196,7 +207,7 @@ it("retains the staged directory and releases state ownership when database disp
   const cleanup = createAgentCleanupScope();
   try {
     await expect(
-      cleanup.run(() => runAuthProbes(probeParams(state, cfg, signals, 1))),
+      cleanup.run(() => runPreparedAuthProbes(probeParams(state, cfg, signals, 1))),
     ).rejects.toMatchObject({ cause: original });
     expect(stagedDir).toContain("openclaw-auth-probe-");
     expect(fs.existsSync(stagedDir!)).toBe(true);

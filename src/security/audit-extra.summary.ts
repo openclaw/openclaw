@@ -277,6 +277,7 @@ export function collectSmallModelRiskFindings(params: {
     // differ per agent and provider override.
     const modelRef = parseModelRef(entry.id, "openai", {
       allowPluginNormalization: false,
+      allowManifestNormalization: false,
     });
     const sandboxMode = resolveSandboxConfigForAgent(params.cfg, agentId ?? undefined).mode;
     const agentTools = agentId ? resolveAgentConfig(params.cfg, agentId)?.tools : undefined;

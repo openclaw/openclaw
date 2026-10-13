@@ -3,6 +3,10 @@ import type { ModelCatalogSnapshot } from "../../agents/model-catalog.js";
 import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import { prepareSessionsPatchEntry, projectSessionsPatchEntry } from "../sessions-patch.js";
 import type { SessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
+import {
+  prepareSessionPatchAuthProfileProvider,
+  prepareSessionPatchRuntimeMetadata,
+} from "./sessions-patch-model-selection.js";
 
 export type SessionPatchCatalogResult = Result<ModelCatalogSnapshot, unknown>;
 
@@ -11,6 +15,16 @@ export function createSessionPatchCatalogPreparation(
   diagnostics?: SessionPatchDiagnostics,
 ) {
   const preparations = new Map<string, Promise<SessionPatchCatalogResult>>();
+  const authProviders = new Map<
+    string,
+    ReturnType<typeof prepareSessionPatchAuthProfileProvider>
+  >();
+  const prepareAuthProvider = (projection: Parameters<typeof projectSessionsPatchEntry>[0]) =>
+    getOrCreatePromise(
+      authProviders,
+      JSON.stringify([projection.agentId, projection.existingEntry?.authProfileOverride]),
+      () => prepareSessionPatchAuthProfileProvider(projection),
+    );
   const prepare = (agentId: string) =>
     getOrCreatePromise(preparations, agentId, async () => {
       const timing = diagnostics?.scope("catalog");
@@ -42,7 +56,7 @@ export function createSessionPatchCatalogPreparation(
       agentId: string;
       mode: "prepare" | "ordered";
       catalog?: SessionPatchCatalogResult;
-      projection: Parameters<typeof prepareSessionsPatchEntry>[0];
+      projection: Parameters<typeof projectSessionsPatchEntry>[0];
     }): Promise<
       | { kind: "model-catalog" }
       | { kind: "complete"; result: Awaited<ReturnType<typeof projectSessionsPatchEntry>> }
@@ -52,11 +66,16 @@ export function createSessionPatchCatalogPreparation(
           kind: "complete",
           result: await projectSessionsPatchEntry({
             ...params.projection,
+            preparedAuthProfileProvider: await prepareAuthProvider(params.projection),
             loadGatewayModelCatalogSnapshot: () => load(params.agentId),
           }),
         };
       }
-      const projection = await prepareSessionsPatchEntry(params.projection);
+      const projection = await prepareSessionsPatchEntry({
+        ...params.projection,
+        runtimeMetadataSnapshot: await prepareSessionPatchRuntimeMetadata(params.projection),
+        preparedAuthProfileProvider: await prepareAuthProvider(params.projection),
+      });
       if (projection.kind === "complete") {
         return projection;
       }

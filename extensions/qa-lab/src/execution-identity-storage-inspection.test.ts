@@ -12,6 +12,15 @@ import { createQaChannelTransport } from "./qa-channel-transport.js";
 import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 
+vi.mock("openclaw/plugin-sdk/model-ref-parse", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/model-ref-parse")>();
+  const resolver = await actual.prepareModelRefResolver({ manifestPlugins: [] });
+  return {
+    ...actual,
+    prepareModelRefResolver: async () => resolver,
+  };
+});
+
 function createGateway(stateDir: string) {
   return {
     baseUrl: "http://127.0.0.1:1",

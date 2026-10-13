@@ -1,6 +1,11 @@
-import { describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginTestRuntimeMetadata } from "../plugin-sdk/plugin-test-runtime.js";
 import { resolveSessionModelIdentityRef, resolveSessionModelRef } from "./session-model-ref.js";
+
+beforeEach(async () => {
+  await preparePluginTestRuntimeMetadata();
+});
 
 function modelConfig(primary: string, models?: Record<string, object>): OpenClawConfig {
   return {

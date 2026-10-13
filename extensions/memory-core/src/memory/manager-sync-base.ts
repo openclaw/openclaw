@@ -3,7 +3,6 @@ import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
-  resolveAgentDir,
   resolveUserPath,
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
@@ -16,17 +15,14 @@ import type {
   MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
-import {
+import type {
   resolveEmbeddingProviderIndexIdentity,
-  type EmbeddingProvider,
-  type EmbeddingProviderRuntime,
+  EmbeddingProvider,
+  EmbeddingProviderRuntime,
 } from "./embeddings.js";
 import type { MemoryIndexDatabase } from "./manager-database-context.js";
 import type { MemoryIndexEntry } from "./manager-index-preparation.js";
-import {
-  resolveMemoryPrimaryProviderRequest,
-  type MemoryProviderLifecycleState,
-} from "./manager-provider-state.js";
+import type { MemoryProviderLifecycleState } from "./manager-provider-state.js";
 import {
   resolveConfiguredScopeHash,
   resolveConfiguredSourcesForMeta,
@@ -421,16 +417,9 @@ export abstract class MemoryManagerSyncBase {
     return this.database.facts.hasSemanticChunks;
   }
 
-  protected resolveConfiguredIndexIdentity() {
-    if (this.settings.provider === "none") {
-      return undefined;
-    }
-    return resolveEmbeddingProviderIndexIdentity({
-      config: this.cfg,
-      agentDir: resolveAgentDir(this.cfg, this.agentId),
-      ...resolveMemoryPrimaryProviderRequest({ settings: this.settings }),
-    });
-  }
+  protected abstract readonly configuredIndexIdentity: Awaited<
+    ReturnType<typeof resolveEmbeddingProviderIndexIdentity>
+  >;
 
   protected resolveCurrentIndexIdentityState(params: {
     meta?: MemoryIndexMeta | null;
@@ -442,7 +431,7 @@ export abstract class MemoryManagerSyncBase {
     const hasProviderOverride = params.provider !== undefined;
     const configuredIndexIdentity =
       !hasProviderOverride && !this.provider && this.settings.provider !== "none"
-        ? this.resolveConfiguredIndexIdentity()
+        ? this.configuredIndexIdentity
         : undefined;
     // Dynamic defaults stay unknown until provider initialization. Plain status
     // must not reinterpret an undiscovered semantic model as keyword-only.

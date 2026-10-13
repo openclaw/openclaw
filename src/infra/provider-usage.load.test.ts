@@ -1,5 +1,7 @@
 // Covers provider usage summary loading across auth and plugin paths.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { ProviderResolveUsageAuthContext } from "../plugins/types.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -20,6 +22,9 @@ const resolveProviderUsageSnapshotWithPluginMock = getProviderUsageSnapshotWithP
 describe("provider-usage.load", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync").mockResolvedValue(
+      createPluginMetadataSnapshotFixture(),
+    );
     resetProviderUsageSnapshotWithPluginMock();
   });
   afterEach(() => vi.useRealTimers());

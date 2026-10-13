@@ -16,7 +16,7 @@ import {
 } from "../../utils/message-channel.js";
 import { createDedupeCache } from "../dedupe.js";
 import { formatErrorMessage } from "../errors.js";
-import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
+import { resolveOutboundChannelPluginAsync } from "./channel-resolution.js";
 import {
   getRuntimeVisibleChannelPlugin,
   listRuntimeVisibleChannelPlugins,
@@ -127,7 +127,7 @@ async function listConfiguredMessageChannelPlugins(
   const plugins: ChannelPlugin[] = [];
   for (const plugin of listRuntimeVisibleChannelPlugins()) {
     if (
-      resolveOutboundChannelPlugin({ channel: plugin.id, cfg }) &&
+      (await resolveOutboundChannelPluginAsync({ channel: plugin.id, cfg })) &&
       (await isPluginConfigured(plugin, cfg, accountResolution))
     ) {
       plugins.push(plugin);
@@ -161,7 +161,7 @@ export async function resolveMessageChannelSelection(params: {
       continue;
     }
     // Explicit activation uses the scoped resolver, including external setup shells.
-    const selectedPlugin = resolveOutboundChannelPlugin({
+    const selectedPlugin = await resolveOutboundChannelPluginAsync({
       channel,
       cfg,
       agentId,

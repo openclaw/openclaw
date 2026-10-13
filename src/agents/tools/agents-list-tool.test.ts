@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
 import { createAgentsListTool } from "./agents-list-tool.js";
+import { withToolTestMetadata } from "./tool-metadata.test-support.js";
 
 const loadConfigMock = vi.fn<() => OpenClawConfig>();
 
@@ -62,7 +63,7 @@ describe("agents_list tool", () => {
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
       '{ agents: Array<{ configured: boolean; id: string; agentRuntime?: { id: string; source: "env" | "agent" | "defaults" | "model" | "provider" | "implicit" | "session" | "session-key" }; model?: string; name?: string }>; allowAny: boolean; requester: string }',
     );
-    const result = await tool.execute("call", {});
+    const result = await withToolTestMetadata(loadConfigMock(), () => tool.execute("call", {}));
     const details = result.details as AgentListDetails;
 
     expect(details).toStrictEqual({
@@ -118,9 +119,8 @@ describe("agents_list tool", () => {
         },
       } as unknown as OpenClawConfig);
 
-      const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
-        "call",
-        {},
+      const result = await withToolTestMetadata(loadConfigMock(), () =>
+        createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute("call", {}),
       );
       const details = result.details as AgentListDetails;
 
@@ -149,9 +149,8 @@ describe("agents_list tool", () => {
       },
     } satisfies OpenClawConfig);
 
-    const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
-      "call",
-      {},
+    const result = await withToolTestMetadata(loadConfigMock(), () =>
+      createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute("call", {}),
     );
     const details = result.details as AgentListDetails;
 
@@ -170,9 +169,8 @@ describe("agents_list tool", () => {
       },
     } satisfies OpenClawConfig);
 
-    const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
-      "call",
-      {},
+    const result = await withToolTestMetadata(loadConfigMock(), () =>
+      createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute("call", {}),
     );
     const details = result.details as AgentListDetails;
 
@@ -201,7 +199,9 @@ describe("agents_list tool", () => {
       },
     });
 
-    const result = await createAgentsListTool({ agentSessionKey: "global" }).execute("call", {});
+    const result = await withToolTestMetadata(loadConfigMock(), () =>
+      createAgentsListTool({ agentSessionKey: "global" }).execute("call", {}),
+    );
 
     expect(result.details).toMatchObject({
       requester: "ops",

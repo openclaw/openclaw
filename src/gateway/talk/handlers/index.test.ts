@@ -163,12 +163,18 @@ vi.mock("../../../state/user-preferences.js", async (importOriginal) => ({
   getCanonicalUserPreferences: mocks.getCanonicalUserPreferences,
 }));
 
-vi.mock("../../../tts/provider-registry.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../tts/provider-registry.js")>()),
-  canonicalizeSpeechProviderId: mocks.canonicalizeSpeechProviderId,
-  getSpeechProvider: mocks.getSpeechProvider,
-  listSpeechProviders: mocks.listSpeechProviders,
-}));
+// mock-isolation: Talk RPC fixtures supply exact speech providers without runtime discovery.
+vi.mock("../../../tts/provider-registry.js", () => {
+  const registry = {
+    canonicalizeSpeechProviderId: mocks.canonicalizeSpeechProviderId,
+    getSpeechProvider: mocks.getSpeechProvider,
+    listSpeechProviders: mocks.listSpeechProviders,
+  };
+  return {
+    withSpeechProviderRegistry: async (_cfg: unknown, run: (value: typeof registry) => unknown) =>
+      run(registry),
+  };
+});
 
 // mock-isolation: Keep synthesis stubbed while using real settings/readiness without barrel initialization.
 vi.mock("../../../tts/tts.js", async () => ({
@@ -180,19 +186,22 @@ vi.mock("../../../tts/tts.js", async () => ({
 
 vi.mock("../../../tts/tts-synthesis.js", () => ({ synthesizeTalkSpeech: mocks.synthesizeSpeech }));
 
+// mock-isolation: Talk RPC cases supply fixture voice registrations without plugin discovery.
 vi.mock("../../../talk/provider-registry.js", () => ({
-  canonicalizeRealtimeVoiceProviderId: mocks.canonicalizeRealtimeVoiceProviderId,
-  getRealtimeVoiceProvider: (providerId: string | undefined) =>
+  canonicalizeRealtimeVoiceProviderIdAsync: mocks.canonicalizeRealtimeVoiceProviderId,
+  getRealtimeVoiceProviderAsync: (providerId: string | undefined) =>
     mocks
       .listRealtimeVoiceProviders()
       .find((provider: { id: string }) => provider.id === providerId),
-  listRealtimeVoiceProviders: mocks.listRealtimeVoiceProviders,
+  listRealtimeVoiceProvidersAsync: mocks.listRealtimeVoiceProviders,
 }));
 
+// mock-isolation: Talk RPC cases supply fixture transcription registrations without plugin discovery.
 vi.mock("../../../realtime-transcription/provider-registry.js", () => ({
-  canonicalizeRealtimeTranscriptionProviderId: mocks.canonicalizeRealtimeTranscriptionProviderId,
-  getRealtimeTranscriptionProvider: mocks.getRealtimeTranscriptionProvider,
-  listRealtimeTranscriptionProviders: mocks.listRealtimeTranscriptionProviders,
+  canonicalizeRealtimeTranscriptionProviderIdAsync:
+    mocks.canonicalizeRealtimeTranscriptionProviderId,
+  getRealtimeTranscriptionProviderAsync: mocks.getRealtimeTranscriptionProvider,
+  listRealtimeTranscriptionProvidersAsync: mocks.listRealtimeTranscriptionProviders,
 }));
 
 // mock-isolation: Keep provider registration and credential state outside handler tests.

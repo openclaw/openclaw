@@ -118,7 +118,7 @@ async function runSetupWizardOnce(
   baseConfig = await requestTelemetryConsent({ opts, prompter, config: baseConfig });
 
   const compatibilityNotices = snapshot.valid
-    ? buildPluginCompatibilitySnapshotNotices({ config: baseConfig })
+    ? await buildPluginCompatibilitySnapshotNotices({ config: baseConfig })
     : [];
   if (compatibilityNotices.length > 0) {
     await prompter.note(

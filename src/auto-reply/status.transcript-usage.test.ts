@@ -13,6 +13,8 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { readRecentSessionUsageFromTranscriptAsync } from "../gateway/session-transcript-usage.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   buildStatusMessage as buildStatusMessageRaw,
@@ -30,15 +32,20 @@ const statusContext = {
 } as const;
 
 function buildStatusMessage({ sessionEntry, ...args }: StatusTestArgs): string {
-  return buildStatusMessageRaw({
-    ...statusContext,
-    modelAuth: "api-key",
-    activeModelAuth: "api-key",
-    modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-opus-4-6" }),
-    agent: { model: "anthropic/claude-opus-4-6" },
-    ...args,
-    sessionEntry: sessionEntry && { sessionId: "status", updatedAt: 0, ...sessionEntry },
-  });
+  return withPluginMetadataSnapshotScope(
+    createPluginMetadataSnapshotFixture(),
+    () =>
+      buildStatusMessageRaw({
+        ...statusContext,
+        modelAuth: "api-key",
+        activeModelAuth: "api-key",
+        modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-opus-4-6" }),
+        agent: { model: "anthropic/claude-opus-4-6" },
+        ...args,
+        sessionEntry: sessionEntry && { sessionId: "status", updatedAt: 0, ...sessionEntry },
+      }),
+    { trustConfigIdentity: true },
+  );
 }
 function modelArgs(provider: string, model: string): Pick<StatusArgs, "modelRefs" | "agent"> {
   return {

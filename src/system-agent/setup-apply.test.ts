@@ -19,6 +19,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import * as configModule from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { projectInferenceRoute } from "./inference-route.js";
@@ -28,7 +29,10 @@ const mocks = getSetupApplyMocks();
 const testTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("applySystemAgentSetup transaction boundaries", () => {
-  beforeEach(resetSetupApplyMocks);
+  beforeEach(async () => {
+    resetSetupApplyMocks();
+    await preparePluginMetadataMachineStateAsync({});
+  });
 
   it("rejects a config created after the initial inference check before writing", async () => {
     mocks.state.initialSnapshot = snapshot("present", {}, { agents: { entries: { main: {} } } });

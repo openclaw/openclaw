@@ -11,7 +11,7 @@ import { readRegularFile, statRegularFile } from "../infra/fs-safe.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { loadSkillRootRecords } from "../skills/loading/skill-root-loader.js";
-import { loadWorkspaceSkills } from "../skills/loading/workspace-skill-loader.js";
+import { prepareWorkspaceSkills } from "../skills/loading/workspace-skill-loader.js";
 import type { SkillScanFinding } from "../skills/security/scanner.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
@@ -285,9 +285,13 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
       workspaceDirs.add(workspaceDir);
     }
   }
-  const entries = [...workspaceDirs].flatMap((workspaceDir) =>
-    loadWorkspaceSkills(workspaceDir, { config: params.cfg }),
-  );
+  const entries = (
+    await Promise.all(
+      [...workspaceDirs].map((workspaceDir) =>
+        prepareWorkspaceSkills(workspaceDir, { config: params.cfg }),
+      ),
+    )
+  ).flat();
   const { listAgentIds } = await import("../agents/agent-scope.js");
   const env = { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
   const reportWorkshopScanFailure = (filePath: string, error: unknown) => {

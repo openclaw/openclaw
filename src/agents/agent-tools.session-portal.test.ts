@@ -8,7 +8,7 @@ import { resolveGatewayScopedTools } from "../gateway/tool-resolution.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
+import { createOpenClawCodingToolsAsync } from "./agent-tools.js";
 
 const identity = { sessionKey: "agent:main:preview", sessionId: "conversation", agentId: "main" };
 const binding = { ...identity, environmentId: "attached", ownerEpoch: 1, generation: 1 };
@@ -52,7 +52,7 @@ async function tools(
   senderIsOwner = false,
 ) {
   return builder === "agent"
-    ? createOpenClawCodingTools({ ...identity, config: cfg, senderIsOwner })
+    ? createOpenClawCodingToolsAsync({ ...identity, config: cfg, senderIsOwner })
     : (
         await resolveGatewayScopedTools({
           ...identity,

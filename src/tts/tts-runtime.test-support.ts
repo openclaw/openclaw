@@ -121,11 +121,11 @@ vi.mock("../plugins/capability-provider-runtime.js", async () => {
   );
   return {
     ...actual,
-    preparePluginCapabilityProviderResolution: ({ cfg }: { cfg?: OpenClawConfig }) => ({
+    preparePluginCapabilityProviderResolutionAsync: async ({ cfg }: { cfg?: OpenClawConfig }) => ({
       load: undefined,
       resolve: () => listSpeechProvidersMock(cfg),
     }),
-    preparePluginCapabilityProviderLookup: ({
+    preparePluginCapabilityProviderLookupAsync: async ({
       providerId,
       cfg,
     }: {
@@ -135,6 +135,8 @@ vi.mock("../plugins/capability-provider-runtime.js", async () => {
       load: undefined,
       resolve: () => getSpeechProviderMock(providerId, cfg) ?? undefined,
     }),
+    resolvePluginCapabilityProvidersAsync: async ({ cfg }: { cfg?: OpenClawConfig }) =>
+      listSpeechProvidersMock(cfg),
   };
 });
 

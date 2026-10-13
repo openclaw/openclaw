@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { promptDefaultModel } from "../flows/model-picker.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { WizardCancelledError, type WizardSelectParams } from "../wizard/prompts.js";
 import { makePrompter } from "./setup/__tests__/test-utils.js";
 
@@ -28,9 +29,10 @@ vi.mock("./model-picker.runtime.js", () => ({
   },
 }));
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
   vi.stubEnv("OPENCLAW_LOCALE", "en");
+  await preparePluginMetadataMachineStateAsync({});
 });
 afterEach(() => vi.unstubAllEnvs());
 

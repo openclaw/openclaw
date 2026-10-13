@@ -19,6 +19,9 @@ import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcri
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Message, ImageContent } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveChatAttachmentMaxBytes } from "./chat-attachment-policy.js";
 import { parseMessageWithAttachments, type ChatAttachment } from "./chat-attachments.js";
@@ -57,6 +60,7 @@ const MAX_ASKS_PER_CONNECTION_RATE_WINDOW = 4;
 
 type SessionCompanionRunParams = {
   cfg: OpenClawConfig;
+  metadataSnapshot: PluginMetadataSnapshot;
   agentId: string;
   modelRef: string;
   sessionKey: string;
@@ -124,6 +128,12 @@ function toRunnerHistoryMessage(
 }
 
 async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
+  return withPluginMetadataSnapshotScope(params.metadataSnapshot, () =>
+    runPreparedSessionCompanion(params),
+  );
+}
+
+async function runPreparedSessionCompanion(params: SessionCompanionRunParams): Promise<string> {
   params.assertSourceCurrent?.();
   params.assertInputCurrent?.();
   const selectedModel = resolveSessionCompanionModel({
@@ -518,14 +528,21 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       assertSourceCurrent?.();
       request.assertInputCurrent?.();
       const cfg = params.getConfig();
-      const utilityModelRef = resolveUtilityModelRef({ cfg, agentId });
+      const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+      const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+        config: cfg,
+        workspaceDir,
+        allowWorkspaceScopedCurrent: true,
+      });
+      const utilityModelRef = withPluginMetadataSnapshotScope(metadataSnapshot, () =>
+        resolveUtilityModelRef({ cfg, agentId, metadataSnapshot }),
+      );
       if (!utilityModelRef) {
         throw new SessionCompanionAskError(
           "utility-model-unavailable",
           "No utility model is configured for this session.",
         );
       }
-      const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
       thread.digestText = formatObserverDigest(currentSnapshot);
       const delta = selectDeltaNotes(currentSnapshot, thread.lastNoteSequence);
       const referenceContext = buildReferenceContext({
@@ -562,6 +579,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       }
       const rawAnswer = await run({
         cfg,
+        metadataSnapshot,
         agentId,
         modelRef: utilityModelRef,
         sessionKey,

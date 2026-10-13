@@ -1,9 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { snapshotReaderSlot } from "./plugin-metadata-snapshot-readers.js";
-import {
-  getCurrentPluginMetadataSnapshotRequiredRuntime,
-  loadPluginMetadataSnapshotRuntime,
-} from "./plugin-metadata-snapshot-required.js";
+import { getCurrentPluginMetadataSnapshotRequiredRuntime } from "./plugin-metadata-snapshot-required.js";
 
 const { loadNative } = vi.hoisted(() => ({ loadNative: vi.fn() }));
 vi.mock("./native-module-require.js", async (importOriginal) => ({
@@ -11,7 +8,7 @@ vi.mock("./native-module-require.js", async (importOriginal) => ({
   tryNativeRequireModule: loadNative,
 }));
 
-const readerKeys = ["getCurrentPluginMetadataSnapshot", "loadPluginMetadataSnapshot"] as const;
+const readerKeys = ["getCurrentPluginMetadataSnapshot"] as const;
 let previousReaders: PropertyDescriptorMap;
 beforeEach(() => {
   previousReaders = Object.getOwnPropertyDescriptors(snapshotReaderSlot);
@@ -31,14 +28,6 @@ afterEach(() => {
   }
 });
 
-const reads = [
-  {
-    name: "current snapshot",
-    run: () => getCurrentPluginMetadataSnapshotRequiredRuntime({}),
-  },
-  { name: "snapshot load", run: () => loadPluginMetadataSnapshotRuntime({ config: {} }) },
-];
-
 function captureFailure(run: () => unknown): unknown {
   try {
     run();
@@ -55,27 +44,28 @@ describe("required plugin metadata readers", () => {
     expect(loadNative).not.toHaveBeenCalled();
   });
 
-  it.each(reads)("preserves the original registered $name error", ({ run }) => {
+  it("preserves the original registered current snapshot error", () => {
     const failure = new Error("registered metadata owner failed");
     const fail = () => {
       throw failure;
     };
     snapshotReaderSlot.getCurrentPluginMetadataSnapshot = fail;
-    snapshotReaderSlot.loadPluginMetadataSnapshot = fail;
-    expect(captureFailure(run)).toBe(failure);
+    expect(captureFailure(() => getCurrentPluginMetadataSnapshotRequiredRuntime({}))).toBe(failure);
     expect(loadNative).not.toHaveBeenCalled();
   });
 
-  it.each(reads)("propagates the required native-loader error for $name", ({ run }) => {
+  it("propagates the required native-loader error for current snapshots", () => {
     const failure = new Error("required metadata module failed to load");
     loadNative.mockImplementation(() => {
       throw failure;
     });
-    expect(captureFailure(run)).toBe(failure);
+    expect(captureFailure(() => getCurrentPluginMetadataSnapshotRequiredRuntime({}))).toBe(failure);
   });
 
-  it.each(reads)("refuses a second transformed metadata owner for $name", ({ run }) => {
+  it("refuses a second transformed current metadata owner", () => {
     loadNative.mockReturnValue({ ok: false });
-    expect(run).toThrow("Host plugin metadata runtime requires native loading");
+    expect(() => getCurrentPluginMetadataSnapshotRequiredRuntime({})).toThrow(
+      "Host plugin metadata runtime requires native loading",
+    );
   });
 });

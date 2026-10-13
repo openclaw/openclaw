@@ -6,7 +6,7 @@ import { captureClawInstallSchemaVersionFacts } from "../../claws/provenance-run
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
-import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -178,7 +178,7 @@ api.registerProvider({
         } else {
           saveAuthProfileStore(authStore, fixture.agentDir);
         }
-        const metadata = loadPluginMetadataSnapshot({
+        const metadata = await resolvePluginMetadataSnapshotAsync({
           config: fixture.config,
           env: fixture.env,
           workspaceDir: fixture.workspaceDir,
@@ -226,6 +226,7 @@ api.registerProvider({
             request: {
               kind: "catalog",
               syntheticAuth: [],
+              bundledDiscoveryMode: undefined,
               clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({
                 env: fixture.env,
               }),

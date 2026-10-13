@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { FailoverError } from "../agents/failover-error.js";
 import {
@@ -19,6 +19,7 @@ import {
 } from "../infra/agent-events.js";
 import { clearAgentRunContext, getAgentRunContext } from "../infra/agent-run-registry.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -43,6 +44,10 @@ const mocks = vi.hoisted(() => ({ loadAgentRuntimePluginRegistryHandle: vi.fn() 
 vi.mock("../agents/runtime-plugins.js", () => ({
   loadAgentRuntimePluginRegistryHandle: mocks.loadAgentRuntimePluginRegistryHandle,
 }));
+
+beforeEach(async () => {
+  await preparePluginMetadataMachineStateAsync({});
+});
 
 function embeddedRoute(runtime: "codex" | "openclaw" = "codex"): SystemAgentConfiguredRoute {
   const config: OpenClawConfig = {
@@ -174,6 +179,7 @@ describe("setup inference plugin ownership", () => {
           },
         };
         await withPluginCache(createPluginCache(), async () => {
+          await preparePluginMetadataMachineStateAsync({ env: state.env });
           const input = { config, workspaceDir: state.workspaceDir, allowCurrent: false };
           const before = resolvePluginMetadataSnapshot(input);
           expect(before.byPluginId.has("fixture-runtime")).toBe(false);
@@ -188,7 +194,7 @@ describe("setup inference plugin ownership", () => {
             configSchema: { type: "object" },
           });
           await state.writeText("plugin/index.js", 'throw new Error("metadata must not execute");');
-          mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValueOnce(
+          mocks.loadAgentRuntimePluginRegistryHandle.mockResolvedValueOnce(
             createEmptyPluginRegistry(),
           );
           await using generationCache = createPluginCache();
@@ -238,7 +244,7 @@ describe("setup inference plugin ownership", () => {
         order.push("metadata");
         return metadataSnapshot;
       });
-      mocks.loadAgentRuntimePluginRegistryHandle.mockImplementationOnce(() => {
+      mocks.loadAgentRuntimePluginRegistryHandle.mockImplementationOnce(async () => {
         order.push("load");
         expect(getCurrentPluginMetadataSnapshot()).toBe(metadataSnapshot);
         return pluginRegistry;

@@ -22,7 +22,11 @@ type NativeReadHost = {
     options?: LoadAuthProfileStoreOptions,
     env?: NodeJS.ProcessEnv,
   ) => AuthProfileStore;
-  loadRuntimeAuthProfileStore: NativeReadHost["loadAuthProfileStoreForAgent"];
+  loadRuntimeAuthProfileStoreAsync: (
+    agentDir?: string,
+    options?: LoadAuthProfileStoreOptions,
+    env?: NodeJS.ProcessEnv,
+  ) => Promise<AuthProfileStore>;
 };
 
 /** Catalog requests already own native reads and writes; only the host opens broker actors. */
@@ -38,7 +42,7 @@ export function readAuthProfileStoreInWorker<T>(
       scope.run(effectiveAgentDir, env, run);
     if (!consume) {
       return runInCapturedScope(() =>
-        host.loadRuntimeAuthProfileStore(effectiveAgentDir, options, env),
+        host.loadRuntimeAuthProfileStoreAsync(effectiveAgentDir, options, env),
       );
     }
     return consume({

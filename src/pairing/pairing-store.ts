@@ -10,6 +10,7 @@ import {
 import { getPairingAdapter } from "../channels/plugins/pairing.js";
 import type { ChannelPairingAdapter } from "../channels/plugins/pairing.types.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -27,8 +28,9 @@ export {
 export { readChannelAllowFromStore } from "./pairing-store.read.js";
 export type PairingRequest = PairingRequestRecord;
 
-function resolvePairingAdapter(channel: PairingChannel, pairingAdapter?: ChannelPairingAdapter) {
-  return pairingAdapter ?? getPairingAdapter(channel) ?? undefined;
+async function resolvePairingAdapter(channel: PairingChannel) {
+  await resolvePluginMetadataSnapshotAsync({});
+  return getPairingAdapter(channel) ?? undefined;
 }
 
 function normalizeAllowFromInput(
@@ -52,12 +54,16 @@ type PairingOptions = {
   assertCurrent?: () => void;
 };
 
-function mutatePairing(params: PairingOptions, mutation: PairingMutation) {
+async function mutatePairing(
+  params: PairingOptions,
+  mutation: PairingMutation,
+  context = captureOpenClawStateWorkerContext({ env: params.env ?? process.env }),
+) {
   const channel = safeChannelKey(params.channel);
   const assertCurrent = params.assertCurrent;
   const adapter =
     mutation.action === "resolve" && mutation.approval !== "dismiss"
-      ? resolvePairingAdapter(params.channel, params.pairingAdapter)
+      ? (params.pairingAdapter ?? (await resolvePairingAdapter(params.channel)))
       : undefined;
   if (
     mutation.action === "resolve" &&
@@ -65,7 +71,6 @@ function mutatePairing(params: PairingOptions, mutation: PairingMutation) {
   ) {
     mutation.approval = "host";
   }
-  const context = captureOpenClawStateWorkerContext({ env: params.env ?? process.env });
   return runOpenClawStateWorkerOperation(
     context,
     (scope) =>
@@ -148,12 +153,17 @@ type AllowFromStoreEntryUpdateParams = PairingOptions & {
 };
 
 async function updateAllowFromStoreEntry(params: AllowFromStoreEntryUpdateParams, remove: boolean) {
+  const context = captureOpenClawStateWorkerContext({ env: params.env ?? process.env });
   const accountId = resolveAllowFromAccountId(params.accountId);
   const entry = normalizeAllowFromInput(
     params.entry,
-    resolvePairingAdapter(params.channel, params.pairingAdapter),
+    params.pairingAdapter ?? (await resolvePairingAdapter(params.channel)),
   );
-  const result = await mutatePairing(params, { action: "allow", accountId, entry, remove });
+  const result = await mutatePairing(
+    params,
+    { action: "allow", accountId, entry, remove },
+    context,
+  );
   if (result.action !== "allow") {
     throw new Error("Unexpected channel pairing allowlist result");
   }

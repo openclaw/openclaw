@@ -27,8 +27,8 @@ import {
   claimPluginInteractiveCallbackDedupe,
   commitPluginInteractiveCallbackDedupe,
 } from "./interactive-state.js";
-import { loadOpenClawPlugins } from "./loader.js";
 import {
+  loadOpenClawPluginsForTest,
   makePluginLoaderTempDir,
   mkdirSafe,
   useNoBundledPlugins,
@@ -205,7 +205,7 @@ describe("loadOpenClawPlugins", () => {
 
     clearInternalHooks();
 
-    loadOpenClawPlugins({
+    loadOpenClawPluginsForTest({
       cache: false,
       workspaceDir: first.dir,
       onlyPluginIds: ["hook-context-first", "hook-context-second"],
@@ -383,7 +383,7 @@ describe("loadOpenClawPlugins", () => {
         },
       },
       onlyPluginIds: ["activation-replacement"],
-    } satisfies Parameters<typeof loadOpenClawPlugins>[0];
+    } satisfies Parameters<typeof loadOpenClawPluginsForTest>[0];
     const hookInit = vi
       .spyOn(hookRunnerGlobal, "initializeGlobalHookRunner")
       .mockImplementationOnce(() => {
@@ -391,7 +391,9 @@ describe("loadOpenClawPlugins", () => {
       });
 
     try {
-      expect(() => loadOpenClawPlugins(replacementOptions)).toThrow("hook activation failed");
+      expect(() => loadOpenClawPluginsForTest(replacementOptions)).toThrow(
+        "hook activation failed",
+      );
     } finally {
       hookInit.mockRestore();
     }
@@ -405,7 +407,7 @@ describe("loadOpenClawPlugins", () => {
     expect(getPluginCommandSpecs().map((command) => command.name)).toEqual(["prior"]);
     expect(priorAuthority!()).toBe(true);
 
-    const activated = loadOpenClawPlugins(replacementOptions);
+    const activated = loadOpenClawPluginsForTest(replacementOptions);
     expect(activated.commands.map((entry) => entry.command.name)).toEqual(["replacement"]);
     expect(getPluginCommandSpecs().map((command) => command.name)).toEqual(["replacement"]);
     expect(priorAuthority!()).toBe(false);
@@ -524,7 +526,7 @@ describe("loadOpenClawPlugins", () => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
     delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
 
-    const scoped = loadOpenClawPlugins({
+    const scoped = loadOpenClawPluginsForTest({
       cache: false,
       activate: false,
       config: {
@@ -566,7 +568,7 @@ describe("loadOpenClawPlugins", () => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
     delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
 
-    const bundledRegistry = loadOpenClawPlugins({
+    const bundledRegistry = loadOpenClawPluginsForTest({
       cache: false,
       config: { plugins: { allow: ["notify-host"] } },
       onlyPluginIds: ["notify-host"],
@@ -584,7 +586,7 @@ describe("loadOpenClawPlugins", () => {
         handle: async () => "{}",
       });`,
     });
-    const externalRegistry = loadOpenClawPlugins({
+    const externalRegistry = loadOpenClawPluginsForTest({
       cache: false,
       workspaceDir: external.dir,
       config: {
@@ -888,15 +890,15 @@ describe("loadOpenClawPlugins", () => {
         },
       },
       onlyPluginIds: ["cached-legacy-hook"],
-    } satisfies Parameters<typeof loadOpenClawPlugins>[0];
+    } satisfies Parameters<typeof loadOpenClawPluginsForTest>[0];
 
-    loadOpenClawPlugins(loadOptions);
+    loadOpenClawPluginsForTest(loadOptions);
     const firstEvent = createInternalHookEvent("gateway", "startup", "gateway:startup");
     await triggerInternalHook(firstEvent);
     expect(firstEvent.messages).toEqual(["cached-hook-fired"]);
 
     setActivePluginRegistry(createEmptyPluginRegistry());
-    loadOpenClawPlugins(loadOptions);
+    loadOpenClawPluginsForTest(loadOptions);
 
     const cachedEvent = createInternalHookEvent("gateway", "startup", "gateway:startup");
     await triggerInternalHook(cachedEvent);
@@ -929,9 +931,9 @@ describe("loadOpenClawPlugins", () => {
         },
       },
       onlyPluginIds: ["cached-command-interactive"],
-    } satisfies Parameters<typeof loadOpenClawPlugins>[0];
+    } satisfies Parameters<typeof loadOpenClawPluginsForTest>[0];
 
-    const registry = loadOpenClawPlugins(loadOptions);
+    const registry = loadOpenClawPluginsForTest(loadOptions);
     expect(getPluginCommandSpecs()).toEqual([
       { name: "hue", description: "Control Hue lights", acceptsArgs: false },
     ]);
@@ -955,7 +957,7 @@ describe("loadOpenClawPlugins", () => {
     commitPluginInteractiveCallbackDedupe(dedupeKey, 1_000);
     expect(claimPluginInteractiveCallbackDedupe(dedupeKey, 1_001)).toBe(false);
 
-    loadOpenClawPlugins(loadOptions);
+    loadOpenClawPluginsForTest(loadOptions);
     expect(claimPluginInteractiveCallbackDedupe(dedupeKey, 1_002)).toBe(false);
 
     setActivePluginRegistry(createEmptyPluginRegistry());
@@ -968,7 +970,7 @@ describe("loadOpenClawPlugins", () => {
       ),
     ).toBeNull();
 
-    loadOpenClawPlugins(loadOptions);
+    loadOpenClawPluginsForTest(loadOptions);
 
     expect(getPluginCommandSpecs()).toEqual([
       { name: "hue", description: "Control Hue lights", acceptsArgs: false },
@@ -1037,17 +1039,17 @@ describe("loadOpenClawPlugins", () => {
       },
     ];
 
-    const first = loadOpenClawPlugins(options);
+    const first = loadOpenClawPluginsForTest(options);
     await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual(
       expectedArtifacts,
     );
 
     setActivePluginRegistry(createEmptyPluginRegistry());
 
-    const second = loadOpenClawPlugins(options);
+    const second = loadOpenClawPluginsForTest(options);
     // Scalar comparisons avoid materializing the registry's lazy runtime in failure output.
     expect(second === first).toBe(false);
-    expect(loadOpenClawPlugins(options) === second).toBe(true);
+    expect(loadOpenClawPluginsForTest(options) === second).toBe(true);
     await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual(
       expectedArtifacts,
     );
@@ -1098,7 +1100,7 @@ describe("loadOpenClawPlugins", () => {
         slots: { memory: "capability-survives-memory" },
       },
     };
-    loadOpenClawPlugins({
+    loadOpenClawPluginsForTest({
       cache: false,
       workspaceDir: memoryPlugin.dir,
       config: activateConfig,
@@ -1122,7 +1124,7 @@ describe("loadOpenClawPlugins", () => {
     // Simulate what resolvePluginWebSearchProviders and similar read-only paths do:
     // load plugins again with activate:false. Each per-plugin snapshot/rollback must
     // preserve the previously registered memory capability.
-    loadOpenClawPlugins({
+    loadOpenClawPluginsForTest({
       cache: false,
       activate: false,
       workspaceDir: memoryPlugin.dir,
@@ -1155,7 +1157,7 @@ describe("loadOpenClawPlugins", () => {
       },
     };
 
-    const snapshot = loadOpenClawPlugins({
+    const snapshot = loadOpenClawPluginsForTest({
       activate: false,
       cache: false,
       workspaceDir: plugin.dir,
@@ -1165,7 +1167,7 @@ describe("loadOpenClawPlugins", () => {
     expect(snapshot.providers.map((entry) => entry.provider.id)).toEqual(["discovery-provider"]);
     expect(snapshot.tools.flatMap((entry) => entry.names)).toContain("discovery_tool");
 
-    const active = loadOpenClawPlugins({
+    const active = loadOpenClawPluginsForTest({
       cache: false,
       workspaceDir: plugin.dir,
       config,
@@ -1304,15 +1306,15 @@ describe("loadOpenClawPlugins", () => {
       logger: { info: register, warn: vi.fn(), error: vi.fn() },
     };
 
-    const first = loadOpenClawPlugins(options);
-    const second = loadOpenClawPlugins(options);
+    const first = loadOpenClawPluginsForTest(options);
+    const second = loadOpenClawPluginsForTest(options);
 
     expect(second).toBe(first);
     expect(register).toHaveBeenCalledExactlyOnceWith("registered");
     expect(first.commands.map((entry) => entry.command.name)).toEqual(["snapshot-command"]);
     expect(getPluginCommandSpecs()).toStrictEqual([]);
 
-    const active = loadOpenClawPlugins({
+    const active = loadOpenClawPluginsForTest({
       workspaceDir: plugin.dir,
       config: options.config,
       onlyPluginIds: ["snapshot-cache"],
@@ -1347,13 +1349,13 @@ describe("loadOpenClawPlugins", () => {
       },
     };
 
-    const first = loadOpenClawPlugins(options);
+    const first = loadOpenClawPluginsForTest(options);
     expectGlobalHookRunner(getGlobalHookRunner());
 
     resetGlobalHookRunner();
     expect(getGlobalHookRunner()).toBeNull();
 
-    const second = loadOpenClawPlugins(options);
+    const second = loadOpenClawPluginsForTest(options);
     expect(second).toBe(first);
     expectGlobalHookRunner(getGlobalHookRunner());
 
@@ -1373,7 +1375,7 @@ describe("loadOpenClawPlugins", () => {
       registration: `api.on("message_sent", () => undefined);`,
     });
 
-    loadOpenClawPlugins({
+    loadOpenClawPluginsForTest({
       workspaceDir: firstPlugin.dir,
       config: {
         plugins: {
@@ -1387,7 +1389,7 @@ describe("loadOpenClawPlugins", () => {
 
     // A second activation retires the unpinned first registry entirely; its
     // hooks must drop instead of dispatching stale config closures.
-    loadOpenClawPlugins({
+    loadOpenClawPluginsForTest({
       workspaceDir: secondPlugin.dir,
       config: {
         plugins: {
@@ -1437,7 +1439,7 @@ describe("loadOpenClawPlugins", () => {
           expectedFirstSource: pluginA.file,
           expectedSecondSource: pluginB.file,
           loadFirst: () =>
-            loadOpenClawPlugins({
+            loadOpenClawPluginsForTest({
               ...options,
               env: {
                 ...process.env,
@@ -1445,7 +1447,7 @@ describe("loadOpenClawPlugins", () => {
               },
             }),
           loadSecond: () =>
-            loadOpenClawPlugins({
+            loadOpenClawPluginsForTest({
               ...options,
               env: {
                 ...process.env,
@@ -1494,7 +1496,7 @@ describe("loadOpenClawPlugins", () => {
           expectedFirstSource: pluginA.file,
           expectedSecondSource: pluginB.file,
           loadFirst: () =>
-            loadOpenClawPlugins({
+            loadOpenClawPluginsForTest({
               ...options,
               env: {
                 ...process.env,
@@ -1505,7 +1507,7 @@ describe("loadOpenClawPlugins", () => {
               },
             }),
           loadSecond: () =>
-            loadOpenClawPlugins({
+            loadOpenClawPluginsForTest({
               ...options,
               env: {
                 ...process.env,

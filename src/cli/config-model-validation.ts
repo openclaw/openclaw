@@ -28,8 +28,11 @@ import {
   resolveConfigEnvVars,
 } from "../config/env-substitution.js";
 import { applyImplicitAgentRosterDefaults } from "../config/implicit-agent-roster.js";
+import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
@@ -147,6 +150,7 @@ function collectTouchedTextModelRefs(params: {
   config: OpenClawConfig;
   previousConfig?: OpenClawConfig;
   touchedPaths: readonly (readonly string[])[];
+  manifestPlugins: ModelManifestNormalizationContext["manifestPlugins"];
 }): TouchedModelRef[] {
   const listedAgentEntries = listAgentEntriesWithSource(params.config);
   const defaultPrimaryPath = ["agents", "defaults", "model", "primary"];
@@ -169,18 +173,27 @@ function collectTouchedTextModelRefs(params: {
     defaultPrimaryTouched &&
     (!previousRefs ||
       previousDefaultAgentId === undefined ||
-      resolveDefaultModelForAgent({ cfg: params.config }).provider !==
+      resolveDefaultModelForAgent({
+        cfg: params.config,
+        manifestPlugins: params.manifestPlugins,
+      }).provider !==
         resolveDefaultModelForAgent({
           cfg: params.previousConfig!,
           agentId: previousDefaultAgentId,
+          manifestPlugins: params.manifestPlugins,
         }).provider);
   const touchedRefs = refs.filter((ref) => {
     if (ref.fallback && defaultPrimaryProviderChanged) {
       const previousRef = previousRefsByIdentity?.get(modelRefComparisonKey(ref));
-      const nextResolved = resolveFallbackRef(params.config, ref.value)?.ref;
+      const nextResolved = resolveFallbackRef(
+        params.config,
+        ref.value,
+        params.manifestPlugins,
+      )?.ref;
       const previousResolved =
         params.previousConfig && previousRef
-          ? resolveFallbackRef(params.previousConfig, previousRef.value)?.ref
+          ? resolveFallbackRef(params.previousConfig, previousRef.value, params.manifestPlugins)
+              ?.ref
           : undefined;
       if (
         !nextResolved ||
@@ -318,6 +331,7 @@ function hasUnresolvedInheritedFallbackProvider(
   config: OpenClawConfig,
   ref: TouchedModelRef,
   unresolvedPaths: ReadonlySet<string>,
+  manifestPlugins: ModelManifestNormalizationContext["manifestPlugins"],
 ): boolean {
   if (!ref.fallback || ref.value.includes("/")) {
     return false;
@@ -336,7 +350,7 @@ function hasUnresolvedInheritedFallbackProvider(
   const primaryModel = splitTrailingAuthProfile(primaryRef.value).model;
   const slash = primaryModel.indexOf("/");
   const provider = slash > 0 ? primaryModel.slice(0, slash) : primaryModel;
-  const fallback = resolveFallbackRef(config, ref.value, undefined, agentId);
+  const fallback = resolveFallbackRef(config, ref.value, manifestPlugins, agentId);
   return Boolean(fallback && !fallback.alias && containsEnvVarReference(provider));
 }
 
@@ -378,6 +392,7 @@ function validateModelRefSyntax(
   config: OpenClawConfig,
   ref: TouchedModelRef,
   unresolvedPaths: ReadonlySet<string>,
+  manifestPlugins: ModelManifestNormalizationContext["manifestPlugins"],
 ): string | undefined {
   if (!ref.value) {
     return "Model reference is empty";
@@ -386,11 +401,13 @@ function validateModelRefSyntax(
   if (unresolvedPaths.has(configPath)) {
     return "Model reference contains an unresolved environment variable";
   }
-  const resolved = resolveCanonicalModelRef(config, ref);
+  const resolved = resolveCanonicalModelRef(config, ref, manifestPlugins);
   return resolved ? undefined : "Invalid model reference or configured model alias target";
 }
 
-async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> {
+async function createRuntimeModelRefResolver(
+  manifestPlugins: PluginMetadataSnapshot,
+): Promise<ConfigModelRefResolver> {
   const modelSelection = await import("../agents/model-selection.js");
   const loadModelModules = () =>
     Promise.all([
@@ -400,12 +417,12 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
   let modelModules: ReturnType<typeof loadModelModules> | undefined;
 
   return async ({ config, ref }) => {
-    let resolvedRef = resolveCanonicalModelRef(config, ref);
+    let resolvedRef = resolveCanonicalModelRef(config, ref, manifestPlugins);
     if (!resolvedRef) {
       return `Unknown model: ${ref.value}`;
     }
     // CLI backends validate their own ids and do not require a roster-owned catalog.
-    if (modelSelection.isCliProvider(resolvedRef.provider, config)) {
+    if (modelSelection.isCliProvider(resolvedRef.provider, config, manifestPlugins)) {
       return undefined;
     }
     const targetAgentId =
@@ -476,8 +493,7 @@ function materializeValidationRoster(config: OpenClawConfig): OpenClawConfig {
     : (applyImplicitAgentRosterDefaults(config) as OpenClawConfig);
 }
 
-/** Checks authored mutations before admission, preserving legacy roster alias paths. */
-export async function checkTouchedTextModelRefs(params: {
+type CheckTouchedTextModelRefsParams = {
   config: OpenClawConfigWithLegacyRoster;
   previousConfig?: OpenClawConfigWithLegacyRoster;
   touchedPaths: readonly (readonly string[])[];
@@ -486,7 +502,10 @@ export async function checkTouchedTextModelRefs(params: {
   resolveModelRef?: ConfigModelRefResolver;
   createModelRefResolver?: () => Promise<ConfigModelRefResolver>;
   redactDependencyValues?: boolean;
-}) {
+};
+
+/** Checks authored mutations before admission, preserving legacy roster alias paths. */
+export async function checkTouchedTextModelRefs(params: CheckTouchedTextModelRefsParams) {
   const touchedPaths = params.touchedPaths;
   const modelDependenciesTouched = touchedPaths.some(
     (path) =>
@@ -507,10 +526,26 @@ export async function checkTouchedTextModelRefs(params: {
     return { refsChecked: 0, refsTotal: 0, errors: [] };
   }
   const config = materializeValidationRoster(params.config);
+  const env = params.env ?? process.env;
+  const metadata = await resolveConfigWidePluginMetadataSnapshotAsync({ config, env });
+  return withPluginMetadataSnapshotScope(
+    metadata,
+    () => checkPreparedTextModelRefs(params, config, modelDependenciesTouched, metadata),
+    { config, env },
+  );
+}
+
+async function checkPreparedTextModelRefs(
+  params: CheckTouchedTextModelRefsParams,
+  config: OpenClawConfig,
+  modelDependenciesTouched: boolean,
+  manifestPlugins: PluginMetadataSnapshot,
+) {
+  const touchedPaths = params.touchedPaths;
   const previousConfig = params.previousConfig
     ? materializeValidationRoster(params.previousConfig)
     : undefined;
-  const validationParams = { ...params, config, previousConfig, touchedPaths };
+  const validationParams = { ...params, config, previousConfig, touchedPaths, manifestPlugins };
   const authoredRefs = collectTouchedTextModelRefs(validationParams);
   const authoredValuesByPath = new Map(
     collectTextModelRefs(params.config).map((ref) => [ref.path, ref.value]),
@@ -563,6 +598,7 @@ export async function checkTouchedTextModelRefs(params: {
       config: validationRosterConfig,
       previousConfig: validationPreviousRosterConfig,
       touchedPaths,
+      manifestPlugins,
     }).map((ref) => [modelRefComparisonKey(ref), ref]),
   );
   for (const authoredRef of authoredRefs) {
@@ -609,9 +645,9 @@ export async function checkTouchedTextModelRefs(params: {
       }
       const previousRef = previousRefsByOwner.get(key);
       const previousResolved = previousRef
-        ? resolveCanonicalModelRef(validationPreviousRosterConfig, previousRef)
+        ? resolveCanonicalModelRef(validationPreviousRosterConfig, previousRef, manifestPlugins)
         : undefined;
-      const nextResolved = resolveCanonicalModelRef(validationRosterConfig, ref);
+      const nextResolved = resolveCanonicalModelRef(validationRosterConfig, ref, manifestPlugins);
       if (
         previousRef?.value !== ref.value ||
         previousResolved?.provider !== nextResolved?.provider ||
@@ -628,11 +664,11 @@ export async function checkTouchedTextModelRefs(params: {
   // A bare fallback cannot be accepted while its inherited provider is env-unresolved;
   // leave it unchecked until runtime can determine that provider.
   const refsToValidate = refs.filter(
-    (ref) => !hasUnresolvedInheritedFallbackProvider(config, ref, unresolvedPaths),
+    (ref) => !hasUnresolvedInheritedFallbackProvider(config, ref, unresolvedPaths, manifestPlugins),
   );
   const validatedRefs = refsToValidate.map((ref) => ({
     ref,
-    error: validateModelRefSyntax(validationConfig, ref, unresolvedPaths),
+    error: validateModelRefSyntax(validationConfig, ref, unresolvedPaths, manifestPlugins),
   }));
   const syntaxFailures = validatedRefs.filter(
     (entry): entry is { ref: TouchedModelRef; error: string } => Boolean(entry.error),
@@ -645,7 +681,9 @@ export async function checkTouchedTextModelRefs(params: {
   let resolveModelRef = params.resolveModelRef;
   if (!resolveModelRef) {
     try {
-      resolveModelRef = await (params.createModelRefResolver ?? createRuntimeModelRefResolver)();
+      resolveModelRef = params.createModelRefResolver
+        ? await params.createModelRefResolver()
+        : await createRuntimeModelRefResolver(manifestPlugins);
     } catch (cause) {
       const detail =
         modelEnvWasExpanded ||

@@ -2,14 +2,14 @@
 // explicitly configured sandbox environment variables.
 import { describe, expect, it } from "vitest";
 import {
-  sanitizeEnvVars,
+  sanitizeEnvVarsAsync,
   sanitizeExplicitSandboxEnvVars,
   validateEnvVarValue,
 } from "./sanitize-env-vars.js";
 
 describe("sanitizeEnvVars", () => {
-  it("keeps normal env vars and blocks obvious credentials", () => {
-    const result = sanitizeEnvVars({
+  it("keeps normal env vars and blocks obvious credentials", async () => {
+    const result = await sanitizeEnvVarsAsync({
       NODE_ENV: "test",
       OPENAI_API_KEY: "sk-live-xxx", // pragma: allowlist secret
       OPENAI_ADMIN_KEY: "sk-admin-live-xxx", // pragma: allowlist secret
@@ -32,8 +32,8 @@ describe("sanitizeEnvVars", () => {
     ]);
   });
 
-  it("blocks credentials even when suffix pattern matches", () => {
-    const result = sanitizeEnvVars({
+  it("blocks credentials even when suffix pattern matches", async () => {
+    const result = await sanitizeEnvVarsAsync({
       MY_TOKEN: "abc",
       MY_SECRET: "def",
       USER: "alice",
@@ -43,10 +43,10 @@ describe("sanitizeEnvVars", () => {
     expect(result.blocked).toStrictEqual(["MY_TOKEN", "MY_SECRET"]);
   });
 
-  it("adds warnings for suspicious values", () => {
+  it("adds warnings for suspicious values", async () => {
     const base64Like =
       "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYQ==";
-    const result = sanitizeEnvVars({
+    const result = await sanitizeEnvVarsAsync({
       USER: "alice",
       SAFE_TEXT: base64Like,
       NULL: "a\0b",
@@ -57,8 +57,8 @@ describe("sanitizeEnvVars", () => {
     expect(result.warnings).toContain("SAFE_TEXT: Value looks like base64-encoded credential data");
   });
 
-  it("supports strict mode with explicit allowlist", () => {
-    const result = sanitizeEnvVars(
+  it("supports strict mode with explicit allowlist", async () => {
+    const result = await sanitizeEnvVarsAsync(
       {
         NODE_ENV: "test",
         FOO: "bar",
@@ -70,8 +70,8 @@ describe("sanitizeEnvVars", () => {
     expect(result.blocked).toEqual(["FOO"]);
   });
 
-  it("skips undefined values when sanitizing process-style env maps", () => {
-    const result = sanitizeEnvVars({
+  it("skips undefined values when sanitizing process-style env maps", async () => {
+    const result = await sanitizeEnvVarsAsync({
       NODE_ENV: "test",
       OPTIONAL_SECRET: undefined,
       OPENAI_API_KEY: undefined,

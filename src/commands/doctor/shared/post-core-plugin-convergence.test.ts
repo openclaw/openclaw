@@ -45,6 +45,7 @@ vi.mock("../../../plugins/payload-verification.js", () => ({
 
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
+import { clearBundledDiscoveryModeMemo } from "../../../plugins/bundled-discovery-state.js";
 import { resolvePluginNpmGenerationProjectDir } from "../../../plugins/install-paths.js";
 import {
   loadInstalledPluginIndexInstallRecords,
@@ -774,7 +775,7 @@ describe("runPostCorePluginConvergence", () => {
     expect(result.errored).toBe(false);
   });
 
-  it("retires payload and record state before repair across two starts", async () => {
+  it("retires payload and record state from cold discovery across two starts", async () => {
     const stateDir = tempDirs.make("openclaw-post-core-convergence-");
     const bundledRoot = tempDirs.make("openclaw-post-core-bundled-");
     const cfg = {
@@ -870,8 +871,10 @@ describe("runPostCorePluginConvergence", () => {
       return { changes: [], warnings: [], records };
     });
 
+    clearBundledDiscoveryModeMemo();
     const first = await runPostCorePluginConvergence({ cfg, env });
     const projectsAfterFirst = fs.readdirSync(path.join(stateDir, "npm", "projects"));
+    clearBundledDiscoveryModeMemo();
     const second = await runPostCorePluginConvergence({ cfg, env });
 
     expect(fs.existsSync(packageDir)).toBe(false);

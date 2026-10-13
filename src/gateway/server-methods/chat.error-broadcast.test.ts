@@ -4,6 +4,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { recordClientPresenceActivity } from "../server/client-presence.js";
@@ -18,6 +20,22 @@ vi.mock("./chat-send-agent-dispatch.js", () => ({
     throw new Error("dispatch failed after admission ACK");
   },
 }));
+
+async function sendChat(...args: Parameters<typeof handleChatSend>) {
+  const config = args[0].context.getRuntimeConfig();
+  const metadata = await resolvePluginMetadataSnapshotAsync({ config });
+  return withPluginMetadataSnapshotScope(metadata, () => handleChatSend(...args), {
+    config,
+  });
+}
+
+async function sendExternalChat(...args: Parameters<typeof handleDirectExternalChatSend>) {
+  const config = args[0].context.getRuntimeConfig();
+  const metadata = await resolvePluginMetadataSnapshotAsync({ config });
+  return withPluginMetadataSnapshotScope(metadata, () => handleDirectExternalChatSend(...args), {
+    config,
+  });
+}
 
 function createMockContext() {
   const broadcast = vi.fn();
@@ -40,7 +58,7 @@ describe("chat.send error broadcast", () => {
     const ctx = createMockContext();
     const respond = vi.fn();
 
-    await handleDirectExternalChatSend({
+    await sendExternalChat({
       params: {
         sessionKey: "main",
         message: "hello",
@@ -107,7 +125,7 @@ describe("chat.send error broadcast", () => {
           isWebchatConnect: () => false,
           respond,
         };
-        const sending = handleChatSend(options, async () => {
+        const sending = sendChat(options, async () => {
           entered.resolve();
           await release.promise;
           return true;
@@ -120,7 +138,7 @@ describe("chat.send error broadcast", () => {
         ]);
         expect(client.personPresence?.lastActivityAt).toBeUndefined();
         const duplicateResponse = vi.fn();
-        await handleChatSend({ ...options, respond: duplicateResponse });
+        await sendChat({ ...options, respond: duplicateResponse });
         expect(duplicateResponse).toHaveBeenCalledWith(
           true,
           { runId: "activity-send", status: "in_flight" },
@@ -146,7 +164,7 @@ describe("chat.send error broadcast", () => {
           closedDuringAdmission ? undefined : admittedAt,
         );
         const cachedResponse = vi.fn();
-        await handleChatSend({
+        await sendChat({
           ...options,
           params: { ...options.params, expectedSessionRoutingContract: "global|main|main" },
           respond: cachedResponse,
@@ -161,7 +179,7 @@ describe("chat.send error broadcast", () => {
     const ctx = createMockContext();
     const respond = vi.fn();
 
-    await handleDirectExternalChatSend({
+    await sendExternalChat({
       params: {
         sessionKey: "main",
         message: "/stop",
@@ -191,7 +209,7 @@ describe("chat.send error broadcast", () => {
       throw Object.assign(new Error("LLM timeout"), { code: "TIMEOUT" });
     });
 
-    await handleDirectExternalChatSend({
+    await sendExternalChat({
       params: {
         sessionKey: "global",
         agentId: "main",

@@ -16,7 +16,7 @@ import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
-import { applyModelOverrideWithAuthProfileCompatibility } from "../../sessions/auth-profile-preservation.js";
+import { applyModelOverrideWithAuthProfileCompatibilityAsync } from "../../sessions/auth-profile-preservation.js";
 import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_MESSAGE,
@@ -424,7 +424,7 @@ export async function handleDirectiveOnly(
         allowElevatedPersistence: elevatedEnabled && elevatedAllowed,
       });
     if (modelSelection) {
-      const applied = applyModelOverrideWithAuthProfileCompatibility({
+      const applied = await applyModelOverrideWithAuthProfileCompatibilityAsync({
         cfg: params.cfg,
         agentDir,
         entry: sessionEntry,

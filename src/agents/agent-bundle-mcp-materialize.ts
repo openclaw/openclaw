@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import {
   getPluginToolMeta,
   setPluginToolMeta,
@@ -651,6 +652,9 @@ export async function createBundleMcpToolRuntime(params: {
 }): Promise<BundleMcpToolRuntime> {
   const signal = getSessionMcpRequestSignal();
   signal?.throwIfAborted();
+  if (!params.createRuntime) {
+    await prepareBundledDiscoveryMode();
+  }
   const createRuntime =
     params.createRuntime ?? (await import("./agent-bundle-mcp-runtime.js")).createSessionMcpRuntime;
   signal?.throwIfAborted();

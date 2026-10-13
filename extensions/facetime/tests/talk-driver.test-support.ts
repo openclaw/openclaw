@@ -96,7 +96,7 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", () => ({
   buildRealtimeVoiceAgentConsultWorkingResponse: vi.fn(() => ({ status: "working" })),
   consultRealtimeVoiceAgent: mocks.consult,
   createRealtimeVoiceBridgeSession: mocks.createSession,
-  getRealtimeVoiceProvider: vi.fn((providerId: string) => ({ id: providerId })),
+  getRealtimeVoiceProviderAsync: vi.fn(async (providerId: string) => ({ id: providerId })),
   createTalkSessionController: vi.fn(() => {
     const recentEvents: unknown[] = [];
     const remember = (event: unknown) => {

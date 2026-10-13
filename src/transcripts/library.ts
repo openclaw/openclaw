@@ -52,7 +52,7 @@ function normalizeDate(value: string | undefined): string | undefined {
 export async function listTranscriptLibrary(
   store: TranscriptsStore,
   params: TranscriptsListParams,
-  providerName?: (providerId: string) => string | undefined,
+  providerName?: (providerId: string) => string | undefined | Promise<string | undefined>,
 ): Promise<TranscriptsListResult> {
   const { cursor, ...filters } = params;
   const startedAfter = normalizeDate(filters.startedAfter);
@@ -92,8 +92,10 @@ export async function listTranscriptLibrary(
     projection: "public",
   });
   const captures = readTranscriptCaptureSnapshot();
-  const sessions = entries.map((entry) =>
-    presentTranscriptSession(entry, captures, providerName?.(entry.providerId)),
+  const sessions = await Promise.all(
+    entries.map(async (entry) =>
+      presentTranscriptSession(entry, captures, await providerName?.(entry.providerId)),
+    ),
   );
   const last = sessions.at(-1);
   const result = {
@@ -107,7 +109,7 @@ export async function listTranscriptLibrary(
 export async function getTranscriptLibrary(
   store: TranscriptsStore,
   params: TranscriptsGetParams,
-  providerName?: (providerId: string) => string | undefined,
+  providerName?: (providerId: string) => string | undefined | Promise<string | undefined>,
 ): Promise<TranscriptsGetResult> {
   const { entry, page, notes, purpose, scope } = await store.readLibraryEntry(params);
   const utterances = page?.utterances
@@ -125,7 +127,7 @@ export async function getTranscriptLibrary(
     session: presentTranscriptSession(
       projectTranscriptSession(entry),
       undefined,
-      providerName?.(entry.session.source.providerId),
+      await providerName?.(entry.session.source.providerId),
     ),
     ...(utterances ? { utterances } : {}),
     nextCursor: page?.hasMore && last ? encodeCursor(scope, [last.sequence]) : null,

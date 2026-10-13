@@ -39,6 +39,7 @@ import { createProcessSupervisor } from "../../process/supervisor/supervisor.js"
 import { createStubChildAdapter } from "../../process/supervisor/supervisor.test-support.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { hashCliImageTurnEntryId } from "../cli-image-turn-correlation.js";
@@ -234,6 +235,11 @@ beforeEach(() => {
       hookAliases: ["claude-cli", "codex-cli", "google-gemini-cli"],
       auth: [],
     },
+    source: "test",
+  });
+  registry.channels.push({
+    pluginId: TEST_MESSAGE_CHANNEL,
+    plugin: createChannelTestPluginBase({ id: TEST_MESSAGE_CHANNEL }),
     source: "test",
   });
   setActivePluginRegistry(registry);

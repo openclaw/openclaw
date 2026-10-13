@@ -44,7 +44,8 @@ import { readSessionWorkerPlacementAsync } from "../gateway/worker-environments/
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { applyModelOverrideWithAuthProfileCompatibility } from "../sessions/auth-profile-preservation.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
+import { applyModelOverrideWithAuthProfileCompatibilityAsync } from "../sessions/auth-profile-preservation.js";
 import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_MESSAGE,
@@ -176,6 +177,15 @@ export async function applySessionModelSelectionInternal(
   if (isModelSelectionLocked(startingEntry)) {
     return { status: "rejected", reason: "locked", message: MODEL_SELECTION_LOCKED_MESSAGE };
   }
+  const metadataSnapshot =
+    params.cfg.plugins?.enabled === false
+      ? null
+      : await resolvePluginMetadataSnapshotAsync({
+          config: params.cfg,
+          workspaceDir: startingEntry.spawnedWorkspaceDir,
+          allowWorkspaceScopedCurrent: true,
+        });
+  const manifestPlugins = metadataSnapshot ?? [];
   const operatorScope = params.operatorAuthority
     ? undefined
     : (
@@ -192,13 +202,19 @@ export async function applySessionModelSelectionInternal(
       defaultProvider: params.defaultProvider,
       defaultModel: { provider: params.defaultProvider, model: params.defaultModel },
       agentId: params.agentId,
+      manifestPlugins,
     });
   const selectedRef = resetToDefault
     ? resolveOperatorModelDefault({
         cfg: params.cfg,
         agentId: params.agentId,
         policy: operatorAuthority?.modelPolicy,
-        model: resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId }),
+        model: resolveDefaultModelForAgent({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          manifestPlugins,
+        }),
+        manifestPlugins,
         allows: policy.allows,
       })
     : params.request;
@@ -234,6 +250,7 @@ export async function applySessionModelSelectionInternal(
 
   const prepared = await prepareModelSelectionRuntime({
     cfg: params.cfg,
+    metadataSnapshot,
     agentId: params.agentId,
     workspaceDir: startingEntry.spawnedWorkspaceDir,
     sessionEntry: startingEntry,
@@ -264,8 +281,9 @@ export async function applySessionModelSelectionInternal(
   const thinkingCatalog = prepared.catalog;
   const selectedCatalogEntry = findSelectedCatalogEntry({ catalog: thinkingCatalog, ...request });
   const nextEntry = { ...startingEntry };
-  const modelChange = applyModelOverrideWithAuthProfileCompatibility({
+  const modelChange = await applyModelOverrideWithAuthProfileCompatibilityAsync({
     cfg: params.cfg,
+    metadataSnapshot: metadataSnapshot ?? undefined,
     agentDir: resolveAgentDir(params.cfg, params.agentId),
     entry: nextEntry,
     currentProvider: params.currentProvider,
@@ -383,6 +401,7 @@ export async function applySessionModelSelectionInternal(
 
   const agentRuntime = resolveEffectiveAgentRuntime({
     cfg: params.cfg,
+    metadataSnapshot,
     provider: request.provider,
     modelId: request.model,
     modelApi: selectedCatalogEntry?.api,

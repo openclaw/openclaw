@@ -109,7 +109,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     await resetSubagentRegistryForTests({ persist: false });
     clearRuntimeConfigSnapshot();
     clearConfigCache();
-    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(createTestRegistry([]));
+    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockResolvedValue(createTestRegistry([]));
     persistRegistryRows.mockReset();
     await configureMockSubagentRegistryPersistence({ persistRegistryRows });
     vi.mocked(restoreSubagentRunsFromDisk).mockResolvedValue(0);

@@ -418,7 +418,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
         }),
         runTurn: vi.fn(),
       }));
-      runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(
+      runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockResolvedValue(
         runtimePluginMocks.pluginRegistry,
       );
     });

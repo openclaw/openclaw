@@ -16,7 +16,6 @@ import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.j
 const { prepareWorkspacePluginRegistries, preparedModelRuntimeWorkspaceFactsKey } =
   await import("./prepared-model-runtime.inbound-registry.js");
 const { ownerKey, hasSameLifecycleInput } = await import("./prepared-model-runtime.owner.js");
-const { loadPluginMetadataSnapshot } = await import("../plugins/plugin-metadata-snapshot.js");
 const {
   writePlugin,
   useNoBundledPlugins,
@@ -84,7 +83,10 @@ it("completes without loading configured context/memory or unrelated startup plu
       entries: { [engine.id]: { enabled: true }, [memory.id]: { enabled: true } },
     },
   };
-  const metadata = loadPluginMetadataSnapshot({ config, workspaceDir: provider.dir });
+  const { resolvePluginMetadataSnapshotAsync: resolveMetadata } = await vi.importActual<
+    typeof import("../plugins/plugin-metadata-snapshot.js")
+  >("../plugins/plugin-metadata-snapshot.js");
+  const metadata = await resolveMetadata({ config, workspaceDir: provider.dir });
   mocks.acquireAgentRunPreparedModelRuntime.mockImplementationOnce(async (input, options) => {
     const preparedInput: PreparedModelRuntimeInput = {
       ...input,

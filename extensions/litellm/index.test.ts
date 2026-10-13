@@ -8,11 +8,14 @@ import {
   registerProviderPlugin,
   requireRegisteredProvider,
   runProviderCatalog,
+  useProviderCatalogMetadata,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../test-support/runtime-spies.js";
 import plugin from "./index.js";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 const LITELLM_DEFAULT_MODEL = {
   id: "claude-opus-4-6",

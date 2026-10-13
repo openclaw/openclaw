@@ -2,7 +2,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { preparePluginAutoEnableTestDiscovery } from "../../config/plugin-auto-enable.test-helpers.js";
 import { withEnv, withEnvAsync } from "../../test-utils/env.js";
 import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
@@ -11,6 +12,10 @@ import type { SkillEntry, SkillInstallSpec } from "../types.js";
 import { buildWorkspaceSkillStatus } from "./status.js";
 
 const tempDirs: string[] = [];
+
+beforeEach(() => {
+  preparePluginAutoEnableTestDiscovery();
+});
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));

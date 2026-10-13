@@ -7,7 +7,7 @@ import {
   createColdPluginHermeticEnv,
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
-import { withEnv } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { isHighSignalLiveModelRef } from "./test-helpers/live-model-dynamic-candidates.js";
 
 describe("live model policy configuration", () => {
@@ -18,7 +18,7 @@ describe("live model policy configuration", () => {
     cleanupTrackedTempDirs(tempDirs);
   });
 
-  it("selects a scoped plugin's modern models under Vitest", () => {
+  it("selects a scoped plugin's modern models under Vitest", async () => {
     const rootDir = makeTrackedTempDir("openclaw-live-model-policy", tempDirs);
     const fixture = createColdPluginFixture({ rootDir });
     fs.writeFileSync(
@@ -41,16 +41,12 @@ describe("live model policy configuration", () => {
     const config = createColdPluginConfig(rootDir, fixture.pluginId);
     const ref = { provider: fixture.providerId, id: "current-model", env };
 
-    withEnv(env, () => {
-      expect(isHighSignalLiveModelRef(ref)).toBe(false);
-      expect(isHighSignalLiveModelRef({ ...ref, config })).toBe(true);
-      expect(isHighSignalLiveModelRef({ ...ref, config, id: "retired-model" })).toBe(false);
-      expect(
-        isHighSignalLiveModelRef({
-          ...ref,
-          config: { ...config, plugins: { ...config.plugins, enabled: false } },
-        }),
-      ).toBe(false);
+    await withEnvAsync(env, async () => {
+      expect(await isHighSignalLiveModelRef(ref)).toBe(false);
+      expect(await isHighSignalLiveModelRef({ ...ref, config })).toBe(true);
+      expect(await isHighSignalLiveModelRef({ ...ref, config, id: "retired-model" })).toBe(false);
+      const disabledConfig = { ...config, plugins: { ...config.plugins, enabled: false } };
+      expect(await isHighSignalLiveModelRef({ ...ref, config: disabledConfig })).toBe(false);
     });
   });
 });

@@ -23,7 +23,7 @@ import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-reque
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import type { OpenClawPluginToolDelivery } from "../plugins/tool-types.js";
 import type { resolvePluginTools } from "../plugins/tools.js";
-import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
+import { listKnownProviderAuthEnvVarNamesAsync } from "../secrets/provider-env-vars.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -115,9 +115,9 @@ function authConfig(envName: string): OpenClawConfig {
   };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   // Exercise auth-source preparation even on hosts with configured search providers.
-  for (const name of listKnownProviderAuthEnvVarNamesCore({ config: {} })) {
+  for (const name of await listKnownProviderAuthEnvVarNamesAsync({ config: {} })) {
     vi.stubEnv(name, undefined);
   }
   hoisted.resolvePluginTools.mockReturnValue([]);

@@ -50,7 +50,11 @@ function fixture(defaultOnly = false) {
     contextWindow: "extended",
   };
   let current = true;
-  let modelPolicy = prepareOperatorModelPolicy({ cfg, policy: { deny: ["fixture/blocked"] } });
+  let modelPolicy = prepareOperatorModelPolicy({
+    cfg,
+    manifestPlugins: [],
+    policy: { deny: ["fixture/blocked"] },
+  });
   const operatorAuthority = createAdmittedRunOperatorAuthority({
     profileId: "limited-operator",
     scopes: ["operator.write"],
@@ -67,7 +71,7 @@ function fixture(defaultOnly = false) {
     current = false;
   };
   const tighten = () => {
-    modelPolicy = prepareOperatorModelPolicy({ cfg, policy: { allow: [] } });
+    modelPolicy = prepareOperatorModelPolicy({ cfg, manifestPlugins: [], policy: { allow: [] } });
   };
   const project = (model: string | null, duringPreparation?: () => void) =>
     projectSessionsPatchEntry({

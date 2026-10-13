@@ -17,7 +17,10 @@ import { toolSchemaDepthEntrypoint } from "../../packages/ai/src/providers/tool-
 import { eventStreamRetentionEntrypoint } from "../../packages/llm-core/src/retention-runtime.test-support.ts";
 import { eventHubRetentionEntrypoint } from "../../packages/sdk/src/retention-runtime.test-support.ts";
 import { tableStackEntrypoint } from "../../packages/terminal-core/src/table-runtime.test-support.ts";
-import { authProfileScopeCwdEntrypoint } from "../../src/agents/auth-profiles/store-scope-cwd-runtime.test-support.ts";
+import {
+  authProfileAsyncSaveEntrypoint,
+  authProfileScopeCwdEntrypoint,
+} from "../../src/agents/auth-profiles/store-scope-cwd-runtime.test-support.ts";
 import { processPollLivenessEntrypoint } from "../../src/agents/bash-tools.process-liveness-runtime.test-support.ts";
 import {
   codeModeDescriptionRetentionEntrypoint,
@@ -335,6 +338,7 @@ export const vitestWorkerBuildEntries = {
     ...Object.values(triageTestRuntimeEntrypoints),
     ...Object.values(triageMaintenanceRuntimeEntrypoints),
     authProfileScopeCwdEntrypoint,
+    authProfileAsyncSaveEntrypoint,
     processPollLivenessEntrypoint,
     codeModeRetentionEntrypoint,
     codeModeDescriptionRetentionEntrypoint,

@@ -38,11 +38,18 @@ let isKnownEnvApiKeyMarker: typeof import("./model-auth-markers.js").isKnownEnvA
 let isNonSecretApiKeyMarker: typeof import("./model-auth-markers.js").isNonSecretApiKeyMarker;
 let resolveOAuthApiKeyMarker: typeof import("./model-auth-markers.js").resolveOAuthApiKeyMarker;
 
+async function prepareMarkerMetadata() {
+  const { preparePluginMetadataMachineStateAsync } =
+    await import("../plugins/installed-plugin-index-record-state.js");
+  await preparePluginMetadataMachineStateAsync({});
+}
+
 async function loadMarkerModules() {
   vi.doUnmock("../plugins/manifest-metadata-scan.js");
   vi.doUnmock("../plugins/manifest-registry.js");
   vi.doUnmock("../secrets/provider-env-vars.js");
   vi.resetModules();
+  await prepareMarkerMetadata();
   const markersModule = await import("./model-auth-markers.js");
   CODEX_APP_SERVER_AUTH_MARKER = markersModule.CODEX_APP_SERVER_AUTH_MARKER;
   GCP_VERTEX_CREDENTIALS_MARKER = markersModule.GCP_VERTEX_CREDENTIALS_MARKER;
@@ -76,8 +83,9 @@ describe("model auth markers", () => {
     await withEnvAsync(cleanPluginManifestEnv(), loadMarkerModules);
   });
 
-  it("recognizes known env marker names but not arbitrary all-caps keys", () => {
-    withEnv(cleanPluginManifestEnv(), () => {
+  it("recognizes known env marker names but not arbitrary all-caps keys", async () => {
+    await withEnvAsync(cleanPluginManifestEnv(), async () => {
+      await prepareMarkerMetadata();
       expect(isNonSecretApiKeyMarker("OPENAI_API_KEY")).toBe(true);
       expect(isNonSecretApiKeyMarker("ALLCAPS_EXAMPLE")).toBe(false);
     });
@@ -89,8 +97,9 @@ describe("model auth markers", () => {
     });
   });
 
-  it("excludes aws-sdk env markers from known api key env marker helper", () => {
-    withEnv(cleanPluginManifestEnv(), () => {
+  it("excludes aws-sdk env markers from known api key env marker helper", async () => {
+    await withEnvAsync(cleanPluginManifestEnv(), async () => {
+      await prepareMarkerMetadata();
       expect(isKnownEnvApiKeyMarker("OPENAI_API_KEY")).toBe(true);
       expect(isKnownEnvApiKeyMarker("AWS_PROFILE")).toBe(false);
     });

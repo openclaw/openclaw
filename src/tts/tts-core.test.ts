@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import type { AssistantMessage, Model, Usage } from "../llm/types.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import type { SpeechModelOverridePolicy } from "./provider-types.js";
 import { resolveSpeechProviderApiKey, summarizeText } from "./tts-core.js";
 import type { ResolvedTtsConfig } from "./tts-types.js";
@@ -51,6 +52,7 @@ describe("TTS core", () => {
   });
 
   it("clamps oversized summarization timeout timers", async () => {
+    await preparePluginMetadataMachineStateAsync({});
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       const model = {

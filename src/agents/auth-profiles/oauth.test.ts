@@ -16,12 +16,14 @@ vi.mock("../cli-credentials.js", () => ({
   readCodexCliCredentialsCached: () => null,
   readMiniMaxCliCredentialsCached: () => null,
 }));
-vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
+vi.mock("../../plugins/provider-runtime.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/provider-runtime.runtime.js")>()),
   buildProviderAuthDoctorHintWithPlugin: async () => undefined,
-  formatProviderAuthProfileApiKeyWithPlugin: async (params: { context?: { access?: string } }) =>
-    params.context?.access,
+  formatProviderAuthProfileApiKeyWithLazyRuntime: async (params: {
+    context?: { access?: string };
+  }) => params.context?.access,
   resolveProviderOAuthCredentialWithPlugin,
-  resolveProviderOAuthRefreshCapabilityWithPlugin: async () => ({ status: "unhandled" }),
+  resolveProviderOAuthRefreshCapabilityWithLazyRuntime: async () => ({ status: "unhandled" }),
 }));
 
 let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;

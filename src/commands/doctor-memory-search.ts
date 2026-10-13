@@ -11,7 +11,7 @@ import {
   hasAuthProfileStoreSourceForProvider,
   isConfiguredAwsSdkAuthProfileForProvider,
 } from "../agents/auth-profiles.js";
-import { resolveMemorySearchConfig } from "../agents/memory-search.js";
+import { resolveMemorySearchConfigAsync } from "../agents/memory-search.js";
 import {
   resolveApiKeyForProviderCore,
   resolveEnvApiKey,
@@ -281,7 +281,7 @@ async function inspectMemorySearchHealthForAgent(
   report: MemorySearchHealthReporter,
 ): Promise<void> {
   const { agentId, agentDir } = scope;
-  const resolved = resolveMemorySearchConfig(cfg, agentId);
+  const resolved = await resolveMemorySearchConfigAsync(cfg, agentId);
 
   if (!resolved) {
     const recallEnabled = inspectRememberAcrossConversationsHealth({
@@ -316,7 +316,7 @@ async function inspectMemorySearchHealthForAgent(
   }
   // Resolve the owner only where Memory Core's checks need it, so these early
   // returns never load the slot plugin.
-  const backendConfig = resolveActiveMemoryBackendConfig({ cfg, agentId });
+  const backendConfig = await resolveActiveMemoryBackendConfig({ cfg, agentId });
   if (backendConfig?.backend === "provider-runtime") {
     let memoryProvider: Awaited<ReturnType<typeof getActiveMemoryProviderCore>>["provider"] = null;
     let status = "unavailable";

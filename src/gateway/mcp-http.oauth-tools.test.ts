@@ -14,7 +14,10 @@ const pluginTools = vi.hoisted(() => ({
 
 vi.mock("../plugins/tools.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/tools.js")>()),
-  resolvePluginTools: (params: unknown) => pluginTools.resolve(params),
+  *resolvePluginToolsSteps(params: unknown) {
+    yield* [];
+    return pluginTools.resolve(params);
+  },
 }));
 
 describe("MCP loopback OAuth tools", () => {

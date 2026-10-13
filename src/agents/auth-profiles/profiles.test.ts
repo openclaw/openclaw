@@ -59,11 +59,13 @@ vi.mock("../provider-auth-aliases.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../provider-auth-aliases.js")>();
   return {
     ...actual,
-    resolveProviderIdForAuth: (...args: Parameters<typeof actual.resolveProviderIdForAuth>) => {
+    resolvePreparedProviderIdForAuth: (
+      ...args: Parameters<typeof actual.resolvePreparedProviderIdForAuth>
+    ) => {
       const provider = args[0].trim().toLowerCase();
       return provider === "gmi-cloud" || provider === "gmicloud"
         ? "gmi"
-        : actual.resolveProviderIdForAuth(...args);
+        : actual.resolvePreparedProviderIdForAuth(...args);
     },
   };
 });

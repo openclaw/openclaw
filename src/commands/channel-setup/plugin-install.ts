@@ -7,6 +7,7 @@ import {
   resolveConfiguredChannelPluginIdsAsync,
   resolveDiscoverableScopedChannelPluginIds,
 } from "../../plugins/channel-plugin-ids.js";
+import { preparePluginMetadataMachineStateAsync } from "../../plugins/installed-plugin-index-record-state.js";
 import { loadPluginRegistryHandle } from "../../plugins/loader.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -66,6 +67,7 @@ export async function loadChannelSetupPluginRegistrySnapshotForChannel(params: {
   workspaceDir?: string;
   forceSetupOnlyChannelPlugins?: boolean;
 }): Promise<PluginRegistry> {
+  await preparePluginMetadataMachineStateAsync({ env: process.env });
   let scopedPluginId = params.pluginId?.trim();
   if (!scopedPluginId) {
     scopedPluginId = getTrustedChannelPluginCatalogEntry(params.channel, {

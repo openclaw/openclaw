@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { zstdCompressSync } from "node:zlib";
-import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
+import { createOpenClawCodingToolsAsync } from "openclaw/plugin-sdk/agent-harness";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { listSessionTranscriptCorpusEntriesForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -22,6 +23,8 @@ import {
   configureMemoryCoreDreamingStateForTests,
   createMemoryCoreTestHarness,
 } from "./test-helpers.js";
+
+useProviderCatalogMetadata(new URL("..", import.meta.url));
 
 describe("memory forget curated writes", () => {
   const { createTempWorkspace } = createMemoryCoreTestHarness();
@@ -60,13 +63,15 @@ describe("memory forget curated writes", () => {
   it("reports session-authored curated memory without deleting unattributable file content", async () => {
     await seedSession("target");
     const curatedContent = "# Long-Term Memory\nThe launch code is violet.\n";
-    const writeTool = createOpenClawCodingTools({
-      workspaceDir,
-      config: cfg,
-      sessionId: "target",
-      sessionKey: "agent:main:target",
-      senderIsOwner: true,
-    }).find((tool) => tool.name === "write");
+    const writeTool = (
+      await createOpenClawCodingToolsAsync({
+        workspaceDir,
+        config: cfg,
+        sessionId: "target",
+        sessionKey: "agent:main:target",
+        senderIsOwner: true,
+      })
+    ).find((tool) => tool.name === "write");
     expect(writeTool).toBeDefined();
     await writeTool!.execute("write-curated-memory", {
       path: "MEMORY.md",

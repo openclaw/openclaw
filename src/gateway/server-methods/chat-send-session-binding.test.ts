@@ -33,6 +33,8 @@ import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { readUserTurnPromptReactionSource } from "../../sessions/user-turn-transcript-admission.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -88,6 +90,8 @@ it.each(admissionScenarios)(
             : scenario;
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       setRuntimeConfigSnapshot({});
+      const runtimeConfig = getRuntimeConfig();
+      const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({ config: runtimeConfig });
       const runId = "retained-preparation";
       const sessionKey = scenario === "dashboard" ? "agent:main:main" : "agent:main:binding";
       const scope = { agentId: "main", sessionKey };
@@ -216,14 +220,20 @@ it.each(admissionScenarios)(
           sessionMutationAuthorization: authorization.authorization,
           isWebchatConnect: () => false,
         };
-        if (scenario === "narrow-first-send") {
-          await handleGatewayRequest({
-            ...request,
-            extraHandlers: { "chat.send": handleChatSend },
-          });
-        } else {
-          await sendChat(request);
-        }
+        await withPluginMetadataSnapshotScope(
+          metadataSnapshot,
+          async () => {
+            if (scenario === "narrow-first-send") {
+              await handleGatewayRequest({
+                ...request,
+                extraHandlers: { "chat.send": handleChatSend },
+              });
+            } else {
+              await sendChat(request);
+            }
+          },
+          { config: runtimeConfig },
+        );
         expect(respond).toHaveBeenCalledWith(
           true,
           dashboard
@@ -429,6 +439,10 @@ it.each(
       { scenario: "minimal", prepareProfileCatalog: true },
       async (state) => {
         setRuntimeConfigSnapshot({});
+        const runtimeConfig = getRuntimeConfig();
+        const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+          config: runtimeConfig,
+        });
         const sessionKey = "agent:main:reaction-source";
         const sessionId = "reaction-source-session";
         const scope = { agentId: "main", sessionKey, sessionId };
@@ -527,15 +541,20 @@ it.each(
           });
           expect(authorization.error).toBeNull();
           const respond = vi.fn();
-          await handleDirectExternalChatSend({
-            params,
-            req: { type: "req", id: runId, method: "chat.send", params },
-            respond,
-            context,
-            client,
-            sessionMutationAuthorization: authorization.authorization,
-            isWebchatConnect: () => false,
-          });
+          await withPluginMetadataSnapshotScope(
+            metadataSnapshot,
+            () =>
+              handleDirectExternalChatSend({
+                params,
+                req: { type: "req", id: runId, method: "chat.send", params },
+                respond,
+                context,
+                client,
+                sessionMutationAuthorization: authorization.authorization,
+                isWebchatConnect: () => false,
+              }),
+            { config: runtimeConfig },
+          );
           expect(respond).toHaveBeenCalledWith(
             true,
             expect.objectContaining({ runId, status: "started" }),

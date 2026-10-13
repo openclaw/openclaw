@@ -1,8 +1,9 @@
-import { buildModelAliasIndex, resolveModelRefFromString } from "openclaw/plugin-sdk/agent-runtime";
+import { buildModelAliasIndex } from "openclaw/plugin-sdk/agent-runtime";
 import {
   type JsonSchemaObject,
   validateJsonSchemaValue,
 } from "openclaw/plugin-sdk/json-schema-runtime";
+import { prepareModelRefResolver } from "openclaw/plugin-sdk/model-ref-parse";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -22,12 +23,12 @@ function stripCodeFences(s: string): string {
   return trimmed;
 }
 
-function resolveLlmTaskModelRef(params: {
+async function resolveLlmTaskModelRef(params: {
   api: OpenClawPluginApi;
   provider?: string;
   rawModel?: string;
   preserveProvider?: boolean;
-}): { provider?: string; model?: string } {
+}): Promise<{ provider?: string; model?: string }> {
   const defaultProvider =
     normalizeOptionalString(params.provider) ??
     normalizeOptionalString(params.api.runtime.agent.defaults.provider);
@@ -45,8 +46,11 @@ function resolveLlmTaskModelRef(params: {
   }
 
   const cfg = params.api.config;
-  const aliasIndex = cfg ? buildModelAliasIndex({ cfg, defaultProvider }) : undefined;
-  const resolved = resolveModelRefFromString({
+  const resolver = await prepareModelRefResolver({ config: cfg });
+  const aliasIndex = cfg
+    ? buildModelAliasIndex({ cfg, defaultProvider, manifestPlugins: resolver.manifestPlugins })
+    : undefined;
+  const resolved = resolver.resolveModelRefFromString({
     cfg,
     raw: rawModel,
     defaultProvider,
@@ -91,7 +95,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       const hasModelOverride = Boolean(
         requestProvider || configuredProvider || requestModel || configuredModel,
       );
-      const { provider, model } = resolveLlmTaskModelRef({
+      const { provider, model } = await resolveLlmTaskModelRef({
         api,
         provider: requestedProvider,
         rawModel,

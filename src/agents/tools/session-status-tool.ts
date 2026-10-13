@@ -37,7 +37,7 @@ import {
 } from "../agent-scope.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveThinkingDefault } from "../model-thinking-default.js";
-import { loadPublishedPreparedModelCatalog } from "../prepared-model-catalog.js";
+import { loadPublishedPreparedModelCatalogOwnerSnapshot } from "../prepared-model-catalog.js";
 import { resolveSessionModelIdentityRef } from "../session-model-ref.js";
 import {
   describeSessionStatusTool,
@@ -537,9 +537,24 @@ export function createSessionStatusTool(opts?: {
         expectedSessionId: access.expectedSessionId,
         targetSessionKey: scopedResolved.key,
         run: async () => {
-          const configured = resolveDefaultModelForAgent({ cfg, agentId });
           const selectedAgentDir = resolveAgentDir(cfg, agentId);
           const selectedWorkspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+          // Status uses the published owner's catalog and metadata without provider discovery.
+          const modelOwner = await loadPublishedPreparedModelCatalogOwnerSnapshot({
+            config: cfg,
+            agentId,
+            agentDir: selectedAgentDir,
+            readOnly: true,
+            ...(scopedResolved.entry.spawnedWorkspaceDir
+              ? { workspaceDir: scopedResolved.entry.spawnedWorkspaceDir }
+              : {}),
+          });
+          const metadataSnapshot = opts?.metadataSnapshot ?? modelOwner.metadataSnapshot;
+          const configured = resolveDefaultModelForAgent({
+            cfg,
+            agentId,
+            manifestPlugins: metadataSnapshot,
+          });
           const modelRaw = readToolStringParam(params, "model");
           let changedModel = false;
           if (typeof modelRaw === "string") {
@@ -551,7 +566,7 @@ export function createSessionStatusTool(opts?: {
               storePath,
               raw: modelRaw,
               resolved: scopedResolved,
-              metadataSnapshot: opts?.metadataSnapshot,
+              metadataSnapshot,
               gatewayCall: gatewayScoped ? gatewayCall : undefined,
             });
             scopedResolved = patched.resolved;
@@ -588,6 +603,7 @@ export function createSessionStatusTool(opts?: {
               scopedResolved.entry,
               agentId,
               `${configured.provider}/${configured.model}`,
+              { manifestPlugins: metadataSnapshot },
             );
           const hasExplicitModelOverride = Boolean(
             !activeModelIdentity &&
@@ -618,16 +634,7 @@ export function createSessionStatusTool(opts?: {
             statusSessionEntry.chatType === "channel" ||
             scopedResolved.key.includes(":group:") ||
             scopedResolved.key.includes(":channel:");
-          // Tool status may read persisted/configured facts, but must not start provider discovery.
-          const thinkingCatalog = await loadPublishedPreparedModelCatalog({
-            config: cfg,
-            agentId,
-            agentDir: selectedAgentDir,
-            readOnly: true,
-            ...(statusSessionEntry.spawnedWorkspaceDir
-              ? { workspaceDir: statusSessionEntry.spawnedWorkspaceDir }
-              : {}),
-          });
+          const thinkingCatalog = modelOwner.modelCatalog.entries;
           const { buildStatusText } = await loadCommandsStatusRuntime();
           const statusText = await buildStatusText({
             cfg,

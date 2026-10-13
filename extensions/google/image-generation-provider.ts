@@ -25,7 +25,7 @@ import {
   DEFAULT_GOOGLE_IMAGE_MODEL,
   GOOGLE_MAX_IMAGE_RESULTS,
 } from "./generation-provider-metadata.js";
-import { resolveGoogleGenerativeAiHttpRequestConfig } from "./http-request.js";
+import { resolveGoogleGenerativeAiHttpRequestConfigAsync } from "./http-request.js";
 import { normalizeGoogleModelId } from "./model-id.js";
 
 const DEFAULT_IMAGE_TIMEOUT_MS = 180_000;
@@ -131,7 +131,7 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
 
       const model = normalizeGoogleModelId(req.model?.trim() || DEFAULT_GOOGLE_IMAGE_MODEL);
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveGoogleGenerativeAiHttpRequestConfig({
+        await resolveGoogleGenerativeAiHttpRequestConfigAsync({
           apiKey: auth.apiKey,
           baseUrl: req.cfg?.models?.providers?.google?.baseUrl,
           request: sanitizeConfiguredModelProviderRequest(

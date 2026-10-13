@@ -8,6 +8,7 @@ import {
   getResolvedSpeechProviderConfig,
   resolveTtsProvider,
   resolveTtsProviderAsync,
+  type TtsProviderRegistry,
 } from "./tts-provider-resolution.js";
 import { resolveModelOverridePolicy, type ResolvedTtsConfig } from "./tts-settings.js";
 import { formatTtsProviderError, sanitizeTtsErrorForLog } from "./tts-synthesis-support.js";
@@ -41,13 +42,16 @@ export {
   setTtsMaxLength,
   setTtsPersona,
   setTtsProvider,
+  setTtsProviderAsync,
 } from "./tts-settings-writes.js";
 export { getLastTtsAttempt, listSpeechVoices, setLastTtsAttempt } from "./tts-payload.js";
 export {
   getResolvedSpeechProviderConfig,
+  getResolvedSpeechProviderConfigAsync,
   isTtsProviderConfigured,
   isTtsProviderConfiguredAsync,
   resolveTtsProviderOrder,
+  resolveTtsProviderOrderAsync,
 } from "./tts-provider-resolution.js";
 export {
   prepareTtsRequest,
@@ -78,8 +82,9 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
 export async function getTtsProviderAsync(
   config: ResolvedTtsConfig,
   prefsPath: string,
+  registry?: TtsProviderRegistry,
 ): Promise<TtsProvider> {
-  return await resolveTtsProviderAsync(config, prefsPath);
+  return await resolveTtsProviderAsync(config, prefsPath, registry);
 }
 
 export const testApi = {

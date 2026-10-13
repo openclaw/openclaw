@@ -1,6 +1,7 @@
 // Shared media runner mock factories provide model-auth and plugin-capability
 // modules for isolated runner tests.
 import { vi } from "vitest";
+import type { MediaUnderstandingProvider } from "./types.js";
 
 /** Builds the auth resolver mock module used by media runner tests. */
 export function createAvailableModelAuthMockModule() {
@@ -45,5 +46,18 @@ export function createAvailableModelAuthMockModule() {
 export function createEmptyCapabilityProviderMockModule() {
   return {
     resolvePluginCapabilityProviders: () => [],
+  };
+}
+
+/** Supplies provider values without loading plugins in media behavior fixtures. */
+export function createMediaProviderAcquisition(providers: MediaUnderstandingProvider[]) {
+  return {
+    providers,
+    run: async <T>(run: () => T | Promise<T>) => await run(),
+    resolveProvider: async ({ providerId }: { providerId: string }) =>
+      providers.find((entry) => entry.id === providerId),
+    resolveProviders: async () => providers,
+    assertOpen() {},
+    release: vi.fn(async () => {}),
   };
 }

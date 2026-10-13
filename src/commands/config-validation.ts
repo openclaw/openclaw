@@ -57,13 +57,14 @@ export async function withCommandPluginMetadata<T>(
   run: () => T,
 ): Promise<Awaited<T>> {
   const [
-    { completePluginMetadataSnapshot, resolvePluginMetadataSnapshot },
+    { completePluginMetadataSnapshot, resolvePluginMetadataSnapshotAsync },
     { withPluginMetadataSnapshotScope },
   ] = await Promise.all([
     import("../plugins/plugin-metadata-snapshot.js"),
     import("../plugins/current-plugin-metadata-snapshot.js"),
   ]);
-  const snapshot = completePluginMetadataSnapshot(params) ?? resolvePluginMetadataSnapshot(params);
+  const snapshot =
+    completePluginMetadataSnapshot(params) ?? (await resolvePluginMetadataSnapshotAsync(params));
   return await withPluginMetadataSnapshotScope(snapshot, run, {
     config: params.config,
     workspaceDir: params.workspaceDir,

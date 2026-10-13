@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
+import { createOpenClawCodingToolsAsync } from "./agent-tools.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import { createRunExit } from "./bash-tools.exec-runtime.test-support.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -375,12 +375,14 @@ describe("exec resolve_exec_env hook wiring", () => {
       vi.fn(async () => ({ LAZY_PLUGIN_SAFE: "yes" })),
     );
 
-    const exec = createOpenClawCodingTools({
-      agentId: "main",
-      sessionKey: "agent:main:telegram:chat-1",
-      cwd: process.cwd(),
-      exec: { host: "gateway", security: "full", ask: "off" },
-    }).find((tool) => tool.name === "exec");
+    const exec = (
+      await createOpenClawCodingToolsAsync({
+        agentId: "main",
+        sessionKey: "agent:main:telegram:chat-1",
+        cwd: process.cwd(),
+        exec: { host: "gateway", security: "full", ask: "off" },
+      })
+    ).find((tool) => tool.name === "exec");
     expect(exec).toBeDefined();
     const result = await executeWrapped(
       exec!,

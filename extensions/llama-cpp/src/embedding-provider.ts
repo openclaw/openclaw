@@ -1,6 +1,6 @@
 import path from "node:path";
 import {
-  getEmbeddingProvider,
+  getEmbeddingProviderAsync,
   type EmbeddingProvider,
   type EmbeddingProviderAdapter,
   type EmbeddingProviderCreateOptions,
@@ -165,7 +165,7 @@ export const llamaCppEmbeddingProviderAdapter: EmbeddingProviderAdapter = {
     const embeddingModel = resolveLlamaCppEmbeddingModel(local);
     const identity = resolveModelIdentity(local, options.dimensions);
     await prepareEmbeddingServer(options, embeddingModel.source);
-    const genericAdapter = getEmbeddingProvider("openai-compatible", options.config);
+    const genericAdapter = await getEmbeddingProviderAsync("openai-compatible", options.config);
     if (!genericAdapter) {
       throw new Error("OpenAI-compatible embedding transport is unavailable.");
     }

@@ -25,7 +25,12 @@ import {
   resolveSecretSentinel,
 } from "../../secrets/sentinel.js";
 import { readProviderJsonObjectResponse } from "../provider-http-errors.js";
-import { resolveProviderRequestHeaders } from "../provider-request-config.js";
+import {
+  attachModelProviderRequestRouteFacts,
+  getModelProviderRequestRouteFacts,
+  prepareModelProviderRequestRouteFacts,
+  resolveProviderRequestPolicyConfig,
+} from "../provider-request-config.js";
 import { buildGuardedModelFetch } from "../provider-transport-fetch.js";
 import { swapSecretSentinelsForEgress } from "../provider-transport-secret-egress.js";
 import type { StreamFn } from "../runtime/index.js";
@@ -415,14 +420,19 @@ export async function prepareGooglePromptCacheStreamFn(
     return undefined;
   }
 
+  const preparedModel = await prepareModelProviderRequestRouteFacts(params.model);
+  const routeFacts = getModelProviderRequestRouteFacts(preparedModel);
   const inner = params.streamFn;
   return async (model, context, options) => {
+    const requestModel = getModelProviderRequestRouteFacts(model)
+      ? model
+      : attachModelProviderRequestRouteFacts(model, routeFacts?.providerMetadataOwners);
     const split = splitSystemPromptCacheBoundary(context.systemPrompt ?? "");
     const systemPrompt = sanitizeTransportPayloadText(
       stripSystemPromptCacheBoundary(split?.stablePrefix ?? ""),
     );
     if (!split || !systemPrompt.trim()) {
-      return inner(model, context, options);
+      return inner(requestModel, context, options);
     }
     const tools = context.tools?.length
       ? [
@@ -445,16 +455,17 @@ export async function prepareGooglePromptCacheStreamFn(
     });
     const callerHeaders = mergeTransportHeaders(params.model.headers, options?.headers);
     const headers =
-      resolveProviderRequestHeaders({
+      resolveProviderRequestPolicyConfig({
         provider: params.model.provider,
         api: params.model.api,
         baseUrl: normalizeGoogleApiBaseUrl(params.model.baseUrl),
+        routeFacts,
         capability: "llm",
         transport: "http",
-        defaultHeaders: authHeaders,
+        providerHeaders: authHeaders,
         callerHeaders,
         precedence: "caller-wins",
-      }) ??
+      }).headers ??
       mergeTransportHeaders(authHeaders, callerHeaders) ??
       authHeaders;
     const cachedContent = await ensureGooglePromptCache({
@@ -462,7 +473,7 @@ export async function prepareGooglePromptCacheStreamFn(
       tools,
       toolConfig,
       cacheRetention: resolvedRetention,
-      model: params.model,
+      model: preparedModel,
       provider: params.provider,
       sessionManager: params.sessionManager,
       signal: params.signal,
@@ -472,12 +483,12 @@ export async function prepareGooglePromptCacheStreamFn(
       log.debug(
         `google prompt cache unavailable for ${params.provider}/${params.modelId}; continuing without cachedContent`,
       );
-      return inner(model, context, options);
+      return inner(requestModel, context, options);
     }
 
     return streamWithPayloadPatch(
       inner,
-      model,
+      requestModel,
       {
         ...context,
         systemPrompt: undefined,

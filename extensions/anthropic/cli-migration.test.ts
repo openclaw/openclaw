@@ -26,9 +26,11 @@ vi.mock("./cli-auth-seam.js", async (importActual) => {
 
 const { buildAnthropicCliMigrationResult } = await import("./cli-migration.js");
 const { resolveKnownAnthropicModelRef } = await import("./claude-model-refs.js");
-const { createTestWizardPrompter, registerSingleProviderPlugin } =
+const { createTestWizardPrompter, registerSingleProviderPlugin, useProviderCatalogMetadata } =
   await import("openclaw/plugin-sdk/plugin-test-runtime");
 const { default: anthropicPlugin } = await import("./index.js");
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 beforeEach(() => {
   probeClaudeCliAuthStatus.mockReset();

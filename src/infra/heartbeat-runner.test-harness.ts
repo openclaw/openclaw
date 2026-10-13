@@ -15,13 +15,15 @@ import { createTestRegistry } from "../test-utils/channel-plugins.js";
 export function installHeartbeatRunnerTestRuntime(params?: { includeSlack?: boolean }): void {
   beforeEach(() => {
     // Model resolution is injected; use the same channel fixtures at dispatch's registry boundary.
-    vi.spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandle").mockImplementation(() => {
-      const registry = getActivePluginRegistry();
-      if (!registry) {
-        throw new Error("Expected heartbeat channel fixture registry");
-      }
-      return registry;
-    });
+    vi.spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandle").mockImplementation(
+      async () => {
+        const registry = getActivePluginRegistry();
+        if (!registry) {
+          throw new Error("Expected heartbeat channel fixture registry");
+        }
+        return registry;
+      },
+    );
     if (params?.includeSlack) {
       setActivePluginRegistry(
         createTestRegistry([

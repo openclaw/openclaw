@@ -106,11 +106,22 @@ export async function supportedSpawnModelChoice(
 ): ReturnType<typeof import("../../model-runtime-choice.js").prepareModelChoice> {
   const { resolveModelRefFromString, buildModelAliasIndex, resolveDefaultModelForAgent } =
     await import("../../model-selection.js");
-  const defaults = resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
+  const { resolvePluginMetadataSnapshotAsync } =
+    await import("../../../plugins/plugin-metadata-snapshot.js");
+  const manifestPlugins = await resolvePluginMetadataSnapshotAsync({
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+  });
+  const defaults = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    manifestPlugins,
+  });
   const selection = {
     cfg: params.cfg,
     agentId: params.agentId,
     defaultProvider: defaults.provider,
+    manifestPlugins,
   };
   const selected = params.resolvedRef
     ? { ref: params.resolvedRef }

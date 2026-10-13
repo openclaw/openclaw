@@ -4,6 +4,7 @@ import { resolveManagedUnsetPathsForWrite } from "../config/config-path-mutation
 import { replaceConfigFile } from "../config/config.js";
 import { getDeferredPluginMigrationConfigFacts } from "../config/deferred-plugin-migration-config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
+import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
 import { coerceConfig } from "../config/io.read-helpers.js";
 import { isConfigValidationFailedError } from "../config/io.write-errors.js";
 import { prepareConfigWriteValues } from "../config/io.write-prepare.js";
@@ -19,6 +20,7 @@ import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../gateway/config-reload-settings.js";
 import { danger, info } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { ExitError, writeRuntimeJson } from "../runtime.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
@@ -203,11 +205,11 @@ function expandActualChangedPaths(
   return [...expanded];
 }
 
-function configApplyHintForOperations(
+async function configApplyHintForOperations(
   operations: readonly ConfigSetOperation[],
   beforeConfig: OpenClawConfig,
   afterConfig: OpenClawConfig,
-): string {
+): Promise<string> {
   const requestedPaths = operations.map(({ requestedPath }) => toDotPath(requestedPath));
   const paths = expandActualChangedPaths(
     diffConfigPaths(beforeConfig, afterConfig),
@@ -218,7 +220,15 @@ function configApplyHintForOperations(
   if (paths.length === 0) {
     return "No gateway restart needed.";
   }
-  const plan = buildGatewayReloadPlan(paths, { candidateConfig: afterConfig });
+  const metadata = await resolveConfigWidePluginMetadataSnapshotAsync({
+    config: afterConfig,
+    env: process.env,
+  });
+  const plan = withPluginMetadataSnapshotScope(
+    metadata,
+    () => buildGatewayReloadPlan(paths, { candidateConfig: afterConfig }),
+    { config: afterConfig, env: process.env },
+  );
   if (
     plan.restartGateway ||
     (plan.hotReasons.length > 0 && resolveGatewayReloadSettings(afterConfig).mode === "off")
@@ -284,7 +294,7 @@ export async function runConfigOperations(params: {
   }
   // Mutate resolved config so runtime defaults never leak into the authored file.
   const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
-  const currentConfig = normalizeConfigMutationModelRefs(snapshot.resolved);
+  const currentConfig = await normalizeConfigMutationModelRefs(snapshot.resolved);
   let mutationSchema: Promise<ConfigSchemaResponse | undefined> | undefined;
   const getMutationSchema = () =>
     (mutationSchema ??= import("../config/runtime-schema.js")
@@ -456,7 +466,7 @@ export async function runConfigOperations(params: {
     }
     nextConfig = coerceConfig(restored.result);
   }
-  nextConfig = normalizeConfigMutationModelRefs(nextConfig);
+  nextConfig = await normalizeConfigMutationModelRefs(nextConfig);
   const normalizedExplicitSetPaths = explicitSetPaths.map(normalizeConfigMutationExplicitSetPath);
   // Parent merge paths own policy, but inherited children are not caller-authored values.
   const resolutionEnv = mutationStart.writeOptions.envSnapshotForRestore ?? process.env;
@@ -549,7 +559,7 @@ export async function runConfigOperations(params: {
       ),
     );
   }
-  const hint = configApplyHintForOperations(operations, currentConfig, nextConfig);
+  const hint = await configApplyHintForOperations(operations, currentConfig, nextConfig);
   if (params.successMode === "set" && operations.length === 1) {
     const operation = operations[0];
     const action = operation?.mutation === "delete" ? "Removed" : "Updated";

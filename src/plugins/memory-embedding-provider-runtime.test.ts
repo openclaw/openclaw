@@ -18,9 +18,16 @@ const mocks = vi.hoisted(() => ({
   >(() => undefined),
 }));
 
+// mock-isolation: Memory embedding fixtures supply capability owners without plugin runtime discovery.
 vi.mock("./capability-provider-runtime.js", () => ({
   resolvePluginCapabilityProvider: mocks.resolvePluginCapabilityProvider,
   resolvePluginCapabilityProviders: mocks.resolvePluginCapabilityProviders,
+  resolvePluginCapabilityProviderAsync: async (
+    ...args: Parameters<typeof mocks.resolvePluginCapabilityProvider>
+  ) => mocks.resolvePluginCapabilityProvider(...args),
+  resolvePluginCapabilityProvidersAsync: async (
+    ...args: Parameters<typeof mocks.resolvePluginCapabilityProviders>
+  ) => mocks.resolvePluginCapabilityProviders(...args),
 }));
 
 let runtimeModule: typeof import("./memory-embedding-provider-runtime.js");
@@ -46,15 +53,14 @@ afterEach(() => {
 });
 
 describe("memory embedding provider runtime resolution", () => {
-  it("falls back to declared capability adapters when the registry is cold", () => {
+  it("falls back to declared capability adapters when the registry is cold", async () => {
     mocks.resolvePluginCapabilityProviders.mockReturnValue([createCapabilityAdapter("ollama")]);
     mocks.resolvePluginCapabilityProvider.mockReturnValue(createCapabilityAdapter("ollama"));
 
-    expect(runtimeModule.listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
-      "openai-compatible",
-      "ollama",
-    ]);
-    expect(runtimeModule.getMemoryEmbeddingProvider("ollama")?.id).toBe("ollama");
+    expect(
+      (await runtimeModule.listMemoryEmbeddingProvidersAsync()).map((adapter) => adapter.id),
+    ).toEqual(["openai-compatible", "ollama"]);
+    expect((await runtimeModule.getMemoryEmbeddingProviderAsync("ollama"))?.id).toBe("ollama");
     expect(mocks.resolvePluginCapabilityProviders).toHaveBeenCalledTimes(1);
     expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledWith({
       key: "embeddingProviders",
@@ -63,7 +69,7 @@ describe("memory embedding provider runtime resolution", () => {
     });
   });
 
-  it("uses a configured provider api as the memory adapter owner", () => {
+  it("uses a configured provider api as the memory adapter owner", async () => {
     const ollamaAdapter = createCapabilityAdapter("ollama");
     const config = {
       models: {
@@ -80,9 +86,9 @@ describe("memory embedding provider runtime resolution", () => {
       providerId === "ollama" ? ollamaAdapter : undefined,
     );
 
-    expect(runtimeModule.getMemoryEmbeddingProvider("ollama-5080", config as never)?.id).toBe(
-      ollamaAdapter.id,
-    );
+    expect(
+      (await runtimeModule.getMemoryEmbeddingProviderAsync("ollama-5080", config as never))?.id,
+    ).toBe(ollamaAdapter.id);
     expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledWith({
       key: "embeddingProviders",
       providerId: "ollama-5080",
@@ -95,7 +101,7 @@ describe("memory embedding provider runtime resolution", () => {
     });
   });
 
-  it("uses registered adapters through a configured provider api", () => {
+  it("uses registered adapters through a configured provider api", async () => {
     const ollamaAdapter = createCapabilityAdapter("ollama");
     registerEmbeddingProvider(ollamaAdapter);
     const config = {
@@ -110,7 +116,7 @@ describe("memory embedding provider runtime resolution", () => {
       },
     } as never;
 
-    expect(runtimeModule.getMemoryEmbeddingProvider("ollama-gpu1", config)?.id).toBe(
+    expect((await runtimeModule.getMemoryEmbeddingProviderAsync("ollama-gpu1", config))?.id).toBe(
       ollamaAdapter.id,
     );
     expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledTimes(1);

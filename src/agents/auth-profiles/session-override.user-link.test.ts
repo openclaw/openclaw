@@ -5,6 +5,7 @@ import { applyMixedDirectives } from "../../auto-reply/reply/directive-handling.
 import { createModelSelectionState } from "../../auto-reply/reply/model-selection.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import {
   clearUserProfileAuthLink,
@@ -82,7 +83,13 @@ async function selectForRequester(
 }
 
 function withAuthState(run: (state: OpenClawTestState) => Promise<void>) {
-  return withOpenClawTestState({ layout: "state-only", prefix: "personal-session-auth-" }, run);
+  return withOpenClawTestState(
+    { layout: "state-only", prefix: "personal-session-auth-" },
+    async (state) => {
+      await resolvePluginMetadataSnapshotAsync({ config: {}, env: state.env });
+      return run(state);
+    },
+  );
 }
 
 describe("person-linked session auth", () => {

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { findSourceImportBackedges } from "../../test/helpers/source-import-closure.js";
 import { bindModelCompletionOwner } from "../llm/model-runtime-binding.js";
 import type { Model } from "../llm/types.js";
+import { makeEmptyPluginMetadataOwners } from "../plugins/current-plugin-metadata.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   complete: vi.fn(),
@@ -11,6 +12,28 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../llm/stream.js", () => ({ completeSimple: mocks.complete }));
 vi.mock("./ai-transport-runtime-host.js", () => ({}));
+// mock-isolation: Completion routing uses fixture endpoint owners without discovering host plugins.
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  resolvePluginMetadataSnapshotAsync: async () => ({
+    owners: {
+      ...makeEmptyPluginMetadataOwners(),
+      providerEndpoints: [
+        {
+          endpointClass: "openai-public",
+          hosts: ["api.openai.com"],
+          hostSuffixes: [],
+          baseUrls: [],
+        },
+        {
+          endpointClass: "opencode-go-native",
+          hosts: [],
+          hostSuffixes: [],
+          baseUrls: ["https://opencode.ai/zen/go", "https://opencode.ai/zen/go/v1"],
+        },
+      ],
+    },
+  }),
+}));
 vi.mock("@openclaw/ai/transports", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/ai/transports")>()),
   prepareModelForSimpleCompletion: mocks.prepareModel,
@@ -254,7 +277,7 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
     });
     expect(mocks.prepareModel).toHaveBeenCalledWith({
       apiRegistry: expect.anything(),
-      model,
+      model: expect.objectContaining(model),
       cfg,
       auth: { mode: "api-key", authFlow: undefined },
     });

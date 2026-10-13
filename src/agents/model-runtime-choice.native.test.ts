@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { prepareModelSelectionRuntime } from "../auto-reply/reply/model-runtime-normalization.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { preparePublishedModelRuntimeChoice } from "./model-runtime-choice.js";
@@ -20,7 +21,8 @@ vi.mock("./prepared-model-catalog.js", () => ({
     return published.owner.modelCatalog.entries;
   },
 }));
-beforeEach(() => {
+beforeEach(async () => {
+  await preparePluginMetadataMachineStateAsync({});
   published.owner = undefined;
 });
 afterEach(() => {

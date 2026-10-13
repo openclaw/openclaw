@@ -2,9 +2,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   clearBundledDiscoveryModeMemo,
   prepareBundledDiscoveryMode,
-  readBundledDiscoveryMode,
   readBundledDiscoveryModeMemoized,
 } from "./bundled-discovery-state.js";
+import {
+  prepareBundledDiscoveryModeNative,
+  readBundledDiscoveryModeNative,
+} from "./bundled-discovery-state.native.js";
 import {
   createPluginCache,
   isPluginCacheFactInvalidatedError,
@@ -14,6 +17,7 @@ import {
 import { readPluginMetadataStateRow } from "./plugin-metadata-state-worker.js";
 
 const reads = vi.hoisted(() => ({
+  artifact: vi.fn<() => boolean>(),
   snapshot: vi.fn<() => object | undefined>(),
   mode: vi.fn<() => unknown>(),
   asyncMode: vi.fn<() => Promise<unknown>>(),
@@ -23,7 +27,7 @@ const reads = vi.hoisted(() => ({
 vi.mock("../state/openclaw-state-db-readonly.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/openclaw-state-db-readonly.js")>()),
   getActiveOpenClawStateDatabaseReadSnapshot: reads.snapshot,
-  isArtifactPreservingStateRead: () => true,
+  isArtifactPreservingStateRead: reads.artifact,
   executeExistingOpenClawStateRead: reads.metadata,
   withArtifactPreservingStateReads: <T>(read: () => T): T => read(),
 }));
@@ -37,6 +41,7 @@ const env = { OPENCLAW_STATE_DIR: "/synthetic/plugin-admission" };
 
 beforeEach(() => {
   vi.resetAllMocks();
+  reads.artifact.mockReturnValue(true);
   reads.snapshot.mockReturnValue({});
   reads.mode.mockReturnValue("allowlist");
   reads.asyncMode.mockResolvedValue("allowlist");
@@ -71,19 +76,19 @@ const readers = [
   {
     name: "synchronous discovery row",
     reject: reads.mode,
-    read: () => readBundledDiscoveryMode({ env }),
+    read: () => readBundledDiscoveryModeNative({ env }),
   },
   {
     name: "artifact-preserving memoized discovery row",
     reject: reads.mode,
-    read: () => readBundledDiscoveryModeMemoized(env, { artifactPreservingReadOnly: true }),
+    read: () => prepareBundledDiscoveryModeNative(env, { artifactPreservingReadOnly: true }),
   },
   {
     name: "memoized prepared row callback",
     reject: reads.mode,
     read: () => {
       reads.snapshot.mockReturnValue(undefined);
-      return readBundledDiscoveryModeMemoized(env, {}, reads.mode);
+      return prepareBundledDiscoveryModeNative(env, {}, reads.mode);
     },
   },
   {
@@ -134,4 +139,45 @@ it("prepares snapshot policy asynchronously and reuses it for synchronous deriva
     expect(reads.asyncMode).toHaveBeenCalledTimes(1);
     expect(reads.mode).not.toHaveBeenCalled();
   });
+});
+
+it("requires preparation for a cold snapshot without falling back to a native read", () => {
+  expect(() => readBundledDiscoveryModeMemoized(env)).toThrow("not prepared");
+  expect(reads.mode).not.toHaveBeenCalled();
+  expect(reads.asyncMode).not.toHaveBeenCalled();
+});
+
+it("keeps explicit native preparation outside the runtime getter", () => {
+  expect(prepareBundledDiscoveryModeNative(env)).toBe("allowlist");
+  expect(readBundledDiscoveryModeMemoized(env)).toBe("allowlist");
+  expect(prepareBundledDiscoveryModeNative(env)).toBe("allowlist");
+  expect(reads.mode).toHaveBeenCalledTimes(1);
+  expect(reads.asyncMode).not.toHaveBeenCalled();
+});
+
+it("prepares an empty artifact root without publishing its policy to live readers", async () => {
+  reads.snapshot.mockReturnValue(undefined);
+  reads.asyncMode.mockResolvedValue(undefined);
+  await withPluginCache(createPluginCache(), async () => {
+    await prepareBundledDiscoveryMode(env);
+    expect(readBundledDiscoveryModeMemoized(env)).toBeUndefined();
+    reads.artifact.mockReturnValue(false);
+    expect(() => readBundledDiscoveryModeMemoized(env)).toThrow("not prepared");
+  });
+  expect(reads.asyncMode).toHaveBeenCalledTimes(1);
+  expect(reads.mode).not.toHaveBeenCalled();
+});
+
+it("keeps reactivation bound to the captured snapshot", async () => {
+  const original = {};
+  reads.snapshot.mockReturnValue(original);
+  const activate = await prepareBundledDiscoveryMode(env);
+  reads.snapshot.mockReturnValue({});
+
+  activate();
+
+  expect(() => readBundledDiscoveryModeMemoized(env)).toThrow("not prepared");
+  reads.snapshot.mockReturnValue(original);
+  expect(readBundledDiscoveryModeMemoized(env)).toBe("allowlist");
+  expect(reads.asyncMode).toHaveBeenCalledTimes(1);
 });

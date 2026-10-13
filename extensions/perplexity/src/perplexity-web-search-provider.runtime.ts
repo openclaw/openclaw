@@ -1,6 +1,6 @@
 import {
   readProviderJsonResponse,
-  resolveProviderRequestHeaders,
+  resolveProviderRequestHeadersAsync,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   buildSearchCacheKey,
@@ -87,18 +87,18 @@ function resolvePerplexityRequestModel(baseUrl: string, model: string): string {
   return model.startsWith("perplexity/") ? model.slice("perplexity/".length) : model;
 }
 
-function buildPerplexityRequestHeaders(params: {
+async function buildPerplexityRequestHeaders(params: {
   apiKey: string;
   baseUrl?: string;
   acceptJson?: boolean;
-}): Record<string, string> {
+}): Promise<Record<string, string>> {
   const defaultHeaders = {
     "Content-Type": "application/json",
     ...(params.acceptJson ? { Accept: "application/json" } : {}),
     Authorization: `Bearer ${params.apiKey}`,
   };
   return (
-    resolveProviderRequestHeaders({
+    (await resolveProviderRequestHeadersAsync({
       provider: "perplexity",
       // The direct Perplexity API is this provider's default endpoint. Other hosts such as
       // OpenRouter keep their own endpoint so the policy attributes them as that vendor.
@@ -107,7 +107,7 @@ function buildPerplexityRequestHeaders(params: {
       capability: "other",
       transport: "http",
       defaultHeaders,
-    }) ?? defaultHeaders
+    })) ?? defaultHeaders
   );
 }
 
@@ -195,7 +195,7 @@ async function runPerplexitySearch(params: PerplexitySearchRequest) {
         messages: [{ role: "user", content: params.query }],
         ...(params.freshness ? { search_recency_filter: params.freshness } : {}),
       };
-  const headers = buildPerplexityRequestHeaders({
+  const headers = await buildPerplexityRequestHeaders({
     apiKey: params.apiKey,
     ...(structured ? { acceptJson: true } : { baseUrl: params.baseUrl }),
   });

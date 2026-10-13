@@ -6,7 +6,7 @@ import { withTempHome } from "../config/test-helpers.js";
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
-import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
+import { listKnownProviderAuthEnvVarNamesAsync } from "../secrets/provider-env-vars.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
 type DoctorFixtureObservation = {
@@ -159,7 +159,7 @@ export async function withDoctorConfigPreflightHome<T>(
       .spyOn(temporaryState, "resolvePreferredOpenClawTmpDir")
       .mockReturnValue(control);
     const providerEnv = Object.fromEntries(
-      listKnownProviderAuthEnvVarNamesCore({ config: {}, env: process.env }).map((key) => [
+      (await listKnownProviderAuthEnvVarNamesAsync({ config: {}, env: process.env })).map((key) => [
         key,
         undefined,
       ]),

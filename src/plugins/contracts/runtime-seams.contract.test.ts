@@ -11,6 +11,7 @@ import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import * as activationCheck from "../../plugin-sdk/facade-activation-check.runtime.js";
 import * as facadeRuntime from "../../plugin-sdk/facade-runtime.js";
 import { captureEnv } from "../../test-utils/env.js";
+import { prepareBundledDiscoveryMode } from "../bundled-discovery-state.js";
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: ({ config }: { config?: unknown }) => ({
@@ -102,6 +103,7 @@ describe("shared runtime seam contracts", () => {
     );
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
     process.env.OPENCLAW_STATE_DIR = stateDir;
+    await prepareBundledDiscoveryMode();
     setRuntimeConfigSnapshot({
       plugins: {
         entries: {

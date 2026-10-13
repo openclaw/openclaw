@@ -2,33 +2,16 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  findPersistedAuthProfileCredential,
-  getRuntimeAuthProfileStoreSnapshot,
-} from "../agents/auth-profiles/store.js";
+import { prepareAuthProfileProvider } from "../agents/auth-profiles.runtime.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { resolveModelProviderAuthConfig } from "../agents/model-auth-provider-route.js";
-import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
+import { resolvePreparedProviderIdForAuth as resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolveCollapsedSessionAuthPinSource } from "../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import { applyModelOverrideToSessionEntry } from "./model-overrides.js";
-
-function resolvePinnedAuthProfileProvider(params: {
-  cfg: OpenClawConfig;
-  agentDir: string;
-  profileId: string;
-}): string | undefined {
-  const storedProvider =
-    getRuntimeAuthProfileStoreSnapshot(params.agentDir)?.profiles[params.profileId]?.provider ??
-    findPersistedAuthProfileCredential({
-      agentDir: params.agentDir,
-      profileId: params.profileId,
-    })?.provider;
-  return storedProvider ?? params.cfg.auth?.profiles?.[params.profileId]?.provider;
-}
 
 type SessionAuthProfilePreservationParams = {
   cfg: OpenClawConfig;
@@ -38,7 +21,7 @@ type SessionAuthProfilePreservationParams = {
   provider: string;
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   /** Presence records completed preparation, including authoritative credential absence. */
-  recordedProvider?: { provider: string | undefined };
+  recordedProvider: { provider: string | undefined };
 };
 
 /** Checks whether a pinned session auth profile can authenticate the selected provider. */
@@ -65,13 +48,8 @@ export function shouldPreserveSessionAuthProfileOverride(
         resolveProviderIdForAuth(provider, lookupParams),
     );
   };
-  const recordedProvider = params.recordedProvider
-    ? (params.recordedProvider.provider ?? params.cfg.auth?.profiles?.[profileOverride]?.provider)
-    : resolvePinnedAuthProfileProvider({
-        cfg: params.cfg,
-        agentDir: params.agentDir,
-        profileId: profileOverride,
-      });
+  const recordedProvider =
+    params.recordedProvider.provider ?? params.cfg.auth?.profiles?.[profileOverride]?.provider;
   if (recordedProvider) {
     return resolvesToTargetProvider(recordedProvider, true);
   }
@@ -85,19 +63,25 @@ export function shouldPreserveSessionAuthProfileOverride(
 
 /** Missing credentials preserve explicit same-provider intent until authentication reports recovery. */
 export function shouldPreserveUnavailableSessionAuthProfileOverride(
-  params: SessionAuthProfilePreservationParams & { store: Pick<AuthProfileStore, "profiles"> },
+  params: Omit<SessionAuthProfilePreservationParams, "recordedProvider"> & {
+    store: Pick<AuthProfileStore, "profiles">;
+    recordedProvider?: SessionAuthProfilePreservationParams["recordedProvider"];
+  },
 ): boolean {
   const profileId = normalizeOptionalString(params.entry.authProfileOverride);
   return Boolean(
     profileId &&
     !params.store.profiles[profileId] &&
     resolveCollapsedSessionAuthPinSource(params.entry) === "user" &&
-    shouldPreserveSessionAuthProfileOverride(params),
+    shouldPreserveSessionAuthProfileOverride({
+      ...params,
+      recordedProvider: params.recordedProvider ?? { provider: undefined },
+    }),
   );
 }
 
 /** Applies a user model selection without dropping a compatible pinned auth profile. */
-export function applyModelOverrideWithAuthProfileCompatibility(
+export function applyModelOverrideWithAuthProfileCompatibilityCore(
   params: Omit<SessionAuthProfilePreservationParams, "provider"> &
     Omit<Parameters<typeof applyModelOverrideToSessionEntry>[0], "preserveAuthProfileOverride">,
 ): { updated: boolean } {
@@ -125,5 +109,34 @@ export function applyModelOverrideWithAuthProfileCompatibility(
         recordedProvider: params.recordedProvider,
         ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
       }),
+  });
+}
+
+/** Prepare the pinned account through its owner before changing the session selection. */
+export async function applyModelOverrideWithAuthProfileCompatibilityAsync(
+  params: Omit<
+    Parameters<typeof applyModelOverrideWithAuthProfileCompatibilityCore>[0],
+    "recordedProvider"
+  > & { recordedProvider?: SessionAuthProfilePreservationParams["recordedProvider"] },
+): Promise<{ updated: boolean }> {
+  let metadataSnapshot = params.metadataSnapshot;
+  if (!metadataSnapshot) {
+    const { resolvePluginMetadataSnapshotAsync } =
+      await import("../plugins/plugin-metadata-snapshot.js");
+    metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+      config: params.cfg,
+      allowWorkspaceScopedCurrent: true,
+    });
+  }
+  const profileId = normalizeOptionalString(params.entry.authProfileOverride);
+  const recordedProvider =
+    params.recordedProvider ??
+    (profileId && !params.profileOverride
+      ? await prepareAuthProfileProvider({ agentDir: params.agentDir, profileId })
+      : { provider: undefined });
+  return applyModelOverrideWithAuthProfileCompatibilityCore({
+    ...params,
+    metadataSnapshot,
+    recordedProvider,
   });
 }

@@ -302,6 +302,7 @@ module.exports = {
                 request: {
                   kind: "catalog",
                   syntheticAuth: [],
+                  bundledDiscoveryMode: undefined,
                   clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env }),
                 },
                 inspection: { provider, expectedCredential: expectedAuth, failCatalog },

@@ -28,6 +28,7 @@ import {
 } from "../../gateway/methods/registry.js";
 import { cronHandlers } from "../../gateway/server-methods/cron.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import { preparePluginMetadataMachineStateAsync } from "../../plugins/installed-plugin-index-record-state.js";
 import { getTotalQueueSize } from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
@@ -65,6 +66,7 @@ describe("native attempt queued automation admission", () => {
         };
         await state.writeConfig(cfg);
         setRuntimeConfigSnapshot(cfg);
+        await preparePluginMetadataMachineStateAsync({});
         const storePath = state.statePath("cron", "jobs.json");
         const now = Date.now();
         const job = createDueIsolatedJob({ id: "native-queued-run", nowMs: now, nextRunAtMs: now });

@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { vi } from "vitest";
 import { listBundledChannelPluginMetadata } from "../../../../plugins/bundled-channel-runtime.js";
+import { preparePluginMetadataMachineStateAsync } from "../../../../plugins/installed-plugin-index-record-state.js";
 import { resolvePluginRootPublicSurfacePath } from "../../../../plugins/public-surface-runtime.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../../../../test-utils/bundled-plugin-public-surface.js";
 
@@ -59,5 +60,6 @@ export async function importBundledChannelContractArtifact<T extends object>(
   pluginId: string,
   entryBaseName: string,
 ): Promise<T> {
+  await preparePluginMetadataMachineStateAsync({});
   return (await import(resolveBundledChannelContractArtifactUrl(pluginId, entryBaseName))) as T;
 }

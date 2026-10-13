@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfigSnapshot } from "../../../config/config.js";
+import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveSessionPinnedHarnessId } from "../../../sessions/agent-harness-session-key.js";
 import {
   assertOperatorModelAllowed,
@@ -31,11 +32,11 @@ export function assertInitialOperatorModelPolicy(
     | "provider"
     | "model"
     | "requestedRouteResolution"
-    | "pluginGeneration"
     | "preparedRunAdmission"
     | "admittedRunContext"
   >,
   entry: Parameters<typeof resolveSessionPinnedHarnessId>[0],
+  pluginMetadataSnapshot: PluginMetadataSnapshot,
 ): void {
   const operatorAuthority = readRunOperatorAuthority(params);
   if (!operatorAuthority?.modelPolicy || resolveSessionPinnedHarnessId(entry)) {
@@ -49,7 +50,7 @@ export function assertInitialOperatorModelPolicy(
     model: selection.modelId,
     requestedRouteResolution: params.requestedRouteResolution,
     fallbacksOverride: [],
-    manifestPlugins: params.pluginGeneration?.pluginMetadataSnapshot,
+    manifestPlugins: pluginMetadataSnapshot,
   })[0];
   assertOperatorModelAllowed(operatorAuthority, selected);
 }

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { preparePluginMetadataMachineStateAsync } from "../../plugins/installed-plugin-index-record-state.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -8,7 +9,8 @@ import { createSessionConversationTestRegistry } from "../../test-utils/session-
 import { resolveSessionDeliveryTargetFromKey } from "./sessions-send-helpers.js";
 
 describe("resolveSessionDeliveryTargetFromKey", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await preparePluginMetadataMachineStateAsync({});
     setActivePluginRegistry(createSessionConversationTestRegistry());
   });
 

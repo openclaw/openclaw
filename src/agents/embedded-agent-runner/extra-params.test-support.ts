@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Context, Model, SimpleStreamOptions } from "../../llm/types.js";
 import * as providerRuntime from "../../plugins/provider-hook-runtime.js";
 import type { ProviderPlugin } from "../../plugins/types.js";
+import { attachProviderRequestFactsFixture } from "../provider-request.test-support.js";
 import type { StreamFn } from "../runtime/index.js";
 import { applyExtraParamsToAgent } from "./extra-params.js";
 import type { ProviderThinkLevel } from "./utils.js";
@@ -118,6 +119,7 @@ export function runExtraParamsCase<
     return createMockStream();
   };
   const agent = { streamFn: baseStreamFn };
+  const model = attachProviderRequestFactsFixture(params.model);
 
   if (params.mockProviderRuntime === true) {
     testing.setProviderRuntimeDepsForTest({
@@ -136,6 +138,7 @@ export function runExtraParamsCase<
       params.thinkingLevel,
       undefined,
       params.workspaceDir,
+      model,
     );
   } finally {
     if (params.mockProviderRuntime === true) {
@@ -144,7 +147,7 @@ export function runExtraParamsCase<
   }
 
   const context: Context = { messages: [] };
-  void agent.streamFn?.(params.model, context, {
+  void agent.streamFn?.(model, context, {
     ...params.options,
     headers: params.callerHeaders ?? params.options?.headers,
   });

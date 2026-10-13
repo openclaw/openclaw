@@ -1,5 +1,6 @@
 // Tests ACP delivery's channel-transform ownership and suppression boundary.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
@@ -38,8 +39,11 @@ function createCoordinator(params: {
 }
 
 describe("ACP channel reply transforms", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     ttsMocks.maybeApplyTtsToPayload.mockClear();
+    await resolvePluginMetadataSnapshotAsync({
+      config: createAcpTestConfig({ tts: { enabled: true } }),
+    });
   });
 
   it("honors dispatcher channel suppression before TTS or transcript accounting", async () => {

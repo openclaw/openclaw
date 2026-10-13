@@ -490,14 +490,12 @@ export async function loadInstalledPluginIndexInstallRecords(
     return copyPluginInstallRecordMap(cached);
   }
   const prepared = await preparePersistedInstalledPluginIndexCacheEntry(captured);
-  prepared.assertCurrent();
   const records = mergeRecoveredManagedNpmInstallRecords(
     requireLoadablePluginInstallRecordState(
       inspectPersistedInstalledPluginIndexInstallRecords(prepared.entry),
     ),
     captured,
   );
-  prepared.assertCurrent();
   cache.set(cacheKey, records);
   return copyPluginInstallRecordMap(records);
 }

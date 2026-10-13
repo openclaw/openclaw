@@ -5,6 +5,7 @@ import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureAmbientGatewayOperatorAuthority } from "../../gateway/operator-invocation-authority.js";
 import { providerSupportsNativePdfDocument } from "../../media-understanding/defaults.js";
+import { buildMediaUnderstandingManifestMetadataRegistry } from "../../media-understanding/manifest-metadata.js";
 import { renderDocumentTruncationNotice } from "../../media/document-extraction-metadata.js";
 import {
   classifyMediaReferenceSource,
@@ -368,6 +369,11 @@ export function createPdfTool(options?: {
       "imageModel",
       committedPdfModelConfig,
     );
+    const mediaProviderRegistry = buildMediaUnderstandingManifestMetadataRegistry(
+      preparedRuntime.config,
+      runtimeWorkspaceDir,
+      preparedRuntime.metadataSnapshot,
+    );
     let nativePdfs: Array<{ base64: string }> | undefined;
 
     const fallbackResult = await runWithImageModelFallback({
@@ -445,7 +451,12 @@ export function createPdfTool(options?: {
             ? (auth.apiKey ?? "")
             : requireApiKey(auth, model.provider);
 
-        if (providerSupportsNativePdfDocument({ providerId: provider })) {
+        if (
+          providerSupportsNativePdfDocument({
+            providerId: provider,
+            providerRegistry: mediaProviderRegistry,
+          })
+        ) {
           if (password) {
             throw new Error(
               `password is not supported with native PDF providers (${provider}/${modelId}). Remove password, or use a non-native model for encrypted PDFs.`,

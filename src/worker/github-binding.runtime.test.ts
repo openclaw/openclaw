@@ -259,7 +259,7 @@ describe("prepareWorkerGitHubEnvironment", () => {
     expect(JSON.stringify(prepared)).not.toContain(binding.token);
     expect(process.env.GH_TOKEN).toBe("inherited-synthetic-token");
     expect(process.env.GITHUB_TOKEN).toBe("inherited-synthetic-token");
-    const child = resolvePreparedExecEnvironment({
+    const child = await resolvePreparedExecEnvironment({
       execParams: { command: "git config --get-regexp '^(maintenance.auto|gc.auto|user.name)$'" },
       host: "gateway",
       defaultPathPrepend: [],

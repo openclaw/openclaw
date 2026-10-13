@@ -10,29 +10,24 @@ import {
   inspectNativePluginMcpRuntimeSupport,
 } from "./bundle-mcp.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
+import { prepareBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import {
   appendPluginControlPlaneWorkspaceDiagnostic,
   resolvePluginControlPlaneWorkspace,
 } from "./control-plane-workspace.js";
-import {
-  resolveEffectivePluginIds,
-  resolveEffectivePluginIdsAsync,
-} from "./effective-plugin-ids.js";
+import { resolveEffectivePluginIdsAsync } from "./effective-plugin-ids.js";
 import { buildPluginShapeSummary } from "./inspect-shape.js";
 import {
   acquirePluginRegistryForInspection,
-  loadPluginRegistryHandle,
+  loadPluginRegistryHandleAsync,
   resolveCompatibleRuntimePluginRegistry,
 } from "./loader.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import { tracePluginLifecyclePhaseAsync } from "./plugin-lifecycle-trace.js";
 import {
-  tracePluginLifecyclePhase,
-  tracePluginLifecyclePhaseAsync,
-} from "./plugin-lifecycle-trace.js";
-import {
-  loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshotAsync,
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
@@ -43,7 +38,7 @@ import type { PluginRegistry } from "./registry.js";
 import { listImportedRuntimePluginIds } from "./runtime.js";
 import { buildPluginRuntimeLoadOptions } from "./runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
-import { loadPluginMetadataRegistrySnapshot } from "./runtime/metadata-registry-loader.js";
+import { loadPluginMetadataRegistrySnapshotAsync } from "./runtime/metadata-registry-loader.js";
 import {
   formatPluginCompatibilityNotice,
   type PluginCompatibilityNotice,
@@ -201,7 +196,9 @@ type PluginReportParams = {
   metadataSnapshot?: PluginMetadataSnapshot;
 };
 
-function preparePluginReport(params: PluginReportParams | undefined) {
+function preparePluginReport(
+  params: PluginReportParams & { metadataSnapshot: PluginMetadataSnapshot },
+) {
   const rawConfig = params?.config ?? getRuntimeConfig();
   const workspace = resolvePluginControlPlaneWorkspace({
     config: rawConfig,
@@ -209,14 +206,7 @@ function preparePluginReport(params: PluginReportParams | undefined) {
     workspaceDir: params?.workspaceDir,
   });
   const initialWorkspaceDir = workspace.workspaceDir;
-  const metadataSnapshot =
-    params?.metadataSnapshot ??
-    loadPluginMetadataSnapshot({
-      config: rawConfig,
-      env: params?.env ?? process.env,
-      workspaceDir: initialWorkspaceDir,
-      ...(params?.onlyPluginIds !== undefined ? { pluginIds: params.onlyPluginIds } : {}),
-    });
+  const metadataSnapshot = params.metadataSnapshot;
   const baseContext = resolvePluginRuntimeLoadContext({
     config: rawConfig,
     env: params?.env,
@@ -249,17 +239,7 @@ function preparePluginReport(params: PluginReportParams | undefined) {
     ...(params?.env ? { env: params.env } : {}),
     activation: "defaults",
   });
-  const onlyPluginIds =
-    params?.effectiveOnly === true
-      ? resolveEffectivePluginIds({
-          config: rawConfig,
-          workspaceDir,
-          env: params?.env ?? process.env,
-          metadataSnapshot,
-        })
-      : params?.onlyPluginIds === undefined
-        ? undefined
-        : [...params.onlyPluginIds];
+  const onlyPluginIds = params.onlyPluginIds === undefined ? undefined : [...params.onlyPluginIds];
 
   return {
     rawConfig,
@@ -283,23 +263,60 @@ function preparePluginReport(params: PluginReportParams | undefined) {
   };
 }
 
-function buildPluginReport(
+async function preparePluginReportAsync(params: PluginReportParams | undefined) {
+  const config = params?.config ?? getRuntimeConfig();
+  const { workspaceDir } = resolvePluginControlPlaneWorkspace({
+    config,
+    env: params?.env,
+    workspaceDir: params?.workspaceDir,
+  });
+  let metadataSnapshot = params?.metadataSnapshot;
+  if (metadataSnapshot) {
+    await prepareBundledDiscoveryMode(params?.env);
+  } else {
+    metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+      config,
+      env: params?.env ?? process.env,
+      workspaceDir,
+      ...(params?.onlyPluginIds !== undefined ? { pluginIds: params.onlyPluginIds } : {}),
+    });
+  }
+  const prepared = preparePluginReport({ ...params, config, metadataSnapshot });
+  if (params?.effectiveOnly === true) {
+    const requestedPluginIds = normalizePluginIdScope(params.onlyPluginIds);
+    const effectivePluginIds = await resolveEffectivePluginIdsAsync({
+      config: prepared.rawConfig,
+      workspaceDir: prepared.workspaceDir,
+      env: params.env ?? process.env,
+      metadataSnapshot,
+    });
+    const onlyPluginIds =
+      requestedPluginIds === undefined
+        ? effectivePluginIds
+        : effectivePluginIds.filter((pluginId) => requestedPluginIds.includes(pluginId));
+    prepared.onlyPluginIds = onlyPluginIds;
+    prepared.runtimeLoadOptions = { ...prepared.runtimeLoadOptions, onlyPluginIds };
+  }
+  return prepared;
+}
+
+async function buildPluginReport(
   params: PluginReportParams | undefined,
   loadModules: boolean,
-  prepared = preparePluginReport(params),
-): PluginStatusReport {
+): Promise<PluginStatusReport> {
+  const prepared = await preparePluginReportAsync(params);
   const { rawConfig, workspaceDir, metadataSnapshot, context, runtimeCompatConfig, onlyPluginIds } =
     prepared;
   const registry = loadModules
-    ? tracePluginLifecyclePhase(
+    ? await tracePluginLifecyclePhaseAsync(
         "runtime plugin registry load",
-        () => loadPluginRegistryHandle(prepared.runtimeLoadOptions),
+        () => loadPluginRegistryHandleAsync(prepared.runtimeLoadOptions),
         { surface: "status", onlyPluginCount: onlyPluginIds?.length },
       )
-    : tracePluginLifecyclePhase(
+    : await tracePluginLifecyclePhaseAsync(
         "plugin registry snapshot",
         () =>
-          loadPluginMetadataRegistrySnapshot({
+          loadPluginMetadataRegistrySnapshotAsync({
             config: runtimeCompatConfig,
             activationSourceConfig: rawConfig,
             workspaceDir,
@@ -353,30 +370,10 @@ function projectPluginReport(
   );
 }
 
-export function buildPluginSnapshotReport(params?: PluginReportParams): PluginStatusReport {
-  return buildPluginReport(params, false);
-}
-
 export async function buildPluginSnapshotReportAsync(
   params?: PluginReportParams,
 ): Promise<PluginStatusReport> {
-  const prepared = preparePluginReport({ ...params, effectiveOnly: false });
-  if (params?.effectiveOnly === true) {
-    const requestedPluginIds = normalizePluginIdScope(params.onlyPluginIds);
-    const effectivePluginIds = await resolveEffectivePluginIdsAsync({
-      config: prepared.rawConfig,
-      workspaceDir: prepared.workspaceDir,
-      env: params.env ?? process.env,
-      metadataSnapshot: prepared.metadataSnapshot,
-    });
-    const onlyPluginIds =
-      requestedPluginIds === undefined
-        ? effectivePluginIds
-        : effectivePluginIds.filter((pluginId) => requestedPluginIds.includes(pluginId));
-    prepared.onlyPluginIds = onlyPluginIds;
-    prepared.runtimeLoadOptions = { ...prepared.runtimeLoadOptions, onlyPluginIds };
-  }
-  return buildPluginReport(params, false, prepared);
+  return await buildPluginReport(params, false);
 }
 
 /** Complete diagnostics projection before retiring its imported plugin generation. */
@@ -385,7 +382,7 @@ export async function withPluginDiagnosticsReport<T>(
   consume: (report: PluginStatusReport) => T | Promise<T>,
 ): Promise<T> {
   await using cache = createPluginCache();
-  return await withPluginCache(cache, () => consume(buildPluginReport(params, true)));
+  return await withPluginCache(cache, async () => consume(await buildPluginReport(params, true)));
 }
 
 /** Serializes an owned inspection before disposing its registration resources. */
@@ -393,7 +390,7 @@ export async function withPluginDiagnosticsReportForInspection<Result extends st
   params: PluginReportParams,
   formatReport: (report: PluginStatusReport) => Result,
 ): Promise<Result> {
-  const prepared = preparePluginReport(params);
+  const prepared = await preparePluginReportAsync(params);
   const inspection = await tracePluginLifecyclePhaseAsync(
     "runtime plugin registry load",
     () => acquirePluginRegistryForInspection(prepared.runtimeLoadOptions),
@@ -623,12 +620,12 @@ export function buildPluginCompatibilityNotices(
   );
 }
 
-export function buildPluginCompatibilitySnapshotNotices(params?: {
+export async function buildPluginCompatibilitySnapshotNotices(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-}): PluginCompatibilityNotice[] {
-  const report = buildPluginSnapshotReport(params);
+}): Promise<PluginCompatibilityNotice[]> {
+  const report = await buildPluginSnapshotReportAsync(params);
   const context = resolvePluginRuntimeLoadContext(params);
   const runtimeRegistry = resolveCompatibleRuntimePluginRegistry(
     buildPluginRuntimeLoadOptions(context),

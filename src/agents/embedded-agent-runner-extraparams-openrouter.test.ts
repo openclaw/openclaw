@@ -9,6 +9,9 @@ import {
 import { runExtraParamsPayloadCase } from "./embedded-agent-runner-extraparams.test-support.js";
 import { applyExtraParamsToAgent } from "./embedded-agent-runner/extra-params.js";
 import { testing as extraParamsTesting } from "./embedded-agent-runner/extra-params.test-support.js";
+import { installProviderRequestMetadataFixture } from "./provider-request.test-support.js";
+
+installProviderRequestMetadataFixture();
 
 beforeEach(() => {
   // OpenRouter behavior is supplied through the provider-runtime seam so tests

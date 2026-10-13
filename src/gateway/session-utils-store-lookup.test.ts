@@ -11,6 +11,7 @@ import {
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -504,6 +505,7 @@ describe("exact session model projections", () => {
     "keeps $selection model selection aligned across list, exact rows and events",
     async ({ selection, model, source }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        await prepareBundledDiscoveryMode();
         const cfg: OpenClawConfig = {
           agents: {
             entries: { main: {} },
@@ -611,6 +613,7 @@ it.each([
   "keeps $selection selection on the physical parent across all-agent lists ($layout)",
   async ({ selection, layout, model, source }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await prepareBundledDiscoveryMode();
       const shared = layout === "shared";
       const storePath = shared ? state.statePath("shared.sqlite") : undefined;
       const parentAgent = shared ? "ops" : "work";

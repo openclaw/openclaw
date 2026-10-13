@@ -1,8 +1,5 @@
 import type { PluginWebSearchProviderEntry } from "./types.js";
-import {
-  resolveBundledWebSearchProvidersFromPublicArtifacts,
-  resolveEnabledBundledWebSearchProvidersFromPublicArtifacts,
-} from "./web-provider-public-artifacts.js";
+import { resolveBundledWebSearchProvidersFromPublicArtifacts } from "./web-provider-public-artifacts.js";
 import {
   mapRegistryProviders,
   resolveBundledWebProviderResolutionConfig,
@@ -10,6 +7,7 @@ import {
 } from "./web-provider-resolution-shared.js";
 import {
   resolvePluginWebProviders,
+  resolvePluginWebProvidersAsync,
   type ResolvePluginWebProvidersParams,
   type ResolveRuntimeWebProvidersParams,
   type WebProviderRuntimeResolution,
@@ -28,26 +26,7 @@ const providerResolution = {
     mapRegistryProviders({ registry, entries: registry.webSearchProviders, onlyPluginIds }),
 } satisfies WebProviderRuntimeResolution<PluginWebSearchProviderEntry>;
 
-function resolveLazyBundledWebSearchProviders(
-  params: Parameters<typeof resolveEnabledBundledWebSearchProvidersFromPublicArtifacts>[0],
-): PluginWebSearchProviderEntry[] | null {
-  const providers = resolveEnabledBundledWebSearchProvidersFromPublicArtifacts(params);
-  return (
-    providers?.map((provider) => {
-      const lazyProvider = Object.assign({}, provider);
-      lazyProvider.createTool = (context) => {
-        // Public descriptors can have setup-only factories; execution belongs to the scoped registry.
-        const runtime = resolvePluginWebProviders(
-          { ...params, onlyPluginIds: [provider.pluginId] },
-          providerResolution,
-        ).find((entry) => entry.pluginId === provider.pluginId && entry.id === provider.id);
-        return runtime?.createTool(context) ?? null;
-      };
-      return lazyProvider;
-    }) ?? null
-  );
-}
-
+/** @deprecated Use resolvePluginWebSearchProvidersAsync for cold discovery. */
 export function resolvePluginWebSearchProviders(
   params: Omit<ResolvePluginWebProvidersParams, "sandboxed">,
 ): PluginWebSearchProviderEntry[] {
@@ -57,11 +36,26 @@ export function resolvePluginWebSearchProviders(
   });
 }
 
+/** @deprecated Use resolveRuntimeWebSearchProvidersAsync for cold discovery. */
 export function resolveRuntimeWebSearchProviders(
   params: ResolveRuntimeWebProvidersParams,
 ): PluginWebSearchProviderEntry[] {
-  return resolvePluginWebProviders(params, {
+  return resolvePluginWebProviders(params, providerResolution);
+}
+
+/** Resolves plugin web search providers after preparing worker-owned metadata. */
+export function resolvePluginWebSearchProvidersAsync(
+  params: Omit<ResolvePluginWebProvidersParams, "sandboxed">,
+): Promise<PluginWebSearchProviderEntry[]> {
+  return resolvePluginWebProvidersAsync(params, {
     ...providerResolution,
-    resolveBundledRuntimeArtifactProviders: resolveLazyBundledWebSearchProviders,
+    resolveBundledPublicArtifactProviders: resolveBundledWebSearchProvidersFromPublicArtifacts,
   });
+}
+
+/** Resolves executable providers before their synchronous tool factories are consumed. */
+export function resolveRuntimeWebSearchProvidersAsync(
+  params: ResolveRuntimeWebProvidersParams,
+): Promise<PluginWebSearchProviderEntry[]> {
+  return resolvePluginWebProvidersAsync(params, providerResolution);
 }

@@ -13,7 +13,7 @@ import {
   resolveProviderConfigSecretInput,
   resolveProviderEntryApiKeyProfileReference,
 } from "../../agents/model-auth-provider-config.js";
-import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { resolvePreparedProviderIdForAuth as resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import {

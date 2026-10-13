@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   loadTranscriptEventsSync,
+  resolveStorePath,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -64,9 +65,11 @@ describe("qa suite runtime agent session helpers", () => {
     sessionKey: string;
     tempRoot: string;
   }) {
+    const sessionEnv = qaSessionEnv(params.tempRoot);
     const identity = {
       agentId: "qa",
-      env: qaSessionEnv(params.tempRoot),
+      env: sessionEnv,
+      storePath: resolveStorePath(undefined, { agentId: "qa", env: sessionEnv }),
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
     };

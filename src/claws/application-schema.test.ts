@@ -1,7 +1,8 @@
 import { mkdir, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { clawTargetPackages } from "./application-provenance.js";
 import { buildClawAddPlan, type ClawAddPlanContext } from "./lifecycle.js";
 import { parseClawManifest, parseClawOpenClawProfile } from "./schema.js";
@@ -91,6 +92,10 @@ describe("Claw application schema v1", () => {
 });
 
 describe("Claw application planning v1", () => {
+  beforeEach(async () => {
+    await preparePluginMetadataMachineStateAsync({});
+  });
+
   it("discloses model and delegation effects with nonblocking local availability notices", async () => {
     const { source, workspace } = await createPlanSource();
     const agent = {

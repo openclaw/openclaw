@@ -7,11 +7,11 @@ import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { createOpenClawToolsAsync } from "./openclaw-tools.js";
 import * as inProcessGateway from "./tools/in-process-gateway.js";
 
 type GatewayRequest = { method: string; params?: Record<string, unknown> };
-type OpenClawToolsOptions = NonNullable<Parameters<typeof createOpenClawTools>[0]>;
+type OpenClawToolsOptions = NonNullable<Parameters<typeof createOpenClawToolsAsync>[0]>;
 
 const embeddedGatewayCalls = vi.hoisted(() => vi.fn());
 const embeddedGatewayResponseMock = vi.hoisted(() => vi.fn());
@@ -52,15 +52,16 @@ vi.mock("../gateway/session-list-read-result.js", () => ({
   },
 }));
 
+// mock-isolation: Session-context fixtures must not acquire real plugin tools or registry state.
 vi.mock("./openclaw-plugin-tools.js", () => ({
-  resolveOpenClawPluginToolsForOptions: () => [],
+  resolveOpenClawPluginToolsForOptionsAsync: async () => [],
 }));
 
-function createTools(
+async function createTools(
   config: OpenClawToolsOptions["config"],
   options: { sandboxed?: boolean; sessionConfigSource?: "runtime" | "pinned" } = {},
 ) {
-  return createOpenClawTools({
+  return createOpenClawToolsAsync({
     agentSessionKey: "global",
     runSessionKey: "agent:research:main",
     sandboxed: options.sandboxed,
@@ -71,7 +72,7 @@ function createTools(
   });
 }
 
-function requireTool(tools: ReturnType<typeof createOpenClawTools>, name: string) {
+function requireTool(tools: Awaited<ReturnType<typeof createOpenClawToolsAsync>>, name: string) {
   const tool = tools.find((candidate) => candidate.name === name);
   if (!tool) {
     throw new Error(`Expected tool ${name} to be registered`);
@@ -156,7 +157,7 @@ describe("openclaw session lookup context", () => {
         },
       });
       setRuntimeConfigSnapshot(capabilityConfig(runtimeEnabled));
-      const tools = createOpenClawTools({
+      const tools = await createOpenClawToolsAsync({
         agentSessionKey: "agent:main:matrix:channel:!room:example.org",
         agentChannel: "matrix",
         agentAccountId: "work",
@@ -201,7 +202,7 @@ describe("openclaw session lookup context", () => {
         card: null,
       });
       try {
-        const tools = createOpenClawTools({
+        const tools = await createOpenClawToolsAsync({
           config: {
             agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
             session: { scope: scenario.scope, mainKey: scenario.mainKey },
@@ -229,7 +230,7 @@ describe("openclaw session lookup context", () => {
   it("binds nested session lookups to the durable caller", async () => {
     const runSessionKey = "agent:research:main";
     setEmbeddedMode(true);
-    const tools = createTools(
+    const tools = await createTools(
       { agents: { entries: { main: {}, research: {} } } },
       { sandboxed: true },
     );
@@ -283,7 +284,7 @@ describe("openclaw session lookup context", () => {
       }
       return undefined;
     });
-    const tools = createTools(sessionPolicyConfig());
+    const tools = await createTools(sessionPolicyConfig());
 
     const listed = await requireTool(tools, "sessions_list").execute("list", {});
     const searched = await requireTool(tools, "sessions_search").execute("search", {
@@ -319,13 +320,13 @@ describe("openclaw session lookup context", () => {
       return undefined;
     });
     setRuntimeConfigSnapshot(accessibleConfig);
-    const tools = createTools(accessibleConfig, { sessionConfigSource: "runtime" });
+    const tools = await createTools(accessibleConfig, { sessionConfigSource: "runtime" });
     const list = requireTool(tools, "sessions_list");
     const history = requireTool(tools, "sessions_history");
     const search = requireTool(tools, "sessions_search");
     setEmbeddedMode(false);
     const send = requireTool(
-      createTools(accessibleConfig, { sessionConfigSource: "runtime" }),
+      await createTools(accessibleConfig, { sessionConfigSource: "runtime" }),
       "sessions_send",
     );
     setEmbeddedMode(true);

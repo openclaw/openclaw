@@ -4,6 +4,8 @@ import { writeSessionEntry } from "../../../config/sessions/session-accessor.sql
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import * as approvals from "../../../infra/exec-approvals-store.js";
 import { saveExecApprovals } from "../../../infra/exec-approvals-store.test-support.js";
+import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
+import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
@@ -144,15 +146,19 @@ export async function withPromptFixture(
         toolSearchDirectoryEnabled: false,
         toolSearchRuntimeConfig: config,
       } satisfies Parameters<typeof prepareEmbeddedAttemptSystemPrompt>[0];
-      await consume({
-        prepare: () => prepareEmbeddedAttemptSystemPrompt(params),
-        attempt,
-        admission,
-        abort,
-        tools,
-        policyRead,
-        approvalRead,
-      });
+      await withPluginRuntimeGenerationScope(
+        { metadataSnapshot: createPluginMetadataSnapshotFixture() },
+        () =>
+          consume({
+            prepare: () => prepareEmbeddedAttemptSystemPrompt(params),
+            attempt,
+            admission,
+            abort,
+            tools,
+            policyRead,
+            approvalRead,
+          }),
+      );
     } finally {
       admission.close();
       policyRead.mockRestore();

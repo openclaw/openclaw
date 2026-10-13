@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, aroundEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -12,12 +12,14 @@ import { registerInternalHook, unregisterInternalHook } from "../../hooks/intern
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import * as fsSafe from "../../infra/fs-safe.js";
 import { getMediaDir, readMediaBuffer, saveMediaBuffer } from "../../media/store.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import type { PluginHookName } from "../../plugins/hook-types.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createSqliteTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.types.js";
@@ -90,6 +92,13 @@ function createAttributionRecorder(registered = true) {
 }
 
 describe("registered harness input attachment preparation", () => {
+  aroundEach((runTest) =>
+    withPluginMetadataSnapshotScope(
+      createPluginMetadataSnapshotFixture({ plugins: [{ id: "codex", providers: ["codex"] }] }),
+      runTest,
+      { trustConfigIdentity: true },
+    ),
+  );
   it.each<{ name: string; hook?: PluginHookName; bootstrap?: boolean; waits: boolean }>([
     ...(
       [

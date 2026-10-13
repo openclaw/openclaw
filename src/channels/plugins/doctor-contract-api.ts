@@ -28,10 +28,12 @@ type BundledChannelDoctorContractApi = {
  */
 export function loadBundledChannelDoctorContractApi(
   channelId: string,
+  env?: NodeJS.ProcessEnv,
 ): BundledChannelDoctorContractApi | undefined {
   return (
     loadBundledPluginPublicArtifactModuleFromCandidatesSync<BundledChannelDoctorContractApi>({
       dirName: channelId.trim(),
+      env,
       artifactCandidates: ["doctor-contract-api.js"],
     }) ?? undefined
   );

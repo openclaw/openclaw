@@ -14,6 +14,7 @@ import {
   removePathWithinRoot,
 } from "../../../infra/fs-safe-remove.js";
 import { retainMutationAuthority } from "../../../infra/mutation-authority.js";
+import { prepareBundledDiscoveryMode } from "../../../plugins/bundled-discovery-state.js";
 import type { PluginCapabilityConsentHandler } from "../../../plugins/capability-consent.js";
 import {
   normalizePluginsConfig,
@@ -589,6 +590,8 @@ async function repairMissingPluginInstallsWithLease(
   // commit it even when this repair made no further changes.
   if (nextRecords !== persistedRecords || params.baselineRecords) {
     if (params.beforePersistentEffect) {
+      const activateDiscovery = await prepareBundledDiscoveryMode(env);
+      activateDiscovery();
       const persistedIndex = readPersistedInstalledPluginIndexSync(persistedIndexOptions);
       // Republishing an unchanged baseline preserves the index contract without
       // starting a protected update or stopping a healthy Gateway.

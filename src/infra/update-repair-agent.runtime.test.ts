@@ -105,7 +105,12 @@ describe("post-failure repair execution", () => {
           });
         }
         const agentDir = state.statePath("agents", "owner", "agent");
-        const auth = createAuthProfileStoreRuntime(createExternalAuthRuntime(() => []));
+        const auth = createAuthProfileStoreRuntime(
+          createExternalAuthRuntime(
+            () => [],
+            async () => () => [],
+          ),
+        );
         const profileId = "fixture:subscription";
         auth.saveAuthProfileStore({
           version: 1,

@@ -32,8 +32,9 @@ vi.mock("../config/paths.js", async (importOriginal) => ({
   resolveStateDir: () => process.env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-state",
 }));
 
+// mock-isolation: Onboarding uses fixed credential aliases without installed plugin state.
 vi.mock("../agents/provider-auth-aliases.js", () => ({
-  resolveProviderIdForAuth: vi.fn((provider: string) => {
+  resolvePreparedProviderIdForAuth: vi.fn((provider: string) => {
     const normalized = provider.trim().toLowerCase();
     if (normalized === "z.ai" || normalized === "z-ai") {
       return "zai";

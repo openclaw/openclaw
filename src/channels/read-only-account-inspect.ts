@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { getBundledChannelAccountInspector } from "./plugins/bundled.js";
 import { getLoadedChannelPlugin } from "./plugins/registry.js";
 import type { ChannelId } from "./plugins/types.public.js";
@@ -13,9 +14,11 @@ export async function inspectReadOnlyChannelAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): Promise<ReadOnlyInspectedAccount | null> {
-  const inspectAccount =
-    getLoadedChannelPlugin(params.channelId)?.config.inspectAccount ??
-    getBundledChannelAccountInspector(params.channelId);
+  let inspectAccount = getLoadedChannelPlugin(params.channelId)?.config.inspectAccount;
+  if (!inspectAccount) {
+    await resolvePluginMetadataSnapshotAsync({});
+    inspectAccount = getBundledChannelAccountInspector(params.channelId);
+  }
   if (!inspectAccount) {
     return null;
   }

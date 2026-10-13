@@ -7,10 +7,11 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import * as mediaTaskStatus from "../../media-generation-task-status.js";
+import { attachPreparedProviderModelFixture } from "../../provider-request.test-support.js";
 import {
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
-  testModel,
+  testModel as rawTestModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import {
   prepareEmbeddedAttemptPromptAssembly,
@@ -18,6 +19,8 @@ import {
 } from "./attempt-prompt-build.js";
 import { forgetPromptBuildDrainCacheForRun } from "./attempt-prompt-helpers.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
+
+const testModel = attachPreparedProviderModelFixture(rawTestModel);
 
 vi.mock("../../../plugins/host-hook-state.js", () => ({
   drainPluginNextTurnInjectionContext: vi.fn(async () => ({ queuedInjections: [] })),

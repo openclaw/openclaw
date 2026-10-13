@@ -161,10 +161,10 @@ export async function collectInstalledPluginHealthSnapshot(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
 }): Promise<StatusPluginHealthSnapshot> {
-  const { buildPluginCompatibilityNotices, buildPluginSnapshotReport } =
+  const { buildPluginCompatibilityNotices, buildPluginSnapshotReportAsync } =
     await import("../plugins/status.js");
   const runtime = await collectRuntimePluginHealthSnapshot();
-  const report = buildPluginSnapshotReport({
+  const report = await buildPluginSnapshotReportAsync({
     config: params.config,
     workspaceDir: params.workspaceDir,
   });

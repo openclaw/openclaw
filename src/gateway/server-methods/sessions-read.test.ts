@@ -5,6 +5,7 @@ import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/clie
 import type { AgentsListResult } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as runtimeMetadata from "../../agents/agent-runtime-metadata.js";
+import { preparePluginAutoEnableTestDiscovery } from "../../config/plugin-auto-enable.test-helpers.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   resolveSessionStorePathCore as resolveStorePath,
@@ -115,6 +116,7 @@ async function setAgentsConfig(agentsConfig: Record<string, unknown> | undefined
     await getGatewayConfigModule();
   clearRuntimeConfigSnapshot();
   clearConfigCache();
+  preparePluginAutoEnableTestDiscovery();
   getRuntimeConfig();
 }
 

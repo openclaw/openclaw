@@ -39,7 +39,7 @@ type ProviderModelRoutesResolver = (
 /** Resolves policy through the bundled or selected trusted installed owner. */
 export function resolveProviderModelPolicySurface(
   providerId: string,
-  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">,
+  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins"> | null,
 ) {
   const provider = normalizeProviderId(providerId);
   const bundled = resolveDirectBundledProviderPolicySurface(provider);
@@ -47,11 +47,13 @@ export function resolveProviderModelPolicySurface(
     return bundled;
   }
   const metadata =
-    metadataSnapshot ??
-    getCurrentPluginMetadataSnapshotRequiredRuntime({
-      allowScopedSnapshot: true,
-      allowWorkspaceScopedSnapshot: true,
-    });
+    metadataSnapshot === null
+      ? null
+      : (metadataSnapshot ??
+        getCurrentPluginMetadataSnapshotRequiredRuntime({
+          allowScopedSnapshot: true,
+          allowWorkspaceScopedSnapshot: true,
+        }));
   return metadata
     ? resolveProviderPolicySurface(provider, {
         manifestRegistry: metadata,
@@ -63,7 +65,7 @@ export function resolveProviderModelPolicySurface(
 /** Binds one provider's identity facts for an authored-row lookup. */
 export function createProviderModelCatalogIdNormalizer(
   providerId: string,
-  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">,
+  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins"> | null,
 ) {
   const provider = normalizeProviderId(providerId);
   const surface = provider ? resolveProviderModelPolicySurface(provider, metadataSnapshot) : null;
@@ -76,7 +78,7 @@ export function resolveProviderModelCatalogId(params: {
   provider: string;
   modelId: string;
   surface?: BundledProviderPolicySurface | null;
-  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
+  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins"> | null;
 }): string | null {
   const provider = normalizeProviderId(params.provider);
   const surface =

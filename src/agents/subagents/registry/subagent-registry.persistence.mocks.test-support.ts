@@ -6,12 +6,13 @@ vi.mock("../../../browser-lifecycle-cleanup.js", () => ({
   >(async () => {}),
 }));
 
+// mock-isolation: Persistence fixtures supply empty registries without acquiring plugin resources.
 vi.mock("../../runtime-plugins.js", async () => {
   const { createEmptyPluginRegistry } = await import("../../../plugins/registry-empty.js");
   return {
     loadAgentRuntimePluginRegistryHandle: vi.fn<
       typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle
-    >(() => createEmptyPluginRegistry()),
+    >(async () => createEmptyPluginRegistry()),
   };
 });
 

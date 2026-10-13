@@ -5,8 +5,8 @@ import type {
   RealtimeVoiceProviderPlugin,
 } from "../plugins/types.js";
 import {
-  getRealtimeTranscriptionProvider,
-  listRealtimeTranscriptionProviders,
+  getRealtimeTranscriptionProviderAsync,
+  listRealtimeTranscriptionProvidersAsync,
 } from "../realtime-transcription/provider-registry.js";
 import type { RealtimeTranscriptionProviderConfig } from "../realtime-transcription/provider-types.js";
 import {
@@ -122,7 +122,8 @@ export async function resolveMeetingRealtimeTranscriptionProvider(params: {
   fullConfig: OpenClawConfig;
   providers?: RealtimeTranscriptionProviderPlugin[];
 }): Promise<ResolvedRealtimeTranscriptionProvider> {
-  const providers = params.providers ?? listRealtimeTranscriptionProviders(params.fullConfig);
+  const providers =
+    params.providers ?? (await listRealtimeTranscriptionProvidersAsync(params.fullConfig));
   if (providers.length === 0) {
     throw new Error("No configured realtime transcription provider registered");
   }
@@ -131,7 +132,7 @@ export async function resolveMeetingRealtimeTranscriptionProvider(params: {
   const configuredProvider = providerId
     ? (params.providers?.find(
         (entry) => entry.id === providerId || entry.aliases?.includes(providerId),
-      ) ?? getRealtimeTranscriptionProvider(providerId, params.fullConfig))
+      ) ?? (await getRealtimeTranscriptionProviderAsync(providerId, params.fullConfig)))
     : undefined;
   const provider = configuredProvider ?? providers[0];
   if (!provider) {

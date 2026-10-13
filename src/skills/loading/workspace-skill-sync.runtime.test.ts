@@ -18,8 +18,10 @@ const mockResolvePluginSkillRoots = vi.hoisted(() =>
   vi.fn(() => [] as Array<{ dir: string; rejectHardlinks: boolean }>),
 );
 
-vi.mock("./plugin-skills.js", () => ({
+vi.mock("./plugin-skills.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-skills.js")>()),
   resolvePluginSkillRoots: mockResolvePluginSkillRoots,
+  resolvePluginSkillRootsFromMetadata: mockResolvePluginSkillRoots,
 }));
 
 async function pathExists(filePath: string): Promise<boolean> {

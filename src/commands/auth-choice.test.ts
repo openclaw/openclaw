@@ -29,8 +29,9 @@ vi.mock("../plugins/provider-install-catalog.js", () => ({
   resolveProviderInstallCatalogEntry: vi.fn(() => undefined),
 }));
 
+// mock-isolation: Credential-prompt tests use synthetic auth methods and in-memory profiles without discovering real providers.
 vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
-  resolvePluginProviders,
+  resolveAuthChoicePluginProviders: resolvePluginProviders,
   resolvePluginSetupProvider: () => undefined,
   resolveProviderPluginChoice,
   runProviderModelSelectedHook,

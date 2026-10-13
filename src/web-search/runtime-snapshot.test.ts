@@ -7,6 +7,11 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/web-provider-types.js";
 
+// mock-isolation: Provider fixtures supply metadata without opening shared machine state.
+vi.mock("../plugins/installed-plugin-index-record-state.js", () => ({
+  preparePluginMetadataMachineStateAsync: async () => () => {},
+}));
+
 // mock-isolation: Use fixed discovery policy without opening machine state for snapshot fixtures.
 vi.mock("../plugins/bundled-discovery-state.js", () => ({
   prepareBundledDiscoveryMode: async () => () => {},
@@ -37,7 +42,9 @@ vi.mock("../plugins/plugin-registry-contributions.js", () => ({
 // mock-isolation: Keep provider runtime loading outside the snapshot lifecycle fixture.
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
+  resolvePluginWebSearchProvidersAsync: resolvePluginWebSearchProvidersMock,
   resolveRuntimeWebSearchProviders: resolveRuntimeWebSearchProvidersMock,
+  resolveRuntimeWebSearchProvidersAsync: resolveRuntimeWebSearchProvidersMock,
 }));
 
 function createCustomSearchTool() {

@@ -12,7 +12,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { registerPluginCommandInRegistry } from "../../plugins/command-registration.js";
-import { loadOpenClawPlugins } from "../../plugins/loader.js";
+import { loadOpenClawPluginsAsync } from "../../plugins/loader.js";
 import { waitForPluginCacheRetirement } from "../../plugins/plugin-cache.js";
 import {
   PLUGIN_COMMAND_DISPATCH,
@@ -156,7 +156,7 @@ async function withDeclaredCommandPlugin(
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       },
       async () => {
-        registry = loadOpenClawPlugins({
+        registry = await loadOpenClawPluginsAsync({
           config: cfg,
           workspaceDir: tempDir,
           cache: false,

@@ -11,6 +11,8 @@ import * as replyInitialization from "../../config/sessions/session-accessor.res
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listSessionEntries, upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import { readVisibleSessionTranscriptMessageEntries } from "../../plugin-sdk/session-transcript-runtime.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
@@ -21,7 +23,7 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
-import type { GatewayClient, RespondFn } from "./types.js";
+import type { GatewayClient, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 vi.mock("./chat-send-admission.js", () => ({
   admitChatSend: () => {
@@ -29,6 +31,16 @@ vi.mock("./chat-send-admission.js", () => ({
   },
 }));
 useNativeProcessFixture();
+
+async function sendNativeChat(options: GatewayRequestHandlerOptions) {
+  const config = options.context.getRuntimeConfig();
+  const metadata = await resolvePluginMetadataSnapshotAsync({ config });
+  return withPluginMetadataSnapshotScope(
+    metadata,
+    () => expectDefined(coreGatewayHandlers["chat.send"], "registered chat.send")(options),
+    { config },
+  );
+}
 
 function nativeConfig(workspace: string): OpenClawConfig {
   return {
@@ -97,10 +109,7 @@ it.each([false, true])(
       const context = createDirectChatContext({ getRuntimeConfig: () => config });
       const client = nativeClient();
       try {
-        await expectDefined(
-          coreGatewayHandlers["chat.send"],
-          "registered chat.send",
-        )({
+        await sendNativeChat({
           req: { type: "req", id: "native-consent-request", method: "chat.send" },
           params: {
             sessionKey: target.sessionKey,
@@ -196,10 +205,7 @@ it.each([
       const context = createDirectChatContext({ getRuntimeConfig: () => config });
       const sessionKey = "agent:main:main";
       try {
-        await expectDefined(
-          coreGatewayHandlers["chat.send"],
-          "registered chat.send",
-        )({
+        await sendNativeChat({
           req: { type: "req", id: "restricted-first-send", method: "chat.send" },
           params: {
             sessionKey,
@@ -251,10 +257,7 @@ it.each(["authority", "mandatory policy", "competing entry"] as const)(
         },
       );
       const sending = Promise.resolve(
-        expectDefined(
-          coreGatewayHandlers["chat.send"],
-          "registered chat.send",
-        )({
+        sendNativeChat({
           req: { type: "req", id: "racing-first-send", method: "chat.send" },
           params: {
             sessionKey,
@@ -336,10 +339,7 @@ it.runIf(process.platform !== "win32")(
         },
       );
       const sending = Promise.resolve(
-        expectDefined(
-          coreGatewayHandlers["chat.send"],
-          "registered chat.send",
-        )({
+        sendNativeChat({
           req: { type: "req", id: "replaced-first-send", method: "chat.send" },
           params: {
             sessionKey,

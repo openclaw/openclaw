@@ -3,10 +3,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getMediaDir } from "../../media/store.js";
+import { preparePluginMetadataMachineStateAsync } from "../../plugins/installed-plugin-index-record-state.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createSandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
@@ -25,6 +26,9 @@ import {
 } from "./media-tool-shared.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+beforeEach(async () => {
+  await preparePluginMetadataMachineStateAsync({});
+});
 
 // Keep media-tool-shared tests focused on root separation; channel-inbound
 // tests cover the real bundled contract loader.

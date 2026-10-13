@@ -36,7 +36,7 @@ import {
 } from "../plugins/runtime.js";
 import type { Deferred } from "../shared/deferred.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { withEnv, withEnvAsync } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -230,7 +230,7 @@ it.each([
 );
 
 it("prepares managed GitHub exec with the node's own sanitized environment", async () => {
-  const environment = withEnv(
+  const environment = await withEnvAsync(
     { GH_TOKEN: "gateway-token", GITHUB_TOKEN: "gateway-fallback", GATEWAY_ONLY: "private" },
     () =>
       resolvePreparedExecEnvironment({
@@ -274,7 +274,7 @@ it.each(["GH_TOKEN", "GITHUB_TOKEN"])(
   async (key) => {
     for (const value of ["", "explicit-token"]) {
       for (const source of ["env", "pluginEnv"] as const) {
-        expect(() =>
+        await expect(
           resolvePreparedExecEnvironment({
             execParams: {
               command: request.command,
@@ -287,7 +287,7 @@ it.each(["GH_TOKEN", "GITHUB_TOKEN"])(
             managedLocalIdentity: true,
             warnings: [],
           }),
-        ).toThrow(`Environment variable '${key}' is forbidden`);
+        ).rejects.toThrow(`Environment variable '${key}' is forbidden`);
       }
       for (const command of ["system.run.prepare", "system.run"]) {
         await expect(

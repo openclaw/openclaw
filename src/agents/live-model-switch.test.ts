@@ -1,6 +1,7 @@
 // Verifies live session model selection, switch queuing, and pending-flag cleanup.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as mod from "./live-model-switch.js";
 
@@ -62,6 +63,7 @@ function makeShouldSwitchParams(overrides: Partial<ShouldSwitchParams> = {}): Sh
     defaultModel: "claude-opus-4-6",
     currentProvider: "anthropic",
     currentModel: "claude-opus-4-6",
+    metadataSnapshot: createPluginMetadataSnapshotFixture(),
     ...overrides,
   };
 }
@@ -339,6 +341,7 @@ describe("live model switch", () => {
               defaultProvider: params.defaultProvider,
               defaultModel: params.defaultModel,
               expectedSelection: selection,
+              metadataSnapshot: params.metadataSnapshot,
             });
           } else {
             expect(selection).toBeUndefined();

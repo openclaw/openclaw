@@ -4,6 +4,7 @@ import { streamOpenAICompletions, streamOpenAIResponses } from "@openclaw/ai/int
 // Lives in core: it proves the facade-installed guarded fetch routes provider
 // requests through OpenClaw's SSRF guard.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { prepareModelProviderRequestRouteFacts } from "../agents/provider-request-config.js";
 import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import { captureEnv } from "../test-utils/env.js";
 // Importing the facade installs the OpenClaw AI transport host ports.
@@ -90,9 +91,13 @@ describe("OpenAI-compatible provider credentials", () => {
       };
     });
 
-    const stream = streamOpenAICompletions(createBaseModel("openai-completions"), context, {
-      apiKey: "sk-third-party",
-    });
+    const stream = streamOpenAICompletions(
+      await prepareModelProviderRequestRouteFacts(createBaseModel("openai-completions")),
+      context,
+      {
+        apiKey: "sk-third-party",
+      },
+    );
     const result = await stream.result();
 
     expect(result.stopReason).toBe("stop");
@@ -106,7 +111,7 @@ describe("OpenAI-compatible provider credentials", () => {
       reasoning: true,
     } satisfies Model<"openai-responses">;
     const stream = streamOpenAIResponses(
-      model,
+      await prepareModelProviderRequestRouteFacts(model),
       {
         messages: [
           {

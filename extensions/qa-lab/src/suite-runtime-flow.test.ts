@@ -7,6 +7,25 @@ const createQaScenarioRuntimeApi = vi.hoisted(() => vi.fn());
 const runScenarioFlow = vi.hoisted(() => vi.fn(async (params: { api: unknown }) => params.api));
 const waitForOutboundMessage = vi.hoisted(() => vi.fn());
 const runRuntimeToolFixture = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/model-ref-parse", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/model-ref-parse")>();
+  const resolver = await actual.prepareModelRefResolver({
+    manifestPlugins: [
+      {
+        providers: ["anthropic", "openai"],
+        modelIdNormalization: {
+          providers: { anthropic: { aliases: { opus: "claude-opus-5-5" } } },
+        },
+      },
+    ],
+  });
+  return {
+    ...actual,
+    prepareModelRefResolver: async () => resolver,
+  };
+});
+
 const { webOpenPage, createWebPageOpener } = vi.hoisted(() => {
   const openPageMock = vi.fn(async (_params: { url: string; repoRoot?: string }) => ({
     pageId: "page-1",

@@ -20,6 +20,7 @@ import * as sessionAccess from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { withTimeout } from "../infra/fs-safe.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { registerProjectRegistry, removeProjectRegistry } from "../projects/project-registry.js";
 import {
@@ -180,6 +181,7 @@ beforeEach(async () => {
   repository = await createRepository(state.root, "selected-project");
   testState.agentConfig = { workspace: defaultWorkspace };
   ({ storePath } = await createSessionStoreDir());
+  await preparePluginMetadataMachineStateAsync({});
   const { getRuntimeConfig } = await getGatewayConfigModule();
   const { provider, model } = resolveDefaultModelForAgent({
     cfg: getRuntimeConfig(),

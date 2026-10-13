@@ -26,7 +26,10 @@ import type {
   resolveManifestProviderAuthChoice,
   resolveManifestProviderAuthChoices,
 } from "../plugins/provider-auth-choices.js";
-import type { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
+import type {
+  resolvePluginProvidersCore,
+  resolvePluginProvidersCoreAsync,
+} from "../plugins/providers.runtime.js";
 import type { SetupRecommendedInstall } from "../plugins/recommended-tool-installs.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
@@ -253,7 +256,9 @@ export type ActivateSetupInferenceDeps = {
   runCliAgent?: typeof import("../agents/cli-runner.js").runCliAgent;
   ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
   transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;
-  resolvePluginProviders?: typeof resolvePluginProvidersCore;
+  resolvePluginProviders?:
+    | typeof resolvePluginProvidersCore
+    | typeof resolvePluginProvidersCoreAsync;
   resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
   resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;
   enablePluginInConfig?: typeof enablePluginInConfig;
@@ -279,7 +284,9 @@ export type DetectSetupInferenceDeps = {
   onPartial?: (detection: SetupInferenceDetection) => void;
   detectInferenceBackends?: typeof detectInferenceBackends;
   resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;
-  resolvePluginProviders?: typeof resolvePluginProvidersCore;
+  resolvePluginProviders?:
+    | typeof resolvePluginProvidersCore
+    | typeof resolvePluginProvidersCoreAsync;
   enablePluginInConfig?: typeof enablePluginInConfig;
 };
 

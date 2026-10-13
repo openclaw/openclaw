@@ -3,8 +3,8 @@ import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import {
-  loadAuthProfileStoreForRuntime,
-  loadAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreForRuntimeAsync,
+  loadAuthProfileStoreWithoutExternalProfilesAsync,
 } from "../agents/auth-profiles/store-runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -19,8 +19,8 @@ import type {
 } from "./capability-catalog-context.types.js";
 import { isPluginRegistryLoadInFlight, resolvePluginRegistryLoadCacheKey } from "./loader-cache.js";
 import { createLazyPluginRuntime } from "./loader-module-runtime.js";
-import { loadOpenClawPluginsWithInternalOverrides } from "./loader-runtime-load.js";
-import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
+import { acquirePluginRegistryWithInternalOverrides } from "./loader-runtime-load.js";
+import { loadOpenClawPluginsAsync, type PluginLoadOptions } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   makePluginLoaderTempDir,
@@ -63,6 +63,7 @@ function createContext(): PluginCapabilityCatalogHostContext {
     resolveAgentDir: unavailable,
     createRealtimeTranscriptionWebSocketSession: unavailable,
     resolveProviderRequestHeaders: unavailable,
+    resolveProviderRequestHeadersAsync: unavailable,
     resolveProviderAuthProfileApiKey: unavailable,
     resolveApiKeyForProvider: unavailable,
     captureWsEvent: unavailable,
@@ -191,14 +192,14 @@ it("retains the creating cache generation when broad services initialize later",
 
 describe("capability factory registration", () => {
   it("composes native capability factories with a restricted runtime", async () => {
-    await withFactoryPlugin(registerFactories, (options) => {
+    await withFactoryPlugin(registerFactories, async (options) => {
       const resolveRuntime = vi
         .spyOn(sdkAlias, "resolvePluginRuntimeModulePathWithDiagnostics")
         .mockImplementation(() => {
           throw new Error("restricted registration must not load the broad runtime");
         });
-      const registry = loadOpenClawPluginsWithInternalOverrides(
-        { ...options, cache: false },
+      const inspection = await acquirePluginRegistryWithInternalOverrides(
+        { ...options, cache: false, activate: false },
         {
           runtime: {
             config: {
@@ -214,39 +215,45 @@ describe("capability factory registration", () => {
           moduleLoader: { installNativeSdkResolver: false, loaderFilename: import.meta.url },
         },
       );
-      expect(registry.plugins).toContainEqual(
-        expect.objectContaining({ id: "factory-owner", status: "loaded" }),
-      );
-      expect(registryContainsRuntimePluginIds(registry, ["factory-owner"])).toBe(true);
-      expect(registry.services.map((entry) => entry.service.id)).toEqual(["factory-lifecycle"]);
-      for (const family of families) {
-        expect(registry[family]).toHaveLength(1);
+      const { registry } = inspection;
+      try {
+        expect(registry.plugins).toContainEqual(
+          expect.objectContaining({ id: "factory-owner", status: "loaded" }),
+        );
+        expect(registryContainsRuntimePluginIds(registry, ["factory-owner"])).toBe(true);
+        expect(registry.services.map((entry) => entry.service.id)).toEqual(["factory-lifecycle"]);
+        for (const family of families) {
+          expect(registry[family]).toHaveLength(1);
+        }
+        const runtime = getPluginRegistryRuntime(registry)!;
+        for (const facet of ["modelAuth", "modelConfig"] as const) {
+          expect(Object.getOwnPropertyDescriptor(runtime, facet)).toEqual({
+            configurable: true,
+            enumerable: true,
+            get: expect.any(Function),
+            set: undefined,
+          });
+        }
+        expect(
+          registry.speechProviders[0]!.provider.isConfigured({
+            cfg: {},
+            providerConfig: {},
+            timeoutMs: 1000,
+          }),
+        ).toBe(true);
+        expect(resolveRuntime).not.toHaveBeenCalled();
+      } finally {
+        await inspection.release();
       }
-      const runtime = getPluginRegistryRuntime(registry)!;
-      for (const facet of ["modelAuth", "modelConfig"] as const) {
-        expect(Object.getOwnPropertyDescriptor(runtime, facet)).toEqual({
-          configurable: true,
-          enumerable: true,
-          get: expect.any(Function),
-          set: undefined,
-        });
-      }
-      expect(
-        registry.speechProviders[0]!.provider.isConfigured({
-          cfg: {},
-          providerConfig: {},
-          timeoutMs: 1000,
-        }),
-      ).toBe(true);
-      expect(resolveRuntime).not.toHaveBeenCalled();
     });
   });
 
   it("agrees on raw authored options during load, cache reuse, and active lookup", async () => {
     await withFactoryPlugin(
       'api.logger.info("inside registration");' + registerFactories,
-      (options, root) => {
+      async (options, root) => {
         let inFlightAtRegistration: boolean | undefined;
+        let cacheKeyAtRegistration: string | undefined;
         let registrations = 0;
         const authored: PluginLoadOptions = Object.freeze({
           ...options,
@@ -257,6 +264,7 @@ describe("capability factory registration", () => {
               if (message.includes("inside registration")) {
                 registrations += 1;
                 inFlightAtRegistration = isPluginRegistryLoadInFlight(authored);
+                cacheKeyAtRegistration = resolvePluginRegistryLoadCacheKey(authored);
               }
             },
             warn() {},
@@ -264,22 +272,22 @@ describe("capability factory registration", () => {
             debug() {},
           },
         });
+        const registry = await loadOpenClawPluginsAsync(authored);
         const cacheKey = resolvePluginRegistryLoadCacheKey(authored);
-        const registry = loadOpenClawPlugins(authored);
         expect(inFlightAtRegistration).toBe(true);
         expect(registryContainsRuntimePluginIds(registry, ["factory-owner"])).toBe(true);
         expect(isPluginRegistryLoadInFlight(authored)).toBe(false);
-        expect(resolvePluginRegistryLoadCacheKey(authored)).toBe(cacheKey);
+        expect(cacheKeyAtRegistration).toBe(cacheKey);
         expect(getPluginLoaderCacheState().get(cacheKey)).toBe(registry);
         expect(resolveCompatibleRuntimePluginRegistry(authored)).toBe(registry);
         const bound = getPluginRuntimeLoadContext(registry)!;
         const prepared = { ...authored, manifestRegistry: bound.manifestRegistry };
         expect(resolveCompatibleRuntimePluginRegistry(prepared)).toBe(registry);
-        expect(loadOpenClawPlugins(prepared) === registry).toBe(true);
+        expect((await loadOpenClawPluginsAsync(prepared)) === registry).toBe(true);
         expect(resolveCompatibleRuntimePluginRegistry(authored) === registry).toBe(true);
         expect(resolveCompatibleRuntimePluginRegistry(prepared) === registry).toBe(true);
         expect(registrations).toBe(1);
-        expect(loadOpenClawPlugins(authored)).toBe(registry);
+        expect(await loadOpenClawPluginsAsync(authored)).toBe(registry);
         expect(resolveCompatibleRuntimePluginRegistry(prepared)).toBe(registry);
         const changedManifest = {
           ...bound.manifestRegistry!,
@@ -331,16 +339,15 @@ describe("capability factory registration", () => {
     `;
     await withFactoryPlugin(
       register,
-      (options, root) => {
+      async (options, root) => {
         const resolveRuntime = vi.spyOn(sdkAlias, "resolvePluginRuntimeModulePathWithDiagnostics");
         resolveRuntime.mockImplementation(() => {
           throw new Error("cold external auth must use native factory composition");
         });
         const agentDir = path.join(root, "state", "agents", "main", "agent");
-        const store = loadAuthProfileStoreForRuntime(agentDir, {
+        const store = await loadAuthProfileStoreForRuntimeAsync(agentDir, {
           config: options.config,
           readOnly: true,
-          syncExternalCli: false,
           externalCli: { mode: "none", config: options.config },
         });
         expect(store.profiles["factory-provider:external"]).toMatchObject({
@@ -349,7 +356,9 @@ describe("capability factory registration", () => {
           access: "hybrid-ready",
         });
         expect(store.runtimeExternalProfileIds).toContain("factory-provider:external");
-        expect(loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles).toEqual({});
+        expect((await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir)).profiles).toEqual(
+          {},
+        );
         expect(resolveRuntime).not.toHaveBeenCalled();
       },
       {
@@ -363,11 +372,14 @@ describe("capability factory registration", () => {
     await withFactoryPlugin(registerFactories, async (options) => {
       const firstContext = createContext();
       const firstOptions = { ...options, capabilityCatalogContext: firstContext };
-      const first = loadOpenClawPlugins(firstOptions);
+      const first = await loadOpenClawPluginsAsync(firstOptions);
       expect(first.speechProviders).toHaveLength(1);
-      expect(loadOpenClawPlugins(firstOptions)).toBe(first);
+      expect(await loadOpenClawPluginsAsync(firstOptions)).toBe(first);
       const secondContext = createContext();
-      const second = loadOpenClawPlugins({ ...options, capabilityCatalogContext: secondContext });
+      const second = await loadOpenClawPluginsAsync({
+        ...options,
+        capabilityCatalogContext: secondContext,
+      });
       expect(second).not.toBe(first);
       const firstHost = Reflect.get(
         first.speechProviders[0]!.provider,
@@ -407,7 +419,7 @@ describe("capability factory registration", () => {
       });
       api.registerRealtimeVoiceProvider(() => Promise.reject(new Error("factory rejected")));`,
       async (options) => {
-        const registry = loadOpenClawPlugins({
+        const registry = await loadOpenClawPluginsAsync({
           ...options,
           capabilityCatalogContext: createContext(),
         });
@@ -460,7 +472,7 @@ it.each([false, true])(
         const cache = createPluginCache();
         const load = () =>
           withPluginCache(cache, () =>
-            loadOpenClawPlugins({
+            loadOpenClawPluginsAsync({
               ...options,
               cache: false,
               capabilityCatalog: { family: "speechProviders", context: createContext() },
@@ -468,7 +480,7 @@ it.each([false, true])(
           );
         const context = { cfg: {}, providerConfig: {}, timeoutMs: 1000 };
         try {
-          const retained = priorSuccess ? load().speechProviders[0]?.provider : undefined;
+          const retained = priorSuccess ? (await load()).speechProviders[0]?.provider : undefined;
           const stream = await retained?.streamSynthesize?.({
             ...context,
             text: "synthetic",
@@ -480,14 +492,18 @@ it.each([false, true])(
             expect(release).toEqual(expect.any(Function));
             await release?.();
           }
-          expect(load).toThrow(/capabilityCatalogEntry failed.*catalog construction failed/);
-          const retried = priorSuccess ? load().speechProviders[0]?.provider : undefined;
+          await expect(load()).rejects.toThrow(
+            /capabilityCatalogEntry failed.*catalog construction failed/,
+          );
+          const retried = priorSuccess ? (await load()).speechProviders[0]?.provider : undefined;
           if (priorSuccess) {
             expect(retained?.isConfigured(context)).toBe(true);
             expect(retried?.isConfigured(context)).toBe(true);
           } else {
             // Failed initialization discards its loader; the next attempt starts fresh.
-            expect(load).toThrow(/capabilityCatalogEntry failed.*catalog construction failed/);
+            await expect(load()).rejects.toThrow(
+              /capabilityCatalogEntry failed.*catalog construction failed/,
+            );
           }
           await retirePluginCache(cache);
           if (priorSuccess) {

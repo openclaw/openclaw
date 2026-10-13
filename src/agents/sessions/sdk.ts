@@ -10,8 +10,14 @@ import {
 } from "../../config/sessions/transcript-write-context.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Message, Model } from "../../llm/types.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
 import { resolveProviderRequestPolicy } from "../provider-attribution.js";
+import {
+  attachModelProviderRequestRouteFacts,
+  getModelProviderRequestRouteFacts,
+} from "../provider-request-config.js";
 import {
   Agent,
   type AgentMessage,
@@ -116,6 +122,7 @@ function createSessionPrepareNextTurnWithContext(
 function getAttributionHeaders(
   model: Model,
   settingsManager: SettingsManager,
+  providerMetadataOwners: PluginMetadataSnapshotOwnerMaps,
 ): Record<string, string> | undefined {
   // SDK-backed session streams do not all consult the attribution policy, so forward its
   // documented header set as caller headers. Hidden (spec-only) attribution stays with the
@@ -124,6 +131,7 @@ function getAttributionHeaders(
     provider: model.provider,
     api: model.api,
     baseUrl: model.baseUrl,
+    providerMetadataOwners,
   });
   if (attributionHeaders && !allowsHiddenAttribution) {
     return attributionHeaders;
@@ -225,7 +233,13 @@ export async function createAgentSession(
     },
     convertToLlm: convertToLlmWithBlockImages,
     streamFn: async (modelResult, context, optionsLocal) => {
-      const auth = await modelRegistry.getApiKeyAndHeaders(modelResult);
+      const providerMetadataOwners =
+        getModelProviderRequestRouteFacts(modelResult)?.providerMetadataOwners ??
+        (await resolvePluginMetadataSnapshotAsync({ allowWorkspaceScopedCurrent: true })).owners;
+      const requestModel = getModelProviderRequestRouteFacts(modelResult)
+        ? modelResult
+        : attachModelProviderRequestRouteFacts(modelResult, providerMetadataOwners);
+      const auth = await modelRegistry.getApiKeyAndHeaders(requestModel);
       if (!auth.ok) {
         throw new Error(auth.error);
       }
@@ -233,8 +247,12 @@ export async function createAgentSession(
       await import("../ai-transport-runtime-host.js");
       optionsLocal?.signal?.throwIfAborted();
       const providerRetrySettings = settingsManager.getProviderRetrySettings();
-      const attributionHeaders = getAttributionHeaders(modelResult, settingsManager);
-      return modelRegistryRuntime.llmRuntime.streamSimple(modelResult, context, {
+      const attributionHeaders = getAttributionHeaders(
+        requestModel,
+        settingsManager,
+        providerMetadataOwners,
+      );
+      return modelRegistryRuntime.llmRuntime.streamSimple(requestModel, context, {
         ...optionsLocal,
         apiKey: auth.apiKey,
         timeoutMs: optionsLocal?.timeoutMs ?? providerRetrySettings.timeoutMs,

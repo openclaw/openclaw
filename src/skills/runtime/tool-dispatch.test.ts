@@ -9,7 +9,7 @@ import {
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { listKnownProviderAuthEnvVarNamesCore } from "../../secrets/provider-env-vars.js";
+import { listKnownProviderAuthEnvVarNamesAsync } from "../../secrets/provider-env-vars.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { resolveSkillDispatchTools, type SkillToolDispatchDependencies } from "./tool-dispatch.js";
@@ -55,9 +55,9 @@ const dispatchDefaults = {
   senderIsOwner: true,
 } satisfies Parameters<typeof resolveSkillDispatchTools>[0];
 
-beforeEach(() => {
+beforeEach(async () => {
   // Exercise auth-source preparation even on hosts with configured search providers.
-  for (const name of listKnownProviderAuthEnvVarNamesCore({ config: {} })) {
+  for (const name of await listKnownProviderAuthEnvVarNamesAsync({ config: {} })) {
     vi.stubEnv(name, undefined);
   }
 });

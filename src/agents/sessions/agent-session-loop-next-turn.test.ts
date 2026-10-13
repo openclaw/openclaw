@@ -344,12 +344,17 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
         session.agent.state.systemPrompt = permissionPrompt;
       });
       const lifecycleEvents: string[] = [];
-      session.subscribe((event) => lifecycleEvents.push(event.type));
+      const retryStarted = createDeferredCore();
+      session.subscribe((event) => {
+        lifecycleEvents.push(event.type);
+        if (event.type === "auto_retry_start") {
+          retryStarted.resolve();
+        }
+      });
 
       const prompt = session.prompt("initial prompt");
-      await vi.advanceTimersByTimeAsync(0);
+      await retryStarted.promise;
       expect(requests).toHaveLength(1);
-      expect(lifecycleEvents).toContain("auto_retry_start");
 
       permissionPrompt = "updated permission prompt";
       await session.prompt("steer during retry", { streamingBehavior: "steer" });

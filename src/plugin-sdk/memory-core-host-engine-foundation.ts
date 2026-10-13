@@ -10,6 +10,7 @@ export {
 } from "../agents/agent-scope.js";
 export {
   resolveMemorySearchConfig,
+  resolveMemorySearchConfigAsync,
   resolveMemorySearchSyncConfig,
 } from "../agents/memory-search.js";
 export type { ResolvedMemorySearchConfig } from "../agents/memory-search.js";

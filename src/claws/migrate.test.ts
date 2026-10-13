@@ -7,6 +7,7 @@ import {
   DEFAULT_SUBAGENT_MAX_CONCURRENT,
 } from "../config/agent-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { applyClawMigrationPlan, buildClawMigrationPlan, ClawMigrationError } from "./migrate.js";
@@ -33,6 +34,8 @@ async function fixture(agent: Record<string, unknown> = {}) {
     OPENCLAW_HOME: root,
     OPENCLAW_STATE_DIR: join(root, "state"),
   };
+  await preparePluginMetadataMachineStateAsync({});
+  await preparePluginMetadataMachineStateAsync({ env });
   const config: OpenClawConfig = {
     agents: {
       entries: {

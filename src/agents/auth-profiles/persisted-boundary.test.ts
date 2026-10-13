@@ -383,10 +383,13 @@ describe("persisted auth profile boundary", () => {
       "minimax-portal:default",
       "minimax-portal:cli",
     ]);
-    expect(resolveAuthProfileOrder({ store: merged, provider: "minimax-portal" })).toEqual([
-      "minimax-portal:default",
-      "minimax-portal:cli",
-    ]);
+    expect(
+      resolveAuthProfileOrder({
+        store: merged,
+        provider: "minimax-portal",
+        authAliasLookupParams: { metadataSnapshot: { plugins: [] } },
+      }),
+    ).toEqual(["minimax-portal:default", "minimax-portal:cli"]);
   });
 
   it("collapses normalized provider order keys without expanding explicit override order", () => {

@@ -51,6 +51,7 @@ export {
   resolvePreparedSandboxRuntimeStatus,
   runSshSandboxCommand,
   sanitizeEnvVars,
+  sanitizeEnvVarsAsync,
   shellEscape,
 } from "../agents/sandbox.js";
 

@@ -1,4 +1,5 @@
 import { expect, vi } from "vitest";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as publication from "./runtime-snapshot-publication.js";
 
@@ -30,8 +31,14 @@ export async function withAuthProfileTestState<T>(
       layout: "state-only",
       env: options.clearOAuthDir ? { OPENCLAW_OAUTH_DIR: undefined } : undefined,
     },
-    async (state) =>
-      run({ stateDir: state.stateDir, agentDir: state.agentDir(), agentDirFor: state.agentDir }),
+    async (state) => {
+      await resolvePluginMetadataSnapshotAsync({ config: {}, env: state.env });
+      return run({
+        stateDir: state.stateDir,
+        agentDir: state.agentDir(),
+        agentDirFor: state.agentDir,
+      });
+    },
   );
 }
 

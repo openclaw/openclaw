@@ -2296,6 +2296,12 @@ const reviewedOperations = new Map([
     "src/state/config-machine-state-write.ts",
     [
       {
+        tier: "T3",
+        operations: ["updateConfigMachineState", "updateConfigMachineStateInDatabase"],
+        evidence:
+          "Updates are limited to hook install/update CLI, service install/stage/uninstall under the service operation lock, guided onboarding, Doctor/migrations, and registered worker kernels (onboarding recommendations, TUI, model catalog, node config, channel identities, promotions, telemetry). The native SDK write/upsert path remains T1.",
+      },
+      {
         tier: "W",
         operations: ["deleteConfigMachineState"],
         evidence:

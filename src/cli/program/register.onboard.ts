@@ -3,6 +3,7 @@ import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { Option, type Command } from "commander";
 import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
 import type { OnboardOptions } from "../../commands/onboard-types.js";
+import { preparePluginMetadataMachineStateAsync } from "../../plugins/installed-plugin-index-record-state.js";
 import { resolveProviderOnboardAuthFlags } from "../../plugins/provider-auth-choices.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
@@ -51,7 +52,6 @@ async function validateRecommendationParentOptions(
   );
 }
 
-const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli();
 const RECOMMENDATION_READ_PARENT_OPTIONS = new Set(["json"]);
 const RECOMMENDATION_MUTATION_PARENT_OPTIONS = new Set(["agent"]);
 
@@ -91,11 +91,10 @@ function resolveOnboardAuthFlags() {
   return flags;
 }
 
-const ONBOARD_AUTH_FLAGS = resolveOnboardAuthFlags();
-
-export function registerOnboardAuthOptions(command: Command): Command {
+export async function registerOnboardAuthOptions(command: Command): Promise<Command> {
+  await preparePluginMetadataMachineStateAsync({});
   command
-    .option("--auth-choice <choice>", `Auth: ${AUTH_CHOICE_HELP}`)
+    .option("--auth-choice <choice>", `Auth: ${formatAuthChoiceChoicesForCli()}`)
     .option(
       "--token-provider <id>",
       "Token provider id (non-interactive; used with --auth-choice token)",
@@ -113,7 +112,7 @@ export function registerOnboardAuthOptions(command: Command): Command {
     .option("--cloudflare-ai-gateway-account-id <id>", "Cloudflare Account ID")
     .option("--cloudflare-ai-gateway-gateway-id <id>", "Cloudflare AI Gateway ID");
 
-  for (const providerFlag of ONBOARD_AUTH_FLAGS) {
+  for (const providerFlag of resolveOnboardAuthFlags()) {
     command.option(providerFlag.cliOption, providerFlag.description);
   }
 
@@ -211,7 +210,7 @@ export async function resolveOnboardCommandOptions(
     tokenExpiresIn: opts.tokenExpiresIn as string | undefined,
     secretInputMode: opts.secretInputMode as OnboardOptions["secretInputMode"],
     ...Object.fromEntries(
-      ONBOARD_AUTH_FLAGS.map((flag) => [
+      resolveOnboardAuthFlags().map((flag) => [
         flag.optionKey,
         opts[flag.optionKey] as string | undefined,
       ]),
@@ -268,7 +267,7 @@ export function registerOnboardFlowOptions(command: Command): Command {
     .option("--mode <mode>", "Onboard mode: local|remote");
 }
 
-export function registerOnboardCommand(program: Command): void {
+export async function registerOnboardCommand(program: Command): Promise<void> {
   const command = program
     .command("onboard")
     .description("Guided setup for auth, models, Gateway, workspace, channels, and skills")
@@ -288,7 +287,7 @@ export function registerOnboardCommand(program: Command): void {
     .option("--modern", "Open inference-gated OpenClaw (kept for compatibility)", false);
   registerOnboardFlowOptions(command);
 
-  registerOnboardAuthOptions(command);
+  await registerOnboardAuthOptions(command);
   registerOnboardGatewayOptions(command);
   registerOnboardRemoteOptions(command);
   registerOnboardRuntimeOptions(command, "onboard");

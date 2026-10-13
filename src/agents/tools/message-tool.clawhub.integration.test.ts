@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { readClawHubRecommendations } from "../../shared/clawhub-recommendations.js";
 import { extractMessagingToolSourceReplyPayload } from "../embedded-agent-messaging-extraction.js";
 import { createMessageTool } from "./message-tool-execution.js";
@@ -32,7 +33,11 @@ const remotePlugin = {
 };
 const catalog = { version: 0, channels: [], getChannel: () => undefined } as const;
 
-function messageTool(config = {}, options: Partial<Parameters<typeof createMessageTool>[0]> = {}) {
+async function messageTool(
+  config = {},
+  options: Partial<Parameters<typeof createMessageTool>[0]> = {},
+) {
+  await prepareBundledDiscoveryMode(process.env);
   setRuntimeConfigSnapshot(options.config ?? config);
   return createMessageTool({
     config,
@@ -78,7 +83,9 @@ describe("ClawHub message recommendations", () => {
           official: false,
         },
       ]);
-      const result = await messageTool().execute("no-match", {
+      const result = await (
+        await messageTool()
+      ).execute("no-match", {
         action: "send",
         message,
         clawhub: { query: "whatsapp" },
@@ -97,7 +104,9 @@ describe("ClawHub message recommendations", () => {
 
   it("preserves an explicit reply when a ClawHub search has no matches", async () => {
     const message = "Deployment complete.\nAll requested checks passed.";
-    const result = await messageTool().execute("no-match-with-reply", {
+    const result = await (
+      await messageTool()
+    ).execute("no-match-with-reply", {
       action: "send",
       message,
       clawhub: { query: "unmatched-capability", kind: "skill" },
@@ -134,7 +143,7 @@ describe("ClawHub message recommendations", () => {
         },
       ],
     });
-    const tool = messageTool({}, { workspaceDir: "/workspace" });
+    const tool = await messageTool({}, { workspaceDir: "/workspace" });
     const result = await tool.execute("skill-card", {
       action: "send",
       message: "Here is your calendar capability.",
@@ -161,7 +170,7 @@ describe("ClawHub message recommendations", () => {
 
   it("rejects model-supplied installation and official claims", async () => {
     await expect(
-      messageTool().execute("forged-status", {
+      (await messageTool()).execute("forged-status", {
         action: "send",
         clawhub: { query: "whatsapp", installed: true, official: true },
       }),

@@ -15,7 +15,7 @@ import { readConfigFileSnapshot } from "../config/io.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { resolveGatewayStateOwnerPath } from "../infra/gateway-state-owner.js";
 import { createSqliteReadOnlyWorkerError } from "../infra/sqlite-readonly-worker-protocol.js";
-import { readBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
+import { readBundledDiscoveryModeNative as readBundledDiscoveryMode } from "../plugins/bundled-discovery-state.native.js";
 import { readPersistedInstalledPluginIndexRowSync } from "../plugins/test-helpers/installed-plugin-index.js";
 import {
   AgentDatabaseAdmissionError,

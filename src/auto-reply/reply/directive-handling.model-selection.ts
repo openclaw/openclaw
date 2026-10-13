@@ -10,7 +10,7 @@ import {
   type ModelVisibilityPolicy,
 } from "../../agents/model-visibility-policy.js";
 import { resolveOperatorModelDefault } from "../../agents/operator-model-policy.js";
-import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { resolvePreparedProviderIdForAuth as resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,

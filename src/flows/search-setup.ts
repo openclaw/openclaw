@@ -23,7 +23,7 @@ import {
   resolveWebSearchInstallCatalogEntries,
   type WebSearchInstallCatalogEntry,
 } from "../plugins/web-search-install-catalog.js";
-import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
+import { resolvePluginWebSearchProvidersAsync } from "../plugins/web-search-providers.runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveWebSearchProviderId } from "../web-search/runtime.js";
 import { t } from "../wizard/i18n/index.js";
@@ -43,11 +43,11 @@ type SearchProviderEntryWithInstall = PluginWebSearchProviderEntry & {
 
 export { resolveSearchProviderOptions as listSearchProviderOptions };
 
-export function resolveSearchProviderOptions(
+export async function resolveSearchProviderOptions(
   config?: OpenClawConfig,
-): readonly PluginWebSearchProviderEntry[] {
+): Promise<readonly PluginWebSearchProviderEntry[]> {
   const runtimeProviders = sortPluginEntriesById(
-    resolvePluginWebSearchProviders({
+    await resolvePluginWebSearchProvidersAsync({
       config,
       env: process.env,
       mode: "setup",
@@ -98,13 +98,6 @@ function defaultModelUsesCodexRuntime(config: OpenClawConfig): boolean {
   );
 }
 
-function resolveSearchProviderEntry(
-  config: OpenClawConfig,
-  provider: SearchProvider,
-): PluginWebSearchProviderEntry | undefined {
-  return resolveSearchProviderOptions(config).find((entry) => entry.id === provider);
-}
-
 export function hasKeyInEnv(entry: Pick<PluginWebSearchProviderEntry, "envVars">): boolean {
   return entry.envVars.some((k) => Boolean(normalizeOptionalString(process.env[k])));
 }
@@ -114,7 +107,7 @@ function providerIsReady(
   authStore: AuthProfileStore,
   entry: Pick<
     PluginWebSearchProviderEntry,
-    "id" | "authProviderId" | "envVars" | "requiresCredential"
+    "id" | "authProviderId" | "envVars" | "requiresCredential" | "getConfiguredCredentialValue"
   >,
 ): boolean {
   if (entry.requiresCredential === false) {
@@ -129,35 +122,29 @@ function providerIsReady(
   ) {
     return true;
   }
-  return hasExistingKey(config, entry.id) || hasKeyInEnv(entry);
-}
-
-function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown {
-  const entry = resolveSearchProviderEntry(config, provider);
-  return entry?.getConfiguredCredentialValue?.(config);
+  return hasExistingKey(config, entry) || hasKeyInEnv(entry);
 }
 
 export function resolveExistingKey(
   config: OpenClawConfig,
-  provider: SearchProvider,
+  entry: Pick<PluginWebSearchProviderEntry, "getConfiguredCredentialValue">,
 ): string | undefined {
-  return normalizeSecretInputString(rawKeyValue(config, provider));
+  return normalizeSecretInputString(entry.getConfiguredCredentialValue?.(config));
 }
 
-export function hasExistingKey(config: OpenClawConfig, provider: SearchProvider): boolean {
-  return hasConfiguredSecretInput(rawKeyValue(config, provider));
+export function hasExistingKey(
+  config: OpenClawConfig,
+  entry: Pick<PluginWebSearchProviderEntry, "getConfiguredCredentialValue">,
+): boolean {
+  return hasConfiguredSecretInput(entry.getConfiguredCredentialValue?.(config));
 }
 
-function buildSearchEnvRef(config: OpenClawConfig, provider: SearchProvider): SecretRef {
-  const entry =
-    resolveSearchProviderEntry(config, provider) ??
-    resolveSearchProviderOptions().find((candidate) => candidate.id === provider);
+function buildSearchEnvRef(entry: PluginWebSearchProviderEntry): SecretRef {
   const resolvedEnvVar =
-    entry?.envVars.find((k) => Boolean(normalizeOptionalString(process.env[k]))) ??
-    entry?.envVars[0];
+    entry.envVars.find((k) => Boolean(normalizeOptionalString(process.env[k]))) ?? entry.envVars[0];
   if (!resolvedEnvVar) {
     throw new Error(
-      `No env var mapping for search provider "${provider}" at ${entry?.credentialPath ?? "unknown path"} in secret-input-mode=ref.`,
+      `No env var mapping for search provider "${entry.id}" at ${entry.credentialPath} in secret-input-mode=ref.`,
     );
   }
   return { source: "env", provider: DEFAULT_SECRET_PROVIDER_ALIAS, id: resolvedEnvVar };
@@ -186,16 +173,12 @@ function applySearchProviderSelectionConfig(
 
 function applySearchProviderSelection(
   config: OpenClawConfig,
-  provider: SearchProvider,
+  providerEntry: PluginWebSearchProviderEntry,
   key?: SecretInput,
 ): OpenClawConfig {
-  const providerEntry = resolveSearchProviderEntry(config, provider);
-  if (!providerEntry) {
-    return config;
-  }
   const next = applySearchProviderSelectionConfig(config, providerEntry, {
     ...config.tools?.web?.search,
-    provider,
+    provider: providerEntry.id,
     enabled: true,
   });
   if (key !== undefined) {
@@ -204,7 +187,11 @@ function applySearchProviderSelection(
   return next;
 }
 
-function preserveDisabledState(original: OpenClawConfig, result: OpenClawConfig): OpenClawConfig {
+function preserveDisabledState(
+  original: OpenClawConfig,
+  result: OpenClawConfig,
+  providers: readonly PluginWebSearchProviderEntry[],
+): OpenClawConfig {
   if (original.tools?.web?.search?.enabled !== false) {
     return result;
   }
@@ -221,7 +208,7 @@ function preserveDisabledState(original: OpenClawConfig, result: OpenClawConfig)
   if (typeof provider !== "string") {
     return next;
   }
-  const providerEntry = resolveSearchProviderEntry(original, provider);
+  const providerEntry = providers.find((entry) => entry.id === provider);
   if (!providerEntry?.pluginId) {
     return next;
   }
@@ -293,6 +280,7 @@ async function finalizeSearchProviderSetup(params: {
   originalConfig: OpenClawConfig;
   nextConfig: OpenClawConfig;
   entry: SearchProviderEntryWithInstall;
+  providers: readonly PluginWebSearchProviderEntry[];
   runtime: RuntimeEnv;
   prompter: WizardPrompter;
   opts?: SetupSearchOptions;
@@ -338,7 +326,7 @@ async function finalizeSearchProviderSetup(params: {
     next = installed.cfg;
   }
   if (params.opts?.preserveDisabledSearchState !== false) {
-    next = preserveDisabledState(params.originalConfig, next);
+    next = preserveDisabledState(params.originalConfig, next, params.providers);
   }
   if (!params.entry.runSetup) {
     return completedSearchSetup(next);
@@ -353,7 +341,7 @@ async function finalizeSearchProviderSetup(params: {
   return completedSearchSetup(
     params.opts?.preserveDisabledSearchState === false
       ? next
-      : preserveDisabledState(params.originalConfig, next),
+      : preserveDisabledState(params.originalConfig, next, params.providers),
   );
 }
 
@@ -366,7 +354,7 @@ export async function runSearchSetupFlow(
   const authStore = await ensureAuthProfileStoreWithoutExternalProfilesAsync(
     resolveDefaultAgentDir(config),
   );
-  const availableProviderOptions = resolveSearchProviderOptions(config);
+  const availableProviderOptions = await resolveSearchProviderOptions(config);
   const codexRecommended =
     defaultModelUsesCodexRuntime(config) &&
     availableProviderOptions.some((entry) => entry.id === CODEX_HOSTED_SEARCH_PROVIDER_ID);
@@ -475,8 +463,7 @@ export async function runSearchSetupFlow(
     return { outcome: "kept-current", config, reason: "user-skipped" };
   }
 
-  const entry =
-    resolveSearchProviderEntry(config, choice) ?? providerOptions.find((e) => e.id === choice);
+  const entry = providerOptions.find((e) => e.id === choice);
   if (!entry) {
     return { outcome: "kept-current", config, reason: "provider-unavailable", providerId: choice };
   }
@@ -509,6 +496,7 @@ export async function runSearchSetupFlow(
       originalConfig: config,
       nextConfig,
       entry,
+      providers: availableProviderOptions,
       runtime,
       prompter,
       opts,
@@ -517,8 +505,8 @@ export async function runSearchSetupFlow(
     entry.requiresCredential === false
       ? `${entry.label} setup`
       : normalizeOptionalString(entry.credentialLabel) || `${entry.label} API key`;
-  const existingKey = resolveExistingKey(config, choice);
-  const keyConfigured = hasExistingKey(config, choice);
+  const existingKey = resolveExistingKey(config, entry);
+  const keyConfigured = hasExistingKey(config, entry);
   const envAvailable = hasKeyInEnv(entry);
   const authProviderId = entry.authProviderId;
   const providerAuthProfileAvailable = authProviderId
@@ -533,7 +521,7 @@ export async function runSearchSetupFlow(
         })
       : false;
   if (opts?.quickstartDefaults && (providerAuthProfileAvailable || keyConfigured || envAvailable)) {
-    const result = applySearchProviderSelection(config, choice, existingKey || undefined);
+    const result = applySearchProviderSelection(config, entry, existingKey || undefined);
     return await finalizeSelection(result);
   }
 
@@ -546,7 +534,7 @@ export async function runSearchSetupFlow(
       ].join("\n"),
       "Web search",
     );
-    return await finalizeSelection(applySearchProviderSelection(config, choice));
+    return await finalizeSelection(applySearchProviderSelection(config, entry));
   }
 
   if (entry.credentialNote) {
@@ -567,15 +555,15 @@ export async function runSearchSetupFlow(
       ].join("\n"),
       "Web search",
     );
-    return await finalizeSelection(applySearchProviderSelection(config, choice));
+    return await finalizeSelection(applySearchProviderSelection(config, entry));
   }
 
   const useSecretRefMode = opts?.secretInputMode === "ref"; // pragma: allowlist secret
   if (useSecretRefMode) {
     if (keyConfigured) {
-      return await finalizeSelection(applySearchProviderSelection(config, choice));
+      return await finalizeSelection(applySearchProviderSelection(config, entry));
     }
-    const ref = buildSearchEnvRef(config, choice);
+    const ref = buildSearchEnvRef(entry);
     await prompter.note(
       [
         "Secret references enabled — OpenClaw will store a reference instead of the API key.",
@@ -585,7 +573,7 @@ export async function runSearchSetupFlow(
       ].join("\n"),
       "Web search",
     );
-    return await finalizeSelection(applySearchProviderSelection(config, choice, ref));
+    return await finalizeSelection(applySearchProviderSelection(config, entry, ref));
   }
 
   const keyInput = await prompter.text({
@@ -600,15 +588,15 @@ export async function runSearchSetupFlow(
 
   const key = normalizeOptionalString(keyInput) ?? "";
   if (key) {
-    return await finalizeSelection(applySearchProviderSelection(config, choice, key));
+    return await finalizeSelection(applySearchProviderSelection(config, entry, key));
   }
 
   if (existingKey) {
-    return await finalizeSelection(applySearchProviderSelection(config, choice, existingKey));
+    return await finalizeSelection(applySearchProviderSelection(config, entry, existingKey));
   }
 
   if (keyConfigured || envAvailable) {
-    return await finalizeSelection(applySearchProviderSelection(config, choice));
+    return await finalizeSelection(applySearchProviderSelection(config, entry));
   }
 
   await prompter.note(

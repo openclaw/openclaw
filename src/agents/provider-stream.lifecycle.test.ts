@@ -8,6 +8,7 @@ import {
   attachModelProviderLocalService,
   stopManagedProviderLocalServices,
 } from "./provider-local-service.js";
+import { prepareModelProviderRequestRouteFacts } from "./provider-request-config.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 
@@ -146,27 +147,30 @@ describe("provider stream lifecycle registration", () => {
     });
     const apiRegistry = createApiRegistry();
     const llmRuntime = createLlmRuntime(apiRegistry);
-    const model = attachModelProviderLocalService(
-      bindModelLlmRuntime(
+    const model = await prepareModelProviderRequestRouteFacts(
+      attachModelProviderLocalService(
+        bindModelLlmRuntime(
+          {
+            api: "ollama",
+            provider: "ollama",
+            id: "qwen3:8b",
+            name: "Test Model",
+            baseUrl: "http://127.0.0.1:19432/v1",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 1024,
+            maxTokens: 512,
+          },
+          llmRuntime,
+        ),
         {
-          api: "ollama",
-          provider: "ollama",
-          id: "qwen3:8b",
-          name: "Test Model",
-          baseUrl: "http://127.0.0.1:19432/v1",
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 1024,
-          maxTokens: 512,
+          command: process.execPath,
+          args: ["-e", "setInterval(() => {}, 1000)"],
+          healthUrl: "http://127.0.0.1:19432/health",
         },
-        llmRuntime,
       ),
-      {
-        command: process.execPath,
-        args: ["-e", "setInterval(() => {}, 1000)"],
-        healthUrl: "http://127.0.0.1:19432/health",
-      },
+      { workspaceDir: "/tmp/test-workspace" },
     );
     expect(apiRegistry.getApiProvider("ollama")).toBeUndefined();
     const streamFn = registerProviderStreamForModel({

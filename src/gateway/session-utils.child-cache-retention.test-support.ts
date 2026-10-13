@@ -5,6 +5,7 @@ import { setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -35,6 +36,7 @@ await withStateDirEnv("session-row-retention-", async ({ stateDir }) => {
   ]);
   setRuntimeConfigSnapshot(cfg);
   setActivePluginRegistry(pluginRegistry);
+  await preparePluginMetadataMachineStateAsync({});
   const parentKey = "agent:main:parent";
   const childKey = "agent:main:child";
 

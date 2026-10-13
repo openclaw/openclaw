@@ -12,6 +12,7 @@ import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import type { Model } from "../llm/types.js";
 import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
 import { withHandedOffCodexClientVersion } from "../plugin-sdk/codex-client-version-handoff.internal.js";
+import { publishBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -227,6 +228,8 @@ async function runCatalogRequest(
   let prepared: WorkerGeneration | undefined;
   let acquiredGeneration: WorkerGeneration | undefined;
   try {
+    // Reconstruct policy from the same parent-owned facts as the metadata graph.
+    publishBundledDiscoveryMode(request.bundledDiscoveryMode, value.input.env);
     if (value.sharedAuthStoreOwnership) {
       noteCommittedSharedAuthStoreOwnership(value.sharedAuthStoreOwnership, value.input.env);
     }
@@ -280,6 +283,7 @@ async function runCatalogRequest(
     const resolveSyntheticCredentials = (providerIds: readonly string[]) =>
       withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
         resolveAmbientAgentCredentialsForDiscovery({
+          metadataSnapshot: pluginGenerationScope.metadataSnapshot,
           config: value.input.config,
           env: value.input.env,
           authoritativeSyntheticAuthProviderRefs:
@@ -323,7 +327,10 @@ async function runCatalogRequest(
     }
     const credentials = {
       ...resolveSyntheticCredentials(request.providerIds ?? value.providerIds),
-      ...resolveAgentCredentialMapFromStore(authStore, { config: value.input.config }),
+      ...resolveAgentCredentialMapFromStore(authStore, {
+        config: value.input.config,
+        metadataSnapshot: pluginGenerationScope.metadataSnapshot,
+      }),
     };
     if (request.kind === "auth-refresh") {
       return {

@@ -275,7 +275,7 @@ describe("subcommand help cold imports", () => {
     const { registerSetupCommand } = await import("./program/register.setup.js");
     const program = makeProgram();
 
-    registerSetupCommand(program);
+    await registerSetupCommand(program);
     await expectHelpExit(program, ["setup", "--help"]);
 
     expect(loaded.modules).not.toContain("setup-command");
@@ -287,7 +287,7 @@ describe("subcommand help cold imports", () => {
     const { registerOnboardCommand } = await import("./program/register.onboard.js");
     const program = makeProgram();
 
-    registerOnboardCommand(program);
+    await registerOnboardCommand(program);
     await expectHelpExit(program, ["onboard", "--help"]);
 
     expect(loaded.modules).not.toContain("onboard-command");

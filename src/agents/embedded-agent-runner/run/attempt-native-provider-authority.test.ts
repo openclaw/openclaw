@@ -16,6 +16,7 @@ import {
   resolveBundledPluginPublicModulePath,
 } from "../../../test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { attachProviderRequestFactsFixture } from "../../provider-request.test-support.js";
 import {
   createAutoCompactionSettings,
   testModel,
@@ -51,13 +52,13 @@ describe("embedded native provider authority", () => {
       const provider = await registerSingleProviderPlugin({ ...plugin, register: plugin.register });
       const providerRuntimeHandle = { provider: "amazon-bedrock", plugin: provider };
       const model = attachModelProviderRuntimePluginHandle(
-        {
+        attachProviderRequestFactsFixture({
           ...testModel,
           api: "bedrock-converse-stream",
           provider: "amazon-bedrock",
           id: "amazon.nova-micro-v1:0",
           baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-        },
+        }),
         providerRuntimeHandle,
       );
       // Resolve the native SDK from its owning plugin, not the core package.

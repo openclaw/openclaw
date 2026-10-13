@@ -2,7 +2,7 @@ import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   buildRealtimeVoiceAgentConsultPolicyInstructions,
-  getRealtimeVoiceProvider,
+  getRealtimeVoiceProviderAsync,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION,
   resolveConfiguredRealtimeVoiceProviderAsync,
@@ -104,7 +104,7 @@ export async function resolveFaceTimeRealtimeProvider(params: {
   const selectedProviderIds = configuredProviderId
     ? new Set([
         configuredProviderId,
-        getRealtimeVoiceProvider(configuredProviderId, params.fullConfig)?.id,
+        (await getRealtimeVoiceProviderAsync(configuredProviderId, params.fullConfig))?.id,
       ])
     : undefined;
   const selectedEntries = configuredProviderId

@@ -1,6 +1,7 @@
 // Openai tests cover media understanding provider plugin behavior.
 import { inspect } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
+import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 // Keep static: evaluates the partial auth mock and its compiled workers at collection.
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -24,6 +25,8 @@ installPinnedHostnameTestHooks();
 beforeEach(() => {
   authMocks.resolve.mockReset();
 });
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 describe("openaiMediaUnderstandingProvider", () => {
   it("declares audio support with the transcription default", () => {

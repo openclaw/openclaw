@@ -14,11 +14,16 @@ import {
   normalizePluginConfigId,
 } from "../plugins/plugin-config-trust.js";
 import { buildPluginMetadataProviderAuthAliases } from "../plugins/plugin-metadata-provider-facts.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { loadLegacyPluginMetadataSnapshotRuntime } from "../plugins/plugin-metadata-snapshot-required.js";
+import {
+  loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshotAsync,
+} from "../plugins/plugin-metadata-snapshot.js";
 import type {
   PluginMetadataSnapshot,
   PluginProviderAuthAliasCandidate,
 } from "../plugins/plugin-metadata-snapshot.types.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 
 /** Inputs that control plugin metadata and trust scope for auth alias lookup. */
 export type ProviderAuthAliasLookupParams = {
@@ -48,13 +53,17 @@ function shouldUsePluginAuthAliases(
   });
 }
 
-function resolveProviderAuthAliasCandidates(
+/** Reads only prepared alias facts, including the existing compatible default snapshot. */
+export function getPreparedProviderAuthAliasSnapshot(
   params?: ProviderAuthAliasLookupParams,
-): ReadonlyMap<string, readonly PluginProviderAuthAliasCandidate[]> {
+): ProviderAuthAliasLookupParams["metadataSnapshot"] {
   const config = params?.config;
-  const context = { env: params?.env ?? process.env, workspaceDir: params?.workspaceDir };
-  const lookup = { ...context, allowWorkspaceScopedSnapshot: true };
-  const snapshot =
+  const lookup = {
+    env: params?.env ?? process.env,
+    workspaceDir: params?.workspaceDir,
+    allowWorkspaceScopedSnapshot: true,
+  };
+  return (
     params?.metadataSnapshot ??
     getCurrentPluginMetadataSnapshot({
       ...lookup,
@@ -63,8 +72,20 @@ function resolveProviderAuthAliasCandidates(
     }) ??
     (config && normalizePluginsConfig(config.plugins).loadPaths.length === 0
       ? getCurrentPluginMetadataSnapshot({ ...lookup, requireDefaultDiscoveryContext: true })
-      : undefined) ??
-    loadPluginMetadataSnapshot({ ...context, config: config ?? {} });
+      : undefined)
+  );
+}
+
+function resolveProviderAuthAliasCandidates(
+  params?: ProviderAuthAliasLookupParams,
+): ReadonlyMap<string, readonly PluginProviderAuthAliasCandidate[]> {
+  const snapshot =
+    getPreparedProviderAuthAliasSnapshot(params) ??
+    loadPluginMetadataSnapshot({
+      env: params?.env ?? process.env,
+      workspaceDir: params?.workspaceDir,
+      config: params?.config ?? {},
+    });
   return (
     snapshot.owners?.providerAuthAliases ?? buildPluginMetadataProviderAuthAliases(snapshot.plugins)
   );
@@ -114,7 +135,7 @@ export function couldResolveProviderIdForAuth(
   target: string,
   params?: ProviderAuthAliasLookupParams,
 ): boolean {
-  if (resolveProviderIdForAuth(provider, params) === target) {
+  if (resolvePreparedProviderIdForAuth(provider, params) === target) {
     return true;
   }
   const normalized = normalizeProviderId(provider);
@@ -166,7 +187,7 @@ export function resolveProviderAuthAliasMap(
 }
 
 /** Resolve the provider ID that should be used for credential lookup. */
-export function resolveProviderIdForAuth(
+export function resolvePreparedProviderIdForAuth(
   provider: string,
   params?: ProviderAuthAliasLookupParams,
 ): string {
@@ -183,4 +204,49 @@ export function resolveProviderIdForAuth(
         matchesProviderAuthEndpoint(normalized, candidate, params),
     )?.target ?? normalized
   );
+}
+
+/** Prepare plugin metadata before resolving a credential provider alias. */
+export async function resolveProviderIdForAuthAsync(
+  provider: string,
+  params?: ProviderAuthAliasLookupParams,
+): Promise<string> {
+  const metadataSnapshot =
+    params?.metadataSnapshot ??
+    (await resolvePluginMetadataSnapshotAsync({
+      config: params?.config ?? {},
+      env: params?.env,
+      workspaceDir: params?.workspaceDir,
+      allowWorkspaceScopedCurrent: true,
+    }));
+  return resolvePreparedProviderIdForAuth(provider, { ...params, metadataSnapshot });
+}
+
+/** @deprecated Await resolveProviderIdForAuthAsync; removed in a later release after stable deprecation. */
+export function resolveProviderIdForAuth(
+  provider: string,
+  params?: ProviderAuthAliasLookupParams,
+): string {
+  if (!provider.trim()) {
+    return resolvePreparedProviderIdForAuth(provider, params);
+  }
+  const metadataSnapshot = getPreparedProviderAuthAliasSnapshot(params);
+  if (metadataSnapshot) {
+    return resolvePreparedProviderIdForAuth(provider, { ...params, metadataSnapshot });
+  }
+  warnPluginSdkDeprecation({
+    family: "provider-auth-aliases-sync",
+    method: "resolveProviderIdForAuth",
+    replacement: "resolveProviderIdForAuthAsync",
+    compatibility: "The synchronous helper retains cold native metadata discovery.",
+  });
+  return resolvePreparedProviderIdForAuth(provider, {
+    ...params,
+    metadataSnapshot: loadLegacyPluginMetadataSnapshotRuntime({
+      config: params?.config,
+      env: params?.env ?? process.env,
+      workspaceDir: params?.workspaceDir,
+      allowWorkspaceScopedCurrent: true,
+    }),
+  });
 }

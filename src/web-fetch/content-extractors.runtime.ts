@@ -4,7 +4,7 @@ import type {
   WebContentExtractionResult,
   WebContentExtractMode,
 } from "../plugins/web-content-extractor-types.js";
-import { resolvePluginWebContentExtractors } from "../plugins/web-content-extractors.runtime.js";
+import { resolvePluginWebContentExtractorsAsync } from "../plugins/web-content-extractors.runtime.js";
 
 /** Runs configured content extractors until one returns readable text. */
 export async function extractReadableContent(params: {
@@ -13,9 +13,9 @@ export async function extractReadableContent(params: {
   extractMode: WebContentExtractMode;
   config?: OpenClawConfig;
 }): Promise<(WebContentExtractionResult & { extractor: string }) | null> {
-  let extractors: ReturnType<typeof resolvePluginWebContentExtractors>;
+  let extractors: Awaited<ReturnType<typeof resolvePluginWebContentExtractorsAsync>>;
   try {
-    extractors = resolvePluginWebContentExtractors({ config: params.config });
+    extractors = await resolvePluginWebContentExtractorsAsync({ config: params.config });
   } catch {
     return null;
   }

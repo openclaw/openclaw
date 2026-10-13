@@ -12,7 +12,11 @@ import {
   includeContributionOwnsAgentRoster,
   includeContributionOwnsBindings,
 } from "./agent-roster-provenance.js";
-import { captureConfigReadEnvMutation, cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
+import {
+  captureConfigReadEnvMutation,
+  captureConfigReadEnvMutationAsync,
+  cloneEnvWithPlatformSemantics,
+} from "./config-env-vars.js";
 import { resolveManagedUnsetPathsForWrite } from "./config-path-mutation.js";
 import { applyImplicitAgentRosterDefaults } from "./implicit-agent-roster.js";
 import { ConfigIncludeError, ConfigIncludeReadError } from "./includes.js";
@@ -35,7 +39,7 @@ import {
   restoreEnvChangesIfUnchanged,
   snapshotEnv,
 } from "./io.read-helpers.js";
-import { maybeLoadDotEnvForConfig } from "./io.runtime-env.js";
+import { maybeLoadDotEnvForConfigAsync } from "./io.runtime-env.js";
 import {
   materializeConfigSnapshotDefaults,
   prepareConfigSnapshotValidation,
@@ -111,7 +115,7 @@ async function readConfigSnapshotWithPreparation(
     preparation?.assertCurrent,
   );
   assertReadCurrent();
-  captureConfigReadEnvMutation(deps.env, () => maybeLoadDotEnvForConfig(deps.env));
+  await captureConfigReadEnvMutationAsync(deps.env, () => maybeLoadDotEnvForConfigAsync(deps.env));
   let restoreReadEnv: (() => void) | undefined;
   let fallbackRaw: string | null = null;
   let fallbackParsed: unknown = {};
@@ -330,9 +334,9 @@ async function readConfigSnapshotWithPreparation(
     if (!validated.ok) {
       const availableSnapshot = pluginMetadata.getSnapshot();
       const collect = () =>
-        context.options.pluginValidation === "core-only"
+        context.options.pluginValidation === "core-only" || !availableSnapshot
           ? findLegacyConfigIssues(effectiveConfigRaw, effectiveParsed)
-          : collectInvalidConfigLegacyIssues(effectiveConfigRaw, effectiveParsed);
+          : collectInvalidConfigLegacyIssues(effectiveConfigRaw, effectiveParsed, deps.env);
       const legacyIssues = await deps.measure("config.snapshot.read.legacy-issues", () =>
         availableSnapshot
           ? withPluginMetadataSnapshotScope(availableSnapshot, collect, {
@@ -656,7 +660,7 @@ export async function readSourceConfigBestEffortFromContext(
   context: ConfigIoContext,
 ): Promise<OpenClawConfig> {
   const { deps, configPath } = context;
-  maybeLoadDotEnvForConfig(deps.env);
+  await maybeLoadDotEnvForConfigAsync(deps.env);
   if (!deps.fs.existsSync(configPath)) {
     return {};
   }

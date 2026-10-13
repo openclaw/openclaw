@@ -151,8 +151,14 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
       promptSecretRefForSetup: promptSecretRef,
       resolveRefFallbackInput,
     },
-  ] = await Promise.all([import("../agents/model-auth-env.js"), import("./provider-auth-ref.js")]);
+    { preparePluginMetadataMachineStateAsync },
+  ] = await Promise.all([
+    import("../agents/model-auth-env.js"),
+    import("./provider-auth-ref.js"),
+    import("./installed-plugin-index-record-state.js"),
+  ]);
   const env = params.env ?? process.env;
+  await preparePluginMetadataMachineStateAsync({ env });
   // Setup must resolve the same trusted workspace/provider descriptors as
   // runtime; dropping the staged config silently changes credential ownership.
   const envKey = resolveEnvApiKey(params.provider, env, {

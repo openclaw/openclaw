@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
@@ -34,7 +35,8 @@ function writePlugin(root: string, marker: string): string {
   return dir;
 }
 
-function installSnapshot(cfg = enabledCfg, trustedOfficialInstall = true) {
+async function installSnapshot(cfg = enabledCfg, trustedOfficialInstall = true) {
+  await prepareBundledDiscoveryMode();
   const snapshot = createPluginMetadataSnapshotFixture({
     plugins: [
       {
@@ -76,32 +78,32 @@ afterEach(() => {
 });
 
 describe("channel media contract resolution for installed plugins", () => {
-  it("ignores installed channel-adjacent plugins that are not trusted official installs", () => {
-    installSnapshot(enabledCfg, false);
+  it("ignores installed channel-adjacent plugins that are not trusted official installs", async () => {
+    await installSnapshot(enabledCfg, false);
     expect(resolveChannelRemoteInboundAttachmentRoots({ cfg: enabledCfg, ctx })).toBeUndefined();
   });
 
-  it("resolves trusted installed roots and revokes them after a policy reload", () => {
-    installSnapshot();
+  it("resolves trusted installed roots and revokes them after a policy reload", async () => {
+    await installSnapshot();
     expect(resolveRoots(enabledCfg)).toEqual({
       remote: ["/installed/remote"],
       local: ["/installed/local"],
     });
     clearPluginMetadataLifecycleCaches();
     const deniedCfg: OpenClawConfig = { ...enabledCfg, plugins: { deny: ["imessage"] } };
-    installSnapshot(deniedCfg);
+    await installSnapshot(deniedCfg);
     expect(resolveRoots(deniedCfg)).toEqual({ remote: undefined, local: undefined });
   });
 
-  it("revokes attachment-root authority when plugins are globally disabled", () => {
+  it("revokes attachment-root authority when plugins are globally disabled", async () => {
     const cfg: OpenClawConfig = { ...enabledCfg, plugins: { enabled: false } };
-    installSnapshot(cfg);
+    await installSnapshot(cfg);
     expect(resolveRoots(cfg)).toEqual({ remote: undefined, local: undefined });
   });
 
-  it("keeps bundled channel media contracts ahead of installed plugin owners", () => {
+  it("keeps bundled channel media contracts ahead of installed plugin owners", async () => {
     writePlugin(bundledPluginsDir, "/bundled");
-    installSnapshot();
+    await installSnapshot();
     expect(resolveChannelRemoteInboundAttachmentRoots({ cfg: enabledCfg, ctx })).toEqual([
       "/bundled/remote",
     ]);

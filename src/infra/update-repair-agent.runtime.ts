@@ -369,6 +369,10 @@ async function runScopedUpdateRepairTurn(params: UpdateRepairTurnParams) {
         import("../process/supervisor/index.js"),
         import("../secrets/provider-env-vars.js"),
       ]);
+    const providerAuthEnvNames = await secrets.listKnownProviderAuthEnvVarNamesAsync({
+      config: runConfig,
+      env: process.env,
+    });
     assertCurrent();
     cleanupProcessScope = getProcessSupervisor().acquireScopeCleanup(sessionKey, {
       processTree: "required-all",
@@ -382,71 +386,69 @@ async function runScopedUpdateRepairTurn(params: UpdateRepairTurnParams) {
       },
       () =>
         toolBudget.run(() =>
-          withHostExecInheritedEnvOmitted(
-            secrets.listKnownProviderAuthEnvVarNamesCore({ env: process.env }),
-            () =>
-              runEmbeddedAgentEntry({
-                preparedRunAdmission,
-                selection: {
-                  cfg: runConfig,
-                  provider: route.provider,
-                  model: route.model,
-                  agentDir: route.agentDir,
-                  userLockedAuthProfileId: route.authProfileId,
-                  fallbacksOverride: modelFallbacks,
-                  requestedRouteResolution: "resolved",
-                },
-                identity: { runId, agentId: route.agentId, sessionId: runId, sessionKey },
-                harness: {
-                  workspaceDir: target.installRoot,
+          withHostExecInheritedEnvOmitted(providerAuthEnvNames, () =>
+            runEmbeddedAgentEntry({
+              preparedRunAdmission,
+              selection: {
+                cfg: runConfig,
+                provider: route.provider,
+                model: route.model,
+                agentDir: route.agentDir,
+                userLockedAuthProfileId: route.authProfileId,
+                fallbacksOverride: modelFallbacks,
+                requestedRouteResolution: "resolved",
+              },
+              identity: { runId, agentId: route.agentId, sessionId: runId, sessionKey },
+              harness: {
+                workspaceDir: target.installRoot,
+                sessionKey,
+                preparation: { kind: "direct" },
+                resolveRuntimeOverride: () => "openclaw",
+              },
+              behavior: {
+                kind: "command-rpc",
+                hasCommittedSideEffect: () => toolBudget.toolCalls > 0,
+              },
+              sessionOverride: { kind: "preserve" },
+              abortSignal: signal,
+              runCandidate: (provider, model, options) => {
+                assertCurrent();
+                return runEmbeddedAgent({
+                  ...options,
+                  preparedRunAdmission,
+                  runId,
+                  sessionId: runId,
                   sessionKey,
-                  preparation: { kind: "direct" },
-                  resolveRuntimeOverride: () => "openclaw",
-                },
-                behavior: {
-                  kind: "command-rpc",
-                  hasCommittedSideEffect: () => toolBudget.toolCalls > 0,
-                },
-                sessionOverride: { kind: "preserve" },
-                abortSignal: signal,
-                runCandidate: (provider, model, options) => {
-                  assertCurrent();
-                  return runEmbeddedAgent({
-                    ...options,
-                    preparedRunAdmission,
-                    runId,
-                    sessionId: runId,
-                    sessionKey,
-                    sessionFile: `in-memory:${runId}`,
-                    sessionManager,
-                    sessionPersistence: "detached",
-                    agentId: route.agentId,
-                    // Keep the credential owner durable; temporary agent-exec state
-                    // intentionally excludes shared OAuth to avoid duplicate refresh owners.
-                    agentDir: route.agentDir,
-                    workspaceDir: target.installRoot,
-                    cwd: target.installRoot,
-                    config: runConfig,
-                    prompt: params.prompt,
-                    clientTools: params.maintenanceHandoff
-                      ? [updateRepairMaintenanceTool]
-                      : undefined,
-                    provider,
-                    model,
-                    ...(route.authProfileId && provider === route.provider
-                      ? { authProfileId: route.authProfileId, authProfileIdSource: "user" as const }
-                      : {}),
-                    modelFallbacksOverride: modelFallbacks,
-                    codeModeOverride: false,
-                    cleanupBundleMcpOnRunEnd: true,
-                    disableTrajectory: true,
-                    trigger: "manual",
-                    timeoutMs: Math.max(1, deadline - Date.now()),
-                    abortSignal: signal,
-                    lane: sessionKey,
-                  });
-                },
-              }),
+                  sessionFile: `in-memory:${runId}`,
+                  sessionManager,
+                  sessionPersistence: "detached",
+                  agentId: route.agentId,
+                  // Keep the credential owner durable; temporary agent-exec state
+                  // intentionally excludes shared OAuth to avoid duplicate refresh owners.
+                  agentDir: route.agentDir,
+                  workspaceDir: target.installRoot,
+                  cwd: target.installRoot,
+                  config: runConfig,
+                  prompt: params.prompt,
+                  clientTools: params.maintenanceHandoff
+                    ? [updateRepairMaintenanceTool]
+                    : undefined,
+                  provider,
+                  model,
+                  ...(route.authProfileId && provider === route.provider
+                    ? { authProfileId: route.authProfileId, authProfileIdSource: "user" as const }
+                    : {}),
+                  modelFallbacksOverride: modelFallbacks,
+                  codeModeOverride: false,
+                  cleanupBundleMcpOnRunEnd: true,
+                  disableTrajectory: true,
+                  trigger: "manual",
+                  timeoutMs: Math.max(1, deadline - Date.now()),
+                  abortSignal: signal,
+                  lane: sessionKey,
+                });
+              },
+            }),
           ),
         ),
     );

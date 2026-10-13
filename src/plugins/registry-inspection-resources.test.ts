@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "./loader.js";
+import { acquirePluginRegistryForInspection, loadPluginRegistryHandleAsync } from "./loader.js";
 import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
@@ -251,7 +251,7 @@ describe("owned plugin inspections", () => {
     let inspection: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>> | undefined;
     let raw: PluginRegistry | undefined;
     try {
-      raw = loadPluginRegistryHandle({ config: fixture.config });
+      raw = await loadPluginRegistryHandleAsync({ config: fixture.config });
       inspection = await acquirePluginRegistryForInspection({ config: fixture.config });
       expect(raw.plugins[0]?.id).toBe(fixture.plugin.id);
       expect(inspection.registry).not.toBe(raw);
@@ -284,7 +284,7 @@ describe("owned plugin inspections", () => {
       expect(legacy.disposals).toBe(0);
       expect(legacy.cleanups).toBe(0);
       expect(legacy.instanceDisposals).toBe(0);
-      expect(loadPluginRegistryHandle({ config: fixture.config })).toBe(raw);
+      expect(await loadPluginRegistryHandleAsync({ config: fixture.config })).toBe(raw);
       expect(getActivePluginRegistry()).toBe(active);
     } finally {
       await fixture.cleanup(inspection);

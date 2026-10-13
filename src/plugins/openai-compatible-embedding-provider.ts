@@ -435,7 +435,8 @@ async function createOpenAICompatibleEmbeddingClient(
     baseUrl,
     endpointUrl: resolveEmbeddingEndpointUrl(baseUrl, "embeddings"),
     headers,
-    ssrfPolicy: resolveEmbeddingProviderSsrFPolicy({
+    ssrfPolicy: await resolveEmbeddingProviderSsrFPolicy({
+      config: options.config,
       provider: providerId,
       api: configuredProvider?.api ?? "openai-completions",
       baseUrl,

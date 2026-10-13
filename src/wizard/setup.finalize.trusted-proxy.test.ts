@@ -103,10 +103,12 @@ const resolveSetupSecretInputString = vi.hoisted(() =>
   vi.fn<() => Promise<string | undefined>>(async () => undefined),
 );
 const resolveExistingKey = vi.hoisted(() =>
-  vi.fn<(config: OpenClawConfig, provider: string) => string | undefined>(() => undefined),
+  vi.fn<(config: OpenClawConfig, provider: PluginWebSearchProviderEntry) => string | undefined>(
+    () => undefined,
+  ),
 );
 const hasExistingKey = vi.hoisted(() =>
-  vi.fn<(config: OpenClawConfig, provider: string) => boolean>(() => false),
+  vi.fn<(config: OpenClawConfig, provider: PluginWebSearchProviderEntry) => boolean>(() => false),
 );
 const hasKeyInEnv = vi.hoisted(() =>
   vi.fn<(entry: Pick<PluginWebSearchProviderEntry, "envVars">) => boolean>(() => false),
@@ -200,8 +202,9 @@ vi.mock("../agents/tools/model-config.helpers.js", () => ({
   hasAuthProfileForProvider,
 }));
 
+// mock-isolation: Proxy finalization fixtures provide search status without plugin runtime discovery.
 vi.mock("../web-search/runtime.js", () => ({
-  listConfiguredWebSearchProviders,
+  listConfiguredWebSearchProvidersAsync: listConfiguredWebSearchProviders,
 }));
 
 vi.mock("../daemon/service.js", () => ({

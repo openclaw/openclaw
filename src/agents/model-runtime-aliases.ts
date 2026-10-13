@@ -5,6 +5,7 @@ import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { resolveProviderModelCatalogId } from "../plugins/provider-model-routes.js";
 import { normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
 import { resolveAgentDir } from "./agent-scope-config.js";
@@ -21,7 +22,7 @@ import {
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 import {
-  resolveProviderIdForAuth,
+  resolvePreparedProviderIdForAuth as resolveProviderIdForAuth,
   type ProviderAuthAliasLookupParams,
 } from "./provider-auth-aliases.js";
 
@@ -72,16 +73,19 @@ export function isCliRuntimeAliasForProvider(params: {
   runtime: string | undefined;
   provider: string | undefined;
   cfg?: OpenClawConfig;
+  metadataSnapshot?: PluginMetadataSnapshot | null;
 }): boolean {
   return isCliRuntimeModelBackendForProvider({
     provider: params.provider,
     runtime: params.runtime,
     config: params.cfg,
+    metadataSnapshot: params.metadataSnapshot,
   });
 }
 
 type RuntimeAliasComparisonOptions = {
   config?: OpenClawConfig;
+  metadataSnapshot?: PluginMetadataSnapshot | null;
 };
 
 function canonicalizeRuntimeAliasProvider(
@@ -93,6 +97,7 @@ function canonicalizeRuntimeAliasProvider(
       runtime: provider,
       config: options.config,
       includeSetupRegistry: options.config !== undefined,
+      metadataSnapshot: options.metadataSnapshot,
     }) ?? provider
   );
 }
@@ -110,8 +115,11 @@ function normalizeRuntimeModelRefForComparison(
     canonicalizeRuntimeAliasProvider(parsed.provider, options),
   );
   const modelId =
-    resolveProviderModelCatalogId({ provider: canonicalProvider, modelId: parsed.modelId }) ??
-    parsed.modelId;
+    resolveProviderModelCatalogId({
+      provider: canonicalProvider,
+      modelId: parsed.modelId,
+      metadataSnapshot: options.metadataSnapshot,
+    }) ?? parsed.modelId;
   return `${canonicalProvider}/${modelId}`;
 }
 

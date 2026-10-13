@@ -230,7 +230,7 @@ export default definePluginEntry({
         const timeoutAgentId = resolveStatusUpdateAgentId(ctx);
         const timeoutModelRef =
           (timeoutAgentId
-            ? getModelRef(liveConfig, timeoutAgentId, config, {
+            ? await getModelRef(liveConfig, timeoutAgentId, config, {
                 modelProviderId: ctx.modelProviderId,
                 modelId: ctx.modelId,
               })

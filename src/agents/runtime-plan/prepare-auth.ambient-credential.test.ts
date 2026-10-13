@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import type { AuthProfileStore } from "../auth-profiles.js";
 import { prepareAgentRuntimeAuth } from "./prepare-auth.js";
 
@@ -37,12 +38,15 @@ const config = {
 
 describe("ambient provider credentials are not queued behind a declared profile", () => {
   // Regression #117956: losing a subscription must not bill an undeclared account.
-  it("does not substitute ambient auth", () => {
+  it("does not substitute ambient auth", async () => {
+    const env = { ANTHROPIC_API_KEY: "ambient-anthropic-key" };
+    const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({ config, env });
     const prepared = prepareAgentRuntimeAuth({
       provider: "claude-cli",
       modelId: "claude-fable-5",
       config,
-      env: { ANTHROPIC_API_KEY: "ambient-anthropic-key" },
+      env,
+      metadataSnapshot,
       authProfileStore: oauthStore(Date.now() + 3_600_000),
     });
     expect(prepared.attempts).toMatchObject([

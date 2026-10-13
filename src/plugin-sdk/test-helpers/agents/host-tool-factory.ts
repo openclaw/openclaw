@@ -4,7 +4,11 @@ import type {
   createOpenClawCodingToolsInternalAsync,
 } from "../../../agents/agent-tools.js";
 
-type ToolsFactory = typeof createOpenClawCodingToolsInternal;
+type ToolsFactory = (
+  ...args: Parameters<typeof createOpenClawCodingToolsInternal>
+) =>
+  | ReturnType<typeof createOpenClawCodingToolsInternal>
+  | ReturnType<typeof createOpenClawCodingToolsInternalAsync>;
 let createTools: typeof createOpenClawCodingToolsInternalAsync | undefined;
 const factories = new Map<string, ToolsFactory>();
 

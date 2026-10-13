@@ -1,8 +1,15 @@
 // Verifies plugin control-plane context construction and boundaries.
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { publishBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "./manifest-registry-installed.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
+
+const env = { HOME: "/home/a", OPENCLAW_HOME: "/openclaw/a" };
+
+beforeEach(() => {
+  publishBundledDiscoveryMode(undefined, env);
+});
 
 function createIndex(
   pluginId: string,
@@ -52,7 +59,7 @@ describe("plugin control-plane context", () => {
     const config = { plugins: { allow: ["demo"] } };
     const base = resolvePluginControlPlaneFingerprint({
       config,
-      env: { HOME: "/home/a", OPENCLAW_HOME: "/openclaw/a" } as NodeJS.ProcessEnv,
+      env,
       index: createIndex("demo"),
       activationFingerprint: "activation-a",
     });
@@ -60,7 +67,7 @@ describe("plugin control-plane context", () => {
     expect(
       resolvePluginControlPlaneFingerprint({
         config,
-        env: { HOME: "/home/a", OPENCLAW_HOME: "/openclaw/a" } as NodeJS.ProcessEnv,
+        env,
         index: createIndex("other"),
         activationFingerprint: "activation-a",
       }),
@@ -68,7 +75,7 @@ describe("plugin control-plane context", () => {
     expect(
       resolvePluginControlPlaneFingerprint({
         config,
-        env: { HOME: "/home/a", OPENCLAW_HOME: "/openclaw/a" } as NodeJS.ProcessEnv,
+        env,
         index: createIndex("demo"),
         activationFingerprint: "activation-b",
       }),
@@ -76,7 +83,7 @@ describe("plugin control-plane context", () => {
     expect(
       resolvePluginControlPlaneFingerprint({
         config: { plugins: { deny: ["demo"] } },
-        env: { HOME: "/home/a", OPENCLAW_HOME: "/openclaw/a" } as NodeJS.ProcessEnv,
+        env,
         index: createIndex("demo"),
         activationFingerprint: "activation-a",
       }),
@@ -128,7 +135,7 @@ describe("plugin control-plane context", () => {
     const resolveControlPlaneFingerprint = (index: InstalledPluginIndex) =>
       resolvePluginControlPlaneFingerprint({
         config: { plugins: { allow: ["demo"] } },
-        env: { HOME: "/home/a", OPENCLAW_HOME: "/openclaw/a" } as NodeJS.ProcessEnv,
+        env,
         index,
         activationFingerprint: "activation-a",
       });

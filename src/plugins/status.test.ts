@@ -31,23 +31,25 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.config,
   loadConfig: mocks.config,
 }));
-vi.mock("../config/io.plugin-metadata.js", () => ({
-  resolveConfigWidePluginMetadataSnapshot: mocks.metadataSnapshot,
-}));
 vi.mock("../config/plugin-auto-enable.js", () => ({ applyPluginAutoEnable: mocks.autoEnable }));
+// mock-isolation: Status tests combine fixture metadata with the real projection helper without runtime discovery.
 vi.mock("./loader.js", () => ({
   loadOpenClawPlugins: mocks.load,
-  loadPluginRegistryHandle: (options: Record<string, unknown> = {}) =>
+  loadPluginRegistryHandleAsync: async (options: Record<string, unknown> = {}) =>
     mocks.load({ ...options, activate: false }),
   resolveCompatibleRuntimePluginRegistry: mocks.runtimeRegistry,
 }));
+// mock-isolation: Status tests combine fixture metadata with the real projection helper without runtime discovery.
 vi.mock("./runtime/metadata-registry-loader.js", () => ({
-  loadPluginMetadataRegistrySnapshot: mocks.metadataRegistry,
+  loadPluginMetadataRegistrySnapshotAsync: async (...args: unknown[]) =>
+    mocks.metadataRegistry(...args),
 }));
+// mock-isolation: Status tests combine fixture metadata with the real projection helper without runtime discovery.
 vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./plugin-metadata-snapshot.js")>();
   return {
-    loadPluginMetadataSnapshot: mocks.metadataSnapshot,
+    resolvePluginMetadataSnapshotAsync: async (...args: unknown[]) =>
+      mocks.metadataSnapshot(...args),
     projectPluginMetadataSnapshot: actual.projectPluginMetadataSnapshot,
     resolvePluginMetadataSnapshot: (params?: { pluginMetadataSnapshot?: unknown }) =>
       params?.pluginMetadataSnapshot ?? mocks.metadataSnapshot(params),
@@ -112,11 +114,11 @@ describe("plugin status reports", () => {
     setReport();
   });
 
-  it("applies the full bundled provider compat chain before loading plugins", () => {
+  it("applies the full bundled provider compat chain before loading plugins", async () => {
     const { config, pluginIds, enabledConfig } = createCompatChainFixture();
     mocks.compatIds.mockReturnValue(pluginIds);
     mocks.compatConfig.mockReturnValue(enabledConfig);
-    status.buildPluginSnapshotReport({ config });
+    await status.buildPluginSnapshotReportAsync({ config });
     expect(mocks.compatConfig).toHaveBeenCalledWith({ config, pluginIds, activation: "defaults" });
     expect(mocks.metadataRegistry).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -218,7 +220,7 @@ describe("plugin status reports", () => {
     });
     mocks.runtimeIds.mockReturnValue(["runtime-loaded", "broken-plugin", "bundle-loaded"]);
     mocks.facadeIds.mockReturnValue(["facade-loaded"]);
-    const snapshot = status.buildPluginSnapshotReport({ config: {} });
+    const snapshot = await status.buildPluginSnapshotReportAsync({ config: {} });
     expect(snapshot.plugins.map(({ id, imported }) => [id, imported])).toEqual([
       ["runtime-loaded", true],
       ["facade-loaded", true],

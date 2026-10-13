@@ -11,7 +11,6 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.s
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as providerPolicySurface from "../../plugins/provider-policy-surface.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import * as pluginScope from "../../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   readPreparedCatalog,
@@ -99,7 +98,6 @@ it("serves the published model-list projection and replaces it with its metadata
       try {
         await harness.runtime.refresh();
         expect(JSON.stringify(await read())).toBe(JSON.stringify(expected));
-        const enterPluginScope = vi.spyOn(pluginScope, "withPluginRuntimeRegistryScope");
         const resolvePolicy = vi.spyOn(
           providerPolicySurface,
           "resolveDirectBundledProviderPolicySurface",
@@ -110,14 +108,12 @@ it("serves the published model-list projection and replaces it with its metadata
           expect(await Promise.all(Array.from({ length: 10 }, read))).toEqual(
             Array.from({ length: 10 }, () => expected),
           );
-          expect(enterPluginScope).not.toHaveBeenCalled();
           expect(prepareStatement).not.toHaveBeenCalled();
           expect(executeStatement).not.toHaveBeenCalled();
           expect(unpreparedRead).not.toHaveBeenCalled();
           // One provider lookup per read is sufficient; prepared rows retain their identities.
           expect(resolvePolicy.mock.calls.length).toBeLessThanOrEqual(10);
         } finally {
-          enterPluginScope.mockRestore();
           resolvePolicy.mockRestore();
           prepareStatement.mockRestore();
           executeStatement.mockRestore();

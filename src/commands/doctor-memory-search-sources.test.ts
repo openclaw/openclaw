@@ -11,7 +11,7 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 
 // mock-isolation: select the built-in backend without activating real plugin runtimes.
 vi.mock("../plugins/memory-runtime.js", () => ({
-  resolveActiveMemoryBackendConfig: () => ({ backend: "builtin" }),
+  resolveActiveMemoryBackendConfig: async () => ({ backend: "builtin" }),
 }));
 
 function config(sessionMemory: boolean): OpenClawConfig {

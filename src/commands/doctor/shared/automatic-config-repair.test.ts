@@ -20,9 +20,16 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { withDoctorConfigPreflightHome } from "../../doctor-config-preflight.test-support.js";
 import {
   commitAutomaticConfigRepair,
-  planAutomaticConfigRepair,
+  planAutomaticConfigRepair as planAutomaticConfigRepairUnprepared,
   resolveLegacyConfigSnapshotForBackup,
 } from "./automatic-config-repair.js";
+import { withDoctorPluginMetadataForTest } from "./plugin-metadata.test-support.js";
+
+function planAutomaticConfigRepair(snapshot: ConfigFileSnapshot) {
+  return withDoctorPluginMetadataForTest(snapshot.sourceConfig, () =>
+    planAutomaticConfigRepairUnprepared(snapshot),
+  );
+}
 
 function invalidSnapshot(params: {
   config: Record<string, unknown>;

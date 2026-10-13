@@ -2,6 +2,7 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import * as preparedModelCatalog from "../agents/prepared-model-catalog.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import type { SystemAgentCommandDeps, SystemAgentOperation } from "./operations.js";
@@ -94,6 +95,7 @@ let sharedVerifiedFixture: Awaited<
 >;
 
 beforeAll(async () => {
+  await prepareBundledDiscoveryMode();
   sharedVerifiedFixture = await createSystemAgentVerifiedInferenceTestFixture(verifiedConfig);
 });
 

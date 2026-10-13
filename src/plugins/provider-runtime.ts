@@ -20,6 +20,7 @@ import { providerUsageLabel } from "../infra/provider-usage.shared.js";
 import type { UsageProviderId } from "../infra/provider-usage.types.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
+import { resolvePluginMetadataSnapshotAsync } from "./plugin-metadata-snapshot.js";
 import type {
   PluginMetadataRegistryView,
   PluginMetadataSnapshot,
@@ -33,7 +34,9 @@ import {
   resolveLoadedProviderRuntimePlugin,
   resolveProviderHookPlugin,
   resolveProviderPluginsForHooks,
+  resolveProviderPluginsForHooksAsync,
   resolveProviderRuntimePlugin,
+  resolveProviderRuntimePluginAsync,
   wrapProviderSimpleCompletionStreamFn,
   type ProviderRuntimePluginHandle,
 } from "./provider-hook-runtime.js";
@@ -106,10 +109,15 @@ function normalizedRuntimeHook<K extends RuntimeHookName>(name: K) {
 }
 
 function asyncRuntimeHook<K extends RuntimeHookName>(name: K) {
-  const invoke = runtimeHook(name);
+  type Hook = Extract<ProviderPlugin[K], (context: never) => unknown>;
   return async (
-    params: Parameters<typeof invoke>[0],
-  ): Promise<Awaited<ReturnType<typeof invoke>>> => await Promise.resolve(invoke(params));
+    params: ProviderRuntimeLookup & { context: Parameters<Hook>[0] },
+  ): Promise<Awaited<ReturnType<Hook>> | undefined> => {
+    const plugin = await resolveProviderRuntimePluginAsync(params);
+    // SAFETY: The selected name determines both the callable and its argument/result contract.
+    const hook = plugin?.[name] as ((context: Parameters<Hook>[0]) => ReturnType<Hook>) | undefined;
+    return await Promise.resolve(hook?.call(plugin, params.context));
+  };
 }
 
 function toolSchemaHook<K extends "normalizeToolSchemas" | "inspectToolSchemas">(name: K) {
@@ -155,34 +163,41 @@ export {
   wrapProviderSimpleCompletionStreamFn,
 };
 
-function resolveProviderPluginsForCatalogHooks(params: {
+async function resolveProviderPluginsForCatalogHooks(params: {
   providerIds?: readonly string[];
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   metadataSnapshot?: PluginMetadataSnapshot;
-}): ProviderPlugin[] {
+}): Promise<ProviderPlugin[]> {
   const workspaceDir =
     params.workspaceDir ??
     params.metadataSnapshot?.workspaceDir ??
     getActivePluginRegistryWorkspaceDirFromState();
   const env = params.env ?? process.env;
+  const metadataSnapshot =
+    params.metadataSnapshot ??
+    (await resolvePluginMetadataSnapshotAsync({
+      config: params.config ?? {},
+      workspaceDir,
+      env,
+    }));
   const onlyPluginIds = resolveCatalogHookProviderPluginIds({
     config: params.config,
     workspaceDir,
     env,
-    metadataSnapshot: params.metadataSnapshot,
+    metadataSnapshot,
   });
   if (onlyPluginIds.length === 0 || params.providerIds?.length === 0) {
     return [];
   }
-  const providers = resolveProviderPluginsForHooks({
+  const providers = await resolveProviderPluginsForHooksAsync({
     ...params,
     workspaceDir,
     env,
     onlyPluginIds,
     providerRefs: params.providerIds,
-    pluginMetadataSnapshot: params.metadataSnapshot,
+    pluginMetadataSnapshot: metadataSnapshot,
   });
   const providerIds = params.providerIds;
   return providerIds
@@ -492,7 +507,7 @@ export async function resolveProviderUsageSnapshotWithPlugin(
     context: ProviderFetchUsageSnapshotContext;
   },
 ) {
-  const providerHook = resolveProviderRuntimePlugin(params)?.fetchUsageSnapshot;
+  const providerHook = (await resolveProviderRuntimePluginAsync(params))?.fetchUsageSnapshot;
   if (providerHook) {
     const snapshot = await providerHook(params.context);
     if (snapshot != null) {
@@ -568,16 +583,28 @@ export function listProviderUsagePluginDescriptors(params: {
 
 export { classifyProviderFailoverSignalWithPlugin } from "./provider-failover.js";
 
+/** @deprecated Use formatProviderAuthProfileApiKeyWithPluginAsync for cold provider loading. */
 export const formatProviderAuthProfileApiKeyWithPlugin = runtimeHook("formatApiKey");
+export const formatProviderAuthProfileApiKeyWithPluginAsync = asyncRuntimeHook("formatApiKey");
+
+async function resolveProviderRefOwnershipAsync(params: ProviderRuntimeLookup) {
+  const snapshot = await resolvePluginMetadataSnapshotAsync({
+    config: params.config ?? {},
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  return resolveProviderRefOwnership({ ...params, manifestRegistry: snapshot.manifestRegistry });
+}
 
 export async function loginProviderOAuthWithPlugin(
   params: ProviderRuntimeLookup & {
     context: Parameters<NonNullable<ProviderPlugin["loginOAuth"]>>[0];
   },
 ) {
-  const ownership = resolveProviderRefOwnership(params);
-  const loginOAuth = resolveProviderRuntimePlugin(params)?.loginOAuth;
+  const plugin = await resolveProviderRuntimePluginAsync(params);
+  const loginOAuth = plugin?.loginOAuth;
   if (!loginOAuth) {
+    const ownership = await resolveProviderRefOwnershipAsync(params);
     return {
       status: ownership.status === "unowned" ? "unowned" : "configured-unavailable",
     } as const;
@@ -594,9 +621,9 @@ export async function resolveProviderOAuthCredentialWithPlugin(
     refresh: boolean;
   },
 ) {
-  const ownership = resolveProviderRefOwnership(params);
-  const plugin = resolveProviderRuntimePlugin(params);
+  const plugin = await resolveProviderRuntimePluginAsync(params);
   if (!plugin) {
+    const ownership = await resolveProviderRefOwnershipAsync(params);
     return {
       status: ownership.status === "unowned" ? "unowned" : "configured-unavailable",
     } as const;
@@ -619,11 +646,12 @@ export async function resolveProviderOAuthCredentialWithPlugin(
   return { status: "available" as const, credential, apiKey };
 }
 
-/** Resolve whether the current provider plugin generation owns OAuth refresh. */
-export function resolveProviderOAuthRefreshCapabilityWithPlugin(params: ProviderRuntimeLookup) {
-  const ownership = resolveProviderRefOwnership(params);
-  const plugin = resolveProviderRuntimePlugin(params);
+function providerOAuthRefreshCapability(
+  params: ProviderRuntimeLookup,
+  plugin: ProviderPlugin | undefined,
+) {
   if (!plugin) {
+    const ownership = resolveProviderRefOwnership(params);
     return {
       status: ownership.status === "unowned" ? "unowned" : "configured-unavailable",
     } as const;
@@ -631,6 +659,24 @@ export function resolveProviderOAuthRefreshCapabilityWithPlugin(params: Provider
   return plugin.refreshOAuth
     ? ({ status: "available" } as const)
     : ({ status: "unhandled" } as const);
+}
+
+/** @deprecated Use resolveProviderOAuthRefreshCapabilityWithPluginAsync for cold provider loading. */
+export function resolveProviderOAuthRefreshCapabilityWithPlugin(params: ProviderRuntimeLookup) {
+  return providerOAuthRefreshCapability(params, resolveProviderRuntimePlugin(params));
+}
+
+export async function resolveProviderOAuthRefreshCapabilityWithPluginAsync(
+  params: ProviderRuntimeLookup,
+) {
+  const plugin = await resolveProviderRuntimePluginAsync(params);
+  if (!plugin) {
+    const ownership = await resolveProviderRefOwnershipAsync(params);
+    return {
+      status: ownership.status === "unowned" ? "unowned" : "configured-unavailable",
+    } as const;
+  }
+  return providerOAuthRefreshCapability(params, plugin);
 }
 
 export const refreshProviderOAuthCredentialWithPlugin = asyncRuntimeHook("refreshOAuth");
@@ -670,11 +716,23 @@ export const buildProviderUnknownModelHintWithPlugin =
 type ProviderSyntheticAuthParams = ProviderRuntimeLookup & {
   context: ProviderResolveSyntheticAuthContext;
   modelApi?: string;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
 };
 
-function* resolveSyntheticAuthProviders(
-  params: ProviderSyntheticAuthParams,
-): Generator<ProviderPlugin> {
+function prepareSyntheticAuthProviderSelection(params: ProviderSyntheticAuthParams) {
+  const metadataSnapshot =
+    params.pluginMetadataSnapshot ??
+    getCurrentPluginMetadataSnapshot({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      allowWorkspaceScopedSnapshot: true,
+    });
+  if (!metadataSnapshot) {
+    throw new Error(
+      "Provider metadata is not prepared; await prepareProviderSyntheticAuthWithPlugin first.",
+    );
+  }
   const providerRefs = resolveProviderHookRefs(
     params.provider,
     params.context.providerConfig,
@@ -692,6 +750,7 @@ function* resolveSyntheticAuthProviders(
             config: params.config,
             workspaceDir: params.workspaceDir,
             env: params.env,
+            manifestRegistry: metadataSnapshot.manifestRegistry,
           }) ?? [],
       ),
     ),
@@ -702,12 +761,21 @@ function* resolveSyntheticAuthProviders(
       workspaceDir: params.workspaceDir,
       env: params.env,
       ...(onlyPluginIds ? { onlyPluginIds } : {}),
+      pluginMetadataSnapshot: metadataSnapshot,
       discoveryEntriesOnly: true,
       includeSyntheticAuthProviders: true,
       includeManifestModelCatalogProviders: false,
     }).find(matchesSyntheticAuthProvider);
   const discoveryProvider =
     discoveryPluginIds.length > 0 ? discover(discoveryPluginIds) : undefined;
+  return { providerRefs, discoveryPluginIds, discoveryProvider, discover };
+}
+
+function* resolveSyntheticAuthProviders(
+  params: ProviderSyntheticAuthParams,
+): Generator<ProviderPlugin> {
+  const { providerRefs, discoveryPluginIds, discoveryProvider, discover } =
+    prepareSyntheticAuthProviderSelection(params);
   if (discoveryProvider) {
     yield discoveryProvider;
     return;
@@ -733,6 +801,41 @@ function* resolveSyntheticAuthProviders(
   }
 }
 
+async function* resolveSyntheticAuthProvidersAsync(
+  params: ProviderSyntheticAuthParams,
+): AsyncGenerator<ProviderPlugin> {
+  const pluginMetadataSnapshot =
+    params.pluginMetadataSnapshot ??
+    (await resolvePluginMetadataSnapshotAsync({
+      config: params.config ?? {},
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    }));
+  const prepared = { ...params, pluginMetadataSnapshot };
+  const { providerRefs, discoveryPluginIds, discoveryProvider, discover } =
+    prepareSyntheticAuthProviderSelection(prepared);
+  if (discoveryProvider) {
+    yield discoveryProvider;
+    return;
+  }
+  for (const providerRef of providerRefs) {
+    const provider = await resolveProviderRuntimePluginAsync({
+      ...prepared,
+      provider: providerRef,
+      applyAutoEnable: false,
+    });
+    if (provider?.resolveSyntheticAuth || provider?.prepareSyntheticAuth) {
+      yield provider;
+    }
+  }
+  if (discoveryPluginIds.length === 0 && providerRefs.length === 1) {
+    const fallbackProvider = discover();
+    if (fallbackProvider) {
+      yield fallbackProvider;
+    }
+  }
+}
+
 export function resolveProviderSyntheticAuthWithPlugin(params: ProviderSyntheticAuthParams) {
   const captured = readPreparedSyntheticAuthFact(params.context, params);
   if (captured) {
@@ -751,11 +854,11 @@ type ProviderSyntheticAuthPreparationParams = ProviderSyntheticAuthParams &
   Parameters<typeof prepareSyntheticAuthWithProvider>[2];
 
 async function prepareSyntheticAuthProviders(
-  providers: Iterable<ProviderPlugin>,
+  providers: Iterable<ProviderPlugin> | AsyncIterable<ProviderPlugin>,
   params: ProviderSyntheticAuthPreparationParams,
 ) {
   params.signal?.throwIfAborted();
-  for (const provider of providers) {
+  for await (const provider of providers) {
     const resolved = await prepareSyntheticAuthWithProvider(provider, params.context, params);
     if (resolved) {
       return resolved;
@@ -772,11 +875,14 @@ export async function prepareProviderSyntheticAuthWithPlugin(
   if (captured) {
     return captured.result ?? undefined;
   }
-  return await prepareSyntheticAuthProviders(resolveSyntheticAuthProviders(params), params);
+  return await prepareSyntheticAuthProviders(resolveSyntheticAuthProvidersAsync(params), params);
 }
 
-function resolveExternalSyntheticAuthProviders(params: ProviderSyntheticAuthParams) {
-  const providers = [...resolveSyntheticAuthProviders(params)];
+async function resolveExternalSyntheticAuthProviders(params: ProviderSyntheticAuthParams) {
+  const providers: ProviderPlugin[] = [];
+  for await (const provider of resolveSyntheticAuthProvidersAsync(params)) {
+    providers.push(provider);
+  }
   return providers.some((provider) => provider.prepareSyntheticAuth) ? providers : [];
 }
 
@@ -788,7 +894,10 @@ export async function prepareProviderExternalAuthWithPlugin(
   const captured = readPreparedSyntheticAuthFact(params.context, params);
   return captured
     ? (captured.result ?? undefined)
-    : await prepareSyntheticAuthProviders(resolveExternalSyntheticAuthProviders(params), params);
+    : await prepareSyntheticAuthProviders(
+        await resolveExternalSyntheticAuthProviders(params),
+        params,
+      );
 }
 
 /** Capture a fresh, complete external-auth generation before dispatching read-only worker work. */
@@ -802,6 +911,14 @@ export async function captureProviderSyntheticAuthFacts(params: {
   const preparationOwner = {};
   const facts: PreparedSyntheticAuthFact[] = [];
   const providerRefs = [...new Set([...params.providerRefs].map(normalizeProviderId))].toSorted();
+  if (providerRefs.length === 0) {
+    return Object.freeze(facts);
+  }
+  const pluginMetadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+    config: params.config,
+    env: params.env,
+    workspaceDir: params.workspaceDir,
+  });
   for (const provider of providerRefs) {
     params.signal?.throwIfAborted();
     const lookup = {
@@ -815,7 +932,10 @@ export async function captureProviderSyntheticAuthFacts(params: {
         providerConfig: findNormalizedProviderValue(params.config.models?.providers, provider),
       },
     };
-    const providers = resolveExternalSyntheticAuthProviders(lookup);
+    const providers = await resolveExternalSyntheticAuthProviders({
+      ...lookup,
+      pluginMetadataSnapshot,
+    });
     if (providers.length === 0) {
       continue;
     }
@@ -837,7 +957,7 @@ export async function captureProviderSyntheticAuthFacts(params: {
 
 export { resolveExternalAuthProfilesWithPlugins } from "./provider-external-auth.js";
 
-export function shouldDeferProviderSyntheticProfileAuthWithPlugin(
+export async function shouldDeferProviderSyntheticProfileAuthWithPlugin(
   params: ProviderRuntimeLookup & {
     context: ProviderDeferSyntheticProfileAuthContext;
     modelApi?: string;
@@ -849,10 +969,11 @@ export function shouldDeferProviderSyntheticProfileAuthWithPlugin(
     params.modelApi,
   );
   for (const providerRef of providerRefs) {
-    const resolved = resolveProviderRuntimePlugin({
+    const plugin = await resolveProviderRuntimePluginAsync({
       ...params,
       provider: providerRef,
-    })?.shouldDeferSyntheticProfileAuth?.(params.context);
+    });
+    const resolved = plugin?.shouldDeferSyntheticProfileAuth?.(params.context);
     if (resolved !== undefined) {
       return resolved;
     }
@@ -869,7 +990,7 @@ export async function augmentModelCatalogWithProviderPlugins(params: {
   context: ProviderAugmentModelCatalogContext;
 }) {
   const supplemental: ProviderAugmentModelCatalogContext["entries"] = [];
-  for (const plugin of resolveProviderPluginsForCatalogHooks(params)) {
+  for (const plugin of await resolveProviderPluginsForCatalogHooks(params)) {
     supplemental.push(...((await plugin.augmentModelCatalog?.(params.context)) ?? []));
   }
   return supplemental;

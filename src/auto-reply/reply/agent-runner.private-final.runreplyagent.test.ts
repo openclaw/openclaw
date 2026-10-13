@@ -7,6 +7,7 @@ import {
   onAgentEvent as subscribeAgentEvent,
   type AgentEventPayload,
 } from "../../infra/agent-events.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
@@ -168,6 +169,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     });
 
     setRuntimeConfigSnapshot(followupRun.run.config);
+    await resolvePluginMetadataSnapshotAsync({ config: followupRun.run.config });
 
     const runId = `stranded-${path.basename(tmp)}`;
     const agentEvents: AgentEventPayload[] = [];

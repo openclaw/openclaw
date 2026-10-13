@@ -9,6 +9,7 @@ import { resolveOpenAICompletionsCompat } from "../../packages/ai/src/transports
 import type { Context, Model } from "../../packages/ai/src/types.js";
 import { projectProviderError } from "../../packages/ai/src/utils/provider-error.js";
 import { createOpenClawReadTool } from "../agents/agent-tools.read.js";
+import { prepareModelProviderRequestRouteFacts } from "../agents/provider-request-config.js";
 import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
@@ -249,14 +250,18 @@ describe("OpenClaw provider tool-result fidelity", () => {
       maxTokens: 1_024,
     } satisfies Model<"anthropic-messages">;
     let anthropicPayload: unknown;
-    const stream = streamSimpleAnthropic(anthropicModel, context, {
-      apiKey: "test-provider-key",
-      reasoning: "off",
-      onPayload: (payload) => {
-        anthropicPayload = payload;
-        throw new Error("payload captured");
+    const stream = streamSimpleAnthropic(
+      await prepareModelProviderRequestRouteFacts(anthropicModel),
+      context,
+      {
+        apiKey: "test-provider-key",
+        reasoning: "off",
+        onPayload: (payload) => {
+          anthropicPayload = payload;
+          throw new Error("payload captured");
+        },
       },
-    });
+    );
     await stream.result();
 
     const openAiModel = {
@@ -267,10 +272,11 @@ describe("OpenClaw provider tool-result fidelity", () => {
       provider: "openai",
       baseUrl: "https://api.openai.com/v1",
     } satisfies Model<"openai-completions">;
+    const preparedOpenAiModel = await prepareModelProviderRequestRouteFacts(openAiModel);
     const openAiPayload = convertMessages(
-      openAiModel,
+      preparedOpenAiModel,
       context,
-      resolveOpenAICompletionsCompat(openAiModel),
+      resolveOpenAICompletionsCompat(preparedOpenAiModel),
     );
 
     for (const payload of [anthropicPayload, openAiPayload]) {

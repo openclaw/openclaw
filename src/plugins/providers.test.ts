@@ -6,8 +6,7 @@ import type { PluginRegistrySnapshot } from "./plugin-registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { ProviderPlugin } from "./types.js";
 
-type ResolveRuntimePluginRegistry = typeof import("./loader.js").resolveRuntimePluginRegistry;
-type LoadOpenClawPlugins = typeof import("./loader.js").loadOpenClawPlugins;
+type LoadOpenClawPlugins = typeof import("./loader.js").loadOpenClawPluginsAsync;
 type IsPluginRegistryLoadInFlight = typeof import("./loader.js").isPluginRegistryLoadInFlight;
 type LoadPluginManifestRegistry =
   typeof import("./manifest-registry.js").loadPluginManifestRegistryCore;
@@ -19,8 +18,7 @@ type LoadPluginRegistrySnapshotWithMetadata =
 type ApplyPluginAutoEnable = typeof import("../config/plugin-auto-enable.js").applyPluginAutoEnable;
 type SetActivePluginRegistry = typeof import("./runtime.js").setActivePluginRegistry;
 
-const runtimeLoader = vi.fn<ResolveRuntimePluginRegistry>();
-const setupLoader = vi.fn<LoadOpenClawPlugins>();
+const runtimeLoader = vi.fn<LoadOpenClawPlugins>();
 const isPluginRegistryLoadInFlightMock = vi.fn<IsPluginRegistryLoadInFlight>((_options) => false);
 const manifestLoader = vi.fn<LoadPluginManifestRegistry>();
 const metadataLoader = vi.fn<LoadPluginMetadataSnapshot>();
@@ -30,7 +28,7 @@ const currentMetadata = vi.fn();
 const autoEnable = vi.fn<ApplyPluginAutoEnable>();
 
 let owners: typeof import("./providers.js");
-let resolvePluginProviders: typeof import("./providers.runtime.js").resolvePluginProvidersCore;
+let resolvePluginProviders: typeof import("./providers.runtime.js").resolvePluginProvidersCoreAsync;
 let setActivePluginRegistry: SetActivePluginRegistry;
 
 function manifest(id: string, overrides: Partial<PluginManifestRecord> = {}): PluginManifestRecord {
@@ -116,13 +114,8 @@ function getLastRuntimeRegistryCall() {
   return call;
 }
 
-function expectActivatedOwner(
-  id: string,
-  mode: "runtime" | "setup" = "runtime",
-  activate?: boolean,
-) {
-  const call =
-    mode === "runtime" ? getLastRuntimeRegistryCall() : setupLoader.mock.calls.at(-1)?.[0];
+function expectActivatedOwner(id: string, activate?: boolean) {
+  const call = getLastRuntimeRegistryCall();
   expect(call?.onlyPluginIds).toEqual([id]);
   if (activate !== undefined) {
     expect(call?.activate).toBe(activate);
@@ -139,10 +132,10 @@ describe("resolvePluginProviders", () => {
   beforeAll(async () => {
     vi.resetModules();
     setManifestPlugins([]);
+    // mock-isolation: Provider resolution fixtures supply metadata and loader results without executing installed plugins.
     vi.doMock("./loader.js", () => ({
-      loadOpenClawPlugins: setupLoader,
+      loadOpenClawPluginsAsync: runtimeLoader,
       isPluginRegistryLoadInFlight: isPluginRegistryLoadInFlightMock,
-      resolveRuntimePluginRegistry: runtimeLoader,
     }));
     vi.doMock("./providers.runtime.js", async () => {
       const { createProviderRegistryResolver } = await import("./providers.runtime-core.js");
@@ -155,6 +148,7 @@ describe("resolvePluginProviders", () => {
     vi.doMock("./manifest-registry.js", () => ({
       loadPluginManifestRegistryCore: manifestLoader,
     }));
+    // mock-isolation: Provider resolution fixtures supply metadata and loader results without executing installed plugins.
     vi.doMock("./plugin-metadata-snapshot.js", () => {
       const loadSnapshot = (params: Parameters<LoadPluginMetadataSnapshot>[0]) => {
         metadataLoader(params);
@@ -166,8 +160,16 @@ describe("resolvePluginProviders", () => {
       return {
         loadPluginMetadataSnapshot: loadSnapshot,
         resolvePluginMetadataSnapshot: loadSnapshot,
+        resolvePluginMetadataSnapshotAsync: async (
+          params: Parameters<LoadPluginMetadataSnapshot>[0],
+        ) => loadSnapshot(params),
       };
     });
+    // mock-isolation: Provider ownership fixtures use the default absent machine discovery flag.
+    vi.doMock("./bundled-discovery-state.js", () => ({
+      readBundledDiscoveryModeMemoized: () => undefined,
+      prepareBundledDiscoveryMode: async () => () => {},
+    }));
     vi.doMock("./current-plugin-metadata-snapshot.js", () => ({
       getCurrentPluginMetadataSnapshot: currentMetadata,
     }));
@@ -188,7 +190,7 @@ describe("resolvePluginProviders", () => {
       };
     });
     owners = await import("./providers.js");
-    ({ resolvePluginProvidersCore: resolvePluginProviders } =
+    ({ resolvePluginProvidersCoreAsync: resolvePluginProviders } =
       await import("./providers.runtime.js"));
     ({ setActivePluginRegistry } = await import("./runtime.js"));
   });
@@ -233,7 +235,7 @@ describe("resolvePluginProviders", () => {
     expect(
       await resolvePersonalAccountAuthMethod({}, "personal-provider", "host-import"),
     ).toBeUndefined();
-    expect(setupLoader).not.toHaveBeenCalled();
+    expect(runtimeLoader).not.toHaveBeenCalled();
   });
 
   it.each([true, false])(
@@ -298,7 +300,6 @@ describe("resolvePluginProviders", () => {
   beforeEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     runtimeLoader.mockReset();
-    setupLoader.mockReset();
     isPluginRegistryLoadInFlightMock.mockReset();
     isPluginRegistryLoadInFlightMock.mockReturnValue(false);
     metadataLoader.mockReset();
@@ -320,8 +321,7 @@ describe("resolvePluginProviders", () => {
       },
       "google",
     );
-    runtimeLoader.mockReturnValue(registry);
-    setupLoader.mockReturnValue(registry);
+    runtimeLoader.mockResolvedValue(registry);
     manifestLoader.mockReset();
     autoEnable.mockReset();
     autoEnable.mockImplementation((params): PluginAutoEnableResult => ({
@@ -370,21 +370,29 @@ describe("resolvePluginProviders", () => {
     ]);
   });
 
-  it("resolves external auth hook plugin ids from manifest contracts without runtime loading", () => {
-    setManifestPlugins([
-      manifest("external-auth-owner", {
-        providers: ["demo"],
-        contracts: { externalAuthProviders: ["demo"] },
-      }),
-      manifest("regular-provider", { providers: ["regular"] }),
+  it("keeps cold synchronous loading confined to the native compatibility operation", async () => {
+    const { createProviderRegistryResolver } = await import("./providers.runtime-core.js");
+    const resolver = createProviderRegistryResolver({
+      loadOpenClawPluginsAsync: runtimeLoader,
+      isPluginRegistryLoadInFlight: isPluginRegistryLoadInFlightMock,
+    });
+    const provider = { id: "google", label: "Google", auth: [] };
+    const nativeLoader = vi.fn(() => providerRegistry(provider));
+    const params = {
+      config: {},
+      onlyPluginIds: ["google"],
+      pluginMetadataSnapshot: {
+        manifestRegistry: manifestLoader(),
+        index: createProviderRegistrySnapshotFixture(),
+      },
+    };
+    expect(() => resolver.resolvePluginProvidersCore(params)).toThrow(
+      "Provider plugins are not loaded",
+    );
+    expect(resolver.resolveLegacyPluginProvidersCore(params, nativeLoader)).toEqual([
+      { ...provider, pluginId: "google" },
     ]);
-
-    expect(
-      owners.resolveExternalAuthProfileProviderPluginIds({
-        config: {},
-        env: {},
-      }),
-    ).toEqual(["external-auth-owner"]);
+    expect(nativeLoader).toHaveBeenCalledOnce();
     expect(runtimeLoader).not.toHaveBeenCalled();
   });
 
@@ -405,7 +413,7 @@ describe("resolvePluginProviders", () => {
     ).toStrictEqual([]);
   });
 
-  it("inherits workspaceDir from the active registry when provider resolution omits it", () => {
+  it("inherits workspaceDir from the active registry when provider resolution omits it", async () => {
     setActivePluginRegistry(
       createEmptyPluginRegistry(),
       undefined,
@@ -413,7 +421,7 @@ describe("resolvePluginProviders", () => {
       "/workspace/runtime",
     );
 
-    resolvePluginProviders({
+    await resolvePluginProviders({
       config: { plugins: { allow: ["google"] } },
       onlyPluginIds: ["google"],
     });
@@ -425,10 +433,10 @@ describe("resolvePluginProviders", () => {
     });
   });
 
-  it("activates the owner plugin for custom provider refs that use a native provider api", () => {
+  it("activates the owner plugin for custom provider refs that use a native provider api", async () => {
     setManifest("ollama", { enabledByDefault: true });
 
-    resolvePluginProviders({
+    await resolvePluginProviders({
       config: {
         models: {
           providers: {
@@ -444,10 +452,10 @@ describe("resolvePluginProviders", () => {
       activate: true,
     });
 
-    expectActivatedOwner("ollama", "runtime", true);
+    expectActivatedOwner("ollama", true);
   });
 
-  it("uses setup.providers to keep explicit provider owners on the setup path", () => {
+  it("uses setup.providers to keep explicit provider owners on the setup path", async () => {
     setManifest("setup-owned-provider", {
       providers: [],
       setup: {
@@ -455,17 +463,17 @@ describe("resolvePluginProviders", () => {
       },
     });
 
-    resolvePluginProviders({
+    await resolvePluginProviders({
       config: {},
       providerRefs: ["setup-owned"],
       activate: true,
       mode: "setup",
     });
 
-    expectActivatedOwner("setup-owned-provider", "setup", true);
+    expectActivatedOwner("setup-owned-provider", true);
   });
 
-  it("does not override global plugin disable during setup owner loading", () => {
+  it("does not override global plugin disable during setup owner loading", async () => {
     setManifest("setup-owned-provider", {
       providers: [],
       setup: {
@@ -473,17 +481,17 @@ describe("resolvePluginProviders", () => {
       },
     });
 
-    resolvePluginProviders({
+    await resolvePluginProviders({
       config: { plugins: { enabled: false } },
       providerRefs: ["setup-owned"],
       activate: true,
       mode: "setup",
     });
 
-    expect(setupLoader).not.toHaveBeenCalled();
+    expect(runtimeLoader).not.toHaveBeenCalled();
   });
 
-  it("does not auto-activate workspace runtime owners by default", () => {
+  it("does not auto-activate workspace runtime owners by default", async () => {
     setManifest("workspace-activation-owner", {
       providers: [],
       origin: "workspace",
@@ -491,9 +499,9 @@ describe("resolvePluginProviders", () => {
         onProviders: ["workspace-activation"],
       },
     });
-    runtimeLoader.mockReturnValue(createEmptyPluginRegistry());
+    runtimeLoader.mockResolvedValue(createEmptyPluginRegistry());
 
-    const providers = resolvePluginProviders({
+    const providers = await resolvePluginProviders({
       config: {},
       providerRefs: ["workspace-activation"],
       activate: true,
@@ -526,7 +534,7 @@ describe("resolvePluginProviders", () => {
     expectModelOwningPluginIds("a", undefined);
   });
 
-  it("preserves LM Studio @iq* quant suffixes when resolving model-owned provider plugins", () => {
+  it("preserves LM Studio @iq* quant suffixes when resolving model-owned provider plugins", async () => {
     setManifestPlugins([
       manifest("lmstudio", {
         modelSupport: {
@@ -546,12 +554,12 @@ describe("resolvePluginProviders", () => {
       },
       "lmstudio",
     );
-    runtimeLoader.mockReturnValue(registry);
+    runtimeLoader.mockResolvedValue(registry);
 
     expectModelOwningPluginIds("qwen3.6-27b@iq3_xxs", ["lmstudio"]);
     expectModelOwningPluginIds("qwen3.6-27b", undefined);
 
-    const providers = resolvePluginProviders({
+    const providers = await resolvePluginProviders({
       config: {},
       modelRefs: ["qwen3.6-27b@iq3_xxs"],
     });
@@ -562,7 +570,7 @@ describe("resolvePluginProviders", () => {
     expectActivatedOwner("lmstudio");
   });
 
-  it("auto-loads a same-id prefix record after ambiguous pattern matches", () => {
+  it("auto-loads a same-id prefix record after ambiguous pattern matches", async () => {
     setManifestPlugins([
       manifest("openai", {
         providers: ["openai", "openai"],
@@ -584,9 +592,9 @@ describe("resolvePluginProviders", () => {
       },
       "openai",
     );
-    runtimeLoader.mockReturnValue(registry);
+    runtimeLoader.mockResolvedValue(registry);
 
-    const providers = resolvePluginProviders({
+    const providers = await resolvePluginProviders({
       config: {},
       modelRefs: ["gpt-5.4"],
     });

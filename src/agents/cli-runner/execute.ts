@@ -298,9 +298,10 @@ export async function executePreparedCliRun(
     const cliTurnStartedAt = Date.now();
     const restoreSkillEnv =
       params.skillsSnapshot && !params.controlOperation
-        ? applySkillEnvOverridesFromSnapshot({
+        ? await applySkillEnvOverridesFromSnapshot({
             snapshot: params.skillsSnapshot,
             config: params.config,
+            assertCurrent,
           })
         : undefined;
     let cleanupMcpCaptureAttempt: (() => Promise<void>) | undefined;

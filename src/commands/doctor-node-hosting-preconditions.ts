@@ -13,6 +13,7 @@ import {
   resolveConfiguredPairingPublicUrl,
   resolvePairingGatewayUrl,
 } from "../pairing/setup-code.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 
@@ -88,6 +89,7 @@ export async function collectNodeHostingPreconditionFindings(
   if (cfg.gateway?.mode === "remote" || !hasConfiguredNodeHosting(cfg)) {
     return [];
   }
+  await prepareBundledDiscoveryMode();
   const findings: HealthFinding[] = [];
   const warn = (finding: Omit<HealthFinding, "checkId" | "severity">) =>
     findings.push({ checkId: CHECK_ID, severity: "warning", ...finding });

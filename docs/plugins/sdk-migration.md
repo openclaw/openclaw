@@ -135,6 +135,114 @@ database worker. The synchronous `loadCombinedSessionStoreForGateway` retains it
 return value and emits a bounded deprecation warning; it remains supported until
 the next Plugin SDK major.
 
+### Model-reference parsing
+
+Await `parseModelRefAsync(raw, defaultProvider, options)` from
+`openclaw/plugin-sdk/agent-runtime` for a single model reference. For repeated
+lookups, await `prepareModelRefResolver({ config, env, workspaceDir })` once and
+use its synchronous `parseModelRef` and `resolveModelRefFromString` methods.
+The resolver also exposes `manifestPlugins` for model helpers that accept
+prepared metadata. Custom provider aliases use that selected snapshot until you
+prepare another resolver; parsing never polls for a newer plugin generation.
+Bundled plugins may use the narrow private `model-ref-parse` seam; third-party
+plugins use the typed public exports from `agent-runtime`.
+
+The existing `parseModelRef` exports and `agent-runtime`'s
+`resolveModelRefFromString` retain cold synchronous discovery for installed
+plugins. They emit a bounded deprecation warning and remain supported until a
+later release after stable deprecation.
+
+### Provider discovery
+
+Await `resolvePluginProvidersAsync` from
+`openclaw/plugin-sdk/provider-catalog-runtime` when selecting provider callbacks.
+It prepares metadata and loads the selected provider registry asynchronously.
+Borrowed callbacks remain owned by the calling SDK host until that host closes.
+
+The synchronous `resolvePluginProviders` export is deprecated and emits a bounded
+warning. It requires an already prepared and loaded provider registry; cold
+discovery must use the async replacement. The synchronous export remains available
+until a later release after stable deprecation.
+
+### Bundled provider request policy
+
+The local-only `openclaw/plugin-sdk/provider-http` seam exports
+`prepareModelProviderRequestRouteFacts` for bundled provider and transport code.
+Await it before using a cold model and reuse the returned model through stream
+and completion calls. Already prepared models reuse their captured facts without
+another metadata lookup.
+
+For direct HTTP requests, await `resolveProviderRequestHeadersAsync` from
+`openclaw/plugin-sdk/provider-http`. It prepares metadata through the existing
+owner and preserves the request's transport, endpoint, and header precedence.
+Pass existing `providerMetadataOwners` to reuse an already prepared request.
+The synchronous `resolveProviderRequestHeaders` export, shipped in `v2026.10.2`,
+retains cold native discovery with a bounded deprecation warning and will be
+removed in a later release after stable deprecation.
+
+Direct policy readers use `getModelProviderRequestRouteFacts` from the same seam
+and pass its `providerMetadataOwners` to their policy/header inputs (or as the
+second argument to `resolveProviderEndpoint`). The policy functions and the
+local-only `provider-model-shared` endpoint helper also retain cold native
+discovery through deprecated compatibility adapters. They emit a bounded warning;
+bundled callers should prepare metadata asynchronously. These local seams are not
+public third-party SDK contracts. Metadata preparation does not grant credential
+or execution authority.
+
+Google's plugin-local `api.ts` and `runtime-api.ts` expose
+`resolveGoogleGenerativeAiHttpRequestConfigAsync` for callers that need cold
+request metadata. It prepares the provider policy before building the HTTP
+request. The synchronous `resolveGoogleGenerativeAiHttpRequestConfig` requires
+prepared metadata, emits a bounded deprecation warning, and remains available
+until a later release after stable deprecation. Bundled callers use the async
+replacement.
+The local-only `provider-http` seam exposes `warnPluginSdkDeprecation` so these
+plugin-local compatibility exports share the existing warning budget.
+
+### Provider auth aliases
+
+Await `resolveProviderIdForAuthAsync` from `openclaw/plugin-sdk/provider-auth-aliases`
+when resolving credential-provider aliases. It prepares plugin metadata through
+its existing owner and preserves workspace trust and endpoint matching.
+The synchronous `resolveProviderIdForAuth` export shipped in `v2026.10.2` is
+now deprecated. It retains cold native discovery with a bounded warning and
+will be removed in a later release after stable deprecation. Calls with prepared
+metadata, including a compatible current snapshot, reuse it without a warning.
+
+### Realtime voice provider discovery
+
+Use `getRealtimeVoiceProviderAsync`, `listRealtimeVoiceProvidersAsync`,
+`canonicalizeRealtimeVoiceProviderIdAsync`, and
+`resolveConfiguredRealtimeVoiceProviderAsync` from
+`openclaw/plugin-sdk/realtime-voice`. They prepare metadata and load provider
+registrations asynchronously. Returned provider callbacks remain owned by the
+calling SDK resource host until it closes.
+
+The synchronous counterparts emit a bounded deprecation warning and retain
+their cold native discovery behavior through the stable deprecation window.
+Removal follows in a later release after stable deprecation. Prepared Gateway
+consumers use the internal registry directly; the native compatibility path belongs only to the
+deprecated SDK exports.
+
+### Speech provider discovery
+
+Use `getSpeechProviderAsync` from `openclaw/plugin-sdk/speech` or
+`openclaw/plugin-sdk/speech-core` when resolving a provider. The speech-core
+surface also exports `listSpeechProvidersAsync` and
+`canonicalizeSpeechProviderIdAsync`. Provider discovery prepares metadata and
+loads registrations asynchronously; returned callbacks stay with the calling
+SDK resource host until it closes.
+
+From `openclaw/plugin-sdk/tts-runtime`, await
+`getResolvedSpeechProviderConfigAsync`, `resolveTtsProviderOrderAsync`, and
+`setTtsProviderAsync`. Their synchronous counterparts, along with the synchronous
+speech registry helpers, are deprecated and require a prepared registry. They
+emit a bounded warning and remain available until a later release after stable
+deprecation.
+Synchronous directive parsing remains available with an explicit `providers`
+inventory; `runtime.tts.prepareTtsRequest` prepares discovery and preserves the
+provider resources needed by directive results.
+
 ### Exec approval reads
 
 Await `loadExecApprovalsReadOnlyAsync` or `readExecApprovalsSnapshotAsync` from
@@ -289,3 +397,29 @@ shared-owner snapshot; it resolves cold ownership through the database worker.
 The synchronous `replaceRuntimeAuthProfileStoreSnapshots` remains deprecated until
 a later stable release and retains native cold-owner admission for compatibility.
 Entries with explicit database paths or agent directories remain in-memory publications.
+
+### Realtime transcription provider discovery
+
+Use `getRealtimeTranscriptionProviderAsync` and
+`listRealtimeTranscriptionProvidersAsync` from
+`openclaw/plugin-sdk/realtime-transcription`. They prepare metadata and load
+provider registrations asynchronously. Returned provider callbacks remain owned
+by the calling SDK resource host until it closes. Bundled Talk, meeting, and
+voice-call consumers use these replacements.
+
+`getRealtimeTranscriptionProvider` and `listRealtimeTranscriptionProviders` are
+deprecated, emit a bounded warning, and require prepared provider registrations.
+They remain available through the stable deprecation window and will be removed
+in a later release after stable deprecation.
+
+### Sandbox environment filtering
+
+Await `sanitizeEnvVarsAsync` from `openclaw/plugin-sdk/sandbox` before forwarding
+host environment values to a sandbox. It prepares credential metadata through
+the database worker, then applies the same name and value filters. Discovery
+always uses host metadata, never environment values supplied by the sandbox.
+
+`sanitizeEnvVars` is deprecated and emits a bounded warning. It retains its
+synchronous native metadata behavior for existing third-party plugins and will
+be removed in a later release after stable deprecation. All bundled callers use
+the asynchronous replacement.

@@ -8,7 +8,9 @@ import type {
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { buildRestartRecoveryTerminalDeliveryEvidence } from "../agent-command-restart-recovery.js";
@@ -966,23 +968,27 @@ describe("deliverAgentCommandResult payload normalization", () => {
     deliverOutboundPayloadsMock.mockClear();
 
     await expect(
-      deliverAgentCommandResultForTest({
-        workspace: true,
-        runtime: runtime as never,
-        opts: {
-          message: "go",
-          deliver: true,
-          json: true,
-          bestEffortDeliver: false,
-          replyChannel: "not-installed",
-          replyTo: "#general",
-        } as AgentCommandOpts,
-        outboundSession: {
-          key: "agent:tester:not-installed:direct:alice",
-          agentId: "tester",
-        } as never,
-        payloads: [{ text: "here you go", mediaUrls: ["./out/photo.png"] }],
-      }),
+      withPluginRuntimeGenerationScope(
+        { metadataSnapshot: createPluginMetadataSnapshotFixture(), pluginRegistry: slackRegistry },
+        () =>
+          deliverAgentCommandResultForTest({
+            workspace: true,
+            runtime: runtime as never,
+            opts: {
+              message: "go",
+              deliver: true,
+              json: true,
+              bestEffortDeliver: false,
+              replyChannel: "not-installed",
+              replyTo: "#general",
+            } as AgentCommandOpts,
+            outboundSession: {
+              key: "agent:tester:not-installed:direct:alice",
+              agentId: "tester",
+            } as never,
+            payloads: [{ text: "here you go", mediaUrls: ["./out/photo.png"] }],
+          }),
+      ),
     ).rejects.toThrow('Unknown channel "not-installed"');
 
     expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();

@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { createOpenClawToolsAsync } from "./openclaw-tools.js";
 import { collectRuntimeChannelCapabilities } from "./runtime-capabilities.js";
 
 describe("registered sessions_spawn binding discovery", () => {
   afterEach(() => resetPluginRuntimeStateForTest());
 
-  it.each(["current", "child"] as const)("%s placement", (placement) => {
+  it.each(["current", "child"] as const)("%s placement", async (placement) => {
     const available = placement === "child";
     setActivePluginRegistry(
       createTestRegistry([
@@ -25,12 +25,14 @@ describe("registered sessions_spawn binding discovery", () => {
       ]),
     );
     const config = { session: { threadBindings: { enabled: true, spawnSessions: true } } };
-    const tool = createOpenClawTools({
-      agentChannel: "binding-chat",
-      config,
-      disableMessageTool: true,
-      disablePluginTools: true,
-    }).find((candidate) => candidate.name === "sessions_spawn");
+    const tool = (
+      await createOpenClawToolsAsync({
+        agentChannel: "binding-chat",
+        config,
+        disableMessageTool: true,
+        disablePluginTools: true,
+      })
+    ).find((candidate) => candidate.name === "sessions_spawn");
     expect(tool?.parameters).toMatchObject({
       properties: { mode: { enum: available ? ["run", "session"] : ["run"] } },
     });

@@ -3,9 +3,14 @@ import { buildOpenAICompletionsParams } from "@openclaw/ai/transports";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../../../packages/ai/src/utils/system-prompt-cache-boundary.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../../plugins/plugin-metadata-snapshot.js";
 import { createOpenRouterSystemCacheWrapper, createOpenRouterWrapper } from "./proxy.js";
+
+beforeEach(async () => {
+  await resolvePluginMetadataSnapshotAsync({});
+});
 
 function runSystemCacheWrapper(model: Partial<Model<"openai-completions">>) {
   const payload = {

@@ -92,21 +92,28 @@ console.log(JSON.stringify({
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("Code Mode model matrix provider setup", () => {
-  it("adds the documented non-secret marker only for local Ollama runs", () => {
-    expect(buildCodeModeMatrixAgentEnv("ollama/qwen3.5:9b", "/runtime", {})).toMatchObject({
+  it("adds the documented non-secret marker only for local Ollama runs", async () => {
+    const stateEnv = { OPENCLAW_STATE_DIR: path.join(os.homedir(), ".openclaw") };
+    expect(
+      await buildCodeModeMatrixAgentEnv("ollama/qwen3.5:9b", "/runtime", stateEnv),
+    ).toMatchObject({
       NODE_DISABLE_COMPILE_CACHE: "1",
       OLLAMA_API_KEY: "ollama-local",
       OPENCLAW_BUNDLED_PLUGINS_DIR: path.join("/runtime", "dist", "extensions"),
     });
     expect(
-      buildCodeModeMatrixAgentEnv("ollama/qwen3.5:9b", "/runtime", {
-        OLLAMA_API_KEY: "configured-value",
-      }).OLLAMA_API_KEY,
+      (
+        await buildCodeModeMatrixAgentEnv("ollama/qwen3.5:9b", "/runtime", {
+          ...stateEnv,
+          OLLAMA_API_KEY: "configured-value",
+        })
+      ).OLLAMA_API_KEY,
     ).toBe("configured-value");
-    expect(buildCodeModeMatrixAgentEnv("huggingface/model", "/runtime", {}).OLLAMA_API_KEY).toBe(
-      undefined,
-    );
-    const isolated = buildCodeModeMatrixAgentEnv("ollama/fixture", "/runtime", {
+    expect(
+      (await buildCodeModeMatrixAgentEnv("huggingface/model", "/runtime", stateEnv)).OLLAMA_API_KEY,
+    ).toBe(undefined);
+    const isolated = await buildCodeModeMatrixAgentEnv("ollama/fixture", "/runtime", {
+      ...stateEnv,
       HOME: "/operator",
       CODEX_HOME: "/operator/codex",
       OPENCLAW_CONFIG_PATH: "/operator/config",
@@ -120,19 +127,23 @@ describe("Code Mode model matrix provider setup", () => {
     expect(isolated).not.toHaveProperty("UNRELATED_TOKEN");
   });
 
-  it("rejects competing credentials and non-API-key provider routes", () => {
-    expect(() =>
+  it("rejects competing credentials and non-API-key provider routes", async () => {
+    const stateEnv = { OPENCLAW_STATE_DIR: path.join(os.homedir(), ".openclaw") };
+    await expect(
       buildCodeModeMatrixAgentEnv("openai/fixture", "/runtime", {
+        ...stateEnv,
         OPENAI_API_KEY: "synthetic-primary",
         CODEX_API_KEY: "synthetic-competitor",
       }),
-    ).toThrow("Ambiguous benchmark authentication");
-    expect(() =>
+    ).rejects.toThrow("Ambiguous benchmark authentication");
+    await expect(
       buildCodeModeMatrixAgentEnv("anthropic/fixture", "/runtime", {
+        ...stateEnv,
         ANTHROPIC_OAUTH_TOKEN: "synthetic-oauth",
       }),
-    ).toThrow("requires an API-key environment input");
-    const env = buildCodeModeMatrixAgentEnv("anthropic/fixture", "/runtime", {
+    ).rejects.toThrow("requires an API-key environment input");
+    const env = await buildCodeModeMatrixAgentEnv("anthropic/fixture", "/runtime", {
+      ...stateEnv,
       ANTHROPIC_API_KEY: "synthetic-selected",
       OPENAI_API_KEY: "synthetic-unrelated",
     });

@@ -6,7 +6,7 @@ import path from "node:path";
 import { type Mock, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as webMedia from "../../media/web-media.js";
-import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import * as authProfiles from "../auth-profiles.js";
 import * as modelAuth from "../model-auth.js";
@@ -25,12 +25,22 @@ type StubPreparedRuntimeSnapshot = {
   createStores: () => { authStorage: unknown; modelRegistry: unknown };
 };
 
-// The canonical resolver reads prepared facts before the registry; stub snapshots
-// carry empty facts so registry-driven fixtures keep deciding resolution.
+// Native PDF support belongs to prepared metadata; model selection stays registry-driven.
 export function withPreparedRuntimeFacts(snapshot: StubPreparedRuntimeSnapshot) {
   return {
     ...snapshot,
-    metadataSnapshot: createEmptyPluginMetadataSnapshot(snapshot.workspaceDir),
+    metadataSnapshot: {
+      ...createPluginMetadataSnapshotFixture({
+        plugins: ["anthropic", "google"].map((id) => ({
+          id,
+          contracts: { mediaUnderstandingProviders: [id] },
+          mediaUnderstandingProviderMetadata: {
+            [id]: { capabilities: ["image"], nativeDocumentInputs: ["pdf"] },
+          },
+        })),
+      }),
+      workspaceDir: snapshot.workspaceDir,
+    },
     configuredRuntimeModels: [],
     findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],

@@ -7,6 +7,8 @@ import type { Mock } from "vitest";
 import { assert, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { acquireGatewayLock, type GatewayLockOptions } from "../../infra/gateway-lock.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 
 let probeModule: typeof import("./list.probe.js");
 
@@ -135,6 +137,18 @@ async function withProbeRuntime(
   }
 }
 
+async function runPreparedAuthProbes(
+  probe: typeof probeModule,
+  params: Parameters<typeof probeModule.runAuthProbes>[0],
+) {
+  const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+    config: params.cfg,
+    env: process.env,
+    workspaceDir: params.workspaceDir,
+  });
+  return withPluginRuntimeGenerationScope({ metadataSnapshot }, () => probe.runAuthProbes(params));
+}
+
 function createRunner() {
   return vi.fn(async (params: RunnerParams) => {
     params.onRequestComplete?.(13);
@@ -213,12 +227,12 @@ describe("runAuthProbes", () => {
     await withProbeRuntime("profile", async ({ probe, runner, readCatalog }) => {
       readCatalog.mockRejectedValue(new Error("Catalog unavailable"));
       const input = probeInput({ options: { profileIds: ["openai:profile"] } });
-      expect((await probe.runAuthProbes(input)).results[0]).toMatchObject({
+      expect((await runPreparedAuthProbes(probe, input)).results[0]).toMatchObject({
         status: "ok",
         latencyMs: 13,
       });
       runner.mockRejectedValueOnce(new Error("Credential preparation failed"));
-      const failed = (await probe.runAuthProbes(input)).results[0];
+      const failed = (await runPreparedAuthProbes(probe, input)).results[0];
       expect(failed?.status).not.toBe("ok");
       expect(failed?.latencyMs).toBeUndefined();
     });
@@ -240,7 +254,7 @@ describe("runAuthProbes", () => {
         },
         options: { profileIds: ["openai:profile"] },
       });
-      expect((await probe.runAuthProbes(input)).results[0]?.status).toBe("ok");
+      expect((await runPreparedAuthProbes(probe, input)).results[0]?.status).toBe("ok");
       expect(runner).toHaveBeenCalledWith(
         expect.objectContaining({
           authProfileId: "openai:profile",
@@ -251,7 +265,9 @@ describe("runAuthProbes", () => {
       expect(runner.mock.calls[0]?.[0].preparedModelRuntimeMode).toBeUndefined();
       expect(runner.mock.calls[0]?.[0].thinkLevel).toBe("off");
       runner.mockRejectedValueOnce(new Error("LLM request timed out."));
-      expect((await probe.runAuthProbes(input)).results[0]).toMatchObject({ status: "timeout" });
+      expect((await runPreparedAuthProbes(probe, input)).results[0]).toMatchObject({
+        status: "timeout",
+      });
     });
   });
 
@@ -265,7 +281,8 @@ describe("runAuthProbes", () => {
         agentRuntime: { id: "codex" },
         models: [],
       };
-      await probe.runAuthProbes(
+      await runPreparedAuthProbes(
+        probe,
         probeInput({
           cfg: { models: { providers: { openai: providerConfig } } },
           options: { includeDirectKeys: true },
@@ -306,7 +323,7 @@ describe("runAuthProbes", () => {
           },
         },
       };
-      await probe.runAuthProbes(probeInput({ cfg, options: { includeDirectKeys: true } }));
+      await runPreparedAuthProbes(probe, probeInput({ cfg, options: { includeDirectKeys: true } }));
       const call = runner.mock.calls[0]?.[0];
       expect(call?.agentDir).not.toBe("/tmp/openclaw-probe-agent");
       expect(call?.agentDir).toContain("openclaw-auth-probe-");

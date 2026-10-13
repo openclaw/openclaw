@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "./external-cli-auth-selection.js";
 import type { AuthProfileStore } from "./types.js";
 
@@ -16,6 +17,10 @@ vi.mock("../model-runtime-aliases.js", () => ({
     },
   ),
 }));
+
+beforeEach(async () => {
+  await resolvePluginMetadataSnapshotAsync({ config: {} });
+});
 
 const claudeCliProfile = {
   type: "oauth" as const,

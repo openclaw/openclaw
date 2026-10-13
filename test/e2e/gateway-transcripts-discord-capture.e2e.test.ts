@@ -412,7 +412,7 @@ describe("Gateway admitted Discord transcript capture", () => {
       const { createPluginRecord } = await import("../../src/plugins/loader-records.js");
       const { getPluginInstance, getPluginValueInstance } =
         await import("../../src/plugins/plugin-instance-scope.js");
-      const { loadPluginMetadataSnapshot } =
+      const { resolvePluginMetadataSnapshotAsync } =
         await import("../../src/plugins/plugin-metadata-snapshot.js");
       const { bindPluginRuntimeArtifactSelection } =
         await import("../../src/plugins/plugin-runtime-artifact-binding.js");
@@ -548,7 +548,7 @@ describe("Gateway admitted Discord transcript capture", () => {
       const registryResources = new PluginRegistryInspectionResources(retireInspectionInstances);
       registryResources.attach(registration.registry);
       releaseFixtureRegistry = () => registryResources.release();
-      const registrationMetadata = loadPluginMetadataSnapshot({
+      const registrationMetadata = await resolvePluginMetadataSnapshotAsync({
         config: cfg,
         workspaceDir: workspace,
       });
@@ -826,7 +826,7 @@ describe("Gateway admitted Discord transcript capture", () => {
         caller: { kind: "operator", source: "scheduled" },
       };
       phase("routed-provider:resolve");
-      const routedProvider = resolveSourceProvider("discord-voice", routedContext);
+      const routedProvider = await resolveSourceProvider("discord-voice", routedContext);
       const activeRegistry = getActivePluginRegistry();
       expect(
         routedProvider,

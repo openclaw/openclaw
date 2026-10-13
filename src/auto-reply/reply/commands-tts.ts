@@ -7,7 +7,7 @@ import {
   isUnscopedSessionKeySentinel,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
-import { getSpeechProvider, listSpeechProviders } from "../../tts/provider-registry.js";
+import { withSpeechProviderRegistry } from "../../tts/provider-registry.js";
 import {
   getLastTtsAttempt,
   getTtsMaxLength,
@@ -222,62 +222,64 @@ async function handleTtsStatusAction(
   config: ReturnType<typeof resolveTtsConfig>,
   prefsPath: string,
 ): Promise<CommandHandlerResult> {
-  const enabled = isTtsEnabled(config, prefsPath);
-  const provider = await getTtsProviderAsync(config, prefsPath);
-  const persona = getTtsPersona(config, prefsPath);
-  const hasKey = await isTtsProviderConfiguredAsync(config, provider, params.cfg);
-  const maxLength = getTtsMaxLength(prefsPath);
-  const summarize = isSummarizationEnabled(prefsPath);
-  const last = getLastTtsAttempt();
-  const lines = [
-    "📊 TTS status",
-    `State: ${enabled ? "✅ enabled" : "❌ disabled"}`,
-    `Chat override: ${params.sessionEntry?.ttsAuto ?? "default"}`,
-    `Provider: ${provider} (${hasKey ? "✅ configured" : "❌ not configured"})`,
-    `Persona: ${persona?.id ?? "none"}`,
-    `Text limit: ${maxLength} chars`,
-    `Auto-summary: ${summarize ? "on" : "off"}`,
-  ];
-  if (last) {
-    const timeAgo = Math.round((Date.now() - last.timestamp) / 1000);
-    lines.push("");
-    lines.push(`Last attempt (${timeAgo}s ago): ${last.success ? "✅" : "❌"}`);
-    lines.push(`Text: ${last.textLength} chars${last.summarized ? " (summarized)" : ""}`);
-    if (last.success) {
-      lines.push(`Provider: ${last.provider ?? "unknown"}`);
-      if (last.persona) {
-        lines.push(`Persona: ${last.persona}`);
-      }
-      if (last.fallbackFrom && last.provider && last.fallbackFrom !== last.provider) {
-        lines.push(`Fallback: ${last.fallbackFrom} -> ${last.provider}`);
-      }
-    } else if (last.error) {
-      lines.push(`Error: ${last.error}`);
-    }
-    if (last.success || last.error) {
-      if (last.attemptedProviders && last.attemptedProviders.length > (last.success ? 1 : 0)) {
-        lines.push(`Attempts: ${last.attemptedProviders.join(" -> ")}`);
-      }
-      const details = last.attempts
-        ?.map((attempt) => {
-          const reason = attempt.reasonCode === "success" ? "ok" : attempt.reasonCode;
-          const latency = Number.isFinite(attempt.latencyMs) ? ` ${attempt.latencyMs}ms` : "";
-          const personaDetail =
-            attempt.persona && attempt.personaBinding && attempt.personaBinding !== "none"
-              ? ` persona=${attempt.persona}:${attempt.personaBinding}`
-              : "";
-          return `${attempt.provider}:${attempt.outcome}(${reason})${personaDetail}${latency}`;
-        })
-        .join(", ");
-      if (details) {
-        lines.push(`Attempt details: ${details}`);
-      }
+  return await withSpeechProviderRegistry(params.cfg, async (registry) => {
+    const enabled = isTtsEnabled(config, prefsPath);
+    const provider = await getTtsProviderAsync(config, prefsPath, registry);
+    const persona = getTtsPersona(config, prefsPath);
+    const hasKey = await isTtsProviderConfiguredAsync(config, provider, params.cfg, registry);
+    const maxLength = getTtsMaxLength(prefsPath);
+    const summarize = isSummarizationEnabled(prefsPath);
+    const last = getLastTtsAttempt();
+    const lines = [
+      "📊 TTS status",
+      `State: ${enabled ? "✅ enabled" : "❌ disabled"}`,
+      `Chat override: ${params.sessionEntry?.ttsAuto ?? "default"}`,
+      `Provider: ${provider} (${hasKey ? "✅ configured" : "❌ not configured"})`,
+      `Persona: ${persona?.id ?? "none"}`,
+      `Text limit: ${maxLength} chars`,
+      `Auto-summary: ${summarize ? "on" : "off"}`,
+    ];
+    if (last) {
+      const timeAgo = Math.round((Date.now() - last.timestamp) / 1000);
+      lines.push("");
+      lines.push(`Last attempt (${timeAgo}s ago): ${last.success ? "✅" : "❌"}`);
+      lines.push(`Text: ${last.textLength} chars${last.summarized ? " (summarized)" : ""}`);
       if (last.success) {
-        lines.push(`Latency: ${last.latencyMs ?? 0}ms`);
+        lines.push(`Provider: ${last.provider ?? "unknown"}`);
+        if (last.persona) {
+          lines.push(`Persona: ${last.persona}`);
+        }
+        if (last.fallbackFrom && last.provider && last.fallbackFrom !== last.provider) {
+          lines.push(`Fallback: ${last.fallbackFrom} -> ${last.provider}`);
+        }
+      } else if (last.error) {
+        lines.push(`Error: ${last.error}`);
+      }
+      if (last.success || last.error) {
+        if (last.attemptedProviders && last.attemptedProviders.length > (last.success ? 1 : 0)) {
+          lines.push(`Attempts: ${last.attemptedProviders.join(" -> ")}`);
+        }
+        const details = last.attempts
+          ?.map((attempt) => {
+            const reason = attempt.reasonCode === "success" ? "ok" : attempt.reasonCode;
+            const latency = Number.isFinite(attempt.latencyMs) ? ` ${attempt.latencyMs}ms` : "";
+            const personaDetail =
+              attempt.persona && attempt.personaBinding && attempt.personaBinding !== "none"
+                ? ` persona=${attempt.persona}:${attempt.personaBinding}`
+                : "";
+            return `${attempt.provider}:${attempt.outcome}(${reason})${personaDetail}${latency}`;
+          })
+          .join(", ");
+        if (details) {
+          lines.push(`Attempt details: ${details}`);
+        }
+        if (last.success) {
+          lines.push(`Latency: ${last.latencyMs ?? 0}ms`);
+        }
       }
     }
-  }
-  return stopWithText(lines.join("\n"));
+    return stopWithText(lines.join("\n"));
+  });
 }
 
 export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
@@ -331,32 +333,34 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
     }
 
     if (action === "provider") {
-      const currentProvider = await getTtsProviderAsync(config, prefsPath);
-      if (!args) {
-        const providers = listSpeechProviders(params.cfg);
-        const providerStates = await Promise.all(
-          providers.map(
-            async (provider) =>
-              `${provider.label}: ${(await isTtsProviderConfiguredAsync(config, provider, params.cfg)) ? "✅" : "❌"}`,
-          ),
-        );
-        return stopWithText(
-          `🎙️ TTS provider\n` +
-            `Primary: ${currentProvider}\n` +
-            providerStates.join("\n") +
-            `\nUsage: /tts provider <id>`,
-        );
-      }
+      return await withSpeechProviderRegistry(params.cfg, async (registry) => {
+        if (!args) {
+          const currentProvider = await getTtsProviderAsync(config, prefsPath, registry);
+          const providers = registry.listSpeechProviders(params.cfg);
+          const providerStates = await Promise.all(
+            providers.map(
+              async (provider) =>
+                `${provider.label}: ${(await isTtsProviderConfiguredAsync(config, provider, params.cfg, registry)) ? "✅" : "❌"}`,
+            ),
+          );
+          return stopWithText(
+            `🎙️ TTS provider\n` +
+              `Primary: ${currentProvider}\n` +
+              providerStates.join("\n") +
+              `\nUsage: /tts provider <id>`,
+          );
+        }
 
-      const requested = args.toLowerCase();
-      const resolvedProvider = getSpeechProvider(requested, params.cfg);
-      if (!resolvedProvider) {
-        return ttsUsage();
-      }
+        const requested = args.toLowerCase();
+        const resolvedProvider = registry.getSpeechProvider(requested, params.cfg);
+        if (!resolvedProvider) {
+          return ttsUsage();
+        }
 
-      const nextProvider = resolvedProvider.id;
-      setTtsProvider(prefsPath, nextProvider);
-      return stopWithText(`✅ TTS provider set to ${nextProvider}.`);
+        const nextProvider = resolvedProvider.id;
+        setTtsProvider(prefsPath, nextProvider, registry);
+        return stopWithText(`✅ TTS provider set to ${nextProvider}.`);
+      });
     }
 
     if (action === "persona") {

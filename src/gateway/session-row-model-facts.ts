@@ -77,6 +77,7 @@ export function readSessionRowModelFacts(params: {
       (lightweight || metadataSnapshot !== undefined ? "active" : undefined),
   });
   return {
+    metadataSnapshot,
     selectedModel,
     rowModelIdentity,
     thinkingProjection,

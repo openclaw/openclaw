@@ -1,6 +1,7 @@
 /** Route-aware auth checks for model-picker callers. */
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "./auth-profiles.js";
 import {
@@ -37,6 +38,7 @@ export function createProviderAuthChecker(params: {
       return modelAuthResolver;
     }
     modelAuthResolver = (async () => {
+      await preparePluginMetadataMachineStateAsync({ env: params.env });
       const authStore = await ensureAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir, {
         allowKeychainPrompt: false,
       });

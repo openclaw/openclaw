@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { Command } from "commander";
-import { resolvePluginProviders } from "openclaw/plugin-sdk/provider-catalog-runtime";
+import { resolvePluginProvidersAsync } from "openclaw/plugin-sdk/provider-catalog-runtime";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { getRegisteredAgentHarness, registerAgentHarness } from "../agents/harness/registry.js";
@@ -360,7 +360,7 @@ it("retains CLI SDK providers through their actual local Gateway context", async
         const resources = getCliPluginInvocationResources()!;
         const registry = await resources.acquire(fixture.load);
         const resolveProviders = () =>
-          resolvePluginProviders({
+          resolvePluginProvidersAsync({
             config: fixture.config,
             env: fixture.env,
             onlyPluginIds: [fixture.id],
@@ -370,12 +370,12 @@ it("retains CLI SDK providers through their actual local Gateway context", async
             withPluginRuntimeRegistryScope(registry, () =>
               withLocalGatewayRequestScope(
                 { deps: {}, getRuntimeConfig: () => fixture.config },
-                () => {
+                async () => {
                   const scope = getPluginRuntimeGatewayRequestScope();
                   if (!scope) {
                     throw new Error("The local Gateway must retain its request scope");
                   }
-                  return { scope, providers: resolveProviders() };
+                  return { scope, providers: await resolveProviders() };
                 },
               ),
             ),
@@ -390,11 +390,11 @@ it("retains CLI SDK providers through their actual local Gateway context", async
           await resources.release();
           expect(fixture.state.disposals).toBe(1);
           expect(fixture.state.database?.isOpen).toBe(false);
-          expect(() =>
+          await expect(
             foreign.run(() =>
               withPluginRuntimeGatewayRequestScope(captured.scope, resolveProviders),
             ),
-          ).toThrow("SDK resource host is closed");
+          ).rejects.toThrow("SDK resource host is closed");
         } finally {
           await resources.release();
         }
@@ -415,8 +415,8 @@ it.each(["returned", "cooperating"] as const)(
         const resources = getCliPluginInvocationResources()!;
         const registry = await resources.acquire(fixture.load);
         // Terminal cleanup consumes an admitted handle; it cannot acquire a retired provider.
-        const providers = withPluginRuntimeRegistryScope(registry, () =>
-          resolvePluginProviders({
+        const providers = await withPluginRuntimeRegistryScope(registry, () =>
+          resolvePluginProvidersAsync({
             config: fixture.config,
             env: fixture.env,
             onlyPluginIds: [fixture.id],

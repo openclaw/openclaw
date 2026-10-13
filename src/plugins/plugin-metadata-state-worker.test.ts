@@ -514,6 +514,7 @@ it("keeps captured async policy and inventory in pinned roots after a concurrent
       { env },
     );
     bundledDiscovery.clearBundledDiscoveryModeMemo();
+    await bundledDiscovery.prepareBundledDiscoveryMode(env);
     expect(bundledDiscovery.readBundledDiscoveryModeMemoized(env)).toBe("allowlist");
     resume.resolve();
     expect(await reading).toEqual({

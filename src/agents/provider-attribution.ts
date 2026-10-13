@@ -11,10 +11,7 @@ import {
   matchesPluginProviderEndpoint,
   normalizePluginProviderBaseUrl,
 } from "../plugins/plugin-metadata-provider-facts.js";
-import {
-  getCurrentPluginMetadataSnapshotRequiredRuntime as getCurrentPluginMetadataSnapshot,
-  loadPluginMetadataSnapshotRuntime as loadPluginMetadataSnapshot,
-} from "../plugins/plugin-metadata-snapshot-required.js";
+import { snapshotReaderSlot } from "../plugins/plugin-metadata-snapshot-readers.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
 import { asBoolean } from "../utils/boolean.js";
 import type { RuntimeVersionEnv } from "../version.js";
@@ -178,10 +175,15 @@ function resolveProviderMetadataOwners(
 ): ProviderMetadataOwners {
   const owners =
     prepared ??
-    getCurrentPluginMetadataSnapshot({
+    snapshotReaderSlot.getCurrentPluginMetadataSnapshot?.({
       allowWorkspaceScopedSnapshot: true,
-    })?.owners ??
-    loadPluginMetadataSnapshot({ config: {} }).owners;
+      allowSynchronousPolicyRead: false,
+    })?.owners;
+  if (!owners) {
+    throw new Error(
+      "Provider request metadata is not prepared; await model or stream preparation before resolving provider policy.",
+    );
+  }
   return {
     providerEndpoints: owners.providerEndpoints ?? [],
     providerRequests: owners.providerRequests ?? new Map(),
@@ -227,6 +229,7 @@ export function isLocalProviderEndpoint(baseUrl: string | null | undefined): boo
   return host !== undefined && isLocalEndpointHost(host);
 }
 
+/** @deprecated Prepare model route facts asynchronously before reading endpoint policy. */
 export function resolveProviderEndpoint(
   baseUrl: string | null | undefined,
   providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps,
@@ -383,6 +386,7 @@ function resolveProviderAttributionPolicy(
   }
 }
 
+/** @deprecated Prepare model route facts asynchronously before reading request policy. */
 export function resolveProviderRequestPolicy(
   input: ProviderRequestPolicyInput,
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
@@ -456,6 +460,7 @@ export function resolveProviderRequestPolicy(
   };
 }
 
+/** @deprecated Prepare model route facts asynchronously before reading request capabilities. */
 export function resolveProviderRequestCapabilities(
   input: ProviderRequestCapabilitiesInput,
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,

@@ -12,9 +12,11 @@ const resolveAgentWorkspaceDir = vi.hoisted(() =>
 );
 const getActiveMemorySearchManagerCore = vi.hoisted(() => vi.fn());
 const resolveActiveMemoryBackendConfig = vi.hoisted(() =>
-  vi.fn<() => { backend: "builtin" } | { backend: "provider-runtime"; providerId: string }>(() => ({
-    backend: "builtin",
-  })),
+  vi.fn<typeof import("../plugins/memory-runtime.js").resolveActiveMemoryBackendConfig>(
+    async () => ({
+      backend: "builtin",
+    }),
+  ),
 );
 const auditDreamingArtifacts = vi.hoisted(() => vi.fn());
 const auditShortTermPromotionArtifacts = vi.hoisted(() => vi.fn());
@@ -71,7 +73,7 @@ function dreamingAudit(overrides: Record<string, unknown> = {}) {
 }
 
 function resetMemoryRecallMocks() {
-  resolveActiveMemoryBackendConfig.mockReset().mockReturnValue({ backend: "builtin" });
+  resolveActiveMemoryBackendConfig.mockReset().mockResolvedValue({ backend: "builtin" });
   auditShortTermPromotionArtifacts.mockReset().mockResolvedValue(shortTermAudit());
   auditDreamingArtifacts.mockReset().mockResolvedValue(dreamingAudit());
   repairDreamingArtifacts.mockReset().mockResolvedValue({
@@ -143,7 +145,7 @@ describe("memory recall doctor integration", () => {
     "reports %s recall health with appropriate guidance",
     async (backend) => {
       if (backend === "provider-runtime") {
-        resolveActiveMemoryBackendConfig.mockReturnValue({ backend, providerId: "records" });
+        resolveActiveMemoryBackendConfig.mockResolvedValue({ backend, providerId: "records" });
       }
       auditShortTermPromotionArtifacts.mockResolvedValueOnce(
         shortTermAudit({

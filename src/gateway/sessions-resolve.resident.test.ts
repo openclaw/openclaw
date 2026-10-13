@@ -3,6 +3,7 @@ import type { SessionsResolveParams } from "../../packages/gateway-protocol/src/
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
@@ -37,6 +38,7 @@ function addUnrelatedSessions() {
 
 it("resolves free ACP aliases from current resident facts without SQLite or discovery materialization", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await prepareBundledDiscoveryMode();
     const acpKey = "agent:harness:acp:12345678-0aaa-4000-8000-000000000009";
     const acpEntry = {
       sessionId: "free-acp-resident",
@@ -126,6 +128,7 @@ it.each(["exact", "broad"] as const)(
   "resolves replaced IDs immediately after a %s committed publication",
   async (publication) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await prepareBundledDiscoveryMode();
       replaceSessionEntrySync(scope, entry);
       const projection = await createSessionRowProjection({ cfg });
       const resolve = (sessionId: string) =>
@@ -180,6 +183,7 @@ it.each(["global", "unknown"] as const)(
   "keeps the advertised %s store winner when resolving IDs and filtering discovery",
   async (sentinel) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await prepareBundledDiscoveryMode();
       const config = {
         ...cfg,
         session: { store: state.statePath("stores", "{agentId}.sqlite") },
@@ -254,6 +258,7 @@ it.each(["global", "unknown"] as const)(
 
 it("bounds exact resident selection without SQLite and sees committed label changes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await prepareBundledDiscoveryMode();
     replaceSessionEntrySync(scope, entry);
     addUnrelatedSessions();
     const projection = await createSessionRowProjection({ cfg });
@@ -311,6 +316,7 @@ it("bounds exact resident selection without SQLite and sees committed label chan
 
 it("searches stored and selected model identities from retained row facts without SQLite", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await prepareBundledDiscoveryMode();
     replaceSessionEntrySync(scope, entry);
     const projection = await createSessionRowProjection({ cfg });
     try {
@@ -339,6 +345,7 @@ it("searches stored and selected model identities from retained row facts withou
 
 it("resolves authorized exact incognito keys without admitting them to discovery or resident rows", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await prepareBundledDiscoveryMode();
     const incognitoKey = "agent:main:dashboard:incognito-12345678-0aaa-4000-8000-000000000002";
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: incognitoKey },
@@ -380,6 +387,7 @@ it("resolves authorized exact incognito keys without admitting them to discovery
 
 it("prepares a cold exact resolution and refuses consumption after its projection owner changes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await prepareBundledDiscoveryMode();
     const archivedKey = "agent:harness:acp:44444444-1111-4111-8111-111111111111";
     replaceSessionEntrySync(
       { agentId: "harness", sessionKey: archivedKey },

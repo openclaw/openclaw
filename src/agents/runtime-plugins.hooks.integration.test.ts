@@ -13,7 +13,7 @@ import {
 } from "../plugins/loader.test-fixtures.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import {
   loadAgentRuntimePluginRegistryHandle,
   withAgentPluginRegistry,
@@ -44,10 +44,10 @@ it("keeps a prepared registry alive after its temporary caller cache retires", a
   const metadataCache = createPluginCache();
   const callerCache = createPluginCache();
   try {
-    const metadataSnapshot = withPluginCache(metadataCache, () =>
-      loadPluginMetadataSnapshot({ config, workspaceDir, allowCurrent: false }),
+    const metadataSnapshot = await withPluginCache(metadataCache, () =>
+      resolvePluginMetadataSnapshotAsync({ config, workspaceDir, allowCurrent: false }),
     );
-    const registry = withPluginCache(callerCache, () =>
+    const registry = await withPluginCache(callerCache, () =>
       loadAgentRuntimePluginRegistryHandle({ config, workspaceDir, metadataSnapshot }),
     );
     const record = registry.plugins.find(({ id }) => id === plugin.id);

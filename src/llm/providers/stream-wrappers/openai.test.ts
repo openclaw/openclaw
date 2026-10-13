@@ -2,7 +2,8 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolvePluginMetadataSnapshotAsync } from "../../../plugins/plugin-metadata-snapshot.js";
 
 const logger = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn() }));
 
@@ -66,6 +67,10 @@ function codeModeContext(...extraNames: string[]) {
     })),
   };
 }
+
+beforeEach(async () => {
+  await resolvePluginMetadataSnapshotAsync({});
+});
 
 afterEach(() => {
   logger.debug.mockReset();

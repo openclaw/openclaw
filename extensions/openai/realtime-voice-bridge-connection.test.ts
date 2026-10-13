@@ -1,6 +1,7 @@
 // Openai tests cover realtime voice provider plugin behavior.
 import { once } from "node:events";
 import { MessageChannel } from "node:worker_threads";
+import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice";
 import type {
   RealtimeVoiceBridge,
@@ -70,6 +71,8 @@ const {
   createQuicksilverBrowserBrokerFixture,
 } = createOpenAIRealtimeTestSupport({ ...mocks, buildOpenAIRealtimeVoiceProvider });
 
+useProviderCatalogMetadata(new URL(".", import.meta.url));
+
 describe("OpenAI realtime voice bridge connection", () => {
   beforeEach(() => {
     resetTestState();
@@ -90,7 +93,7 @@ describe("OpenAI realtime voice bridge connection", () => {
         onAudio: vi.fn(),
         onClearAudio: vi.fn(),
       });
-      const { connecting, socket } = beginBridgeConnection(bridge);
+      const { connecting, socket } = await beginBridgeConnection(bridge);
       openSocket(socket);
       emitSessionUpdated(socket);
       await connecting;
@@ -252,7 +255,7 @@ describe("OpenAI realtime voice bridge connection", () => {
         expect(bindBridge).toHaveBeenCalledWith(bridge);
         expect(bindControl).not.toHaveBeenCalled();
       }
-      const { connecting, socket } = beginBridgeConnection(bridge);
+      const { connecting, socket } = await beginBridgeConnection(bridge);
       let connectResolved = false;
       void connecting.then(() => {
         connectResolved = true;
@@ -336,7 +339,7 @@ describe("OpenAI realtime voice bridge connection", () => {
       language: "de",
       onReady,
     });
-    const { connecting, socket } = beginBridgeConnection(bridge);
+    const { connecting, socket } = await beginBridgeConnection(bridge);
     let connectResolved = false;
     void connecting.then(() => {
       connectResolved = true;
@@ -394,7 +397,7 @@ describe("OpenAI realtime voice bridge connection", () => {
 
   it("bounds queued audio by aggregate bytes before session readiness", async () => {
     const bridge = createNativeBridge();
-    const { connecting, socket } = beginBridgeConnection(bridge);
+    const { connecting, socket } = await beginBridgeConnection(bridge);
     openSocket(socket);
     await Promise.resolve();
 
@@ -422,7 +425,7 @@ describe("OpenAI realtime voice bridge connection", () => {
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
     });
-    const { connecting, socket } = beginBridgeConnection(bridge);
+    const { connecting, socket } = await beginBridgeConnection(bridge);
     openSocket(socket);
     bridge.sendAudio(Buffer.from("queued-before-ready"));
     socket.bufferedAmount = 1024 * 1024 + 1;
@@ -450,7 +453,7 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(FakeWebSocket.instances).toHaveLength(0);
     expect(onClose).not.toHaveBeenCalled();
 
-    const { connecting, socket } = beginBridgeConnection(bridge);
+    const { connecting, socket } = await beginBridgeConnection(bridge);
     openSocket(socket);
     emitSessionUpdated(socket);
     await connecting;
@@ -466,7 +469,7 @@ describe("OpenAI realtime voice bridge connection", () => {
 
   it("does not carry queued audio across terminal close and explicit reconnect", async () => {
     const bridge = createNativeBridge();
-    const { connecting: firstConnect, socket: firstSocket } = beginBridgeConnection(bridge);
+    const { connecting: firstConnect, socket: firstSocket } = await beginBridgeConnection(bridge);
     openSocket(firstSocket);
     await Promise.resolve();
 
@@ -475,7 +478,10 @@ describe("OpenAI realtime voice bridge connection", () => {
     await firstConnect;
     bridge.sendAudio(Buffer.from("sent-after-close"));
 
-    const { connecting: reconnecting, socket: secondSocket } = beginBridgeConnection(bridge, 1);
+    const { connecting: reconnecting, socket: secondSocket } = await beginBridgeConnection(
+      bridge,
+      1,
+    );
     openSocket(secondSocket);
     emitSessionUpdated(secondSocket);
     await reconnecting;
@@ -495,7 +501,7 @@ describe("OpenAI realtime voice bridge connection", () => {
       throw readyError;
     });
     const bridge = createNativeBridge({ onClose, onError, onReady });
-    const { connecting, socket } = beginBridgeConnection(bridge);
+    const { connecting, socket } = await beginBridgeConnection(bridge);
     let connectError: unknown;
     const observedConnect = connecting.catch((error: unknown) => {
       connectError = error;
@@ -542,7 +548,7 @@ describe("OpenAI realtime voice bridge connection", () => {
         createUnreadableToolName(),
       ],
     });
-    const { connecting, socket } = beginBridgeConnection(bridge);
+    const { connecting, socket } = await beginBridgeConnection(bridge);
 
     openSocket(socket);
 
@@ -569,7 +575,7 @@ describe("OpenAI realtime voice bridge connection", () => {
         createRealtimeTool("x".repeat(65)),
       ],
     });
-    const { connecting, socket } = beginBridgeConnection(bridge);
+    const { connecting, socket } = await beginBridgeConnection(bridge);
 
     expect(socket.args[0]).toBe(
       "wss://example.openai.azure.com/openai/realtime?api-version=2024-10-01-preview&deployment=realtime-prod",
@@ -637,7 +643,7 @@ describe("OpenAI realtime voice bridge connection", () => {
 
   it("rejects connection when the socket closes before session readiness", async () => {
     const bridge = createNativeBridge();
-    const { connecting, socket } = beginBridgeConnection(bridge);
+    const { connecting, socket } = await beginBridgeConnection(bridge);
 
     openSocket(socket);
     socket.close(1006, "session closed");
@@ -648,7 +654,7 @@ describe("OpenAI realtime voice bridge connection", () => {
 
   it("bounds sideband frames received before session readiness", async () => {
     const bridge = createNativeBridge();
-    const { connecting, socket } = beginBridgeConnection(bridge);
+    const { connecting, socket } = await beginBridgeConnection(bridge);
     openSocket(socket);
     const frame = Buffer.from(
       JSON.stringify({ type: "session.created", padding: "x".repeat(600 * 1024) }),
@@ -665,7 +671,7 @@ describe("OpenAI realtime voice bridge connection", () => {
     vi.useFakeTimers();
     const onClose = vi.fn();
     const bridge = createNativeBridge({ onClose });
-    const { connecting, socket } = beginBridgeConnection(bridge);
+    const { connecting, socket } = await beginBridgeConnection(bridge);
 
     const timeoutAssertion = expect(connecting).rejects.toThrow(
       "OpenAI realtime connection timeout",
@@ -758,7 +764,7 @@ describe("OpenAI realtime voice bridge connection", () => {
   it("settles cleanly when closed before the websocket opens", async () => {
     const onClose = vi.fn();
     const bridge = createNativeBridge({ onClose });
-    const { connecting, socket } = beginBridgeConnection(bridge);
+    const { connecting, socket } = await beginBridgeConnection(bridge);
 
     void bridge.close();
     void bridge.close();

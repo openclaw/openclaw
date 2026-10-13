@@ -11,6 +11,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   createPluginSessionStateDoctorScanner,
@@ -102,8 +103,9 @@ function entry(patch: Record<string, unknown>): SessionEntry {
 }
 
 describe("doctor session state provider routes", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     ownerState.owners = [codexOwner, openAIOwner];
+    await prepareBundledDiscoveryMode();
   });
 
   it("skips unrelated recovery metadata and valid locked harness rows", async () => {

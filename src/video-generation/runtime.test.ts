@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { AgentToolModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import {
   DASHSCOPE_WAN_VIDEO_CAPABILITIES,
   DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL,
@@ -89,7 +90,8 @@ function useCapturingProvider(
 }
 
 describe("video-generation runtime", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await preparePluginMetadataMachineStateAsync({});
     providers = [];
     listedConfigs = [];
     providerEnvVars = {};

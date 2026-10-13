@@ -19,8 +19,10 @@ import {
 } from "../test-support/home-env.test-support.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 
-vi.mock("./plugin-skills.js", () => ({
+vi.mock("./plugin-skills.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-skills.js")>()),
   resolvePluginSkillRoots: () => [],
+  resolvePluginSkillRootsFromMetadata: () => [],
 }));
 
 const fixtureSuite = createFixtureSuite("openclaw-skills-snapshot-suite-");

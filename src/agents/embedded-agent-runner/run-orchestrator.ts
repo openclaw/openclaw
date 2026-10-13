@@ -22,7 +22,6 @@ import {
   buildAgentHookContextIdentityFields,
 } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   runOutsidePluginRuntimeGenerationScope,
   withPluginRuntimeGenerationScope,
@@ -243,7 +242,16 @@ async function runEmbeddedAgentForSession(
       const onAttemptStart = params.onAttemptStart;
       const runGeneration = async (): Promise<EmbeddedAgentRunResult> => {
         throwIfAborted();
-        assertInitialOperatorModelPolicy(params, sessionAdmission?.entry);
+        const startupStages = createStageTimingTracker(Date.now);
+        const {
+          requestedWorkspaceResolution,
+          runtimeWorkspaceResolution,
+          preserveExecutionWorkspace,
+          pluginMetadataSnapshot,
+        } = await resolvePreparedRuntimeWorkspaces(params);
+        startupStages.mark("workspace");
+        const config = params.config ?? EMPTY_EMBEDDED_AGENT_CONFIG;
+        assertInitialOperatorModelPolicy(params, sessionAdmission?.entry, pluginMetadataSnapshot);
         // Subscription-scoped claude-cli auth executes via the CLI backend;
         // resolved post-admission so dispatched runs obey the same lifecycle,
         // placement, and concurrency gates as native embedded runs.
@@ -270,14 +278,6 @@ async function runEmbeddedAgentForSession(
           laneController.assertCurrent();
           preReplyGeneration?.assertCurrent();
         };
-        const startupStages = createStageTimingTracker(Date.now);
-        const {
-          requestedWorkspaceResolution,
-          runtimeWorkspaceResolution,
-          preserveExecutionWorkspace,
-        } = resolvePreparedRuntimeWorkspaces(params);
-        startupStages.mark("workspace");
-        const config = params.config ?? EMPTY_EMBEDDED_AGENT_CONFIG;
         const requestedAgentDir =
           params.agentDir ?? resolveAgentDir(config, requestedWorkspaceResolution.agentId);
         const retainIdleRunOwner = params.config === undefined;
@@ -296,13 +296,6 @@ async function runEmbeddedAgentForSession(
             cfg: config,
             agentId: requestedWorkspaceResolution.agentId,
             sessionKey: params.sessionKey,
-          });
-        const pluginMetadataSnapshot =
-          params.pluginGeneration?.pluginMetadataSnapshot ??
-          loadPluginMetadataSnapshot({
-            config,
-            workspaceDir: runtimeWorkspaceResolution.workspaceDir,
-            env: process.env,
           });
         const runtimePluginSelections = resolveModelCandidateChain({
           cfg: config,

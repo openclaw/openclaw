@@ -48,7 +48,7 @@ import {
   retainGatewayPluginMetadata,
   type GatewayPluginMetadataOwner,
 } from "../../plugins/plugin-metadata-lifecycle.js";
-import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { createPluginRegistry } from "../../plugins/registry.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
@@ -61,10 +61,10 @@ import { createContext as createInProcessContext } from "../server-plugin-in-pro
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 
 let metadataOwner: GatewayPluginMetadataOwner | undefined;
-beforeAll(() => {
+beforeAll(async () => {
   metadataOwner = retainGatewayPluginMetadata(createTestGatewayScheduler());
-  const snapshot = metadataOwner.runBootstrap(() =>
-    loadPluginMetadataSnapshot({ config: {}, allowCurrent: false }),
+  const snapshot = await metadataOwner.runBootstrap(() =>
+    resolvePluginMetadataSnapshotAsync({ config: {}, allowCurrent: false }),
   );
   metadataOwner.publish(snapshot);
   setGatewayPluginMetadataSnapshot(snapshot, { config: {} });

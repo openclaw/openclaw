@@ -22,6 +22,7 @@ import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lif
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { readPreparedGatewayModelMetadata } from "../server-model-catalog-view.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { prepareSessionFastModePresentation } from "../session-fast-mode-presentation.js";
 import {
@@ -206,6 +207,7 @@ function createSessionPatchHandler(
           },
           modelCatalog: catalog?.entries,
           modelCatalogRouteVariants: catalog?.routeVariants,
+          metadataSnapshot: readPreparedGatewayModelMetadata(executed.cfg, catalog),
         }),
         undefined,
       );

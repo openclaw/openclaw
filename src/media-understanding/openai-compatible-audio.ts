@@ -23,6 +23,11 @@ type OpenAiCompatibleAudioParams = AudioTranscriptionRequest & {
 export async function transcribeOpenAiCompatibleAudio(
   params: OpenAiCompatibleAudioParams,
 ): Promise<AudioTranscriptionResult> {
+  const { resolvePluginMetadataSnapshotAsync } =
+    await import("../plugins/plugin-metadata-snapshot.js");
+  const { owners } = await resolvePluginMetadataSnapshotAsync({
+    allowWorkspaceScopedCurrent: true,
+  });
   const fetchFn = params.fetchFn ?? fetch;
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
     resolveProviderHttpRequestConfig({
@@ -32,6 +37,7 @@ export async function transcribeOpenAiCompatibleAudio(
       request: params.request,
       defaultHeaders: buildOpenAiCompatibleAuthHeaders(params),
       provider: params.provider,
+      providerMetadataOwners: owners,
       api: OPENAI_AUDIO_TRANSCRIPTIONS_API,
       capability: "audio",
       transport: "media-understanding",

@@ -305,7 +305,7 @@ async function ensureSandboxBrowserContainer(
   params.assertCurrent?.();
   const expectedHash = computeSandboxBrowserConfigHash({
     docker: browserDockerCfg,
-    dockerEnvPolicyEpoch: resolveDockerEnvPolicyEpoch(browserDockerCfg.env),
+    dockerEnvPolicyEpoch: await resolveDockerEnvPolicyEpoch(browserDockerCfg.env),
     browser: {
       cdpPort: params.cfg.browser.cdpPort,
       vncPort: params.cfg.browser.vncPort,

@@ -8,7 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createWebSearchTool } from "../agents/tools/web-search.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { loadOpenClawPluginsAsync } from "./loader.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { PluginInstanceDrainTimeoutError } from "./plugin-instance-error.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
@@ -74,7 +74,7 @@ module.exports = { id: "search-fixture", register(api) {
       tools: { web: { search: { provider: "fixture-search" } } },
     };
     const cache = createPluginCache();
-    const registry = withPluginCache(cache, () => loadOpenClawPlugins({ config }));
+    const registry = await withPluginCache(cache, () => loadOpenClawPluginsAsync({ config }));
     const record = expectDefined(
       registry.plugins.find((entry) => entry.id === "search-fixture"),
       "search plugin",

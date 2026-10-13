@@ -137,6 +137,7 @@ async function fixture(stableAccount = true) {
   await upsertSessionEntry({
     agentId: "second",
     sessionKey: ctx.sessionKey!,
+    storePath: resolveStorePath(undefined, { agentId: "second" }),
     entry: { sessionId: ctx.sessionId!, updatedAt: Date.now() },
   });
   const harness = createClientHarness();

@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { preparePublishedModelRuntimeChoice } from "../../agents/model-runtime-choice.js";
 import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 
 const fixture = vi.hoisted(() => {
@@ -38,14 +40,21 @@ vi.mock("../../agents/model-runtime-choice.js", () => ({
 const { agentsHandlers } = await import("./agents.js");
 async function update(params: Record<string, unknown>) {
   const respond = vi.fn();
-  await agentsHandlers["agents.update"]!({
-    req: { type: "req", id: "native-selection", method: "agents.update" },
-    params,
-    respond,
-    context: createDirectChatContext({ getRuntimeConfig: () => fixture.config }),
-    client: null,
-    isWebchatConnect: () => false,
-  });
+  const config = fixture.config;
+  const metadata = await resolvePluginMetadataSnapshotAsync({ config });
+  await withPluginMetadataSnapshotScope(
+    metadata,
+    () =>
+      agentsHandlers["agents.update"]!({
+        req: { type: "req", id: "native-selection", method: "agents.update" },
+        params,
+        respond,
+        context: createDirectChatContext({ getRuntimeConfig: () => fixture.config }),
+        client: null,
+        isWebchatConnect: () => false,
+      }),
+    { config },
+  );
   return respond;
 }
 

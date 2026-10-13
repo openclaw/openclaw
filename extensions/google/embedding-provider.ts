@@ -30,7 +30,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseGeminiAuth } from "./gemini-auth.js";
-import { resolveGoogleApiClientHeaders } from "./google-api-client-header.js";
+import { resolveGoogleApiClientHeadersAsync } from "./google-api-client-header.js";
 
 export type GeminiEmbeddingClient = Omit<RemoteEmbeddingClient, "fetchImpl"> & {
   modelPath: string;
@@ -437,7 +437,8 @@ async function resolveGeminiEmbeddingClient(
     );
   }
 
-  const ssrfPolicy = resolveEmbeddingProviderSsrFPolicy({
+  const ssrfPolicy = await resolveEmbeddingProviderSsrFPolicy({
+    config: options.config,
     provider: "google",
     api: providerConfig?.api ?? "google-generative-ai",
     baseUrl,
@@ -458,12 +459,12 @@ async function resolveGeminiEmbeddingClient(
   }
   const headers: Record<string, string> = {
     ...headerOverrides,
-    ...resolveGoogleApiClientHeaders({
+    ...(await resolveGoogleApiClientHeadersAsync({
       baseUrl,
       api: "google-generative-ai",
       capability: "other",
       transport: "http",
-    }),
+    })),
   };
   const apiKeys = remoteApiKey
     ? [apiKey]

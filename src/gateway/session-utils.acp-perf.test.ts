@@ -11,8 +11,11 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { closeRetainedOpenClawStateReadConnections } from "../state/openclaw-state-db-read-connection.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import type {
@@ -38,6 +41,8 @@ vi.mock("../infra/worker-task-server.js", async (importOriginal) => ({
 }));
 import "../state/openclaw-state-read.worker.js";
 
+const projectionMetadata = createPluginMetadataSnapshotFixture();
+
 test("retains ACP batch bounds while clean lists and canonical metadata updates reuse resident facts", async () => {
   await withStateDirEnv("openclaw-perf-acp-", async ({ stateDir }) => {
     resetPluginRuntimeStateForTest();
@@ -53,6 +58,7 @@ test("retains ACP batch bounds while clean lists and canonical metadata updates 
     } as OpenClawConfig;
     resetConfigRuntimeState();
     setRuntimeConfigSnapshot(cfg);
+    await resolvePluginMetadataSnapshotAsync({ config: cfg });
 
     const stateKey = "agent:default:webchat:dm:state";
     const missingKey = "agent:default:webchat:dm:missing";
@@ -230,7 +236,10 @@ test("retains ACP batch bounds while clean lists and canonical metadata updates 
         [markerKey]: markerEntry,
         ...runtimeEntries,
       });
-      projection = await createSessionRowProjection({ cfg });
+      projection = await withPluginRuntimeGenerationScope(
+        { metadataSnapshot: projectionMetadata },
+        () => createSessionRowProjection({ cfg }),
+      );
       await projection.ensureMaterialized();
       acpSelects.counts.metadata = 0;
       const rows = vi.spyOn(rowProjection, "readSessionRowInputs");

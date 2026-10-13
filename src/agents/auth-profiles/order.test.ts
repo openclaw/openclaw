@@ -31,6 +31,7 @@ const pluginMetadataMocks = vi.hoisted(() => {
   return {
     getCurrentPluginMetadataSnapshot: vi.fn(() => snapshot),
     loadPluginMetadataSnapshot: vi.fn(() => snapshot),
+    resolvePluginMetadataSnapshotAsync: vi.fn(async () => snapshot),
   };
 });
 
@@ -39,15 +40,19 @@ vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOrigin
   getCurrentPluginMetadataSnapshot: pluginMetadataMocks.getCurrentPluginMetadataSnapshot,
 }));
 
+// mock-isolation: Keep discovery on this fixture's synthetic provider metadata.
 vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: pluginMetadataMocks.loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshotAsync: pluginMetadataMocks.resolvePluginMetadataSnapshotAsync,
 }));
 
 vi.mock("./external-auth.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./external-auth.js")>()),
   createExternalAuthRuntime: () => ({
     listRuntimeExternalAuthProfiles: () => [],
+    prepareRuntimeExternalAuthProfiles: async () => () => [],
     overlayExternalAuthProfiles: <T>(store: T) => store,
+    overlayExternalAuthProfilesAsync: async <T>(store: T) => store,
   }),
 }));
 
@@ -65,6 +70,7 @@ describe("resolveAuthProfileOrder", () => {
     clearPluginMetadataLifecycleCaches();
     pluginMetadataMocks.getCurrentPluginMetadataSnapshot.mockClear();
     pluginMetadataMocks.loadPluginMetadataSnapshot.mockClear();
+    pluginMetadataMocks.resolvePluginMetadataSnapshotAsync.mockClear();
   });
 
   it("includes pending OAuth refresh only for settlement-aware runtime resolution", () => {

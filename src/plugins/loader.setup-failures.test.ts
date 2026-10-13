@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, expect, it } from "vitest";
-import { loadPluginRegistryHandle } from "./loader.js";
+import { loadPluginRegistryHandleAsync } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   resetPluginLoaderTestStateForTest,
@@ -44,7 +44,7 @@ it.each([
     };`,
   );
   const healthy = writePlugin({ id: "healthy-setup-sibling", registration: "" });
-  const registry = loadPluginRegistryHandle({
+  const registry = await loadPluginRegistryHandleAsync({
     cache: false,
     channelPluginLoadIntent: "setup",
     config: {

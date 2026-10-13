@@ -3,6 +3,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
+import { preparePluginMetadataMachineStateAsync } from "./installed-plugin-index-record-state.js";
 import {
   acquirePluginRegistryWithInternalOverrides,
   loadOpenClawPluginsWithInternalOverrides,
@@ -45,17 +46,26 @@ type BundledCapabilityRuntimeParams = Pick<
   discovery?: PluginDiscoveryResult;
 };
 
-export function loadBundledCapabilityRuntimeRegistry(params: BundledCapabilityRuntimeParams) {
+/** Publishes the existing scoped capability registry after worker-owned metadata admission. */
+export async function loadBundledCapabilityRuntimeRegistryAsync(
+  params: BundledCapabilityRuntimeParams,
+) {
+  const activateMetadata = await preparePluginMetadataMachineStateAsync({ env: params.env });
+  activateMetadata();
   const { options, overrides } = prepareBundledCapabilityRuntime(params);
   return loadOpenClawPluginsWithInternalOverrides(options, overrides);
 }
 
-export function acquireBundledCapabilityRuntimeRegistry(params: BundledCapabilityRuntimeParams) {
+export async function acquireBundledCapabilityRuntimeRegistry(
+  params: BundledCapabilityRuntimeParams,
+) {
+  const activateMetadata = await preparePluginMetadataMachineStateAsync({ env: params.env });
+  activateMetadata();
   const { options, overrides } = prepareBundledCapabilityRuntime(params);
   return acquirePluginRegistryWithInternalOverrides(options, overrides);
 }
 
-function prepareBundledCapabilityRuntime(params: BundledCapabilityRuntimeParams): {
+export function prepareBundledCapabilityRuntime(params: BundledCapabilityRuntimeParams): {
   options: PluginLoadOptions & { cache: false; activate: false };
   overrides: Parameters<typeof loadOpenClawPluginsWithInternalOverrides>[1];
 } {

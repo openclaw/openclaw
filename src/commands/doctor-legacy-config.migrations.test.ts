@@ -2,7 +2,7 @@
 // oxfmt-ignore
 import { useDoctorLegacyConfigFixture } from "./doctor/shared/legacy-config-fixture.test-support.js";
 // Doctor legacy config migration tests cover shipped migration recipes and validation outcomes.
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { listAgentEntries } from "../agents/agent-roster.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
@@ -11,6 +11,7 @@ import {
   makeRegistry,
 } from "../config/plugin-auto-enable.test-helpers.js";
 import { validateConfigObject } from "../config/validation.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { maybeRepairCodexRoutes } from "./doctor/shared/codex-route-warnings.js";
@@ -21,6 +22,10 @@ import { repairStaleAgentModelRefs } from "./doctor/shared/stale-agent-model-ref
 
 describe("normalizeCompatibilityConfigValues", () => {
   useDoctorLegacyConfigFixture();
+
+  beforeEach(async () => {
+    await prepareBundledDiscoveryMode();
+  });
 
   it("drops reserved MCP server names without touching sibling servers", () => {
     const raw: unknown = JSON.parse(

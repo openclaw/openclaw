@@ -17,6 +17,8 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createGatewayRequestContext } from "../server-request-context.js";
@@ -163,15 +165,21 @@ it.each([
         });
         expect(authorization.error).toBeNull();
         const respond = vi.fn();
-        await handleChatSend({
-          params,
-          req: { type: "req", id: runId, method: "chat.send" },
-          respond,
-          context,
-          client,
-          sessionMutationAuthorization: authorization.authorization,
-          isWebchatConnect: () => false,
-        });
+        const metadata = await resolvePluginMetadataSnapshotAsync({ config: cfg });
+        await withPluginMetadataSnapshotScope(
+          metadata,
+          () =>
+            handleChatSend({
+              params,
+              req: { type: "req", id: runId, method: "chat.send" },
+              respond,
+              context,
+              client,
+              sessionMutationAuthorization: authorization.authorization,
+              isWebchatConnect: () => false,
+            }),
+          { config: cfg },
+        );
         expect(respond).toHaveBeenCalledWith(
           true,
           expect.objectContaining({ runId, status: "started" }),

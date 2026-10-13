@@ -37,8 +37,8 @@ vi.mock("../plugins/manifest-contract-eligibility.js", () => {
 
 import {
   providerSupportsNativePdfDocument,
-  resolveAutoMediaKeyProviders,
-  resolveDefaultMediaModel,
+  resolveAutoMediaKeyProvidersCore as resolveAutoMediaKeyProviders,
+  resolveDefaultMediaModelCore as resolveDefaultMediaModel,
   resolveDocumentMediaModel,
 } from "./defaults.js";
 

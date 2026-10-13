@@ -130,10 +130,6 @@ export async function resolveConfigWidePluginMetadataSnapshotAsync(
       resolveConfigWidePluginMetadataSnapshotAsync(captured),
     );
   }
-  const current = resolveReusableGatewayPluginMetadataSnapshot(captured, false);
-  if (current) {
-    return current;
-  }
   const cache = getPluginCache();
   const release = retainPluginCache(cache);
   try {
@@ -141,6 +137,10 @@ export async function resolveConfigWidePluginMetadataSnapshotAsync(
       // Policy determines the snapshot cache key before installed-index access.
       const activateDiscovery = await prepareBundledDiscoveryMode(captured.env);
       activateDiscovery();
+      const current = resolveReusableGatewayPluginMetadataSnapshot(captured, false);
+      if (current) {
+        return current;
+      }
       const preparedCurrent = resolveReusableGatewayPluginMetadataSnapshot(captured);
       if (preparedCurrent) {
         return preparedCurrent;
@@ -152,11 +152,10 @@ export async function resolveConfigWidePluginMetadataSnapshotAsync(
         return existing;
       }
       if (captured.installRecords === undefined) {
-        const installed = await preparePersistedInstalledPluginIndexCacheEntry({
+        await preparePersistedInstalledPluginIndexCacheEntry({
           env: captured.env,
           stateDir: captured.stateDir,
         });
-        installed.assertCurrent();
       }
       activateDiscovery();
       // Parsing, recovery, trust checks and persisted/derived selection retain one owner.

@@ -1,4 +1,10 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 
 /** Reuses real provider registrations while each case retains its own tool-schema inputs. */
 export function useProviderToolSchemaRuntimeForTest(pluginIds: readonly string[]): void {
@@ -8,58 +14,49 @@ export function useProviderToolSchemaRuntimeForTest(pluginIds: readonly string[]
   let close = async () => {};
   let restore = () => {};
   beforeAll(async () => {
-    const [
-      loader,
-      metadata,
-      caches,
-      generations,
-      handles,
-      runtime,
-      registryRuntime,
-      configSnapshots,
-    ] = await Promise.all([
-      import("../../plugins/loader.js"),
-      import("../../plugins/plugin-metadata-snapshot.js"),
-      import("../../plugins/plugin-cache.js"),
-      import("../../plugins/runtime/generation-scope.js"),
-      import("../../plugins/provider-hook-runtime.js"),
-      import("../../plugins/provider-runtime.js"),
-      import("../../plugins/runtime.js"),
-      import("../../config/runtime-snapshot.js"),
-    ]);
+    const [loader, metadata, caches, generations, handles, runtime, registryRuntime] =
+      await Promise.all([
+        import("../../plugins/loader.js"),
+        import("../../plugins/plugin-metadata-snapshot.js"),
+        import("../../plugins/plugin-cache.js"),
+        import("../../plugins/runtime/generation-scope.js"),
+        import("../../plugins/provider-hook-runtime.js"),
+        import("../../plugins/provider-runtime.js"),
+        import("../../plugins/runtime.js"),
+      ]);
     const config = {
       plugins: {
         allow: [...pluginIds],
         entries: Object.fromEntries(pluginIds.map((id) => [id, { enabled: true }])),
       },
     };
+    const previousConfig = getRuntimeConfigSnapshot();
+    const previousSource = getRuntimeConfigSourceSnapshot();
+    setRuntimeConfigSnapshot(config);
     const cache = caches.createPluginCache();
     const closeCache = async () => {
-      expect((await caches.retirePluginCache(cache)).failures).toEqual([]);
-    };
-    close = closeCache;
-    const prepared = caches.withPluginCache(cache, () => {
-      const previousConfig = configSnapshots.getRuntimeConfigSnapshot();
-      const previousSource = configSnapshots.getRuntimeConfigSourceSnapshot();
-      configSnapshots.setRuntimeConfigSnapshot(config);
       try {
-        return {
-          metadataSnapshot: metadata.loadPluginMetadataSnapshot({ config }),
-          pluginRegistry: loader.loadOpenClawPlugins({
-            config,
-            onlyPluginIds: [...pluginIds],
-            activate: false,
-            throwOnLoadError: true,
-          }),
-        };
+        expect((await caches.retirePluginCache(cache)).failures).toEqual([]);
       } finally {
         if (previousConfig) {
-          configSnapshots.setRuntimeConfigSnapshot(previousConfig, previousSource ?? undefined);
+          setRuntimeConfigSnapshot(previousConfig, previousSource ?? undefined);
         } else {
-          configSnapshots.clearRuntimeConfigSnapshot();
+          clearRuntimeConfigSnapshot();
         }
       }
-    });
+    };
+    close = closeCache;
+    const prepared = await caches.withPluginCache(cache, async () => ({
+      metadataSnapshot: await metadata.resolvePluginMetadataSnapshotAsync({
+        config,
+        allowCurrent: false,
+      }),
+      pluginRegistry: await loader.loadPluginRegistryHandleAsync({
+        config,
+        onlyPluginIds: [...pluginIds],
+        throwOnLoadError: true,
+      }),
+    }));
     const normalize = runtime.normalizeProviderToolSchemasWithPlugin;
     const inspect = runtime.inspectProviderToolSchemasWithPlugin;
     const prepare = (params: Parameters<typeof normalize>[0]) => {

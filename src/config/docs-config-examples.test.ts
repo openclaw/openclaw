@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
@@ -31,6 +32,12 @@ function auditMarkdown(markdown: string): ReturnType<typeof auditDocsConfigExamp
 }
 
 describe("docs config examples", () => {
+  beforeAll(async () => {
+    await prepareBundledDiscoveryMode(
+      resolveRepoBundledPluginEnv(fileURLToPath(new URL("../../extensions", import.meta.url))),
+    );
+  });
+
   it.each([
     {
       name: "reports a retired nested key in a whole config",

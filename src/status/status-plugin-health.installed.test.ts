@@ -24,12 +24,12 @@ vi.mock("../channels/plugins/read-only.js", () => ({
 // plugin records come only from the seeded runtime registry.
 vi.mock("../plugins/status.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/status.js")>();
-  const emptyReport = { plugins: [], diagnostics: [] } as unknown as ReturnType<
-    typeof actual.buildPluginSnapshotReport
+  const emptyReport = { plugins: [], diagnostics: [] } as unknown as Awaited<
+    ReturnType<typeof actual.buildPluginSnapshotReportAsync>
   >;
   return {
     ...actual,
-    buildPluginSnapshotReport: vi.fn(() => emptyReport),
+    buildPluginSnapshotReportAsync: vi.fn(async () => emptyReport),
     buildPluginCompatibilityNotices: vi.fn(() => []),
   } as typeof actual;
 });

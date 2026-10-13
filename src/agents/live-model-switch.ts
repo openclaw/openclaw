@@ -10,6 +10,8 @@ import type { SessionEntryBookkeepingReducer } from "../config/sessions/session-
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import type { LiveSessionModelSelection } from "./live-model-switch-error.js";
@@ -34,6 +36,7 @@ function resolveSelectionFromSessionEntry(params: {
   agentId?: string;
   defaultProvider: string;
   defaultModel: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): LiveSessionModelSelection {
   const { cfg, entry } = params;
   const agentId = normalizeOptionalString(params.agentId);
@@ -41,6 +44,7 @@ function resolveSelectionFromSessionEntry(params: {
     ? resolveDefaultModelForAgent({
         cfg,
         agentId,
+        manifestPlugins: params.metadataSnapshot,
       })
     : { provider: params.defaultProvider, model: params.defaultModel };
   const normalizedSelection = normalizeStoredOverrideModel({
@@ -53,6 +57,7 @@ function resolveSelectionFromSessionEntry(params: {
     runtimeModel: entry?.model,
     overrideProvider: normalizedSelection.providerOverride,
     overrideModel: normalizedSelection.modelOverride,
+    manifestPlugins: params.metadataSnapshot,
   });
   const provider =
     persisted?.provider ??
@@ -64,6 +69,7 @@ function resolveSelectionFromSessionEntry(params: {
     provider,
     entry,
     cfg,
+    metadataSnapshot: params.metadataSnapshot,
   });
   const authProfileId = normalizeOptionalString(entry?.authProfileOverride);
   return {
@@ -96,6 +102,7 @@ export function prepareLiveModelSwitchAfterRun(params: {
   providerUsed?: string;
   modelUsed?: string;
   entry: SessionEntry;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): Extract<SessionEntryBookkeepingReducer, { kind: "live-model" }> | undefined {
   const provider = normalizeOptionalString(params.providerUsed);
   const model = normalizeOptionalString(params.modelUsed);
@@ -113,6 +120,7 @@ export function prepareLiveModelSwitchAfterRun(params: {
     }),
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    metadataSnapshot: params.metadataSnapshot,
   });
   if (
     !(provider === persisted.provider && model === persisted.model) &&
@@ -177,6 +185,7 @@ export async function shouldSwitchToLiveModel(params: {
   currentAgentRuntimeOverride?: string;
   currentAuthProfileId?: string;
   currentAuthProfileIdSource?: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<LiveSessionModelSelection | undefined> {
   const sessionKey = params.sessionKey?.trim();
   const cfg = params.cfg;
@@ -197,12 +206,16 @@ export async function shouldSwitchToLiveModel(params: {
   if (!entry?.liveModelSwitchPending) {
     return undefined;
   }
+  const metadataSnapshot =
+    params.metadataSnapshot ??
+    (await resolvePluginMetadataSnapshotAsync({ config: cfg, allowWorkspaceScopedCurrent: true }));
   const persisted = resolveSelectionFromSessionEntry({
     cfg,
     entry,
     agentId: params.agentId,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    metadataSnapshot,
   });
   if (
     !hasDifferentLiveSessionModelSelection(
@@ -226,6 +239,7 @@ export async function shouldSwitchToLiveModel(params: {
       defaultProvider: params.defaultProvider,
       defaultModel: params.defaultModel,
       expectedSelection: persisted,
+      metadataSnapshot,
     }).catch(() => {
       /* best-effort — fs/lock errors are non-fatal here */
     });
@@ -244,6 +258,7 @@ export async function clearLiveModelSwitchPending(params: {
   defaultProvider: string;
   defaultModel: string;
   expectedSelection: LiveSessionModelSelection;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<void> {
   const sessionKey = params.sessionKey?.trim();
   const cfg = params.cfg;
@@ -252,8 +267,11 @@ export async function clearLiveModelSwitchPending(params: {
   }
   const agentId = params.agentId?.trim();
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
+  const metadataSnapshot =
+    params.metadataSnapshot ??
+    (await resolvePluginMetadataSnapshotAsync({ config: cfg, allowWorkspaceScopedCurrent: true }));
   await clearMatchingLiveModelSwitch(
-    { ...params, cfg, sessionKey, storePath, agentId },
+    { ...params, cfg, sessionKey, storePath, agentId, metadataSnapshot },
     (persisted) => !hasDifferentLiveSessionModelSelection(params.expectedSelection, persisted),
   );
 }

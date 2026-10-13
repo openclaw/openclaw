@@ -1,15 +1,19 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerContextEngineForOwner } from "../../context-engine/registry.js";
 import { captureContextEngineRegistryStateForTests } from "../../context-engine/registry.test-support.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { createAgentCleanupScope } from "../run-cleanup-timeout.js";
 import { runEmbeddedAgentEntry } from "./run-entry.js";
 
-afterEach(() => clearRuntimeConfigSnapshot());
+const config: OpenClawConfig = { plugins: { slots: { contextEngine: "cleanup-probe" } } };
+beforeEach(() => setRuntimeConfigSnapshot(config));
+afterEach(clearRuntimeConfigSnapshot);
 
 const cleanupCases = [
   { kind: "command-rpc", settlement: "success" },
@@ -21,8 +25,10 @@ const cleanupCases = [
 it.each(cleanupCases)(
   "settles $kind replies and cleanup ownership for $settlement",
   async ({ kind, settlement }) => {
-    const cfg = { plugins: { slots: { contextEngine: "cleanup-probe" } } };
-    setRuntimeConfigSnapshot(cfg);
+    const manifestPlugins = await resolvePluginMetadataSnapshotAsync({
+      config,
+      workspaceDir: process.cwd(),
+    });
     const restoreRegistry = captureContextEngineRegistryStateForTests();
     const disposal = createDeferred();
     const disposalStarted = createDeferred();
@@ -50,7 +56,8 @@ it.each(cleanupCases)(
       .run(() =>
         runEmbeddedAgentEntry({
           selection: {
-            cfg,
+            cfg: config,
+            manifestPlugins,
             provider: "synthetic",
             model: "synthetic-model",
             fallbacksOverride: [],

@@ -250,12 +250,12 @@ try {
               const { registerSetupCommand } = await import("./program/register.setup.js");
               const { registerPreActionHooks } = await import("./program/preaction.js");
               registerPreActionHooks(program, "test");
-              registerSetupCommand(program);
+              await registerSetupCommand(program);
             } else if (process.argv[2] === "onboard") {
               const { registerOnboardCommand } = await import("./program/register.onboard.js");
               const { registerPreActionHooks } = await import("./program/preaction.js");
               registerPreActionHooks(program, "test");
-              registerOnboardCommand(program);
+              await registerOnboardCommand(program);
             } else if (process.argv[2] === "config") {
               const { registerConfigCli } = await import("./config-cli.js");
               const { registerPreActionHooks } = await import("./program/preaction.js");

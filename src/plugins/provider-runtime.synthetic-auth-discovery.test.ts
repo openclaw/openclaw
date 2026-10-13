@@ -49,9 +49,26 @@ vi.mock("./provider-hook-runtime.js", async (importOriginal) => {
     resolveProviderHookPlugin: vi.fn(),
     resolveProviderPluginsForHooks: vi.fn(() => []),
     resolveProviderRuntimePlugin,
+    resolveProviderRuntimePluginAsync: async () => resolveProviderRuntimePlugin(),
     wrapProviderStreamFn: vi.fn(),
   };
 });
+
+const metadataSnapshot = vi.hoisted(() => ({
+  index: { plugins: [], diagnostics: [] },
+  manifestRegistry: { plugins: [], diagnostics: [] },
+  workspaceDir: "/workspace",
+}));
+
+// mock-isolation: Synthetic auth fixtures own provider metadata without opening machine state.
+vi.mock("./current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./current-plugin-metadata-snapshot.js")>()),
+  getCurrentPluginMetadataSnapshot: () => metadataSnapshot,
+}));
+vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-metadata-snapshot.js")>()),
+  resolvePluginMetadataSnapshotAsync: async () => metadataSnapshot,
+}));
 
 vi.mock("./provider-discovery.runtime.js", () => ({
   resolvePluginDiscoveryProvidersRuntime,
@@ -67,9 +84,9 @@ const resolveProviderOwnerIds = vi.hoisted(() =>
   ),
 );
 
-vi.mock("./providers.js", () => ({
+vi.mock("./providers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./providers.js")>()),
   resolveCatalogHookProviderPluginIds: vi.fn(() => []),
-  resolveExternalAuthProfileProviderPluginIds: vi.fn(() => []),
   resolveOwningPluginIdsForProvider: resolveProviderOwnerIds,
   resolveOwningPluginIdsForProviderRef: resolveProviderOwnerIds,
 }));

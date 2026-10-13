@@ -167,7 +167,7 @@ const composeTestConfig = (baseConfig: Record<string, unknown>) => {
   return applyImplicitAgentRosterDefaults(composed) as OpenClawConfig;
 };
 
-export function loadGatewayTestConfig(): OpenClawConfig {
+export function readGatewayTestConfig(): OpenClawConfig {
   const configPath = resolveConfigPath();
   let fileConfig: Record<string, unknown> = {};
   try {
@@ -178,9 +178,26 @@ export function loadGatewayTestConfig(): OpenClawConfig {
   } catch {
     fileConfig = {};
   }
+  return composeTestConfig(fileConfig);
+}
+
+export function loadGatewayTestConfig(): OpenClawConfig {
   return applyPluginAutoEnable({
-    config: composeTestConfig(fileConfig),
+    config: readGatewayTestConfig(),
     env: process.env,
+  }).config;
+}
+
+export async function loadGatewayTestConfigAsync(
+  config = readGatewayTestConfig(),
+): Promise<OpenClawConfig> {
+  const { resolvePluginMetadataSnapshotAsync } =
+    await import("../plugins/plugin-metadata-snapshot.js");
+  const metadata = await resolvePluginMetadataSnapshotAsync({ config, env: process.env });
+  return applyPluginAutoEnable({
+    config,
+    env: process.env,
+    manifestRegistry: metadata.manifestRegistry,
   }).config;
 }
 
@@ -249,7 +266,7 @@ export function createGatewayConfigOverrides(actual: GatewayConfigRuntime): Gate
     async (cfg: Record<string, unknown>, options?: ConfigWriteOptions) => {
       const configPath = resolveConfigPath();
       await writeJsonAtomic(configPath, cfg, { durable: false, trailingNewline: true });
-      const config = loadGatewayTestConfig();
+      const config = await loadGatewayTestConfigAsync();
       await finalizeRuntimeSnapshotWrite({
         nextSourceConfig: config,
         freshConfig: config,
@@ -280,6 +297,12 @@ export function createGatewayConfigOverrides(actual: GatewayConfigRuntime): Gate
   const readConfigFileSnapshotWithPluginMetadata =
     async (): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> => {
       const snapshot = await readConfigFileSnapshot();
+      const { resolvePluginMetadataSnapshotAsync } =
+        await import("../plugins/plugin-metadata-snapshot.js");
+      const pluginMetadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+        config: snapshot.config,
+        env: process.env,
+      });
       const validation = validateConfigObjectWithPlugins(snapshot.config, {
         env: process.env,
         pluginValidation: "skip",
@@ -291,6 +314,7 @@ export function createGatewayConfigOverrides(actual: GatewayConfigRuntime): Gate
           issues: validation.ok ? [] : validation.issues,
           warnings: validation.warnings,
         },
+        pluginMetadataSnapshot,
       };
     };
 
@@ -299,7 +323,7 @@ export function createGatewayConfigOverrides(actual: GatewayConfigRuntime): Gate
     if (runtimeSnapshot) {
       return runtimeSnapshot;
     }
-    const config = loadGatewayTestConfig();
+    const config = readGatewayTestConfig();
     actual.setRuntimeConfigSnapshot(config);
     return config;
   };

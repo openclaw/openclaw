@@ -25,6 +25,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import * as mediaStore from "../../media/store.js";
 import * as webMedia from "../../media/web-media.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import * as pluginConfig from "../../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
@@ -215,7 +216,8 @@ function resetVideoGenerateMocks(providerEnvVars: readonly string[]) {
 describe("createVideoGenerateTool", () => {
   let providerEnvVars: string[];
 
-  beforeAll(() => {
+  beforeAll(async () => {
+    await prepareBundledDiscoveryMode(process.env);
     providerEnvVars = [
       ...listKnownProviderAuthEnvVarNamesCore({ config: {} }),
       "GCLOUD_PROJECT",
@@ -228,8 +230,9 @@ describe("createVideoGenerateTool", () => {
     ];
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     resetVideoGenerateMocks(providerEnvVars);
+    await prepareBundledDiscoveryMode(process.env);
   });
 
   afterEach(() => {

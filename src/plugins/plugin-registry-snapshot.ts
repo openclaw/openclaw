@@ -20,6 +20,7 @@ import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.
 import { safeFileSignature, safeHashFile } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
+import { preparePluginMetadataMachineStateAsync } from "./installed-plugin-index-record-state.js";
 import { preservePluginSourceAdmissions } from "./installed-plugin-index-source-admissions.js";
 import {
   readPersistedInstalledPluginIndexSync,
@@ -597,8 +598,10 @@ export function loadPluginRegistrySnapshot(
 export async function inspectPluginRegistry(
   params: LoadInstalledPluginIndexParams & InstalledPluginIndexStoreOptions = {},
 ) {
-  return withPluginCache(createPluginCache(), () => {
+  return withPluginCache(createPluginCache(), async () => {
     const inspectionParams = resolveControlPlaneRegistryParams(params);
+    const activateMetadata = await preparePluginMetadataMachineStateAsync(inspectionParams);
+    activateMetadata();
     const persisted = readPersistedInstalledPluginIndexSync(inspectionParams);
     // Explicit inspection crosses the management boundary, so it must not reuse the
     // plugin-file facts that produced the persisted snapshot it is verifying.

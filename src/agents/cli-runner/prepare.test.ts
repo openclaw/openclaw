@@ -4559,7 +4559,10 @@ describe("prepareCliRunContext", () => {
             sessionPersistence: "detached",
             agentId: "main",
             workspaceDir: dir,
-            config: { plugins: { slots: { contextEngine: engineId } } },
+            config: {
+              agents: { entries: { main: { workspace: dir } } },
+              plugins: { slots: { contextEngine: engineId } },
+            },
             prompt: "owned next ask",
             provider: "test-cli",
             model: "test-model",

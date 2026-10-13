@@ -13,6 +13,14 @@ const runScenarioFlow = vi.hoisted(() => vi.fn<typeof RunScenarioFlow>());
 
 vi.mock("playwright-core", () => ({ chromium: { launch } }));
 vi.mock("./scenario-flow-runner.js", () => ({ runScenarioFlow }));
+vi.mock("openclaw/plugin-sdk/model-ref-parse", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/model-ref-parse")>();
+  const resolver = await actual.prepareModelRefResolver({ manifestPlugins: [] });
+  return {
+    ...actual,
+    prepareModelRefResolver: async () => resolver,
+  };
+});
 
 function makeBrowser() {
   const page = {

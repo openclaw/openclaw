@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { prepareBundledDiscoveryMode } from "../../../../plugins/bundled-discovery-state.js";
 import {
   loadBundledPluginFacade,
   resolveBundledPluginPublicModulePath,
@@ -16,6 +17,9 @@ import type { AnyChannelPlugin as ChannelPlugin } from "../../types.plugin.js";
 
 type ChannelPluginApiModule = Record<string, unknown>;
 type ChannelDirectoryContractModule = Record<string, unknown>;
+
+// Shards enumerate their test cases during module evaluation, before hooks run.
+await prepareBundledDiscoveryMode();
 
 const channelPluginCache = new Map<ChannelId, ChannelPlugin | null>();
 const channelPluginPromiseCache = new Map<ChannelId, Promise<ChannelPlugin | null>>();

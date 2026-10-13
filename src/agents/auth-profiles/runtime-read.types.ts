@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ExternalCliAuthDiscovery } from "./external-cli-discovery.js";
 import type { LegacyAuthProfileSource } from "./legacy-source-files.js";
 import type { AuthProfileDatabase } from "./sqlite.js";
@@ -13,6 +14,7 @@ export type LoadAuthProfileStoreOptions = {
   profileId?: string;
   allowKeychainPrompt?: boolean;
   config?: OpenClawConfig;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
   database?: AuthProfileDatabase;
   externalCli?: ExternalCliAuthDiscovery;
   inheritedAuthDir?: string;

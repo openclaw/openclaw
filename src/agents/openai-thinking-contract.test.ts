@@ -8,12 +8,13 @@ import {
   streamSimple,
 } from "openclaw/plugin-sdk/llm";
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   resolveSupportedThinkingLevelFromProfile,
   resolveThinkingProfile,
 } from "../auto-reply/thinking.js";
 import { resolveProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
+import { resolvePluginProvidersCoreAsync } from "../plugins/providers.runtime.js";
 import { resolveEmbeddedAgentStream } from "./embedded-agent-runner/stream-resolution.js";
 
 const openaiModel = {
@@ -40,6 +41,10 @@ const codexTestToken = [
 ].join(".");
 
 describe("OpenAI thinking contract", () => {
+  beforeEach(async () => {
+    await resolvePluginProvidersCoreAsync({ providerRefs: ["openai"], activate: true });
+  });
+
   it.each([
     { name: "disabled scalar effort", scalar: { supportsReasoningEffort: false } },
     { name: "empty scalar efforts", scalar: { supportedReasoningEfforts: [] } },

@@ -147,7 +147,7 @@ export async function fixture(
   await fs.writeFile(configPath, before);
   clearConfigCache();
   const agentDir = resolveAgentDir(config, "main");
-  const metadata = createSystemAgentPluginMetadataTestSnapshot(config);
+  const metadata = await createSystemAgentPluginMetadataTestSnapshot(config);
   const choice: ProviderAuthChoiceMetadata = {
     pluginId: "openai",
     providerId: "openai",
@@ -257,7 +257,9 @@ export async function fixture(
     reply(params),
   );
   // Revalidation must reload the same prepared provider used by login and the probe.
-  vi.spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandle").mockReturnValue(pluginRegistry);
+  vi.spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandle").mockResolvedValue(
+    pluginRegistry,
+  );
   const deps: ActivateSetupInferenceDeps = {
     resolvePluginProviders: () => [provider],
     resolveManifestProviderAuthChoice: () => choice,

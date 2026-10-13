@@ -11,6 +11,7 @@ import {
   pluginToolWithExecute,
   resetCodeModeTestState,
 } from "../../code-mode.test-support.js";
+import { attachPreparedProviderModelFixture } from "../../provider-request.test-support.js";
 import { Agent } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
@@ -29,7 +30,7 @@ import {
 
 const hoisted = getHoisted();
 const tempPaths: string[] = [];
-const model: Model = {
+const model = attachPreparedProviderModelFixture({
   id: "test-model",
   name: "Test Model",
   api: "openai-responses",
@@ -40,7 +41,7 @@ const model: Model = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 8_192,
   maxTokens: 8_192,
-};
+} satisfies Model);
 
 function streamAssistant(content: AssistantMessage["content"]) {
   const message: AssistantMessage = {

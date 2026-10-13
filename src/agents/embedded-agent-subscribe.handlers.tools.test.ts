@@ -1,11 +1,12 @@
 import type { AgentEvent } from "openclaw/plugin-sdk/agent-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   onAgentEvent as registerAgentEventListener,
   resetAgentEventsForTest,
 } from "../infra/agent-events.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
@@ -904,6 +905,10 @@ describe("handleToolExecutionEnd MCP connect action tracking", () => {
 });
 
 describe("handleToolExecutionEnd mutating failure recovery", () => {
+  beforeEach(async () => {
+    await preparePluginMetadataMachineStateAsync({});
+  });
+
   it("keeps an earlier message error when the next delivery is intentionally suppressed", async () => {
     const { ctx } = createTestContext();
     await executeTool(ctx, {
@@ -1954,6 +1959,10 @@ describe("handleToolExecutionEnd derived tool events", () => {
 });
 
 describe("messaging tool media URL tracking", () => {
+  beforeEach(async () => {
+    await preparePluginMetadataMachineStateAsync({});
+  });
+
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry());
   });

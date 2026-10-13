@@ -205,7 +205,7 @@ export function createTranscriptSessionId(): string {
   return `transcript-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`;
 }
 
-export function resolveSourceProvider(providerId: string, ctx: TranscriptsRuntimeContext) {
+export async function resolveSourceProvider(providerId: string, ctx: TranscriptsRuntimeContext) {
   return providerId === manualTranscriptSourceProvider.id
     ? manualTranscriptSourceProvider
     : getTranscriptSourceProvider(providerId, ctx.config);

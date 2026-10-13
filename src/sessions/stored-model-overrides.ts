@@ -116,11 +116,12 @@ export function resolveStoredModelOverride(params: {
 
 /** Resolve inherited model selection without synchronous session-store access. */
 export async function resolveStoredModelOverrideAsync(
-  params: Omit<Parameters<typeof resolveStoredModelOverride>[0], "loadSessionEntry"> & {
-    loadSessionEntry?: (
-      sessionKey: string,
-    ) => SessionEntry | undefined | Promise<SessionEntry | undefined>;
-  },
+  params: Omit<Parameters<typeof resolveStoredModelOverride>[0], "loadSessionEntry"> &
+    ModelManifestNormalizationContext & {
+      loadSessionEntry?: (
+        sessionKey: string,
+      ) => SessionEntry | undefined | Promise<SessionEntry | undefined>;
+    },
 ): Promise<StoredModelOverride | null> {
   if (params.sessionEntry?.modelOverrideSource === "default") {
     return null;

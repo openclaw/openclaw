@@ -82,6 +82,7 @@ function createRowThinkingFixture() {
         model: "reasoner",
         thinkingLevel,
       },
+      preparedModelMetadata: null,
       preparedAcpMeta: {
         backend: "openclaw",
         agent: "fixture",

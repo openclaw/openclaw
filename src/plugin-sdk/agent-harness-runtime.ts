@@ -439,7 +439,16 @@ export async function loadAgentHarnessMcpConfig(
   params: Parameters<typeof import("../agents/bundle-mcp-config.js").loadStaticBundleMcpConfig>[0],
 ): Promise<ReturnType<typeof import("../agents/bundle-mcp-config.js").loadStaticBundleMcpConfig>> {
   const { loadStaticBundleMcpConfig } = await import("../agents/bundle-mcp-config.js");
-  return loadStaticBundleMcpConfig(params);
+  if (params.manifestRegistry || params.cfg?.plugins?.enabled === false) {
+    return loadStaticBundleMcpConfig(params);
+  }
+  const { resolvePluginMetadataSnapshotAsync } =
+    await import("../plugins/plugin-metadata-snapshot.js");
+  const snapshot = await resolvePluginMetadataSnapshotAsync({
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+  });
+  return loadStaticBundleMcpConfig({ ...params, manifestRegistry: snapshot.manifestRegistry });
 }
 
 /** Load Codex bundle MCP thread config without forcing the heavy config module into SDK imports. */

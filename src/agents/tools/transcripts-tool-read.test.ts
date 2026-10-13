@@ -107,7 +107,7 @@ describe("transcripts read actions", () => {
         sessions: original,
       });
       const timezone = original[0]?.sessionId === "local" ? "UTC" : "Pacific/Honolulu";
-      releaseSkill = applySkillEnvOverridesFromSnapshot({
+      releaseSkill = await applySkillEnvOverridesFromSnapshot({
         snapshot: { prompt: "", skills: [{ name: "chronology" }] },
         config: { skills: { entries: { chronology: { env: { TZ: timezone } } } } },
       });

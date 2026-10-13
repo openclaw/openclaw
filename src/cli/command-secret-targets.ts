@@ -20,8 +20,8 @@ import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
 } from "../plugins/types.js";
-import { resolvePluginWebFetchProviders } from "../plugins/web-fetch-providers.runtime.js";
-import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
+import { resolvePluginWebFetchProvidersAsync } from "../plugins/web-fetch-providers.runtime.js";
+import { resolvePluginWebSearchProvidersAsync } from "../plugins/web-search-providers.runtime.js";
 import { normalizeOptionalAccountId } from "../routing/session-key.js";
 import { loadChannelSecretContractApi } from "../secrets/channel-contract-api.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
@@ -136,13 +136,13 @@ function isConfiguredSecretCandidate(value: unknown): boolean {
 
 type WebCapability = "search" | "fetch";
 
-function resolveWebProviders(
+async function resolveWebProviders(
   config: OpenClawConfig,
   kind: WebCapability,
-): CapabilityWebCredentialProvider[] {
+): Promise<CapabilityWebCredentialProvider[]> {
   return kind === "search"
-    ? resolvePluginWebSearchProviders({ config })
-    : resolvePluginWebFetchProviders({ config });
+    ? resolvePluginWebSearchProvidersAsync({ config })
+    : resolvePluginWebFetchProvidersAsync({ config });
 }
 
 // Registry entries use wildcard path patterns; command inputs often identify one concrete config path.
@@ -232,11 +232,11 @@ function addFallbackPathTargets(
   }
 }
 
-function getCapabilityWebSelectedProviderTargetIds(
+async function getCapabilityWebSelectedProviderTargetIds(
   config: OpenClawConfig,
   kind: WebCapability,
   selectedProviderId: string,
-): SelectedProviderTargetState & { matchedProvider: boolean } {
+): Promise<SelectedProviderTargetState & { matchedProvider: boolean }> {
   const state: SelectedProviderTargetState = {
     targetIds: new Set(),
     targetPaths: new Set(),
@@ -247,7 +247,7 @@ function getCapabilityWebSelectedProviderTargetIds(
   const providerDiscoveryConfig = structuredClone(config);
   const web = ((providerDiscoveryConfig.tools ??= {}).web ??= {});
   web[kind] = { ...asOptionalRecord(web[kind]), provider: selectedProviderId };
-  const providers = resolveWebProviders(providerDiscoveryConfig, kind).filter(
+  const providers = (await resolveWebProviders(providerDiscoveryConfig, kind)).filter(
     (provider) => provider.id === selectedProviderId,
   );
   for (const provider of providers) {
@@ -279,15 +279,15 @@ function getCapabilityWebSelectedProviderTargetIds(
   return { ...state, matchedProvider: providers.length > 0 };
 }
 
-function getCapabilityWebAutoDetectTargets(
+async function getCapabilityWebAutoDetectTargets(
   config: OpenClawConfig,
   kind: WebCapability,
-): CommandSecretTargetScope {
+): Promise<CommandSecretTargetScope> {
   const baseTargetIds = new Set(getCapabilityWebTargetIds(kind));
   const targetIds = new Set(baseTargetIds);
   const fallbackTargetIds = new Set<string>();
   const fallbackPaths = new Set<string>();
-  for (const provider of sortPluginEntriesForAutoDetect(resolveWebProviders(config, kind))) {
+  for (const provider of sortPluginEntriesForAutoDetect(await resolveWebProviders(config, kind))) {
     if (isConfiguredSecretCandidate(provider.getConfiguredCredentialValue?.(config))) {
       break;
     }
@@ -545,11 +545,11 @@ export function getAgentRuntimeOptionalCommandSecretPaths(config: OpenClawConfig
   );
 }
 
-function getCapabilityWebCommandSecretTargets(
+async function getCapabilityWebCommandSecretTargets(
   config: OpenClawConfig,
   kind: WebCapability,
   providerId?: string | null,
-): CommandSecretTargetScope {
+): Promise<CommandSecretTargetScope> {
   const web = asOptionalRecord(config.tools?.web?.[kind]);
   if (web?.enabled === false) {
     return {
@@ -561,7 +561,7 @@ function getCapabilityWebCommandSecretTargets(
   if (!selectedProviderId) {
     return getCapabilityWebAutoDetectTargets(config, kind);
   }
-  const selectedTargets = getCapabilityWebSelectedProviderTargetIds(
+  const selectedTargets = await getCapabilityWebSelectedProviderTargetIds(
     config,
     kind,
     selectedProviderId,
@@ -587,22 +587,22 @@ function getCapabilityWebCommandSecretTargets(
 }
 
 /** Web-fetch target scope for selected/auto-detected providers and configured fallback paths. */
-export function getCapabilityWebFetchCommandSecretTargets(
+export async function getCapabilityWebFetchCommandSecretTargets(
   config: OpenClawConfig,
   options?: {
     providerId?: string | null;
   },
-): CommandSecretTargetScope {
+): Promise<CommandSecretTargetScope> {
   return getCapabilityWebCommandSecretTargets(config, "fetch", options?.providerId);
 }
 
 /** Web-search target scope for selected/auto-detected providers and configured fallback paths. */
-export function getCapabilityWebSearchCommandSecretTargets(
+export async function getCapabilityWebSearchCommandSecretTargets(
   config: OpenClawConfig,
   options?: {
     providerId?: string | null;
   },
-): CommandSecretTargetScope {
+): Promise<CommandSecretTargetScope> {
   return getCapabilityWebCommandSecretTargets(config, "search", options?.providerId);
 }
 

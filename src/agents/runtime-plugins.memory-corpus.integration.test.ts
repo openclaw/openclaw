@@ -16,6 +16,7 @@ import {
   listMemoryCorpusSupplements,
   prepareMemoryPromptSection,
 } from "../plugins/memory-state.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { withAgentPluginRegistry } from "./runtime-plugins.js";
 
 afterEach(() => {
@@ -72,7 +73,12 @@ it("keeps auto-enabled bundled root-owned memory sidecars in a direct agent regi
   } satisfies OpenClawConfig;
   const selections = [{ provider: pluginId, modelId: "fixture-model" }];
   const workspaceDir = makePluginLoaderTempDir();
-  const rootConfig = applyPluginAutoEnable({ config, env: process.env }).config;
+  const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({ config, workspaceDir });
+  const rootConfig = applyPluginAutoEnable({
+    config,
+    env: process.env,
+    manifestRegistry: metadataSnapshot.manifestRegistry,
+  }).config;
   expect(rootConfig.plugins?.entries?.[pluginId]?.enabled).toBe(true);
   const root = await loadAndActivateRootPluginRegistry({
     cache: false,

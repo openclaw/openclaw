@@ -7,7 +7,7 @@ import {
   cleanupPluginLoaderFixturesForTest,
   clearPluginLoaderCache,
   EMPTY_PLUGIN_SCHEMA,
-  loadOpenClawPlugins,
+  loadOpenClawPluginsForTest,
   makePluginLoaderTempDir,
   writePlugin,
 } from "./loader.test-fixtures.js";
@@ -100,7 +100,7 @@ function fixture(
     otherSource: other.file,
     registrations: () => (existsSync(marker) ? readFileSync(marker, "utf8") : ""),
     load: (channelPluginLoadIntent: "setup" | "full", onlyPluginIds = query.onlyPluginIds) =>
-      loadOpenClawPlugins({
+      loadOpenClawPluginsForTest({
         config,
         env: {},
         installRecords: {},

@@ -1,5 +1,8 @@
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
-import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
+import {
+  getModelProviderRequestRouteFacts,
+  resolveProviderRequestHeadersAsync,
+} from "openclaw/plugin-sdk/provider-http";
 import { isProxyReasoningUnsupportedModelHint } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOpenAICompatibleReasoningPayload } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
@@ -29,18 +32,24 @@ export function wrapKilocodeProviderStream(
     ctx.modelId === "kilo-auto/balanced" || isProxyReasoningUnsupportedModelHint(ctx.modelId)
       ? undefined
       : ctx.thinkingLevel;
-  return (model, context, options) => {
+  return async (model, context, options) => {
     const originalOnPayload = options?.onPayload;
-    const headers = resolveProviderRequestHeaders({
-      provider: typeof model.provider === "string" ? model.provider : "kilocode",
-      api: model.api,
-      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
-      capability: "llm",
-      transport: "stream",
-      callerHeaders: options?.headers,
-      defaultHeaders: { "X-KILOCODE-FEATURE": process.env.KILOCODE_FEATURE?.trim() || "openclaw" },
-      precedence: "defaults-win",
-    });
+    const headers = await resolveProviderRequestHeadersAsync(
+      {
+        provider: typeof model.provider === "string" ? model.provider : "kilocode",
+        api: model.api,
+        baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+        providerMetadataOwners: getModelProviderRequestRouteFacts(model)?.providerMetadataOwners,
+        capability: "llm",
+        transport: "stream",
+        callerHeaders: options?.headers,
+        defaultHeaders: {
+          "X-KILOCODE-FEATURE": process.env.KILOCODE_FEATURE?.trim() || "openclaw",
+        },
+        precedence: "defaults-win",
+      },
+      { config: ctx.config, workspaceDir: ctx.workspaceDir },
+    );
     return underlying(model, context, {
       ...options,
       headers,

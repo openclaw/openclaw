@@ -26,7 +26,7 @@ import {
 } from "./agent-tools.before-tool-call.decision.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { createOpenClawToolsAsync } from "./openclaw-tools.js";
 import { getInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -190,10 +190,12 @@ describe("generic tool action decision receipts", () => {
   });
 
   it("records a Gateway-shaped tool assembled without its first hook wrapper", async () => {
-    const source = createOpenClawTools({
-      disablePluginTools: true,
-      wrapBeforeToolCallHook: false,
-    }).find((tool) => tool.name === "sessions_list");
+    const source = (
+      await createOpenClawToolsAsync({
+        disablePluginTools: true,
+        wrapBeforeToolCallHook: false,
+      })
+    ).find((tool) => tool.name === "sessions_list");
     if (!source) {
       throw new Error("missing Gateway-shaped sessions_list tool");
     }

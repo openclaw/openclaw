@@ -15,6 +15,7 @@ import { runInitialConfigWriteHealth } from "../../../flows/doctor-health-contri
 import { runCodexSessionRouteHealth } from "../../../flows/doctor-health-contribution-runners.state.js";
 import type { DoctorHealthFlowContext } from "../../../flows/doctor-health-contribution-types.js";
 import { acquireGatewayStateOwner } from "../../../infra/gateway-state-owner.js";
+import { preparePluginMetadataMachineStateAsync } from "../../../plugins/installed-plugin-index-record-state.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-db-async-lifecycle.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
@@ -118,6 +119,7 @@ describe("persisted provider rename", () => {
       ctx.cfgForPersistence = source;
       await runInitialConfigWriteHealth(ctx);
       expect(ctx.configResultWriteCommitted).not.toBe(true);
+      await preparePluginMetadataMachineStateAsync({ env: state.env });
       await runCodexSessionRouteHealth(ctx);
       expect(loadSessionEntry(scope)).toEqual(before);
       expect(await fs.readFile(state.configPath)).toEqual(configBefore);

@@ -183,7 +183,7 @@ module.exports = { id: '${validPluginId}', register() {} };`,
     ]);
     setActiveDegradedPlugins(buildDegradedPluginsFromVerificationFailures(smoke.failures));
 
-    const { loadOpenClawPlugins } =
+    const { loadOpenClawPluginsAsync } =
       await vi.importActual<typeof import("../plugins/loader.js")>("../plugins/loader.js");
     const pluginConfig = {
       enabled: true,
@@ -194,8 +194,8 @@ module.exports = { id: '${validPluginId}', register() {} };`,
         [validPluginId]: { enabled: true },
       },
     };
-    const registry = withPluginCache(cache, () =>
-      loadOpenClawPlugins({
+    const registry = await withPluginCache(cache, () =>
+      loadOpenClawPluginsAsync({
         cache: false,
         config: { plugins: pluginConfig },
         onlyPluginIds: [brokenPluginId, validPluginId],
@@ -289,7 +289,7 @@ module.exports = { id: '${pluginId}', register() {} };`,
     });
     setActiveDegradedPlugins(buildDegradedPluginsFromVerificationFailures(smoke.failures));
 
-    const { loadOpenClawPlugins } =
+    const { loadOpenClawPluginsAsync } =
       await vi.importActual<typeof import("../plugins/loader.js")>("../plugins/loader.js");
     const options = {
       cache: false,
@@ -303,14 +303,14 @@ module.exports = { id: '${pluginId}', register() {} };`,
       },
       onlyPluginIds: [pluginId],
     };
-    const registry = withPluginCache(cache, () => loadOpenClawPlugins(options));
+    const registry = await withPluginCache(cache, () => loadOpenClawPluginsAsync(options));
     registries.push(registry);
 
     expect(registry.plugins.find((plugin) => plugin.id === pluginId)?.status).toBe("loaded");
     expect(imported.has(pluginId)).toBe(true);
     expect(listActiveDegradedPlugins()).toEqual([]);
-    const replacement = withPluginCache(cache, () =>
-      loadOpenClawPlugins({ ...options, previousRegistry: registry }),
+    const replacement = await withPluginCache(cache, () =>
+      loadOpenClawPluginsAsync({ ...options, previousRegistry: registry }),
     );
     registries.push(replacement);
     expect(replacement.plugins.find((plugin) => plugin.id === pluginId)).toBe(
@@ -365,10 +365,10 @@ module.exports = { id: '${pluginId}', register() {} };`,
     });
     setActiveDegradedPlugins(buildDegradedPluginsFromVerificationFailures(smoke.failures));
 
-    const { loadOpenClawPlugins } =
+    const { loadOpenClawPluginsAsync } =
       await vi.importActual<typeof import("../plugins/loader.js")>("../plugins/loader.js");
-    const registry = withPluginCache(cache, () =>
-      loadOpenClawPlugins({
+    const registry = await withPluginCache(cache, () =>
+      loadOpenClawPluginsAsync({
         cache: false,
         config: {
           plugins: {
@@ -433,7 +433,7 @@ describe("updater plugin degradation with a running source Gateway", () => {
     );
     const archivePath = path.join(root, "fixture.tgz");
     await createTar({ gzip: true, file: archivePath, cwd: sourceDir }, ["."]);
-    const installed = await installPluginFromPath({ path: archivePath, extensionsDir });
+    const installed = await installPluginFromPath({ path: archivePath, extensionsDir, config: {} });
     expect(installed.ok).toBe(true);
     if (!installed.ok) {
       throw new Error(installed.error);
@@ -491,13 +491,17 @@ describe("updater plugin degradation with a running source Gateway", () => {
       status: "error",
       reason: "post-plugin-doctor-invalid-config",
     });
-    const { loadOpenClawPlugins } =
+    const { loadOpenClawPluginsAsync } =
       await vi.importActual<typeof import("../plugins/loader.js")>("../plugins/loader.js");
     const loadGeneration = () =>
       withPluginCache(createFixturePluginCache(), async () => {
         const quarantine = await refreshStartupPluginQuarantine({ cfg: config, env: process.env });
         setActiveDegradedPlugins(quarantine.quarantinedPlugins);
-        const registry = loadOpenClawPlugins({ cache: false, config, onlyPluginIds: [pluginId] });
+        const registry = await loadOpenClawPluginsAsync({
+          cache: false,
+          config,
+          onlyPluginIds: [pluginId],
+        });
         registries.push(registry);
         return registry;
       });
@@ -520,6 +524,7 @@ describe("updater plugin degradation with a running source Gateway", () => {
     const repaired = await installPluginFromPath({
       path: archivePath,
       extensionsDir,
+      config,
       mode: "update",
       expectedPluginId: pluginId,
     });

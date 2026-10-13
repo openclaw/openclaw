@@ -11,7 +11,7 @@ import {
   writePluginMetadata,
 } from "../plugins/loader.test-fixtures.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { getPluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import { getPluginRegistryRuntime } from "../plugins/registry-runtime-binding.js";
 import { createPluginRegistryOwner, getActivePluginRegistry } from "../plugins/runtime.js";
@@ -73,7 +73,7 @@ it.each(["direct-loader-successor", "prepared"] as const)(
         slots: { memory: "none" },
       },
     };
-    const metadata = loadPluginMetadataSnapshot({ config, workspaceDir });
+    const metadata = await resolvePluginMetadataSnapshotAsync({ config, workspaceDir });
     const options = {
       config,
       workspaceDir,

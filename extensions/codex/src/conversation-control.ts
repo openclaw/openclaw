@@ -1,6 +1,6 @@
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import {
-  applyModelOverrideWithAuthProfileCompatibility,
+  applyModelOverrideWithAuthProfileCompatibilityAsync,
   ModelSelectionLockedError,
 } from "openclaw/plugin-sdk/model-session-runtime";
 import {
@@ -210,11 +210,11 @@ export async function setCodexConversationModel(input: {
       authority: params.assertCommitAllowed
         ? { kind: "source", source: params.assertCommitAllowed }
         : { kind: "host", assertCurrent: params.assertCurrent },
-      prepare: (entry) => {
+      prepare: async (entry) => {
         if (entry.sessionId !== identity.sessionId) {
           throw new Error("Codex session changed while applying the model selection.");
         }
-        applyModelOverrideWithAuthProfileCompatibility({
+        await applyModelOverrideWithAuthProfileCompatibilityAsync({
           cfg: params.config ?? {},
           agentDir: params.agentDir ?? resolveAgentDir(params.config ?? {}, identity.agentId),
           entry,

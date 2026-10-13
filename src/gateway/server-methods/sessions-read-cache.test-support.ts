@@ -8,6 +8,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { mergeSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { onUserProfilesChanged } from "../../state/user-profile-events.js";
 import { readUserProfileSnapshotSync } from "../../state/user-profile-identity.read.js";
 import {
@@ -32,9 +33,10 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js
 export { disposeSessionReadContexts, sessionReadHandlers };
 const initializing = new WeakMap<GatewayRequestContext, Promise<void>>();
 afterEach(disposeSessionReadContexts);
-export function initializeSessionReadContext(context: GatewayRequestContext) {
+export async function initializeSessionReadContext(context: GatewayRequestContext) {
+  await prepareBundledDiscoveryMode();
   if (getSessionRowProjection(context)) {
-    return Promise.resolve();
+    return;
   }
   let pending = initializing.get(context);
   if (!pending) {

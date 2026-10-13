@@ -121,10 +121,12 @@ const resolveSetupSecretInputString = vi.hoisted(() =>
   vi.fn<() => Promise<string | undefined>>(async () => undefined),
 );
 const resolveExistingKey = vi.hoisted(() =>
-  vi.fn<(config: OpenClawConfig, provider: string) => string | undefined>(() => undefined),
+  vi.fn<(config: OpenClawConfig, provider: PluginWebSearchProviderEntry) => string | undefined>(
+    () => undefined,
+  ),
 );
 const hasExistingKey = vi.hoisted(() =>
-  vi.fn<(config: OpenClawConfig, provider: string) => boolean>(() => false),
+  vi.fn<(config: OpenClawConfig, provider: PluginWebSearchProviderEntry) => boolean>(() => false),
 );
 const hasKeyInEnv = vi.hoisted(() =>
   vi.fn<(entry: Pick<PluginWebSearchProviderEntry, "envVars">) => boolean>(() => false),
@@ -209,8 +211,9 @@ vi.mock("../agents/tools/model-config.helpers.js", () => ({
   hasAuthProfileForProvider,
 }));
 
+// mock-isolation: Finalize fixtures provide configured search status without loading provider runtimes.
 vi.mock("../web-search/runtime.js", () => ({
-  listConfiguredWebSearchProviders,
+  listConfiguredWebSearchProvidersAsync: listConfiguredWebSearchProviders,
 }));
 
 vi.mock("../daemon/service.js", () => ({
@@ -1385,7 +1388,7 @@ describe("finalizeSetupWizard", () => {
         envVars: ["PERPLEXITY_API_KEY"],
       }),
     ]);
-    hasExistingKey.mockImplementation((configForTest, provider) => provider === "perplexity");
+    hasExistingKey.mockImplementation((configForTest, provider) => provider.id === "perplexity");
 
     const prompter = createLaterPrompter();
 
@@ -1406,7 +1409,7 @@ describe("finalizeSetupWizard", () => {
         envVars: ["FIRECRAWL_API_KEY"],
       }),
     ]);
-    hasExistingKey.mockImplementation((configForTest, provider) => provider === "firecrawl");
+    hasExistingKey.mockImplementation((configForTest, provider) => provider.id === "firecrawl");
 
     const prompter = createLaterPrompter();
 

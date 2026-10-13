@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 
 const mocks = vi.hoisted(() => ({
   buildManifestBuiltInModelSuppressionResolver: vi.fn(),
@@ -21,8 +22,9 @@ import {
 } from "./model-suppression.js";
 
 describe("model suppression", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     clearPluginMetadataLifecycleCaches();
+    await preparePluginMetadataMachineStateAsync({});
     mocks.buildManifestBuiltInModelSuppressionResolver.mockReset();
   });
 

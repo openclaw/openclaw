@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { AssistantMessage, Context, Model } from "@openclaw/ai";
 import { streamOpenAICompletions } from "@openclaw/ai/internal/openai";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { classifyAssistantFailoverReason } from "../../src/agents/embedded-agent-helpers/assistant-message-failures.js";
 import { formatAssistantErrorText } from "../../src/agents/embedded-agent-helpers/error-text.js";
 import { recoverAfterTransportDrop } from "../../src/agents/embedded-agent-runner/run/attempt-recovery.test-support.js";
@@ -10,8 +10,14 @@ import {
   resolveFailoverStatus,
   resolveModelFallbackError,
 } from "../../src/agents/failover-error.js";
+import { prepareModelProviderRequestRouteFacts } from "../../src/agents/provider-request-config.js";
 import { sleepWithAbort } from "../../src/infra/backoff.js";
+import { prepareBundledDiscoveryMode } from "../../src/plugins/bundled-discovery-state.js";
 import { loadBundledPluginFacade } from "../../src/test-utils/bundled-plugin-public-surface.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../src/test-utils/openclaw-test-state.js";
 import { registerSingleProviderPlugin } from "../../src/test-utils/plugin-registration.js";
 
 vi.mock("../../src/infra/backoff.js", async (importOriginal) => ({
@@ -20,8 +26,11 @@ vi.mock("../../src/infra/backoff.js", async (importOriginal) => ({
 }));
 
 let providerOwner: Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
+let state: OpenClawTestState;
 
 beforeAll(async () => {
+  state = await createOpenClawTestState({ label: "openrouter-error-classification" });
+  await prepareBundledDiscoveryMode(state.env);
   const { default: openrouterPlugin } = await loadBundledPluginFacade<{
     default: Parameters<typeof registerSingleProviderPlugin>[0];
   }>({
@@ -29,6 +38,10 @@ beforeAll(async () => {
     artifactBasename: "index.js",
   });
   providerOwner = await registerSingleProviderPlugin(openrouterPlugin);
+});
+
+afterAll(async () => {
+  await state.cleanup();
 });
 
 const model = {
@@ -76,7 +89,10 @@ async function runAgainstOpenRouterError(params: {
   try {
     const address = server.address() as AddressInfo;
     const result = await streamOpenAICompletions(
-      { ...model, baseUrl: `http://127.0.0.1:${address.port}/api/v1` },
+      await prepareModelProviderRequestRouteFacts({
+        ...model,
+        baseUrl: `http://127.0.0.1:${address.port}/api/v1`,
+      }),
       params.context,
       { apiKey: ["test", "key"].join("-") },
     ).result();
@@ -109,7 +125,10 @@ async function runAgainstOpenRouterStream(event: Record<string, unknown>) {
   try {
     const address = server.address() as AddressInfo;
     return await streamOpenAICompletions(
-      { ...model, baseUrl: `http://127.0.0.1:${address.port}/api/v1` },
+      await prepareModelProviderRequestRouteFacts({
+        ...model,
+        baseUrl: `http://127.0.0.1:${address.port}/api/v1`,
+      }),
       { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
       { apiKey: ["test", "key"].join("-") },
     ).result();

@@ -65,6 +65,7 @@ export async function resolveBareResetBootstrapFileAccess(params: {
         sessionKey: params.sessionKey,
         modelApi: runtimeModelContext.modelApi,
         runtimeModel: runtimeModelContext.runtimeModel,
+        manifestPlugins: runtimeModelContext.manifestPlugins,
       });
       return inventory.groups.some((group) => group.tools.some((tool) => tool.id === "read"));
     });

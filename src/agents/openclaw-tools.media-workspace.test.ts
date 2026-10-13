@@ -5,13 +5,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getMediaDir, saveMediaBuffer } from "../media/store.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { createOpenClawToolsAsync } from "./openclaw-tools.js";
 import { applyNodesToolWorkspaceGuard } from "./openclaw-tools.registration.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { loadMediaToolReferences } from "./tools/media-tool-shared.js";
 
+// mock-isolation: Workspace media guards use core tools without activating installed plugins.
 vi.mock("./openclaw-plugin-tools.js", () => ({
-  resolveOpenClawPluginToolsForOptions: () => [],
+  resolveOpenClawPluginToolsForOptionsAsync: async () => [],
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -59,20 +60,28 @@ describe("nodes output paths", () => {
   });
 });
 
-function createMediaTool(name: string, options: Parameters<typeof createOpenClawTools>[0]) {
-  const tool = createOpenClawTools({
-    config: { plugins: { enabled: false } },
-    agentDir: tempDirs.make("openclaw-media-agent-"),
-    modelHasVision: true,
-    ...options,
-  }).find((candidate) => candidate.name === name);
+async function createMediaTool(
+  name: string,
+  options: Parameters<typeof createOpenClawToolsAsync>[0],
+) {
+  const tool = (
+    await createOpenClawToolsAsync({
+      config: { plugins: { enabled: false } },
+      agentDir: tempDirs.make("openclaw-media-agent-"),
+      modelHasVision: true,
+      ...options,
+    })
+  ).find((candidate) => candidate.name === name);
   if (!tool) {
     throw new Error(`Expected registered ${name} tool`);
   }
   return tool;
 }
 
-async function expectLoadedImage(tool: ReturnType<typeof createMediaTool>, imagePath: string) {
+async function expectLoadedImage(
+  tool: Awaited<ReturnType<typeof createMediaTool>>,
+  imagePath: string,
+) {
   const result = await tool.execute("inspect-screenshot", { path: imagePath });
   expect(result.content).toEqual(
     expect.arrayContaining([
@@ -85,7 +94,7 @@ describe("media references in task workspaces", () => {
   it("loads Gateway media with workspace-only access while rejecting outside files and symlinks", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-media-state-"));
     const workspaceDir = tempDirs.make("openclaw-media-worktree-");
-    const tool = createMediaTool("view_image", {
+    const tool = await createMediaTool("view_image", {
       workspaceDir,
       fsPolicy: { workspaceOnly: true, root: workspaceDir },
     });
@@ -113,7 +122,7 @@ describe("media references in task workspaces", () => {
     const imagePath = path.join(cwd, "screenshot.png");
     await fs.writeFile(imagePath, png);
     await fs.writeFile(path.join(sessionRoot, "shared.png"), png);
-    const tool = createMediaTool("view_image", {
+    const tool = await createMediaTool("view_image", {
       workspaceDir,
       cwd,
       fsPolicy: { workspaceOnly, root: sessionRoot },
@@ -139,7 +148,7 @@ describe("media references in task workspaces", () => {
     await fs.writeFile(path.join(sandboxRoot, "screenshot.png"), png);
     const hostImage = path.join(hostRoot, "host.png");
     await fs.writeFile(hostImage, png);
-    const tool = createMediaTool("view_image", {
+    const tool = await createMediaTool("view_image", {
       workspaceDir,
       cwd: hostRoot,
       fsPolicy: { workspaceOnly: true, root: hostRoot },
@@ -160,7 +169,7 @@ describe("media references in task workspaces", () => {
     const readStarted = createDeferredCore();
     const finishRead = createDeferredCore();
     const controller = new AbortController();
-    const tool = createMediaTool("view_image", {
+    const tool = await createMediaTool("view_image", {
       sandboxRoot,
       sandboxFsBridge: {
         ...bridge,
@@ -191,7 +200,7 @@ describe("media references in task workspaces", () => {
       const outsidePath = path.join(workspaceDir, name);
       await fs.writeFile(imagePath, bytes);
       await fs.writeFile(outsidePath, bytes);
-      const tool = createMediaTool("pdf", {
+      const tool = await createMediaTool("pdf", {
         config: {
           plugins: { allow: [] },
           tools: { allow: ["pdf"] },

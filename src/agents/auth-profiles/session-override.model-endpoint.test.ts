@@ -4,7 +4,8 @@ import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/ses
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { OpenClawSchema } from "../../config/zod-schema.js";
-import { applyModelOverrideWithAuthProfileCompatibility } from "../../sessions/auth-profile-preservation.js";
+import { resolvePluginProvidersCoreAsync } from "../../plugins/providers.runtime.js";
+import { applyModelOverrideWithAuthProfileCompatibilityAsync } from "../../sessions/auth-profile-preservation.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   createEmptyAgentDiscoveryStores,
@@ -113,12 +114,19 @@ it.each([
           },
           agentId,
         );
+        // This fixture supplies its own empty stores instead of a prepared runtime.
+        await resolvePluginProvidersCoreAsync({
+          config: cfg,
+          workspaceDir: state.workspaceDir,
+          providerRefs: ["arcee"],
+          activate: true,
+        });
         const { model } = await resolveModelAsync(
           "arcee",
           "trinity-large-thinking",
           state.agentDir(agentId),
           cfg,
-          createEmptyAgentDiscoveryStores(),
+          { ...createEmptyAgentDiscoveryStores(), workspaceDir: state.workspaceDir },
         );
         expect(model?.baseUrl).toBe(modelEndpoint);
 
@@ -159,7 +167,7 @@ it.each([
           authProfileOverrideSource: expectedSource,
         });
         if (source === "user" && pin === "arcee:work") {
-          applyModelOverrideWithAuthProfileCompatibility({
+          await applyModelOverrideWithAuthProfileCompatibilityAsync({
             cfg,
             agentDir: state.agentDir(agentId),
             entry: sessionEntry,

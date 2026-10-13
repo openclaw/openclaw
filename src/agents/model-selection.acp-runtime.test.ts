@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { AgentEntryConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import {
   resolveAgentEffectiveModelPrimary,
   resolveAgentExplicitModelPrimary,
@@ -19,6 +20,10 @@ import {
 const HARNESS_MODEL = "harness-only[context=272k,reasoning=medium]";
 const nativePrimary = "native/primary";
 const nativeFallback = "native/backup";
+
+beforeAll(async () => {
+  await prepareBundledDiscoveryMode();
+});
 
 function buildConfig(agent: AgentEntryConfig): OpenClawConfig {
   return {

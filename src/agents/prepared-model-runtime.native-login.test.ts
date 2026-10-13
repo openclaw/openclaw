@@ -19,17 +19,25 @@ const native = vi.hoisted(() => ({
 }));
 
 // mock-isolation: Supply discovery descriptors without loading installed plugins or CLI processes.
-vi.mock("../plugins/provider-discovery.runtime.js", () => ({
-  resolvePluginDiscoveryProvidersRuntime: () => [
-    { id: native.id, label: "Fixture CLI", auth: [], prepareSyntheticAuth: native.probe },
-    {
-      id: "unrelated-cli",
-      label: "Unrelated CLI",
-      auth: [],
-      prepareSyntheticAuth: native.unrelatedProbe,
-    },
-  ],
-}));
+vi.mock("../plugins/provider-discovery.runtime.js", () => {
+  const runtime = {
+    resolvePluginDiscoveryProvidersRuntime: () => [
+      { id: native.id, label: "Fixture CLI", auth: [], prepareSyntheticAuth: native.probe },
+      {
+        id: "unrelated-cli",
+        label: "Unrelated CLI",
+        auth: [],
+        prepareSyntheticAuth: native.unrelatedProbe,
+      },
+    ],
+  };
+  return {
+    ...runtime,
+    resolvePluginDiscoveryProvidersRuntimeAsync: async (
+      ...args: Parameters<typeof runtime.resolvePluginDiscoveryProvidersRuntime>
+    ) => runtime.resolvePluginDiscoveryProvidersRuntime(...args),
+  };
+});
 
 const nativeLogin = {
   apiKey: "synthetic-native-presence",

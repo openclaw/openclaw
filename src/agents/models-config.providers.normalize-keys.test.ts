@@ -1,10 +1,11 @@
 // Covers provider-key canonicalization plus secret marker persistence safeguards.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createConfigIoContext } from "../config/io.context.js";
 import { readConfigFileSnapshotFromContext } from "../config/io.snapshot.js";
 import { ModelsConfigSchema } from "../config/zod-schema.core.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { normalizeProviderCatalogModelsForConfig } from "./models-config.providers.catalog.js";
@@ -18,6 +19,10 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 }));
 
 describe("normalizeProviders", () => {
+  beforeEach(async () => {
+    await preparePluginMetadataMachineStateAsync({});
+    await preparePluginMetadataMachineStateAsync({ env: {} });
+  });
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const createModel = (
     overrides: Partial<
@@ -187,6 +192,7 @@ describe("normalizeProviders", () => {
           env: { HEADER_LITERAL: undefined, HEADER_PENDING: undefined, ...env },
         },
         async (state) => {
+          await preparePluginMetadataMachineStateAsync({ env: state.env });
           await state.writeConfig({
             plugins: { enabled: false },
             models: {

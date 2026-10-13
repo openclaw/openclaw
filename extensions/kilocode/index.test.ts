@@ -26,7 +26,7 @@ describe("kilocode provider plugin", () => {
       streamFn: baseStreamFn,
     } as never);
 
-    void wrappedReasoning?.(
+    await wrappedReasoning?.(
       {
         api: "openai-completions",
         provider: "kilocode",
@@ -48,7 +48,7 @@ describe("kilocode provider plugin", () => {
       streamFn: baseStreamFn,
     } as never);
 
-    void wrappedAuto?.(
+    await wrappedAuto?.(
       {
         api: "openai-completions",
         provider: "kilocode",
@@ -77,7 +77,7 @@ describe("kilocode provider plugin", () => {
       streamFn: baseStreamFn,
     } as never);
 
-    void wrapped?.(
+    await wrapped?.(
       {
         api: "openai-completions",
         provider: "kilocode",

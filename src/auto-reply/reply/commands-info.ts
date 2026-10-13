@@ -164,6 +164,7 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
         sessionKey: params.sessionKey,
         modelApi: runtimeModelContext.modelApi,
         runtimeModel: runtimeModelContext.runtimeModel,
+        manifestPlugins: runtimeModelContext.manifestPlugins,
         messageProvider: params.command.channel,
         senderId: params.command.senderId,
         senderName: params.ctx.SenderName,

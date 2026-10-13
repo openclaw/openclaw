@@ -1,3 +1,4 @@
+import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { calculateMulawRms } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it, vi } from "vitest";
 import { openAIRealtimeHost } from "./realtime-host.js";
@@ -11,6 +12,8 @@ import {
   FakeSocket,
   parseSent,
 } from "./realtime-quicksilver.test-helpers.js";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 describe("GPT-Live gateway telephony audio", () => {
   it.each(["direct", "webrtc"] as const)(

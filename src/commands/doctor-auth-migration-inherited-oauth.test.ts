@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
+import { saveAuthProfileStoreAsync } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -38,7 +38,7 @@ describe("auth profile migration with an inherited main OAuth credential", () =>
     // Main is already migrated and owns a live copy of the same profile id.
     // This is the real shape: doctor migrates main successfully, then fails on
     // the remaining agent, so main's SQLite store is already populated.
-    saveAuthProfileStore(
+    await saveAuthProfileStoreAsync(
       {
         version: 1,
         profiles: {

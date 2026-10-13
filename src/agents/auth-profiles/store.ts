@@ -14,7 +14,6 @@ import { readUserModelAuthProfile } from "../../state/user-model-accounts.js";
 import { isRecord, resolveUserPath } from "../../utils.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { AUTH_STORE_VERSION, authProfilesLog } from "./constants.js";
-import { normalizeAuthProfileSecretRefs } from "./credential-normalize.js";
 import {
   copyCanonicalAuthProfileCredentialObservations,
   observeCanonicalAuthProfileCredentials,
@@ -110,6 +109,8 @@ import { prepareAuthProfileStoreMutation } from "./store-mutation.js";
 import { createAuthProfileStoreReadRuntime } from "./store-read.js";
 import {
   buildLocalAuthProfileStoreForSave,
+  createAuthProfileStoreSaver,
+  prepareLegacyAuthProfileSave,
   type SaveAuthProfileStoreOptions,
 } from "./store-save.js";
 import { createAuthProfileStoreUpdater } from "./store-update.js";
@@ -120,6 +121,7 @@ import type {
   PreparedAuthProfileStoreOwner,
   RuntimeAuthProfileStore,
 } from "./types.js";
+import { runAuthProfileUsage } from "./usage-lifecycle.js";
 
 function withCredentialSources(
   store: AuthProfileStore,
@@ -776,7 +778,12 @@ export { preserveResolvedSecretBackedCredentials } from "./runtime-snapshot-owne
 export function createAuthProfileStoreRuntime(
   externalAuth: ReturnType<typeof createExternalAuthRuntime>,
 ) {
-  const { listRuntimeExternalAuthProfiles, overlayExternalAuthProfiles } = externalAuth;
+  const {
+    listRuntimeExternalAuthProfiles,
+    prepareRuntimeExternalAuthProfiles,
+    overlayExternalAuthProfiles,
+    overlayExternalAuthProfilesAsync,
+  } = externalAuth;
 
   function maybeSyncPersistedExternalCliAuthProfiles(params: {
     store: AuthProfileStore;
@@ -860,7 +867,7 @@ export function createAuthProfileStoreRuntime(
   }
 
   const updateAuthProfileStoreWithLock = createAuthProfileStoreUpdater(
-    listRuntimeExternalAuthProfiles,
+    prepareRuntimeExternalAuthProfiles,
     {
       applyScopedAuthReadThrough,
       getScopedAuthProfileEnv,
@@ -868,13 +875,15 @@ export function createAuthProfileStoreRuntime(
       resolveRuntimeAuthProfileAgentDir,
       isEnvOnlyAuthProfileRuntime,
       load: loadAuthProfileStoreForAgent,
-      save(store, agentDir, options, database, owner) {
+      save(store, agentDir, options, database, owner, preparedExternalProfiles) {
         const publication = saveAuthProfileStoreInTransaction(
           store,
           agentDir,
           options,
           database,
           owner,
+          false,
+          preparedExternalProfiles,
         );
         deferRuntimeSnapshotsAfterCommit(database, publication);
       },
@@ -1033,6 +1042,36 @@ export function createAuthProfileStoreRuntime(
         ? shared
         : materializePersonalAuthProfile(shared, options.profileId);
     }
+    const prepared = prepareRuntimeAuthProfileStore(agentDir, options, env, readPreparedStore);
+    return prepared.finish(overlayExternalAuthProfiles(prepared.store, prepared.options));
+  }
+
+  async function loadRuntimeAuthProfileStoreAsync(
+    agentDir?: string,
+    options?: LoadAuthProfileStoreOptions,
+    env?: NodeJS.ProcessEnv,
+    readPreparedStore?: (databasePath: string) => AuthProfileStore,
+  ): Promise<AuthProfileStore> {
+    if (isEnvOnlyAuthProfileRuntime()) {
+      return createEmptyAuthProfileStore();
+    }
+    const prepared = prepareRuntimeAuthProfileStore(agentDir, options, env, readPreparedStore);
+    const store = prepared.finish(
+      await overlayExternalAuthProfilesAsync(prepared.store, prepared.options),
+    );
+    return options?.profileId &&
+      isUserModelAuthProfileId(options.profileId) &&
+      !captureScope().isolated
+      ? materializePersonalAuthProfile(store, options.profileId)
+      : store;
+  }
+
+  function prepareRuntimeAuthProfileStore(
+    agentDir?: string,
+    options?: LoadAuthProfileStoreOptions,
+    env?: NodeJS.ProcessEnv,
+    readPreparedStore?: (databasePath: string) => AuthProfileStore,
+  ) {
     const effectiveAgentDir = resolveRuntimeAuthProfileAgentDir(agentDir);
     const effectiveOptions = resolveRuntimeAuthProfileLoadOptions(options);
     if (!readPreparedStore && (!effectiveAgentDir || !effectiveOptions?.inheritedAuthDir)) {
@@ -1066,16 +1105,21 @@ export function createAuthProfileStoreRuntime(
     const mergedStore = mainStore
       ? mergeAuthProfileStores(mainStore, store, { preserveBaseRuntimeExternalProfiles: true })
       : store;
-    return setRuntimeLocalProfileMetadata(
-      overlayExternalAuthProfiles(mergedStore, {
+    return {
+      store: mergedStore,
+      options: {
         agentDir: effectiveAgentDir,
         ...(env ? { env } : {}),
         ...externalCli,
-      }),
-      listRuntimeLocalProfileIds(store, mainStore),
-      !isMainStore && runtimeStoreInheritsMainState(mergedStore, store),
-      isMainStore ? undefined : store,
-    );
+      },
+      finish: (overlaid: AuthProfileStore) =>
+        setRuntimeLocalProfileMetadata(
+          overlaid,
+          listRuntimeLocalProfileIds(store, mainStore),
+          !isMainStore && runtimeStoreInheritsMainState(mergedStore, store),
+          isMainStore ? undefined : store,
+        ),
+    };
   }
 
   const {
@@ -1089,6 +1133,7 @@ export function createAuthProfileStoreRuntime(
     resolveRuntimeAuthProfileLoadOptions,
     loadAuthProfileStoreForAgent,
     loadRuntimeAuthProfileStore,
+    loadRuntimeAuthProfileStoreAsync,
     captureScope,
   });
 
@@ -1222,6 +1267,7 @@ export function createAuthProfileStoreRuntime(
     captureScope,
     withPreparedAuthProfileStoreReads,
     overlayExternalAuthProfiles,
+    overlayExternalAuthProfilesAsync,
     setRuntimeAuthProfileStoreSnapshot,
     updateRuntimeAuthProfileStoreSnapshot,
   });
@@ -1444,6 +1490,7 @@ export function createAuthProfileStoreRuntime(
     database: AuthProfileDatabase,
     owner: AuthProfileStoreOwner | PreparedAuthProfileStoreOwner,
     publishFromSuppliedStore = false,
+    preparedExternalProfiles = listRuntimeExternalAuthProfiles,
   ): RuntimeSnapshotPublication {
     // Shared-state rows are global: never scope their persistence or runtime snapshots to an
     // agent, or shared credentials are published and cached as agent-local state.
@@ -1467,7 +1514,7 @@ export function createAuthProfileStoreRuntime(
     const buildLocalStore = (saveOptions = options) =>
       buildLocalAuthProfileStoreForSave({
         getScopedSharedAuthStore,
-        listRuntimeExternalAuthProfiles,
+        listRuntimeExternalAuthProfiles: preparedExternalProfiles,
         owner,
         store,
         agentDir: persistenceAgentDir,
@@ -1593,7 +1640,8 @@ export function createAuthProfileStoreRuntime(
   }
 
   /**
-   * @deprecated Use updateAuthProfileStoreWithLock from openclaw/plugin-sdk/provider-auth.
+   * @deprecated Use saveAuthProfileStoreAsync for replacement or updateAuthProfileStoreWithLock
+   * from openclaw/plugin-sdk/provider-auth for partial updates.
    * Retained until removal in a later stable release after deprecation ships.
    */
   function saveAuthProfileStore(
@@ -1602,15 +1650,8 @@ export function createAuthProfileStoreRuntime(
     options?: SaveAuthProfileStoreOptions,
     database?: AuthProfileDatabase,
   ): void {
-    warnPluginSdkDeprecation({
-      family: "auth-profiles",
-      method: "saveAuthProfileStore",
-      replacement: "updateAuthProfileStoreWithLock from openclaw/plugin-sdk/provider-auth",
-    });
     // Reject lossy SDK inputs before opening the write owner; normalize its detached copy later.
-    for (const credential of Object.values(store.profiles)) {
-      normalizeAuthProfileSecretRefs(credential);
-    }
+    prepareLegacyAuthProfileSave(store);
     const effectiveAgentDir = resolveRuntimeAuthProfileAgentDir(agentDir);
     if (database) {
       // Retain a prepared transaction owner, or use a shared connection's canonical identity.
@@ -1662,13 +1703,16 @@ export function createAuthProfileStoreRuntime(
    * Commit only while both persisted auth rows still match the captured baseline.
    * The caller claims `owned` before publishing because publication is fallible.
    */
-  function saveAuthProfileStoreIfPersistenceSnapshotMatches(params: {
-    store: AuthProfileStore;
-    snapshot: AuthProfileStorePersistenceSnapshot;
-    agentDir?: string;
-    options?: SaveAuthProfileStoreOptions;
-    stateDir?: string;
-  }): CommittedAuthProfileStoreSave {
+  function saveAuthProfileStoreIfPersistenceSnapshotMatches(
+    params: {
+      store: AuthProfileStore;
+      snapshot: AuthProfileStorePersistenceSnapshot;
+      agentDir?: string;
+      options?: SaveAuthProfileStoreOptions;
+      stateDir?: string;
+    },
+    preparedExternalProfiles = listRuntimeExternalAuthProfiles,
+  ): CommittedAuthProfileStoreSave {
     const agentDir = resolveRuntimeAuthProfileAgentDir(params.agentDir);
     assertAuthProfilePersistenceOwner(params.snapshot.owner, agentDir, params.stateDir);
     const { owned, publication } = runAuthProfileWriteTransaction(
@@ -1695,6 +1739,8 @@ export function createAuthProfileStoreRuntime(
           params.options,
           database,
           owner,
+          false,
+          preparedExternalProfiles,
         );
         const ownedSnapshot = {
           owner,
@@ -1731,6 +1777,18 @@ export function createAuthProfileStoreRuntime(
     };
   }
 
+  async function saveAuthProfileStoreIfPersistenceSnapshotMatchesAsync(
+    params: Parameters<typeof saveAuthProfileStoreIfPersistenceSnapshotMatches>[0],
+  ): Promise<CommittedAuthProfileStoreSave> {
+    return runAuthProfileUsage(async () => {
+      const preparedExternalProfiles =
+        params.options?.filterExternalAuthProfiles === false
+          ? () => []
+          : await prepareRuntimeExternalAuthProfiles({ env: params.snapshot.owner.env });
+      return saveAuthProfileStoreIfPersistenceSnapshotMatches(params, preparedExternalProfiles);
+    });
+  }
+
   return {
     prepareAuthProfileStoreForModelRuntime,
     createAuthProfileStoreReadScope,
@@ -1750,8 +1808,10 @@ export function createAuthProfileStoreRuntime(
     ensureAuthProfileStoreForLocalUpdate,
     ensureAuthProfileStoreForLocalUpdateAsync,
     saveAuthProfileStore,
+    saveAuthProfileStoreAsync: createAuthProfileStoreSaver(updateAuthProfileStoreWithLock),
     saveAuthProfileStoreWithPreparedOwner,
     saveAuthProfileStoreIfPersistenceSnapshotMatches,
+    saveAuthProfileStoreIfPersistenceSnapshotMatchesAsync,
     findPersistedAuthProfileCredential,
     findPersistedAuthProfileCredentialAsync,
     resolvePersistedAuthProfileOwnerAgentDirAsync,

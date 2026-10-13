@@ -1,8 +1,9 @@
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
+  resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveMemorySearchConfig,
+  resolveMemorySearchConfigAsync,
   resolveUserPath,
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
@@ -18,6 +19,7 @@ import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import type { openOpenClawAgentSqliteWorkerStoreV2 } from "openclaw/plugin-sdk/sqlite-runtime";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
+import { resolveEmbeddingProviderIndexIdentity } from "./embeddings.js";
 import { getMemoryManagerLifecycle } from "./lifecycle.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
@@ -27,7 +29,10 @@ import {
   type MemoryEmbeddingProviderRequirement,
 } from "./manager-provider-lifecycle.js";
 import { getLocalEmbeddingRuntimeFacts } from "./manager-provider-runtime-facts.js";
-import type { MemoryProviderLifecycleState } from "./manager-provider-state.js";
+import {
+  resolveMemoryPrimaryProviderRequest,
+  type MemoryProviderLifecycleState,
+} from "./manager-provider-state.js";
 import {
   MemoryManagerRegistry,
   type MemoryManagerProviderFactory,
@@ -83,6 +88,9 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   protected readonly workspaceDir: string;
   protected readonly settings: ResolvedMemorySearchConfig;
   protected readonly providerRequirement: MemoryEmbeddingProviderRequirement;
+  protected readonly configuredIndexIdentity: Awaited<
+    ReturnType<typeof resolveEmbeddingProviderIndexIdentity>
+  >;
   private closePromise: Promise<void> | null = null;
   private publishedDatabaseReleased = false;
   protected providerUnavailableReason?: string;
@@ -119,19 +127,19 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     return await managerRegistry.acquire(
       { agentId, purpose },
       {
-        prepare: () => {
-          const settings = source?.settings ?? resolveMemorySearchConfig(cfg, agentId);
+        prepare: async () => {
+          const settings = source?.settings ?? (await resolveMemorySearchConfigAsync(cfg, agentId));
           if (!settings) {
             return null;
           }
           const workspaceDir = source?.workspaceDir ?? resolveAgentWorkspaceDir(cfg, agentId);
           const providerRequirement =
             source?.providerRequirement ??
-            resolveMemoryEmbeddingProviderRequirement({
+            (await resolveMemoryEmbeddingProviderRequirement({
               cfg,
               agentId,
               settings,
-            });
+            }));
           const key = resolveMemoryIndexManagerCacheKey({
             agentId,
             workspaceDir,
@@ -154,6 +162,15 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
                   throw new Error("Memory maintenance source connection is unavailable");
                 }
                 const effectiveSettings = resolveEffectiveMemorySearchSettings(settings);
+                const configuredIndexIdentity = source
+                  ? source.configuredIndexIdentity
+                  : settings.provider === "none"
+                    ? undefined
+                    : await resolveEmbeddingProviderIndexIdentity({
+                        config: cfg,
+                        agentDir: resolveAgentDir(cfg, agentId),
+                        ...resolveMemoryPrimaryProviderRequest({ settings }),
+                      });
                 const publishedDatabase = await MemoryIndexDatabase.openPublished({
                   agentId,
                   writeOptions: databaseOptions,
@@ -175,6 +192,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
                   memoryFiles,
                   settings,
                   providerRequirement,
+                  configuredIndexIdentity,
                   purpose,
                   acquireLocalService: params.acquireLocalService,
                   runInBackgroundContext: source?.backgroundRunner ?? params.runInBackgroundContext,
@@ -225,6 +243,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     workspaceDir: string;
     settings: ResolvedMemorySearchConfig;
     providerRequirement: MemoryEmbeddingProviderRequirement;
+    configuredIndexIdentity: Awaited<ReturnType<typeof resolveEmbeddingProviderIndexIdentity>>;
     purpose: MemoryIndexManagerPurpose;
     acquireLocalService?: MemoryCoreAcquireLocalService;
     runInBackgroundContext?: MemoryCoreRuntimeHost["runInBackgroundContext"];
@@ -249,6 +268,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       store: { ...effectiveSettings.store, databasePath: dbPath },
     };
     this.providerRequirement = params.providerRequirement;
+    this.configuredIndexIdentity = params.configuredIndexIdentity;
     this.providerLifecycle = { mode: "pending", requestedProvider: this.settings.provider };
     for (const memorySource of effectiveSettings.sources) {
       this.sources.add(memorySource);
@@ -539,7 +559,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       providerInitialized: this.embeddingBootstrapFailure ? true : this.providerInitialized,
       requestedProvider: this.settings.provider,
       resolveConfiguredModel: () =>
-        this.resolveConfiguredIndexIdentity()?.provider.model || this.settings.model,
+        this.configuredIndexIdentity?.provider.model || this.settings.model,
     });
     const storage =
       this.sourceInspections.size > 0

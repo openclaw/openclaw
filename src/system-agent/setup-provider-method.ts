@@ -4,7 +4,7 @@ import { enablePluginWithCapabilityConsent } from "../plugins/enable.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
-import { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
+import { resolvePluginProvidersCoreAsync } from "../plugins/providers.runtime.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import { supportsSetupTextInference } from "./setup-inference-auth-options.js";
@@ -58,7 +58,9 @@ export async function withSetupProviderAuthMethod<T>(
             error: `${params.choice.choiceLabel} is disabled (${enabled.reason ?? "blocked"}).`,
           };
         }
-        const providers = (params.deps.resolvePluginProviders ?? resolvePluginProvidersCore)({
+        const providers = await (
+          params.deps.resolvePluginProviders ?? resolvePluginProvidersCoreAsync
+        )({
           config: enabled.config,
           workspaceDir: params.workspace,
           mode: "setup",

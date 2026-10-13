@@ -322,7 +322,7 @@ describe("subagent registry seam flow", () => {
       onSubagentEnded: mocks.onSubagentEnded,
     });
     const pluginRegistry = createEmptyPluginRegistry();
-    mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(pluginRegistry);
+    mocks.loadAgentRuntimePluginRegistryHandle.mockResolvedValue(pluginRegistry);
     mocks.runSubagentEnded.mockImplementation(async () => {
       expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(pluginRegistry);
     });

@@ -14,6 +14,8 @@ import {
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createPluginRuntimeMock } from "./test-helpers/plugin-runtime-mock.js";
 
+const pairingAdapter = { idLabel: "Demo sender" };
+
 let stateDir: string;
 afterEach(async () => {
   await closeStateDatabaseForTest();
@@ -29,7 +31,8 @@ function createPairingFixture() {
         upsertPairingRequest: (input) => upsertChannelPairingRequest({ ...input, env }),
         readAllowFromStore: ({ channel, accountId }) =>
           readChannelAllowFromStore(channel, env, accountId),
-        removeAllowFromStoreEntry: (input) => removeChannelAllowFromStoreEntry({ ...input, env }),
+        removeAllowFromStoreEntry: (input) =>
+          removeChannelAllowFromStoreEntry({ ...input, env, pairingAdapter }),
       },
     },
   });
@@ -69,16 +72,34 @@ describe("channel pairing account isolation", () => {
     ]);
     await expect(listChannelPairingRequests("other", env, "beta")).resolves.toEqual([]);
     await expect(
-      approveChannelPairingCode({ channel: "demo", accountId: "beta", code: alpha.code, env }),
+      approveChannelPairingCode({
+        channel: "demo",
+        accountId: "beta",
+        code: alpha.code,
+        env,
+        pairingAdapter,
+      }),
     ).resolves.toBeNull();
     await expect(
-      approveChannelPairingCode({ channel: "demo", accountId: "alpha", code: alpha.code, env }),
+      approveChannelPairingCode({
+        channel: "demo",
+        accountId: "alpha",
+        code: alpha.code,
+        env,
+        pairingAdapter,
+      }),
     ).resolves.toMatchObject({ id: "shared-sender" });
     await expect(pairing.readAllowFromStore()).resolves.toEqual(["shared-sender"]);
     await expect(listChannelPairingRequests("demo", env, "alpha")).resolves.toEqual([]);
     await expect(readChannelAllowFromStore("demo", env, "beta")).resolves.toEqual([]);
 
-    await approveChannelPairingCode({ channel: "demo", accountId: "beta", code: beta.code, env });
+    await approveChannelPairingCode({
+      channel: "demo",
+      accountId: "beta",
+      code: beta.code,
+      env,
+      pairingAdapter,
+    });
     await expect(pairing.removeAllowFromStoreEntry("shared-sender")).resolves.toEqual({
       changed: true,
       allowFrom: [],
@@ -123,7 +144,13 @@ describe("channel pairing account isolation", () => {
     await expect(pairing.issueChallenge(challenge)).resolves.toEqual({ created: false });
     expect(replies).toHaveLength(1);
     await expect(
-      approveChannelPairingCode({ channel: "demo", accountId: "alpha", code: stored.code, env }),
+      approveChannelPairingCode({
+        channel: "demo",
+        accountId: "alpha",
+        code: stored.code,
+        env,
+        pairingAdapter,
+      }),
     ).resolves.toMatchObject({ id: "challenge-sender" });
     await expect(pairing.readAllowFromStore()).resolves.toEqual(["challenge-sender"]);
   });

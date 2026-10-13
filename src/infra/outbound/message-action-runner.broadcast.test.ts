@@ -388,6 +388,8 @@ describe("broadcast send outcomes through native actions", () => {
         agentSessionKey: identity.sessionKey,
         messageActionTurnCapability: capability,
         config: messageToolConfig,
+        // This synthetic channel has no SecretRef fields.
+        getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
       });
       const pending = tool.execute("broadcast-cancel-call", {
         action: "broadcast",

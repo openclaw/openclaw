@@ -14,7 +14,7 @@ import type {
   ProviderApiKeyResolver,
   ProviderAuthResolver,
 } from "./models-config.providers.secret-helpers.js";
-import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+import { resolvePreparedProviderIdForAuth as resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 const unavailableDiscoveryAuthProfiles = new WeakMap<object, string>();
 

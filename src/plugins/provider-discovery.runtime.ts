@@ -3,12 +3,13 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { sortUniqueStrings } from "../../packages/normalization-core/src/string-normalization.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
+import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
-import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { isJavaScriptModulePath } from "./native-module-require.js";
 import { getPluginMetadataSnapshotCache, withPluginCache } from "./plugin-cache.js";
 import { withProfile } from "./plugin-load-profile.js";
+import { resolvePluginMetadataSnapshotAsync } from "./plugin-metadata-snapshot.js";
 import { preparePluginModule } from "./plugin-module-loader-cache.js";
 import { resolvePluginRuntimeArtifact } from "./plugin-runtime-artifact-resolution.js";
 import {
@@ -22,7 +23,7 @@ import type {
   ResolveRuntimePluginDiscoveryProvidersParams,
 } from "./provider-discovery.js";
 import { resolveDiscoveredProviderPluginIds } from "./providers.js";
-import { resolvePluginProvidersCore } from "./providers.runtime.js";
+import { resolvePluginProvidersCoreAsync } from "./providers.runtime.js";
 import { loadValidatedPublicSurfaceModule } from "./public-surface-loader.js";
 import { resolvePluginRuntimeRecord } from "./runtime-context.js";
 import { getPluginRegistryForContext } from "./runtime/gateway-request-scope.js";
@@ -219,11 +220,18 @@ function resolveProviderDiscoveryEntryPlugins(
 ): ProviderDiscoveryEntryResult {
   const metadataSnapshot =
     params.pluginMetadataSnapshot ??
-    loadManifestMetadataSnapshot({
+    getCurrentPluginMetadataSnapshot({
       config: params.config ?? {},
       env: params.env ?? process.env,
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      allowWorkspaceScopedSnapshot: true,
+      allowSynchronousPolicyRead: false,
     });
+  if (!metadataSnapshot) {
+    throw new Error(
+      "Provider discovery requires prepared metadata; use planPluginDiscoveryRuntimeAsync.",
+    );
+  }
   const registry = metadataSnapshot.index;
   const manifestRegistry = metadataSnapshot.manifestRegistry;
   const pluginIds = resolveDiscoveredProviderPluginIds({
@@ -389,6 +397,28 @@ export function planPluginDiscoveryRuntime(
   };
 }
 
+async function preparePluginDiscoveryRuntimeParams(
+  params: ResolveRuntimePluginDiscoveryProvidersParams,
+): Promise<ResolveRuntimePluginDiscoveryProvidersParams> {
+  if (params.pluginMetadataSnapshot) {
+    return params;
+  }
+  const pluginMetadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+    config: params.config ?? {},
+    env: params.env ?? process.env,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    allowWorkspaceScopedCurrent: true,
+  });
+  return { ...params, pluginMetadataSnapshot };
+}
+
+export async function planPluginDiscoveryRuntimeAsync(
+  params: ResolveRuntimePluginDiscoveryProvidersParams,
+): Promise<ProviderDiscoveryPlan> {
+  return planPluginDiscoveryRuntime(await preparePluginDiscoveryRuntimeParams(params));
+}
+
+/** Reads captured entry descriptors without starting runtime plugin loading. */
 export function resolvePluginDiscoveryProvidersRuntime(
   params: ResolveRuntimePluginDiscoveryProvidersParams,
 ): ProviderPlugin[] {
@@ -396,12 +426,37 @@ export function resolvePluginDiscoveryProvidersRuntime(
   if (plan.kind === "entries") {
     return plan.providers;
   }
-  const fullProviders = resolvePluginProvidersCore({
-    ...params,
-    env: params.env ?? process.env,
+  throw new Error(
+    "Provider discovery requires runtime loading; use resolvePluginDiscoveryProvidersRuntimeAsync.",
+  );
+}
+
+export async function resolvePluginDiscoveryProvidersRuntimeAsync(
+  params: ResolveRuntimePluginDiscoveryProvidersParams,
+): Promise<ProviderPlugin[]> {
+  const prepared = await preparePluginDiscoveryRuntimeParams(params);
+  const plan = planPluginDiscoveryRuntime(prepared);
+  if (plan.kind === "entries") {
+    return plan.providers;
+  }
+  const fullProviders = await resolvePluginProvidersCoreAsync({
+    ...prepared,
+    env: prepared.env ?? process.env,
     ...(plan.pluginIds ? { onlyPluginIds: plan.pluginIds } : {}),
   });
-  const providers = [...plan.providers];
+  return mergePluginDiscoveryProviders(
+    plan.providers,
+    fullProviders,
+    params.includeSyntheticAuthProviders,
+  );
+}
+
+function mergePluginDiscoveryProviders(
+  entryProviders: ProviderPlugin[],
+  fullProviders: ProviderPlugin[],
+  includeSyntheticAuthProviders: boolean | undefined,
+): ProviderPlugin[] {
+  const providers = [...entryProviders];
   const entryIndices = new Map(
     providers.map((provider, index) => [normalizeProviderId(provider.id), index]),
   );
@@ -412,7 +467,7 @@ export function resolvePluginDiscoveryProvidersRuntime(
       // Runtime owns catalog replacement and its auth pair. A lightweight-only
       // auth contribution survives without keeping a superseded catalog hook.
       providers[index] =
-        !params.includeSyntheticAuthProviders ||
+        !includeSyntheticAuthProviders ||
         provider.resolveSyntheticAuth ||
         provider.prepareSyntheticAuth
           ? provider

@@ -5,6 +5,7 @@ import {
   registerProviderPlugin,
   registerSingleProviderPlugin,
   resolveProviderPluginChoice,
+  useProviderCatalogMetadata,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   expectPassthroughReplayPolicy,
@@ -35,6 +36,8 @@ import {
   isOpenRouterProxyReasoningUnsupportedModel,
 } from "./provider-catalog.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 function createOpenRouterDoneStreamWithoutGeneration() {
   const stream = createAssistantMessageEventStream();

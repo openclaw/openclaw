@@ -3,8 +3,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 
+// mock-isolation: Round-robin ordering excludes host plugin aliases from its credential fixture.
 vi.mock("./provider-auth-aliases.js", () => ({
-  resolveProviderIdForAuth: (provider: string) => provider.trim().toLowerCase(),
+  resolvePreparedProviderIdForAuth: (provider: string) => provider.trim().toLowerCase(),
 }));
 
 const apiKey = (provider = "anthropic"): AuthProfileCredential => ({

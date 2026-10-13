@@ -86,7 +86,7 @@ export function resolveMemoryPrimaryProviderRequest(params: {
   };
 }
 
-export function resolveMemoryFallbackProviderRequest(params: {
+export async function resolveMemoryFallbackProviderRequest(params: {
   cfg: OpenClawConfig;
   settings: ResolvedMemorySearchConfig;
   currentProviderId: string | null;
@@ -103,7 +103,7 @@ export function resolveMemoryFallbackProviderRequest(params: {
   return {
     ...resolveMemoryPrimaryProviderRequest({ settings: params.settings }),
     provider: fallback,
-    model: resolveEmbeddingProviderFallbackModel(fallback, params.settings.model, params.cfg),
+    model: await resolveEmbeddingProviderFallbackModel(fallback, params.settings.model, params.cfg),
     remote: resolveEmbeddingProviderFallbackRemote(params.settings.remote),
     fallback: "none" as const,
   };

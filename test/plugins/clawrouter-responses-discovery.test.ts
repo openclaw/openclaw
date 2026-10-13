@@ -8,6 +8,7 @@ import {
 } from "../../src/agents/embedded-agent-runner/model.js";
 import type { ProviderRuntimeHooks } from "../../src/agents/embedded-agent-runner/model.provider-hooks.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import { prepareBundledDiscoveryMode } from "../../src/plugins/bundled-discovery-state.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -22,6 +23,7 @@ describe("ClawRouter Responses discovery to dispatch", () => {
 
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "clawrouter-responses" });
+    await prepareBundledDiscoveryMode(state.env);
     clearLiveCatalogCacheForTests();
     auth.resolveApiKeyForProvider.mockReset();
     auth.resolveApiKeyForProvider.mockResolvedValue({ apiKey: "synthetic-catalog-key" });

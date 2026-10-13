@@ -1,10 +1,15 @@
 // Covers direct model directive authorization and upgrade-era repair guidance.
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { resolveModelDirectiveSelection } from "./model-selection-directive.js";
 import { createModelSelectionState } from "./model-selection.js";
+
+beforeAll(async () => {
+  await prepareBundledDiscoveryMode();
+});
 
 function resolveDirective(params: { cfg: OpenClawConfig; raw: string; agentId?: string }) {
   const defaultProvider = "openai";

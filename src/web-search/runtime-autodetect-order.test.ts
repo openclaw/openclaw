@@ -10,6 +10,13 @@ import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.type
 import { createWebSearchTestProvider } from "../test-utils/web-provider-runtime.test-helpers.js";
 import { runWebSearch } from "./runtime.js";
 
+// mock-isolation: Provider fixtures supply metadata without opening shared machine state.
+vi.mock("../plugins/installed-plugin-index-record-state.js", () => ({
+  preparePluginMetadataMachineStateAsync: async () => () => {},
+  getPersistedInstalledPluginIndexCacheEntry: () => ({ state: { status: "missing" } }),
+  inspectPersistedInstalledPluginIndexInstallRecordsSync: () => ({ status: "missing" }),
+}));
+
 // mock-isolation: Use fixed discovery policy without opening machine state for provider fixtures.
 vi.mock("../plugins/bundled-discovery-state.js", () => ({
   prepareBundledDiscoveryMode: async () => () => {},
@@ -22,9 +29,12 @@ const { resolveProviders } = vi.hoisted(() => ({
 vi.mock("../plugins/plugin-registry-contributions.js", () => ({
   resolveManifestContractOwnerPluginId: () => undefined,
 }));
+// mock-isolation: Autodetection order tests supply exact provider inventories without plugin runtime discovery.
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolveProviders,
+  resolvePluginWebSearchProvidersAsync: resolveProviders,
   resolveRuntimeWebSearchProviders: resolveProviders,
+  resolveRuntimeWebSearchProvidersAsync: resolveProviders,
 }));
 
 describe("web search OAuth and environment auto-detection", () => {

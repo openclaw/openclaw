@@ -5,6 +5,7 @@
  * Kept apart from isolated-completion.ts so readers do not load run machinery.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveCliRuntimeCanonicalProvider } from "./cli-backends.js";
@@ -50,11 +51,13 @@ export function resolveIsolatedCompletionProvider(params: {
   provider: string;
   config: OpenClawConfig;
   agentHarnessRuntimeOverride?: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): { provider: string; runtimeOverride?: string } {
   const canonicalProvider = resolveCliRuntimeCanonicalProvider({
     runtime: params.provider,
     config: params.config,
     includeSetupRegistry: true,
+    metadataSnapshot: params.metadataSnapshot,
   });
   const runtimeOverride =
     params.agentHarnessRuntimeOverride ?? (canonicalProvider ? params.provider : undefined);
@@ -169,6 +172,7 @@ export async function resolveIsolatedCompletionRuntime(
       provider: params.provider,
       config,
       agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
+      metadataSnapshot: params.preparedAuth?.metadataSnapshot,
     });
     const route = await resolveIsolatedCompletionRoute({
       config,

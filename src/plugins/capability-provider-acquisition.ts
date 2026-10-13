@@ -4,14 +4,12 @@ import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { acquireBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
 import {
   preparePluginCapabilityProviderLookup,
+  preparePluginCapabilityProviderLookupAsync,
   preparePluginCapabilityProviderResolution,
+  preparePluginCapabilityProviderResolutionAsync,
   type CapabilityProviderFor,
 } from "./capability-provider-runtime.js";
-import {
-  acquirePluginRegistryForInspection,
-  isPluginRegistryLoadInFlight,
-  resolvePluginRegistryLoadCacheKey,
-} from "./loader.js";
+import { acquirePluginRegistryForInspection, resolvePluginRegistryLoadCacheKey } from "./loader.js";
 import { getPluginValueInstance } from "./plugin-instance-scope.js";
 import {
   collectRegistryInvocationInstances,
@@ -129,16 +127,14 @@ export async function acquirePluginCapabilityProviders<
       let registry = load.loadedRegistry;
       if (!registry) {
         const loadOptions = load.resolveLoadOptions();
-        if (!isPluginRegistryLoadInFlight(loadOptions)) {
-          const key = resolvePluginRegistryLoadCacheKey(loadOptions);
-          registry = await getOrCreatePromise(loads, key, () =>
-            acquirePluginRegistryForInspection(loadOptions).then((acquired) => {
-              releases.push(acquired.release);
-              captureAuthority(acquired.registry);
-              return acquired.registry;
-            }),
-          );
-        }
+        const key = resolvePluginRegistryLoadCacheKey(loadOptions);
+        registry = await getOrCreatePromise(loads, key, () =>
+          acquirePluginRegistryForInspection(loadOptions).then((acquired) => {
+            releases.push(acquired.release);
+            captureAuthority(acquired.registry);
+            return acquired.registry;
+          }),
+        );
       }
       const fallback = load.fallback(registry);
       entries = fallback.entries;
@@ -157,18 +153,19 @@ export async function acquirePluginCapabilityProviders<
   const resolveProviders = (
     query: Omit<Parameters<typeof preparePluginCapabilityProviderResolution<K>>[0], "key">,
   ) =>
-    run(() =>
+    run(async () =>
       execute<CapabilityProviderFor<K>[]>(
-        preparePluginCapabilityProviderResolution({ ...query, key: params.key }, retain),
+        await preparePluginCapabilityProviderResolutionAsync({ ...query, key: params.key }, retain),
       ),
     );
   const resolveProvider = (
     query: Omit<Parameters<typeof preparePluginCapabilityProviderLookup<K>>[0], "key">,
   ) =>
-    run(() =>
+    run(async () =>
       execute<CapabilityProviderFor<K> | undefined>(
-        preparePluginCapabilityProviderLookup({ ...query, key: params.key }, (registry) =>
-          retain(registry, query.providerId),
+        await preparePluginCapabilityProviderLookupAsync(
+          { ...query, key: params.key },
+          (registry) => retain(registry, query.providerId),
         ),
       ),
     );

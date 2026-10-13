@@ -3,7 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { discoverConfiguredPluginLoadPaths, discoverOpenClawPlugins } from "./discovery.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
+import { loadOpenClawPluginsAsync } from "./loader.js";
 import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
@@ -75,7 +76,7 @@ afterEach(() => {
 });
 
 describe("deterministic plugin discovery ownership", () => {
-  it("keeps plugin, equal-priority hook, and service order independent of directory enumeration", () => {
+  it("keeps plugin, equal-priority hook, and service order independent of directory enumeration", async () => {
     const stateRoot = createTemporaryRoot();
     const extensionRoot = path.join(stateRoot, "extensions");
     for (const pluginId of ["zeta", "alpha"]) {
@@ -83,7 +84,7 @@ describe("deterministic plugin discovery ownership", () => {
     }
     reverseDirectoryEntries(extensionRoot);
 
-    const registry = loadOpenClawPlugins({
+    const registry = await loadOpenClawPluginsAsync({
       activate: false,
       cache: false,
       config: { plugins: { allow: ["alpha", "zeta"], slots: { memory: "none" } } },
@@ -165,7 +166,7 @@ describe("deterministic plugin discovery ownership", () => {
     expect(discovery.candidates.map((candidate) => candidate.idHint)).toEqual(["alpha", "zeta"]);
   });
 
-  it("orders manifest-only plugin metadata consistently across filesystem enumeration", () => {
+  it("orders manifest-only plugin metadata consistently across filesystem enumeration", async () => {
     const root = createTemporaryRoot();
     const home = path.join(root, "home");
     const extensionRoot = path.join(home, ".openclaw", "extensions");
@@ -174,10 +175,12 @@ describe("deterministic plugin discovery ownership", () => {
     }
     reverseDirectoryEntries(extensionRoot);
 
-    const records = listOpenClawPluginManifestMetadata({
+    const env = {
       OPENCLAW_HOME: home,
       OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "no-bundled-plugins"),
-    });
+    };
+    await readPersistedInstalledPluginIndex({ env });
+    const records = listOpenClawPluginManifestMetadata(env);
 
     expect(
       records.filter((record) => record.origin === "global").map((record) => record.manifest.id),

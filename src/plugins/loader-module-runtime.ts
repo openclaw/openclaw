@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { VERSION } from "../version.js";
 import { runPluginRegistration } from "./api-lifecycle.js";
@@ -194,6 +195,7 @@ export function createLazyPluginRuntime(params: {
   devSourceRoot?: string | null;
   pluginSdkResolution?: PluginSdkResolutionPreference;
   runtimeOptions?: CreatePluginRuntimeOptions;
+  readConfig?: () => OpenClawConfig;
 }): PluginRuntime {
   const cache = getPluginCache();
   type RuntimeModule = {
@@ -233,7 +235,7 @@ export function createLazyPluginRuntime(params: {
     );
   };
 
-  const base = createRuntimeBase();
+  const base = createRuntimeBase(params.readConfig);
   let resolvedRuntime: PluginRuntime | null = null;
   const resolveRuntime = (): PluginRuntime => {
     resolvedRuntime ??= withPluginCache(cache, () => {

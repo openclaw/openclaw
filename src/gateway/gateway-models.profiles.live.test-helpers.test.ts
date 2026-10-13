@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
@@ -27,6 +28,10 @@ describe("isolateLiveGatewayConfig", () => {
 });
 
 describe("resolveExplicitLiveModelCandidates", () => {
+  beforeEach(async () => {
+    await preparePluginMetadataMachineStateAsync({});
+  });
+
   const pro = createGatewayLiveTestModel("deepseek", "deepseek-v4-pro");
   const anthropic = createGatewayLiveTestModel("anthropic", "claude-sonnet-4-6");
   const google = createGatewayLiveTestModel("google", "gemini-3.1-pro-preview");

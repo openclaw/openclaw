@@ -7,7 +7,10 @@ import {
   readPersistedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
 } from "../agents/auth-profiles/sqlite.js";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
+import {
+  saveAuthProfileStore,
+  saveAuthProfileStoreAsync,
+} from "../agents/auth-profiles/store-runtime.js";
 import * as authStoreRuntime from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 
@@ -30,7 +33,7 @@ export type ApplyFixture = {
 
 export async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
   if (path.basename(filePath) === "openclaw-agent.sqlite") {
-    saveAuthProfileStore(value as AuthProfileStore, path.dirname(filePath), {
+    await saveAuthProfileStoreAsync(value as AuthProfileStore, path.dirname(filePath), {
       filterExternalAuthProfiles: false,
       syncExternalCli: false,
     });
@@ -116,12 +119,12 @@ export function mutateAuthStoreBeforeNextPublication(
   agentDir: string,
   concurrentMutation: "credentials" | "state",
 ): void {
-  const save = authStoreRuntime.saveAuthProfileStoreIfPersistenceSnapshotMatches;
+  const save = authStoreRuntime.saveAuthProfileStoreIfPersistenceSnapshotMatchesAsync;
   vi.spyOn(
     authStoreRuntime,
-    "saveAuthProfileStoreIfPersistenceSnapshotMatches",
-  ).mockImplementationOnce((params) => {
-    const committed = save(params);
+    "saveAuthProfileStoreIfPersistenceSnapshotMatchesAsync",
+  ).mockImplementationOnce(async (params) => {
+    const committed = await save(params);
     const publish = committed.publishRuntimeSnapshots;
     committed.publishRuntimeSnapshots = () => {
       // Mutate persisted rows after the candidate commit but before its
@@ -151,7 +154,7 @@ export function mutateAuthStoreBeforeNextPublication(
             : {}),
         },
         agentDir,
-        { syncExternalCli: false },
+        { filterExternalAuthProfiles: false, syncExternalCli: false },
       );
       return publish();
     };

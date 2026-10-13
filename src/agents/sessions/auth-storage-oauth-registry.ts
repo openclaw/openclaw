@@ -8,7 +8,7 @@ import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-
 import {
   loginProviderOAuthWithPlugin,
   resolveProviderOAuthCredentialWithPlugin,
-  resolveProviderOAuthRefreshCapabilityWithPlugin,
+  resolveProviderOAuthRefreshCapabilityWithLazyRuntime,
 } from "../../plugins/provider-runtime.runtime.js";
 
 // Values belong to one AuthStorage object. The weak attachment keeps ModelRegistry
@@ -64,7 +64,7 @@ export async function resolveAuthStoragePluginOAuthCredential(
 export async function canResolveAuthStoragePluginOAuthRefresh(
   providerId: OAuthProviderId,
 ): Promise<boolean> {
-  const capability = await resolveProviderOAuthRefreshCapabilityWithPlugin({
+  const capability = await resolveProviderOAuthRefreshCapabilityWithLazyRuntime({
     provider: providerId,
   });
   if (capability.status === "configured-unavailable") {

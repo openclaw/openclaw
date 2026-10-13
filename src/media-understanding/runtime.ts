@@ -5,6 +5,7 @@ import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
 import {
   normalizeImageDescriptionInput,
@@ -12,7 +13,7 @@ import {
 } from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
 import {
-  buildMediaUnderstandingRegistry,
+  acquireMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
   normalizeMediaProviderId,
 } from "./provider-registry.js";
@@ -22,12 +23,7 @@ import {
   normalizeDecisionReason,
   type MediaRequestOverrides,
 } from "./runner.entries.js";
-import {
-  buildProviderRegistry,
-  createMediaAttachmentCache,
-  normalizeMediaAttachments,
-  runCapability,
-} from "./runner.js";
+import { createMediaAttachmentCache, normalizeMediaAttachments, runCapability } from "./runner.js";
 import type {
   DescribePreparedImageWithModelParams,
   DescribeImageFileParams,
@@ -120,100 +116,104 @@ async function runFile(
   params: RunMediaUnderstandingFileParams,
   request: MediaRequestOverrides,
 ): Promise<RunMediaUnderstandingFileResult> {
-  const { cfg } = params;
-  const requestTimeoutSeconds =
-    typeof params.timeoutMs === "number" &&
-    Number.isFinite(params.timeoutMs) &&
-    params.timeoutMs > 0
-      ? Math.ceil(params.timeoutMs / 1000)
-      : undefined;
-  const ctx = buildFileContext(params);
-  const attachments = normalizeMediaAttachments(ctx);
-  const decisionBase = {
-    capability: params.capability,
-    attachments: [],
-    attachmentProcessing: Object.fromEntries(
-      attachments.map(({ index }) => [index, "omitted" as const]),
-    ),
-    ...(params.capability === "image" ? { nativeVisionActive: false } : {}),
-  };
-  if (attachments.length === 0) {
-    return {
-      text: undefined,
-      decision: {
-        ...decisionBase,
-        outcome: "no-attachment",
-        attachmentDispositions: {},
-      },
-    };
-  }
-  const config = {
-    ...cfg.tools?.media?.[params.capability],
-    ...(request.prompt ? { prompt: request.prompt } : {}),
-    ...(request.language ? { language: request.language } : {}),
-    ...(requestTimeoutSeconds !== undefined ? { timeoutSeconds: requestTimeoutSeconds } : {}),
-  };
-  if (config?.enabled === false) {
-    return {
-      text: undefined,
-      provider: undefined,
-      model: undefined,
-      output: undefined,
-      decision: {
-        ...decisionBase,
-        outcome: "disabled",
-        attachmentDispositions: Object.fromEntries(
-          attachments.map((attachment) => [
-            attachment.index,
-            { kind: "capability-disabled" as const },
-          ]),
-        ),
-      },
-    };
-  }
-  const providerRegistry = buildProviderRegistry(undefined, cfg);
-  const agentDir =
-    params.agentDir ?? (params.agentId ? resolveAgentDir(cfg, params.agentId) : undefined);
-  const cache = createMediaAttachmentCache(attachments, {
-    localPathRoots: params.mediaUrl ? undefined : resolveFileLocalRoots(params.filePath),
-    ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
-  });
-
-  try {
-    const result = await runCapability({
+  return await runWithAsyncWorkResources<RunMediaUnderstandingFileResult>(async (onAcquired) => {
+    const { cfg } = params;
+    const requestTimeoutSeconds =
+      typeof params.timeoutMs === "number" &&
+      Number.isFinite(params.timeoutMs) &&
+      params.timeoutMs > 0
+        ? Math.ceil(params.timeoutMs / 1000)
+        : undefined;
+    const ctx = buildFileContext(params);
+    const attachments = normalizeMediaAttachments(ctx);
+    const decisionBase = {
       capability: params.capability,
-      cfg,
-      ctx,
-      attachments: cache,
-      media: attachments,
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      ...(agentDir ? { agentDir } : {}),
-      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-      providerRegistry,
-      config,
-      activeModel: params.activeModel,
-      request,
-    });
-    if (result.outputs.length === 0 && result.decision.outcome === "failed") {
-      throw new Error(
-        normalizeDecisionReason(findDecisionReason(result.decision, "failed")) ??
-          `${params.capability} understanding failed`,
-      );
-    }
-    const output = result.outputs.find(
-      (entry) => entry.kind === KIND_BY_CAPABILITY[params.capability],
-    );
-    const text = output?.text?.trim();
-    return {
-      text: text || undefined,
-      provider: output?.provider,
-      model: output?.model,
-      output,
-      decision: result.decision,
+      attachments: [],
+      attachmentProcessing: Object.fromEntries(
+        attachments.map(({ index }) => [index, "omitted" as const]),
+      ),
+      ...(params.capability === "image" ? { nativeVisionActive: false } : {}),
     };
-  } finally {
-    await cache.cleanup();
-  }
+    if (attachments.length === 0) {
+      return {
+        text: undefined,
+        decision: {
+          ...decisionBase,
+          outcome: "no-attachment",
+          attachmentDispositions: {},
+        },
+      };
+    }
+    const config = {
+      ...cfg.tools?.media?.[params.capability],
+      ...(request.prompt ? { prompt: request.prompt } : {}),
+      ...(request.language ? { language: request.language } : {}),
+      ...(requestTimeoutSeconds !== undefined ? { timeoutSeconds: requestTimeoutSeconds } : {}),
+    };
+    if (config?.enabled === false) {
+      return {
+        text: undefined,
+        provider: undefined,
+        model: undefined,
+        output: undefined,
+        decision: {
+          ...decisionBase,
+          outcome: "disabled",
+          attachmentDispositions: Object.fromEntries(
+            attachments.map((attachment) => [
+              attachment.index,
+              { kind: "capability-disabled" as const },
+            ]),
+          ),
+        },
+      };
+    }
+    const acquired = await acquireMediaUnderstandingRegistry({ cfg });
+    onAcquired(acquired);
+    const providerRegistry = acquired.registry;
+    const agentDir =
+      params.agentDir ?? (params.agentId ? resolveAgentDir(cfg, params.agentId) : undefined);
+    const cache = createMediaAttachmentCache(attachments, {
+      localPathRoots: params.mediaUrl ? undefined : resolveFileLocalRoots(params.filePath),
+      ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
+    });
+
+    try {
+      const result = await runCapability({
+        capability: params.capability,
+        cfg,
+        ctx,
+        attachments: cache,
+        media: attachments,
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        ...(agentDir ? { agentDir } : {}),
+        ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+        providerRegistry,
+        config,
+        activeModel: params.activeModel,
+        request,
+      });
+      if (result.outputs.length === 0 && result.decision.outcome === "failed") {
+        throw new Error(
+          normalizeDecisionReason(findDecisionReason(result.decision, "failed")) ??
+            `${params.capability} understanding failed`,
+        );
+      }
+      const output = result.outputs.find(
+        (entry) => entry.kind === KIND_BY_CAPABILITY[params.capability],
+      );
+      const text = output?.text?.trim();
+      return {
+        text: text || undefined,
+        provider: output?.provider,
+        model: output?.model,
+        output,
+        decision: result.decision,
+      };
+    } finally {
+      await cache.cleanup();
+    }
+  });
 }
 
 export async function describeImageFile(
@@ -263,37 +263,44 @@ export async function prepareImageDescriptionInput(params: PrepareImageDescripti
 }
 
 export async function describePreparedImageWithModel(params: DescribePreparedImageWithModelParams) {
-  const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
-  const providerRegistry = buildProviderRegistry(undefined, params.cfg);
-  const provider = providerRegistry.get(normalizeMediaProviderId(params.provider));
-  const describeImage = provider?.describeImage ?? describeImageWithModel;
-  const agentDir =
-    params.agentDir ??
-    (params.agentId
-      ? resolveAgentDir(params.cfg, params.agentId)
-      : resolveDefaultAgentDir(params.cfg));
-  const image = await optimizeImageDescriptionInput({
-    ...params.image,
-    maxBytes: DEFAULT_MAX_BYTES.image,
-    cfg: params.cfg,
-    provider: params.provider,
-    model: params.model,
-    agentDir,
-    workspaceDir: params.workspaceDir,
-  });
-  return await describeImage({
-    buffer: image.buffer,
-    fileName: image.fileName ?? params.image.fileName,
-    mime: image.mime,
-    provider: params.provider,
-    model: params.model,
-    prompt: params.prompt,
-    maxTokens: params.maxTokens,
-    timeoutMs,
-    cfg: params.cfg,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    agentDir,
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  return await runWithAsyncWorkResources(async (onAcquired) => {
+    const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
+    const acquired = await acquireMediaUnderstandingRegistry({
+      cfg: params.cfg,
+      providerId: params.provider,
+    });
+    onAcquired(acquired);
+    const providerRegistry = acquired.registry;
+    const provider = providerRegistry.get(normalizeMediaProviderId(params.provider));
+    const describeImage = provider?.describeImage ?? describeImageWithModel;
+    const agentDir =
+      params.agentDir ??
+      (params.agentId
+        ? resolveAgentDir(params.cfg, params.agentId)
+        : resolveDefaultAgentDir(params.cfg));
+    const image = await optimizeImageDescriptionInput({
+      ...params.image,
+      maxBytes: DEFAULT_MAX_BYTES.image,
+      cfg: params.cfg,
+      provider: params.provider,
+      model: params.model,
+      agentDir,
+      workspaceDir: params.workspaceDir,
+    });
+    return await describeImage({
+      buffer: image.buffer,
+      fileName: image.fileName ?? params.image.fileName,
+      mime: image.mime,
+      provider: params.provider,
+      model: params.model,
+      prompt: params.prompt,
+      maxTokens: params.maxTokens,
+      timeoutMs,
+      cfg: params.cfg,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      agentDir,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    });
   });
 }
 
@@ -307,31 +314,35 @@ export async function describeImageFileWithModel(params: DescribeImageFileWithMo
 }
 
 export async function extractStructuredWithModel(params: ExtractStructuredWithModelParams) {
-  const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
-  if (!params.input.some((entry) => entry.type === "image")) {
-    throw new Error("Structured extraction requires at least one image input.");
-  }
-  const provider = getMediaUnderstandingProvider(
-    params.provider,
-    buildMediaUnderstandingRegistry(undefined, params.cfg),
-  );
-  if (!provider?.extractStructured) {
-    throw new Error(`Provider does not support structured extraction: ${params.provider}`);
-  }
-  return await provider.extractStructured({
-    input: params.input,
-    instructions: params.instructions,
-    schemaName: params.schemaName,
-    jsonSchema: params.jsonSchema,
-    jsonMode: params.jsonMode,
-    provider: params.provider,
-    model: params.model,
-    profile: params.profile,
-    preferredProfile: params.preferredProfile,
-    authStore: params.authStore,
-    timeoutMs,
-    cfg: params.cfg,
-    agentDir: params.agentDir ?? "",
+  return await runWithAsyncWorkResources(async (onAcquired) => {
+    const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
+    if (!params.input.some((entry) => entry.type === "image")) {
+      throw new Error("Structured extraction requires at least one image input.");
+    }
+    const acquired = await acquireMediaUnderstandingRegistry({
+      cfg: params.cfg,
+      providerId: params.provider,
+    });
+    onAcquired(acquired);
+    const provider = getMediaUnderstandingProvider(params.provider, acquired.registry);
+    if (!provider?.extractStructured) {
+      throw new Error(`Provider does not support structured extraction: ${params.provider}`);
+    }
+    return await provider.extractStructured({
+      input: params.input,
+      instructions: params.instructions,
+      schemaName: params.schemaName,
+      jsonSchema: params.jsonSchema,
+      jsonMode: params.jsonMode,
+      provider: params.provider,
+      model: params.model,
+      profile: params.profile,
+      preferredProfile: params.preferredProfile,
+      authStore: params.authStore,
+      timeoutMs,
+      cfg: params.cfg,
+      agentDir: params.agentDir ?? "",
+    });
   });
 }
 
@@ -345,26 +356,32 @@ export async function describeVideoFile(
 export async function resolveAudioInputBudget(params: {
   cfg: OpenClawConfig;
 }): Promise<{ enabled: false } | { enabled: true; maxBytes: number }> {
-  const { cfg } = params;
-  const config = cfg.tools?.media?.audio;
-  if (config?.enabled === false) {
-    return { enabled: false };
-  }
-  const capability = "audio";
-  const entries = resolveModelEntries({
-    cfg,
-    capability,
-    config,
-    providerRegistry: buildProviderRegistry(undefined, cfg),
-  }).map(({ entry }) => entry);
-  // Auto-detected provider and CLI entries inherit the capability limit.
-  const candidates = entries.length > 0 ? entries : [{}];
-  return {
-    enabled: true,
-    maxBytes: Math.max(
-      ...candidates.map((entry) => resolveMaxBytes({ cfg, capability, config, entry })),
-    ),
-  };
+  return await runWithAsyncWorkResources<{ enabled: false } | { enabled: true; maxBytes: number }>(
+    async (onAcquired) => {
+      const { cfg } = params;
+      const config = cfg.tools?.media?.audio;
+      if (config?.enabled === false) {
+        return { enabled: false };
+      }
+      const acquired = await acquireMediaUnderstandingRegistry({ cfg });
+      onAcquired(acquired);
+      const capability = "audio";
+      const entries = resolveModelEntries({
+        cfg,
+        capability,
+        config,
+        providerRegistry: acquired.registry,
+      }).map(({ entry }) => entry);
+      // Auto-detected provider and CLI entries inherit the capability limit.
+      const candidates = entries.length > 0 ? entries : [{}];
+      return {
+        enabled: true,
+        maxBytes: Math.max(
+          ...candidates.map((entry) => resolveMaxBytes({ cfg, capability, config, entry })),
+        ),
+      };
+    },
+  );
 }
 
 export async function transcribeAudioFile(

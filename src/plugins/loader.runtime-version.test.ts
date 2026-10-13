@@ -4,7 +4,7 @@ import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { formatPluginLine } from "../cli/plugins-list-format.js";
 import {
   cleanupPluginLoaderFixturesForTest,
-  loadOpenClawPlugins,
+  loadOpenClawPluginsForTest,
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
   writePlugin,
@@ -91,7 +91,7 @@ export const result = { content: [{ type: "text", text: "runtime ready" }] };`,
     const config = {
       plugins: { allow: [plugin.id], load: { paths: [plugin.dir] }, slots: { memory: "none" } },
     };
-    const registry = loadOpenClawPlugins({
+    const registry = loadOpenClawPluginsForTest({
       config,
       manifestRegistry: loadPluginManifestRegistryCore({ config, installRecords: {} }),
       installRecords: {},

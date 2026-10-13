@@ -80,7 +80,7 @@ it.each(["spawned", "legacy", "configured", "removed", "reassigned", "reopened"]
         // Exercise dispatch with the synthetic backend, not the installed ACPX plugin.
         const pluginRegistry = vi
           .spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandle")
-          .mockReturnValue(registry.registry);
+          .mockResolvedValue(registry.registry);
         let afterRuntimePrepared: (() => void) | undefined;
         const publishedRuntime = vi
           .spyOn(preparedRuntime, "loadPublishedGatewayReplyDispatchRuntime")

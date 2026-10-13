@@ -42,6 +42,7 @@ import { resolveSessionPublicShare } from "../config/sessions/session-public-sha
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as channelOutbound from "../plugin-sdk/channel-outbound.js";
 import * as ssrfRuntime from "../plugin-sdk/ssrf-runtime.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import {
   markPluginRegistryActive,
@@ -266,6 +267,7 @@ describe("X publication production-owner composition", () => {
     };
     setRuntimeConfigSnapshot(config);
     const cfg = () => getRuntimeConfig();
+    await prepareBundledDiscoveryMode();
     expect(await xPlugin.config.inspectAccount?.(cfg(), "default")).toMatchObject({
       configured: true,
       enabled: true,

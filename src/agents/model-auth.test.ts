@@ -38,9 +38,11 @@ vi.mock("../plugins/setup-registry.js", () => ({
   resolvePluginSetupProviderCore: () => undefined,
 }));
 
+// mock-isolation: Auth selection fixtures provide an empty external-profile inventory.
 vi.mock("../plugins/provider-external-auth-core.js", () => ({
   createProviderExternalAuthResolver: () => ({
     resolveExternalAuthProfilesWithPlugins: () => [],
+    prepareExternalAuthProfilesWithPlugins: async () => () => [],
   }),
 }));
 
@@ -158,7 +160,15 @@ function resetRuntimeAuthState() {
   setActiveDegradedSecretOwners([]);
 }
 
-beforeEach(resetRuntimeAuthState);
+beforeEach(async () => {
+  resetRuntimeAuthState();
+  const { preparePluginMetadataMachineStateAsync } =
+    await import("../plugins/installed-plugin-index-record-state.js");
+  await Promise.all([
+    preparePluginMetadataMachineStateAsync({}),
+    preparePluginMetadataMachineStateAsync({ env: {} }),
+  ]);
+});
 afterEach(resetRuntimeAuthState);
 
 function secretRef(source: SecretRef["source"], id: string, provider: string): SecretRef {

@@ -2,7 +2,7 @@
 import { afterAll, afterEach, expect, it } from "vitest";
 import {
   cleanupPluginLoaderFixturesForTest,
-  loadOpenClawPlugins,
+  loadOpenClawPluginsForTest,
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
   writePlugin,
@@ -29,7 +29,7 @@ it("registers static nodeHostCommands without activation", () => {
     };`,
   });
 
-  const registry = loadOpenClawPlugins({
+  const registry = loadOpenClawPluginsForTest({
     cache: false,
     activate: false,
     workspaceDir: plugin.dir,

@@ -1,6 +1,7 @@
 /** Tests external CLI scoping during agent auth-profile credential discovery. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 
 const storeMocks = vi.hoisted(() => ({
   ensureAuthProfileStoreAsync: vi.fn(() => ({ version: 1, profiles: {} })),
@@ -19,6 +20,19 @@ const syntheticAuthMocks = vi.hoisted(() => ({
   resolveRuntimeSyntheticAuthProviderRefs: vi.fn(() => []),
   resolveProviderSyntheticAuthWithPlugin: vi.fn(),
   prepareProviderSyntheticAuthWithPlugin: vi.fn(),
+}));
+
+const metadataMocks = vi.hoisted(() => ({
+  resolvePluginMetadataSnapshotAsync:
+    vi.fn<
+      typeof import("../plugins/plugin-metadata-snapshot.js").resolvePluginMetadataSnapshotAsync
+    >(),
+}));
+
+// mock-isolation: These auth-policy fixtures provide metadata without reading machine state.
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
+  resolvePluginMetadataSnapshotAsync: metadataMocks.resolvePluginMetadataSnapshotAsync,
 }));
 
 vi.mock("./auth-profiles/store-runtime.js", () => storeMocks);
@@ -47,10 +61,15 @@ import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-d
 describe("resolveAgentDiscoveryAuthFacts external CLI scoping", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    metadataMocks.resolvePluginMetadataSnapshotAsync.mockImplementation(async () =>
+      createPluginMetadataSnapshotFixture(),
+    );
     credentialMocks.resolveAgentCredentialMapFromStore.mockReturnValue({});
   });
 
   it("threads scoped external CLI discovery into writable auth store loading", async () => {
+    const metadataSnapshot = createPluginMetadataSnapshotFixture();
+    metadataMocks.resolvePluginMetadataSnapshotAsync.mockResolvedValue(metadataSnapshot);
     const cfg = {} as OpenClawConfig;
     const externalCli = externalCliDiscoveryForProviders({
       cfg,
@@ -67,6 +86,7 @@ describe("resolveAgentDiscoveryAuthFacts external CLI scoping", () => {
       allowKeychainPrompt: false,
       config: cfg,
       externalCli,
+      pluginMetadataSnapshot: metadataSnapshot,
     });
   });
 
@@ -108,17 +128,19 @@ describe("resolveAgentDiscoveryAuthFacts external CLI scoping", () => {
     );
     expect(storeMocks.ensureAuthProfileStoreAsync).not.toHaveBeenCalled();
     expect(syntheticAuthMocks.resolveRuntimeSyntheticAuthProviderRefs).not.toHaveBeenCalled();
-    expect(syntheticAuthMocks.resolveProviderSyntheticAuthWithPlugin).toHaveBeenCalledWith({
-      provider: "fireworks",
-      config: undefined,
-      workspaceDir: undefined,
-      env: {},
-      context: {
-        config: undefined,
+    expect(syntheticAuthMocks.prepareProviderSyntheticAuthWithPlugin).toHaveBeenCalledWith(
+      expect.objectContaining({
         provider: "fireworks",
-        providerConfig: undefined,
-      },
-    });
+        config: undefined,
+        workspaceDir: undefined,
+        env: {},
+        context: {
+          config: undefined,
+          provider: "fireworks",
+          providerConfig: undefined,
+        },
+      }),
+    );
   });
 
   it.each(["read", "prepare"])(
@@ -130,6 +152,7 @@ describe("resolveAgentDiscoveryAuthFacts external CLI scoping", () => {
       const resolveSyntheticAuth = vi.fn((_provider: string) => undefined);
 
       const options = {
+        metadataSnapshot: createPluginMetadataSnapshotFixture(),
         env: { ANTHROPIC_API_KEY: "provider-key" },
         syntheticAuthProviderRefs: ["claude-cli"],
         authoritativeSyntheticAuthProviderRefs: ["claude-cli"],
@@ -150,7 +173,7 @@ describe("resolveAgentDiscoveryAuthFacts external CLI scoping", () => {
   it.each(["oauth", "token"] as const)(
     "skips synthetic api-key fills under a %s provider pin",
     async (auth) => {
-      syntheticAuthMocks.resolveProviderSyntheticAuthWithPlugin.mockReturnValue({
+      syntheticAuthMocks.prepareProviderSyntheticAuthWithPlugin.mockResolvedValue({
         apiKey: "synthetic-key",
       });
       const cfg = {
@@ -168,7 +191,32 @@ describe("resolveAgentDiscoveryAuthFacts external CLI scoping", () => {
       });
 
       expect(credentials.fireworks).toBeUndefined();
-      expect(syntheticAuthMocks.resolveProviderSyntheticAuthWithPlugin).not.toHaveBeenCalled();
+      expect(syntheticAuthMocks.prepareProviderSyntheticAuthWithPlugin).not.toHaveBeenCalled();
     },
   );
+
+  it("uses prepared alias metadata before admitting synthetic credentials", async () => {
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "alias-owner", providerAuthAliases: { alias: "canonical" } }],
+    });
+    metadataMocks.resolvePluginMetadataSnapshotAsync.mockResolvedValue(metadataSnapshot);
+    const config = {
+      models: {
+        providers: { canonical: { auth: "oauth", baseUrl: "https://example.invalid", models: [] } },
+      },
+    } satisfies OpenClawConfig;
+
+    const credentials = await prepareAmbientAgentCredentialsForDiscovery({
+      config,
+      env: {},
+      syntheticAuthProviderRefs: ["alias"],
+    });
+
+    expect(credentials).toEqual({});
+    expect(syntheticAuthMocks.prepareProviderSyntheticAuthWithPlugin).not.toHaveBeenCalled();
+    expect(discoveryCoreMocks.addEnvBackedAgentCredentials).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({ metadataSnapshot }),
+    );
+  });
 });

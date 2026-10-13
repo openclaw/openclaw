@@ -1,5 +1,5 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
-import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -7,6 +7,7 @@ import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlit
 import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { openIncognitoTestActor } from "../state/openclaw-agent-execution-incognito.test-support.js";
@@ -29,6 +30,9 @@ beforeAll(async () => {
     { OPENCLAW_STATE_DIR: dirs.make("title-actor-") },
     authority,
   );
+});
+beforeEach(async () => {
+  await prepareBundledDiscoveryMode();
 });
 afterAll(async () => actor?.close());
 
@@ -77,15 +81,20 @@ it("refuses a title after the same session ID acquires another lifecycle during 
     entered.resolve();
     return resume.promise;
   });
-  const pending = withIncognitoSessionActor(actor, () =>
-    maybeGenerateSessionTitle({
-      cfg,
-      agentId: "main",
-      sessionKey,
-      sessionId: entry.sessionId,
-      storePath: actor.path,
-      userMessage: "Plan my workspace",
-    }),
+  const pending = withPluginMetadataSnapshotScope(
+    createPluginMetadataSnapshotFixture(),
+    () =>
+      withIncognitoSessionActor(actor, () =>
+        maybeGenerateSessionTitle({
+          cfg,
+          agentId: "main",
+          sessionKey,
+          sessionId: entry.sessionId,
+          storePath: actor.path,
+          userMessage: "Plan my workspace",
+        }),
+      ),
+    { config: cfg, trustConfigIdentity: true },
   );
   const settled = pending.then(
     () => undefined,

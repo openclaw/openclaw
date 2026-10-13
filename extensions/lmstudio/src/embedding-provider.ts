@@ -206,12 +206,13 @@ export async function createLmstudioEmbeddingProvider(
   }).request;
   // An absent policy opts catalog requests out of LM Studio's guarded transport.
   const ssrfPolicy =
-    resolveEmbeddingProviderSsrFPolicy({
+    (await resolveEmbeddingProviderSsrFPolicy({
+      config: options.config,
       provider: resolvedProvider?.providerId ?? LMSTUDIO_PROVIDER_ID,
       api: providerConfig?.api ?? "openai-completions",
       baseUrl,
       allowPrivateNetwork: request?.allowPrivateNetwork,
-    }) ?? {};
+    })) ?? {};
   const client: LmstudioEmbeddingClient = {
     baseUrl,
     model,

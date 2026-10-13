@@ -1,4 +1,5 @@
 import type { ImageGenerationProviderConfiguredContext } from "openclaw/plugin-sdk/image-generation";
+import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   isProviderApiKeyConfiguredAsync,
   listProfilesForProvider,
@@ -42,6 +43,8 @@ afterEach(() => {
   vi.resetAllMocks();
   vi.unstubAllEnvs();
 });
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 describe("OpenAI image generation auth availability", () => {
   it("uses capability-aware credential availability before checking the image route", async () => {

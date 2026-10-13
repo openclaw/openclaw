@@ -708,7 +708,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             import {
               createEmptyPluginRegistry,getPluginRegistryState,withPluginRuntimeRegistryScope,
               clearActivePluginRegistry,setActivePluginRegistry,withPluginRuntimeGenerationScope,
-              createPluginMetadataSnapshot,loadOpenClawPlugins,getPluginRuntimeLoadContext,
+              createPluginMetadataSnapshot,loadOpenClawPluginsAsync,getPluginRuntimeLoadContext,
             } from ${JSON.stringify(
               pathToFileURL(
                 owner
@@ -723,7 +723,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             const observed = () => fs.existsSync(events) ? fs.readFileSync(events,'utf8').trim().split('\\n').map(line=>JSON.parse(line)) : [];
             const started = performance.now();
             const {buildEmbeddedRunPayloads} = await import(process.argv[2]);
-            const {resolveProviderRuntimePluginHandle} = await import(process.argv[3]);
+            const {resolveProviderRuntimePluginAsync} = await import(process.argv[3]);
             const imported = performance.now();
             assert.deepEqual(observed(),[], 'importing classifier code must not materialize the provider');
             assert.equal(getPluginRegistryState()?.activeRegistry ?? null,null);
@@ -745,7 +745,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             let scopedPreparationRecordCount = 0;
             if (${scope === "scoped"}) {
               const scopedHook = registry.providers[0].provider.classifyFailoverReason;
-              registry = loadOpenClawPlugins({config:{plugins:{allow:['fixture-hook'],entries:{'fixture-hook':{enabled:true}}}},onlyPluginIds:['fixture-hook'],activate:false});
+              registry = await loadOpenClawPluginsAsync({config:{plugins:{allow:['fixture-hook'],entries:{'fixture-hook':{enabled:true}}}},onlyPluginIds:['fixture-hook'],activate:false});
               const loadedOwner = registry.providers.find(entry=>entry.pluginId==='fixture-hook');
               assert(loadedOwner, 'the real loader must establish the scoped provider owner');
               loadedOwner.provider.classifyFailoverReason = scopedHook;
@@ -753,23 +753,23 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
               assert.deepEqual(preparationRecords.map(record=>record.event),['import','register']);
               scopedPreparationRecordCount = preparationRecords.length;
             }
-            const providerOwner = ${scope === "prepared" ? "resolveProviderRuntimePluginHandle({provider:'fixture-provider'}).plugin" : "undefined"};
+            const providerOwner = ${scope === "prepared" ? "await resolveProviderRuntimePluginAsync({provider:'fixture-provider'})" : "undefined"};
             if (${scope === "prepared"}) {
               assert.equal(providerOwner?.id,'fixture-provider');
               assert.deepEqual(observed(),[{event:'import'},{event:'register',mode:'discovery'}]);
             }
             const callStarted = performance.now();
             const render = providerOwner => buildEmbeddedRunPayloads({...input('403 fixture refusal'),providerOwner});
-            const prepare = () => resolveProviderRuntimePluginHandle({provider:'fixture-provider'}).plugin;
-            const call = () => {
-              const activeProviderOwner = ${scope === "scoped" ? "prepare()" : "providerOwner"};
+            const prepare = () => resolveProviderRuntimePluginAsync({provider:'fixture-provider',config:getPluginRuntimeLoadContext(registry)?.rawConfig});
+            const call = async () => {
+              const activeProviderOwner = ${scope === "scoped" ? "await prepare()" : "providerOwner"};
               if (${scope === "scoped"}) {
                 assert.equal(activeProviderOwner?.classifyFailoverReason,registry.providers[0].provider.classifyFailoverReason,'preparation must retain the scoped provider hook identity');
               }
               assert.deepEqual(render(),unprepared,'ownerless presentation must ignore loaded provider policy');
               return render(activeProviderOwner);
             };
-            const payloads = withPluginRuntimeRegistryScope(registry,call);
+            const payloads = await withPluginRuntimeRegistryScope(registry,call);
             const callMs = performance.now()-callStarted;
             const records = observed().slice(scopedPreparationRecordCount);
             if (${scope === "scoped"}) {
@@ -791,19 +791,19 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
               const metadataSnapshot = createPluginMetadataSnapshot({config,manifestRegistry});
               setActivePluginRegistry(registry,'fixture-active');
               try {
-                assert.deepEqual(call(),payloads,'preparation must select the active loaded provider');
-                withPluginRuntimeGenerationScope({metadataSnapshot,pluginRegistry:registry},()=>{
-                  assert.deepEqual(call(),payloads,'preparation must select the generation provider');
+                assert.deepEqual(await call(),payloads,'preparation must select the active loaded provider');
+                await withPluginRuntimeGenerationScope({metadataSnapshot,pluginRegistry:registry},async()=>{
+                  assert.deepEqual(await call(),payloads,'preparation must select the generation provider');
                   const callsBeforeEmptyGeneration = scopedCalls;
-                  withPluginRuntimeGenerationScope({metadataSnapshot},()=>{
-                    withPluginRuntimeRegistryScope(registry,()=>{
-                      const absentOwner = prepare();
+                  await withPluginRuntimeGenerationScope({metadataSnapshot},async()=>{
+                    await withPluginRuntimeRegistryScope(registry,async()=>{
+                      const absentOwner = await prepare();
                       assert.equal(absentOwner,undefined,'an empty generation must fence request and active providers');
                       assert.deepEqual(render(absentOwner),unprepared);
                       assert.equal(scopedCalls,callsBeforeEmptyGeneration);
                     });
                   });
-                  assert.deepEqual(call(),payloads,'the outer generation must be restored');
+                  assert.deepEqual(await call(),payloads,'the outer generation must be restored');
                 });
               } finally {await clearActivePluginRegistry();}
               assert.deepEqual(render(),unprepared,'presentation outside the scope still needs an explicit owner');

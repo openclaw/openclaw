@@ -2,6 +2,11 @@ import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { Model } from "../../../llm/types.js";
 import type { ProviderModelRouteAuthRequirement } from "../../../plugin-sdk/provider-model-types.js";
+import {
+  getCurrentPluginMetadataSnapshot,
+  withPluginMetadataSnapshotScope,
+} from "../../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../../plugins/plugin-metadata-snapshot.js";
 import { prepareProviderRuntimeAuth } from "../../../plugins/provider-runtime.js";
 import { SecretSurfaceUnavailableError } from "../../../secrets/runtime-degraded-state.js";
 import {
@@ -169,6 +174,21 @@ export function createEmbeddedRunAuthController(params: {
   log: LogLike;
 }) {
   const { state } = params;
+  const withAuthMetadata = async <T>(operation: () => Promise<T>): Promise<T> => {
+    const context = { config: params.config, workspaceDir: params.workspaceDir };
+    if (
+      getCurrentPluginMetadataSnapshot({
+        ...context,
+        allowWorkspaceScopedSnapshot: true,
+        allowSynchronousPolicyRead: false,
+        requireDefaultDiscoveryContext: !params.config,
+      })
+    ) {
+      return operation();
+    }
+    const snapshot = await resolvePluginMetadataSnapshotAsync(context);
+    return withPluginMetadataSnapshotScope(snapshot, operation, context);
+  };
   // Runtime auth overlays are profile-scoped. Keep the pre-auth model so a
   // later profile cannot inherit an earlier profile's endpoint or headers.
   const baseRuntimeModel = state.models.runtime;
@@ -639,10 +659,13 @@ export function createEmbeddedRunAuthController(params: {
   };
 
   return {
-    applyAuthProfileCandidate: applyApiKeyInfo,
-    advanceAuthProfile,
-    initializeAuthProfile,
-    maybeRefreshRuntimeAuthForAuthError,
+    applyAuthProfileCandidate: (...args: Parameters<typeof applyApiKeyInfo>) =>
+      withAuthMetadata(() => applyApiKeyInfo(...args)),
+    advanceAuthProfile: () => withAuthMetadata(advanceAuthProfile),
+    initializeAuthProfile: () => withAuthMetadata(initializeAuthProfile),
+    maybeRefreshRuntimeAuthForAuthError: (
+      ...args: Parameters<typeof maybeRefreshRuntimeAuthForAuthError>
+    ) => withAuthMetadata(() => maybeRefreshRuntimeAuthForAuthError(...args)),
     stopRuntimeAuthRefreshTimer,
   };
 }

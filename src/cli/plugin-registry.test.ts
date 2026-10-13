@@ -86,11 +86,11 @@ const mocks = vi.hoisted(() => ({
     vi.fn<typeof import("../plugins/channel-plugin-ids.js").resolveConfiguredChannelPluginIds>(),
   resolveChannelPluginIds:
     vi.fn<typeof import("../plugins/channel-plugin-ids.js").resolveChannelPluginIds>(),
-  resolveEffectivePluginIds:
-    vi.fn<typeof import("../plugins/effective-plugin-ids.js").resolveEffectivePluginIds>(),
-  resolvePluginRuntimeLoadContext:
+  resolveEffectivePluginIdsAsync:
+    vi.fn<typeof import("../plugins/effective-plugin-ids.js").resolveEffectivePluginIdsAsync>(),
+  resolvePluginRuntimeLoadContextAsync:
     vi.fn<
-      typeof import("../plugins/runtime/load-context.resolve.js").resolvePluginRuntimeLoadContext
+      typeof import("../plugins/runtime/load-context.resolve.js").resolvePluginRuntimeLoadContextAsync
     >(),
 }));
 
@@ -112,14 +112,15 @@ vi.mock("../plugins/channel-plugin-ids.js", () => ({
 // mock-isolation: Registry selection uses fixture plugin ids without installed-plugin discovery.
 vi.mock("../plugins/effective-plugin-ids.js", () => ({
   resolveEffectivePluginIdsAsync: async (
-    ...args: Parameters<typeof mocks.resolveEffectivePluginIds>
-  ) => mocks.resolveEffectivePluginIds(...args),
+    ...args: Parameters<typeof mocks.resolveEffectivePluginIdsAsync>
+  ) => mocks.resolveEffectivePluginIdsAsync(...args),
 }));
 
+// mock-isolation: Fixture load contexts avoid ambient config and persisted metadata discovery.
 vi.mock("../plugins/runtime/load-context.resolve.js", () => ({
-  resolvePluginRuntimeLoadContext: (
-    ...args: Parameters<typeof mocks.resolvePluginRuntimeLoadContext>
-  ) => mocks.resolvePluginRuntimeLoadContext(...args),
+  resolvePluginRuntimeLoadContextAsync: (
+    ...args: Parameters<typeof mocks.resolvePluginRuntimeLoadContextAsync>
+  ) => mocks.resolvePluginRuntimeLoadContextAsync(...args),
 }));
 
 vi.mock("../plugins/runtime/load-context.js", () => ({
@@ -149,10 +150,10 @@ describe("ensurePluginRegistryLoaded", () => {
     mocks.loadAndActivateRootPluginRegistry.mockReset();
     mocks.resolveConfiguredChannelPluginIds.mockReset();
     mocks.resolveChannelPluginIds.mockReset();
-    mocks.resolveEffectivePluginIds.mockReset();
-    mocks.resolvePluginRuntimeLoadContext.mockReset();
-    mocks.resolveEffectivePluginIds.mockReturnValue(["demo"]);
-    mocks.resolvePluginRuntimeLoadContext.mockImplementation((options) => {
+    mocks.resolveEffectivePluginIdsAsync.mockReset();
+    mocks.resolvePluginRuntimeLoadContextAsync.mockReset();
+    mocks.resolveEffectivePluginIdsAsync.mockResolvedValue(["demo"]);
+    mocks.resolvePluginRuntimeLoadContextAsync.mockImplementation(async (options) => {
       const rawConfig = (options?.config ?? {}) as Record<string, unknown>;
       return {
         rawConfig,
@@ -180,7 +181,7 @@ describe("ensurePluginRegistryLoaded", () => {
     };
     const autoEnabledConfig = withActivatedPluginIdsForTest(baseConfig, ["demo-chat"]);
 
-    mocks.resolvePluginRuntimeLoadContext.mockReturnValue({
+    mocks.resolvePluginRuntimeLoadContextAsync.mockResolvedValue({
       rawConfig: baseConfig,
       config: autoEnabledConfig,
       activationSourceConfig: baseConfig,
@@ -218,7 +219,7 @@ describe("ensurePluginRegistryLoaded", () => {
       channels: { "demo-channel-a": { enabled: false } },
     };
 
-    mocks.resolvePluginRuntimeLoadContext.mockReturnValue({
+    mocks.resolvePluginRuntimeLoadContextAsync.mockResolvedValue({
       rawConfig: config,
       config,
       activationSourceConfig: config,

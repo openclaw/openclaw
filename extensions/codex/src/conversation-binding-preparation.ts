@@ -32,11 +32,10 @@ import {
 import type { CodexAppServerClient } from "./app-server/client.js";
 import { readCodexEffectiveConfig } from "./app-server/config-layer-policy.js";
 import {
-  canUseCodexModelBackedApprovalsReviewerForModel,
+  prepareCodexAppServerConfig,
   readCodexPluginConfig,
   readCodexRequirementsToml,
   resolveOpenClawExecPolicyForCodexAppServer,
-  resolveCodexAppServerRuntimeOptions,
 } from "./app-server/config.js";
 import { resolveCodexNativeExecutionPolicy } from "./app-server/native-execution-policy.js";
 import {
@@ -204,6 +203,8 @@ export async function resolveConversationAppServerRuntime(params: {
         })
       : undefined;
   using _ = { [Symbol.dispose]: () => sandboxForPolicy?.[Symbol.dispose]?.() };
+  const { resolveCodexAppServerRuntimeOptions, canUseCodexModelBackedApprovalsReviewerForModel } =
+    await prepareCodexAppServerConfig({ config: params.config, env: process.env });
   const configuredRuntime = resolveCodexAppServerRuntimeOptions({
     pluginConfig: params.pluginConfig,
     execPolicy,
@@ -216,8 +217,6 @@ export async function resolveConversationAppServerRuntime(params: {
   const canUseAutoReview = canUseCodexModelBackedApprovalsReviewerForModel({
     modelProvider: params.modelProvider,
     model: params.model,
-    config: params.config,
-    env: process.env,
     agentDir: params.agentDir,
   });
   const runtime = applyCodexSessionPermissionPolicy({

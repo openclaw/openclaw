@@ -68,7 +68,7 @@ it("keeps the configured context engine active in a prepared agent registry", as
     workspaceDir: makePluginLoaderTempDir(),
     onlyPluginIds: [engineId],
   });
-  const preparedRegistry = loadAgentRuntimePluginRegistryHandle({
+  const preparedRegistry = await loadAgentRuntimePluginRegistryHandle({
     basePluginIds: [],
     config,
     workspaceDir: plugin.dir,
@@ -154,7 +154,7 @@ it("selects a full-mode-only context engine on caller-owned handles without full
   expect(rootSandboxFactory).not.toBeNull();
   expect(rootSandboxFactory).not.toBe(previousSandboxFactory);
 
-  const handle = loadAgentRuntimePluginRegistryHandle({
+  const handle = await loadAgentRuntimePluginRegistryHandle({
     basePluginIds: ["ce-probe", "sandbox-probe"],
     config,
     workspaceDir,
@@ -229,7 +229,7 @@ it("retains the adopted engine through reload, accepted commit and engine dispos
   };
   const load = () => loadAndActivateRootPluginRegistry({ config, cache: false });
   const root = await load();
-  const handle = loadAgentRuntimePluginRegistryHandle({
+  const handle = await loadAgentRuntimePluginRegistryHandle({
     basePluginIds: [],
     config,
     workspaceDir: plugin.dir,
@@ -403,7 +403,7 @@ it.each(["factory", "contract"] as const)(
       },
     };
     const root = await loadAndActivateRootPluginRegistry({ config, cache: false });
-    const handle = loadAgentRuntimePluginRegistryHandle({
+    const handle = await loadAgentRuntimePluginRegistryHandle({
       basePluginIds: [],
       config,
       workspaceDir: plugin.dir,

@@ -61,6 +61,9 @@ export function resolveExternalCliOverlayOptions(
     return {
       allowKeychainPrompt: false,
       ...(config ? { config } : {}),
+      ...(options?.pluginMetadataSnapshot
+        ? { pluginMetadataSnapshot: options.pluginMetadataSnapshot }
+        : {}),
       externalCliProviderIds: [],
       externalCliProfileIds: [],
     };
@@ -79,6 +82,9 @@ export function resolveExternalCliOverlayOptions(
   return {
     ...(allowKeychainPrompt !== undefined ? { allowKeychainPrompt } : {}),
     ...(config ? { config } : {}),
+    ...(options?.pluginMetadataSnapshot
+      ? { pluginMetadataSnapshot: options.pluginMetadataSnapshot }
+      : {}),
     ...(providerIds ? { externalCliProviderIds: providerIds } : {}),
     ...(profileIds ? { externalCliProfileIds: profileIds } : {}),
   };
@@ -103,6 +109,12 @@ type RuntimeReadHost = {
     env?: NodeJS.ProcessEnv,
     readPreparedStore?: (databasePath: string) => AuthProfileStore,
   ) => AuthProfileStore;
+  loadRuntimeAuthProfileStoreAsync: (
+    agentDir?: string,
+    options?: LoadAuthProfileStoreOptions,
+    env?: NodeJS.ProcessEnv,
+    readPreparedStore?: (databasePath: string) => AuthProfileStore,
+  ) => Promise<AuthProfileStore>;
   captureScope: () => {
     isolated: boolean;
     run: <T>(agentDir: string | undefined, env: NodeJS.ProcessEnv, run: () => T) => T;
@@ -151,6 +163,7 @@ export function createAuthProfileStoreRuntimeReader({
   resolveRuntimeAuthProfileLoadOptions,
   loadAuthProfileStoreForAgent,
   loadRuntimeAuthProfileStore,
+  loadRuntimeAuthProfileStoreAsync,
   captureScope,
 }: RuntimeReadHost) {
   /** Capture sources once; the store owner decides which persisted facts it needs. */
@@ -208,7 +221,7 @@ export function createAuthProfileStoreRuntimeReader({
           options: capturedOptions,
           scope,
           loadAuthProfileStoreForAgent,
-          loadRuntimeAuthProfileStore,
+          loadRuntimeAuthProfileStoreAsync,
         },
         consume,
       );
@@ -435,7 +448,7 @@ export function createAuthProfileStoreRuntimeReader({
       }
       assertCurrent();
       const load = () =>
-        loadRuntimeAuthProfileStore(
+        loadRuntimeAuthProfileStoreAsync(
           effectiveAgentDir,
           { ...capturedOptions, profileId: undefined },
           env,
@@ -450,7 +463,7 @@ export function createAuthProfileStoreRuntimeReader({
             return prepared.value;
           },
         );
-      const store = inCapturedScope(load);
+      const store = await inCapturedScope(load);
       return materializePersonalProfile(store);
     };
     let result: Result<T | AuthProfileStore, unknown>;

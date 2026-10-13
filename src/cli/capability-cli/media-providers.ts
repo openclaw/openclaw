@@ -34,16 +34,21 @@ export async function listUnderstandingProviders(
   cfg: OpenClawConfig,
   agentId: string,
 ) {
-  const { buildMediaUnderstandingRegistry } =
+  const { acquireMediaUnderstandingRegistry } =
     await import("../../media-understanding/provider-registry.js");
-  return [...buildMediaUnderstandingRegistry(undefined, cfg).values()]
-    .filter((provider) => provider.capabilities?.includes(kind))
-    .map((provider) => ({
-      available: true,
-      configured: providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
-      selected: false,
-      id: provider.id,
-      capabilities: provider.capabilities,
-      defaultModels: provider.defaultModels,
-    }));
+  const acquired = await acquireMediaUnderstandingRegistry({ cfg });
+  try {
+    return [...acquired.registry.values()]
+      .filter((provider) => provider.capabilities?.includes(kind))
+      .map((provider) => ({
+        available: true,
+        configured: providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
+        selected: false,
+        id: provider.id,
+        capabilities: provider.capabilities,
+        defaultModels: provider.defaultModels,
+      }));
+  } finally {
+    await acquired.release();
+  }
 }

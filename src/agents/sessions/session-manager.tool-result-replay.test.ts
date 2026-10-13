@@ -1,6 +1,7 @@
 import { streamAnthropic } from "@openclaw/ai/internal/anthropic";
 import { describe, expect, it } from "vitest";
 import type { Context, Message, Model } from "../../llm/types.js";
+import { attachPreparedProviderModelFixture } from "../provider-request.test-support.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { parseSessionEntries, SessionManager } from "./session-manager.js";
@@ -44,7 +45,7 @@ async function anthropicPayload(context: { messages: AgentMessage[] }): Promise<
     (message): message is Message =>
       message.role === "user" || message.role === "assistant" || message.role === "toolResult",
   );
-  const model: Model<"anthropic-messages"> = {
+  const model: Model<"anthropic-messages"> = attachPreparedProviderModelFixture({
     id: "claude-sonnet-4-6",
     name: "Claude Sonnet 4.6",
     provider: "anthropic",
@@ -55,7 +56,7 @@ async function anthropicPayload(context: { messages: AgentMessage[] }): Promise<
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 200_000,
     maxTokens: 4096,
-  };
+  });
   let capturedPayload: unknown;
   const stream = streamAnthropic(model, { messages } satisfies Context, {
     apiKey: "sk-ant-provider",

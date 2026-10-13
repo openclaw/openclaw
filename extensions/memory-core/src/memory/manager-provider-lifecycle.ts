@@ -73,11 +73,11 @@ export function resolveEffectiveMemorySearchSettings(
   };
 }
 
-export function resolveMemoryEmbeddingProviderRequirement(params: {
+export async function resolveMemoryEmbeddingProviderRequirement(params: {
   cfg: OpenClawConfig;
   agentId: string;
   settings: ResolvedMemorySearchConfig;
-}): MemoryEmbeddingProviderRequirement {
+}): Promise<MemoryEmbeddingProviderRequirement> {
   const agentEntry = resolveAgentConfig(params.cfg, normalizeAgentId(params.agentId));
   const configuredProvider = (
     agentEntry?.memory?.search?.provider ?? params.cfg.memory?.search?.provider
@@ -85,7 +85,7 @@ export function resolveMemoryEmbeddingProviderRequirement(params: {
   if (params.settings.provider === "none" || configuredProvider === "none") {
     return { mode: "fts-only", provider: params.settings.provider };
   }
-  const adapterTransport = resolveEmbeddingProviderAdapterTransport(
+  const adapterTransport = await resolveEmbeddingProviderAdapterTransport(
     params.settings.provider,
     params.cfg,
   );
@@ -272,7 +272,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
       provider: this.provider,
       lifecycle: this.providerLifecycle,
     });
-    const fallbackRequest = resolveMemoryFallbackProviderRequest({
+    const fallbackRequest = await resolveMemoryFallbackProviderRequest({
       cfg: this.cfg,
       settings: this.settings,
       currentProviderId,

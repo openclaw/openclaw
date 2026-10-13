@@ -6,6 +6,7 @@ import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execut
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-runtime.publication-events.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
+import { preparePluginAutoEnableTestDiscovery } from "../config/plugin-auto-enable.test-helpers.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   deleteSessionEntryLifecycle,
@@ -310,6 +311,7 @@ it.each(["static", "unowned-map", "empty-map"] as const)(
           defaults: { model: "fixture/primary" },
         },
       };
+      preparePluginAutoEnableTestDiscovery();
       const publish = (enabled: boolean) => {
         const snapshot = createPluginMetadataSnapshotFixture({
           plugins: [
@@ -605,6 +607,7 @@ it("searches cold archives with worker-prepared facts across publications and li
     setActivePluginRegistry(createEmptyPluginRegistry());
     const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
+    preparePluginAutoEnableTestDiscovery();
     setCurrentPluginMetadataSnapshot(createPluginMetadataSnapshotFixture(), {
       config: cfg,
       compatibleConfigs: [cfg],

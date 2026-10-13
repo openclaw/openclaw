@@ -1,10 +1,10 @@
 import {
   DEFAULT_PROVIDER,
-  parseModelRef,
   resolveAgentEffectiveModelPrimary,
   resolveDefaultModelForAgent,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { prepareModelRefResolver } from "openclaw/plugin-sdk/model-ref-parse";
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
@@ -210,7 +210,7 @@ export function extractRecentTurns(messages: unknown[]): ActiveRecallRecentTurn[
   return turns;
 }
 
-export function getModelRef(
+export async function getModelRef(
   runtimeConfig: OpenClawConfig,
   agentId: string,
   config: ResolvedActiveRecallPluginConfig,
@@ -218,11 +218,20 @@ export function getModelRef(
     modelProviderId?: string;
     modelId?: string;
   },
-): { provider: string; model: string } | undefined {
+): Promise<{ provider: string; model: string } | undefined> {
   const currentRunModel =
     ctx?.modelProviderId && ctx?.modelId ? `${ctx.modelProviderId}/${ctx.modelId}` : undefined;
-  const configuredDefaultModel = resolveAgentEffectiveModelPrimary(runtimeConfig, agentId)
-    ? resolveDefaultModelForAgent({ cfg: runtimeConfig, agentId })
+  const configuredPrimary = resolveAgentEffectiveModelPrimary(runtimeConfig, agentId);
+  if (!config.model && !currentRunModel && !configuredPrimary && !config.modelFallback) {
+    return undefined;
+  }
+  const resolver = await prepareModelRefResolver({ config: runtimeConfig });
+  const configuredDefaultModel = configuredPrimary
+    ? resolveDefaultModelForAgent({
+        cfg: runtimeConfig,
+        agentId,
+        manifestPlugins: resolver.manifestPlugins,
+      })
     : undefined;
   const defaultProvider = configuredDefaultModel?.provider ?? DEFAULT_PROVIDER;
   const candidates = [
@@ -236,7 +245,10 @@ export function getModelRef(
   for (const candidate of candidates) {
     if (candidate) {
       return (
-        parseModelRef(candidate, defaultProvider) ?? { provider: defaultProvider, model: candidate }
+        resolver.parseModelRef(candidate, defaultProvider) ?? {
+          provider: defaultProvider,
+          model: candidate,
+        }
       );
     }
   }

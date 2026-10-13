@@ -8,6 +8,7 @@ import {
   createBundleMcpTempHarness,
   writeBundleTextFiles,
 } from "../plugins/bundle-mcp.test-support.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
   bindPluginMetadataSnapshotCache,
@@ -36,7 +37,8 @@ async function createBundle() {
     "settings.json": JSON.stringify({ hideThinkingBlock: true, shellPath: "/blocked" }),
   });
   const cache = createPluginCache();
-  const snapshot = withPluginCache(cache, () => {
+  const snapshot = await withPluginCache(cache, async () => {
+    await prepareBundledDiscoveryMode();
     const prepared = createPluginMetadataSnapshotFixture({
       plugins: [
         {
@@ -81,7 +83,8 @@ describe("bundle metadata cache ownership", () => {
           mcpServers: { bundled: { command: "replacement" } },
         }),
       );
-      const candidate = withPluginCache(createPluginCache(), () => {
+      const candidate = await withPluginCache(createPluginCache(), async () => {
+        await prepareBundledDiscoveryMode();
         const snapshot = createPluginMetadataSnapshotFixture({
           plugins: [...bundle.snapshot.plugins],
         });

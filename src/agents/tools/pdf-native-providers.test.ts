@@ -3,7 +3,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
-import * as pdfNativeProviders from "./pdf-native-providers.js";
+import * as nativePdfProviders from "./pdf-native-providers.js";
+import { withToolTestMetadata } from "./tool-metadata.test-support.js";
+
+const pdfNativeProviders = {
+  anthropicAnalyzePdf: (params: Parameters<typeof nativePdfProviders.anthropicAnalyzePdf>[0]) =>
+    withToolTestMetadata({}, () => nativePdfProviders.anthropicAnalyzePdf(params)),
+  geminiAnalyzePdf: (params: Parameters<typeof nativePdfProviders.geminiAnalyzePdf>[0]) =>
+    withToolTestMetadata({}, () => nativePdfProviders.geminiAnalyzePdf(params)),
+};
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
   normalizeProviderTransportWithPlugin: (params: { context?: { baseUrl?: string } }) =>

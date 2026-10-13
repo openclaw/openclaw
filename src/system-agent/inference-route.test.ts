@@ -1,10 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
-import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import { selectAgentHarness } from "../agents/harness/selection.js";
 import { resolveRunWorkspaceDir } from "../agents/workspace-run.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { SYSTEM_AGENT_ID } from "./agent-id.js";
 import {
   projectInferenceRoute,
@@ -73,6 +74,10 @@ function utilityConfig(primary?: string): OpenClawConfig {
     },
   };
 }
+
+beforeEach(async () => {
+  await preparePluginMetadataMachineStateAsync({});
+});
 
 afterEach(() => {
   clearAgentHarnesses();

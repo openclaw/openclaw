@@ -15,7 +15,7 @@ import {
   hasTelegramApprovalCallbackPrefix,
   parseTelegramApprovalCallbackData,
 } from "./approval-callback-data.js";
-import { resolveAgentDir, resolveDefaultModelForAgent } from "./bot-handlers.agent.runtime.js";
+import { resolveAgentDir } from "./bot-handlers.agent.runtime.js";
 import {
   createTelegramCallbackMessageActions,
   handleTelegramQuestionCallback,
@@ -525,10 +525,7 @@ export function createTelegramCallbackRouter({
           const storePath = telegramDeps.resolveStorePath(runtimeCfg.session?.store, {
             agentId: sessionState.agentId,
           });
-          const resolvedDefault = resolveDefaultModelForAgent({
-            cfg: runtimeCfg,
-            agentId: sessionState.agentId,
-          });
+          const resolvedDefault = activeResolvedDefault;
           const isDefaultSelection =
             selection.provider === resolvedDefault.provider &&
             selection.model === resolvedDefault.model;

@@ -4,6 +4,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import {
   shouldAllowProviderOwnedThinkingReplay,
@@ -143,8 +144,9 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
 });
 
 describe("resolveTranscriptPolicy", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    await prepareBundledDiscoveryMode();
   });
 
   function expectStrictOpenAiCompatibleReplayDefaults(provider: string): void {

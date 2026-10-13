@@ -168,6 +168,11 @@ const mocks = vi.hoisted(() => {
   };
 });
 
+vi.mock("../plugins/installed-plugin-index-policy.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/installed-plugin-index-policy.js")>()),
+  resolveInstalledPluginIndexPolicyHash: () => mocks.metadataSnapshot.policyHash,
+}));
+
 vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
   isPluginMetadataSnapshotCompatible: () => true,

@@ -358,7 +358,7 @@ export function installThreadingTestPlugin(params: {
     },
   ]);
   setActivePluginRegistry(registry);
-  runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
+  runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockResolvedValue(registry);
 }
 
 export function installCaptionedVoiceTestPlugin(id: string) {
@@ -377,7 +377,7 @@ export function installCaptionedVoiceTestPlugin(id: string) {
     },
   ]);
   setActivePluginRegistry(registry);
-  runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
+  runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockResolvedValue(registry);
 }
 
 export function requireToolResultHandler(
@@ -614,7 +614,7 @@ export const describe0BeforeEach0 = () => {
   stageSandboxMediaMocks.stageSandboxMedia.mockResolvedValue({ staged: new Map() });
   runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReset();
   runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(
-    () => getActivePluginRegistry() ?? runtimePluginMocks.pluginRegistry,
+    async () => getActivePluginRegistry() ?? runtimePluginMocks.pluginRegistry,
   );
 };
 
@@ -652,7 +652,7 @@ export const describe2BeforeEach0 = () => {
   // snapshot so later retirement cannot invalidate the dispatch under test.
   const activeRegistry = getActivePluginRegistry();
   runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReset();
-  runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(
+  runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockResolvedValue(
     activeRegistry ? { ...activeRegistry } : createTestRegistry([]),
   );
   resetInboundDedupe();

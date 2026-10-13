@@ -7,10 +7,7 @@ import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
 import { resolvePluginControlPlaneWorkspace } from "../plugins/control-plane-workspace.js";
 import { createInstalledPluginOwnershipResolver } from "../plugins/installed-plugin-package-ownership.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
-import {
-  tracePluginLifecyclePhase,
-  tracePluginLifecyclePhaseAsync,
-} from "../plugins/plugin-lifecycle-trace.js";
+import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { formatPluginTrustDiagnostic } from "../plugins/plugin-trust.js";
 import type {
   PluginCompatibilityNotice,
@@ -97,10 +94,11 @@ export async function runPluginsInspectCommand(
     buildAllPluginInspectReports,
     withPluginDiagnosticsReportForInspection,
     buildPluginInspectReport,
-    buildPluginSnapshotReport,
+    buildPluginSnapshotReportAsync,
     formatPluginCompatibilityNotice,
   } = await import("../plugins/status.js");
-  const { loadPluginMetadataSnapshot } = await import("../plugins/plugin-metadata-snapshot.js");
+  const { resolvePluginMetadataSnapshotAsync } =
+    await import("../plugins/plugin-metadata-snapshot.js");
   const cfg = await tracePluginLifecyclePhaseAsync(
     "config read",
     captureRuntimeConfigAsyncReader(),
@@ -109,9 +107,9 @@ export async function runPluginsInspectCommand(
     },
   );
   const { workspaceDir } = resolvePluginControlPlaneWorkspace({ config: cfg });
-  const metadataSnapshot = tracePluginLifecyclePhase(
+  const metadataSnapshot = await tracePluginLifecyclePhaseAsync(
     "plugin metadata load",
-    () => loadPluginMetadataSnapshot({ config: cfg, workspaceDir }),
+    () => resolvePluginMetadataSnapshotAsync({ config: cfg, workspaceDir }),
     { command: "inspect" },
   );
   const ownershipResolver = createInstalledPluginOwnershipResolver(metadataSnapshot.index);
@@ -196,9 +194,9 @@ export async function runPluginsInspectCommand(
           { command: "inspect", all: true },
         )
       : formatReport(
-          tracePluginLifecyclePhase(
+          await tracePluginLifecyclePhaseAsync(
             "plugin registry snapshot",
-            () => buildPluginSnapshotReport(reportParams),
+            () => buildPluginSnapshotReportAsync(reportParams),
             { command: "inspect", all: true },
           ),
         );
@@ -216,9 +214,9 @@ export async function runPluginsInspectCommand(
     return;
   }
 
-  const snapshotReport = tracePluginLifecyclePhase(
+  const snapshotReport = await tracePluginLifecyclePhaseAsync(
     "plugin registry snapshot",
-    () => buildPluginSnapshotReport(reportParams),
+    () => buildPluginSnapshotReportAsync(reportParams),
     { command: "inspect" },
   );
   const targetPlugin =

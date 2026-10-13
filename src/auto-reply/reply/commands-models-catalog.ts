@@ -34,6 +34,7 @@ import { getPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-ru
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { resolveProviderChannelLoginChoice } from "../../plugins/provider-login-options.js";
 import { resolveModelRuntimeRoute } from "../../shared/model-runtime-route.js";
 import { resolveAgentRuntimeLabel } from "../../status/agent-runtime-label.js";
@@ -120,6 +121,20 @@ export async function loadModelsProviderData(
     ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
     readOnly: true,
   });
+  return withPluginMetadataSnapshotScope(
+    owner.metadataSnapshot,
+    () => projectModelsProviderData(owner, agentId, options),
+    { config: owner.config, workspaceDir: owner.workspaceDir },
+  );
+}
+
+async function projectModelsProviderData(
+  owner: Awaited<
+    ReturnType<typeof preparedModelCatalog.loadPublishedPreparedModelCatalogOwnerSnapshot>
+  >,
+  agentId: string | undefined,
+  options: ModelsBrowseOptions,
+): Promise<PreparedModelsProviderData> {
   // The owner records refresh outcomes; a sent menu must not wait for acquisition or be rewritten.
   void owner.loadFullModelCatalog?.().catch(() => undefined);
   const cfg = owner.config;

@@ -8,6 +8,7 @@ import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import * as pdfExtract from "../../media/pdf-extract.js";
 import * as webMedia from "../../media/web-media.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -47,9 +48,10 @@ const pdfConfig = (primary: string): OpenClawConfig => ({
 type Options = Omit<NonNullable<Parameters<typeof createPdfTool>[0]>, "agentDir">;
 let agentDir: string;
 
-beforeEach(() => {
+beforeEach(async () => {
   agentDir = tempDirs.make("openclaw-pdf-");
   resetPdfToolAuthEnv();
+  await prepareBundledDiscoveryMode(process.env);
   completeMock.mockReset();
   // PDF orchestration uses synthetic credentials; both async readers share that empty store.
   const authStore = { version: 1, profiles: {} };
@@ -154,6 +156,7 @@ it("admits managed inbound refs under workspace-only policy", async () => {
   await fs.mkdir(inboundDir, { recursive: true });
   await fs.writeFile(path.join(inboundDir, "claim.pdf"), FAKE_PDF_MEDIA.buffer);
   await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+    await prepareBundledDiscoveryMode(process.env);
     const { pdf, loadSpy } = await native({ fsPolicy: { workspaceOnly: true } }, false);
     const result = await pdf.execute("pdf", { pdf: "media://inbound/claim.pdf" });
     expect(loadSpy).toHaveBeenCalledWith(

@@ -16,6 +16,7 @@ import { recordSessionParticipant } from "../config/sessions/session-accessor.sq
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -54,7 +55,8 @@ vi.mock("../infra/gateway-lock.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/gateway-lock.js")>()),
   readActiveGatewayLockIdentity: catalogState.readActiveGatewayLockIdentity,
 }));
-beforeEach(() => {
+beforeEach(async () => {
+  await preparePluginMetadataMachineStateAsync({});
   catalogState.catalog = { entries: [], routeVariants: [] };
   catalogState.callGateway.mockReset();
   catalogState.readActiveGatewayLockIdentity.mockReset().mockResolvedValue(undefined);

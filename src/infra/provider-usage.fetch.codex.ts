@@ -1,6 +1,6 @@
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 // Fetches Codex provider usage windows.
-import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
+import { resolveProviderRequestHeadersAsync } from "../agents/provider-request-config.js";
 import { fetchUsageJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
@@ -68,13 +68,13 @@ export async function fetchCodexUsage(
     defaultHeaders["ChatGPT-Account-Id"] = accountId;
   }
   const headers =
-    resolveProviderRequestHeaders({
+    (await resolveProviderRequestHeadersAsync({
       provider: "openai",
       baseUrl: "https://chatgpt.com/backend-api/wham/usage",
       capability: "other",
       transport: "http",
       defaultHeaders,
-    }) ?? defaultHeaders;
+    })) ?? defaultHeaders;
 
   const parsed = await fetchUsageJson({
     provider: "openai",

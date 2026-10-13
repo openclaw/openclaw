@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import type { NodeHostClient } from "./client.js";
 import { NodeWorkerContainerContextMismatchError } from "./node-worker-container-lifecycle.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
@@ -129,6 +130,7 @@ describe("node-host worker manifest", () => {
   );
 
   it("advertises native inference after unisolated worker hosting is admitted", async () => {
+    await preparePluginMetadataMachineStateAsync({});
     const prepared = await prepareNodeHostRuntime({
       config: {
         nodeHost: {

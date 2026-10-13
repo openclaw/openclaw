@@ -27,7 +27,7 @@ import {
   prepareSshSandboxExec,
   resolvePreferredOpenClawTmpDir,
   runSshSandboxCommand,
-  sanitizeEnvVars,
+  sanitizeEnvVarsAsync,
   shellEscape,
   withTempWorkspace,
 } from "openclaw/plugin-sdk/sandbox";
@@ -246,7 +246,7 @@ class OpenShellSandboxBackendImpl {
         const pending = await this.prepareExec({ command, workdir, env, usePty });
         return {
           argv: pending.argv,
-          env: sanitizeEnvVars(process.env).allowed,
+          env: (await sanitizeEnvVarsAsync(process.env)).allowed,
           stdinMode: "pipe-open",
           finalizeToken: pending.token,
         };

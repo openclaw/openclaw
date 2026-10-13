@@ -10,7 +10,10 @@ import {
 import { describe, expect, it } from "vitest";
 import { createOpenAIResponsesContextManagementWrapper } from "../llm/providers/stream-wrappers/openai.js";
 import { buildProviderToolCompatFamilyHooks } from "../plugin-sdk/provider-tools.js";
+import { useProviderCatalogMetadata } from "../plugin-sdk/test-helpers/provider-catalog.js";
 import { testing as openAITransportTesting } from "./openai-transport-stream.test-support.js";
+
+useProviderCatalogMetadata(new URL("../../extensions/openai/", import.meta.url));
 
 const { buildOpenAIResponsesParams } = openAITransportTesting;
 

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, OpenClawConfigInput } from "../../config/config.js";
+import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -91,8 +92,7 @@ vi.mock("../model-suppression.js", async (importOriginal) => {
 // mock-isolation: Synthetic discovery snapshots exclude process-wide auth publication and runtime owners.
 vi.mock("../prepared-model-runtime.js", async () => {
   const discovery = await import("../agent-model-discovery.js");
-  const { createPluginMetadataSnapshot } =
-    await import("../../config/plugin-auto-enable.test-helpers.js");
+  const { prepareBundledDiscoveryMode } = await import("../../plugins/bundled-discovery-state.js");
   const createSnapshot = async (input: {
     agentDir: string;
     config?: OpenClawConfig;
@@ -100,6 +100,12 @@ vi.mock("../prepared-model-runtime.js", async () => {
   }) => {
     const config = input.config ?? {};
     const { authStorage } = await discovery.discoverAuthStorageFacts(input.agentDir);
+    await prepareBundledDiscoveryMode();
+    const metadataSnapshot = createPluginMetadataSnapshot({
+      config,
+      manifestRegistry: { plugins: [], diagnostics: [] },
+      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+    });
     const modelRegistry = await discovery.discoverModelsAsync(authStorage, input.agentDir, {
       ...(input.config ? { config: input.config } : {}),
       ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
@@ -117,15 +123,13 @@ vi.mock("../prepared-model-runtime.js", async () => {
       observationConfig: config,
       isCurrent: () => true,
       authModes: {},
-      metadataSnapshot: createPluginMetadataSnapshot({
-        config,
-        manifestRegistry: { plugins: [], diagnostics: [] },
-        ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-      }),
+      metadataSnapshot,
       modelCatalog: { entries: [], routeVariants: [] },
       configuredRuntimeModels: [],
       findConfiguredRuntimeModel: () => undefined,
-      inlineProviderModels: buildInlineProviderModels(config.models?.providers ?? {}),
+      inlineProviderModels: buildInlineProviderModels(config.models?.providers ?? {}, {
+        providerMetadataOwners: metadataSnapshot.owners,
+      }),
       createStores: () => ({ authStorage, modelRegistry }),
     } satisfies PreparedModelRuntimeSnapshot;
   };
@@ -237,6 +241,10 @@ describe("resolveModel forward-compat errors and overrides", () => {
       };
       mockDiscoveredModel(discoverModelsAsync, { provider, modelId, templateModel: catalogModel });
       setRuntimeConfigSnapshot(runtime, source);
+      const providerMetadataOwners = createPluginMetadataSnapshot({
+        config: runtime,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+      }).owners;
 
       for (const cfg of [runtime, structuredClone(runtime)]) {
         const result = await resolveModelForTest(provider, modelId, "/tmp/agent", cfg);
@@ -245,6 +253,7 @@ describe("resolveModel forward-compat errors and overrides", () => {
           modelId,
           cfg,
           manifestAlias: { provider },
+          providerMetadataOwners,
           getStaticCatalogModel: () => catalogModel,
           runtimeHooks: createRuntimeHooks(),
         });

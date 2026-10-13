@@ -90,8 +90,8 @@ const client: GatewayClient = {
 let metadata: SystemAgentPluginMetadataTestSnapshot;
 const engines: SystemAgentChatEngine[] = [];
 
-beforeAll(() => {
-  metadata = createSystemAgentPluginMetadataTestSnapshot();
+beforeAll(async () => {
+  metadata = await createSystemAgentPluginMetadataTestSnapshot();
 });
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>

@@ -1,5 +1,9 @@
 import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import type { OpenClawConfig } from "../config/types.js";
+import {
+  acquirePluginCapabilityProviders,
+  finishCapabilityOperation,
+} from "../plugins/capability-provider-acquisition.js";
 import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import { resolveImageCapableConfigProviderIds } from "./config-provider-models.js";
 import type { MediaUnderstandingProvider } from "./types.js";
@@ -68,4 +72,25 @@ export function getMediaUnderstandingProvider(
   registry: Map<string, MediaUnderstandingProvider>,
 ): MediaUnderstandingProvider | undefined {
   return registry.get(normalizeMediaProviderId(id));
+}
+
+/** Retains provider code for an async media operation and exposes its prepared registry. */
+export async function acquireMediaUnderstandingRegistry(params: {
+  cfg?: OpenClawConfig;
+  overrides?: Record<string, MediaUnderstandingProvider>;
+  providerId?: string;
+}) {
+  const acquired = await acquirePluginCapabilityProviders({
+    key: "mediaUnderstandingProviders",
+    cfg: params.cfg,
+    providerId: params.providerId,
+  });
+  try {
+    const registry = await acquired.run(() =>
+      buildMediaUnderstandingRegistry(params.overrides, params.cfg, acquired.providers),
+    );
+    return { ...acquired, registry };
+  } catch (error) {
+    return await finishCapabilityOperation<never>({ ok: false, error }, acquired.release);
+  }
 }

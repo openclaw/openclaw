@@ -2,25 +2,26 @@
 import { tryResolveConfiguredAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
 import { modelKey, type ModelRef } from "../../agents/model-ref-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
-import { resolvePluginProviderRegistryCore } from "../../plugins/providers.runtime.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginProvidersCoreAsync } from "../../plugins/providers.runtime.js";
+import type { PluginRegistry } from "../../plugins/registry-types.js";
 import {
   getPluginRuntimeGenerationRegistry,
   withPluginRuntimeGenerationScope,
 } from "../../plugins/runtime/generation-scope.js";
 
-export function withModelCommandProviderRuntime<T>(
+export async function withModelCommandProviderRuntime<T>(
   params: {
     runtimeConfig: OpenClawConfig;
     selectModelRefs: () => readonly (ModelRef | undefined)[];
   },
   run: (providerRegistryAvailable: boolean) => T,
-): T {
+): Promise<T> {
   const retainedRegistry = getPluginRuntimeGenerationRegistry();
   const config = params.runtimeConfig;
   const env = process.env;
   const workspaceDir = tryResolveConfiguredAgentWorkspaceDir(config, env);
-  const metadataSnapshot = loadManifestMetadataSnapshot({ config, env, workspaceDir });
+  const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({ config, env, workspaceDir });
   const providerRefs = new Set<string>();
   const modelRefs = new Set<string>();
   // Reuse the operation's selection policy with hooks fenced off. Combining
@@ -32,8 +33,10 @@ export function withModelCommandProviderRuntime<T>(
       modelRefs.add(modelKey(ref.provider, ref.model));
     }
   }
-  const selected = providerRefs.size
-    ? resolvePluginProviderRegistryCore({
+  let pluginRegistry: PluginRegistry | undefined;
+  if (providerRefs.size) {
+    await resolvePluginProvidersCoreAsync(
+      {
         config,
         env,
         workspaceDir,
@@ -42,10 +45,15 @@ export function withModelCommandProviderRuntime<T>(
         modelRefs: [...modelRefs],
         registryScope: "exact",
         activate: false,
-      })
-    : undefined;
+      },
+      (registry) => {
+        pluginRegistry = registry;
+        return undefined;
+      },
+    );
+  }
   return withPluginRuntimeGenerationScope(
-    { metadataSnapshot, pluginRegistry: selected?.registry },
+    { metadataSnapshot, pluginRegistry },
     // An empty retained scope is authoritative; a fresh empty selection only
     // means that this candidate has no owner in the available metadata inventory.
     () => run(!retainedRegistry || retainedRegistry.providers.length > 0),

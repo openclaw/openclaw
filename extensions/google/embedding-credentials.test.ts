@@ -1,5 +1,8 @@
+import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import { createGeminiEmbeddingProvider } from "./embedding-provider.js";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 afterEach(() => vi.restoreAllMocks());
 

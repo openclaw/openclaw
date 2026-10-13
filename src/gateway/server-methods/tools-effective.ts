@@ -283,6 +283,7 @@ async function resolveBaseToolsEffectiveInventory(
         modelId: context.modelId,
         modelApi: runtimeModelContext.modelApi,
         runtimeModel: runtimeModelContext.runtimeModel,
+        manifestPlugins: runtimeModelContext.manifestPlugins,
         currentChannelId: context.currentChannelId,
         currentThreadTs: context.currentThreadTs,
         accountId: context.accountId,

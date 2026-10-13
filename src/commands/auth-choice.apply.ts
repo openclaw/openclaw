@@ -24,7 +24,7 @@ export async function prepareAuthChoice(
   ) {
     const { normalizeApiKeyTokenProviderAuthChoice } =
       await import("./auth-choice.apply.api-providers.js");
-    authChoice = normalizeApiKeyTokenProviderAuthChoice({
+    authChoice = await normalizeApiKeyTokenProviderAuthChoice({
       authChoice,
       tokenProvider: params.opts.tokenProvider,
       config: params.config,

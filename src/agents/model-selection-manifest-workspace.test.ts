@@ -1,6 +1,7 @@
 // Verifies configured model selection uses manifest policy only in scoped contexts.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
@@ -58,7 +59,8 @@ function createCatalogConfig(): OpenClawConfig {
 }
 
 describe("configured model manifest workspace scope", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await preparePluginMetadataMachineStateAsync({});
     loadManifestMetadataSnapshotMock.mockReset();
     getCurrentPluginMetadataSnapshotMock.mockReset();
     getActivePluginRegistryWorkspaceDirFromStateMock.mockReset();

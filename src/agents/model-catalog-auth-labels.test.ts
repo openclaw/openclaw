@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { createBedrockAwsSdkConfig } from "./auth-profiles/config-fixtures.test-support.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
@@ -34,7 +35,13 @@ const capture = (provider: string, store: AuthProfileStore, cfg: OpenClawConfig 
 };
 
 describe("captured catalog auth labels", () => {
-  beforeEach(() => envKey.mockReset().mockReturnValue(null));
+  beforeEach(async () => {
+    envKey.mockReset().mockReturnValue(null);
+    await Promise.all([
+      preparePluginMetadataMachineStateAsync({}),
+      preparePluginMetadataMachineStateAsync({ env: {} }),
+    ]);
+  });
 
   it("preserves provider-specific placeholders and independently owned profile labels", () => {
     const config = createBedrockAwsSdkConfig();

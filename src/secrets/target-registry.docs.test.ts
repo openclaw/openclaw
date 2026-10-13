@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { buildSecretRefCredentialMatrix } from "./credential-matrix.test-support.js";
 
 const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -29,7 +30,8 @@ describe("secret target registry docs", () => {
     "docs/reference/secretref-user-supplied-credentials-matrix.json",
   );
 
-  it("stays in sync with docs/reference/secretref-user-supplied-credentials-matrix.json", () => {
+  it("stays in sync with docs/reference/secretref-user-supplied-credentials-matrix.json", async () => {
+    await prepareBundledDiscoveryMode();
     expect(fs.readFileSync(matrixPath, "utf8")).toBe(
       `${JSON.stringify(buildSecretRefCredentialMatrix(), null, 2)}\n`,
     );

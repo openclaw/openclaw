@@ -22,7 +22,7 @@ import {
 } from "../plugins/loader.test-fixtures.js";
 import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { createPluginRegistryOwner, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -146,7 +146,7 @@ describe("cron preparation plugin ownership", () => {
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const loadGateway = async (cfg: OpenClawConfig) => {
       const input = { config: cfg, workspaceDir: state.workspaceDir };
-      const metadata = loadPluginMetadataSnapshot(input);
+      const metadata = await resolvePluginMetadataSnapshotAsync(input);
       setCurrentPluginMetadataSnapshot(metadata, { config: cfg });
       const registry = await loadAndActivateRootPluginRegistry({
         ...input,
@@ -225,7 +225,7 @@ describe("cron preparation plugin ownership", () => {
     async (owner) => {
       // Artifact selection must not depend on how long cold module loading takes.
       vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
-      const metadataSnapshot = loadPluginMetadataSnapshot({
+      const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
         config,
         workspaceDir: state.workspaceDir,
       });
@@ -296,8 +296,8 @@ describe("cron preparation plugin ownership", () => {
     "uses only %s registry ownership during downstream loading without a model runtime",
     async (owner) => {
       const input = { config, workspaceDir: state.workspaceDir, agentDir: state.agentDir() };
-      const metadataSnapshot = loadPluginMetadataSnapshot(input);
-      const registry = createPreparedInboundRegistryLoader()(input, metadataSnapshot);
+      const metadataSnapshot = await resolvePluginMetadataSnapshotAsync(input);
+      const registry = await createPreparedInboundRegistryLoader()(input, metadataSnapshot);
       prepareOwnedPluginLoadContext(input, process.env, registry, metadataSnapshot, true);
       if (owner === "global") {
         setActivePluginRegistry(registry);

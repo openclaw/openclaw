@@ -8,12 +8,15 @@ import type {
   MediaUnderstandingProvider,
 } from "openclaw/plugin-sdk/media-understanding";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RawData, WebSocket } from "ws";
 import { WebSocketServer } from "ws";
 import { isDeepgramFluxModel } from "./audio-flux.js";
 import plugin from "./index.js";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 const runCommandBuffered = vi.hoisted(() =>
   vi.fn<typeof import("openclaw/plugin-sdk/process-runtime").runCommandBuffered>(),

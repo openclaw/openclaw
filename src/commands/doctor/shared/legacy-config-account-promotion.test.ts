@@ -11,8 +11,24 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
-import { normalizeCompatibilityConfigValues } from "./legacy-config-core-migrate.js";
-import { seedMissingDefaultAccountsFromSingleAccountBase } from "./legacy-config-core-normalizers.js";
+import { normalizeCompatibilityConfigValues as normalizeCompatibilityConfigValuesUnprepared } from "./legacy-config-core-migrate.js";
+import { seedMissingDefaultAccountsFromSingleAccountBase as seedMissingDefaultAccountsFromSingleAccountBaseUnprepared } from "./legacy-config-core-normalizers.js";
+import { withDoctorPluginMetadataForTest } from "./plugin-metadata.test-support.js";
+
+function normalizeCompatibilityConfigValues(config: OpenClawConfig) {
+  return withDoctorPluginMetadataForTest(config, () =>
+    normalizeCompatibilityConfigValuesUnprepared(config),
+  );
+}
+
+function seedMissingDefaultAccountsFromSingleAccountBase(
+  config: OpenClawConfig,
+  changes: string[],
+) {
+  return withDoctorPluginMetadataForTest(config, () =>
+    seedMissingDefaultAccountsFromSingleAccountBaseUnprepared(config, changes),
+  );
+}
 
 let state: OpenClawTestState | undefined;
 

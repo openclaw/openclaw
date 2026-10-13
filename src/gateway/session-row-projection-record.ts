@@ -393,6 +393,7 @@ export function publishTranscriptFields(
     storePath: row.storeTarget.storePath,
     entry: row.entry,
     selectedModel: row.materialized.source.selectedModel,
+    metadataSnapshot: row.materialized.source.modelMetadata,
     projectedAgentRuns: context.projectedAgentRuns!,
     active: false,
     activeModel: fields.fallbackModel ?? null,

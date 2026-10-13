@@ -17,6 +17,8 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import * as history from "../../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as sharedReads from "../../state/openclaw-state-db-readonly.js";
@@ -230,12 +232,18 @@ it("retains session facts on identity-scope changes and refreshes changes that a
     const context = requestContext(cfg);
     context.getRuntimeConfig = () => getRuntimeConfigSnapshot()!;
     const release = projectionWork.retainSessionListForegroundWork();
-    const projection = await createSessionRowProjection({
-      cfg,
-      getConfig: () => context.getRuntimeConfig(),
-      modelCatalog: [],
-      placementFactsReader: createWorkerSessionPlacementStore(),
-    });
+    const metadata = await resolvePluginMetadataSnapshotAsync({ config: cfg });
+    const projection = await withPluginMetadataSnapshotScope(
+      metadata,
+      () =>
+        createSessionRowProjection({
+          cfg,
+          getConfig: () => context.getRuntimeConfig(),
+          modelCatalog: [],
+          placementFactsReader: createWorkerSessionPlacementStore(),
+        }),
+      { config: cfg },
+    );
     bindSessionRowProjection(context, () => projection);
     const client = identifiedClient("viewer");
     const list = () => listSessions({ context, client, request: { archived: "all" } });

@@ -217,12 +217,12 @@ export function boundOpenAIQuicksilverContextItems(
   return newestFirst.toReversed();
 }
 
-export function openAIQuicksilverAuthHeaders(
+export async function openAIQuicksilverAuthHeaders(
   auth: OpenAIQuicksilverAuth,
   requestIds: OpenAIQuicksilverRequestIds,
   runtime: OpenAIRealtimeHost,
   url = OPENAI_QUICKSILVER_CALL_URL,
-): Record<string, string> {
+): Promise<Record<string, string>> {
   const baseUrl = url.replace(/^wss:/u, "https:");
   return openAIRealtimeAuthHeaders(
     {
@@ -235,7 +235,7 @@ export function openAIQuicksilverAuthHeaders(
   );
 }
 
-function openAIRealtimeAuthHeaders(
+async function openAIRealtimeAuthHeaders(
   params: {
     auth: OpenAIQuicksilverAuth;
     requestIds: OpenAIQuicksilverRequestIds;
@@ -243,10 +243,10 @@ function openAIRealtimeAuthHeaders(
     includeQuicksilverAlpha: boolean;
   },
   runtime: OpenAIRealtimeHost,
-): Record<string, string> {
+): Promise<Record<string, string>> {
   // x-oai-attestation is optional and intentionally omitted on unsupported clients.
   return {
-    ...resolveOpenAIRealtimeRequestHeaders(runtime, params.baseUrl),
+    ...(await resolveOpenAIRealtimeRequestHeaders(runtime, params.baseUrl)),
     Authorization: `Bearer ${params.auth.token}`,
     ...(params.includeQuicksilverAlpha ? { "OpenAI-Alpha": "quicksilver=v2" } : {}),
     "session-id": params.requestIds.sessionId,
@@ -419,7 +419,7 @@ export async function createOpenAIQuicksilverCall(
     : isGptLive
       ? OPENAI_QUICKSILVER_CALL_URL
       : OPENAI_REALTIME_CALL_URL;
-  const authHeaders = openAIRealtimeAuthHeaders(
+  const authHeaders = await openAIRealtimeAuthHeaders(
     {
       auth: params.auth,
       requestIds: params.requestIds,
@@ -532,7 +532,7 @@ export async function hangupOpenAIRealtimeCall(
     throw new Error("OpenAI Realtime call id is invalid");
   }
   const url = `${OPENAI_REALTIME_CALL_URL}/${encodeURIComponent(params.callId)}/hangup`;
-  const headers = resolveOpenAIRealtimeRequestHeaders(runtime, url, {
+  const headers = await resolveOpenAIRealtimeRequestHeaders(runtime, url, {
     Authorization: `Bearer ${params.apiKey}`,
   });
   const response = await (params.fetchImpl ?? fetch)(url, {

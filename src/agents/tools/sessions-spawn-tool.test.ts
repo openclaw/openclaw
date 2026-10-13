@@ -30,6 +30,7 @@ import { registerSessionsSpawnCompletionTests } from "./sessions-spawn-tool.comp
 import { captureSessionDecisionWork } from "./sessions-spawn-tool.decision.test-support.js";
 import { registerSessionsSpawnInputTests } from "./sessions-spawn-tool.input.test-support.js";
 import { registerSessionsSpawnVisibleCleanupTests } from "./sessions-spawn-tool.visible-cleanup.test-support.js";
+import { withToolTestMetadata } from "./tool-metadata.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-visible-spawn-");
 
@@ -1104,16 +1105,16 @@ describe("sessions_spawn tool", () => {
       ref: { provider: "mock-provider", model: "primary" },
     });
     const callGateway = mockGateway({ ...visibleCreated, entry: { owner: { actor } } });
-    const tool = makeVisibleTool({
-      callGateway,
-      config: {
-        agents: {
-          defaults: { model: "mock-provider/primary" },
-          entries: { main: { identity } },
-        },
+    const config = {
+      agents: {
+        defaults: { model: "mock-provider/primary" },
+        entries: { main: { identity } },
       },
-    });
-    const result = await tool.execute("owned-visible", { task: "inspect", visible: true });
+    };
+    const tool = makeVisibleTool({ callGateway, config });
+    const result = await withToolTestMetadata(config, () =>
+      tool.execute("owned-visible", { task: "inspect", visible: true }),
+    );
     expect(result.details).toMatchObject({ status: "accepted", owner });
   });
 

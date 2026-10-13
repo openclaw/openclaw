@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import { runNodeScript } from "../../../test/helpers/run-node-script.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { prepareSecretsRuntimeFastPathSnapshot } from "../../secrets/runtime-fast-path.js";
 import {
   activateSecretsRuntimeSnapshotState,
@@ -27,6 +29,7 @@ import {
   saveAuthProfileStoreIfPersistenceSnapshotMatches,
   updateAuthProfileStoreWithLock,
 } from "./store-runtime.js";
+import { authProfileAsyncSaveEntrypoint } from "./store-scope-cwd-runtime.test-support.js";
 import { createAuthOwnerTestFixtures } from "./store-state-owner.test-support.js";
 import {
   captureAuthProfileStorePersistenceSnapshot,
@@ -39,6 +42,19 @@ const { tempDirs, saveOptions, apiKey, store, snapshotAt, unreadableOuter, seedR
   createAuthOwnerTestFixtures();
 
 describe("explicit auth state ownership", () => {
+  it("replaces shared and local stores and refreshes SDK model selection through the host owner", async ({
+    signal,
+  }) => {
+    const result = await runNodeScript(
+      (workerArgv) => workerArgv(resolveRuntimeWorkerUrl(authProfileAsyncSaveEntrypoint)),
+      process.env,
+      undefined,
+      { signal, requireProcessTreeExit: process.platform !== "win32" },
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   it.each(["mixed-live", "cleared-local"] as const)(
     "preserves $0 bookkeeping ownership across shared-root activation",
     async (bookkeepingOwner) => {

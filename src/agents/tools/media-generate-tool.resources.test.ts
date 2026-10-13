@@ -260,7 +260,7 @@ async function prepareSnapshot(
     ],
     "static",
     { includeCredentialProviders: false },
-    () => registry,
+    async () => registry,
   );
   const facts = prepared.agentFacts[0]!;
   const catalog = prepareConfiguredRuntimeFacts({

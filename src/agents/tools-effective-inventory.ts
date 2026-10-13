@@ -13,6 +13,8 @@ import {
   findConfiguredProviderModel,
   resolveMergedModelProviderConfig,
 } from "../config/model-provider-config.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { extractModelCompat } from "../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { normalizeProviderTransportWithPlugin } from "../plugins/provider-runtime.js";
@@ -23,7 +25,10 @@ import { hasAnyAuthProfileStoreSourceAsync } from "./auth-profiles/source-check.
 import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { resolveBundledStaticCatalogModel } from "./embedded-agent-runner/model.static-catalog.js";
-import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
+import {
+  type ModelManifestNormalizationContext,
+  normalizeStaticProviderModelId,
+} from "./model-ref-shared.js";
 import { acquireReadOnlyPreparedModelRuntime } from "./prepared-model-runtime.js";
 import { createToolAccessDiagnostics } from "./tool-access-diagnostics.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
@@ -128,14 +133,16 @@ function resolveConfiguredFallbackApi(
 }
 
 /** Resolves configured or bundled metadata without starting provider discovery. */
-function resolveStaticToolInventoryRuntimeModelContext(params: {
+async function resolveStaticToolInventoryRuntimeModelContext(params: {
   cfg: OpenClawConfig;
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   modelProvider?: string;
   modelId?: string;
-}): { modelApi?: string; runtimeModel?: ProviderRuntimeModel } {
+}): Promise<
+  { modelApi?: string; runtimeModel?: ProviderRuntimeModel } & ModelManifestNormalizationContext
+> {
   const provider = normalizeProviderId(params.modelProvider ?? "");
   const modelId = params.modelId?.trim() ?? "";
   if (!provider || !modelId) {
@@ -143,15 +150,22 @@ function resolveStaticToolInventoryRuntimeModelContext(params: {
   }
   const agentId = params.agentId?.trim() || resolveSessionAgentId({ config: params.cfg });
   const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
+  const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+    config: params.cfg,
+    workspaceDir,
+  });
   const providerConfig = resolveMergedModelProviderConfig(params.cfg, provider);
   const configuredModel = findConfiguredProviderModel(providerConfig, provider, modelId, (id) =>
-    normalizeLowercaseStringOrEmpty(normalizeStaticProviderModelId(provider, id)),
+    normalizeLowercaseStringOrEmpty(
+      normalizeStaticProviderModelId(provider, id, { manifestPlugins: metadataSnapshot }),
+    ),
   );
   const bundledStaticModel = resolveBundledStaticCatalogModel({
     provider,
     modelId,
     cfg: params.cfg,
     workspaceDir,
+    metadataSnapshot,
   });
   let runtimeModel: ProviderRuntimeModel;
   if (configuredModel) {
@@ -180,22 +194,27 @@ function resolveStaticToolInventoryRuntimeModelContext(params: {
       baseUrl: normalizeOptionalString(providerConfig?.baseUrl) ?? bundledStaticModel.baseUrl,
     } as ProviderRuntimeModel;
   } else {
-    return {};
+    return { manifestPlugins: metadataSnapshot };
   }
-  const normalized = normalizeProviderTransportWithPlugin({
-    provider,
-    modelId: runtimeModel.id,
-    config: params.cfg,
-    workspaceDir,
-    context: {
-      config: params.cfg,
-      workspaceDir,
-      provider,
-      modelId: runtimeModel.id,
-      api: runtimeModel.api,
-      baseUrl: runtimeModel.baseUrl,
-    },
-  });
+  const normalized = withPluginMetadataSnapshotScope(
+    metadataSnapshot,
+    () =>
+      normalizeProviderTransportWithPlugin({
+        provider,
+        modelId: runtimeModel.id,
+        config: params.cfg,
+        workspaceDir,
+        context: {
+          config: params.cfg,
+          workspaceDir,
+          provider,
+          modelId: runtimeModel.id,
+          api: runtimeModel.api,
+          baseUrl: runtimeModel.baseUrl,
+        },
+      }),
+    { config: params.cfg, workspaceDir },
+  );
   if (normalized) {
     runtimeModel = {
       ...runtimeModel,
@@ -206,11 +225,12 @@ function resolveStaticToolInventoryRuntimeModelContext(params: {
   return {
     modelApi: runtimeModel.api,
     runtimeModel,
+    manifestPlugins: metadataSnapshot,
   };
 }
 
-type ToolInventoryRuntimeModelContext = ReturnType<
-  typeof resolveStaticToolInventoryRuntimeModelContext
+type ToolInventoryRuntimeModelContext = Awaited<
+  ReturnType<typeof resolveStaticToolInventoryRuntimeModelContext>
 >;
 
 /** Keeps dynamic model hooks owned and scoped until inventory projection finishes. */
@@ -219,7 +239,7 @@ export async function acquireEffectiveToolInventoryRuntimeModelContext(
 ): Promise<
   { run: <T>(project: (context: ToolInventoryRuntimeModelContext) => T) => T } & AsyncDisposable
 > {
-  const staticContext = resolveStaticToolInventoryRuntimeModelContext(params);
+  const staticContext = await resolveStaticToolInventoryRuntimeModelContext(params);
   if (staticContext.runtimeModel) {
     return { run: (project) => project(staticContext), [Symbol.asyncDispose]: async () => {} };
   }
@@ -261,7 +281,11 @@ export async function acquireEffectiveToolInventoryRuntimeModelContext(
     if (!runtimeModel) {
       return { run: (project) => project({}), [Symbol.asyncDispose]: async () => {} };
     }
-    const context = { modelApi: runtimeModel.api, runtimeModel };
+    const context = {
+      modelApi: runtimeModel.api,
+      runtimeModel,
+      manifestPlugins: lease.snapshot.metadataSnapshot,
+    };
     let released = false;
     let disposal: Promise<void> | undefined;
     const acquired = {
@@ -286,19 +310,26 @@ export async function acquireEffectiveToolInventoryRuntimeModelContext(
 }
 
 /** Resolves compatibility metadata explicitly configured for a provider/model pair. */
-export function resolveConfiguredModelCompat(params: {
-  cfg: OpenClawConfig;
-  modelProvider?: string;
-  modelId?: string;
-}) {
+export function resolveConfiguredModelCompat(
+  params: {
+    cfg: OpenClawConfig;
+    modelProvider?: string;
+    modelId?: string;
+  } & ModelManifestNormalizationContext,
+) {
   const provider = normalizeProviderId(params.modelProvider ?? "");
   const modelId = params.modelId?.trim() ?? "";
   if (!provider || !modelId) {
     return undefined;
   }
   const providerConfig = resolveMergedModelProviderConfig(params.cfg, provider);
+  if (!providerConfig?.models?.length) {
+    return undefined;
+  }
   const match = findConfiguredProviderModel(providerConfig, provider, modelId, (id) =>
-    normalizeLowercaseStringOrEmpty(normalizeStaticProviderModelId(provider, id)),
+    normalizeLowercaseStringOrEmpty(
+      normalizeStaticProviderModelId(provider, id, { manifestPlugins: params.manifestPlugins }),
+    ),
   );
   return extractModelCompat(match);
 }
@@ -318,8 +349,9 @@ export async function resolveEffectiveToolInventory(
       ? {
           modelApi: params.modelApi ?? params.runtimeModel?.api,
           runtimeModel: params.runtimeModel,
+          manifestPlugins: params.manifestPlugins,
         }
-      : resolveStaticToolInventoryRuntimeModelContext({
+      : await resolveStaticToolInventoryRuntimeModelContext({
           cfg: params.cfg,
           agentId,
           agentDir,
@@ -327,10 +359,17 @@ export async function resolveEffectiveToolInventory(
           modelProvider: params.modelProvider,
           modelId: params.modelId,
         });
+  const providerConfig = resolveMergedModelProviderConfig(params.cfg, params.modelProvider ?? "");
+  const manifestPlugins =
+    runtimeModelContext.manifestPlugins ??
+    (providerConfig?.models?.length
+      ? await resolvePluginMetadataSnapshotAsync({ config: params.cfg, workspaceDir })
+      : undefined);
   const modelCompat = resolveConfiguredModelCompat({
     cfg: params.cfg,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
+    manifestPlugins,
   });
 
   const capabilityProfile =

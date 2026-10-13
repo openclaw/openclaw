@@ -9,13 +9,13 @@ import {
   describeImagesWithModel,
 } from "../../media-understanding/image-runtime.js";
 import {
+  acquireMediaUnderstandingRegistry,
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
 } from "../../media-understanding/provider-registry.js";
 import { resolveTimeoutMs } from "../../media-understanding/resolve.js";
 import type { MediaUnderstandingProvider } from "../../media-understanding/types.js";
 import type { ImageCompressionPolicy } from "../../media/web-media.js";
-import { resolvePluginCapabilityProvider } from "../../plugins/capability-provider-runtime.js";
 import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js";
 import {
   bindOperatorModelExecution,
@@ -184,17 +184,28 @@ export async function runImagePrompt(params: {
         assertCurrent();
         // The fallback candidate owns runtime loading; an unrelated media plugin must not
         // block a selected image provider before its request timeout can start.
-        const selectedProvider = preparedProviders
-          ? findCapabilityProviderById({
-              providers: preparedProviders,
-              providerId: provider,
-              normalizeProviderId: normalizeMediaProviderId,
-            })
-          : resolvePluginCapabilityProvider({
-              key: "mediaUnderstandingProviders",
-              providerId: provider,
+        const acquired = preparedProviders
+          ? undefined
+          : await acquireMediaUnderstandingRegistry({
               cfg: providerCfg,
+              providerId: provider,
             });
+        if (acquired) {
+          onAcquired({
+            release: async () => {
+              try {
+                await acquired.release();
+              } finally {
+                execution?.release();
+              }
+            },
+          });
+        }
+        const selectedProvider = findCapabilityProviderById({
+          providers: preparedProviders ?? acquired?.providers ?? [],
+          providerId: provider,
+          normalizeProviderId: normalizeMediaProviderId,
+        });
         const providerRegistry = buildMediaUnderstandingRegistry(
           selectedProvider ? { [provider]: selectedProvider } : undefined,
           providerCfg,

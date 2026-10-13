@@ -11,6 +11,8 @@ import {
   createCorePluginStateSyncKeyedStore,
   resetPluginStateStoreForTests,
 } from "../plugin-state/plugin-state-store.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -622,16 +624,25 @@ describe("OpenClaw rescue message", () => {
             latencyMs: 17,
           })),
         };
-        await expect(
-          runRescue(
-            `/openclaw set default model openai/gpt-5.2${agentId ? ` for agent ${agentId}` : ""}`,
-            cfg,
-            commandContext(),
-            deps,
-          ),
-        ).resolves.toContain("Reply /openclaw yes to apply");
-        await expect(runRescue("/openclaw yes", cfg, commandContext(), deps)).resolves.toContain(
-          agentId ? `Agent ${agentId} model: openai/gpt-5.2` : "Default model: openai/gpt-5.2",
+        const metadata = await resolvePluginMetadataSnapshotAsync({ config: cfg });
+        await withPluginMetadataSnapshotScope(
+          metadata,
+          async () => {
+            await expect(
+              runRescue(
+                `/openclaw set default model openai/gpt-5.2${agentId ? ` for agent ${agentId}` : ""}`,
+                cfg,
+                commandContext(),
+                deps,
+              ),
+            ).resolves.toContain("Reply /openclaw yes to apply");
+            await expect(
+              runRescue("/openclaw yes", cfg, commandContext(), deps),
+            ).resolves.toContain(
+              agentId ? `Agent ${agentId} model: openai/gpt-5.2` : "Default model: openai/gpt-5.2",
+            );
+          },
+          { config: cfg },
         );
 
         const currentConfig = mockConfig.currentConfig() as OpenClawConfig;

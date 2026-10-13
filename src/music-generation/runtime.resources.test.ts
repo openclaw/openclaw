@@ -3,7 +3,10 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
-import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "../plugins/loader.js";
+import {
+  acquirePluginRegistryForInspection,
+  loadPluginRegistryHandleAsync,
+} from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   makePluginLoaderTempDir,
@@ -346,7 +349,8 @@ describe("music generation registration resources", () => {
               ? await acquirePluginRegistryForInspection({ config: fixture.config })
               : undefined;
           const registry =
-            inspection?.registry ?? loadPluginRegistryHandle({ config: fixture.config });
+            inspection?.registry ??
+            (await loadPluginRegistryHandleAsync({ config: fixture.config }));
           let projectionRelease: Promise<void> | undefined;
           if (ownership === "managed-getter") {
             expect(inspection).toBeDefined();

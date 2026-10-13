@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, assert, describe, expect, it } from "vitest";
-import { loadBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
+import { loadBundledCapabilityRuntimeRegistryAsync } from "./bundled-capability-runtime.js";
 import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import {
@@ -14,7 +14,7 @@ import {
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
   completePluginMetadataSnapshot,
-  loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshotAsync,
 } from "./plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
@@ -71,8 +71,8 @@ function writeChannelCapabilityPlugin(id: string): TempPlugin {
   return plugin;
 }
 
-describe("loadBundledCapabilityRuntimeRegistry", () => {
-  it("retains the bundled owner under an external shadow without rediscovering changed manifests", () => {
+describe("loadBundledCapabilityRuntimeRegistryAsync", () => {
+  it("retains the bundled owner under an external shadow without rediscovering changed manifests", async () => {
     const root = makePluginLoaderTempDir();
     const bundledRoot = path.join(root, "bundled");
     const target = writePlugin({
@@ -97,7 +97,7 @@ describe("loadBundledCapabilityRuntimeRegistry", () => {
       OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
     };
     const snapshot = completePluginMetadataSnapshot({
-      snapshot: loadPluginMetadataSnapshot({ config, env, preferPersisted: false }),
+      snapshot: await resolvePluginMetadataSnapshotAsync({ config, env, preferPersisted: false }),
       config,
       env,
     });
@@ -109,20 +109,24 @@ describe("loadBundledCapabilityRuntimeRegistry", () => {
     setGatewayPluginMetadataSnapshot(snapshot, { config, env });
     fs.writeFileSync(path.join(target.dir, "openclaw.plugin.json"), "{}");
 
-    const registry = loadBundledCapabilityRuntimeRegistry({ pluginIds: [target.id], config, env });
+    const registry = await loadBundledCapabilityRuntimeRegistryAsync({
+      pluginIds: [target.id],
+      config,
+      env,
+    });
     expect(registry.providers.map((entry) => entry.provider.id)).toEqual(["bundled-capability"]);
     expect(registry.plugins.find((plugin) => plugin.id === target.id)?.origin).toBe("bundled");
     const loadExplicitDiscovery = () =>
-      loadBundledCapabilityRuntimeRegistry({
+      loadBundledCapabilityRuntimeRegistryAsync({
         pluginIds: [target.id],
         config,
         env,
         discovery: discoveryFor(target),
       });
-    expect(loadExplicitDiscovery().providers.map((entry) => entry.provider.id)).toEqual([
+    expect((await loadExplicitDiscovery()).providers.map((entry) => entry.provider.id)).toEqual([
       "bundled-capability",
     ]);
-    const freshRegistry = withPluginCache(createPluginCache(), loadExplicitDiscovery);
+    const freshRegistry = await withPluginCache(createPluginCache(), loadExplicitDiscovery);
     expect(freshRegistry.providers).toEqual([]);
     expect(freshRegistry.diagnostics).toEqual(
       expect.arrayContaining([
@@ -130,13 +134,13 @@ describe("loadBundledCapabilityRuntimeRegistry", () => {
       ]),
     );
     expect(
-      loadBundledCapabilityRuntimeRegistry({ pluginIds: [target.id], config, env }).providers.map(
-        (entry) => entry.provider.id,
-      ),
+      (
+        await loadBundledCapabilityRuntimeRegistryAsync({ pluginIds: [target.id], config, env })
+      ).providers.map((entry) => entry.provider.id),
     ).toEqual(["bundled-capability"]);
   });
 
-  it("loads only the requested bundled plugin without replacing the active registry", () => {
+  it("loads only the requested bundled plugin without replacing the active registry", async () => {
     const target = writePlugin({
       id: "capability-target",
       registration: `if (api.registrationMode === "discovery") {
@@ -158,7 +162,7 @@ describe("loadBundledCapabilityRuntimeRegistry", () => {
     const activeSnapshotBefore = captureActivePluginRegistrySnapshot();
     const registrationContextBefore = getPluginRegistrationContext();
 
-    const registry = loadBundledCapabilityRuntimeRegistry({
+    const registry = await loadBundledCapabilityRuntimeRegistryAsync({
       pluginIds: [target.id],
       discovery: discoveryFor(target, unscoped),
     });
@@ -180,13 +184,13 @@ describe("loadBundledCapabilityRuntimeRegistry", () => {
     { name: "denylisted", plugins: { deny: ["blocked-capability"] } },
     { name: "outside the restrictive allowlist", plugins: { allow: ["allowed-capability"] } },
     { name: "blocked by global plugin disablement", plugins: { enabled: false } },
-  ])("never imports a $name plugin through bundled capability capture", ({ plugins }) => {
+  ])("never imports a $name plugin through bundled capability capture", async ({ plugins }) => {
     const blocked = writePlugin({
       id: "blocked-capability",
       registration: `api.registerProvider({ id: "blocked-capability", label: "Blocked", auth: [] });`,
     });
 
-    const registry = loadBundledCapabilityRuntimeRegistry({
+    const registry = await loadBundledCapabilityRuntimeRegistryAsync({
       pluginIds: [blocked.id],
       config: { plugins },
       discovery: discoveryFor(blocked),
@@ -196,11 +200,11 @@ describe("loadBundledCapabilityRuntimeRegistry", () => {
     expect(listImportedRuntimePluginIds()).not.toContain(blocked.id);
   });
 
-  it("registers channel capabilities during discovery without replacing the active registry", () => {
+  it("registers channel capabilities during discovery without replacing the active registry", async () => {
     const target = writeChannelCapabilityPlugin("capability-channel");
     const active = createEmptyPluginRegistry();
     setActivePluginRegistry(active, "existing-channel-registry");
-    const registry = loadBundledCapabilityRuntimeRegistry({
+    const registry = await loadBundledCapabilityRuntimeRegistryAsync({
       pluginIds: [target.id],
       discovery: discoveryFor(target),
     });

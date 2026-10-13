@@ -124,7 +124,7 @@ describe("exec GitHub identity", () => {
         agentId: "main",
       });
       const tracePath = path.join(root, `trace-${managed}.jsonl`);
-      const { env: childEnv, requestedEnv } = prepare("gateway", prepared, false);
+      const { env: childEnv, requestedEnv } = await prepare("gateway", prepared, false);
       // Real Git consumes the composed exec environment, including inherited parameters.
       const overlay = { ...childEnv, ...env, GIT_TRACE2_EVENT: tracePath };
       await git(worktree, ["fetch", "origin", blob], overlay);
@@ -199,20 +199,20 @@ describe("exec GitHub identity", () => {
     expect(sandboxEnv).not.toHaveProperty("GH_CONFIG_DIR");
   });
 
-  it("scrubs only an explicitly owned GH_TOKEN preview variable", () => {
+  it("scrubs only an explicitly owned GH_TOKEN preview variable", async () => {
     setTestEnvValue("GH_TOKEN", "ambient-token");
     setTestEnvValue("GITHUB_TOKEN", "ambient-fallback");
-    const result = prepare("gateway", previewEnvironment("env", "GH_TOKEN"), false);
+    const result = await prepare("gateway", previewEnvironment("env", "GH_TOKEN"), false);
     expect(result.env.GH_TOKEN).toBe("");
     expect(result.env.GITHUB_TOKEN).toBe("ambient-fallback");
   });
 
-  it("blanks a custom preview env ref for native local and sandbox exec", () => {
+  it("blanks a custom preview env ref for native local and sandbox exec", async () => {
     setTestEnvValue("GH_TOKEN", "ambient-token");
     setTestEnvValue("PREVIEW_SERVICE_TOKEN", "ambient-preview-token");
     const prepared = previewEnvironment("env", "PREVIEW_SERVICE_TOKEN");
     for (const host of ["gateway", "sandbox"] as const) {
-      const result = prepare(host, prepared);
+      const result = await prepare(host, prepared);
       expect(result.env.PREVIEW_SERVICE_TOKEN).toBe("");
       expect(result.requestedEnv?.PREVIEW_SERVICE_TOKEN).toBe("");
       expect(result.env.GH_TOKEN).toBe("store-sentinel");

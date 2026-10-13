@@ -1,6 +1,7 @@
 /** Tests command registry definitions, native specs, aliases, and argument menus. */
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { preparePluginTestRuntimeMetadata } from "../plugin-sdk/plugin-test-runtime.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createCommandTurnContext } from "./command-turn-context.js";
@@ -104,10 +105,11 @@ function createNativeCommandsRegistry(id: "discord" | "slack") {
   ]);
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.doUnmock("../channels/plugins/index.js");
   resetPluginRuntimeStateForTest();
   setActivePluginRegistry(createTestRegistry([]));
+  await preparePluginTestRuntimeMetadata();
 });
 
 afterEach(() => {

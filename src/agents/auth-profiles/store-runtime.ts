@@ -14,8 +14,10 @@ export const {
   ensureAuthProfileStoreAsync,
   ensureAuthProfileStoreWithoutExternalProfilesAsync,
   ensureAuthProfileStoreForLocalUpdateAsync,
+  saveAuthProfileStoreAsync,
   saveAuthProfileStoreWithPreparedOwner,
   saveAuthProfileStoreIfPersistenceSnapshotMatches,
+  saveAuthProfileStoreIfPersistenceSnapshotMatchesAsync,
 } = nativePluginBindings.authStore;
 
 /**
@@ -27,7 +29,8 @@ export const loadAuthProfileStoreForSecretsRuntime =
   nativePluginBindings.authStore.loadAuthProfileStoreForSecretsRuntime;
 
 /**
- * @deprecated Use updateAuthProfileStoreWithLock from openclaw/plugin-sdk/provider-auth.
+ * @deprecated Use saveAuthProfileStoreAsync for replacement or updateAuthProfileStoreWithLock
+ * from openclaw/plugin-sdk/provider-auth for partial updates.
  * Retained until removal in a later stable release after deprecation ships.
  */
 export const saveAuthProfileStore = nativePluginBindings.authStore.saveAuthProfileStore;

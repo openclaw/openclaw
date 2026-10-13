@@ -475,7 +475,12 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
                 await state.writeConfig(config);
                 const agentDir = state.statePath("agents", "diagnostic", "agent");
                 const profileId = "fixture:subscription";
-                const auth = createAuthProfileStoreRuntime(createExternalAuthRuntime(() => []));
+                const auth = createAuthProfileStoreRuntime(
+                  createExternalAuthRuntime(
+                    () => [],
+                    async () => () => [],
+                  ),
+                );
                 if (automatic) {
                   auth.saveAuthProfileStore({
                     version: 1,
@@ -620,7 +625,7 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
                     config: runConfig,
                     agentId: "diagnostic",
                   });
-                  const { env: toolEnv } = resolvePreparedExecEnvironment({
+                  const { env: toolEnv } = await resolvePreparedExecEnvironment({
                     execParams: { command: "synthetic read-only target probes" },
                     host: "gateway",
                     defaultPathPrepend: [],

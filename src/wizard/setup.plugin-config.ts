@@ -142,8 +142,8 @@ async function listEnabledConfigurableManifestPlugins(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
 }): Promise<readonly PluginManifestRecord[]> {
-  const { loadPluginMetadataSnapshot } = await loadPluginMetadataSnapshotModule();
-  const snapshot = loadPluginMetadataSnapshot({
+  const { resolvePluginMetadataSnapshotAsync } = await loadPluginMetadataSnapshotModule();
+  const snapshot = await resolvePluginMetadataSnapshotAsync({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: process.env,

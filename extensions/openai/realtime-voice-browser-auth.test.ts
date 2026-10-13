@@ -1,3 +1,4 @@
+import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 // Openai tests cover realtime voice provider plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
@@ -65,6 +66,8 @@ const {
   rejectedKeyMessage: OPENAI_REALTIME_REJECTED_KEY_MESSAGE,
   createQuicksilverBrowserBrokerFixture,
 } = createOpenAIRealtimeTestSupport({ ...mocks, buildOpenAIRealtimeVoiceProvider });
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 describe("OpenAI realtime voice browser authentication", () => {
   beforeEach(() => {
@@ -374,7 +377,7 @@ describe("OpenAI realtime voice browser authentication", () => {
     const onError = vi.fn();
     const onClose = vi.fn();
     const bridge = createNativeBridge({ onError, onClose });
-    const { connecting, socket } = beginBridgeConnection(bridge);
+    const { connecting, socket } = await beginBridgeConnection(bridge);
 
     openSocket(socket);
     emitServerEvent(socket, {
@@ -427,7 +430,7 @@ describe("OpenAI realtime voice browser authentication", () => {
     },
   ])("$name", async ({ event, providerConfig, expectedMessage }) => {
     const bridge = createNativeBridge(providerConfig ? { providerConfig } : {});
-    const { connecting, socket } = beginBridgeConnection(bridge);
+    const { connecting, socket } = await beginBridgeConnection(bridge);
 
     if (event === "structured") {
       openSocket(socket);

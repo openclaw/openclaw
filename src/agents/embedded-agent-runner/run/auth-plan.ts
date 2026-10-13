@@ -85,6 +85,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   const authStoreOptions = {
     migrationProvider: params.provider,
     config: runParams.config,
+    pluginMetadataSnapshot: params.preparedModelRuntime?.metadataSnapshot,
     profileId: runParams.authProfileId,
     allowKeychainPrompt: false,
   };

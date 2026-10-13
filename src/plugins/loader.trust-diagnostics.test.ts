@@ -9,7 +9,7 @@ import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.j
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
-import { clearPluginRegistryLoadCache, loadOpenClawPlugins } from "./loader.js";
+import { clearPluginRegistryLoadCache, loadOpenClawPluginsAsync } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   makePluginLoaderTempDir,
@@ -20,7 +20,7 @@ import {
 } from "./loader.test-fixtures.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { disposePluginRegistryInstances } from "./runtime.js";
-import { buildPluginInspectReport, buildPluginSnapshotReport } from "./status.js";
+import { buildPluginInspectReport, buildPluginSnapshotReportAsync } from "./status.js";
 
 const defaultPluginId = "diagnostics-otel";
 const defaultPackageName = `@openclaw/${defaultPluginId}`;
@@ -56,8 +56,8 @@ describe("recorded plugin trust diagnostics", () => {
       });
     }
     const warn = vi.fn();
-    const load = (plugin = first, activate = true, install?: PluginInstallRecord) => {
-      const registry = loadOpenClawPlugins({
+    const load = async (plugin = first, activate = true, install?: PluginInstallRecord) => {
+      const registry = await loadOpenClawPluginsAsync({
         config: {
           plugins: {
             load: { paths: [plugin.file] },
@@ -79,19 +79,19 @@ describe("recorded plugin trust diagnostics", () => {
         }),
       );
     };
-    load(first, false);
+    await load(first, false);
     expect(warn).not.toHaveBeenCalled();
-    load();
+    await load();
     for (let reload = 0; reload < 4; reload++) {
       clearPluginRegistryLoadCache();
-      load();
+      await load();
     }
     await using cache = createPluginCache();
-    withPluginCache(cache, () => load());
+    await withPluginCache(cache, () => load());
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]?.[0]).toContain(first.file);
-    load(replacement);
-    load(replacement);
+    await load(replacement);
+    await load(replacement);
     expect(warn).toHaveBeenCalledTimes(2);
     expect(warn.mock.calls[1]?.[0]).toContain(replacement.file);
     const install: PluginInstallRecord = {
@@ -100,19 +100,19 @@ describe("recorded plugin trust diagnostics", () => {
       installPath: replacement.dir,
       resolvedName: "@vendor/different-package",
     };
-    load(replacement, true, install);
-    load(replacement, true, install);
+    await load(replacement, true, install);
+    await load(replacement, true, install);
     expect(warn).toHaveBeenCalledTimes(3);
     expect(warn.mock.calls[2]?.[0]).toContain("provenance-invalid");
     const resolvedSpec = "@vendor/unverified-reload@2.0.0";
-    load(replacement, true, { ...install, resolvedSpec });
-    load(replacement, true, { resolvedSpec, ...install });
+    await load(replacement, true, { ...install, resolvedSpec });
+    await load(replacement, true, { resolvedSpec, ...install });
     expect(warn).toHaveBeenCalledTimes(4);
     expect(warn.mock.calls[3]?.[0]).toBe(warn.mock.calls[2]?.[0]);
-    load(other);
+    await load(other);
     expect(warn).toHaveBeenCalledTimes(5);
     await drainGlobalSingletonLifecycleState("restart");
-    load(other);
+    await load(other);
     expect(warn).toHaveBeenCalledTimes(6);
   });
 
@@ -269,14 +269,14 @@ describe("recorded plugin trust diagnostics", () => {
             slots: { memory: "none" },
           },
         };
-        const snapshot = buildPluginSnapshotReport({ config });
+        const snapshot = await buildPluginSnapshotReportAsync({ config });
         const inspected = buildPluginInspectReport({
           id: plugin.id,
           config,
           report: snapshot,
         })!.plugin;
         const warn = vi.fn();
-        const registry = loadOpenClawPlugins({
+        const registry = await loadOpenClawPluginsAsync({
           config,
           cache: false,
           logger: { info() {}, warn, error() {}, debug() {} },
@@ -318,10 +318,10 @@ describe("recorded plugin trust diagnostics", () => {
             stateDir,
             prompter: { shouldRepair: true },
           });
-          const repaired = loadOpenClawPlugins({ config, cache: false }).plugins.find(
+          const repaired = (await loadOpenClawPluginsAsync({ config, cache: false })).plugins.find(
             (entry) => entry.id === pluginId,
           )!;
-          const inspectedAfter = buildPluginSnapshotReport({ config }).plugins.find(
+          const inspectedAfter = (await buildPluginSnapshotReportAsync({ config })).plugins.find(
             (entry) => entry.id === pluginId,
           )!;
           expect(repaired).toMatchObject({
@@ -385,7 +385,7 @@ describe("recorded plugin trust diagnostics", () => {
         ok: true as const,
         runId: "unexpected-hook-run",
       }));
-      const registry = loadOpenClawPlugins({
+      const registry = await loadOpenClawPluginsAsync({
         config: {
           plugins: {
             allow: plugins.map(({ id }) => id),

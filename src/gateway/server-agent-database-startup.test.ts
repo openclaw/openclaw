@@ -56,7 +56,7 @@ import { clearOpenClawAgentIntegrityVerification } from "../state/openclaw-quara
 import { resolveQuarantineStorePath } from "../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
-import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
+import { loadGatewayTestConfigAsync } from "./test-helpers.config-runtime.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   installGatewayTestHooks,
@@ -201,7 +201,7 @@ it.for([
       vi.stubEnv("OPENCLAW_TEST_RECOVERY_SECRET", recoverySecret);
     }
     const env = { ...process.env };
-    const cfg = loadGatewayTestConfig();
+    const cfg = await loadGatewayTestConfigAsync();
     setRuntimeConfigSnapshot(cfg);
     const root = resolveStateDir(env);
     const scope = {
@@ -701,7 +701,7 @@ it("admits a deferred fleet without gating readiness on stale configured or unco
   };
   testState.agentConfig = { systemAgent: { agentId: "main" } };
   const env = { ...process.env };
-  const cfg = loadGatewayTestConfig();
+  const cfg = await loadGatewayTestConfigAsync();
   const agentIds = ["worker-a", "worker-b", "main"];
   const paths = agentIds.map((agentId) => openOpenClawAgentDatabase({ agentId, env }).path);
   const stalePaths = agentIds.map(
@@ -857,7 +857,7 @@ it("admits a deferred fleet without gating readiness on stale configured or unco
 
 it("reports history in a skipped unconfigured agent store as not found", async () => {
   const sessionKey = "agent:gemini:acp:skipped-history";
-  setRuntimeConfigSnapshot(loadGatewayTestConfig());
+  setRuntimeConfigSnapshot(await loadGatewayTestConfigAsync());
   await upsertSessionEntryCore(
     { agentId: "gemini", sessionKey },
     { sessionId: "skipped-history", updatedAt: 1 },
@@ -872,7 +872,7 @@ it("reports history in a skipped unconfigured agent store as not found", async (
     await assertOpenClawDatabasesReady({
       env,
       operation: "gateway-startup",
-      config: loadGatewayTestConfig(),
+      config: await loadGatewayTestConfigAsync(),
     });
     return await startConnectedServerWithClient();
   });

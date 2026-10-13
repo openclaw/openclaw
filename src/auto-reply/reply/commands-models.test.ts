@@ -6,6 +6,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import * as preparedCatalog from "../../agents/prepared-model-catalog.js";
 import { bindPreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { preparePluginMetadataMachineStateAsync } from "../../plugins/installed-plugin-index-record-state.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import type { ProviderCatalogOutcome } from "../../plugins/provider-catalog-outcome.js";
@@ -72,7 +73,8 @@ vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOrigin
   getCurrentPluginMetadataSnapshot: pluginMetadataMocks.getCurrent,
 }));
 
-beforeEach(() => {
+beforeEach(async () => {
+  await preparePluginMetadataMachineStateAsync({});
   vi.stubEnv("CODEX_API_KEY", undefined);
   vi.stubEnv("OPENAI_API_KEY", undefined);
   vi.spyOn(preparedCatalog, "loadPublishedPreparedModelCatalogOwnerSnapshot").mockImplementation(

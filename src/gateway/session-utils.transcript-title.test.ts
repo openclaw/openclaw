@@ -12,14 +12,17 @@ import {
   type SessionTranscriptReadScope,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { buildGatewaySessionRow } from "./session-utils-row.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
+const projectionMetadata = createPluginMetadataSnapshotFixture();
 const NOW = Date.UTC(2026, 8, 15);
 // Keep the persisted marker distinct from copies of this test in source maps.
 const NAMED_PAYLOAD_MARKER = `named transcript payload ${randomUUID()}`;
@@ -95,18 +98,20 @@ async function withTitleRows(
         queries,
         render: async (includeLastMessage = false) => {
           return Object.entries(store).map(([key, entry]) =>
-            buildGatewaySessionRow({
-              cfg,
-              agentId: "main",
-              storePath,
-              store,
-              key,
-              entry,
-              now: NOW,
-              includeDerivedTitles: true,
-              includeLastMessage,
-              lightweightListRow: true,
-            }),
+            withPluginRuntimeGenerationScope({ metadataSnapshot: projectionMetadata }, () =>
+              buildGatewaySessionRow({
+                cfg,
+                agentId: "main",
+                storePath,
+                store,
+                key,
+                entry,
+                now: NOW,
+                includeDerivedTitles: true,
+                includeLastMessage,
+                lightweightListRow: true,
+              }),
+            ),
           );
         },
       });

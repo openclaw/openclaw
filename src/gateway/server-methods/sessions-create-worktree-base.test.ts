@@ -2,13 +2,14 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import {
   loadSessionEntry,
   loadTranscriptEventsSync,
 } from "../../config/sessions/session-accessor.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { refreshProjectClone } from "../../projects/project-clone.js";
 import { registerProjectRegistry } from "../../projects/project-registry.js";
 import { registerClonedProjectRegistry } from "../../projects/project-registry.test-support.js";
@@ -32,6 +33,10 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 const execFileAsync = promisify(execFile);
 const projectCloneMocks = vi.hoisted(() => ({ materialize: vi.fn() }));
+
+beforeEach(async () => {
+  await resolvePluginMetadataSnapshotAsync({ config: {} });
+});
 
 vi.mock("../../projects/project-clone.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../projects/project-clone.js")>();

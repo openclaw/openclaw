@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { preparePluginAutoEnableTestDiscovery } from "../config/plugin-auto-enable.test-helpers.js";
 import {
   makeEmptyPluginMetadataOwners,
   setCurrentPluginMetadataSnapshot,
@@ -45,6 +46,7 @@ async function withDotEnvFixture(run: (fixture: DotEnvFixture) => Promise<void>)
   setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
   await fs.mkdir(cwdDir, { recursive: true });
   await fs.mkdir(stateDir, { recursive: true });
+  preparePluginAutoEnableTestDiscovery();
   await run({ base, cwdDir, stateDir });
 }
 

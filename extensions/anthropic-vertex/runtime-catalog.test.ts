@@ -1,7 +1,12 @@
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
-import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  registerSingleProviderPlugin,
+  useProviderCatalogMetadata,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import anthropicVertexPlugin from "./index.js";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url), new URL("../google/", import.meta.url));
 
 describe("Anthropic Vertex registered runtime model resolution", () => {
   afterEach(() => vi.unstubAllEnvs());

@@ -6,6 +6,7 @@ import {
   createBundleMcpTempHarness,
   createBundleProbePlugin,
 } from "../../plugins/bundle-mcp.test-support.js";
+import { preparePluginMetadataMachineStateAsync } from "../../plugins/installed-plugin-index-record-state.js";
 import { captureEnv, setTestEnvValue, withEnvAsync } from "../../test-utils/env.js";
 import { disposeAllSessionMcpRuntimes } from "../agent-bundle-mcp-manager-api.js";
 import { bindSessionMcpRuntimeTestScheduler } from "../agent-bundle-mcp-manager.test-support.js";
@@ -119,6 +120,7 @@ export async function prepareBundleProbeCliConfig(params?: {
 }) {
   // Bundle discovery reads HOME for per-user plugin roots.
   return await withEnvAsync({ HOME: bundleProbeHomeDir }, async () => {
+    await preparePluginMetadataMachineStateAsync({ env: params?.env });
     return await prepareCliBundleMcpConfig({
       enabled: true,
       mode: "claude-config-file",

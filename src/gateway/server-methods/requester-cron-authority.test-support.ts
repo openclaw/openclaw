@@ -10,7 +10,7 @@ import {
   type AdmittedRunContext,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
-import { createOpenClawCodingTools } from "../../agents/agent-tools.js";
+import { createOpenClawCodingToolsAsync } from "../../agents/agent-tools.js";
 import {
   buildCliMcpGrantContext,
   finalizeCliMcpGrant,
@@ -332,7 +332,7 @@ export async function createCreatorTransportTools(params: {
   const creatorTools: CronCreatorToolAllowlistEntry[] = [];
   const creatorCapture: CronToolsAllowCaptureRef = {};
   const tools = await withGatewayToolCallerIdentity(callerIdentity, () =>
-    createOpenClawCodingTools({
+    createOpenClawCodingToolsAsync({
       config,
       agentId: "main",
       sessionKey: SESSION,

@@ -9,11 +9,7 @@ import {
   assertSecretOwnerAvailable,
   SecretSurfaceUnavailableError,
 } from "../../secrets/runtime-degraded-state.js";
-import {
-  canonicalizeSpeechProviderId,
-  getSpeechProvider,
-  listSpeechProviders,
-} from "../../tts/provider-registry.js";
+import { withSpeechProviderRegistry } from "../../tts/provider-registry.js";
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
 import { resolvePreparedTtsProvider } from "../../tts/tts-provider-resolution.js";
 import { resolveTtsPersonaList, resolveTtsSettingsSnapshot } from "../../tts/tts-settings.js";
@@ -37,29 +33,31 @@ import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 async function resolveTtsGatewayStatusFacts(cfg: OpenClawConfig) {
-  const settings = resolveTtsSettingsSnapshot({
-    cfg,
-    preparedTtsPreferences: await prepareTtsPreferences(),
-  });
-  const speechProviders = listSpeechProviders(cfg);
-  const configuredByProvider = new Map(
-    await Promise.all(
-      speechProviders.map(
-        async (provider) =>
-          [
-            provider.id,
-            await isTtsProviderConfiguredAsync(settings.config, provider, cfg),
-          ] as const,
+  return await withSpeechProviderRegistry(cfg, async (registry) => {
+    const settings = resolveTtsSettingsSnapshot({
+      cfg,
+      preparedTtsPreferences: await prepareTtsPreferences(),
+    });
+    const speechProviders = registry.listSpeechProviders(cfg);
+    const configuredByProvider = new Map(
+      await Promise.all(
+        speechProviders.map(
+          async (provider) =>
+            [
+              provider.id,
+              await isTtsProviderConfiguredAsync(settings.config, provider, cfg, registry),
+            ] as const,
+        ),
       ),
-    ),
-  );
-  const provider = resolvePreparedTtsProvider({
-    config: settings.config,
-    preference: settings.providerPreference,
-    providers: speechProviders,
-    configuredByProvider,
+    );
+    const provider = resolvePreparedTtsProvider({
+      config: settings.config,
+      preference: settings.providerPreference,
+      providers: speechProviders,
+      configuredByProvider,
+    });
+    return { configuredByProvider, provider, settings, speechProviders };
   });
-  return { configuredByProvider, provider, settings, speechProviders };
 }
 
 function setTtsEnabledHandler(enabled: boolean): GatewayRequestHandler {
@@ -79,16 +77,6 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const { configuredByProvider, provider, settings, speechProviders } =
         await resolveTtsGatewayStatusFacts(cfg);
       const fallbackCandidates = resolveTtsProviderOrder(provider, cfg, speechProviders).slice(1);
-      await Promise.all(
-        fallbackCandidates.map(async (candidate) => {
-          if (!configuredByProvider.has(candidate)) {
-            configuredByProvider.set(
-              candidate,
-              await isTtsProviderConfiguredAsync(settings.config, candidate, cfg),
-            );
-          }
-        }),
-      );
       const fallbackProviders = fallbackCandidates.filter(
         (candidate) => configuredByProvider.get(candidate) === true,
       );
@@ -242,26 +230,26 @@ export const ttsHandlers: GatewayRequestHandlers = {
   },
   "tts.setProvider": async ({ params, respond, context }) => {
     const cfg = context.getRuntimeConfig();
-    const provider = canonicalizeSpeechProviderId(
-      normalizeOptionalString(params.provider) ?? "",
-      cfg,
-    );
-    if (!provider || !getSpeechProvider(provider, cfg)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Invalid provider. Use a registered TTS provider id.",
-        ),
-      );
-      return;
-    }
     await respondUnavailableOnThrow(respond, async () => {
-      const config = resolveTtsConfig(cfg);
-      const prefsPath = await resolveTtsPrefsPathAsync(config);
-      setTtsProvider(prefsPath, provider);
-      respond(true, { provider });
+      await withSpeechProviderRegistry(cfg, async (registry) => {
+        const requested = normalizeOptionalString(params.provider) ?? "";
+        const provider = registry.getSpeechProvider(requested, cfg);
+        if (!provider) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "Invalid provider. Use a registered TTS provider id.",
+            ),
+          );
+          return;
+        }
+        const config = resolveTtsConfig(cfg);
+        const prefsPath = await resolveTtsPrefsPathAsync(config);
+        setTtsProvider(prefsPath, provider.id, registry);
+        respond(true, { provider: provider.id });
+      });
     });
   },
   "tts.personas": async ({ respond, context }) => {

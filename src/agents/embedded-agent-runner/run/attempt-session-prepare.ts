@@ -27,6 +27,7 @@ import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import { resolveUserTimezone } from "../../date-time.js";
 import { bootstrapHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
 import { relocateCurrentRuntimeContextCarrierToTail } from "../../internal-runtime-context.js";
+import { getModelProviderRequestRouteFacts } from "../../provider-request-config.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import {
@@ -128,6 +129,8 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
       provider: attempt.provider,
       modelId: attempt.modelId,
       baseUrl: attempt.model.baseUrl ?? undefined,
+      providerMetadataOwners: getModelProviderRequestRouteFacts(attempt.model)
+        ?.providerMetadataOwners,
     }),
     // The finalizer's result gate rejects any compaction, so never start one.
     compactionForbidden: attempt.operation === "settled-tool-finalization",

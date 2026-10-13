@@ -10,6 +10,7 @@ import {
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectSessionDisplayMessage } from "../gateway/session-display-projection.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { readSessionTranscriptRunId } from "../sessions/transcript-events.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
 
@@ -24,6 +25,7 @@ type SessionFallbackParams = SessionFallbackSource & {
   selectedModel: string;
   parseSelectedProvider?: boolean;
   config?: OpenClawConfig;
+  metadataSnapshot?: PluginMetadataSnapshot | null;
 };
 
 function resolveCompletedFallbackEntry(params: SessionFallbackParams) {
@@ -63,6 +65,7 @@ function selectCompletedFallbackModel(
     selectedModelRef: selected.label,
     activeModelRef: active.label,
     config: params.config,
+    metadataSnapshot: params.metadataSnapshot,
     state: entry,
   }).active
     ? { modelProvider: active.provider, model: active.model }

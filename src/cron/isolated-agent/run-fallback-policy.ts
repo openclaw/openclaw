@@ -1,6 +1,6 @@
 /** Resolves model fallback chains for isolated cron runs and preflight. */
 import type { RunEntryModelResolve } from "../../agents/embedded-agent-runner/run-entry.types.js";
-import { resolveModelCandidateChain } from "../../agents/model-fallback-candidates.js";
+import { resolveModelCandidateChainAsync } from "../../agents/model-fallback-candidates.js";
 import type { ModelCandidate } from "../../agents/model-fallback.types.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -96,7 +96,7 @@ export function resolveCronFallbacksOverride(params: {
 }
 
 /** Builds the ordered model candidates used by cron preflight checks. */
-export function resolveCronPreflightCandidates(params: {
+export async function resolveCronPreflightCandidates(params: {
   cfg: OpenClawConfig;
   job: CronJob;
   agentId: string;
@@ -104,9 +104,9 @@ export function resolveCronPreflightCandidates(params: {
   model: string;
   useSubagentFallbacks?: boolean;
   inheritDefaultFallbacksForAgentStringModel?: boolean;
-}): ModelCandidate[] {
+}): Promise<ModelCandidate[]> {
   const fallbacksOverride = resolveCronFallbacksOverride(params);
-  return resolveModelCandidateChain({
+  return resolveModelCandidateChainAsync({
     cfg: params.cfg,
     agentId: params.agentId,
     provider: params.provider,
@@ -121,7 +121,7 @@ export async function resolveCronPreflight(
   params: Parameters<typeof resolveCronPreflightCandidates>[0],
 ) {
   const modelPreflightRuntime = await cronModelPreflightRuntimeLoader.load();
-  const preflightCandidates = resolveCronPreflightCandidates(params);
+  const preflightCandidates = await resolveCronPreflightCandidates(params);
   let firstUnavailableReason: string | undefined;
   for (const [index, candidate] of preflightCandidates.entries()) {
     const candidatePreflight = await modelPreflightRuntime.preflightCronModelProvider({

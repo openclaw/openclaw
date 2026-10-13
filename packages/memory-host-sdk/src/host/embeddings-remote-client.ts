@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { EmbeddingProviderOptions } from "./embeddings.types.js";
 import { requireApiKey, resolveApiKeyForProvider } from "./openclaw-runtime-auth.js";
 import {
+  resolvePluginMetadataSnapshotAsync,
   resolveProviderRequestPolicyConfig,
   resolveProviderTransportSsrFPolicy,
   type SsrFPolicy,
@@ -183,7 +184,8 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
   return {
     baseUrl,
     headers,
-    ssrfPolicy: resolveEmbeddingProviderSsrFPolicy({
+    ssrfPolicy: await resolveEmbeddingProviderSsrFPolicy({
+      config: params.options.config,
       provider: params.provider,
       api: providerConfig?.api ?? "openai-completions",
       baseUrl,
@@ -193,13 +195,20 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
 }
 
 /** Embedding adapters share inference's endpoint classification and explicit network policy. */
-export function resolveEmbeddingProviderSsrFPolicy(params: {
+export async function resolveEmbeddingProviderSsrFPolicy(params: {
+  config: EmbeddingProviderOptions["config"];
   provider: string;
   api?: string;
   baseUrl: string;
   allowPrivateNetwork?: boolean;
-}): SsrFPolicy | undefined {
+}): Promise<SsrFPolicy | undefined> {
+  const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+    config: params.config,
+    env: process.env,
+    allowWorkspaceScopedCurrent: true,
+  });
   const policy = resolveProviderRequestPolicyConfig({
+    providerMetadataOwners: metadataSnapshot.owners,
     provider: params.provider,
     api: params.api,
     baseUrl: params.baseUrl,

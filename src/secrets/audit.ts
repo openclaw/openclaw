@@ -18,6 +18,8 @@ import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { JsonFileReadError, readJsonSync } from "../infra/json-files.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { resolveUserPath } from "../utils.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { findEnvPlaintextFindings } from "./audit-env.js";
@@ -528,105 +530,116 @@ export async function runSecretsAudit(
 ) {
   const env = params.env ?? process.env;
   const snapshot = await createSecretsConfigIO({ env }).readConfigFileSnapshot();
-  const configPath = resolveUserPath(snapshot.path);
-  const defaults = snapshot.valid ? snapshot.config.secrets?.defaults : undefined;
-
-  const collector: AuditCollector = {
-    findings: [],
-    refAssignments: [],
-    configProviderRefPaths: new Map(),
-    authProviderModes: new Map(),
-    configPlaintextAssignments: [],
-    filesScanned: new Set([configPath]),
-  };
-
-  const stateDir = resolveStateDir(env, os.homedir);
-  const envPaths = listSecretsDotEnvPaths({ configPath, stateDir });
   const config = snapshot.valid ? snapshot.config : ({} as OpenClawConfig);
-  let resolution = {
-    refsChecked: 0,
-    skippedExecRefs: 0,
-    resolvabilityComplete: true,
-  };
+  const collectAudit = async () => {
+    const configPath = resolveUserPath(snapshot.path);
+    const defaults = snapshot.valid ? snapshot.config.secrets?.defaults : undefined;
 
-  if (snapshot.valid) {
-    collectConfigSecrets({
-      config,
-      configPath,
-      collector,
-      env,
-    });
-    for (const target of listAuthProfileStoreTargets(config, stateDir, env)) {
-      collectAuthStoreSecrets(target, collector, defaults);
-    }
-    for (const modelsJsonPath of listAgentModelsJsonPaths(config, stateDir, env)) {
-      collectModelsJsonSecrets({
-        modelsJsonPath,
+    const collector: AuditCollector = {
+      findings: [],
+      refAssignments: [],
+      configProviderRefPaths: new Map(),
+      authProviderModes: new Map(),
+      configPlaintextAssignments: [],
+      filesScanned: new Set([configPath]),
+    };
+
+    const stateDir = resolveStateDir(env, os.homedir);
+    const envPaths = listSecretsDotEnvPaths({ configPath, stateDir });
+    let resolution = {
+      refsChecked: 0,
+      skippedExecRefs: 0,
+      resolvabilityComplete: true,
+    };
+
+    if (snapshot.valid) {
+      collectConfigSecrets({
+        config,
+        configPath,
         collector,
+        env,
+      });
+      for (const target of listAuthProfileStoreTargets(config, stateDir, env)) {
+        collectAuthStoreSecrets(target, collector, defaults);
+      }
+      for (const modelsJsonPath of listAgentModelsJsonPaths(config, stateDir, env)) {
+        collectModelsJsonSecrets({
+          modelsJsonPath,
+          collector,
+        });
+      }
+      const unresolvedRefResult = await collectUnresolvedRefFindings({
+        collector,
+        config,
+        env,
+        allowExec: Boolean(params.allowExec),
+      });
+      resolution = {
+        refsChecked: unresolvedRefResult.refsChecked,
+        skippedExecRefs: unresolvedRefResult.skippedExecRefs,
+        resolvabilityComplete: unresolvedRefResult.skippedExecRefs === 0,
+      };
+      collectShadowingFindings(collector);
+      collector.findings.push(
+        ...(await findSecretStorePlaintextResidueFindings({
+          assignments: collector.configPlaintextAssignments,
+          database: { env },
+        })),
+      );
+    } else {
+      collector.findings.push({
+        code: "REF_UNRESOLVED",
+        severity: "error",
+        file: configPath,
+        jsonPath: "<root>",
+        message: "Config is invalid; cannot validate secret references reliably.",
       });
     }
-    const unresolvedRefResult = await collectUnresolvedRefFindings({
-      collector,
-      config,
-      env,
-      allowExec: Boolean(params.allowExec),
-    });
-    resolution = {
-      refsChecked: unresolvedRefResult.refsChecked,
-      skippedExecRefs: unresolvedRefResult.skippedExecRefs,
-      resolvabilityComplete: unresolvedRefResult.skippedExecRefs === 0,
-    };
-    collectShadowingFindings(collector);
+
+    for (const envPath of envPaths) {
+      const findings = findEnvPlaintextFindings(envPath);
+      if (findings) {
+        collector.filesScanned.add(envPath);
+        collector.findings.push(...findings);
+      }
+    }
     collector.findings.push(
-      ...(await findSecretStorePlaintextResidueFindings({
-        assignments: collector.configPlaintextAssignments,
+      ...(await findSecretStoreRedactedValueFindings({
         database: { env },
+        excludeNames: new Set(
+          collector.refAssignments
+            .filter((assignment) => assignment.ref.source === "store")
+            .map((assignment) => assignment.ref.id),
+        ),
       })),
     );
-  } else {
-    collector.findings.push({
-      code: "REF_UNRESOLVED",
-      severity: "error",
-      file: configPath,
-      jsonPath: "<root>",
-      message: "Config is invalid; cannot validate secret references reliably.",
-    });
-  }
+    collectLegacyAuthSourceFindings({ config, stateDir, env, collector });
+    const summary = summarizeFindings(collector.findings);
+    const status: SecretsAuditStatus =
+      summary.unresolvedRefCount > 0
+        ? "unresolved"
+        : collector.findings.length > 0
+          ? "findings"
+          : "clean";
 
-  for (const envPath of envPaths) {
-    const findings = findEnvPlaintextFindings(envPath);
-    if (findings) {
-      collector.filesScanned.add(envPath);
-      collector.findings.push(...findings);
-    }
-  }
-  collector.findings.push(
-    ...(await findSecretStoreRedactedValueFindings({
-      database: { env },
-      excludeNames: new Set(
-        collector.refAssignments
-          .filter((assignment) => assignment.ref.source === "store")
-          .map((assignment) => assignment.ref.id),
-      ),
-    })),
-  );
-  collectLegacyAuthSourceFindings({ config, stateDir, env, collector });
-  const summary = summarizeFindings(collector.findings);
-  const status: SecretsAuditStatus =
-    summary.unresolvedRefCount > 0
-      ? "unresolved"
-      : collector.findings.length > 0
-        ? "findings"
-        : "clean";
-
-  return {
-    version: 1 as const,
-    status,
-    resolution,
-    filesScanned: [...collector.filesScanned].toSorted(),
-    summary,
-    findings: collector.findings,
+    return {
+      version: 1 as const,
+      status,
+      resolution,
+      filesScanned: [...collector.filesScanned].toSorted(),
+      summary,
+      findings: collector.findings,
+    };
   };
+  if (!snapshot.valid) {
+    return collectAudit();
+  }
+  const metadata = await resolvePluginMetadataSnapshotAsync({ config, env });
+  return withPluginMetadataSnapshotScope(metadata, collectAudit, {
+    config,
+    env,
+    trustConfigIdentity: true,
+  });
 }
 
 /** Maps audit results to CLI exit codes. */

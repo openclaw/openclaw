@@ -54,12 +54,7 @@ import {
   refreshPublishedModelRuntimeCatalog,
   retainPublishedModelRuntimeOwner,
 } from "./prepared-model-runtime.published-owner.js";
-import {
-  refreshCommittedProviderCatalogs,
-  createPreparedModelRuntimeRecovery,
-  resolveSafeRefreshAgentIds,
-  updateOwnersForScopedRefresh,
-} from "./prepared-model-runtime.refresh-scope.js";
+import * as refreshScope from "./prepared-model-runtime.refresh-scope.js";
 import { closeEphemeralPreparedModelRuntimeResources } from "./prepared-model-runtime.resources.js";
 import {
   acquireRetainedAgentRuntimeCleanupRegistries,
@@ -469,7 +464,7 @@ export function markPreparedModelRuntimeSnapshotsStale(
   }
   refreshRequestEpoch += 1;
   const staleError = new Error(reason);
-  updateOwnersForScopedRefresh(owners, options.agentIds, staleError, {
+  refreshScope.updateOwnersForScopedRefresh(owners, options.agentIds, staleError, {
     retireStandalone: true,
     resetPluginGeneration: true,
   });
@@ -502,7 +497,7 @@ export function rejectPendingPreparedModelRuntimeReplacement(
   notifyPreparedModelRuntimePublication({ phase: "failed", error: replacementError });
 }
 
-const modelRuntimeRecovery = createPreparedModelRuntimeRecovery({
+const modelRuntimeRecovery = refreshScope.createPreparedModelRuntimeRecovery({
   owners,
   canRecover: () => gatewayLifecycleActive && !refreshCancellation.signal.aborted,
   getReplacement: () => pendingModelRuntimeReplacement,
@@ -533,10 +528,8 @@ export function refreshPreparedModelRuntimeSnapshots(
   if (options.isPublicationCurrent?.() === false) {
     return Promise.resolve();
   }
-  const requestedScopedRefresh = options.agentIds !== undefined;
-  const initialAgentIds =
-    typeof config === "function" ? undefined : resolveSafeRefreshAgentIds(config, options, owners);
-  const forceFullRefresh = requestedScopedRefresh && initialAgentIds === undefined;
+  const initialAgentIds = refreshScope.resolveInitialRefreshAgentIds(config, options, owners);
+  const forceFullRefresh = options.agentIds !== undefined && initialAgentIds === undefined;
   // Stale synchronously. Queued publication must never leave the prior generation request-visible.
   markPreparedModelRuntimeSnapshotsStale(undefined, {
     waitForReplacement: true,
@@ -575,7 +568,7 @@ export function refreshPreparedModelRuntimeSnapshots(
   const rejectReplacement = (error: Error) => {
     if (requestEpoch === refreshRequestEpoch) {
       // A lost external claim can leave partially built owners; fence them even without a successor.
-      updateOwnersForScopedRefresh(owners, publicationAgentIds, error, {
+      refreshScope.updateOwnersForScopedRefresh(owners, publicationAgentIds, error, {
         clearPending: true,
         resetPluginGeneration: true,
       });
@@ -605,7 +598,7 @@ export function refreshPreparedModelRuntimeSnapshots(
     // Publication listeners may synchronously read the committed owner. Clear the lifecycle
     // gate before announcing availability so they cannot observe a false missing generation.
     notifyPreparedModelRuntimePublication({ phase: "published" });
-    refreshCommittedProviderCatalogs(owners.values());
+    refreshScope.refreshCommittedProviderCatalogs(owners.values());
   };
   const publication = publicationQueue
     .enqueue(async () => {
@@ -616,39 +609,41 @@ export function refreshPreparedModelRuntimeSnapshots(
       if (!isPublicationCurrent()) {
         return;
       }
-      publicationAgentIds = forceFullRefresh
-        ? undefined
-        : resolveSafeRefreshAgentIds(currentConfig, options, owners);
-      retainedGatewayRunOwners.clear(owners);
-      gatewayLifecycleActive ||= options.gatewayLifecycle === true;
-      await configuredRefresh.refreshPreparedModelRuntimeSnapshotsNow(
-        currentConfig,
-        { ...options, agentIds: publicationAgentIds },
-        {
-          owners,
-          agentBuildCompletions,
-          gatewayLifecycleActive,
-          isPublicationCurrent,
-          buildTimeoutMs: modelRuntimeBuildTimeoutMs,
-          progress: startup?.progress,
-          acquisitionSignal,
-          onPluginGenerationRetired: modelRuntimeRecovery.recoverPlugin,
-        },
-      );
-      if (!isPublicationCurrent()) {
-        return;
-      }
-      const drain = () =>
-        drainPendingAuthMutations(
-          // The final queue check, dispatch rebuild, and replacement resolution are one synchronous
-          // commit. A mutation before it is adopted; a mutation after it starts a new auth transaction.
-          commitReplacement,
+      await refreshScope.withPreparedModelRefreshScope(currentConfig, options, async () => {
+        publicationAgentIds = forceFullRefresh
+          ? undefined
+          : refreshScope.resolveSafeRefreshAgentIds(currentConfig, options, owners);
+        retainedGatewayRunOwners.clear(owners);
+        gatewayLifecycleActive ||= options.gatewayLifecycle === true;
+        await configuredRefresh.refreshPreparedModelRuntimeSnapshotsNow(
+          currentConfig,
+          { ...options, agentIds: publicationAgentIds },
+          {
+            owners,
+            agentBuildCompletions,
+            gatewayLifecycleActive,
+            isPublicationCurrent,
+            buildTimeoutMs: modelRuntimeBuildTimeoutMs,
+            progress: startup?.progress,
+            acquisitionSignal,
+            onPluginGenerationRetired: modelRuntimeRecovery.recoverPlugin,
+          },
         );
-      if (replacement?.degraded) {
-        await publicationQueue.enqueue(drain);
-      } else {
-        await drain();
-      }
+        if (!isPublicationCurrent()) {
+          return;
+        }
+        const drain = () =>
+          drainPendingAuthMutations(
+            // The final queue check, dispatch rebuild, and replacement resolution are one synchronous
+            // commit. A mutation before it is adopted; a mutation after it starts a new auth transaction.
+            commitReplacement,
+          );
+        if (replacement?.degraded) {
+          await publicationQueue.enqueue(drain);
+        } else {
+          await drain();
+        }
+      });
     }, startup?.release)
     .then(commitReplacement, (error: unknown) => {
       const refreshError = toStringifiedError(error);
@@ -732,7 +727,7 @@ function invalidateForAuthMutation(event: PreparedModelRuntimeAuthMutation): voi
       }
       if (pendingModelRuntimeReplacement?.degraded || configuredOwnersAreRequestVisible(owners)) {
         notifyPreparedModelRuntimePublication({ phase: "published" });
-        refreshCommittedProviderCatalogs(owners.values());
+        refreshScope.refreshCommittedProviderCatalogs(owners.values());
       }
     });
   };

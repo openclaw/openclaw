@@ -189,6 +189,7 @@ describe("ClawRouter cold prepared catalog", () => {
         request: {
           kind: "catalog",
           syntheticAuth: [],
+          bundledDiscoveryMode: undefined,
           clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: state.env }),
         },
       },

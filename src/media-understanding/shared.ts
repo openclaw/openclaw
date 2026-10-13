@@ -25,6 +25,7 @@ import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { bufferToBlobPart } from "../plugin-sdk/blob-runtime.js";
+import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   executeProviderOperationWithRetry,
   isTransientProviderHttpStatus,
@@ -356,9 +357,11 @@ export function resolveProviderHttpRequestConfigWithOriginTrust(params: {
   api?: string;
   capability?: ProviderRequestCapability;
   transport?: ProviderRequestTransport;
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
 }): ResolvedProviderHttpRequestConfigWithOriginTrust {
   const requestConfig = resolveProviderRequestPolicyConfig({
     provider: params.provider ?? "",
+    providerMetadataOwners: params.providerMetadataOwners,
     baseUrl: params.baseUrl,
     defaultBaseUrl: params.defaultBaseUrl,
     capability: params.capability ?? "other",

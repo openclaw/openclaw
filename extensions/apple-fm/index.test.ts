@@ -7,10 +7,13 @@ import {
   capturePluginRegistration,
   createNonExitingRuntimeEnv,
   createTestWizardPrompter,
+  useProviderCatalogMetadata,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import type { AppleFmFacts } from "./native.js";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 const native = vi.hoisted(() => ({
   prepare: vi.fn<import("./native.js").AppleFmNative["prepare"]>(),

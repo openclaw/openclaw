@@ -8,6 +8,7 @@ import type {
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import { markImplicitSameChatApprovalAuthorization } from "../../plugin-sdk/approval-auth-runtime.js";
+import { preparePluginMetadataMachineStateAsync } from "../../plugins/installed-plugin-index-record-state.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -157,8 +158,9 @@ function buildApproveParams(
 }
 
 describe("handleApproveCommand", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    await preparePluginMetadataMachineStateAsync({});
     isPendingSystemAgentApprovalMock.mockResolvedValue(false);
     setApprovePluginRegistry();
   });

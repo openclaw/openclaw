@@ -19,8 +19,9 @@ const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
   resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
 }));
 
+// mock-isolation: Secret fixtures supply explicit web providers without opening plugin runtime state.
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
-  resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
+  resolvePluginWebSearchProvidersAsync: resolvePluginWebSearchProvidersMock,
 }));
 
 vi.mock("../plugins/installed-plugin-index-records.js", () => ({

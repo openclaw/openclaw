@@ -135,7 +135,7 @@ describe("applyNonInteractiveAuthChoice", () => {
     applyNonInteractivePluginProviderChoice.mockResolvedValueOnce(resolvedConfig as never);
     const normalize = vi
       .spyOn(apiProviderAuthChoices, "normalizeApiKeyTokenProviderAuthChoice")
-      .mockImplementation((params) =>
+      .mockImplementation(async (params) =>
         params.workspaceDir === target.workspaceDir ? "demo-provider-api-key" : params.authChoice,
       );
 

@@ -9,6 +9,7 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
 import { parseUpdateDoctorLintReport } from "../infra/update-doctor-lint.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import * as pluginDiscovery from "../plugins/discovery.js";
 import { discoverConfiguredPluginLoadPaths } from "../plugins/discovery.js";
 import * as manifestRegistry from "../plugins/manifest-registry.js";
@@ -74,6 +75,7 @@ it.each([
         OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
       },
       async () => {
+        await prepareBundledDiscoveryMode();
         const discovery = discoverConfiguredPluginLoadPaths({ loadPaths: [pluginPath] });
         expect(discovery.candidates).toEqual([]);
         let diagnostics = discovery.diagnostics;

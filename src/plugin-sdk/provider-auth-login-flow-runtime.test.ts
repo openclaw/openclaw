@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelsAuthLoginFlowOptions } from "../commands/models/auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   buildProviderLoginChoicesReply,
   cancelProviderLoginFlow,
@@ -18,6 +19,11 @@ const resolveChoice = vi.hoisted(() =>
 vi.mock("../plugins/provider-login-options.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/provider-login-options.js")>()),
   resolveProviderChannelLoginChoice: resolveChoice,
+}));
+// mock-isolation: Choice resolution is mocked; metadata preparation must not read local state.
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
+  resolvePluginMetadataSnapshotAsync: async () => createPluginMetadataSnapshotFixture(),
 }));
 
 const choice: ProviderChannelLoginChoice = {

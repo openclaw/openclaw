@@ -55,7 +55,7 @@ vi.mock("./onboard-recommendations.js", () => ({
 async function readHelpAuthChoices(): Promise<string[]> {
   const { registerOnboardCommand } = await import("../cli/program/register.onboard.js");
   const program = new Command();
-  registerOnboardCommand(program);
+  await registerOnboardCommand(program);
   const onboard = program.commands.find((command) => command.name() === "onboard");
   const description = onboard?.options.find(
     (option) => option.long === "--auth-choice",

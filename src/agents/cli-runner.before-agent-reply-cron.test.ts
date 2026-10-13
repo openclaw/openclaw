@@ -22,6 +22,7 @@ import {
 } from "../plugins/hook-claim-admission.js";
 import type { PluginHookAgentContext } from "../plugins/hook-types.js";
 import type { HookRunner } from "../plugins/hooks.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../sessions/user-turn-transcript.test-support.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -225,6 +226,7 @@ describe("runCliAgent before_agent_reply seam", () => {
     "holds early hook authority for %s and releases handled turns",
     async (scenario) => {
       await withOpenClawTestState({ label: "cli-before-reply-authority" }, async (state) => {
+        await preparePluginMetadataMachineStateAsync({ env: state.env });
         const target = {
           agentId: "main",
           sessionKey:
@@ -553,6 +555,7 @@ describe("runCliAgent before_agent_reply seam", () => {
   });
 
   it("lets before_agent_reply claim cron runs before the CLI subprocess is invoked", async () => {
+    await preparePluginMetadataMachineStateAsync({});
     const logInfoSpy = vi.spyOn(cliBackendLog, "info").mockImplementation(() => undefined);
     hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
     replyMock.mockResolvedValue({

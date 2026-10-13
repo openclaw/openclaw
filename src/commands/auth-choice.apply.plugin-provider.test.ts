@@ -47,8 +47,9 @@ const resolveProviderPluginChoice = vi.hoisted(() =>
   vi.fn<typeof import("../plugins/provider-wizard.js").resolveProviderPluginChoiceCore>(),
 );
 const runProviderModelSelectedHook = vi.hoisted(() => vi.fn(async () => {}));
+// mock-isolation: Provider-install and credential-staging tests control provider callbacks without loading real plugins.
 vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
-  resolvePluginProviders,
+  resolveAuthChoicePluginProviders: resolvePluginProviders,
   resolvePluginSetupProvider,
   resolveProviderPluginChoice,
   runProviderModelSelectedHook,

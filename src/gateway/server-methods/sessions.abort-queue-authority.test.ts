@@ -2,7 +2,7 @@
 // oxfmt-ignore
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import {
@@ -32,9 +32,16 @@ import { createActiveRun } from "./chat.abort.test-helpers.js";
 import { sessionAbortHandlers } from "./sessions-abort.js";
 
 useChatAbortRegistryFixture();
+let releaseProfileCatalog: (() => void) | undefined;
+beforeEach(async () => {
+  ensureUserProfilesSchema({});
+  releaseProfileCatalog = (await prepareUserProfileCatalog()).release;
+});
 const key = "agent:main:queued-stop";
 const sessionId = "original-stop-session";
 afterEach(() => {
+  releaseProfileCatalog?.();
+  releaseProfileCatalog = undefined;
   for (const queueKey of [key, sessionId]) {
     clearFollowupQueue(queueKey);
     clearFollowupDrainCallback(queueKey);
@@ -43,8 +50,6 @@ afterEach(() => {
 });
 
 async function setup() {
-  ensureUserProfilesSchema({});
-  onTestFinished((await prepareUserProfileCatalog()).release);
   const client = roleClient("view", "queued-stop-owner");
   client.connId = "queued-stop-connection";
   client.connect.scopes = ["operator.sessions.write"];

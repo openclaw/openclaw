@@ -8,6 +8,8 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
 import { resolveCronJobsStorePath, saveCronJobsStore } from "../../cron/store.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import {
@@ -17,7 +19,7 @@ import {
 import { createWorkshopSkill, listWorkshopSkills, restoreWorkshopSkill } from "./library.js";
 import { registerSkillUsageTracking } from "./skill-usage.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
-import { archiveUnusedWorkshopSkills } from "./unused-archive.js";
+import { archiveUnusedWorkshopSkills as archiveUnusedWorkshopSkillsInScope } from "./unused-archive.js";
 
 const DAY_MS = 24 * 60 * 60_000;
 const openclawAgent: OpenClawConfig = {
@@ -28,6 +30,18 @@ const openclawAgent: OpenClawConfig = {
     },
   },
 };
+
+async function archiveUnusedWorkshopSkills(
+  ...params: Parameters<typeof archiveUnusedWorkshopSkillsInScope>
+) {
+  const config = params[0];
+  const metadata = await resolvePluginMetadataSnapshotAsync({ config });
+  return withPluginMetadataSnapshotScope(
+    metadata,
+    () => archiveUnusedWorkshopSkillsInScope(...params),
+    { config },
+  );
+}
 
 let state: OpenClawTestState;
 let stopTracking: (() => Promise<void>) | undefined;

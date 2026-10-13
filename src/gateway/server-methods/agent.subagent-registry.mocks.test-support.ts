@@ -76,9 +76,10 @@ vi.mock(
 vi.mock("../../browser-lifecycle-cleanup.js", () => ({
   cleanupBrowserSessionsForLifecycleEnd: async () => {},
 }));
+// mock-isolation: Agent RPC fixtures provide empty registries without opening plugin runtimes.
 vi.mock("../../agents/runtime-plugins.js", async () => {
   const { createEmptyPluginRegistry } = await import("../../plugins/registry-empty.js");
-  return { loadAgentRuntimePluginRegistryHandle: createEmptyPluginRegistry };
+  return { loadAgentRuntimePluginRegistryHandle: async () => createEmptyPluginRegistry() };
 });
 
 export function resetSubagentRegistryMocks() {

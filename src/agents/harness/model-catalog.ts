@@ -18,7 +18,7 @@ import { resolveConfiguredModelEntries } from "../configured-model-entries.js";
 import { DEFAULT_PROVIDER } from "../defaults.js";
 import { enrichHarnessRows, modelCatalogRouteVariantKey } from "../model-catalog-entry.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../model-catalog.types.js";
-import type { ModelRef } from "../model-ref-shared.js";
+import type { ModelManifestNormalizationContext, ModelRef } from "../model-ref-shared.js";
 import {
   buildConfiguredModelCatalog,
   resolveModelRefFromString,
@@ -78,6 +78,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   /** Explicit inventory acquisition; ordinary thinking reads stay selected-harness-only. */
   includePickerRuntimes?: boolean;
   pluginRegistry?: PluginRegistry | null;
+  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
   observationConfig?: OpenClawConfig;
   includesProvider?: (provider: string) => boolean;
   normalizeProvider?: (provider: string) => string;
@@ -107,6 +108,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
           defaultProvider: params.defaultProvider,
           allowManifestNormalization: true,
           allowPluginNormalization: true,
+          manifestPlugins: params.manifestPlugins,
         })?.ref
       : undefined;
   let defaultRuntime: string | undefined;
@@ -135,6 +137,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
       agentId: params.agentId,
       defaultProvider: params.defaultProvider,
       defaultModel: params.defaultModel,
+      manifestPlugins: params.manifestPlugins,
     }).entries) {
       for (const runtime of entry.pickerRuntimes ?? []) {
         addRuntime(runtime, entry.ref.provider);
@@ -170,6 +173,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
         defaultProvider: params.defaultProvider,
         allowManifestNormalization: true,
         allowPluginNormalization: true,
+        manifestPlugins: params.manifestPlugins,
       })?.ref;
       return resolved ? [resolved] : [];
     });
@@ -282,6 +286,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
       ...buildConfiguredModelCatalog({
         cfg: params.cfg,
         workspaceDir: params.workspaceDir,
+        manifestPlugins: params.manifestPlugins,
       }).map(keyOf),
     ]);
     // Successful discovery replaces its native scope; authored membership survives an empty list.
@@ -398,23 +403,29 @@ export function augmentPreparedModelCatalogWithAgentHarness(params: {
   snapshot: ModelCatalogSnapshot;
   preparedSnapshot?: ModelCatalogSnapshot;
   pluginRegistry?: PluginRegistry;
+  pluginMetadataSnapshot: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"];
   includesProvider?: (provider: string) => boolean;
   normalizeProvider?: (provider: string) => string;
   onDiscoveryStarted?: (provider: string) => void;
   onDiscoveryCompleted?: (rows: readonly ModelCatalogEntry[]) => void;
   onError?: (error: unknown, providers?: readonly string[]) => void;
 }): Promise<ModelCatalogSnapshot> {
-  const { input, ...catalogParams } = params;
+  const { input, pluginMetadataSnapshot, ...catalogParams } = params;
   const { config, agentId, agentDir, workspaceDir } = preparedHarnessCatalogScope(input);
-  return augmentModelCatalogWithAgentHarness({
-    ...catalogParams,
-    cfg: config,
-    agentId,
-    agentDir,
-    workspaceDir,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: resolveNativeModelPrimary(input.config, agentId),
-    includePickerRuntimes: params.nativeSelection === undefined,
-    observationConfig: input.config,
-  });
+  return withPluginRuntimeGenerationScope(
+    { metadataSnapshot: pluginMetadataSnapshot, pluginRegistry: params.pluginRegistry },
+    () =>
+      augmentModelCatalogWithAgentHarness({
+        ...catalogParams,
+        cfg: config,
+        agentId,
+        agentDir,
+        workspaceDir,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: resolveNativeModelPrimary(input.config, agentId),
+        includePickerRuntimes: params.nativeSelection === undefined,
+        observationConfig: input.config,
+        manifestPlugins: pluginMetadataSnapshot,
+      }),
+  );
 }

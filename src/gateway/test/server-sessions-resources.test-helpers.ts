@@ -12,6 +12,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "../../config/sessions/session-transcript-reconcile.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { preparePluginMetadataMachineStateAsync } from "../../plugins/installed-plugin-index-record-state.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-context-binding.js";
 import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
 import {
@@ -139,6 +140,7 @@ export function installGatewaySessionsTestResources(
   installGatewayTestHooks({
     scope: "suite",
     setup: async () => {
+      await preparePluginMetadataMachineStateAsync({});
       const workspace = getRuntimeConfig().agents?.defaults?.workspace;
       if (!workspace) {
         throw new Error("Gateway sessions fixture requires a configured workspace");

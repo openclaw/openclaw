@@ -9,6 +9,8 @@ import { loadManifestModelCatalog } from "../agents/model-catalog.js";
 import { resolveModelCandidateChain } from "../agents/model-fallback-candidates.js";
 import { supportsModelTools } from "../agents/model-tool-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { verifySystemAgentInferenceWithFallback } from "../system-agent/inference-fallback.js";
@@ -40,152 +42,166 @@ export async function selectUpdateRepairInference(params: {
   const eligibility = new Map<SystemAgentConfiguredRoute, boolean>();
   try {
     signal.throwIfAborted();
-    const owner = resolveAmbientOwnerAgentId(params.config);
-    const configuredEntries = listAgentEntries(params.config);
-    const catalog = loadManifestModelCatalog({ config: params.config });
-    const accept = async (route: SystemAgentConfiguredRoute): Promise<boolean> => {
-      signal.throwIfAborted();
-      const cached = eligibility.get(route);
-      if (cached !== undefined) {
-        return cached;
-      }
-      const model = findModelInCatalog(catalog, route.provider, route.model);
-      const configuredModel = params.config.models?.providers?.[route.provider]?.models.find(
-        (entry) => entry.id === route.model,
-      );
-      if (
-        route.runner !== "embedded" ||
-        !supportsModelTools(model ?? {}) ||
-        !supportsModelTools(configuredModel ?? {})
-      ) {
-        eligibility.set(route, false);
-        return false;
-      }
-      const auth = {
-        provider: route.provider,
-        cfg: route.runConfig,
-        agentDir: route.agentDir,
-        modelId: route.model,
-        modelApi: configuredModel?.api ?? model?.api,
-      };
-      let accepted: boolean;
-      try {
-        // Runtime auth owns inherited profiles and OAuth refresh. Browse-only
-        // readiness cannot decide whether a refreshable credential can run.
-        accepted = route.authProfileId
-          ? Boolean(
-              await resolveApiKeyForProviderCore({
-                ...auth,
-                profileId: route.authProfileId,
-                lockedProfile: true,
-                allowAuthProfileFallback: false,
-                modelBaseUrl:
-                  params.config.models?.providers?.[route.provider]?.baseUrl ?? model?.baseUrl,
-              }),
-            )
-          : await hasAvailableAuthForProvider(auth);
-      } catch {
-        accepted = false;
-      }
-      signal.throwIfAborted();
-      eligibility.set(route, accepted);
-      return accepted;
-    };
-    const selected = await verifySystemAgentInferenceWithFallback({
-      requestingAgentId: owner,
-      runtime: params.runtime,
-      deps: { readConfig: async () => params.config },
-      routePolicy: {
-        expand: async (base) => {
-          // Execution aliases identify the runner, not the configured model provider.
-          const primaryProvider = base.modelLabel.slice(0, base.modelLabel.indexOf("/"));
-          const candidates = resolveModelCandidateChain({
-            cfg: params.config,
-            agentId: base.agentId,
-            provider: primaryProvider,
-            model: base.model,
-            requestedRouteResolution: "resolved",
-          });
-          const routes: SystemAgentConfiguredRoute[] = [];
-          for (const candidate of candidates) {
-            signal.throwIfAborted();
-            const primaryProfile =
-              candidate.provider === primaryProvider && candidate.model === base.model
-                ? base.authProfileId
-                : undefined;
-            const modelKey = `${candidate.provider}/${candidate.model}`;
-            const modelRef = `${modelKey}${primaryProfile ? `@${primaryProfile}` : ""}`;
-            const entries = (
-              configuredEntries.length ? configuredEntries : [{ id: base.agentId }]
-            ).map((entry) =>
-              normalizeAgentId(entry.id) === base.agentId
-                ? Object.assign({}, entry, {
-                    model: { primary: modelRef, fallbacks: [] },
-                    models: {
-                      ...entry.models,
-                      [modelKey]: {
-                        ...entry.models?.[modelKey],
-                        agentRuntime: { id: "openclaw" },
-                      },
-                    },
-                  })
-                : entry,
-            );
-            const runConfig: OpenClawConfig = {
-              ...params.config,
-              agents: {
-                ...params.config.agents,
-                defaults: {
-                  ...params.config.agents?.defaults,
-                  model: { primary: modelRef, fallbacks: [] },
-                },
-                entries: toAgentEntriesRecord(entries),
-              },
-            };
-            const route = await resolveSystemAgentConfiguredRouteFromConfig(
-              runConfig,
-              base.agentId,
-            );
-            if (route) {
-              routes.push(route);
-            }
+    const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({ config: params.config });
+    return await withPluginMetadataSnapshotScope(
+      metadataSnapshot,
+      async (): Promise<UpdateRepairInferenceResult> => {
+        const owner = resolveAmbientOwnerAgentId(params.config);
+        const configuredEntries = listAgentEntries(params.config);
+        const catalog = loadManifestModelCatalog({ config: params.config, metadataSnapshot });
+        const accept = async (route: SystemAgentConfiguredRoute): Promise<boolean> => {
+          signal.throwIfAborted();
+          const cached = eligibility.get(route);
+          if (cached !== undefined) {
+            return cached;
           }
-          chains.set(base.agentId, routes);
-          return routes;
-        },
-        accept,
-        verify: async (route) => {
+          const model = findModelInCatalog(catalog, route.provider, route.model);
+          const configuredModel = params.config.models?.providers?.[route.provider]?.models.find(
+            (entry) => entry.id === route.model,
+          );
+          if (
+            route.runner !== "embedded" ||
+            !supportsModelTools(model ?? {}) ||
+            !supportsModelTools(configuredModel ?? {})
+          ) {
+            eligibility.set(route, false);
+            return false;
+          }
+          const auth = {
+            provider: route.provider,
+            cfg: route.runConfig,
+            agentDir: route.agentDir,
+            modelId: route.model,
+            modelApi: configuredModel?.api ?? model?.api,
+          };
+          let accepted: boolean;
+          try {
+            // Runtime auth owns inherited profiles and OAuth refresh. Browse-only
+            // readiness cannot decide whether a refreshable credential can run.
+            accepted = route.authProfileId
+              ? Boolean(
+                  await resolveApiKeyForProviderCore({
+                    ...auth,
+                    profileId: route.authProfileId,
+                    lockedProfile: true,
+                    allowAuthProfileFallback: false,
+                    modelBaseUrl:
+                      params.config.models?.providers?.[route.provider]?.baseUrl ?? model?.baseUrl,
+                  }),
+                )
+              : await hasAvailableAuthForProvider(auth);
+          } catch {
+            accepted = false;
+          }
           signal.throwIfAborted();
-          const result = await runSetupInferenceTurn({
-            route,
-            deps: { timeoutMs: Math.max(1, deadline - Date.now()) },
-            requireExecutionOwner: false,
-            signal,
-            runtime: params.runtime,
-          });
-          signal.throwIfAborted();
-          return result.ok
-            ? { ok: true, modelRef: route.modelLabel, latencyMs: result.latencyMs }
-            : result;
-        },
+          eligibility.set(route, accepted);
+          return accepted;
+        };
+        const selected = await verifySystemAgentInferenceWithFallback({
+          requestingAgentId: owner,
+          runtime: params.runtime,
+          deps: {
+            readConfig: async () => params.config,
+            resolveRoute: (config, agentId) =>
+              resolveSystemAgentConfiguredRouteFromConfig(config, agentId, {
+                pluginMetadataPlugins: metadataSnapshot.plugins,
+              }),
+          },
+          routePolicy: {
+            expand: async (base) => {
+              // Execution aliases identify the runner, not the configured model provider.
+              const primaryProvider = base.modelLabel.slice(0, base.modelLabel.indexOf("/"));
+              const candidates = resolveModelCandidateChain({
+                cfg: params.config,
+                agentId: base.agentId,
+                provider: primaryProvider,
+                model: base.model,
+                requestedRouteResolution: "resolved",
+                manifestPlugins: metadataSnapshot.plugins,
+              });
+              const routes: SystemAgentConfiguredRoute[] = [];
+              for (const candidate of candidates) {
+                signal.throwIfAborted();
+                const primaryProfile =
+                  candidate.provider === primaryProvider && candidate.model === base.model
+                    ? base.authProfileId
+                    : undefined;
+                const modelKey = `${candidate.provider}/${candidate.model}`;
+                const modelRef = `${modelKey}${primaryProfile ? `@${primaryProfile}` : ""}`;
+                const entries = (
+                  configuredEntries.length ? configuredEntries : [{ id: base.agentId }]
+                ).map((entry) =>
+                  normalizeAgentId(entry.id) === base.agentId
+                    ? Object.assign({}, entry, {
+                        model: { primary: modelRef, fallbacks: [] },
+                        models: {
+                          ...entry.models,
+                          [modelKey]: {
+                            ...entry.models?.[modelKey],
+                            agentRuntime: { id: "openclaw" },
+                          },
+                        },
+                      })
+                    : entry,
+                );
+                const runConfig: OpenClawConfig = {
+                  ...params.config,
+                  agents: {
+                    ...params.config.agents,
+                    defaults: {
+                      ...params.config.agents?.defaults,
+                      model: { primary: modelRef, fallbacks: [] },
+                    },
+                    entries: toAgentEntriesRecord(entries),
+                  },
+                };
+                const route = await resolveSystemAgentConfiguredRouteFromConfig(
+                  runConfig,
+                  base.agentId,
+                  { pluginMetadataPlugins: metadataSnapshot.plugins },
+                );
+                if (route) {
+                  routes.push(route);
+                }
+              }
+              chains.set(base.agentId, routes);
+              return routes;
+            },
+            accept,
+            verify: async (route) => {
+              signal.throwIfAborted();
+              const result = await runSetupInferenceTurn({
+                route,
+                deps: { timeoutMs: Math.max(1, deadline - Date.now()) },
+                requireExecutionOwner: false,
+                signal,
+                runtime: params.runtime,
+              });
+              signal.throwIfAborted();
+              return result.ok
+                ? { ok: true, modelRef: route.modelLabel, latencyMs: result.latencyMs }
+                : result;
+            },
+          },
+        });
+        if (!selected.ok || selected.route.runner !== "embedded") {
+          return {
+            ok: false,
+            reason: selected.ok
+              ? "No local, tool-capable inference route is available."
+              : selected.error,
+          };
+        }
+        const chain = chains.get(selected.route.agentId) ?? [];
+        const modelFallbacks: string[] = [];
+        for (const route of chain.slice(chain.indexOf(selected.route) + 1)) {
+          if (await accept(route)) {
+            modelFallbacks.push(route.modelLabel);
+          }
+        }
+        return { ok: true, route: selected.route, modelFallbacks };
       },
-    });
-    if (!selected.ok || selected.route.runner !== "embedded") {
-      return {
-        ok: false,
-        reason: selected.ok
-          ? "No local, tool-capable inference route is available."
-          : selected.error,
-      };
-    }
-    const chain = chains.get(selected.route.agentId) ?? [];
-    const modelFallbacks: string[] = [];
-    for (const route of chain.slice(chain.indexOf(selected.route) + 1)) {
-      if (await accept(route)) {
-        modelFallbacks.push(route.modelLabel);
-      }
-    }
-    return { ok: true, route: selected.route, modelFallbacks };
+    );
   } catch {
     return {
       ok: false,

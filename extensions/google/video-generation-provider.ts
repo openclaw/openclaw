@@ -26,7 +26,7 @@ import {
   GOOGLE_VIDEO_MAX_DURATION_SECONDS,
   GOOGLE_VIDEO_MIN_DURATION_SECONDS,
 } from "./generation-provider-metadata.js";
-import { resolveGoogleApiClientHeaders } from "./google-api-client-header.js";
+import { resolveGoogleApiClientHeadersAsync } from "./google-api-client-header.js";
 import { createGoogleGenAI, type GoogleGenAIClient } from "./google-genai-runtime.js";
 import { stripGoogleProviderPrefix } from "./model-id.js";
 import { resolveGoogleGenerativeAiApiOrigin } from "./provider-policy.js";
@@ -431,12 +431,12 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
       const restBaseUrl = resolveGoogleVideoRestBaseUrl(configuredBaseUrl);
       const authHeaders = {
         ...parseGeminiAuth(apiKey).headers,
-        ...resolveGoogleApiClientHeaders({
+        ...(await resolveGoogleApiClientHeadersAsync({
           baseUrl: restBaseUrl,
           api: "google-generative-ai",
           capability: "video",
           transport: "http",
-        }),
+        })),
       };
       const durationSeconds = resolveDurationSeconds(req.durationSeconds);
       const model = normalizeOptionalString(req.model) || DEFAULT_GOOGLE_VIDEO_MODEL;
@@ -448,7 +448,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
         timeoutMs: req.timeoutMs,
         label: "Google video generation",
       });
-      const client = createGoogleGenAI({
+      const client = await createGoogleGenAI({
         apiKey,
         httpOptions: {
           ...(configuredBaseUrl ? { baseUrl: configuredBaseUrl } : {}),

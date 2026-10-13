@@ -9,6 +9,7 @@ import {
   resolveRegistryUpdateChannel,
 } from "../../../infra/update-channels.js";
 import { isBundledPluginInsideDevSourceRoot } from "../../../plugins/dev-source-root.js";
+import { preparePluginMetadataMachineStateAsync } from "../../../plugins/installed-plugin-index-record-state.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   removePluginInstallRecordFromRecords,
@@ -63,6 +64,7 @@ export async function resolveConfiguredPluginInstallContext(params: {
     const resolved = path.resolve(resolveUserPath(value, params.env));
     return safeRealpathSync(resolved, realpathCache) ?? resolved;
   };
+  await preparePluginMetadataMachineStateAsync({ env: params.env });
   const snapshot = loadManifestMetadataSnapshot({ config: params.cfg, env: params.env });
   const currentBundledPlugins = loadPluginManifestRegistryCore({
     config: params.cfg,

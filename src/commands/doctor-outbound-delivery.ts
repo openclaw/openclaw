@@ -10,6 +10,7 @@ import { withLegacyMigrationStateLock } from "../infra/state-migrations.lock.js"
 import { listRetiredDeliveryQueueFiles } from "../infra/state-migrations.retired-delivery-files.js";
 import { assertNoRetiredStateFiles } from "../infra/state-migrations.retired-files.js";
 import type { MigrationMessages } from "../infra/state-migrations.types.js";
+import { prepareBundledDiscoveryModeNative } from "../plugins/bundled-discovery-state.native.js";
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 
@@ -67,6 +68,7 @@ export async function migrateDoctorDeliveryQueues(params: {
         preparations.some((entry) => entry.legacyPreparationState === "claimed");
       let result: Awaited<ReturnType<typeof migrateLegacyPendingOutboundDeliveries>>;
       if (needsRuntime) {
+        prepareBundledDiscoveryModeNative(env);
         const { loadGatewayStartupPluginPlanWithMetadata } =
           await import("../plugins/gateway-startup-plugin-loader.js");
         const { acquirePluginRegistryForInspection } = await import("../plugins/loader.js");

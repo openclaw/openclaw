@@ -12,13 +12,15 @@ import {
   getLoadedRuntimePluginRegistry,
   registryContainsRuntimePluginIds,
 } from "./active-runtime-registry.js";
+import { prepareBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
+import { getCachedPluginRegistry } from "./loader-cache.js";
 import { resolvePluginRegistrationConfigKey } from "./loader-registration-config.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
-import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "./plugin-metadata-snapshot.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import { hasCompletedPluginRuntimeRegistration } from "./plugin-runtime-artifact-binding.js";
 import { hasExplicitPluginIdScope } from "./plugin-scope.js";
@@ -52,12 +54,10 @@ import {
 import type { ProviderPlugin } from "./types.js";
 
 export function createProviderRegistryResolver(dependencies: {
-  loadOpenClawPlugins: (options: PluginLoadOptions) => PluginRegistry;
-  resolveRuntimePluginRegistry: (options?: PluginLoadOptions) => PluginRegistry | undefined;
+  loadOpenClawPluginsAsync: (options: PluginLoadOptions) => Promise<PluginRegistry>;
   isPluginRegistryLoadInFlight: (options?: PluginLoadOptions) => boolean;
 }) {
-  const { loadOpenClawPlugins, resolveRuntimePluginRegistry, isPluginRegistryLoadInFlight } =
-    dependencies;
+  const { loadOpenClawPluginsAsync, isPluginRegistryLoadInFlight } = dependencies;
   type ProviderResolutionInputs = Parameters<typeof resolvePluginProviderRegistryCore>[0] & {
     env: NodeJS.ProcessEnv;
   };
@@ -181,14 +181,12 @@ export function createProviderRegistryResolver(dependencies: {
     );
     const snapshot =
       sourceParams.pluginMetadataSnapshot ??
-      (retained || params.registryScope === "loaded"
-        ? getCurrentPluginMetadataSnapshot({
-            config: params.config,
-            env,
-            workspaceDir,
-            allowWorkspaceScopedSnapshot: true,
-          })
-        : resolvePluginMetadataSnapshot({ config: params.config ?? {}, env, workspaceDir }));
+      getCurrentPluginMetadataSnapshot({
+        config: params.config,
+        env,
+        workspaceDir,
+        allowWorkspaceScopedSnapshot: true,
+      });
     const inputs = { ...sourceParams, env, workspaceDir };
     const selection = snapshot
       ? prepareProviderSelection(
@@ -391,7 +389,7 @@ export function createProviderRegistryResolver(dependencies: {
       : undefined;
   }
 
-  function resolvePluginProviderRegistryCore(params: {
+  type ProviderRegistryParams = {
     config?: PluginLoadOptions["config"];
     workspaceDir?: string;
     /** Use an explicit env when plugin roots should resolve independently from process.env. */
@@ -409,7 +407,19 @@ export function createProviderRegistryResolver(dependencies: {
     skipIfLoadInFlight?: boolean;
     /** Exact preparation or loaded-only inspection without discovery/activation. */
     registryScope?: "exact" | "loaded";
-  }): ReturnType<typeof captureProviderRegistrySelection> | undefined {
+  };
+  type ProviderRegistrySelection = ReturnType<typeof captureProviderRegistrySelection>;
+  type ProviderRegistryPlan =
+    | { kind: "selected"; selection: ProviderRegistrySelection }
+    | {
+        kind: "load";
+        options: PluginLoadOptions;
+        select: (registry: PluginRegistry) => ProviderRegistrySelection;
+      };
+
+  function preparePluginProviderRegistry(
+    params: ProviderRegistryParams,
+  ): ProviderRegistryPlan | undefined {
     if (params.mode === "setup" && params.registryScope === "loaded") {
       return undefined;
     }
@@ -417,6 +427,11 @@ export function createProviderRegistryResolver(dependencies: {
       params.mode === "setup" ? undefined : getPluginRuntimeGenerationRegistry();
     const prepared = prepareProviderLookup(params, Boolean(generationRegistry));
     const { inputs, snapshot } = prepared;
+    if (!snapshot && !generationRegistry && params.registryScope !== "loaded") {
+      throw new Error(
+        "Provider metadata is not prepared; await resolvePluginProviderRegistryCoreAsync first.",
+      );
+    }
     let { loadOptions } = prepared;
     const { env, workspaceDir } = inputs;
     let registrationConfigKey: string | undefined;
@@ -542,7 +557,7 @@ export function createProviderRegistryResolver(dependencies: {
           lookup,
         );
         if (selected) {
-          return selected;
+          return { kind: "selected", selection: selected };
         }
       }
     }
@@ -555,26 +570,72 @@ export function createProviderRegistryResolver(dependencies: {
     ) {
       return undefined;
     }
-    const registry =
-      params.mode === "setup" || params.registryScope === "exact"
-        ? loadOpenClawPlugins(loadOptions)
-        : resolveRuntimePluginRegistry(loadOptions);
-    if (!registry) {
-      return undefined;
-    }
     const projectedPluginIds = prepared.selection.projectedPluginIds ?? loadOptions.onlyPluginIds;
-    return captureProviderRegistrySelection(
-      registry,
-      prepared.selection,
-      params.mode !== "setup" && projectedPluginIds
-        ? sortUniqueStrings([
-            ...projectedPluginIds,
-            ...(prepared.selection.unownedProviderRefs.length > 0
-              ? prepareRegistry(registry, prepared.selection).aliasOwners
-              : []),
-          ])
-        : undefined,
+    const selection = prepared.selection;
+    const select = (registry: PluginRegistry) =>
+      captureProviderRegistrySelection(
+        registry,
+        selection,
+        params.mode !== "setup" && projectedPluginIds
+          ? sortUniqueStrings([
+              ...projectedPluginIds,
+              ...(selection.unownedProviderRefs.length > 0
+                ? prepareRegistry(registry, selection).aliasOwners
+                : []),
+            ])
+          : undefined,
+      );
+    const cached =
+      loadOptions.activate === false ? getCachedPluginRegistry(loadOptions) : undefined;
+    return cached
+      ? { kind: "selected", selection: select(cached) }
+      : { kind: "load", options: loadOptions, select };
+  }
+
+  /** @deprecated Prepare providers with resolvePluginProviderRegistryCoreAsync before reading. */
+  function resolvePluginProviderRegistryCore(
+    params: ProviderRegistryParams,
+  ): ProviderRegistrySelection | undefined {
+    const plan = preparePluginProviderRegistry(params);
+    if (plan?.kind === "load") {
+      throw new Error(
+        "Provider plugins are not loaded; await resolvePluginProviderRegistryCoreAsync first.",
+      );
+    }
+    return plan?.selection;
+  }
+
+  async function resolvePluginProviderRegistryCoreAsync(
+    params: ProviderRegistryParams,
+  ): Promise<ProviderRegistrySelection | undefined> {
+    if (getPluginRuntimeGenerationRegistry() && params.mode !== "setup") {
+      return resolvePluginProviderRegistryCore(params);
+    }
+    const env = params.env ?? process.env;
+    const workspaceDir = resolveProviderRuntimeWorkspaceDir(
+      params,
+      getActivePluginRegistryWorkspaceDir(),
     );
+    let snapshot = params.pluginMetadataSnapshot;
+    if (snapshot) {
+      await prepareBundledDiscoveryMode(env);
+    } else {
+      snapshot = await resolvePluginMetadataSnapshotAsync({
+        config: params.config ?? {},
+        env,
+        workspaceDir,
+      });
+    }
+    const plan = preparePluginProviderRegistry({
+      ...params,
+      env,
+      workspaceDir,
+      pluginMetadataSnapshot: snapshot,
+    });
+    if (plan?.kind !== "load") {
+      return plan?.selection;
+    }
+    return plan.select(await loadOpenClawPluginsAsync(plan.options));
   }
 
   function resolvePluginProvidersCore(
@@ -587,6 +648,26 @@ export function createProviderRegistryResolver(dependencies: {
     if (!resolved) {
       return [];
     }
+    return projectProviders(resolved, onSelectedRegistry);
+  }
+
+  /** Only the native compatibility owner supplies a synchronous loader. */
+  function resolveLegacyPluginProvidersCore(
+    params: ProviderRegistryParams,
+    load: (options: PluginLoadOptions) => PluginRegistry,
+  ): ProviderPlugin[] {
+    const plan = preparePluginProviderRegistry(params);
+    if (!plan) {
+      return [];
+    }
+    const resolved = plan.kind === "load" ? plan.select(load(plan.options)) : plan.selection;
+    return projectProviders(resolved);
+  }
+
+  function projectProviders(
+    resolved: ProviderRegistrySelection,
+    onSelectedRegistry?: Parameters<typeof resolvePluginProvidersCore>[1],
+  ): ProviderPlugin[] {
     const { registry, onlyPluginIds } = resolved;
     const project =
       onSelectedRegistry?.(registry) ??
@@ -596,9 +677,20 @@ export function createProviderRegistryResolver(dependencies: {
       .map((entry) => project(entry.provider, entry.pluginId));
   }
 
+  async function resolvePluginProvidersCoreAsync(
+    params: ProviderRegistryParams,
+    onSelectedRegistry?: Parameters<typeof resolvePluginProvidersCore>[1],
+  ): Promise<ProviderPlugin[]> {
+    const resolved = await resolvePluginProviderRegistryCoreAsync(params);
+    return resolved ? projectProviders(resolved, onSelectedRegistry) : [];
+  }
+
   return {
     isPluginProvidersLoadInFlight,
     resolvePluginProviderRegistryCore,
+    resolvePluginProviderRegistryCoreAsync,
     resolvePluginProvidersCore,
+    resolveLegacyPluginProvidersCore,
+    resolvePluginProvidersCoreAsync,
   };
 }

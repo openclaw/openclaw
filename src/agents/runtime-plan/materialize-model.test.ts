@@ -5,6 +5,7 @@ import {
   makeRegistry,
 } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { materializePreparedRuntimeModel } from "./materialize-model.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";
 
@@ -24,6 +25,7 @@ const plan: AgentRuntimeAuthPlan = {
 };
 
 describe("materializePreparedRuntimeModel", () => {
+  const preparedMetadata = createPluginMetadataSnapshotFixture();
   it.each(["matching", "resolved", "route-less"] as const)(
     "rejects a retired final %s route without rejecting its API sibling",
     async (mode) => {
@@ -125,6 +127,7 @@ describe("materializePreparedRuntimeModel", () => {
 
     await expect(
       materializePreparedRuntimeModel({
+        metadataSnapshot: preparedMetadata,
         plan: { ...plan, forwardedAuthProfileId: "openai:backup" },
         provider: "openai",
         modelId: "gpt-5.5",
@@ -150,6 +153,7 @@ describe("materializePreparedRuntimeModel", () => {
 
     await expect(
       materializePreparedRuntimeModel({
+        metadataSnapshot: preparedMetadata,
         plan: {
           providerForAuth: "clawrouter",
           authProfileProviderForAuth: "clawrouter",
@@ -183,6 +187,7 @@ describe("materializePreparedRuntimeModel", () => {
 
     await expect(
       materializePreparedRuntimeModel({
+        metadataSnapshot: preparedMetadata,
         plan,
         provider: "openai",
         modelId: "gpt-5.5",
@@ -238,6 +243,7 @@ describe("materializePreparedRuntimeModel", () => {
 
     await expect(
       materializePreparedRuntimeModel({
+        metadataSnapshot: preparedMetadata,
         plan: platformPlan,
         provider: "openai",
         modelId: "gpt-5.4-nano",
@@ -271,6 +277,7 @@ describe("materializePreparedRuntimeModel", () => {
 
     await expect(
       materializePreparedRuntimeModel({
+        metadataSnapshot: preparedMetadata,
         plan: aliasPlan,
         provider: "openai",
         modelId: "gpt-5.4-codex",
@@ -292,6 +299,7 @@ describe("materializePreparedRuntimeModel", () => {
 
     await expect(
       materializePreparedRuntimeModel({
+        metadataSnapshot: preparedMetadata,
         plan,
         provider: "openai",
         modelId: "gpt-5.5",
@@ -310,6 +318,7 @@ describe("materializePreparedRuntimeModel", () => {
   it("rejects mismatched targets and mismatched resolved tuples", async () => {
     await expect(
       materializePreparedRuntimeModel({
+        metadataSnapshot: preparedMetadata,
         plan,
         provider: "openai",
         modelId: "gpt-5.6",
@@ -319,6 +328,7 @@ describe("materializePreparedRuntimeModel", () => {
 
     await expect(
       materializePreparedRuntimeModel({
+        metadataSnapshot: preparedMetadata,
         plan,
         provider: "openai",
         modelId: "gpt-5.5",

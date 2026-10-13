@@ -9,12 +9,18 @@ const registry = vi.hoisted(() => ({
   providers: [] as SpeechProviderPlugin[],
 }));
 
-vi.mock("../../../tts/provider-registry.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../tts/provider-registry.js")>()),
-  listSpeechProviders: () => registry.providers,
-  canonicalizeSpeechProviderId: (id: string | undefined) => id,
-  getSpeechProvider: () => undefined,
-}));
+// mock-isolation: Catalog fixtures provide their prepared speech registry without runtime discovery.
+vi.mock("../../../tts/provider-registry.js", () => {
+  const prepared = {
+    listSpeechProviders: () => registry.providers,
+    canonicalizeSpeechProviderId: (id: string | undefined) => id,
+    getSpeechProvider: () => undefined,
+  };
+  return {
+    withSpeechProviderRegistry: async (_cfg: unknown, run: (value: typeof prepared) => unknown) =>
+      run(prepared),
+  };
+});
 
 beforeEach(() => {
   registry.providers = [];

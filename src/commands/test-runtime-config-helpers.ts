@@ -7,6 +7,13 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.opencla
 import type { RuntimeEnv } from "../runtime.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
+/** Restore async config admission when a command fixture replaces config-file reads. */
+export async function prepareTestCommandPluginMetadata(): Promise<void> {
+  const { preparePluginMetadataMachineStateAsync } =
+    await import("../plugins/installed-plugin-index-record-state.js");
+  await preparePluginMetadataMachineStateAsync({ env: process.env });
+}
+
 export const baseConfigSnapshot = {
   path: "/tmp/openclaw.json",
   exists: true,

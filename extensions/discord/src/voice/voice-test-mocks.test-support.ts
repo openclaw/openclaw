@@ -429,7 +429,7 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async () => {
     registerRealtimeVoiceSelection: registerRealtimeVoiceSelectionMock.mockImplementation(
       actual.registerRealtimeVoiceSelection,
     ),
-    canonicalizeRealtimeVoiceProviderId: canonicalizeRealtimeVoiceProviderIdMock,
+    canonicalizeRealtimeVoiceProviderIdAsync: canonicalizeRealtimeVoiceProviderIdMock,
     createRealtimeVoiceBridgeSession: createRealtimeVoiceBridgeSessionMock,
     createRealtimeVoiceSessionHarness: (
       params: Parameters<typeof actual.createRealtimeVoiceSessionHarness>[0],

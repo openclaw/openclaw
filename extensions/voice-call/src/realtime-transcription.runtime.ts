@@ -1,6 +1,6 @@
 // Realtime transcription provider facade for the voice-call plugin runtime.
 
 export {
-  getRealtimeTranscriptionProvider,
-  listRealtimeTranscriptionProviders,
+  getRealtimeTranscriptionProviderAsync,
+  listRealtimeTranscriptionProvidersAsync,
 } from "openclaw/plugin-sdk/realtime-transcription";

@@ -15,9 +15,10 @@ import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
 import { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 
+// mock-isolation: Upgrade rejection tests must not discover or acquire real transcription providers.
 vi.mock("./realtime-transcription.runtime.js", () => ({
-  getRealtimeTranscriptionProvider: () => undefined,
-  listRealtimeTranscriptionProviders: () => [
+  getRealtimeTranscriptionProviderAsync: () => undefined,
+  listRealtimeTranscriptionProvidersAsync: () => [
     {
       id: "fixture",
       label: "Fixture",

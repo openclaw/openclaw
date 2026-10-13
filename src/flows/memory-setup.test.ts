@@ -23,7 +23,6 @@ const mocks = vi.hoisted(() => ({
 
 // mock-isolation: Provider discovery uses a fixture manifest, not operator plugin metadata.
 vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
-  loadManifestContractSnapshot: mocks.snapshot,
   listAvailableManifestContractValues: mocks.manifestIds,
 }));
 vi.mock("../plugins/embedding-provider-config.js", async (importOriginal) => ({
@@ -31,7 +30,14 @@ vi.mock("../plugins/embedding-provider-config.js", async (importOriginal) => ({
   resolveConfiguredGenericEmbeddingProviderId: mocks.alias,
 }));
 // mock-isolation: Provider selection is fixture-owned and must not resolve the active plugin registry.
-vi.mock("../plugins/embedding-provider-runtime.js", () => ({ getEmbeddingProvider: mocks.get }));
+vi.mock("../plugins/embedding-provider-runtime.js", () => ({
+  getEmbeddingProvider: mocks.get,
+  getEmbeddingProviderAsync: async (...args: Parameters<typeof mocks.get>) => mocks.get(...args),
+}));
+// mock-isolation: Async setup discovery uses the same synthetic manifest inventory.
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  resolvePluginMetadataSnapshotAsync: async () => mocks.snapshot(),
+}));
 // mock-isolation: Secret prompts must not load operator auth stores or execute secret providers.
 vi.mock("../plugins/provider-auth-ref.js", () => ({
   promptSecretRefForSetup: mocks.promptRef,

@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
@@ -17,16 +18,58 @@ import { buildPersistedAuthProfileSecretsStore } from "./persisted.js";
 import { removePersonalAuthProfileReferences } from "./runtime-external-profile-references.js";
 import { pruneAuthProfileStoreReferences } from "./runtime-snapshot-owner.js";
 import { getRuntimeAuthProfileStoreSnapshotAtDatabasePath } from "./runtime-snapshots.js";
-import type { AuthProfileStore, AuthProfileStoreOwner } from "./types.js";
+import type {
+  AuthProfileStore,
+  AuthProfileStoreOwner,
+  AuthProfileStoreUpdater,
+  SaveAuthProfileStoreOptions,
+} from "./types.js";
 
-export type SaveAuthProfileStoreOptions = {
-  filterExternalAuthProfiles?: boolean;
-  preserveOrderProfileIds?: Iterable<string>;
-  preserveStateProfileIds?: Iterable<string>;
-  pruneOrderProfileIds?: Iterable<string>;
-  sharedStoreWrite?: boolean;
-  syncExternalCli?: boolean;
-};
+export type { SaveAuthProfileStoreOptions } from "./types.js";
+
+function validateAuthProfileStoreSecrets(store: AuthProfileStore): void {
+  for (const credential of Object.values(store.profiles)) {
+    normalizeAuthProfileSecretRefs(credential);
+  }
+}
+
+export function prepareLegacyAuthProfileSave(store: AuthProfileStore): void {
+  warnPluginSdkDeprecation({
+    family: "auth-profiles",
+    method: "saveAuthProfileStore",
+    replacement:
+      "saveAuthProfileStoreAsync for replacement or updateAuthProfileStoreWithLock from openclaw/plugin-sdk/provider-auth for partial updates",
+  });
+  validateAuthProfileStoreSecrets(store);
+}
+
+/** Replace the selected owner's store through its existing update and publication owner. */
+export function createAuthProfileStoreSaver(update: AuthProfileStoreUpdater) {
+  return async function saveAuthProfileStoreAsync(
+    store: AuthProfileStore,
+    agentDir?: string,
+    options?: SaveAuthProfileStoreOptions,
+  ): Promise<void> {
+    validateAuthProfileStoreSecrets(store);
+    const replacement = cloneAuthProfileStore(store);
+    const updated = await update({
+      agentDir,
+      sharedStoreWrite: options?.sharedStoreWrite,
+      saveOptions: options,
+      updater(current) {
+        // A whole-store save must clear omitted state and runtime metadata too.
+        for (const key of Object.keys(current)) {
+          Reflect.deleteProperty(current, key);
+        }
+        Object.assign(current, replacement);
+        return true;
+      },
+    });
+    if (!updated) {
+      throw new Error("Failed to save auth profile store; retry when its writer is available.");
+    }
+  };
+}
 
 export function buildLocalAuthProfileStoreForSave(params: {
   getScopedSharedAuthStore: () => AuthProfileStore | undefined;

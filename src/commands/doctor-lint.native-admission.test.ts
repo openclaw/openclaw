@@ -19,7 +19,7 @@ import {
 } from "../plugins/plugin-cache.js";
 import { bindPluginInstanceModuleLoader } from "../plugins/plugin-instance-module-loader.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { settlePluginNativeAdmissions } from "../plugins/plugin-native-admission-state.js";
 import {
   readPersistedInstalledPluginIndexRowSync,
@@ -150,8 +150,8 @@ export default {
       const readIndex = () => readPersistedInstalledPluginIndexRowSync({ env: state.env });
       const before = readIndex();
       expect(before).toBeDefined();
-      const baseSnapshot = withPluginCache(parent, () =>
-        loadPluginMetadataSnapshot({ config, env: state.env }),
+      const baseSnapshot = await withPluginCache(parent, () =>
+        resolvePluginMetadataSnapshotAsync({ config, env: state.env }),
       );
       const prepared = createDoctorPluginMetadataSnapshotScope({
         getBaseSnapshot: () => baseSnapshot,

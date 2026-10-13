@@ -393,7 +393,7 @@ export async function advanceGatewayWizardToSecretStorage(engine: SystemAgentCha
 }
 
 beforeAll(async () => {
-  pluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot(
+  pluginMetadataSnapshot = await createSystemAgentPluginMetadataTestSnapshot(
     sharedVerifiedInferenceConfig,
   );
   const fixture = await createSystemAgentVerifiedInferenceTestFixture(

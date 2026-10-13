@@ -675,7 +675,8 @@ describe("setup activation credentials and configuration", () => {
       agentDir: setup.agentDir,
       profiles: [{ profileId: "openai:replacement", credential }],
     });
-    const method = setup.deps.resolvePluginProviders?.({ config: configured })[0]?.auth[0];
+    const method = (await setup.deps.resolvePluginProviders?.({ config: configured }))?.[0]
+      ?.auth[0];
     assert.ok(method);
     method.starterModel = "openai/provider-default";
 

@@ -1,6 +1,11 @@
+import { createPluginMetadataSnapshotFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveAuthProfileOrder, type AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { describe, expect, it, vi } from "vitest";
 import { createCodexAuthProfileSelection } from "./auth-profile-selection.js";
+
+const metadataSnapshot = createPluginMetadataSnapshotFixture();
+const resolvePreparedAuthProfileOrder: typeof resolveAuthProfileOrder = (params) =>
+  resolveAuthProfileOrder({ ...params, authAliasLookupParams: { metadataSnapshot } });
 
 describe("Codex auth profile selection", () => {
   it("selects the configured profile after loading the worker-backed store", async () => {
@@ -13,7 +18,7 @@ describe("Codex auth profile selection", () => {
     const selection = createCodexAuthProfileSelection({
       ensureAuthProfileStore: vi.fn().mockReturnValue(store),
       ensureAuthProfileStoreAsync: vi.fn().mockResolvedValue(store),
-      resolveAuthProfileOrder,
+      resolveAuthProfileOrder: resolvePreparedAuthProfileOrder,
     });
 
     await expect(
@@ -26,7 +31,7 @@ describe("Codex auth profile selection", () => {
     const selection = createCodexAuthProfileSelection({
       ensureAuthProfileStore: vi.fn(),
       ensureAuthProfileStoreAsync,
-      resolveAuthProfileOrder,
+      resolveAuthProfileOrder: resolvePreparedAuthProfileOrder,
     });
 
     await expect(

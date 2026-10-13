@@ -87,6 +87,9 @@ export async function runConfigSet(opts: {
       const { buildConfigSetOperations } = await import("./config-cli-input.js");
       const { parseConfigSetCurrentExpectation } = await import("./config-set-input.js");
       const currentExpectation = parseConfigSetCurrentExpectation(opts.cliOptions);
+      const { resolvePluginMetadataSnapshotAsync } =
+        await import("../plugins/plugin-metadata-snapshot.js");
+      await resolvePluginMetadataSnapshotAsync({});
       const operations = buildConfigSetOperations({
         path: opts.path,
         value: opts.value,

@@ -5,7 +5,10 @@ import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
-import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "../plugins/loader.js";
+import {
+  acquirePluginRegistryForInspection,
+  loadPluginRegistryHandleAsync,
+} from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   makePluginLoaderTempDir,
@@ -253,7 +256,8 @@ describe("streaming speech registration ownership", () => {
           kind === "managed"
             ? await acquirePluginRegistryForInspection({ config: fixture.cfg })
             : undefined;
-        const registry = inspection?.registry ?? loadPluginRegistryHandle({ config: fixture.cfg });
+        const registry =
+          inspection?.registry ?? (await loadPluginRegistryHandleAsync({ config: fixture.cfg }));
         const result = await withPluginRuntimeRegistryScope(registry, fixture.run);
         await inspection?.release();
         const reader = result.audioStream!.getReader();

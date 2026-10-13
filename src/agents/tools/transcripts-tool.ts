@@ -98,7 +98,7 @@ async function importTranscripts(params: {
     ...sourceFromParams(params.rawParams),
     ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
   };
-  const provider = resolveSourceProvider(requestedSource.providerId, params.ctx);
+  const provider = await resolveSourceProvider(requestedSource.providerId, params.ctx);
   if (!provider?.importTranscript) {
     throw new Error(`transcripts provider ${requestedSource.providerId} cannot import transcripts`);
   }
@@ -238,7 +238,7 @@ async function summarizeExisting(params: {
 async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
   const providers = uniqueStrings([
     manualTranscriptSourceProvider.id,
-    ...listTranscriptSourceProviders(ctx.config).map((provider) => provider.id),
+    ...(await listTranscriptSourceProviders(ctx.config)).map((provider) => provider.id),
   ]);
   const visibleEntries = (
     await Promise.all(

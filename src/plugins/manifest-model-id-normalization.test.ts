@@ -4,7 +4,13 @@ import path from "node:path";
 import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveModelRefFromStringLegacy } from "../agents/model-ref-sdk-resolve.js";
 import { normalizeStaticProviderModelId } from "../agents/model-ref-shared.js";
+import {
+  parseModelRef,
+  parseModelRefAsync,
+  prepareModelRefResolver,
+} from "../plugin-sdk/model-ref-parse.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { withPluginMetadataSnapshotScope } from "./current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
@@ -105,6 +111,45 @@ describe("manifest model id normalization", () => {
     clearPluginMetadataLifecycleCaches();
     restoreEnv();
     tempDirs.cleanup();
+  });
+
+  it("retains cold SDK aliases while prepared resolvers keep their selected policies", async () => {
+    const stateDir = tempDirs.make("openclaw-model-id-sdk-");
+    const pluginDir = path.join(stateDir, "extensions", "normalizer");
+    await writeInstallIndex({ stateDir, pluginDir });
+    writeNormalizerManifest({ pluginDir, prefix: "alpha" });
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    deleteTestEnvValue("OPENCLAW_HOME");
+    setTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+    deleteTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR");
+
+    expect(parseModelRef("demo/demo-model", "demo")).toEqual({
+      provider: "demo",
+      model: "alpha/demo-model",
+    });
+    const resolver = await prepareModelRefResolver();
+    writeNormalizerManifest({ pluginDir, prefix: "beta" });
+    clearPluginMetadataLifecycleCaches();
+
+    expect(resolver.parseModelRef("demo/demo-model", "demo")?.model).toBe("alpha/demo-model");
+    expect(
+      resolver.resolveModelRefFromString({ raw: "demo/demo-model", defaultProvider: "demo" })?.ref
+        .model,
+    ).toBe("alpha/demo-model");
+    expect((await parseModelRefAsync("demo/demo-model", "demo"))?.model).toBe("beta/demo-model");
+
+    clearPluginMetadataLifecycleCaches();
+    expect(
+      resolveModelRefFromStringLegacy({
+        raw: "demo/demo-model",
+        defaultProvider: "demo",
+        allowManifestNormalization: false,
+      })?.ref.model,
+    ).toBe("demo-model");
+    expect(
+      resolveModelRefFromStringLegacy({ raw: "demo/demo-model", defaultProvider: "demo" })?.ref
+        .model,
+    ).toBe("beta/demo-model");
   });
 
   it("does not reuse broader normalization policies in a narrowed metadata view", async () => {

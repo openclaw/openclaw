@@ -1,14 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   resolveDirectStoredModelOverride,
   resolveStoredModelOverride,
   resolveStoredModelOverrideAsync,
 } from "./stored-model-overrides.js";
+
+beforeEach(async () => {
+  await preparePluginMetadataMachineStateAsync({});
+});
 
 function resolveParentOverride(parent: Partial<SessionEntry>) {
   const parentKey = "agent:main:discord:channel:root";
@@ -63,6 +68,40 @@ describe("resolveStoredModelOverride", () => {
     });
     expect(loadSessionEntry).toHaveBeenCalledWith("agent:main:telegram:dm:parent");
   });
+
+  it.each(["session", "parent"] as const)(
+    "uses prepared manifest aliases for the %s override",
+    async (source) => {
+      const sessionEntry = {
+        sessionId: "selected-session",
+        updatedAt: 1,
+        providerOverride: "fixture-provider",
+        modelOverride: "raw",
+      };
+      const result = await resolveStoredModelOverrideAsync({
+        defaultProvider: "openai",
+        manifestPlugins: [
+          {
+            modelIdNormalization: {
+              providers: { "fixture-provider": { aliases: { raw: "canonical" } } },
+            },
+          },
+        ],
+        ...(source === "session"
+          ? { sessionEntry }
+          : {
+              sessionKey: "agent:main:telegram:dm:parent:thread:child",
+              loadSessionEntry: async () => sessionEntry,
+            }),
+      });
+      expect(result).toEqual({
+        provider: "fixture-provider",
+        model: "canonical",
+        source,
+        routeResolution: "raw",
+      });
+    },
+  );
 
   it("does not inherit active automatic fallback overrides from parent sessions", async () => {
     expect(
@@ -164,6 +203,7 @@ describe("resolveStoredModelOverride", () => {
       const config = { agents: { entries: { main: {} } } };
       await state.writeConfig(config);
       setRuntimeConfigSnapshot(config);
+      await preparePluginMetadataMachineStateAsync({ env: state.env });
       for (const [index, entry] of [
         {
           providerOverride: "anthropic",

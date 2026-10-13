@@ -14,6 +14,8 @@ import { resolveConfiguredSetupModelForAgent } from "../agents/utility-model.js"
 import { copyConfigResolutionFacts } from "../config/resolution-facts.js";
 import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { SYSTEM_AGENT_ID } from "./agent-id.js";
@@ -103,6 +105,17 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
   deps: SystemAgentRouteProjectionDeps = {},
   configSnapshot?: SystemAgentConfigSnapshot,
 ): Promise<SystemAgentConfiguredRoute | null> {
+  if (!deps.pluginMetadataPlugins) {
+    const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({ config: runConfig });
+    return withPluginMetadataSnapshotScope(metadataSnapshot, () =>
+      resolveSystemAgentConfiguredRouteFromConfig(
+        runConfig,
+        requestedAgentId,
+        { ...deps, pluginMetadataPlugins: metadataSnapshot.plugins },
+        configSnapshot,
+      ),
+    );
+  }
   // Match before adding the reserved execution agent changes the source shape.
   // Gateway publication owns the canonical source, not the default-materialized
   // view. Only that exact view may use its paired source; a staged candidate must
@@ -238,7 +251,19 @@ export async function projectInferenceRoute(
   deps: SystemAgentRouteProjectionDeps = {},
   sourceConfig: OpenClawConfig = config,
 ): Promise<DefaultInferenceRouteProjection> {
-  const { resolveProviderIdForAuth } = await import("../agents/provider-auth-aliases.js");
+  if (!deps.pluginMetadataPlugins) {
+    const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({ config });
+    return withPluginMetadataSnapshotScope(metadataSnapshot, () =>
+      projectInferenceRoute(
+        config,
+        requestedAgentId,
+        { ...deps, pluginMetadataPlugins: metadataSnapshot.plugins },
+        sourceConfig,
+      ),
+    );
+  }
+  const { resolvePreparedProviderIdForAuth: resolveProviderIdForAuth } =
+    await import("../agents/provider-auth-aliases.js");
   const routeAgentId = resolveAmbientOwnerAgentId(config, requestedAgentId);
   const route = await resolveSystemAgentConfiguredRouteFromConfig(config, routeAgentId, deps);
   const list = listAgentEntries(config);

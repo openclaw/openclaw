@@ -5,7 +5,7 @@ import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-contex
 import { resolveNativeModelPrimary } from "../agents/agent-scope.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
-import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
+import { resolveSessionRuntimeOverrideForProviderAsync } from "../agents/session-runtime-compat.js";
 import { createCrustaceanSlug } from "../agents/session-slug.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import type { WorktreeSourceStage } from "../agents/worktrees/types.js";
@@ -21,6 +21,11 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTimeout } from "../infra/fs-safe.js";
+import {
+  getCurrentPluginMetadataSnapshot,
+  withPluginMetadataSnapshotScope,
+} from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
@@ -247,26 +252,50 @@ async function generateDashboardSessionTitle(params: {
   if (!sourceText || sourceText.startsWith("/")) {
     return null;
   }
-  const regularModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
-  const agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
+  const metadataSnapshot =
+    getCurrentPluginMetadataSnapshot({
+      config: params.cfg,
+      allowWorkspaceScopedSnapshot: true,
+      allowSynchronousPolicyRead: false,
+    }) ??
+    (await resolvePluginMetadataSnapshotAsync({
+      config: params.cfg,
+      allowWorkspaceScopedCurrent: true,
+    }));
+  const { regularModel, preferredProfile, regularModelRef, utilityModelRef } =
+    withPluginMetadataSnapshotScope(
+      metadataSnapshot,
+      () => {
+        const selectedModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
+        const selectedProfile = resolveDashboardTitleAuthProfile({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          entry: params.entry,
+          regularProvider: selectedModel.provider,
+        });
+        const selectedModelRef = `${selectedModel.provider}/${selectedModel.model}${
+          selectedProfile ? `@${selectedProfile}` : ""
+        }`;
+        const selectedUtilityModelRef = resolveUtilityModelRefForAgent({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          primaryProvider: selectedModel.provider,
+          primaryModelRef: selectedModelRef,
+        });
+        return {
+          regularModel: selectedModel,
+          preferredProfile: selectedProfile,
+          regularModelRef: selectedModelRef,
+          utilityModelRef: selectedUtilityModelRef,
+        };
+      },
+      { config: params.cfg },
+    );
+  const agentHarnessRuntimeOverride = await resolveSessionRuntimeOverrideForProviderAsync({
     provider: regularModel.provider,
     entry: params.entry,
     cfg: params.cfg,
-  });
-  const preferredProfile = resolveDashboardTitleAuthProfile({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    entry: params.entry,
-    regularProvider: regularModel.provider,
-  });
-  const regularModelRef = `${regularModel.provider}/${regularModel.model}${
-    preferredProfile ? `@${preferredProfile}` : ""
-  }`;
-  const utilityModelRef = resolveUtilityModelRefForAgent({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    primaryProvider: regularModel.provider,
-    primaryModelRef: regularModelRef,
+    metadataSnapshot,
   });
   const generateLabel = async (): Promise<string | null> => {
     try {

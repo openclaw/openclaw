@@ -19,6 +19,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { runReplyAgent } from "./agent-runner-run.js";
@@ -111,6 +112,7 @@ it("answers through a timed-out compaction summary and does not re-run it next t
       await setSessionMcpRuntimeScheduler(scheduler);
       await state.writeConfig(cfg);
       setRuntimeConfigSnapshot(cfg);
+      await resolvePluginMetadataSnapshotAsync({ config: cfg });
       await replaceSessionEntry(scope, {
         sessionId,
         updatedAt: Date.now(),

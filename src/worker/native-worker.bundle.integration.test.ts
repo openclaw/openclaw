@@ -18,7 +18,7 @@ import { createWorkerBundleProducer } from "../gateway/worker-environments/bundl
 import * as openclawRoot from "../infra/openclaw-root.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { NodeWorkerBundleInstaller } from "../node-host/node-worker-bundle-installer.js";
-import { snapshotNodeWorkerNativeInference } from "../node-host/node-worker-native-inference.js";
+import { snapshotNodeWorkerNativeInferenceAsync } from "../node-host/node-worker-native-inference.js";
 import { createNodeWorkerSupervisor } from "../node-host/node-worker-supervisor.js";
 import {
   DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
@@ -291,7 +291,7 @@ describe.skipIf(process.env.TEST_NATIVE_WORKER_BUNDLE !== "1" || process.platfor
           },
         },
       } as OpenClawConfig;
-      const nativeInferenceSnapshot = snapshotNodeWorkerNativeInference(config, env)!;
+      const nativeInferenceSnapshot = (await snapshotNodeWorkerNativeInferenceAsync(config, env))!;
       supervisor = createNodeWorkerSupervisor({
         bundleRoot,
         env,

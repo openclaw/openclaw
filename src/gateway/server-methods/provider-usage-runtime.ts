@@ -17,6 +17,8 @@ import { resolveEnvApiKey } from "../../agents/model-auth-env.js";
 import { resolveUsableCustomProviderApiKey } from "../../agents/model-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { UsageProviderId } from "../../infra/provider-usage.types.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { listProviderUsagePluginDescriptors } from "../../plugins/provider-runtime.js";
 import { getActivePluginRegistryVersion } from "../../plugins/runtime.js";
 
@@ -128,24 +130,34 @@ export async function getProviderUsageRuntimeSnapshot(params: {
     (await ensureAuthProfileStoreAsync(agentDir, {
       externalCli: externalCliDiscoveryForConfigStatus({ cfg: configRef }),
     }));
-  const descriptors = listProviderUsagePluginDescriptors({ config: configRef, env: process.env });
-  const providerIds = descriptors.map((descriptor) => descriptor.provider);
-  const directApiKeys = resolveDirectApiKeys(configRef, providerIds);
-  current = {
-    agentDir,
-    agentId,
-    configRef,
-    credentialKey: fingerprintProviderUsageCredentials({
-      cfg: configRef,
-      directApiKeys,
-      providerIds,
-      store,
-    }),
-    providerIds,
-    store,
-    // Building can publish an external-auth overlay, so bind the finished snapshot to its result.
-    authStoreGeneration: getRuntimeAuthProfileStoreSnapshotRevision(agentDir),
-    pluginRegistryGeneration,
-  };
-  return current;
+  const metadata = await resolvePluginMetadataSnapshotAsync({ config: configRef });
+  return withPluginMetadataSnapshotScope(
+    metadata,
+    () => {
+      const descriptors = listProviderUsagePluginDescriptors({
+        config: configRef,
+        env: process.env,
+      });
+      const providerIds = descriptors.map((descriptor) => descriptor.provider);
+      const directApiKeys = resolveDirectApiKeys(configRef, providerIds);
+      current = {
+        agentDir,
+        agentId,
+        configRef,
+        credentialKey: fingerprintProviderUsageCredentials({
+          cfg: configRef,
+          directApiKeys,
+          providerIds,
+          store,
+        }),
+        providerIds,
+        store,
+        // Building can publish an external-auth overlay, so bind the finished snapshot to its result.
+        authStoreGeneration: getRuntimeAuthProfileStoreSnapshotRevision(agentDir),
+        pluginRegistryGeneration,
+      };
+      return current;
+    },
+    { config: configRef },
+  );
 }

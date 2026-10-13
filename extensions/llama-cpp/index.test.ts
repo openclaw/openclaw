@@ -46,7 +46,7 @@ vi.mock("./src/llama-server-install.js", async (importOriginal) => ({
 
 vi.mock("openclaw/plugin-sdk/embedding-providers", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/embedding-providers")>()),
-  getEmbeddingProvider: () => ({ create: mocks.genericCreate }),
+  getEmbeddingProviderAsync: async () => ({ create: mocks.genericCreate }),
 }));
 
 vi.mock("./src/managed-server.js", async (importOriginal) => ({

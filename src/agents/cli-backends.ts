@@ -163,6 +163,7 @@ export function resolveCliRuntimeModelBackendBinding(params: {
   provider: string | undefined;
   runtime: string | undefined;
   config?: OpenClawConfig;
+  metadataSnapshot?: PluginMetadataSnapshot | null;
 }): CliRuntimeModelBackendBinding | undefined {
   const provider = normalizeProviderId(params.provider ?? "");
   const runtime = normalizeProviderId(params.runtime ?? "");
@@ -170,9 +171,13 @@ export function resolveCliRuntimeModelBackendBinding(params: {
     return undefined;
   }
   return resolveCliRuntimeBinding(runtime, provider, () =>
-    params.config === undefined
+    params.config === undefined || params.metadataSnapshot === null
       ? undefined
-      : resolvePluginSetupCliBackend({ backend: runtime, config: params.config }),
+      : resolvePluginSetupCliBackend({
+          backend: runtime,
+          config: params.config,
+          metadataSnapshot: params.metadataSnapshot,
+        }),
   );
 }
 
@@ -180,6 +185,7 @@ export function isCliRuntimeModelBackendForProvider(params: {
   provider: string | undefined;
   runtime: string | undefined;
   config?: OpenClawConfig;
+  metadataSnapshot?: PluginMetadataSnapshot | null;
 }): boolean {
   return resolveCliRuntimeModelBackendBinding(params) !== undefined;
 }

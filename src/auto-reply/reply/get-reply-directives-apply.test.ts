@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as sandboxRuntime from "../../agents/sandbox.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
 import { applyMixedDirectives } from "./directive-handling.mixed-inline.test-helpers.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
@@ -293,6 +294,7 @@ describe("applyInlineDirectiveOverrides", () => {
       modelPolicyRepairConfigPath,
       expected,
     }) => {
+      await resolvePluginMetadataSnapshotAsync({ config: {} });
       const directives = parseInlineSessionDirectives(
         "hello /model openai/gpt-5.4 --runtime openclaw",
       );

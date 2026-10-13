@@ -521,6 +521,9 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
     loadPluginMetadataSnapshotMock(...args),
   resolvePluginMetadataSnapshot: (...args: Parameters<typeof loadPluginMetadataSnapshotMock>) =>
     loadPluginMetadataSnapshotMock(...args),
+  resolvePluginMetadataSnapshotAsync: async (
+    ...args: Parameters<typeof loadPluginMetadataSnapshotMock>
+  ) => loadPluginMetadataSnapshotMock(...args),
 }));
 
 vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
@@ -540,7 +543,7 @@ vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
 // mock-isolation: CLI report fixtures own registry leases and cleanup without activating installed plugins.
 vi.mock("../plugins/status.js", () => ({
   buildPluginSnapshotReportAsync: async (
-    ...args: Parameters<(typeof import("../plugins/status.js"))["buildPluginSnapshotReport"]>
+    ...args: Parameters<(typeof import("../plugins/status.js"))["buildPluginSnapshotReportAsync"]>
   ) => buildPluginSnapshotReportMock(...args),
   withPluginDiagnosticsReportForInspection: async (
     ...args: Parameters<typeof withPluginDiagnosticsReportForInspectionMock>
@@ -551,16 +554,6 @@ vi.mock("../plugins/status.js", () => ({
       await retirePluginDiagnosticsMock();
     }
   },
-  buildPluginSnapshotReport: ((
-    ...args: Parameters<(typeof import("../plugins/status.js"))["buildPluginSnapshotReport"]>
-  ) =>
-    invokeMock<
-      Parameters<(typeof import("../plugins/status.js"))["buildPluginSnapshotReport"]>,
-      ReturnType<(typeof import("../plugins/status.js"))["buildPluginSnapshotReport"]>
-    >(
-      buildPluginSnapshotReportMock,
-      ...args,
-    )) as (typeof import("../plugins/status.js"))["buildPluginSnapshotReport"],
   buildPluginRegistrySnapshotReport: ((
     ...args: Parameters<
       (typeof import("../plugins/status.js"))["buildPluginRegistrySnapshotReport"]

@@ -6,6 +6,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import * as activationRuntime from "./facade-activation-check.runtime.js";
 import {
   listImportedBundledPluginFacadeIds,
@@ -33,7 +34,7 @@ it.each([
   },
 ])(
   "$kind activation with $defaults preserves policy errors, cached exports, and artifact failures",
-  async ({ load, manifest, paddedId }) => {
+  async ({ kind, load, manifest, paddedId }) => {
     const bundledRoot = path.resolve("dist-runtime", "extensions");
     fs.mkdirSync(bundledRoot, { recursive: true });
     const root = fs.realpathSync(tempDirs.make(".activation-", bundledRoot));
@@ -66,6 +67,9 @@ it.each([
     const params = { dirName: "fixture", artifactBasename: "api.js" };
     const invoke = (request = params) => Promise.resolve().then(() => load(request));
     try {
+      if (kind === "sync") {
+        await preparePluginMetadataMachineStateAsync({});
+      }
       setRuntimeConfigSnapshot({});
       await expect(
         invoke({ dirName: "missing-fixture", artifactBasename: "api.js" }),

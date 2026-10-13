@@ -1,17 +1,17 @@
 import { unwrapSecretSentinelsForProviderEgress } from "../agents/provider-secret-egress.js";
-import { resolveProviderRuntimePlugin } from "./provider-hook-runtime.js";
+import { resolveProviderRuntimePluginAsync } from "./provider-hook-runtime.js";
 import type { ProviderPrepareRuntimeAuthContext } from "./types.js";
 
 export async function prepareProviderRuntimeAuth(
   params: Pick<
-    Parameters<typeof resolveProviderRuntimePlugin>[0],
+    Parameters<typeof resolveProviderRuntimePluginAsync>[0],
     "provider" | "config" | "workspaceDir" | "env"
   > & {
     assertCurrent?: () => void;
     context: ProviderPrepareRuntimeAuthContext;
   },
 ) {
-  const prepareRuntimeAuth = resolveProviderRuntimePlugin(params)?.prepareRuntimeAuth;
+  const prepareRuntimeAuth = (await resolveProviderRuntimePluginAsync(params))?.prepareRuntimeAuth;
   if (!prepareRuntimeAuth) {
     return undefined;
   }

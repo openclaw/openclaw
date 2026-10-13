@@ -9,8 +9,8 @@ const mocks = vi.hoisted(() => ({
     vi.fn<typeof import("../channel-plugin-ids.js").resolveConfiguredChannelPluginIds>(),
   resolveChannelPluginIds:
     vi.fn<typeof import("../channel-plugin-ids.js").resolveChannelPluginIds>(),
-  resolveEffectivePluginIds:
-    vi.fn<typeof import("../effective-plugin-ids.js").resolveEffectivePluginIds>(),
+  resolveEffectivePluginIdsAsync:
+    vi.fn<typeof import("../effective-plugin-ids.js").resolveEffectivePluginIdsAsync>(),
   collectConfiguredMemoryEmbeddingProviderIds:
     vi.fn<
       typeof import("../gateway-startup-plugin-ids.js").collectConfiguredMemoryEmbeddingProviderIds
@@ -55,8 +55,8 @@ vi.mock("../channel-plugin-ids.js", () => ({
 // mock-isolation: Loader scope uses fixture plugin ids without installed-plugin discovery.
 vi.mock("../effective-plugin-ids.js", () => ({
   resolveEffectivePluginIdsAsync: async (
-    ...args: Parameters<typeof mocks.resolveEffectivePluginIds>
-  ) => mocks.resolveEffectivePluginIds(...args),
+    ...args: Parameters<typeof mocks.resolveEffectivePluginIdsAsync>
+  ) => mocks.resolveEffectivePluginIdsAsync(...args),
 }));
 
 vi.mock("../gateway-startup-plugin-ids.js", () => ({
@@ -70,7 +70,16 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
     mocks.applyPluginAutoEnable(...args),
 }));
 
+// mock-isolation: Loader scope uses fixture readiness without publishing process discovery facts.
+vi.mock("../bundled-discovery-state.js", () => ({
+  prepareBundledDiscoveryMode: async () => () => {},
+}));
+
+// mock-isolation: Loader scope supplies metadata without installed-plugin discovery or state reads.
 vi.mock("../../config/io.plugin-metadata.js", () => ({
+  resolveConfigWidePluginMetadataSnapshotAsync: async (
+    ...args: Parameters<typeof mocks.resolvePluginMetadataSnapshot>
+  ) => mocks.resolvePluginMetadataSnapshot(...args),
   resolveConfigWidePluginMetadataSnapshot: (
     ...args: Parameters<typeof mocks.resolvePluginMetadataSnapshot>
   ) => mocks.resolvePluginMetadataSnapshot(...args),
@@ -79,6 +88,9 @@ vi.mock("../../config/io.plugin-metadata.js", () => ({
 vi.mock("../plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugin-metadata-snapshot.js")>()),
   resolvePluginMetadataSnapshot: (
+    ...args: Parameters<typeof mocks.resolvePluginMetadataSnapshot>
+  ) => mocks.resolvePluginMetadataSnapshot(...args),
+  resolvePluginMetadataSnapshotAsync: async (
     ...args: Parameters<typeof mocks.resolvePluginMetadataSnapshot>
   ) => mocks.resolvePluginMetadataSnapshot(...args),
 }));
@@ -207,11 +219,11 @@ describe("ensurePluginRegistryLoaded", () => {
   it("loads effective plugin ids for the all scope", async () => {
     const env = { HOME: "/tmp/openclaw-home" };
     const config = { plugins: { enabled: true } };
-    mocks.resolveEffectivePluginIds.mockReturnValue(["demo", "memory-core"]);
+    mocks.resolveEffectivePluginIdsAsync.mockResolvedValue(["demo", "memory-core"]);
 
     await ensurePluginRegistryLoaded({ scope: "all", config, env });
 
-    expect(mocks.resolveEffectivePluginIds).toHaveBeenCalledWith({
+    expect(mocks.resolveEffectivePluginIdsAsync).toHaveBeenCalledWith({
       config,
       env,
       workspaceDir: "/resolved-workspace",
@@ -259,7 +271,7 @@ describe("ensurePluginRegistryLoaded", () => {
       ensurePluginRegistryLoaded({ scope: "sandbox-backends", config }),
     ).resolves.toBeUndefined();
     expect(requireLoadOptions().onlyPluginIds).toEqual(["research-owner", "sandbox-owner"]);
-    expect(mocks.resolveEffectivePluginIds).not.toHaveBeenCalled();
+    expect(mocks.resolveEffectivePluginIdsAsync).not.toHaveBeenCalled();
   });
 
   it("loads installed persisted sandbox owners after configuration switches to Docker", async () => {

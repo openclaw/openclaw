@@ -8,8 +8,7 @@ import { withPluginRuntimeGenerationRegistryScope } from "./runtime/generation-s
 import type { WebProviderRuntimeResolution } from "./web-provider-runtime-shared.js";
 
 const mocks = vi.hoisted(() => ({
-  isPluginRegistryLoadInFlight: vi.fn(() => false),
-  loadOpenClawPlugins: vi.fn(),
+  loadPluginRegistryHandleAsync: vi.fn(),
   resolveCompatibleRuntimePluginRegistry: vi.fn(),
   getLoadedRuntimePluginRegistry: vi.fn(),
   resolvePluginRegistryLoadCacheKey: vi.fn((options: unknown) => JSON.stringify(options)),
@@ -27,9 +26,14 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
+// mock-isolation: Resolution fixtures provide metadata without reading shared machine state.
+vi.mock("./installed-plugin-index-record-state.js", () => ({
+  preparePluginMetadataMachineStateAsync: async () => () => {},
+}));
+
+// mock-isolation: Web provider lifecycle fixtures control exact registry acquisition without loading installed plugins.
 vi.mock("./loader.js", () => ({
-  isPluginRegistryLoadInFlight: mocks.isPluginRegistryLoadInFlight,
-  loadOpenClawPlugins: mocks.loadOpenClawPlugins,
+  loadPluginRegistryHandleAsync: mocks.loadPluginRegistryHandleAsync,
   resolveCompatibleRuntimePluginRegistry: mocks.resolveCompatibleRuntimePluginRegistry,
   resolvePluginRegistryLoadCacheKey: mocks.resolvePluginRegistryLoadCacheKey,
   resolveRuntimePluginRegistry: mocks.resolveRuntimePluginRegistry,
@@ -50,7 +54,7 @@ vi.mock("./runtime/load-context.js", () => ({
   createPluginRuntimeLoaderLogger: mocks.createPluginRuntimeLoaderLogger,
 }));
 
-let resolvePluginWebProviders: typeof import("./web-provider-runtime-shared.js").resolvePluginWebProviders;
+let resolvePluginWebProvidersAsync: typeof import("./web-provider-runtime-shared.js").resolvePluginWebProvidersAsync;
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
@@ -76,13 +80,24 @@ function resolution(
 
 describe("web-provider-runtime-shared", () => {
   beforeAll(async () => {
-    ({ resolvePluginWebProviders } = await import("./web-provider-runtime-shared.js"));
+    ({ resolvePluginWebProvidersAsync } = await import("./web-provider-runtime-shared.js"));
+  });
+
+  it("rejects cold synchronous discovery without starting a native load", async () => {
+    const { resolvePluginWebProviders } = await import("./web-provider-runtime-shared.js");
+    expect(() =>
+      resolvePluginWebProviders(
+        { config: {} },
+        resolution({
+          mapRegistryProviders: () => [],
+        }),
+      ),
+    ).toThrow("await async web provider resolution");
+    expect(mocks.loadPluginRegistryHandleAsync).not.toHaveBeenCalled();
   });
 
   beforeEach(() => {
-    mocks.isPluginRegistryLoadInFlight.mockReset();
-    mocks.isPluginRegistryLoadInFlight.mockReturnValue(false);
-    mocks.loadOpenClawPlugins.mockReset();
+    mocks.loadPluginRegistryHandleAsync.mockReset();
     mocks.resolveCompatibleRuntimePluginRegistry.mockReset();
     mocks.getLoadedRuntimePluginRegistry.mockReset();
     mocks.getLoadedRuntimePluginRegistry.mockReturnValue(undefined);
@@ -103,12 +118,12 @@ describe("web-provider-runtime-shared", () => {
     );
   });
 
-  it("preserves explicit empty scopes in runtime-compatible web provider loads", () => {
+  it("preserves explicit empty scopes in runtime-compatible web provider loads", async () => {
     const activeRegistry = { source: "active" };
     const mapRegistryProviders = vi.fn(() => []);
     mocks.getLoadedRuntimePluginRegistry.mockReturnValue(activeRegistry as never);
 
-    const result = resolvePluginWebProviders(
+    const result = await resolvePluginWebProvidersAsync(
       {
         config: {},
         onlyPluginIds: [],
@@ -125,14 +140,14 @@ describe("web-provider-runtime-shared", () => {
       onlyPluginIds: [],
     });
     expect(result).toStrictEqual([]);
-    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+    expect(mocks.loadPluginRegistryHandleAsync).not.toHaveBeenCalled();
   });
 
-  it("preserves explicit scopes when config is omitted in direct runtime resolution", () => {
+  it("preserves explicit scopes when config is omitted in direct runtime resolution", async () => {
     const mapRegistryProviders = vi.fn(() => []);
     mocks.getLoadedRuntimePluginRegistry.mockReturnValue({} as never);
 
-    resolvePluginWebProviders(
+    await resolvePluginWebProvidersAsync(
       {
         onlyPluginIds: ["alpha"],
       },
@@ -146,7 +161,7 @@ describe("web-provider-runtime-shared", () => {
     expect(mockArg(mapRegistryProviders).onlyPluginIds).toEqual(["alpha"]);
   });
 
-  it("resolves provider candidates from the original config and prepared manifests", () => {
+  it("resolves provider candidates from the original config and prepared manifests", async () => {
     const activeRegistry = { source: "active" };
     const config = { plugins: { entries: {} } };
     const resolvedConfig = { plugins: { entries: { brave: { enabled: true } } } };
@@ -155,7 +170,7 @@ describe("web-provider-runtime-shared", () => {
     const mapRegistryProviders = vi.fn(() => ["provider"]);
     mocks.getLoadedRuntimePluginRegistry.mockReturnValue(activeRegistry);
 
-    const providers = resolvePluginWebProviders(
+    const providers = await resolvePluginWebProvidersAsync(
       {
         config,
         env: { BRAVE_API_KEY: "key" },
@@ -195,15 +210,15 @@ describe("web-provider-runtime-shared", () => {
       plugins: manifestRecords,
       diagnostics: [],
     });
-    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+    expect(mocks.loadPluginRegistryHandleAsync).not.toHaveBeenCalled();
   });
 
-  it("reuses the loaded registry for runtime web providers", () => {
+  it("reuses the loaded registry for runtime web providers", async () => {
     const loadedRegistry = { source: "loaded" };
     const mapRegistryProviders = vi.fn(() => ["provider"]);
     mocks.getLoadedRuntimePluginRegistry.mockReturnValue(loadedRegistry as never);
 
-    resolvePluginWebProviders(
+    await resolvePluginWebProvidersAsync(
       {
         config: {},
         onlyPluginIds: ["brave"],
@@ -214,15 +229,15 @@ describe("web-provider-runtime-shared", () => {
     );
 
     expect(mockArg(mocks.getLoadedRuntimePluginRegistry).requiredPluginIds).toEqual(["brave"]);
-    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+    expect(mocks.loadPluginRegistryHandleAsync).not.toHaveBeenCalled();
   });
 
-  it("caches setup web provider plugin loads by default", () => {
+  it("caches setup web provider plugin loads by default", async () => {
     const loadedRegistry = { source: "setup" };
     const mapRegistryProviders = vi.fn(() => ["provider"]);
-    mocks.loadOpenClawPlugins.mockReturnValue(loadedRegistry as never);
+    mocks.loadPluginRegistryHandleAsync.mockReturnValue(loadedRegistry as never);
 
-    const providers = resolvePluginWebProviders(
+    const providers = await resolvePluginWebProvidersAsync(
       {
         config: {},
         mode: "setup",
@@ -234,14 +249,14 @@ describe("web-provider-runtime-shared", () => {
     );
 
     expect(providers).toEqual(["provider"]);
-    expect(mockArg(mocks.loadOpenClawPlugins).cache).toBe(true);
-    expect(mockArg(mocks.loadOpenClawPlugins).onlyPluginIds).toEqual(["brave"]);
+    expect(mockArg(mocks.loadPluginRegistryHandleAsync).cache).toBe(true);
+    expect(mockArg(mocks.loadPluginRegistryHandleAsync).onlyPluginIds).toEqual(["brave"]);
   });
 
-  it("uses bundled runtime artifacts before loading a plugin registry", () => {
+  it("uses bundled runtime artifacts before loading a plugin registry", async () => {
     const resolveBundledRuntimeArtifactProviders = vi.fn(() => ["provider"]);
 
-    const providers = resolvePluginWebProviders(
+    const providers = await resolvePluginWebProvidersAsync(
       {
         config: {},
         workspaceDir: "/workspace",
@@ -261,16 +276,16 @@ describe("web-provider-runtime-shared", () => {
       env: { FIRECRAWL_API_KEY: "" },
       onlyPluginIds: ["firecrawl"],
     });
-    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+    expect(mocks.loadPluginRegistryHandleAsync).not.toHaveBeenCalled();
   });
 
-  it("falls back to plugin loading when bundled runtime artifacts do not cover the scope", () => {
+  it("falls back to plugin loading when bundled runtime artifacts do not cover the scope", async () => {
     const fallbackRegistry = { source: "fallback" };
     const mapRegistryProviders = vi.fn(() => ["provider"]);
     const resolveBundledRuntimeArtifactProviders = vi.fn(() => null);
-    mocks.loadOpenClawPlugins.mockReturnValue(fallbackRegistry as never);
+    mocks.loadPluginRegistryHandleAsync.mockReturnValue(fallbackRegistry as never);
 
-    const providers = resolvePluginWebProviders(
+    const providers = await resolvePluginWebProvidersAsync(
       {
         config: {},
       },
@@ -283,23 +298,23 @@ describe("web-provider-runtime-shared", () => {
 
     expect(providers).toEqual(["provider"]);
     expect(resolveBundledRuntimeArtifactProviders).toHaveBeenCalledTimes(1);
-    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+    expect(mocks.loadPluginRegistryHandleAsync).toHaveBeenCalledTimes(1);
     expect(mapRegistryProviders).toHaveBeenCalledWith({
       registry: fallbackRegistry,
       onlyPluginIds: ["external-provider"],
     });
   });
 
-  it("falls back to a scoped provider load when the active runtime registry has no web providers", () => {
+  it("falls back to a scoped provider load when the active runtime registry has no web providers", async () => {
     const activeRegistry = { source: "active" };
     const fallbackRegistry = { source: "fallback" };
     const mapRegistryProviders = vi.fn(({ registry }) =>
       registry === fallbackRegistry ? ["brave"] : [],
     );
     mocks.getLoadedRuntimePluginRegistry.mockReturnValue(activeRegistry as never);
-    mocks.loadOpenClawPlugins.mockReturnValue(fallbackRegistry as never);
+    mocks.loadPluginRegistryHandleAsync.mockReturnValue(fallbackRegistry as never);
 
-    const result = resolvePluginWebProviders(
+    const result = await resolvePluginWebProvidersAsync(
       {
         config: {},
       },
@@ -310,16 +325,16 @@ describe("web-provider-runtime-shared", () => {
     );
 
     expect(result).toEqual(["brave"]);
-    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+    expect(mocks.loadPluginRegistryHandleAsync).toHaveBeenCalledTimes(1);
     expect(mapRegistryProviders).toHaveBeenCalledTimes(2);
   });
 
-  it("retains an empty request-owned web provider selection without registering plugins again", () => {
+  it("retains an empty request-owned web provider selection without registering plugins again", async () => {
     const registry = createEmptyPluginRegistry();
     const mapRegistryProviders = vi.fn(() => []);
 
-    const result = withPluginRuntimeRegistryScope(registry, () =>
-      resolvePluginWebProviders(
+    const result = await withPluginRuntimeRegistryScope(registry, () =>
+      resolvePluginWebProvidersAsync(
         { config: {}, manifestRecords: [] },
         resolution({ resolveCandidatePluginIds: () => undefined, mapRegistryProviders }),
       ),
@@ -331,19 +346,19 @@ describe("web-provider-runtime-shared", () => {
       onlyPluginIds: undefined,
     });
     expect(mocks.getLoadedRuntimePluginRegistry).not.toHaveBeenCalled();
-    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+    expect(mocks.loadPluginRegistryHandleAsync).not.toHaveBeenCalled();
   });
 
   it.each([undefined, ["external-search"]])(
     "retains an exact generation's empty selection with candidates %j",
-    (candidates) => {
+    async (candidates) => {
       const registry = createEmptyPluginRegistry();
       const requestRegistry = createEmptyPluginRegistry();
       const mapRegistryProviders = vi.fn(() => []);
 
-      const result = withPluginRuntimeRegistryScope(requestRegistry, () =>
+      const result = await withPluginRuntimeRegistryScope(requestRegistry, () =>
         withPluginRuntimeGenerationRegistryScope(registry, () =>
-          resolvePluginWebProviders(
+          resolvePluginWebProvidersAsync(
             { config: {} },
             resolution({ resolveCandidatePluginIds: () => candidates, mapRegistryProviders }),
           ),
@@ -356,7 +371,7 @@ describe("web-provider-runtime-shared", () => {
         onlyPluginIds: candidates,
       });
       expect(mocks.getLoadedRuntimePluginRegistry).not.toHaveBeenCalled();
-      expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+      expect(mocks.loadPluginRegistryHandleAsync).not.toHaveBeenCalled();
     },
   );
 
@@ -374,16 +389,16 @@ describe("web-provider-runtime-shared", () => {
     },
   ])(
     "discovers undeclared providers from a request scope with $name",
-    ({ manifestRecords, scopedProviders }) => {
+    async ({ manifestRecords, scopedProviders }) => {
       const registry = createEmptyPluginRegistry();
       const fallbackRegistry = createEmptyPluginRegistry();
       const mapRegistryProviders = vi.fn(({ registry: selected }) =>
         selected === fallbackRegistry ? ["external-search", "scoped-search"] : scopedProviders,
       );
-      mocks.loadOpenClawPlugins.mockReturnValue(fallbackRegistry);
+      mocks.loadPluginRegistryHandleAsync.mockReturnValue(fallbackRegistry);
 
-      const result = withPluginRuntimeRegistryScope(registry, () =>
-        resolvePluginWebProviders(
+      const result = await withPluginRuntimeRegistryScope(registry, () =>
+        resolvePluginWebProvidersAsync(
           { config: {}, manifestRecords },
           resolution({ resolveCandidatePluginIds: () => undefined, mapRegistryProviders }),
         ),
@@ -391,11 +406,11 @@ describe("web-provider-runtime-shared", () => {
 
       expect(result).toEqual(["external-search", "scoped-search"]);
       expect(mocks.getLoadedRuntimePluginRegistry).not.toHaveBeenCalled();
-      expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+      expect(mocks.loadPluginRegistryHandleAsync).toHaveBeenCalledTimes(1);
     },
   );
 
-  it("does not treat an active registry missing declared candidates as authoritative", () => {
+  it("does not treat an active registry missing declared candidates as authoritative", async () => {
     // Regression: an active registry with SOME web providers used to win even when a
     // manifest-declared candidate (npm-installed Brave with BRAVE_API_KEY set) was
     // absent from it, so env-var auto-detect could never see the installed provider.
@@ -413,9 +428,9 @@ describe("web-provider-runtime-shared", () => {
       }
       return activeRegistry as never;
     });
-    mocks.loadOpenClawPlugins.mockReturnValue(scopedRegistry as never);
+    mocks.loadPluginRegistryHandleAsync.mockReturnValue(scopedRegistry as never);
 
-    const result = resolvePluginWebProviders(
+    const result = await resolvePluginWebProvidersAsync(
       {
         config: {},
         env: { BRAVE_API_KEY: "key" } as never,
@@ -427,6 +442,6 @@ describe("web-provider-runtime-shared", () => {
     );
 
     expect(result).toEqual(["brave", "grok"]);
-    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+    expect(mocks.loadPluginRegistryHandleAsync).toHaveBeenCalledTimes(1);
   });
 });

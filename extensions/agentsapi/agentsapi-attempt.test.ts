@@ -11,6 +11,7 @@ import {
   initializeGlobalHookRunner,
   loadUserTurnTranscriptRecorderFactoryForTest,
   resetGlobalHookRunner,
+  useProviderCatalogMetadata,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   clearRuntimeConfigSnapshot,
@@ -45,6 +46,8 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
     },
   };
 });
+
+useProviderCatalogMetadata(new URL("../openai/", import.meta.url));
 
 const tempDirs = useSessionStoreTempDirs(afterAll, "agentsapi-completed-reply-");
 const readItems = vi.fn<AgentsApiClient["items"]>();

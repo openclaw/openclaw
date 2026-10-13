@@ -3,5 +3,6 @@
  */
 export {
   listMemoryEmbeddingProviders,
+  listMemoryEmbeddingProvidersAsync,
   listRegisteredMemoryEmbeddingProviderAdapters,
 } from "../plugins/memory-embedding-provider-runtime.js";

@@ -1,8 +1,9 @@
 // Embedded run entry integration tests cover persisted runtime skill entries.
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { preparePluginAutoEnableTestDiscovery } from "../../config/plugin-auto-enable.test-helpers.js";
 import { resolveSkillsPrompt } from "../loading/workspace-skill-prompt.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { writePluginWithSkill } from "../test-support/skill-plugin-fixtures.test-support.js";
@@ -11,6 +12,10 @@ import { resolveReusableWorkspaceSkillSnapshot } from "./session-snapshot.js";
 
 const tempDirs = createTempDirTracker();
 const originalBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+
+beforeEach(() => {
+  preparePluginAutoEnableTestDiscovery();
+});
 
 function restoreBundledPluginsDir() {
   if (originalBundledDir === undefined) {

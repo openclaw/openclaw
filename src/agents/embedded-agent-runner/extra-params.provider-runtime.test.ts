@@ -4,6 +4,7 @@ import { createLlmStreamSimpleMock } from "../../../test/helpers/agents/llm-stre
 import { createKilocodeWrapper } from "../../llm/providers/stream-wrappers/proxy.js";
 import type { Context, Model, SimpleStreamOptions } from "../../llm/types.js";
 import { captureEnv } from "../../test-utils/env.js";
+import { installProviderRequestMetadataFixture } from "../provider-request.test-support.js";
 import type { StreamFn } from "../runtime/index.js";
 import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import {
@@ -14,6 +15,8 @@ import {
 import { testing as extraParamsTesting } from "./extra-params.test-support.js";
 
 vi.mock("../../llm/stream.js", () => createLlmStreamSimpleMock());
+
+installProviderRequestMetadataFixture();
 
 beforeEach(() => {
   extraParamsTesting.setProviderRuntimeDepsForTest({

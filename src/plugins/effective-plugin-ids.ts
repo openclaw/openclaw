@@ -11,16 +11,15 @@ import { isVitestRuntimeEnv } from "../infra/env.js";
 import {
   listExplicitConfiguredChannelIdsForConfig,
   loadGatewayStartupPluginPlan,
-  resolveConfiguredChannelPluginIds,
   resolveConfiguredChannelPluginIdsAsync,
 } from "./channel-plugin-ids.js";
 import {
   normalizePluginsConfig,
   resolveSelectedContextEnginePluginIdFromConfig,
 } from "./config-state.js";
-import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { resolvePluginMetadataSnapshotAsync } from "./plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 
 function collectConfiguredChannelIds(
@@ -55,10 +54,7 @@ function addBundledChannelOwnerPluginIds(params: {
   pluginIds: Set<string>;
   config: OpenClawConfig;
   channelIds: readonly string[];
-  env: NodeJS.ProcessEnv;
-  workspaceDir?: string;
-  bundledPluginsDir?: string;
-  manifestRecords?: readonly PluginManifestRecord[];
+  manifestRecords: readonly PluginManifestRecord[];
 }): void {
   // Channel state callbacks run before this pass and may update config.
   const plugins = normalizePluginsConfig(params.config.plugins);
@@ -66,23 +62,7 @@ function addBundledChannelOwnerPluginIds(params: {
   if (channelIds.size === 0) {
     return;
   }
-  const env = params.bundledPluginsDir
-    ? {
-        ...params.env,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: params.bundledPluginsDir,
-        ...(isVitestRuntimeEnv(params.env) || isVitestRuntimeEnv()
-          ? { OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1" }
-          : {}),
-      }
-    : params.env;
-  const records =
-    params.manifestRecords ??
-    loadManifestMetadataSnapshot({
-      config: params.config,
-      env,
-      workspaceDir: params.workspaceDir,
-    }).plugins;
-  for (const plugin of records) {
+  for (const plugin of params.manifestRecords) {
     if (plugin.origin !== "bundled") {
       continue;
     }
@@ -117,56 +97,58 @@ type ResolveEffectivePluginIdsParams = {
   metadataSnapshot?: PluginMetadataSnapshot;
 };
 
-export function resolveEffectivePluginIds(params: ResolveEffectivePluginIdsParams): string[] {
-  return resolveEffectivePluginIdsWithChannels(params);
-}
-
 export async function resolveEffectivePluginIdsAsync(
   params: ResolveEffectivePluginIdsParams,
 ): Promise<string[]> {
-  const prepared =
+  const reusable =
     params.bundledPluginsDir || params.metadataSnapshot?.pluginIds
       ? undefined
       : params.metadataSnapshot;
+  const env = params.bundledPluginsDir
+    ? {
+        ...params.env,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: params.bundledPluginsDir,
+        ...(isVitestRuntimeEnv(params.env) || isVitestRuntimeEnv()
+          ? { OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1" }
+          : {}),
+      }
+    : params.env;
+  const prepared =
+    reusable ??
+    (await resolvePluginMetadataSnapshotAsync({
+      config: params.config,
+      env,
+      workspaceDir: params.workspaceDir,
+    }));
   const autoEnabled = applyPluginAutoEnable({
     config: params.config,
-    env: params.env,
-    ...(prepared ? { manifestRegistry: prepared.manifestRegistry } : {}),
-    ...(prepared?.discovery ? { discovery: prepared.discovery } : {}),
+    env,
+    manifestRegistry: prepared.manifestRegistry,
+    discovery: prepared.discovery,
   });
   const configuredPluginIds = await resolveConfiguredChannelPluginIdsAsync({
     config: autoEnabled.config,
     activationSourceConfig: params.config,
     workspaceDir: params.workspaceDir,
-    env: params.env,
-    manifestRecords: prepared?.plugins,
-    discovery: prepared?.discovery,
+    env,
+    manifestRecords: prepared.plugins,
+    discovery: prepared.discovery,
   });
-  return resolveEffectivePluginIdsWithChannels(params, { autoEnabled, configuredPluginIds });
+  return resolveEffectivePluginIdsWithChannels(
+    { ...params, env, metadataSnapshot: prepared },
+    { autoEnabled, configuredPluginIds },
+  );
 }
 
 function resolveEffectivePluginIdsWithChannels(
-  params: ResolveEffectivePluginIdsParams,
-  preparedChannels?: {
+  params: ResolveEffectivePluginIdsParams & { metadataSnapshot: PluginMetadataSnapshot },
+  preparedChannels: {
     autoEnabled: ReturnType<typeof applyPluginAutoEnable>;
     configuredPluginIds: string[];
   },
 ): string[] {
-  // Effective ids are a whole-config question. A plugin-scoped snapshot only carries
-  // its own manifests, and a bundled-plugins-dir override rewrites the discovery env,
-  // so neither can answer it — those callers keep re-deriving.
-  const prepared =
-    params.bundledPluginsDir || params.metadataSnapshot?.pluginIds
-      ? undefined
-      : params.metadataSnapshot;
-  const autoEnabled =
-    preparedChannels?.autoEnabled ??
-    applyPluginAutoEnable({
-      config: params.config,
-      env: params.env,
-      ...(prepared ? { manifestRegistry: prepared.manifestRegistry } : {}),
-      ...(prepared?.discovery ? { discovery: prepared.discovery } : {}),
-    });
+  const prepared = params.metadataSnapshot;
+  const autoEnabled = preparedChannels.autoEnabled;
   const effectiveConfig = autoEnabled.config;
   const plugins = normalizePluginsConfig(effectiveConfig.plugins);
   const ids = new Set(plugins.enabled ? plugins.allow : []);
@@ -196,36 +178,23 @@ function resolveEffectivePluginIdsWithChannels(
     effectiveConfig,
     params.config,
     params.env,
-    prepared?.discovery,
+    prepared.discovery,
   );
-  const configuredPluginIds =
-    preparedChannels?.configuredPluginIds ??
-    resolveConfiguredChannelPluginIds({
-      config: effectiveConfig,
-      activationSourceConfig: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      manifestRecords: prepared?.plugins,
-      discovery: prepared?.discovery,
-    });
-  for (const pluginId of configuredPluginIds) {
+  for (const pluginId of preparedChannels.configuredPluginIds) {
     ids.add(pluginId);
   }
   addBundledChannelOwnerPluginIds({
     pluginIds: ids,
     config: effectiveConfig,
     channelIds: configuredChannelIds,
-    env: params.env,
-    workspaceDir: params.workspaceDir,
-    manifestRecords: prepared?.plugins,
-    ...(params.bundledPluginsDir ? { bundledPluginsDir: params.bundledPluginsDir } : {}),
+    manifestRecords: prepared.plugins,
   });
   for (const pluginId of loadGatewayStartupPluginPlan({
     config: effectiveConfig,
     activationSourceConfig: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    ...(prepared ? { metadataSnapshot: prepared } : {}),
+    metadataSnapshot: prepared,
   }).pluginIds) {
     ids.add(pluginId);
   }

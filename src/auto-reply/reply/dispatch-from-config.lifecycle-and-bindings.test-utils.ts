@@ -431,7 +431,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("audits registry-load failures without exposing the setup error", async () => {
     setNoAbort();
-    runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockImplementationOnce(() => {
+    runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockImplementationOnce(async () => {
       throw new Error("setup failed");
     });
 

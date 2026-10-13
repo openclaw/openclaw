@@ -1,18 +1,18 @@
 // Token-provider normalization hooks for provider-backed auth choices.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveProviderMatch } from "../plugins/provider-auth-choice-helpers.js";
-import { resolvePluginProviders } from "../plugins/provider-auth-choice.runtime.js";
+import { resolveAuthChoicePluginProviders } from "../plugins/provider-auth-choice.runtime.js";
 import type { ApplyAuthChoiceParams } from "./auth-choice.apply.types.js";
 import type { AuthChoice } from "./onboard-types.js";
 
 /** Translate generic api-key/token choices to provider-specific auth choices when possible. */
-export function normalizeApiKeyTokenProviderAuthChoice(params: {
+export async function normalizeApiKeyTokenProviderAuthChoice(params: {
   authChoice: AuthChoice;
   tokenProvider?: string;
   config?: ApplyAuthChoiceParams["config"];
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-}): AuthChoice {
+}): Promise<AuthChoice> {
   const normalizedTokenProvider = normalizeOptionalLowercaseString(params.tokenProvider);
   if (!normalizedTokenProvider) {
     return params.authChoice;
@@ -27,7 +27,7 @@ export function normalizeApiKeyTokenProviderAuthChoice(params: {
     return params.authChoice;
   }
   const provider = resolveProviderMatch(
-    resolvePluginProviders({
+    await resolveAuthChoicePluginProviders({
       config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,

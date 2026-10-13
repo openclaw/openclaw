@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createInfoWarnErrorLogger } from "../../../test/helpers/mock-logger.js";
 import type { PluginLoadOptions } from "../loader.js";
-import { loadPluginMetadataRegistrySnapshot } from "./metadata-registry-loader.js";
+import { loadPluginMetadataRegistrySnapshotAsync } from "./metadata-registry-loader.js";
 
 const loadConfigMock = vi.fn();
 const applyPluginAutoEnableMock = vi.fn();
@@ -17,9 +17,10 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: (...args: unknown[]) => applyPluginAutoEnableMock(...args),
 }));
 
+// mock-isolation: Loader-option tests capture fixture requests without executing installed plugins.
 vi.mock("../loader.js", () => ({
   loadOpenClawPlugins: (...args: unknown[]) => loadOpenClawPluginsMock(...args),
-  loadPluginRegistryHandle: (options: Record<string, unknown> = {}) =>
+  loadPluginRegistryHandleAsync: async (options: Record<string, unknown> = {}) =>
     loadOpenClawPluginsMock({ ...options, activate: false }),
 }));
 
@@ -31,6 +32,21 @@ vi.mock("../../agents/agent-scope.js", () => ({
   >(() => "/resolved-workspace"),
   resolveDefaultAgentId: () => "default",
 }));
+
+// mock-isolation: Empty fixture manifests keep loader-option checks independent of disk discovery.
+vi.mock("./load-context.resolve.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./load-context.resolve.js")>();
+  return {
+    ...actual,
+    resolvePluginRuntimeLoadContextAsync: async (
+      options: Parameters<typeof actual.resolvePluginRuntimeLoadContextAsync>[0],
+    ) =>
+      actual.resolvePluginRuntimeLoadContext({
+        ...options,
+        manifestRegistry: options?.manifestRegistry ?? { plugins: [], diagnostics: [] },
+      }),
+  };
+});
 
 vi.mock("../control-plane-workspace.js", () => ({
   resolvePluginControlPlaneWorkspace: (params: { workspaceDir?: string }) => ({
@@ -48,7 +64,7 @@ function getOnlyLoadOpenClawPluginsOptions(): PluginLoadOptions {
   return options as PluginLoadOptions;
 }
 
-describe("loadPluginMetadataRegistrySnapshot", () => {
+describe("loadPluginMetadataRegistrySnapshotAsync", () => {
   beforeEach(() => {
     loadConfigMock.mockReset();
     applyPluginAutoEnableMock.mockReset();
@@ -62,8 +78,8 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
     loadOpenClawPluginsMock.mockReturnValue({ plugins: [], diagnostics: [] });
   });
 
-  it("defaults to a non-activating validate snapshot", () => {
-    loadPluginMetadataRegistrySnapshot({
+  it("defaults to a non-activating validate snapshot", async () => {
+    await loadPluginMetadataRegistrySnapshotAsync({
       config: { plugins: {} },
       activationSourceConfig: { plugins: { allow: ["demo"] } },
       env: { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv,
@@ -88,8 +104,8 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
     expect(loadOptions.logger).toBeDefined();
   });
 
-  it("forwards explicit manifest-only requests", () => {
-    loadPluginMetadataRegistrySnapshot({
+  it("forwards explicit manifest-only requests", async () => {
+    await loadPluginMetadataRegistrySnapshotAsync({
       config: { plugins: {} },
       loadModules: false,
     });
@@ -110,10 +126,10 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
     expect(loadOptions.logger).toBeDefined();
   });
 
-  it("forwards an explicit logger through metadata snapshots", () => {
+  it("forwards an explicit logger through metadata snapshots", async () => {
     const logger = createInfoWarnErrorLogger();
 
-    loadPluginMetadataRegistrySnapshot({
+    await loadPluginMetadataRegistrySnapshotAsync({
       config: { plugins: {} },
       logger,
       workspaceDir: "/workspace",
@@ -138,12 +154,12 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
     ).toBe(true);
   });
 
-  it("honors explicit load options when reusing a resolved runtime context", () => {
+  it("honors explicit load options when reusing a resolved runtime context", async () => {
     const logger = createInfoWarnErrorLogger();
     const env = { HOME: "/tmp/context-home" } as NodeJS.ProcessEnv;
     const manifestRegistry = { plugins: [], diagnostics: [] };
 
-    loadPluginMetadataRegistrySnapshot({
+    await loadPluginMetadataRegistrySnapshotAsync({
       config: { plugins: { allow: ["compat-provider"] } },
       activationSourceConfig: { plugins: { allow: ["raw-plugin"] } },
       workspaceDir: "/compat-workspace",
@@ -179,8 +195,8 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
     });
   });
 
-  it("preserves explicit empty plugin scopes on metadata snapshots", () => {
-    loadPluginMetadataRegistrySnapshot({
+  it("preserves explicit empty plugin scopes on metadata snapshots", async () => {
+    await loadPluginMetadataRegistrySnapshotAsync({
       config: { plugins: {} },
       onlyPluginIds: [],
     });

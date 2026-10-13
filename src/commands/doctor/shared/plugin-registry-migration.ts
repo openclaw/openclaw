@@ -6,6 +6,7 @@ import {
 } from "../../../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
+import { prepareBundledDiscoveryMode } from "../../../plugins/bundled-discovery-state.js";
 import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-record-state.js";
 import {
   loadInstalledPluginIndexInstallRecords,
@@ -163,6 +164,7 @@ export async function migratePluginRegistryForDoctor(
       const installRecords = migrateOfficialPluginInstallProvenance(
         params.installRecords ?? (await loadInstalledPluginIndexInstallRecords(params)),
       );
+      await prepareBundledDiscoveryMode(params.env);
       const current: InstalledPluginIndex = {
         ...loadInstalledPluginIndex({ ...params, config, installRecords }),
         refreshReason: "migration",

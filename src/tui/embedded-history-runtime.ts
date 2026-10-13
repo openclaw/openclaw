@@ -3,13 +3,13 @@ import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatTuiErrorMessage } from "./tui-formatters.js";
 
-export function ensureEmbeddedHistoryRuntimePluginsLoaded(params: {
+export async function ensureEmbeddedHistoryRuntimePluginsLoaded(params: {
   cfg: OpenClawConfig;
   sessionAgentId: string;
-}): { status: "warmed" } | { status: "failed"; error: string } {
+}): Promise<{ status: "warmed" } | { status: "failed"; error: string }> {
   try {
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.sessionAgentId);
-    loadAgentRuntimePluginRegistryHandle({
+    await loadAgentRuntimePluginRegistryHandle({
       config: params.cfg,
       workspaceDir,
     });

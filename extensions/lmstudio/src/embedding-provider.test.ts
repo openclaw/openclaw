@@ -1,8 +1,11 @@
 // LM Studio embedding provider tests cover preload context-length precedence.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
+import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { lmstudioMemoryEmbeddingProviderAdapter } from "../memory-embedding-adapter.js";
 import { createLmstudioEmbeddingProvider } from "./embedding-provider.js";
+
+useProviderCatalogMetadata(new URL("..", import.meta.url));
 
 const prepareLmstudioModelForInferenceMock = vi.hoisted(() =>
   vi.fn(async (_params?: { requestedContextLength?: number }) => ({

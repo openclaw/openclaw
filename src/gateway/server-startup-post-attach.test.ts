@@ -17,6 +17,7 @@ import type { PluginHookHandlerMap } from "../plugins/hook-types.js";
 import { createHookRunner } from "../plugins/hooks.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
+import { preparePluginMetadataMachineState } from "../plugins/installed-plugin-index-record-state.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -1281,6 +1282,7 @@ describe("startGatewayPostAttachRuntime", () => {
   });
 
   it("adopts a winning plugin generation without publishing stale deferred startup state", async () => {
+    preparePluginMetadataMachineState({ env: process.env });
     const { logGatewayStartup } =
       await vi.importActual<typeof import("./server-startup-log.js")>("./server-startup-log.js");
     const log = { info: vi.fn(), warn: vi.fn() };

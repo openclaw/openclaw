@@ -3,8 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -116,8 +117,17 @@ function harness() {
       logger,
       caller: { kind: "operator", source: "scheduled" },
     });
+  const metadataSnapshot = createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: provider.id,
+        enabledByDefault: true,
+        contracts: { transcriptSourceProviders: [provider.id] },
+      },
+    ],
+  });
   const run = (callback: (service: Service) => Promise<void>, instance = service()) =>
-    withPluginRuntimeRegistryScope(registry, async () => {
+    withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry: registry }, async () => {
       try {
         await callback(instance);
       } finally {

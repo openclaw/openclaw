@@ -291,6 +291,10 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/state/openclaw-state-worker-runtime.ts",
     ],
   },
+  {
+    testFile: "src/agents/auth-profiles/store-state-owner.test.ts",
+    watchGlobs: ["src/agents/auth-profiles/store-async-save.test-support.ts"],
+  },
   ...[
     "src/agents/embedded-agent-runner/run/attempt-prompt-submit.test.ts",
     "src/agents/embedded-agent-runner/run/attempt-prompt-submit.runtime-replay.test.ts",

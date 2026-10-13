@@ -5,6 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   augmentModelCatalogWithProviderPlugins,
   resolvePluginProviders,
+  resolvePluginProvidersAsync,
 } from "openclaw/plugin-sdk/provider-catalog-runtime";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import {
@@ -16,7 +17,10 @@ import {
   LegacyPluginSdkResourceHost,
   bindLegacyPluginSdkResourceHost,
 } from "../plugins/legacy-sdk-resource-host.js";
-import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "../plugins/loader.js";
+import {
+  acquirePluginRegistryForInspection,
+  loadPluginRegistryHandleAsync,
+} from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   resetPluginLoaderTestStateForTest,
@@ -165,11 +169,11 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     config,
     env,
     load: () => acquirePluginRegistryForInspection({ config, env }),
-    loadRaw: () => loadPluginRegistryHandle({ config, env }),
+    loadRaw: () => loadPluginRegistryHandleAsync({ config, env }),
     resolve(registry: PluginRegistry, host: LegacyPluginSdkResourceHost, providerRefs?: string[]) {
       return host.run(() =>
         withPluginRuntimeRegistryScope(registry, () =>
-          resolvePluginProviders({ config, env, onlyPluginIds: [id], providerRefs }),
+          resolvePluginProvidersAsync({ config, env, onlyPluginIds: [id], providerRefs }),
         ),
       );
     },
@@ -184,7 +188,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
 }
 
 function readProvider(
-  provider: ReturnType<typeof resolvePluginProviders>[number],
+  provider: Awaited<ReturnType<typeof resolvePluginProvidersAsync>>[number],
 ): boolean | undefined {
   return provider.isCacheTtlEligible?.({ provider: provider.id, modelId: "synthetic-model" });
 }
@@ -224,12 +228,12 @@ it.each([false, true])(
           )
         : createScheduler(),
     );
-    let providers: ReturnType<typeof resolvePluginProviders> = [];
+    let providers: Awaited<ReturnType<typeof resolvePluginProvidersAsync>> = [];
     scheduler.schedule({
       id: "provider-borrow",
       delayMs: 1,
-      run: () => {
-        providers = resolvePluginProviders({
+      run: async () => {
+        providers = await resolvePluginProvidersAsync({
           config: fixture.config,
           env: fixture.env,
           onlyPluginIds: [fixture.id],
@@ -267,8 +271,8 @@ it("keeps two SDK hosts independent while borrowing the same native source", asy
   const second = new LegacyPluginSdkResourceHost();
   const inspection = await fixture.load();
   try {
-    const [firstProvider] = fixture.resolve(inspection.registry, first);
-    const [secondProvider] = fixture.resolve(inspection.registry, second);
+    const [firstProvider] = await fixture.resolve(inspection.registry, first);
+    const [secondProvider] = await fixture.resolve(inspection.registry, second);
     await inspection.release();
     expect(readProvider(firstProvider!)).toBe(true);
     await first.close();
@@ -283,16 +287,32 @@ it("keeps two SDK hosts independent while borrowing the same native source", asy
   }
 });
 
-it("does not dispose a raw registry selected through the public facade", async () => {
+it("retains a prepared raw registry through async and deprecated synchronous SDK selection", async () => {
   const fixture = nativeProviderFixture();
   const host = new LegacyPluginSdkResourceHost();
+  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
   try {
-    const registry = fixture.loadRaw();
-    const [provider] = fixture.resolve(registry, host);
+    const registry = await fixture.loadRaw();
+    const [provider] = await fixture.resolve(registry, host);
+    const [legacyProvider] = host.run(() =>
+      withPluginRuntimeRegistryScope(registry, () =>
+        resolvePluginProviders({
+          config: fixture.config,
+          env: fixture.env,
+          onlyPluginIds: [fixture.id],
+        }),
+      ),
+    );
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining("resolvePluginProvidersAsync"), {
+      code: "DEP_PLUGIN_SDK",
+      type: "DeprecationWarning",
+    });
     await host.close();
     expect(readProvider(provider!)).toBe(true);
+    expect(readProvider(legacyProvider!)).toBe(true);
     expect(fixture.state.disposals).toBe(0);
   } finally {
+    warning.mockRestore();
     await host.close();
     fixture.cleanup();
   }
@@ -314,9 +334,9 @@ it("does not revive an inspection released by an earlier selection getter", asyn
     },
   });
   try {
-    expect(() => fixture.resolve(inspection.registry, host, ["synthetic-runtime-alias"])).toThrow(
-      "reloaded or disabled",
-    );
+    await expect(
+      fixture.resolve(inspection.registry, host, ["synthetic-runtime-alias"]),
+    ).rejects.toThrow("reloaded or disabled");
     expect(reads).toBeGreaterThan(0);
     await released;
     expect(fixture.state.disposals).toBe(1);
@@ -336,7 +356,9 @@ it.each([
     const fixture = nativeProviderFixture();
     const host = new LegacyPluginSdkResourceHost();
     const inspection = await fixture.load();
-    const previous = previouslyAdopted ? fixture.resolve(inspection.registry, host)[0] : undefined;
+    const previous = previouslyAdopted
+      ? (await fixture.resolve(inspection.registry, host))[0]
+      : undefined;
     const failure = new Error("synthetic provider projection failure");
     const finishTail = createDeferredCore();
     let tailWork: Promise<void> | undefined;
@@ -356,7 +378,7 @@ it.each([
       },
     });
     try {
-      expect(() => fixture.resolve(inspection.registry, host)).toThrow(failure);
+      await expect(fixture.resolve(inspection.registry, host)).rejects.toThrow(failure);
       await inspection.release();
       expect(fixture.state.disposals).toBe(previouslyAdopted || tail ? 0 : 1);
       expect(fixture.state.database?.isOpen).toBe(previouslyAdopted || tail);
@@ -412,7 +434,7 @@ it.each([false, true])(
       },
     });
     try {
-      expect(() => fixture.resolve(inspection.registry, host)).toThrow(
+      await expect(fixture.resolve(inspection.registry, host)).rejects.toThrow(
         "SDK resource host is closed",
       );
       await fixture.state.disposalEntered.promise;
@@ -452,7 +474,7 @@ it("retains context-only Gateway provider resources after a foreign ambient host
       const resolverSpy = vi.spyOn(context, "resolveGatewayContext");
       bindLegacyPluginSdkResourceHost(context.resolveGatewayContext, owner);
       try {
-        const [provider] = foreign.run(() =>
+        const [provider] = await foreign.run(() =>
           withPluginRuntimeGatewayRequestScope({ context, isWebchatConnect: () => false }, () =>
             fixture.resolve(inspection.registry, foreign),
           ),
@@ -574,7 +596,7 @@ it.each(["tracker", "binding"] as const)(
     const sdkHost = new LegacyPluginSdkResourceHost();
     const inspection = await registrationWork.track(fixture.load);
     try {
-      const [provider] = fixture.resolve(inspection.registry, sdkHost);
+      const [provider] = await fixture.resolve(inspection.registry, sdkHost);
       await inspection.release();
       await registrationWork.drain();
       expect(readProvider(provider!)).toBe(true);

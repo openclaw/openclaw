@@ -27,6 +27,7 @@ import {
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../src/infra/agent-run-registry.js";
+import { prepareBundledDiscoveryMode } from "../src/plugins/bundled-discovery-state.js";
 import { getPluginInstance } from "../src/plugins/plugin-instance-scope.js";
 import { createPluginRegistry } from "../src/plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
@@ -405,6 +406,7 @@ describe("Teams message CLI", () => {
     args: string[],
     action: Action,
   ) {
+    await prepareBundledDiscoveryMode();
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     const command = new Command().name("message").exitOverride();
     register(command, {

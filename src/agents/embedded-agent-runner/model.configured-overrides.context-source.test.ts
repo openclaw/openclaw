@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { applyConfiguredProviderOverrides } from "./model.configured-overrides.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
@@ -35,6 +36,7 @@ function resolve(configuredModel?: Partial<ModelDefinitionConfig>) {
     modelId: "future-model",
     cfg,
     manifestAlias: { provider },
+    providerMetadataOwners: createPluginMetadataSnapshotFixture().owners,
     runtimeHooks: createProviderRuntimeTestMock({ handledDynamicProviders: [] }),
   });
 }

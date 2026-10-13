@@ -24,7 +24,7 @@ import {
   resolveExplicitAuthOrderSelection,
 } from "../../agents/auth-profiles.js";
 import type { RuntimeAuthProfileStore } from "../../agents/auth-profiles/types.js";
-import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { resolvePreparedProviderIdForAuth as resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";

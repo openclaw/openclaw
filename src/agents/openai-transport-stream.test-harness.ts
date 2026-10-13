@@ -3,6 +3,7 @@ import type { MutableAssistantOutput } from "@openclaw/ai/transports";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { expect } from "vitest";
 import { testing } from "./openai-transport-stream.test-support.js";
+import { attachPreparedProviderModelFixture } from "./provider-request.test-support.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 export const buildOpenAIResponsesParams: typeof testing.buildOpenAIResponsesParams =
@@ -29,7 +30,7 @@ export function makeCompletionsModel(
   overrides: Partial<Model<"openai-completions">> = {},
 ): Model<"openai-completions"> {
   const id = overrides.id ?? "test-model";
-  return {
+  return attachPreparedProviderModelFixture<Model<"openai-completions">>({
     id,
     name: overrides.name ?? id,
     api: "openai-completions",
@@ -41,14 +42,14 @@ export function makeCompletionsModel(
     contextWindow: 200_000,
     maxTokens: 8192,
     ...overrides,
-  };
+  });
 }
 
 export function makeResponsesModel<TApi extends ResponsesApi = "openai-responses">(
   overrides: Partial<Model<TApi>> = {},
 ): Model<TApi> {
   const id = overrides.id ?? "test-model";
-  return {
+  return attachPreparedProviderModelFixture({
     id,
     name: overrides.name ?? id,
     api: "openai-responses" as TApi,
@@ -60,7 +61,7 @@ export function makeResponsesModel<TApi extends ResponsesApi = "openai-responses
     contextWindow: 200_000,
     maxTokens: 8192,
     ...overrides,
-  } as Model<TApi>;
+  } as Model<TApi>);
 }
 
 export function createAssistantOutput(model: Model<"openai-completions">): MutableAssistantOutput {

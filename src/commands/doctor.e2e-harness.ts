@@ -283,12 +283,14 @@ vi.mock("../skills/discovery/status.js", () => ({
   buildWorkspaceSkillStatus: () => ({ skills: [] }),
 }));
 
+// mock-isolation: Doctor fixtures inspect repairs against an empty runtime without loading installed plugin code.
 vi.mock("../plugins/loader.js", () => ({
   isPluginRegistryLoadInFlight: () => false,
   loadOpenClawPlugins: () => createEmptyPluginRegistry(),
+  loadOpenClawPluginsAsync: async () => createEmptyPluginRegistry(),
   loadPluginRegistryHandle: () => createEmptyPluginRegistry(),
+  loadPluginRegistryHandleAsync: async () => createEmptyPluginRegistry(),
   resolveCompatibleRuntimePluginRegistry: () => null,
-  resolveRuntimePluginRegistry: () => null,
 }));
 
 vi.mock("../config/config.js", async () => {

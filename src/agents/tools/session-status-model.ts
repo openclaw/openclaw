@@ -10,7 +10,8 @@ import {
   resolvePluginMetadataSnapshot,
 } from "../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { applyModelOverrideWithAuthProfileCompatibility } from "../../sessions/auth-profile-preservation.js";
+import { applyModelOverrideWithAuthProfileCompatibilityCore as applyModelOverrideWithAuthProfileCompatibility } from "../../sessions/auth-profile-preservation.js";
+import { prepareAuthProfileProvider } from "../auth-profiles.runtime.js";
 import {
   buildModelAliasIndex,
   modelKey,
@@ -133,26 +134,39 @@ export async function patchSessionStatusModel(params: {
         selected.ref.provider === configured.provider && selected.ref.model === configured.model,
     };
   }
-  const applySelection = (entry: SessionEntry) =>
-    applyModelOverrideWithAuthProfileCompatibility({
+  const providers = new Map<string, Promise<{ provider: string | undefined }>>();
+  const applySelection = async (entry: SessionEntry) => {
+    const profileId = entry.authProfileOverride?.trim();
+    let recordedProvider: { provider: string | undefined } = { provider: undefined };
+    if (profileId) {
+      let prepared = providers.get(profileId);
+      if (!prepared) {
+        prepared = prepareAuthProfileProvider({ agentDir: params.agentDir, profileId });
+        providers.set(profileId, prepared);
+      }
+      recordedProvider = await prepared;
+    }
+    return applyModelOverrideWithAuthProfileCompatibility({
       cfg,
       agentDir: params.agentDir,
       entry,
       currentProvider:
         entry.providerOverride?.trim() || entry.modelProvider?.trim() || configured.provider,
       selection: modelSelection,
+      recordedProvider,
       explicitDefaultSelection: modelSelection.isDefault,
       markLiveSwitchPending: true,
     });
-  const applied = applySelection({ ...resolved.entry });
+  };
+  const applied = await applySelection({ ...resolved.entry });
   if (!applied.updated) {
     return { resolved, changedModel: false };
   }
   const patched = await patchSessionEntryWithKey(
     { agentId, sessionKey: resolved.key, storePath: params.storePath },
-    (entry, context) => {
+    async (entry, context) => {
       const next: SessionEntry = { ...entry };
-      applySelection(next);
+      await applySelection(next);
       if (!next.sessionId.trim() && !context.existingEntry?.sessionId?.trim()) {
         next.sessionId = randomUUID();
       }

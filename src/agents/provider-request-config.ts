@@ -1,5 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ModelDefinitionConfig } from "../config/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ConfiguredModelProviderRequest,
   ConfiguredProviderRequest,
@@ -383,6 +384,7 @@ export function applyPreparedRuntimeAuthToModel<
     api: model.api,
     baseUrl: preparedAuth.baseUrl ?? model.baseUrl,
     providerHeaders,
+    providerMetadataOwners: getModelProviderRequestRouteFacts(model)?.providerMetadataOwners,
     request: sanitizeRuntimeProviderRequestOverrides(preparedAuth.request),
     capability: "llm",
     transport: "stream",
@@ -586,10 +588,12 @@ export function resolveProviderRequestConfig(params: {
 
 type ResolvedProviderRequestConfig = ReturnType<typeof resolveProviderRequestConfig>;
 
+/** Derive headers from metadata already prepared by the request or model owner. */
 export function resolveProviderRequestHeaders(params: {
   provider: string;
   api?: RequestApi;
   baseUrl?: string;
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
   capability?: ProviderRequestCapability;
   transport?: ProviderRequestTransport;
   callerHeaders?: Record<string, string>;
@@ -601,6 +605,7 @@ export function resolveProviderRequestHeaders(params: {
     provider: params.provider,
     api: params.api,
     baseUrl: params.baseUrl,
+    providerMetadataOwners: params.providerMetadataOwners,
     capability: params.capability,
     transport: params.transport,
     callerHeaders: params.callerHeaders,
@@ -608,6 +613,23 @@ export function resolveProviderRequestHeaders(params: {
     precedence: params.precedence,
     request: params.request,
   }).headers;
+}
+
+/** Prepare cold request metadata before deriving headers for HTTP or stream transports. */
+export async function resolveProviderRequestHeadersAsync(
+  params: Parameters<typeof resolveProviderRequestHeaders>[0],
+  context: { config?: OpenClawConfig; workspaceDir?: string } = {},
+): Promise<ReturnType<typeof resolveProviderRequestHeaders>> {
+  if (params.providerMetadataOwners) {
+    return resolveProviderRequestHeaders(params);
+  }
+  const { resolvePluginMetadataSnapshotAsync } =
+    await import("../plugins/plugin-metadata-snapshot.js");
+  const snapshot = await resolvePluginMetadataSnapshotAsync({
+    ...context,
+    allowWorkspaceScopedCurrent: true,
+  });
+  return resolveProviderRequestHeaders({ ...params, providerMetadataOwners: snapshot.owners });
 }
 
 const MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL = Symbol.for(
@@ -672,22 +694,44 @@ export function attachModelProviderRequestRouteFacts<TModel extends ProviderRequ
     modelId: model.id,
     compat: model.compat,
   });
-  return {
-    ...model,
-    [MODEL_PROVIDER_REQUEST_ROUTE_FACTS_SYMBOL]: {
-      providerMetadataOwners,
-      capabilities,
-      ...(!["default", "invalid", "local", "custom"].includes(capabilities.endpointClass)
-        ? { providerOwner: capabilities.endpointClass }
-        : {}),
+  // The selected runtime and completion owner are carried by non-enumerable model properties.
+  const descriptors = Object.getOwnPropertyDescriptors(model);
+  Reflect.deleteProperty(descriptors, MODEL_PROVIDER_REQUEST_ROUTE_FACTS_SYMBOL);
+  return Object.defineProperties(
+    {
+      ...model,
+      [MODEL_PROVIDER_REQUEST_ROUTE_FACTS_SYMBOL]: {
+        providerMetadataOwners,
+        capabilities,
+        ...(!["default", "invalid", "local", "custom"].includes(capabilities.endpointClass)
+          ? { providerOwner: capabilities.endpointClass }
+          : {}),
+      },
     },
-  };
+    descriptors,
+  );
 }
 
 export function getModelProviderRequestRouteFacts(
   model: object,
 ): ProviderRequestRouteFacts | undefined {
   return (model as ModelWithProviderRequestRouteFacts)[MODEL_PROVIDER_REQUEST_ROUTE_FACTS_SYMBOL];
+}
+
+/** Cold SDK streams prepare once; selected models already carry their owner's route facts. */
+export async function prepareModelProviderRequestRouteFacts<
+  TModel extends ProviderRequestRouteModel,
+>(model: TModel, params: { config?: OpenClawConfig; workspaceDir?: string } = {}): Promise<TModel> {
+  if (getModelProviderRequestRouteFacts(model)) {
+    return model;
+  }
+  const { resolvePluginMetadataSnapshotAsync } =
+    await import("../plugins/plugin-metadata-snapshot.js");
+  const snapshot = await resolvePluginMetadataSnapshotAsync({
+    ...params,
+    allowWorkspaceScopedCurrent: true,
+  });
+  return attachModelProviderRequestRouteFacts(model, snapshot.owners);
 }
 
 /** Re-resolves a projected transport model against the source model's metadata generation. */

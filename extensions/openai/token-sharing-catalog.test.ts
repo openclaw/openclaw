@@ -1,3 +1,4 @@
+import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   clearLiveCatalogCacheForTests,
   type LiveModelCatalogFetchGuard,
@@ -66,6 +67,8 @@ async function runCatalogWithFetchGuard(params: {
     fetchSpy.mockRestore();
   }
 }
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 describe("SIWC model discovery", () => {
   beforeEach(() => {

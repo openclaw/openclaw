@@ -9,7 +9,7 @@ import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-s
 import { prepareLegacySessionSurfaces } from "./legacy-session-surfaces.js";
 import { clearPluginRegistryLoadCache } from "./loader.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
-import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "./plugin-metadata-snapshot.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
@@ -264,7 +264,7 @@ export function hasAuth() { return false; }
       },
     });
     clearPluginMetadataLifecycleCaches();
-    const persisted = loadPluginMetadataSnapshot({
+    const persisted = await resolvePluginMetadataSnapshotAsync({
       config,
       env,
       stateDir,

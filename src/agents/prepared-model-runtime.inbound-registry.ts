@@ -3,6 +3,7 @@ import {
   listRuntimePluginIdsFromRegistry,
   createRuntimePluginManifestLookup,
 } from "../plugins/active-runtime-registry.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginRegistryGatewayOwner } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -11,7 +12,10 @@ import {
   getPluginRuntimeLoadContext,
   getReusablePluginRuntimeActivation,
 } from "../plugins/runtime/load-context.js";
-import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
+import {
+  prepareOwnedPluginLoadContext,
+  prepareOwnedPluginMetadataSnapshotParams,
+} from "./prepared-model-runtime.plugin-context.js";
 import type { PreparedModelRuntimeBuildResources } from "./prepared-model-runtime.resources.js";
 import type {
   PreparedModelRuntimeInput,
@@ -29,7 +33,7 @@ export type PreparedInboundRegistryLoader = (
   metadataSnapshot: PluginMetadataSnapshot,
   configuredHarnessRuntimes?: readonly string[],
   onPrimaryRegistry?: (registry: PluginRegistry) => void,
-) => PluginRegistry;
+) => Promise<PluginRegistry>;
 
 function inboundRegistryIdentity(input: PreparedInboundRegistryInput): string {
   return JSON.stringify({
@@ -78,12 +82,17 @@ function resolveLendingGatewayRegistry(
 }
 
 /** Loads generic plugin facts without acquiring model, catalog, or credential state. */
-export function loadPreparedInboundPluginRegistry(
+export async function loadPreparedInboundPluginRegistry(
   input: PreparedInboundRegistryInput,
-  metadataSnapshot = prepareOwnedPluginLoadContext(input, input.env ?? process.env, undefined),
+  preparedMetadataSnapshot?: PluginMetadataSnapshot,
   configuredHarnessRuntimes?: readonly string[],
   onPrimaryRegistry?: (registry: PluginRegistry) => void,
-): PluginRegistry {
+): Promise<PluginRegistry> {
+  const metadataSnapshot =
+    preparedMetadataSnapshot ??
+    (await resolvePluginMetadataSnapshotAsync(
+      prepareOwnedPluginMetadataSnapshotParams(input, input.env ?? process.env),
+    ));
   const gatewayRegistry = resolveLendingGatewayRegistry(input, metadataSnapshot);
   // Registry-owned facts survive an outer reload cache without allowing stale
   // metadata or changed activation inputs to reuse already-registered callbacks.
@@ -102,7 +111,7 @@ export function loadPreparedInboundPluginRegistry(
       : undefined;
   const registry =
     reusableGatewayRegistry ??
-    loadAgentRuntimePluginRegistryHandle(
+    (await loadAgentRuntimePluginRegistryHandle(
       {
         config: input.config,
         env: input.env ?? process.env,
@@ -114,7 +123,7 @@ export function loadPreparedInboundPluginRegistry(
         borrowRegistry: gatewayRegistry,
       },
       onPrimaryRegistry,
-    );
+    ));
   if (reusableGatewayRegistry) {
     onPrimaryRegistry?.(reusableGatewayRegistry);
   }
@@ -128,28 +137,29 @@ export function createPreparedInboundRegistryLoader(): PreparedInboundRegistryLo
     string,
     {
       metadataSnapshot: PluginMetadataSnapshot;
-      registry: PluginRegistry;
-      primaryRegistry: PluginRegistry;
+      loaded: Promise<{ registry: PluginRegistry; primaryRegistry: PluginRegistry }>;
     }
   >();
-  return (input, metadataSnapshot, configuredHarnessRuntimes, onPrimaryRegistry) => {
+  return async (input, metadataSnapshot, configuredHarnessRuntimes, onPrimaryRegistry) => {
     const key = inboundRegistryIdentity(input);
-    const existing = registries.get(key);
-    if (existing?.metadataSnapshot === metadataSnapshot) {
-      onPrimaryRegistry?.(existing.primaryRegistry);
-      return existing.registry;
+    let existing = registries.get(key);
+    if (existing?.metadataSnapshot !== metadataSnapshot) {
+      const loaded = (async () => {
+        let primaryRegistry: PluginRegistry | undefined;
+        const registry = await loadPreparedInboundPluginRegistry(
+          input,
+          metadataSnapshot,
+          configuredHarnessRuntimes,
+          (source) => {
+            primaryRegistry = source;
+          },
+        );
+        return { registry, primaryRegistry: primaryRegistry ?? registry };
+      })();
+      existing = { metadataSnapshot, loaded };
+      registries.set(key, existing);
     }
-    let primaryRegistry: PluginRegistry | undefined;
-    const registry = loadPreparedInboundPluginRegistry(
-      input,
-      metadataSnapshot,
-      configuredHarnessRuntimes,
-      (source) => {
-        primaryRegistry = source;
-      },
-    );
-    primaryRegistry ??= registry;
-    registries.set(key, { metadataSnapshot, registry, primaryRegistry });
+    const { registry, primaryRegistry } = await existing.loaded;
     onPrimaryRegistry?.(primaryRegistry);
     return registry;
   };
@@ -162,7 +172,7 @@ type PreparedWorkspacePluginRegistries = {
 };
 
 /** Prepares distinct generic-inbound and model-selected registries for one workspace generation. */
-export function prepareWorkspacePluginRegistries(
+export async function prepareWorkspacePluginRegistries(
   input: PreparedModelRuntimeInput,
   metadataSnapshot: PluginMetadataSnapshot,
   retainRegistry: (registry: PluginRegistry) => void,
@@ -174,7 +184,7 @@ export function prepareWorkspacePluginRegistries(
   loadRuntimeRegistry:
     | PreparedModelRuntimeBuildResources["load"]
     | typeof loadAgentRuntimePluginRegistryHandle = loadAgentRuntimePluginRegistryHandle,
-): PreparedWorkspacePluginRegistries | Promise<PreparedWorkspacePluginRegistries> {
+): Promise<PreparedWorkspacePluginRegistries> {
   // Passive reads stay runtime-free; executable probes carry explicit scope.
   if (input.readOnly && !input.loadRuntimePlugins && !input.runtimePluginSelections) {
     return {};
@@ -185,14 +195,14 @@ export function prepareWorkspacePluginRegistries(
     input.readOnly || input.runtimePluginPurpose === "isolated-completion"
       ? undefined
       : (reusableGeneration?.inboundPluginRegistry ??
-        loadInboundRegistry?.(
+        (await loadInboundRegistry?.(
           input,
           metadataSnapshot,
           getConfiguredHarnessRuntimes?.(),
           (source) => {
             primaryRegistry = source;
           },
-        ));
+        )));
   const baseRegistry = reusableGeneration?.pluginRegistry ?? inboundPluginRegistry;
   for (const registry of new Set([inboundPluginRegistry, baseRegistry])) {
     if (registry) {
@@ -203,7 +213,7 @@ export function prepareWorkspacePluginRegistries(
   let loadedPrimaryRegistry: PluginRegistry | undefined;
   const runtimePluginRegistry =
     input.runtimePluginSelections || !baseRegistry
-      ? loadRuntimeRegistry(
+      ? await loadRuntimeRegistry(
           {
             ...(input.loadRuntimePlugins
               ? { basePluginIds: [] }
@@ -234,18 +244,13 @@ export function prepareWorkspacePluginRegistries(
           },
         )
       : baseRegistry;
-  const prepared = (registry: PluginRegistry): PreparedWorkspacePluginRegistries => {
-    retainRegistry(registry);
-    return {
-      runtimePluginRegistry: registry,
-      primaryRegistry:
-        registry === baseRegistry
-          ? (primaryRegistry ?? registry)
-          : (loadedPrimaryRegistry ?? registry),
-      ...(inboundPluginRegistry ? { inboundPluginRegistry } : {}),
-    };
+  retainRegistry(runtimePluginRegistry);
+  return {
+    runtimePluginRegistry,
+    primaryRegistry:
+      runtimePluginRegistry === baseRegistry
+        ? (primaryRegistry ?? runtimePluginRegistry)
+        : (loadedPrimaryRegistry ?? runtimePluginRegistry),
+    ...(inboundPluginRegistry ? { inboundPluginRegistry } : {}),
   };
-  return runtimePluginRegistry instanceof Promise
-    ? runtimePluginRegistry.then(prepared)
-    : prepared(runtimePluginRegistry);
 }

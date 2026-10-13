@@ -12,6 +12,7 @@ import {
   applySessionModelSelection,
   type ApplySessionModelSelectionParams,
 } from "../plugin-sdk/model-session-runtime.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   onSessionLifecycleEvent,
@@ -53,8 +54,9 @@ vi.mock(
 
 let lifecycleEvents: SessionLifecycleEvent[];
 let unsubscribeLifecycle: () => void;
-beforeEach(() => {
+beforeEach(async () => {
   resetMocks();
+  await preparePluginMetadataMachineStateAsync({});
   vi.mocked(loadProviderScopedThinkingCatalog).mockReset().mockResolvedValue([]);
   lifecycleEvents = [];
   unsubscribeLifecycle = onSessionLifecycleEvent((event) => lifecycleEvents.push(event));

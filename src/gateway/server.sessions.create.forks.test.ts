@@ -9,6 +9,8 @@ import { resetContextWindowCacheForTest } from "../agents/context.test-support.j
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { SessionCatalogProvider } from "../plugins/session-catalog.js";
@@ -21,6 +23,7 @@ import {
   requireNonEmptyString,
 } from "./server.sessions.create.test-support.js";
 import type { GatewaySessionCommitResult } from "./session-create-service.types.js";
+import { loadGatewayTestConfigAsync } from "./test-helpers.config-runtime.js";
 import {
   agentDiscoveryMock,
   embeddedRunMock,
@@ -593,12 +596,20 @@ test.each(["cli", "enabled", "disabled"] as const)(
     testState.sessionConfig = { dmScope: "main" };
     await writeSessionStore({ entries: { main: sessionStoreEntry("sess-parent-catalog") } });
 
+    const config = await loadGatewayTestConfigAsync();
+    (await getGatewayConfigModule()).setRuntimeConfigSnapshot(config);
+    const metadata = await resolvePluginMetadataSnapshotAsync({ config, allowCurrent: false });
     try {
-      const created = await directSessionReq<CreatedSession>("sessions.create", {
-        agentId: "main",
-        catalogId: "claude",
-        ...(harness === "cli" ? { parentSessionKey: "main", emitCommandHooks: true } : {}),
-      });
+      const created = await withPluginMetadataSnapshotScope(
+        metadata,
+        () =>
+          directSessionReq<CreatedSession>("sessions.create", {
+            agentId: "main",
+            catalogId: "claude",
+            ...(harness === "cli" ? { parentSessionKey: "main", emitCommandHooks: true } : {}),
+          }),
+        { trustConfigIdentity: true },
+      );
 
       if (fixture) {
         expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);

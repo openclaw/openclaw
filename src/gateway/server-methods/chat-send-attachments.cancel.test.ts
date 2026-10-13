@@ -9,6 +9,8 @@ import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import * as staging from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
 import { abortChatRunById } from "../chat-abort.js";
@@ -17,6 +19,14 @@ import { createDirectChatContext } from "../server-chat.agent-events.test-helper
 import { prepareChatSendAttachments } from "./chat-send-attachments.js";
 import { prepareAndAdmitChatSend } from "./chat-send-setup.js";
 import type { RespondFn } from "./types.js";
+
+async function prepareChatSend(params: Parameters<typeof prepareAndAdmitChatSend>[0]) {
+  const config = params.context.getRuntimeConfig();
+  const metadata = await resolvePluginMetadataSnapshotAsync({ config });
+  return withPluginMetadataSnapshotScope(metadata, () => prepareAndAdmitChatSend(params), {
+    config,
+  });
+}
 
 it.each([
   { canTransfer: true, stopped: false },
@@ -44,7 +54,7 @@ it.each([
     const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
     const respond = vi.fn<RespondFn>();
     const runId = "remote-attachment";
-    const setup = await prepareAndAdmitChatSend({
+    const setup = await prepareChatSend({
       client: null,
       context,
       respond,
@@ -227,7 +237,7 @@ it.each([
     const respond = vi.fn<RespondFn>(() => {
       filesPresentAtResponse.push(inboundPath !== undefined && existsSync(inboundPath));
     });
-    const setup = await prepareAndAdmitChatSend({
+    const setup = await prepareChatSend({
       client: null,
       context,
       respond,

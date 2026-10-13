@@ -168,8 +168,8 @@ async function searchMemory(options: GatewayRequestHandlerOptions, assertCurrent
     }
   }
   // Only a native owner is asked for its backend; a legacy runtime keeps its manager calls.
-  const backend = isActiveMemoryProviderNative({ cfg, agentId })
-    ? resolveActiveMemoryBackendConfig({ cfg, agentId })
+  const backend = (await isActiveMemoryProviderNative({ cfg, agentId }))
+    ? await resolveActiveMemoryBackendConfig({ cfg, agentId })
     : null;
   if (backend?.backend === "provider-runtime") {
     respond(

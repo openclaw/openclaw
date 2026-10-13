@@ -15,6 +15,7 @@ import {
 import "../llm/ai-transport-host.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { streamWithIdleTimeout } from "./embedded-agent-runner/run/llm-idle-timeout.js";
+import { attachPreparedProviderModelFixture } from "./provider-request.test-support.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 const sseEvent = (data: unknown, event?: string) =>
@@ -128,12 +129,14 @@ describe.each(transports)("guarded $api SSE liveness integration", (transport) =
     try {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       const onIdleTimeout = vi.fn();
-      const model = makeProviderModelFixture({
-        id: "keepalive-model",
-        provider: "openrouter",
-        api: transport.api,
-        baseUrl: `${origin}/v1`,
-      });
+      const model = attachPreparedProviderModelFixture(
+        makeProviderModelFixture({
+          id: "keepalive-model",
+          provider: "openrouter",
+          api: transport.api,
+          baseUrl: `${origin}/v1`,
+        }),
+      );
       const stream = await streamWithIdleTimeout(transport.createStream(), 400, onIdleTimeout)(
         model,
         { messages: [{ role: "user", content: "reply", timestamp: 1 }] },

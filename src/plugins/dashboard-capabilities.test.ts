@@ -4,7 +4,7 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { resolveBoardWidgetContentKindResourceUrls } from "./board-widget-content-kinds.js";
 import {
   cleanupPluginLoaderFixturesForTest,
-  loadOpenClawPlugins,
+  loadOpenClawPluginsForTest,
   resetPluginLoaderTestStateForTest,
   type TempPlugin,
   useNoBundledPlugins,
@@ -21,7 +21,7 @@ function updateDashboardManifest(plugin: TempPlugin, dashboard: Record<string, u
 }
 
 function loadFixture(...plugins: [TempPlugin, ...TempPlugin[]]) {
-  return loadOpenClawPlugins({
+  return loadOpenClawPluginsForTest({
     cache: false,
     workspaceDir: plugins[0].dir,
     config: {

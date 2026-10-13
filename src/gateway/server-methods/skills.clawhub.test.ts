@@ -1,6 +1,8 @@
 // ClawHub skills tests cover install/update/detail/status flows, security
 // verdicts, local skill cards, and workspace skill status reports.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { closeSkillsWatchers } from "../../skills/runtime/refresh.js";
 import { callGatewayHandler } from "./skills.test-helpers.js";
 
@@ -128,7 +130,24 @@ describe("skills gateway handlers (clawhub)", () => {
       agentId === "research" ? "/tmp/research-workspace" : "/tmp/workspace",
     );
 
-    const { ok, error } = await callSkillsHandler("skills.status", { agentId: "research" });
+    const config = {};
+    const workspaceDir = "/tmp/research-workspace";
+    const metadata = await resolvePluginMetadataSnapshotAsync({
+      config,
+      workspaceDir,
+      allowCurrent: false,
+    });
+    const { ok, error } = await withPluginMetadataSnapshotScope(
+      metadata,
+      () =>
+        callGatewayHandler(
+          skillsHandlers,
+          "skills.status",
+          { agentId: "research" },
+          { context: { getRuntimeConfig: () => config } },
+        ),
+      { config, workspaceDir },
+    );
 
     expect(ok).toBe(true);
     expect(error).toBeUndefined();

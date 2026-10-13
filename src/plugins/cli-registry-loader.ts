@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import { resolvePluginActivationSourceConfig } from "./activation-source-config.js";
+import { prepareBundledDiscoveryModeNative } from "./bundled-discovery-state.native.js";
 import { createPluginCliGatewayNodesRuntime } from "./cli-gateway-nodes-runtime.js";
 import { resolvePluginControlPlaneWorkspace } from "./control-plane-workspace.js";
 import type { PluginLoadOptions } from "./loader.js";
@@ -137,6 +138,7 @@ export function createPluginCliLoadSession(
           return current.prepared;
         }
         const preparedEnv = cloneEnvWithPlatformSemantics(env);
+        prepareBundledDiscoveryModeNative(preparedEnv);
         const { workspaceDir } = resolvePluginControlPlaneWorkspace({ config, env: preparedEnv });
         // An omitted execution owner means shared roots, not the validation union. Supplying
         // this original snapshot also keeps runtime/load-context's Gateway default unchanged.

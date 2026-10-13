@@ -154,6 +154,12 @@ describe("config CLI explicit reference values", () => {
     await withConfig(raw, async ({ configPath }) => {
       const env = captureEnv(["CONFIG_CAPTURED_MODEL"]);
       const releaseOwner = registerManagedRuntimeConfigWriteOwner(configPath);
+      const metadata = await import("../config/io.plugin-metadata.js");
+      const { resolvePluginMetadataSnapshotAsync } =
+        await import("../plugins/plugin-metadata-snapshot.js");
+      const resolveMetadata = vi
+        .spyOn(metadata, "resolveConfigWidePluginMetadataSnapshotAsync")
+        .mockImplementation(resolvePluginMetadataSnapshotAsync);
       try {
         deleteTestEnvValue("CONFIG_CAPTURED_MODEL");
         const prepared = await readConfigFileSnapshotForWrite();
@@ -182,6 +188,7 @@ describe("config CLI explicit reference values", () => {
         expect(fs.existsSync(configPath + ".bak")).toBe(false);
         expect(errors).toEqual([]);
       } finally {
+        resolveMetadata.mockRestore();
         releaseOwner();
         env.restore();
       }

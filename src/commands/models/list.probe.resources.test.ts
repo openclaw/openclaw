@@ -16,15 +16,26 @@ import { resetPreparedModelRuntimeSnapshotsForTest } from "../../agents/prepared
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginInstance } from "../../plugins/plugin-instance-scope.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { PluginRegistryInspectionResources } from "../../plugins/registry-inspection-resources.js";
 import { createPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { runAuthProbes, withAuthProbeStateOwnership } from "./list.probe.js";
+
+async function runPreparedAuthProbes(params: Parameters<typeof runAuthProbes>[0]) {
+  const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+    config: params.cfg,
+    env: process.env,
+    workspaceDir: params.workspaceDir,
+  });
+  return withPluginRuntimeGenerationScope({ metadataSnapshot }, () => runAuthProbes(params));
+}
 
 const complete = vi.hoisted(() => vi.fn());
 // mock-isolation: Keep real runtime admission and credential custody but never call a provider.
@@ -252,7 +263,7 @@ it.each([
     const stateWrites = vi.spyOn(authProfileSqlite, "writePersistedAuthProfileStateRaw");
     try {
       const result = await parent.track(() =>
-        runAuthProbes({
+        runPreparedAuthProbes({
           cfg,
           agentId: "main",
           agentDir: state.agentDir(),

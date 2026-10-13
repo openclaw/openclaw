@@ -20,6 +20,7 @@ import {
 } from "../gateway/server-methods/requester-cron-authority.test-support.js";
 import { sessionMutationHandlers } from "../gateway/server-methods/sessions-mutations.js";
 import { createSyntheticPluginRuntimeClient } from "../gateway/server-plugin-runtime-client.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -97,6 +98,7 @@ async function createFixture(option: CiAutomationOption) {
     plugins: { enabled: false },
   };
   setRuntimeConfigSnapshot(config);
+  await preparePluginMetadataMachineStateAsync({});
   const seed = async (sessionId: string) =>
     await accessor.replaceSessionEntry(
       { agentId: "main", sessionKey: SESSION },

@@ -3,7 +3,7 @@ import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  applyModelOverrideWithAuthProfileCompatibility,
+  applyModelOverrideWithAuthProfileCompatibilityAsync,
   ModelSelectionLockedError,
   resolvePersistedSessionRuntimeId,
 } from "openclaw/plugin-sdk/model-session-runtime";
@@ -291,7 +291,7 @@ export async function generateVoiceResponse(
                 sessionId: crypto.randomUUID(),
                 updatedAt: now,
               },
-              prepare: (entry) => {
+              prepare: async (entry) => {
                 const next = entry.sessionId
                   ? { ...entry }
                   : {
@@ -300,7 +300,7 @@ export async function generateVoiceResponse(
                       updatedAt: now,
                     };
                 if (voiceConfig.responseModel) {
-                  applyModelOverrideWithAuthProfileCompatibility({
+                  await applyModelOverrideWithAuthProfileCompatibilityAsync({
                     cfg,
                     agentDir,
                     entry: next,

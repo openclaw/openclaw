@@ -76,7 +76,7 @@ export function registerWebCapabilityCommands(capability: Command): void {
         const { resolveLocalCapabilityRuntimeConfig } = await import("./shared.js");
         const { runWebSearch } = await import("../../web-search/runtime.js");
         const rawConfig = await captureRuntimeConfigAsyncReader()();
-        const scopedTargets = getCapabilityWebSearchCommandSecretTargets(rawConfig, {
+        const scopedTargets = await getCapabilityWebSearchCommandSecretTargets(rawConfig, {
           providerId: provider,
         });
         const cfg = await resolveLocalCapabilityRuntimeConfig({
@@ -114,7 +114,7 @@ export function registerWebCapabilityCommands(capability: Command): void {
         const { resolveLocalCapabilityRuntimeConfig } = await import("./shared.js");
         const { resolveWebFetchDefinition } = await import("../../web-fetch/runtime.js");
         const rawConfig = await captureRuntimeConfigAsyncReader()();
-        const scopedTargets = getCapabilityWebFetchCommandSecretTargets(rawConfig, {
+        const scopedTargets = await getCapabilityWebFetchCommandSecretTargets(rawConfig, {
           providerId: provider,
         });
         const cfg = await resolveLocalCapabilityRuntimeConfig({
@@ -122,7 +122,7 @@ export function registerWebCapabilityCommands(capability: Command): void {
           ...scopedTargets,
           config: rawConfig,
         });
-        const resolved = resolveWebFetchDefinition({
+        const resolved = await resolveWebFetchDefinition({
           config: cfg,
           providerId: provider,
         });
@@ -159,7 +159,7 @@ export function registerWebCapabilityCommands(capability: Command): void {
         id: provider.id,
         envVars: provider.envVars,
       })),
-      fetch: listWebFetchProviders({ config: cfg }).map((provider) => ({
+      fetch: (await listWebFetchProviders({ config: cfg })).map((provider) => ({
         available: true,
         configured: isWebFetchProviderConfigured({ provider, config: cfg }),
         selected: provider.id === selectedFetchProvider,

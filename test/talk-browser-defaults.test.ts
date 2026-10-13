@@ -6,6 +6,8 @@ import { buildOpenAIRealtimeVoiceProvider } from "../extensions/openai/api.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { withLocalGatewayRequestScope } from "../src/gateway/local-request-context.js";
 import { talkHandlers } from "../src/gateway/talk/handlers/index.js";
+import { useProviderCatalogMetadata } from "../src/plugin-sdk/test-helpers/provider-catalog.js";
+import { prepareBundledDiscoveryMode } from "../src/plugins/bundled-discovery-state.js";
 import { getPluginRuntimeGatewayRequestScope } from "../src/plugins/runtime/gateway-request-scope.js";
 import type { RealtimeVoiceProviderPlugin } from "../src/plugins/types.js";
 import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
@@ -20,32 +22,51 @@ const mocks = vi.hoisted(() => ({
   createSession: vi.fn(),
 }));
 
-vi.mock("../src/talk/provider-registry.js", () => ({
-  canonicalizeRealtimeVoiceProviderId: (id: string | undefined) => {
-    const normalized = id?.trim().toLowerCase();
-    return (
+vi.mock("../src/talk/provider-registry.js", async (importOriginal) => {
+  const registry = {
+    canonicalizeRealtimeVoiceProviderId: (id: string | undefined) => {
+      const normalized = id?.trim().toLowerCase();
+      return (
+        mocks.providers.find(
+          (provider) => provider.id === normalized || provider.aliases?.includes(normalized ?? ""),
+        )?.id ?? normalized
+      );
+    },
+    getRealtimeVoiceProvider: (id: string) =>
       mocks.providers.find(
-        (provider) => provider.id === normalized || provider.aliases?.includes(normalized ?? ""),
-      )?.id ?? normalized
-    );
-  },
-  getRealtimeVoiceProvider: (id: string) =>
-    mocks.providers.find(
-      (provider) =>
-        provider.id === id.trim().toLowerCase() ||
-        provider.aliases?.includes(id.trim().toLowerCase()),
-    ),
-  listRealtimeVoiceProviders: () => mocks.providers,
-}));
-vi.mock("../src/tts/provider-registry.js", () => ({
-  canonicalizeSpeechProviderId: (id: string | undefined) => id,
-  getSpeechProvider: () => undefined,
-  listSpeechProviders: () => [],
-}));
+        (provider) =>
+          provider.id === id.trim().toLowerCase() ||
+          provider.aliases?.includes(id.trim().toLowerCase()),
+      ),
+    listRealtimeVoiceProviders: () => mocks.providers,
+  };
+  return {
+    ...(await importOriginal<typeof import("../src/talk/provider-registry.js")>()),
+    ...registry,
+    canonicalizeRealtimeVoiceProviderIdAsync: async (id: string | undefined) =>
+      registry.canonicalizeRealtimeVoiceProviderId(id),
+    getRealtimeVoiceProviderAsync: async (id: string) => registry.getRealtimeVoiceProvider(id),
+    listRealtimeVoiceProvidersAsync: async () => registry.listRealtimeVoiceProviders(),
+  };
+});
+// mock-isolation: Browser Talk fixtures use an empty speech registry without runtime discovery.
+vi.mock("../src/tts/provider-registry.js", () => {
+  const registry = {
+    canonicalizeSpeechProviderId: (id: string | undefined) => id,
+    getSpeechProvider: () => undefined,
+    listSpeechProviders: () => [],
+  };
+  return {
+    ...registry,
+    withSpeechProviderRegistry: async (_cfg: unknown, run: (value: typeof registry) => unknown) =>
+      run(registry),
+  };
+});
+// mock-isolation: Browser Talk fixtures use an empty transcription registry without runtime discovery.
 vi.mock("../src/realtime-transcription/provider-registry.js", () => ({
-  canonicalizeRealtimeTranscriptionProviderId: (id: string | undefined) => id,
-  getRealtimeTranscriptionProvider: () => undefined,
-  listRealtimeTranscriptionProviders: () => [],
+  canonicalizeRealtimeTranscriptionProviderIdAsync: async (id: string | undefined) => id,
+  getRealtimeTranscriptionProviderAsync: async () => undefined,
+  listRealtimeTranscriptionProvidersAsync: async () => [],
 }));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
@@ -117,6 +138,7 @@ vi.mock("../ui/src/pages/chat/talk/transport.runtime.js", () => ({
   }),
 }));
 
+useProviderCatalogMetadata(new URL("../extensions/openai/", import.meta.url));
 useRealtimeTalkMicrophoneFixture();
 beforeEach(() => {
   mocks.providerRequests.length = 0;
@@ -158,6 +180,7 @@ describe("OpenAI browser Talk catalog defaults", () => {
     "preserves $label from discovery through session creation",
     async ({ model, launchModel, launchProvider, camera, expected, audioOnly }) => {
       await withOpenClawTestState({ prefix: "talk-browser-defaults-" }, async (state) => {
+        await prepareBundledDiscoveryMode(state.env);
         const cfg: OpenClawConfig = {
           agents: {
             entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },

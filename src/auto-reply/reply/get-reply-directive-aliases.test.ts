@@ -9,6 +9,7 @@ import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import * as activeThinkingPolicy from "../../plugins/provider-thinking-active.js";
@@ -165,6 +166,7 @@ async function resolveModelDirective(params: {
       throw new Error("Directive fixture attempted ambient model-policy discovery.");
     });
   try {
+    await prepareBundledDiscoveryMode();
     const result = await withPluginMetadataSnapshotScope(
       directiveMetadata,
       () =>

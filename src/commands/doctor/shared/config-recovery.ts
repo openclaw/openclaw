@@ -8,6 +8,7 @@ import { recoverConfigFromLastKnownGoodCore } from "../../../config/io.observe-r
 import { prepareConfigRecoveryFromContext } from "../../../config/io.snapshot.js";
 import type { ConfigIoFactoryOptions } from "../../../config/io.types.js";
 import type { ConfigFileSnapshot } from "../../../config/types.js";
+import { prepareBundledDiscoveryModeNative } from "../../../plugins/bundled-discovery-state.native.js";
 import { classifyOtelGrpcMigrationOwnership } from "./include-migration-ownership.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 
@@ -25,6 +26,7 @@ const transformDoctorRecoveryCandidate: ConfigRecoveryCandidateTransform = (para
         : "candidate migration requires an include-owned diagnostics.otel.protocol repair",
     );
   }
+  prepareBundledDiscoveryModeNative(params.env);
   const migration = applyLegacyDoctorMigrations(params.candidate.parsed, {
     sourceConfigBeforeMigrations: params.resolvedConfig,
     context: {

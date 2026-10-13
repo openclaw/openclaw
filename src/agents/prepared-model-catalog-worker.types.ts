@@ -49,6 +49,7 @@ export type PreparedModelWorkerCommand =
 export type PreparedModelWorkerRequest = PreparedModelWorkerCommand &
   Readonly<{
     syntheticAuth: PreparedSyntheticAuthFacts;
+    bundledDiscoveryMode: "compat" | "allowlist" | undefined;
     clawInstallSchemaVersions: ReturnType<typeof captureClawInstallSchemaVersionFacts>;
     /** Codex client version decided by the parent; absent means the bundled pin. */
     codexClientVersion?: string;

@@ -5,6 +5,12 @@ import { getToolPluginMetadata } from "openclaw/plugin-sdk/tool-plugin";
 import { expect, it, vi } from "vitest";
 import plugin from "./index.js";
 
+vi.mock("openclaw/plugin-sdk/model-ref-parse", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/model-ref-parse")>();
+  const resolver = await actual.prepareModelRefResolver({ manifestPlugins: [] });
+  return { ...actual, prepareModelRefResolver: async () => resolver };
+});
+
 const observed = vi.hoisted(() => ({
   imports: vi.fn(),
   factories: vi.fn(),

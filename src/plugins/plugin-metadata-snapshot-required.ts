@@ -3,7 +3,6 @@ import { isPluginSourceModulePath, tryNativeRequireModule } from "./native-modul
 import {
   snapshotReaderSlot,
   type CurrentSnapshotModule,
-  type SnapshotLoaderModule,
 } from "./plugin-metadata-snapshot-readers.js";
 
 // Required policy readers must preserve loader failures. Source and built code
@@ -34,12 +33,25 @@ export function getCurrentPluginMetadataSnapshotRequiredRuntime(
   return reader(params);
 }
 
-/** Loads metadata through its canonical owner without suppressing discovery errors. */
-export function loadPluginMetadataSnapshotRuntime(
-  params: Parameters<SnapshotLoaderModule["loadPluginMetadataSnapshot"]>[0],
-): ReturnType<SnapshotLoaderModule["loadPluginMetadataSnapshot"]> {
+/** Explicit legacy SDK compatibility; ordinary runtime owners prepare asynchronously. */
+export function loadLegacyPluginMetadataSnapshotRuntime(
+  params: Parameters<
+    typeof import("./plugin-metadata-readers.runtime.js").loadLegacyPluginMetadataSnapshot
+  >[0],
+) {
+  const current = getCurrentPluginMetadataSnapshotRequiredRuntime({
+    config: params.config,
+    env: params.env,
+    workspaceDir: params.workspaceDir,
+    allowWorkspaceScopedSnapshot: true,
+    allowSynchronousPolicyRead: false,
+    ...(params.config === undefined ? { requireDefaultDiscoveryContext: true } : {}),
+  });
+  if (current) {
+    return current;
+  }
   const reader =
-    snapshotReaderSlot.loadPluginMetadataSnapshot ??
-    loadRequiredSnapshotReaders().loadPluginMetadataSnapshot;
+    snapshotReaderSlot.loadLegacyPluginMetadataSnapshot ??
+    loadRequiredSnapshotReaders().loadLegacyPluginMetadataSnapshot;
   return reader(params);
 }

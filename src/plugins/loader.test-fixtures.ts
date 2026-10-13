@@ -4,15 +4,24 @@ import os from "node:os";
 import path from "node:path";
 import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { withEnv } from "../test-utils/env.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { preparePluginMetadataMachineState } from "./installed-plugin-index-record-state.js";
+import { loadOpenClawPlugins as loadOpenClawPluginsCore } from "./loader.js";
 import { getPluginLoaderCacheState } from "./registry-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 
-export { loadOpenClawPlugins };
+/** These synchronous leaf tests model boot/CLI admission before the runtime loader. */
+export function loadOpenClawPluginsForTest(
+  options: NonNullable<Parameters<typeof loadOpenClawPluginsCore>[0]> = {},
+): ReturnType<typeof loadOpenClawPluginsCore> {
+  preparePluginMetadataMachineState({ env: options.env });
+  return loadOpenClawPluginsCore(options);
+}
 
 export type TempPlugin = { dir: string; file: string; id: string };
-export type PluginLoadConfig = NonNullable<Parameters<typeof loadOpenClawPlugins>[0]>["config"];
-export type PluginRegistry = ReturnType<typeof loadOpenClawPlugins>;
+export type PluginLoadConfig = NonNullable<
+  Parameters<typeof loadOpenClawPluginsForTest>[0]
+>["config"];
+export type PluginRegistry = ReturnType<typeof loadOpenClawPluginsForTest>;
 
 function chmodSafeDir(dir: string) {
   if (process.platform === "win32") {
@@ -175,7 +184,7 @@ export function loadBundleFixture(params: {
   const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", params.pluginId);
   params.build(bundleRoot);
   return withEnv({ OPENCLAW_STATE_DIR: stateDir, ...params.env }, () =>
-    loadOpenClawPlugins({
+    loadOpenClawPluginsForTest({
       workspaceDir,
       onlyPluginIds: params.onlyPluginIds ?? [params.pluginId],
       config: {

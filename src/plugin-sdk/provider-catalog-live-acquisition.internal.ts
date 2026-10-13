@@ -86,6 +86,17 @@ function readDefaultLiveModelCatalogRows(body: unknown): readonly unknown[] {
   throw new Error("Live model catalog response must be an array or { data: [] }");
 }
 
+/** API-key placeholder classification reads provider-owned manifest metadata. */
+export async function prepareLiveModelCatalogAuth(
+  params: LiveModelCatalogHeaderContext,
+): Promise<void> {
+  if (params.apiKey?.trim()) {
+    const { preparePluginMetadataMachineStateAsync } =
+      await import("../plugins/installed-plugin-index-record-state.js");
+    await preparePluginMetadataMachineStateAsync({});
+  }
+}
+
 function normalizeLiveModelCatalogRequestApiKey(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed || isNonSecretApiKeyMarker(trimmed)) {
@@ -306,6 +317,7 @@ async function fetchLiveProviderModelCatalogPage(
 export async function fetchLiveProviderModelRows(
   params: FetchLiveProviderModelRowsParams,
 ): Promise<readonly unknown[]> {
+  await prepareLiveModelCatalogAuth(params);
   const fetchGuard = params.fetchGuard ?? fetchWithSsrFGuard;
   const timeoutMs = params.timeoutMs ?? 5_000;
   const startedAt = performance.now();
@@ -370,6 +382,7 @@ export function liveModelCatalogAuthCacheKey(
 export async function getCachedLiveProviderModelRows(
   params: CachedLiveProviderModelRowsParams,
 ): Promise<readonly unknown[]> {
+  await prepareLiveModelCatalogAuth(params);
   return await getCachedLiveCatalogValue({
     keyParts: params.cacheKeyParts ?? [
       params.providerId,

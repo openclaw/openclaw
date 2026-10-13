@@ -42,16 +42,17 @@ const mocks = vi.hoisted(() => {
         deliveredEarly: false,
       }),
     ),
-    getRealtimeTranscriptionProvider: vi.fn<(...args: unknown[]) => unknown>(
+    getRealtimeTranscriptionProviderAsync: vi.fn<(...args: unknown[]) => unknown>(
       () => realtimeTranscriptionProvider,
     ),
-    listRealtimeTranscriptionProviders: vi.fn(() => [realtimeTranscriptionProvider]),
+    listRealtimeTranscriptionProvidersAsync: vi.fn(() => [realtimeTranscriptionProvider]),
   };
 });
 
+// mock-isolation: Webhook tests supply transcription providers without initializing plugin discovery or credentials.
 vi.mock("./realtime-transcription.runtime.js", () => ({
-  getRealtimeTranscriptionProvider: mocks.getRealtimeTranscriptionProvider,
-  listRealtimeTranscriptionProviders: mocks.listRealtimeTranscriptionProviders,
+  getRealtimeTranscriptionProviderAsync: mocks.getRealtimeTranscriptionProviderAsync,
+  listRealtimeTranscriptionProvidersAsync: mocks.listRealtimeTranscriptionProvidersAsync,
 }));
 
 vi.mock("./response-generator.js", () => ({

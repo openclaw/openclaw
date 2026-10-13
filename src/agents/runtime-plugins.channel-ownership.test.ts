@@ -1,10 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 
 const loaders = vi.hoisted(() => ({
   loadPluginRegistryHandle: vi.fn(),
   acquirePluginRegistryForInspection: vi.fn(),
 }));
-vi.mock("../plugins/loader.js", () => loaders);
+// mock-isolation: Channel custody tests provide exact loader-owned instances and must not load replacement runtimes.
+vi.mock("../plugins/loader.js", () => ({
+  ...loaders,
+  loadPluginRegistryHandleAsync: async (...args: unknown[]) =>
+    loaders.loadPluginRegistryHandle(...args),
+}));
 
 import {
   createPluginMetadataSnapshot,
@@ -55,7 +61,8 @@ let previous: ReturnType<typeof captureActivePluginRegistrySnapshot>;
 const instances: PluginInstanceHandle[] = [];
 const releases: Array<() => void | Promise<void>> = [];
 
-beforeEach(() => {
+beforeEach(async () => {
+  await prepareBundledDiscoveryMode();
   previous = captureActivePluginRegistrySnapshot();
   loaders.loadPluginRegistryHandle.mockReset();
   loaders.acquirePluginRegistryForInspection.mockReset();
@@ -186,7 +193,7 @@ describe("prepared channel runtime ownership", () => {
     { path: "selected", close: "donor" },
   ])("retains the live transport through $path until $close closes", async ({ path, close }) => {
     const { live, selected, input } = prepareOwners();
-    const registry = withPluginRuntimeRegistryScope(live.registry, () =>
+    const registry = await withPluginRuntimeRegistryScope(live.registry, () =>
       path === "inbound"
         ? loadPreparedInboundPluginRegistry(input, selected.metadataSnapshot)
         : loadAgentRuntimePluginRegistryHandle(input),
@@ -310,6 +317,12 @@ describe("prepared channel runtime ownership", () => {
         selectedManifests.plugins[0]!.source = "/another-workspace/channel/index.js";
         selectedManifests.plugins[0]!.rootDir = "/another-workspace/channel";
       }
+      if (mismatch === "environment") {
+        await prepareBundledDiscoveryMode({
+          ...process.env,
+          OPENCLAW_STATE_DIR: "/fixture/unrelated-profile",
+        });
+      }
       const selected = createChannelOwner(
         "discovery transport",
         mismatch === "gateway" ? () => undefined : gateway,
@@ -325,7 +338,7 @@ describe("prepared channel runtime ownership", () => {
         },
       );
       loaders.loadPluginRegistryHandle.mockReturnValue(selected.registry);
-      const registry = withPluginRuntimeGatewayRequestScope(
+      const registry = await withPluginRuntimeGatewayRequestScope(
         {
           isWebchatConnect: () => false,
           pluginRegistry: live.registry,

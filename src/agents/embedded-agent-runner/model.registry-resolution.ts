@@ -1,7 +1,10 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ModelRegistry as CoreModelRegistry } from "../../llm/model-registry.js";
 import type { Model } from "../../llm/types.js";
-import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
+import type {
+  PluginMetadataSnapshot,
+  PluginMetadataSnapshotOwnerMaps,
+} from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { loadAuthProfileStoreForRuntimeAsync, resolveAuthProfileOrder } from "../auth-profiles.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
@@ -154,6 +157,7 @@ export async function resolveDynamicModelAuthProfile(params: {
   provider: string;
   modelId: string;
   cfg?: OpenClawConfig;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
   agentDir?: string;
   authProfileId?: string;
   authProfileMode?: AuthProfileCredential["type"] | "aws-sdk";
@@ -175,6 +179,7 @@ export async function resolveDynamicModelAuthProfile(params: {
     allowKeychainPrompt: false,
     profileId: explicitProfileId,
     config: params.cfg,
+    pluginMetadataSnapshot: params.pluginMetadataSnapshot,
     externalCli: externalCliDiscoveryForProviderAuth({
       cfg: params.cfg,
       provider: params.provider,
@@ -345,6 +350,7 @@ type ResolveModelWithPreparedRegistryParams = {
   modelId: string;
   modelRegistry: CoreModelRegistry;
   cfg?: OpenClawConfig;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
   agentDir?: string;
   agentRuntimeId?: string;
   workspaceDir?: string;

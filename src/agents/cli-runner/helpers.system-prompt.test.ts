@@ -2,6 +2,8 @@ import { Type } from "typebox";
 // Verifies CLI system-prompt construction without loading the full runner.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { resolveSessionGitCoauthorPrompt } from "../git-coauthor-prompt.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import { buildCliAgentSystemPrompt } from "./helpers.js";
@@ -69,12 +71,18 @@ describe("buildCliAgentSystemPrompt", () => {
         "</available_skills>",
       ].join("\n"),
     };
-    const systemPrompt = buildCliAgentSystemPrompt(params);
+    withPluginMetadataSnapshotScope(
+      createPluginMetadataSnapshotFixture(),
+      () => {
+        const systemPrompt = buildCliAgentSystemPrompt(params);
 
-    expect(systemPrompt).toContain("<name>weather</name>");
-    expect(systemPrompt).toContain("- Current: fixture/current");
-    preparedModelRuntime.isCurrent.mockReturnValue(false);
-    expect(buildCliAgentSystemPrompt(params)).not.toContain("## Model Aliases");
+        expect(systemPrompt).toContain("<name>weather</name>");
+        expect(systemPrompt).toContain("- Current: fixture/current");
+        preparedModelRuntime.isCurrent.mockReturnValue(false);
+        expect(buildCliAgentSystemPrompt(params)).not.toContain("## Model Aliases");
+      },
+      { trustConfigIdentity: true },
+    );
   });
 
   it.each([true, false])(

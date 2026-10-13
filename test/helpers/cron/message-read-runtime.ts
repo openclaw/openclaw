@@ -72,7 +72,7 @@ export async function installScheduledMessageReadRuntime(params: {
   }
   // Both acquisition paths borrow the same real registrations; prepared-runtime ownership stays real.
   vi.spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandle").mockImplementation(
-    (_params, onPrimaryRegistry) => {
+    async (_params, onPrimaryRegistry) => {
       onPrimaryRegistry?.(owner.registry);
       return owner.registry;
     },

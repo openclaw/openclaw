@@ -3,7 +3,9 @@
  */
 export {
   getEmbeddingProvider,
+  getEmbeddingProviderAsync,
   listEmbeddingProviders,
+  listEmbeddingProvidersAsync,
 } from "../plugins/embedding-provider-runtime.js";
 
 export type {

@@ -27,6 +27,15 @@ vi.mock("../plugins/capability-provider-runtime.js", () => ({
   resolvePluginCapabilityProviders: selection.discover,
 }));
 
+// mock-isolation: Selection tests supply exact candidate acquisitions without plugin runtime discovery.
+vi.mock("../plugins/capability-provider-acquisition.js", async () => {
+  const { createMediaProviderAcquisition } = await import("./runner.test-mocks.js");
+  return {
+    acquirePluginCapabilityProviders: async () =>
+      createMediaProviderAcquisition(selection.discover()),
+  };
+});
+
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: async () => [],
   readPreparedModelCatalog: async () => [],

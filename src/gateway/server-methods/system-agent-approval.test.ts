@@ -82,8 +82,8 @@ describe("Full Access delegated chat", () => {
   }> = [];
   let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
-  beforeAll(() => {
-    pluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot(verifiedConfig);
+  beforeAll(async () => {
+    pluginMetadataSnapshot = await createSystemAgentPluginMetadataTestSnapshot(verifiedConfig);
   });
 
   afterEach(async () => {

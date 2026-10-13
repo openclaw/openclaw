@@ -25,6 +25,7 @@ import type { CronJob } from "../cron/types.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
 import * as execApprovalsStore from "../infra/exec-approvals-store.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
@@ -73,6 +74,11 @@ import { applySessionContextWindowPatch } from "./sessions-patch-context-window.
 const { getSessionProviderArtifactMocks, resetSessionProviderArtifacts } =
   await import("./session-utils-provider.test-support.js");
 const providerArtifactMocks = getSessionProviderArtifactMocks();
+
+beforeEach(async () => {
+  resetSessionProviderArtifacts();
+  await prepareBundledDiscoveryMode();
+});
 
 test("resolves fixed-store and auth owners independently of retained Doctor ownership", () => {
   const cfg = retainLegacyDefaultAgentId(
@@ -251,8 +257,6 @@ describe("gateway session utils", () => {
       identity: { type: "agent", id: "agent:roboclaw:discord:channel:123" },
     });
   });
-
-  beforeEach(resetSessionProviderArtifacts);
 
   afterAll(closeSessionSqliteDatabasesForTest);
 

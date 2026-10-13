@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { getPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
@@ -72,6 +73,7 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
       configSchema: { type: "object", additionalProperties: false },
     }),
   );
+  await preparePluginMetadataMachineStateAsync({ env: process.env });
   const inventories: ReturnType<typeof loadPluginMetadataSnapshot>[] = [];
   const workers = ["one", "two"].map((agentId) => {
     const workspaceDir = path.join(fixture.root, `workspace-${agentId}`);

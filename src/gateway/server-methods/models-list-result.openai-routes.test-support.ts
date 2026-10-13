@@ -64,34 +64,36 @@ type ListModelsParams = {
   view?: "all" | "configured" | "provider-config" | "default";
 };
 
-const chatMetadataSnapshot = createPluginMetadataSnapshotFixture({
-  plugins: [
-    {
-      id: "openai",
-      providers: ["openai"],
-      modelCatalog: {
-        discovery: { openai: "runtime" },
-        providers: { openai: { defaultUtilityModel: "gpt-5.6-luna", models: [] } },
+const createChatMetadataSnapshot = () =>
+  createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: "openai",
+        providers: ["openai"],
+        modelCatalog: {
+          discovery: { openai: "runtime" },
+          providers: { openai: { defaultUtilityModel: "gpt-5.6-luna", models: [] } },
+        },
+        setup: { providers: [{ id: "openai", envVars: ["OPENAI_API_KEY"] }] },
       },
-      setup: { providers: [{ id: "openai", envVars: ["OPENAI_API_KEY"] }] },
-    },
-    {
-      id: "anthropic",
-      providers: ["anthropic"],
-      cliBackends: ["claude-cli"],
-      syntheticAuthRefs: ["claude-cli"],
-      providerAuthAliases: { "claude-cli": "anthropic" },
-      modelCatalog: { discovery: { anthropic: "refreshable", "claude-cli": "static" } },
-      setup: {
-        providers: [{ id: "anthropic", envVars: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"] }],
+      {
+        id: "anthropic",
+        providers: ["anthropic"],
+        cliBackends: ["claude-cli"],
+        syntheticAuthRefs: ["claude-cli"],
+        providerAuthAliases: { "claude-cli": "anthropic" },
+        modelCatalog: { discovery: { anthropic: "refreshable", "claude-cli": "static" } },
+        setup: {
+          providers: [{ id: "anthropic", envVars: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"] }],
+        },
       },
-    },
-  ],
-});
+    ],
+  });
 
 export function createModelsListTestContext(params: ListModelsParams) {
   const agentId = params.agentId ?? "main";
   const config = params.cfg ?? ({} as OpenClawConfig);
+  const metadataSnapshot = params.metadataSnapshot ?? createChatMetadataSnapshot();
   setRuntimeConfigSnapshot(config);
   onTestFinished(() => clearRuntimeConfigSnapshot());
   const createCatalogSnapshot = (entries: ModelCatalogEntry[]) =>
@@ -113,7 +115,7 @@ export function createModelsListTestContext(params: ListModelsParams) {
             allowKeychainPrompt: false,
           },
         ),
-      metadataSnapshot: params.metadataSnapshot ?? chatMetadataSnapshot,
+      metadataSnapshot,
       entries,
       routeVariants: entries,
       ...(params.staticEntries ? { staticEntries: params.staticEntries } : {}),

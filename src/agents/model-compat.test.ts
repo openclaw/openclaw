@@ -1,19 +1,12 @@
 import path from "node:path";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const providerRuntimeMocks = vi.hoisted(() => ({
-  resolveProviderModernModelRef: vi.fn(),
-}));
-
-vi.mock("../plugins/provider-runtime.js", () => {
-  return {
-    resolveProviderModernModelRef: providerRuntimeMocks.resolveProviderModernModelRef,
-  };
-});
-
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
+import * as providerRuntime from "../plugins/provider-hook-runtime.js";
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import { isModernModelRef } from "./test-helpers/live-model-dynamic-candidates.js";
+
+let metadataSnapshot: Awaited<ReturnType<typeof resolvePluginMetadataSnapshotAsync>>;
 
 const baseModel = (): Model =>
   ({
@@ -45,7 +38,7 @@ function supportsStrictMode(model: Model): boolean | undefined {
 function expectSupportsDeveloperRoleForcedOff(overrides?: Partial<Model>): void {
   const model = { ...baseModel(), ...overrides };
   delete (model as { compat?: unknown }).compat;
-  const normalized = normalizeModelCompat(model as Model);
+  const normalized = normalizeModelCompat(model as Model, metadataSnapshot.owners);
   expect(normalized).not.toBe(model);
   expect(model.compat).toBeUndefined();
   expect(supportsDeveloperRole(normalized)).toBe(false);
@@ -53,27 +46,30 @@ function expectSupportsDeveloperRoleForcedOff(overrides?: Partial<Model>): void 
   expect(supportsStrictMode(normalized)).toBe(false);
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   // Endpoint capabilities come from manifests. Keep source tests independent
   // from partial dist output left by an earlier build in the same checkout.
   vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(process.cwd(), "extensions"));
-  providerRuntimeMocks.resolveProviderModernModelRef.mockReset();
-  providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(undefined);
+  metadataSnapshot = await resolvePluginMetadataSnapshotAsync({});
+  vi.spyOn(providerRuntime, "resolveProviderRuntimePluginAsync").mockResolvedValue(undefined);
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
 
 describe("isModernModelRef", () => {
-  it("matches plugin-advertised modern models only for exact provider ids", () => {
-    providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(
-      ({ provider, context }) =>
-        provider === "z.ai" && context.modelId === "glm-5" ? true : undefined,
-    );
+  it("matches plugin-advertised modern models only for exact provider ids", async () => {
+    vi.mocked(providerRuntime.resolveProviderRuntimePluginAsync).mockResolvedValue({
+      id: "z.ai",
+      label: "Modern model fixture",
+      auth: [],
+      isModernModelRef: ({ provider, modelId }) => provider === "z.ai" && modelId === "glm-5",
+    });
 
-    expect(isModernModelRef({ provider: "z.ai", id: "glm-5" })).toBe(true);
-    expect(isModernModelRef({ provider: "z-ai", id: "glm-5" })).toBe(false);
+    expect(await isModernModelRef({ provider: "z.ai", id: "glm-5" })).toBe(true);
+    expect(await isModernModelRef({ provider: "z-ai", id: "glm-5" })).toBe(false);
   });
 });
 
@@ -93,7 +89,7 @@ describe("normalizeModelCompat — Anthropic baseUrl", () => {
 
   it("strips trailing /v1/ (with slash) from anthropic-messages baseUrl", () => {
     const model = { ...anthropicBase(), baseUrl: "https://api.anthropic.com/v1/" };
-    const normalized = normalizeModelCompat(model);
+    const normalized = normalizeModelCompat(model, metadataSnapshot.owners);
     expect(normalized.baseUrl).toBe("https://api.anthropic.com");
   });
 });
@@ -122,7 +118,7 @@ describe("normalizeModelCompat", () => {
       baseUrl: "https://api.openai.com/v1",
     };
     delete (model as { compat?: unknown }).compat;
-    const normalized = normalizeModelCompat(model);
+    const normalized = normalizeModelCompat(model, metadataSnapshot.owners);
     expect(normalized.compat).toBeUndefined();
   });
 
@@ -133,7 +129,7 @@ describe("normalizeModelCompat", () => {
       baseUrl: "https://proxy.example.com/v1",
       compat: { supportsDeveloperRole: true },
     };
-    const normalized = normalizeModelCompat(model);
+    const normalized = normalizeModelCompat(model, metadataSnapshot.owners);
     expect(supportsDeveloperRole(normalized)).toBe(true);
   });
 
@@ -144,7 +140,7 @@ describe("normalizeModelCompat", () => {
       baseUrl: "https://proxy.example.com/v1",
       compat: { supportsUsageInStreaming: true },
     };
-    const normalized = normalizeModelCompat(model);
+    const normalized = normalizeModelCompat(model, metadataSnapshot.owners);
     expect(supportsUsageInStreaming(normalized)).toBe(true);
   });
 
@@ -155,7 +151,7 @@ describe("normalizeModelCompat", () => {
       baseUrl: "https://proxy.example.com/v1",
       compat: { supportsStrictMode: true },
     };
-    const normalized = normalizeModelCompat(model);
+    const normalized = normalizeModelCompat(model, metadataSnapshot.owners);
     expect(supportsStrictMode(normalized)).toBe(true);
   });
 
@@ -167,7 +163,7 @@ describe("normalizeModelCompat", () => {
       supportsUsageInStreaming: true,
       supportsStrictMode: true,
     };
-    const normalized = normalizeModelCompat(model);
+    const normalized = normalizeModelCompat(model, metadataSnapshot.owners);
     expect(normalized).toBe(model);
   });
 
@@ -179,7 +175,7 @@ describe("normalizeModelCompat", () => {
       supportsUsageInStreaming: true,
       supportsStrictMode: true,
     };
-    const normalized = normalizeModelCompat(model);
+    const normalized = normalizeModelCompat(model, metadataSnapshot.owners);
     expect(supportsDeveloperRole(normalized)).toBe(true);
     expect(supportsUsageInStreaming(normalized)).toBe(true);
     expect(supportsStrictMode(normalized)).toBe(true);

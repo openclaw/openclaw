@@ -8,7 +8,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import {
   acquirePluginRegistryForInspection,
   clearPluginRegistryLoadCache,
-  loadOpenClawPlugins,
+  loadOpenClawPluginsAsync,
 } from "./loader.js";
 import {
   makePluginLoaderTempDir,
@@ -134,7 +134,7 @@ it.each([true, false])(
         } };`,
     });
     const observed = () => JSON.parse(readFileSync(observationFile, "utf8"));
-    const registry = loadOpenClawPlugins({
+    const registry = await loadOpenClawPluginsAsync({
       config: pluginConfig(plugin),
       activate,
       cache: false,
@@ -199,12 +199,14 @@ it.each([true, false])(
       cache: cached,
       activate: false,
     };
-    const registry = withPluginCache(cache, () => loadOpenClawPlugins(options));
+    const registry = await withPluginCache(cache, () => loadOpenClawPluginsAsync(options));
     try {
       expect(registry.plugins[0]?.status).toBe("loaded");
       expect(process.listenerCount(event)).toBe(before + 1);
       if (cached) {
-        expect(withPluginCache(cache, () => loadOpenClawPlugins(options))).toBe(registry);
+        expect(await withPluginCache(cache, () => loadOpenClawPluginsAsync(options))).toBe(
+          registry,
+        );
       }
       withPluginCache(cache, clearPluginRegistryLoadCache);
       expect(process.listenerCount(event)).toBe(before + 1);
@@ -246,8 +248,8 @@ it("preserves an adopted published instance across cache retirement", async () =
   const helper = path.join(plugin.dir, "lazy.mjs");
   writeFileSync(helper, 'export const value = "captured";');
   const cache = createPluginCache();
-  const registry = withPluginCache(cache, () =>
-    loadOpenClawPlugins({
+  const registry = await withPluginCache(cache, () =>
+    loadOpenClawPluginsAsync({
       config: pluginConfig(plugin),
       activate: false,
     }),
@@ -299,7 +301,7 @@ it("keeps a module-scope resource open for the republished instance after the ol
   // A republish loads the unchanged plugin through a fresh inventory, then retires the old one.
   const load = (cache: PluginCache) =>
     withPluginCache(cache, () =>
-      loadOpenClawPlugins({
+      loadOpenClawPluginsAsync({
         config: pluginConfig(plugin),
         activate: false,
         cache: false,
@@ -307,8 +309,8 @@ it("keeps a module-scope resource open for the republished instance after the ol
     );
   const previousCache = createPluginCache();
   const nextCache = createPluginCache();
-  const previous = load(previousCache);
-  const next = load(nextCache);
+  const previous = await load(previousCache);
+  const next = await load(nextCache);
   try {
     const tool = next.tools[0]?.factory({});
     if (!tool || Array.isArray(tool)) {
@@ -374,7 +376,7 @@ it.each(["load", "register", "id-mismatch"] as const)(
       "id-mismatch": `${acquire} module.exports = { id: "wrong-owner", register() {} };`,
     }[phase]!;
     const plugin = writePlugin({ id: `failed-${phase}`, body });
-    const registry = loadOpenClawPlugins({
+    const registry = await loadOpenClawPluginsAsync({
       config: pluginConfig(plugin),
       cache: false,
       activate: false,
@@ -424,7 +426,7 @@ it("records a disabled runtime-only memory plugin without promising native effec
         throw new Error("disabled plugin registered");
       } };`,
   });
-  const registry = loadOpenClawPlugins({
+  const registry = await loadOpenClawPluginsAsync({
     config: pluginConfig(plugin),
     cache: false,
     activate: false,
@@ -471,16 +473,16 @@ it("retires every unpublished instance when a nonactivating builder throws", asy
   ];
   const cache = createPluginCache();
   try {
-    expect(() =>
+    await expect(
       withPluginCache(cache, () =>
-        loadOpenClawPlugins({
+        loadOpenClawPluginsAsync({
           config: pluginConfig(...plugins),
           cache: false,
           activate: false,
           throwOnLoadError: true,
         }),
       ),
-    ).toThrow("later plugin failed");
+    ).rejects.toThrow("later plugin failed");
     await retirePluginCache(cache);
     expect(process.listenerCount(event)).toBe(before);
   } finally {
@@ -510,11 +512,11 @@ it("joins failed registration cleanup through cache retirement and preserves bot
     } };`,
   });
   const cache = createPluginCache();
-  let registry: ReturnType<typeof loadOpenClawPlugins> | undefined;
+  let registry: Awaited<ReturnType<typeof loadOpenClawPluginsAsync>> | undefined;
   let retirement: ReturnType<typeof retirePluginCache> | undefined;
   try {
-    registry = withPluginCache(cache, () =>
-      loadOpenClawPlugins({
+    registry = await withPluginCache(cache, () =>
+      loadOpenClawPluginsAsync({
         config: pluginConfig(plugin),
         activate: false,
       }),
@@ -560,16 +562,16 @@ it("closes loader admission before a retiring setup owner's abort callback", asy
   const cache = createPluginCache();
   const instance = new PluginInstance("retiring-setup");
   cache.setupModules.set(instance.pluginId, instance);
-  let failure: unknown;
+  let failure: Promise<unknown> | undefined;
   instance.lifecycle.signal.addEventListener("abort", () => {
-    try {
-      withPluginCache(cache, () => loadOpenClawPlugins({ onlyPluginIds: [], activate: false }));
-    } catch (error) {
-      failure = error;
-    }
+    failure = withPluginCache(cache, () =>
+      loadOpenClawPluginsAsync({ onlyPluginIds: [], activate: false }),
+    ).catch((error: unknown) => error);
   });
   await retirePluginCache(cache);
-  expect(failure).toEqual(expect.objectContaining({ message: expect.stringContaining("retired") }));
+  expect(await failure).toEqual(
+    expect.objectContaining({ message: expect.stringContaining("retired") }),
+  );
 });
 
 it("rejects deferred runtime loading after cache retirement completes", async () => {
@@ -582,10 +584,10 @@ it("rejects deferred runtime loading after cache retirement completes", async ()
   });
   const cache = createPluginCache();
   const resume = createDeferredCore();
-  let registry: ReturnType<typeof loadOpenClawPlugins> | undefined;
+  let registry: Awaited<ReturnType<typeof loadOpenClawPluginsAsync>> | undefined;
   const loading = withPluginCache(cache, async () => {
     await resume.promise;
-    return (registry = loadOpenClawPlugins({
+    return (registry = await loadOpenClawPluginsAsync({
       config: pluginConfig(plugin),
       activate: false,
     }));

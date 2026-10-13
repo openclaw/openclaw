@@ -7,7 +7,7 @@ import type { AgentHarnessAttemptParams } from "../agents/harness/types.js";
 import { AuthStorage } from "../agents/sessions/auth-storage.js";
 import { ModelRegistry } from "../agents/sessions/model-registry.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { loadOpenClawPluginsAsync } from "./loader.js";
 import {
   makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
@@ -107,7 +107,7 @@ it("retains a running harness package through unrelated reload and fenced retire
   let running: Promise<unknown> | undefined;
   let settlement: Promise<void> | undefined;
   try {
-    const first = loadOpenClawPlugins(options);
+    const first = await loadOpenClawPluginsAsync(options);
     registries.push(first);
     const original = expectDefined(resolve(first), "registered fixture harness").harness;
     running = original.runAttempt(params);
@@ -116,7 +116,7 @@ it("retains a running harness package through unrelated reload and fenced retire
     expect(directory).not.toBe(plugin.dir);
     const capturedPackage = path.join(directory, "package.json");
 
-    const reloaded = loadOpenClawPlugins({
+    const reloaded = await loadOpenClawPluginsAsync({
       ...options,
       previousRegistry: first,
       replacePluginIds: [unrelated.id],
@@ -157,7 +157,7 @@ it("retains a running harness package through unrelated reload and fenced retire
     vi.useRealTimers();
 
     writeVersion("2.0.0");
-    const current = loadOpenClawPlugins(options);
+    const current = await loadOpenClawPluginsAsync(options);
     registries.push(current);
     const replacement = expectDefined(resolve(current), "replacement fixture harness").harness;
     expect(replacement).not.toBe(original);

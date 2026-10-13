@@ -9,13 +9,13 @@ import { resolveRealtimeVoiceAgentContextInstructions } from "../../agents/realt
 import type { TalkRealtimeConfig } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import {
-  getRealtimeTranscriptionProvider,
-  listRealtimeTranscriptionProviders,
+  getRealtimeTranscriptionProviderAsync,
+  listRealtimeTranscriptionProvidersAsync,
 } from "../../realtime-transcription/provider-registry.js";
 import type { RealtimeTranscriptionProviderConfig } from "../../realtime-transcription/provider-types.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME } from "../../talk/agent-run-control-shared.js";
-import { listRealtimeVoiceProviders } from "../../talk/provider-registry.js";
+import { listRealtimeVoiceProvidersAsync } from "../../talk/provider-registry.js";
 import type { RealtimeVoiceProviderConfig } from "../../talk/provider-types.js";
 import {
   getVoiceProviderConfig,
@@ -71,13 +71,13 @@ function getVoiceCallStreamingConfig(config: OpenClawConfig): {
   };
 }
 
-export function listTalkTranscriptionProviders(
+export async function listTalkTranscriptionProviders(
   config: OpenClawConfig,
   configuredProviderIds: Iterable<string | undefined>,
 ) {
-  const providers = listRealtimeTranscriptionProviders(config);
+  const providers = await listRealtimeTranscriptionProvidersAsync(config);
   for (const providerId of configuredProviderIds) {
-    const configuredProvider = getRealtimeTranscriptionProvider(providerId, config);
+    const configuredProvider = await getRealtimeTranscriptionProviderAsync(providerId, config);
     if (
       configuredProvider &&
       !providers.some(
@@ -170,7 +170,7 @@ export async function buildTalkRealtimeConfig(
     config,
     provider: selectedProvider,
     providerConfigs,
-    providers: listRealtimeVoiceProviders(config),
+    providers: await listRealtimeVoiceProvidersAsync(config),
     requestedModel:
       normalizeOptionalString(requestedModel) ?? normalizeOptionalString(talkRealtime?.model),
   });
@@ -210,7 +210,7 @@ export async function buildTalkTranscriptionConfig(
     config,
     provider,
     providerConfigs,
-    providers: listTalkTranscriptionProviders(config, configuredProviderIds),
+    providers: await listTalkTranscriptionProviders(config, configuredProviderIds),
     requestedModel: normalizeOptionalString(requestedModel),
   });
   return {
@@ -239,10 +239,10 @@ export async function resolveConfiguredRealtimeTranscriptionProvider(params: {
 }) {
   const normalizedConfigured = normalizeOptionalLowercaseString(params.configuredProviderId);
   const providers = normalizedConfigured
-    ? [getRealtimeTranscriptionProvider(normalizedConfigured, params.config)].filter(
+    ? [await getRealtimeTranscriptionProviderAsync(normalizedConfigured, params.config)].filter(
         (provider) => provider !== undefined,
       )
-    : listTalkTranscriptionProviders(params.config, Object.keys(params.providerConfigs));
+    : await listTalkTranscriptionProviders(params.config, Object.keys(params.providerConfigs));
   // An explicit provider is authoritative; automatic selection is stable by
   // provider order so the same config picks the same transcription backend.
   const orderedProviders = normalizedConfigured

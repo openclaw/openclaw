@@ -122,7 +122,8 @@ vi.mock("../../agents/main-session-recovery/main-session-recovery-store.js", () 
 
 // Provider profile discovery is owned by thinking.test.ts. Keep the real thinking-policy
 // projection here while preventing an unrelated active-plugin and public-artifact graph load.
-vi.mock("../../plugins/provider-thinking.js", () => ({
+vi.mock("../../plugins/provider-thinking.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/provider-thinking.js")>()),
   resolveEffectiveThinkingProfile: () => undefined,
 }));
 
@@ -292,8 +293,10 @@ vi.mock("../../config/sessions/ambient-transcript-watermark.js", () => ({
   updateAmbientTranscriptWatermark: updateAmbientTranscriptWatermarkMock,
 }));
 
-vi.mock("../../globals.js", () => ({
+vi.mock("../../globals.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../globals.js")>()),
   logVerbose: vi.fn(),
+  warn: vi.fn(),
 }));
 
 vi.mock("../../process/command-queue.js", () => ({

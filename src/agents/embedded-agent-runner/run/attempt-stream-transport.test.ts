@@ -6,7 +6,7 @@ import { isAnthropicOAuthApiKey } from "@openclaw/ai/internal/anthropic";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  anthropicModel,
+  anthropicModel as rawAnthropicModel,
   context as anthropicContext,
   anthropicEvents,
   createAnthropicResponse,
@@ -19,8 +19,9 @@ import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
 import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
-import "../../ai-transport-runtime-host.js";
 import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
+import "../../ai-transport-runtime-host.js";
+import { attachPreparedProviderModelFixture } from "../../provider-request.test-support.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
 import {
@@ -28,6 +29,8 @@ import {
   type WrapProviderStreamFnParams,
 } from "../extra-params.test-support.js";
 import { prepareEmbeddedAttemptTransport } from "./attempt-stream-settle.js";
+
+const anthropicModel = attachPreparedProviderModelFixture(rawAnthropicModel);
 
 const registerProviderStreamForModel = vi.hoisted(() => vi.fn());
 
@@ -66,12 +69,12 @@ function createTransportFixture(testCase: {
           defaults: { contextPruning: { mode: testCase.pruning ? "cache-ttl" : "off" } },
         },
       },
-      model: {
+      model: attachPreparedProviderModelFixture({
         api: "anthropic-messages",
         provider: "anthropic",
         id: "claude-sonnet-4-6",
         baseUrl: testCase.baseUrl ?? "https://api.anthropic.com",
-      },
+      }),
       modelId: "claude-sonnet-4-6",
       provider: "anthropic",
       promptCacheKey: undefined,
@@ -131,7 +134,11 @@ function createMediaTransportFixture(modelId: string, workspaceDir = "/tmp", age
     registry: { getApiProvider: () => undefined },
   } as never);
   const session = { agent: { streamFn: providerStream, transport: "auto" } };
-  const model = { api: "test-api", provider: "test-provider", id: modelId };
+  const model = attachPreparedProviderModelFixture({
+    api: "test-api",
+    provider: "test-provider",
+    id: modelId,
+  });
   registerProviderStreamForModel.mockReturnValue(providerStream);
   const input = {
     attempt: {
@@ -359,7 +366,10 @@ describe("prepareEmbeddedAttemptTransport", () => {
       apiKey: "stored-profile-key",
     });
     session.agent.streamFn = sessionStream;
-    input.attempt.model = { ...input.attempt.model, api: "test-api" };
+    input.attempt.model = attachPreparedProviderModelFixture({
+      ...input.attempt.model,
+      api: "test-api",
+    });
 
     const result = await prepareEmbeddedAttemptTransport(input);
     await session.agent.streamFn(input.attempt.model, { messages: [] }, {});

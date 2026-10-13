@@ -12,7 +12,7 @@ import {
   resolveConfiguredMediaEntryCapabilities,
   resolveEffectiveMediaEntryCapabilities,
 } from "../media-understanding/entry-capabilities.js";
-import { buildMediaUnderstandingCapabilityRegistry } from "../media-understanding/provider-capability-registry.js";
+import { buildMediaUnderstandingCapabilityRegistryAsync } from "../media-understanding/provider-capability-registry.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { resolveVoiceModelRefs } from "../tts/voice-models.js";
 import { getPath } from "./path-utils.js";
@@ -308,27 +308,27 @@ function collectProviderRequestAssignments(params: {
   }
 }
 
-function collectMediaRequestAssignments(params: ConfigCollectorParams): void {
+async function collectMediaRequestAssignments(params: ConfigCollectorParams): Promise<void> {
   const tools = isRecord(params.config.tools) ? params.config.tools : undefined;
   const media = isRecord(tools?.media) ? tools.media : undefined;
   if (!media) {
     return;
   }
 
-  let providerRegistry: ReturnType<typeof buildMediaUnderstandingCapabilityRegistry> | undefined;
-  const getProviderRegistry = () => {
-    providerRegistry ??= buildMediaUnderstandingCapabilityRegistry(params.config);
-    return providerRegistry;
-  };
+  let providerRegistry:
+    | ReturnType<typeof buildMediaUnderstandingCapabilityRegistryAsync>
+    | undefined;
+  const getProviderRegistry = () =>
+    (providerRegistry ??= buildMediaUnderstandingCapabilityRegistryAsync(params.config));
   const capabilityKeys = ["audio", "image", "video"] as const;
   const isCapabilityEnabled = (capability: (typeof capabilityKeys)[number]) =>
     (isRecord(media[capability]) ? media[capability] : undefined)?.enabled !== false;
 
   const models = media.models;
   if (Array.isArray(models)) {
-    models.forEach((rawModel, index) => {
+    for (const [index, rawModel] of models.entries()) {
       if (!isRecord(rawModel) || !isRecord(rawModel.request)) {
-        return;
+        continue;
       }
       const entry = rawModel as MediaUnderstandingModelConfig;
       const configuredCapabilities = resolveConfiguredMediaEntryCapabilities(entry);
@@ -338,7 +338,7 @@ function collectMediaRequestAssignments(params: ConfigCollectorParams): void {
         configuredCapabilities ??
         resolveEffectiveMediaEntryCapabilities({
           entry,
-          providerRegistry: getProviderRegistry(),
+          providerRegistry: await getProviderRegistry(),
         });
       const active = capabilities?.some((capability) => isCapabilityEnabled(capability)) ?? false;
       const inactiveReason =
@@ -360,7 +360,7 @@ function collectMediaRequestAssignments(params: ConfigCollectorParams): void {
           contract: rawModel,
         },
       });
-    });
+    }
   }
 
   for (const capability of capabilityKeys) {
@@ -435,12 +435,12 @@ function collectCronAssignments(params: ConfigCollectorParams): void {
 }
 
 /** Collects SecretRef assignments from core non-plugin config surfaces. */
-export function collectCoreConfigAssignments(params: {
+export async function collectCoreConfigAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
   agentId?: string;
-}): void {
+}): Promise<void> {
   const database = params.config.database;
   if (database?.postgres) {
     createConfigSecretInputCollector(params)(
@@ -487,5 +487,5 @@ export function collectCoreConfigAssignments(params: {
   collectMessagesTtsAssignments(params);
   collectAgentTtsAssignments(params);
   collectCronAssignments(params);
-  collectMediaRequestAssignments(params);
+  await collectMediaRequestAssignments(params);
 }

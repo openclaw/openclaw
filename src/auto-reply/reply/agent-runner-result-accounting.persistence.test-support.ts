@@ -7,8 +7,9 @@ import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/ses
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import type { ReplyPayload } from "../types.js";
 import { withAgentTurnCompletion } from "./agent-runner-completion.js";
@@ -270,7 +271,13 @@ export async function createAgentAccountingPersistenceFixture({
           auth: [],
         },
       });
-      return withPluginRuntimeRegistryScope(registry, async () => {
+      const generation = {
+        pluginRegistry: registry,
+        metadataSnapshot: createPluginMetadataSnapshotFixture({
+          plugins: [{ id: "synthetic", providers: [diagnostic.provider] }],
+        }),
+      };
+      return withPluginRuntimeGenerationScope(generation, async () => {
         const delivered: ReplyPayload[] = [];
         const decision = await withCompletion(async (completion) => {
           const accounting = await accountQueued(context.execution, completion);

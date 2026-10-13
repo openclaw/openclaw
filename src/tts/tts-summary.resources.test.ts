@@ -15,7 +15,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Context, Model, ProviderStreamOptions } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { summarizeText } from "../plugin-sdk/speech-core.js";
-import { loadPluginRegistryHandle } from "../plugins/loader.js";
+import { loadPluginRegistryHandleAsync } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   makePluginLoaderTempDir,
@@ -492,7 +492,7 @@ it.each(["success", "auth-abort", "completion-abort"] as const)(
 it("leaves a raw provider registration with its owner", async () => {
   const fixture = nativeSummaryFixture();
   await fixture.run(async () => {
-    const raw = loadPluginRegistryHandle({ config: fixture.config });
+    const raw = await loadPluginRegistryHandleAsync({ config: fixture.config });
     const snapshot = { ...fixture.lease.snapshot, pluginRegistry: raw };
     fixture.acquire.mockResolvedValue({ ...fixture.lease, snapshot });
     fixture.state.finish.resolve();

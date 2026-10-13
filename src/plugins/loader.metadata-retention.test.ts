@@ -8,15 +8,12 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { withEnvAsync } from "../test-utils/env.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
-import {
-  extractPluginInstallRecordsFromInstalledPluginIndex,
-  loadInstalledPluginIndex,
-} from "./installed-plugin-index.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index.js";
+import { loadOpenClawPluginsAsync } from "./loader.js";
 import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
-import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "./plugin-metadata-snapshot.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { disposePluginRegistryInstances } from "./runtime.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -108,22 +105,25 @@ it.each(["global", "bundled", "bundled without package.json"] as const)(
     try {
       await withEnvAsync(env, async () => {
         await writePersistedInstalledPluginIndex(
-          loadInstalledPluginIndex({
-            config,
-            env,
-            workspaceDir,
-            installRecords:
-              origin === "global"
-                ? {
-                    "metadata-sibling": {
-                      source: "npm",
-                      spec: "metadata-sibling@1.0.0",
-                      version: "1.0.0",
-                      installPath: packageDir,
-                    },
-                  }
-                : {},
-          }),
+          (
+            await resolvePluginMetadataSnapshotAsync({
+              config,
+              env,
+              workspaceDir,
+              allowCurrent: false,
+              installRecords:
+                origin === "global"
+                  ? {
+                      "metadata-sibling": {
+                        source: "npm",
+                        spec: "metadata-sibling@1.0.0",
+                        version: "1.0.0",
+                        installPath: packageDir,
+                      },
+                    }
+                  : {},
+            })
+          ).registryIndex,
           { env },
         );
         const installRecords = loadInstalledPluginIndexInstallRecordsSync({ env });
@@ -134,9 +134,9 @@ it.each(["global", "bundled", "bundled without package.json"] as const)(
             ...config,
             agents: { entries: { main: { workspace: nextWorkspace } } },
           };
-          return withPluginCache(cache, () => {
+          return withPluginCache(cache, async () => {
             // Read the same committed installation facts through both real metadata producers.
-            const snapshot = loadPluginMetadataSnapshot({
+            const snapshot = await resolvePluginMetadataSnapshotAsync({
               config: nextConfig,
               env,
               workspaceDir: nextWorkspace,
@@ -149,7 +149,7 @@ it.each(["global", "bundled", "bundled without package.json"] as const)(
               snapshot.index,
             );
             expect(snapshotInstallRecords).toEqual(installRecords);
-            const registry = loadOpenClawPlugins({
+            const registry = await loadOpenClawPluginsAsync({
               config: nextConfig,
               env,
               workspaceDir: nextWorkspace,
@@ -175,7 +175,7 @@ it.each(["global", "bundled", "bundled without package.json"] as const)(
             return { record, manifest, handler };
           });
         };
-        const initial = load(true);
+        const initial = await load(true);
         expect
           .soft(initial.manifest.packageDescription)
           .toBe(hasPackage ? "Original package description" : undefined);
@@ -200,7 +200,7 @@ it.each(["global", "bundled", "bundled without package.json"] as const)(
         const initialResponse = await call(initial.handler);
         // First installation can derive metadata; the following settings reload hydrates it.
         for (const preferPersisted of [false, true]) {
-          const current = load(preferPersisted);
+          const current = await load(preferPersisted);
           expect
             .soft(current.manifest.packageDescription)
             .toBe(hasPackage ? "Original package description" : undefined);
@@ -218,7 +218,7 @@ it.each(["global", "bundled", "bundled without package.json"] as const)(
         let expectedRegistrations = 1;
         if (origin === "global") {
           nextWorkspace = path.join(root, "other-workspace");
-          const changed = load(false, nextWorkspace);
+          const changed = await load(false, nextWorkspace);
           expect(changed.manifest.workspaceDir).toBe(nextWorkspace);
           expect(changed.record).not.toBe(initial.record);
           expect(changed.handler).not.toBe(initial.handler);
@@ -229,7 +229,7 @@ it.each(["global", "bundled", "bundled without package.json"] as const)(
         // A real package metadata edit must still replace the runtime; cache-path
         // equivalence must not remove description from the loader's full comparison.
         writeDescription("Updated package description");
-        const changedDescription = load(false, nextWorkspace);
+        const changedDescription = await load(false, nextWorkspace);
         expect(changedDescription.manifest.packageDescription).toBe("Updated package description");
         expect(changedDescription.record).not.toBe(previous.record);
         expect(changedDescription.handler).not.toBe(previous.handler);

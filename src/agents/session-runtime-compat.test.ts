@@ -1,11 +1,16 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import {
-  resolveManualCompactionCliTarget,
+  resolveManualCompactionCliTargetAsync,
   resolvePersistedSessionRuntimeId,
   resolveSessionRuntimeOverrideForProvider,
 } from "./session-runtime-compat.js";
+
+// mock-isolation: Runtime compatibility uses empty metadata; fixture CLI registrations below own alias policy.
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  resolvePluginMetadataSnapshotAsync: vi.fn(async () => ({ plugins: [], index: { plugins: [] } })),
+}));
 
 describe("resolvePersistedSessionRuntimeId", () => {
   it("lets a locked harness outrank a conflicting persisted runtime override", () => {
@@ -91,7 +96,7 @@ describe("resolveManualCompactionCliTarget", () => {
     cliBackendsTesting.resetDepsForTest();
   });
 
-  it.each(["claude-cli"])("uses setup metadata for %s", (provider) => {
+  it.each(["claude-cli"])("uses setup metadata for %s", async (provider) => {
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [],
       resolvePluginSetupCliBackend: ({ backend }) =>
@@ -108,7 +113,7 @@ describe("resolveManualCompactionCliTarget", () => {
           : undefined,
     });
     expect(
-      resolveManualCompactionCliTarget({
+      await resolveManualCompactionCliTargetAsync({
         provider,
         cfg: {} as OpenClawConfig,
         entry: {
@@ -124,7 +129,7 @@ describe("resolveManualCompactionCliTarget", () => {
     });
   });
 
-  it("passes config when resolving an explicit setup-registered runtime binding", () => {
+  it("passes config when resolving an explicit setup-registered runtime binding", async () => {
     const cfg = { plugins: { entries: { anthropic: { enabled: true } } } } as OpenClawConfig;
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [],
@@ -143,7 +148,7 @@ describe("resolveManualCompactionCliTarget", () => {
     });
 
     expect(
-      resolveManualCompactionCliTarget({
+      await resolveManualCompactionCliTargetAsync({
         provider: "anthropic",
         cfg,
         entry: {
@@ -160,16 +165,16 @@ describe("resolveManualCompactionCliTarget", () => {
     });
   });
 
-  it("does not infer a CLI runtime without its native binding", () => {
+  it("does not infer a CLI runtime without its native binding", async () => {
     expect(
-      resolveManualCompactionCliTarget({
+      await resolveManualCompactionCliTargetAsync({
         provider: "anthropic",
         entry: {},
       }),
     ).toEqual({});
   });
 
-  it("does not choose between multiple compatible native bindings", () => {
+  it("does not choose between multiple compatible native bindings", async () => {
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () =>
         [
@@ -188,7 +193,7 @@ describe("resolveManualCompactionCliTarget", () => {
         ] as never,
     });
     expect(
-      resolveManualCompactionCliTarget({
+      await resolveManualCompactionCliTargetAsync({
         provider: "anthropic",
         entry: {
           cliSessionBindings: {
@@ -200,9 +205,9 @@ describe("resolveManualCompactionCliTarget", () => {
     ).toEqual({});
   });
 
-  it("does not reuse an unlocked historical harness binding after a provider switch", () => {
+  it("does not reuse an unlocked historical harness binding after a provider switch", async () => {
     expect(
-      resolveManualCompactionCliTarget({
+      await resolveManualCompactionCliTargetAsync({
         provider: "openai",
         entry: {
           agentHarnessId: "claude-cli",

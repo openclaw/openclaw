@@ -11,6 +11,7 @@ import {
   DEFAULT_BROWSER_EVALUATE_ENABLED,
   resolveBrowserConfig,
 } from "../../plugin-sdk/browser-profiles.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { defaultRuntime } from "../../runtime.js";
 import { captureChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import { createLazyRuntimeNamedExport } from "../../shared/lazy-runtime.js";
@@ -563,6 +564,7 @@ export async function resolveSandboxContext(
   // provisioning. Preserve that owner boundary across backend, browser,
   // registry, and filesystem-bridge setup so model fallback never retries it.
   try {
+    await prepareBundledDiscoveryMode();
     assertSandboxSessionSecretOwnerAvailable(params.config, resolved);
     const context = await withWorktreePreparationTiming("sandbox", () =>
       resolveProvisionedSandboxContext(ownedParams, resolved, {

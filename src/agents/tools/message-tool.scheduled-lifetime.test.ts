@@ -27,6 +27,7 @@ import type {
 import { recoverPendingDeliveries } from "../../infra/outbound/delivery-queue-recovery.js";
 import { loadUnfinishedDeliveries } from "../../infra/outbound/delivery-queue-storage.js";
 import { sendDurableMessageBatch } from "../../plugin-sdk/channel-outbound.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
@@ -344,6 +345,7 @@ it.each([
         catalog: () => ({ tools: catalog }),
         isAvailable: () => catalog.some((tool) => tool.name === "message"),
       });
+      await prepareBundledDiscoveryMode(process.env);
       const tool = createMessageTool({
         config,
         agentId: "main",

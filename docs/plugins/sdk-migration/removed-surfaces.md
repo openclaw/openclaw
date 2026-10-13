@@ -356,6 +356,15 @@ timeline for current status.
     and manifest contract were removed after the **2026-08-21** migration
     deadline.
 
+    Runtime lookups now prepare plugin owners asynchronously. Replace
+    `getEmbeddingProvider` / `listEmbeddingProviders` with
+    `getEmbeddingProviderAsync` / `listEmbeddingProvidersAsync` from
+    `openclaw/plugin-sdk/embedding-providers`. Memory host callers use
+    `getMemoryEmbeddingProviderAsync`, `listMemoryEmbeddingProvidersAsync`, and
+    `resolveMemorySearchConfigAsync` on their existing host subpaths. The
+    synchronous exports are deprecated and only read already-prepared registries;
+    they no longer perform cold discovery.
+
   </Accordion>
 
   <Accordion title="Raw channel send results -> OutboundDeliveryResult">

@@ -82,7 +82,7 @@ function createStatusScanDepsRuntimeModuleMock(
     })),
     getMemorySearchManager: mocks.getMemorySearchManager,
     isMemoryProviderNative: vi.fn<StatusScanDepsRuntimeModuleMock["isMemoryProviderNative"]>(
-      () => false,
+      async () => false,
     ),
   };
 }
@@ -263,8 +263,10 @@ export async function loadStatusScanModuleForTest(
   vi.doMock("../cli/command-config-resolution.js", () => ({
     resolveCommandConfigWithSecrets: mocks.resolveCommandSecretRefsViaGateway,
   }));
+  // mock-isolation: Status fixtures supply search configuration without loading embedding providers.
   vi.doMock("../agents/memory-search.js", () => ({
-    resolveMemorySearchConfig,
+    resolveMemorySearchConfigAsync: async (...args: unknown[]) =>
+      resolveMemorySearchConfig(...args),
   }));
 
   if (!options.fastJson) {

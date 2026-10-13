@@ -1,4 +1,5 @@
 import type { Message } from "grammy/types";
+import { prepareModelRefResolver } from "openclaw/plugin-sdk/agent-runtime";
 import { formatMediaPlaceholderText } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStoredModelOverrideAsync } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -176,6 +177,7 @@ export function createTelegramMessageSessionRuntime({
       agentId: route.agentId,
     });
     const entry = await loadSessionEntry({ agentId: route.agentId, storePath, sessionKey });
+    const { manifestPlugins } = await prepareModelRefResolver({ config: params.runtimeCfg });
     const storedOverride = await resolveStoredModelOverrideAsync({
       sessionEntry: entry,
       loadSessionEntry: (parentSessionKey) =>
@@ -184,7 +186,9 @@ export function createTelegramMessageSessionRuntime({
       defaultProvider: resolveDefaultModelForAgent({
         cfg: params.runtimeCfg,
         agentId: route.agentId,
+        manifestPlugins,
       }).provider,
+      manifestPlugins,
     });
     const provider = entry?.modelProvider?.trim();
     const model = entry?.model?.trim();

@@ -167,15 +167,15 @@ async function resolveUnavailablePluginApprovalSurfaceReason(
   if (!trigger) {
     return undefined;
   }
+  if (trigger !== "user") {
+    return `Plugin approval unavailable: ${trigger} runs have no approval-capable initiating surface.`;
+  }
   const initiatingSurface = await resolveApprovalInitiatingSurfaceStateAsync({
     channel: ctx?.turnSourceChannel,
     accountId: ctx?.turnSourceAccountId,
     cfg: ctx?.config,
     approvalKind: "plugin",
   });
-  if (trigger !== "user") {
-    return `Plugin approval unavailable: ${trigger} runs have no approval-capable initiating surface.`;
-  }
   if (!ctx?.turnSourceChannel?.trim() && !ctx?.approvalReviewerDeviceId?.trim()) {
     return "Plugin approval unavailable: non-interactive CLI runs have no approval-capable initiating surface.";
   }

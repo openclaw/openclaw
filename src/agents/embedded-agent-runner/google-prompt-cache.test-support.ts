@@ -2,6 +2,7 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, vi } from "vitest";
+import { attachProviderRequestFactsFixture } from "../provider-request.test-support.js";
 import * as providerFetch from "../provider-transport-fetch.js";
 import { prepareGooglePromptCacheStreamFn } from "./google-prompt-cache.js";
 
@@ -42,7 +43,7 @@ export function makeSessionManager(entries: SessionCustomEntry[] = []) {
 }
 
 export function makeGoogleModel(id = "gemini-3.1-pro-preview") {
-  return {
+  return attachProviderRequestFactsFixture({
     id,
     name: id,
     api: "google-generative-ai",
@@ -54,7 +55,7 @@ export function makeGoogleModel(id = "gemini-3.1-pro-preview") {
     contextWindow: 128000,
     maxTokens: 8192,
     headers: { "X-Provider": "google" },
-  } satisfies Model<"google-generative-ai">;
+  } satisfies Model<"google-generative-ai">);
 }
 
 export function createCacheFetchMock(params: { name: string; expireTime: string }) {
@@ -152,7 +153,7 @@ export function preparePromptCacheStream(params: {
   signal?: AbortSignal;
   streamFn: StreamFn;
 }) {
-  const model = params.model ?? makeGoogleModel();
+  const model = attachProviderRequestFactsFixture(params.model ?? makeGoogleModel());
   vi.spyOn(Date, "now").mockReturnValue(params.now);
   if (params.fetchMock) {
     vi.spyOn(providerFetch, "buildGuardedModelFetch").mockReturnValue(params.fetchMock);

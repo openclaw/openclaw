@@ -1,9 +1,12 @@
 // Google tests cover video generation provider plugin behavior.
 import type { Video } from "@google/genai";
+import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 const { createGoogleGenAIMock, downloadMock, generateVideosMock, getVideosOperationMock } =
   vi.hoisted(() => {

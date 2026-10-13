@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import {
   prepareProviderSyntheticAuthWithPlugin,
   resolveProviderSyntheticAuthWithPlugin,
@@ -49,7 +50,18 @@ function resolveAmbientCredentialInputs(
 ) {
   const credentials = addEnvBackedAgentCredentials({}, options);
   const syntheticAuthProviderRefs =
-    options.syntheticAuthProviderRefs ?? resolveRuntimeSyntheticAuthProviderRefs();
+    options.syntheticAuthProviderRefs ??
+    resolveRuntimeSyntheticAuthProviderRefs(
+      options.metadataSnapshot
+        ? {
+            config: options.config,
+            env: options.env,
+            workspaceDir: options.workspaceDir,
+            index: options.metadataSnapshot.index,
+            registryDiagnostics: options.metadataSnapshot.registryDiagnostics,
+          }
+        : undefined,
+    );
   const authoritativeSyntheticAuthProviderRefs = new Set(
     [...(options.authoritativeSyntheticAuthProviderRefs ?? [])]
       .map(normalizeProviderId)
@@ -70,6 +82,7 @@ function resolveAmbientCredentialInputs(
       !isAmbientCredentialAllowedByProviderAuthPin({
         config: options.config,
         authAliasLookupParams: {
+          metadataSnapshot: options.metadataSnapshot,
           ...(options.env ? { env: options.env } : {}),
           ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
         },
@@ -90,6 +103,7 @@ function syntheticAuthParams(options: AgentDiscoveryAuthLookupOptions, provider:
     workspaceDir: options.workspaceDir,
     env: options.env,
     provider,
+    pluginMetadataSnapshot: options.metadataSnapshot,
     context: {
       config: options.config,
       provider,
@@ -138,13 +152,23 @@ export async function prepareAmbientAgentCredentialsForDiscovery(
     preparationOwner?: object;
   } = {},
 ): Promise<AgentCredentialMap> {
-  const { credentials, providers } = resolveAmbientCredentialInputs(options);
+  const prepared = {
+    ...options,
+    metadataSnapshot:
+      options.metadataSnapshot ??
+      (await resolvePluginMetadataSnapshotAsync({
+        config: options.config ?? {},
+        workspaceDir: options.workspaceDir,
+        env: options.env,
+      })),
+  };
+  const { credentials, providers } = resolveAmbientCredentialInputs(prepared);
   for (const provider of providers) {
     options.signal?.throwIfAborted();
     const resolved = options.resolveSyntheticAuth
       ? await options.resolveSyntheticAuth(provider)
       : await prepareProviderSyntheticAuthWithPlugin({
-          ...syntheticAuthParams(options, provider),
+          ...syntheticAuthParams(prepared, provider),
           signal: options.signal,
           preparationOwner: options.preparationOwner,
         });
@@ -158,6 +182,13 @@ export async function resolveAgentDiscoveryAuthFacts(
   agentDir: string,
   options?: DiscoverAuthStorageOptions,
 ): Promise<{ store: AuthProfileStore; credentials: AgentCredentialMap }> {
+  const metadataSnapshot =
+    options?.metadataSnapshot ??
+    (await resolvePluginMetadataSnapshotAsync({
+      config: options?.config ?? {},
+      workspaceDir: options?.workspaceDir,
+      env: options?.env,
+    }));
   const storeOptions = {
     allowKeychainPrompt: false,
     ...(options?.config ? { config: options.config } : {}),
@@ -174,20 +205,23 @@ export async function resolveAgentDiscoveryAuthFacts(
         })
       : await ensureAuthProfileStoreAsync(agentDir, {
           ...storeOptions,
+          pluginMetadataSnapshot: metadataSnapshot,
           ...(options?.readOnly === true ? { readOnly: true } : {}),
         });
   const credentials = resolveAgentCredentialMapFromStore(store, {
     includeSecretRefPlaceholders: options?.readOnly === true,
     config: options?.config,
+    metadataSnapshot,
   });
   const ambientCredentials =
     options?.ambientCredentials ??
-    resolveAmbientAgentCredentialsForDiscovery({
+    (await prepareAmbientAgentCredentialsForDiscovery({
       config: options?.config,
       workspaceDir: options?.workspaceDir,
       env: options?.env,
       syntheticAuthProviderRefs: options?.syntheticAuthProviderRefs,
-    });
+      metadataSnapshot,
+    }));
   for (const [provider, credential] of Object.entries(ambientCredentials)) {
     if (credentials[provider]) {
       continue;

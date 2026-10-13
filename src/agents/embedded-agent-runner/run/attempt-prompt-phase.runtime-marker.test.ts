@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Context } from "../../../llm/types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
+import { attachPreparedProviderModelFixture } from "../../provider-request.test-support.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import {
   createAssistant,
@@ -8,7 +9,7 @@ import {
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
-  testModel,
+  testModel as rawTestModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import {
@@ -17,6 +18,8 @@ import {
 } from "../session-prompt-state.js";
 import { runEmbeddedAttemptPromptPhase } from "./attempt-prompt-phase.js";
 import { createFixture, mocks } from "./attempt-prompt-phase.test-support.js";
+
+const testModel = attachPreparedProviderModelFixture(rawTestModel);
 
 registerAgentSessionLoopTestLifecycle();
 

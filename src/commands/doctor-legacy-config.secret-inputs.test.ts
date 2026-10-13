@@ -1,12 +1,17 @@
 // Load the shared migration mocks before their production consumers.
 // oxfmt-ignore
 import { useDoctorLegacyConfigFixture } from "./doctor/shared/legacy-config-fixture.test-support.js";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { parseSecretRef } from "../config/types.secrets.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 
 describe("normalizeCompatibilityConfigValues", () => {
   useDoctorLegacyConfigFixture();
+
+  beforeEach(async () => {
+    await preparePluginMetadataMachineStateAsync({});
+  });
 
   it("migrates legacy secretref-env markers on SecretRef credential paths", () => {
     const res = normalizeCompatibilityConfigValues({

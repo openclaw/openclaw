@@ -297,10 +297,10 @@ describe("Codex native configuration", () => {
             },
           });
         }
+        await expect(run).rejects.toThrow("operator role cannot use this model");
         expect(turnModels).toEqual(
           permission === "denied" ? [runtimeModel] : [runtimeModel, "native-retry"],
         );
-        await expect(run).rejects.toThrow("operator role cannot use this model");
         expect(params.modelId).toBe(catalogModel);
         expect(params.model.id).toBe(catalogModel);
         const transcript = await readTranscriptMessagesByIdentity(params);

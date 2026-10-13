@@ -1,5 +1,6 @@
 // Covers provider-driven plugin auto-enable decisions.
 import { afterAll, describe, expect, it } from "vitest";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
 import {
   makeIsolatedEnv,
@@ -70,7 +71,8 @@ describe("applyPluginAutoEnable providers", () => {
 
   it.each(googleProviderCases)(
     "auto-enables the Google plugin from $name under a restrictive allowlist",
-    ({ config }) => {
+    async ({ config }) => {
+      await preparePluginMetadataMachineStateAsync({ env });
       const result = applyPluginAutoEnable({
         config: {
           ...config,

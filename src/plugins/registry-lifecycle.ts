@@ -410,11 +410,8 @@ export function isPluginRegistryPreparing(registryView: PluginRegistry): boolean
   return scope?.active === true && scope.registry === registry && !retiredRegistries.has(registry);
 }
 
-/** Replacement registration and services share bounded authority before publication. */
-export function withPluginRegistryPreparationScope<T>(
-  registryView: PluginRegistry,
-  run: () => T,
-): T {
+/** Loader registration keeps its preparation authority across candidate yields until publication. */
+export function createPluginRegistryPreparationScope(registryView: PluginRegistry) {
   const registry = getPluginRegistryResourceOwner(registryView);
   if (retiredRegistries.has(registry)) {
     throw new Error("Cannot prepare a retired plugin registry");
@@ -423,25 +420,36 @@ export function withPluginRegistryPreparationScope<T>(
     registry,
     active: true,
   };
-  return preparation.run(scope, () => {
-    let pending = false;
-    try {
-      const result = run();
-      if (isPromiseLike(result)) {
-        pending = true;
-        return Promise.resolve(result).finally(() => {
-          scope.active = false;
-          scope.registry = undefined;
-        }) as T; // SAFETY: Preserves the callback's resolved value and async shape.
-      }
-      return result;
-    } finally {
-      if (!pending) {
-        scope.active = false;
-        scope.registry = undefined;
-      }
+  return {
+    run<T>(run: () => T): T {
+      return preparation.run(scope, run);
+    },
+    [Symbol.dispose]() {
+      scope.active = false;
+      scope.registry = undefined;
+    },
+  };
+}
+
+/** Replacement registration and services share bounded authority before publication. */
+export function withPluginRegistryPreparationScope<T>(
+  registryView: PluginRegistry,
+  run: () => T,
+): T {
+  const scope = createPluginRegistryPreparationScope(registryView);
+  let pending = false;
+  try {
+    const result = scope.run(run);
+    if (isPromiseLike(result)) {
+      pending = true;
+      return Promise.resolve(result).finally(() => scope[Symbol.dispose]()) as T; // SAFETY: Preserves the callback's resolved value and async shape.
     }
-  });
+    return result;
+  } finally {
+    if (!pending) {
+      scope[Symbol.dispose]();
+    }
+  }
 }
 
 /** True after any runtime activation, including a generation retired during publication. */

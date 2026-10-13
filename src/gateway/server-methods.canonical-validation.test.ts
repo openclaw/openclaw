@@ -18,7 +18,6 @@ import { authorizeGatewayRequestPreDispatch } from "./server-methods/request-aut
 import { sessionSubscriptionHandlers } from "./server-methods/sessions-subscriptions.js";
 import type { GatewayRequestContext, GatewayRequestHandler } from "./server-methods/types.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
-import * as rowFacts from "./session-row-database-facts.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { sharingPolicyClient } from "./session-sharing.test-utils.js";
@@ -183,12 +182,6 @@ it("authorizes exact rows independently of bulk validation and fences corrupt su
           return certify(...args);
         },
       );
-      const readFacts = rowFacts.withSessionRowDatabaseFacts;
-      vi.spyOn(rowFacts, "withSessionRowDatabaseFacts").mockImplementation(async (...args) => {
-        rowEntered.resolve();
-        await releaseRow.promise;
-        return readFacts(...args);
-      });
       const subscribeSessionMessageEvents = vi.fn();
       const context = bindSessionRowProjection(
         {
@@ -240,6 +233,19 @@ it("authorizes exact rows independently of bulk validation and fences corrupt su
         parse.mock.calls.filter(([json]) => json.includes('"sessionId":"dirty-')),
       ).toHaveLength(0);
       parse.mockRestore();
+      const prepareMembership = projection.prepareMembership.bind(projection);
+      vi.spyOn(projection, "prepareMembership").mockImplementation(async () => {
+        rowEntered.resolve();
+        await releaseRow.promise;
+        await prepareMembership();
+      });
+      // The clean subscription already refreshed compact membership for the dirty rows.
+      sessionChanges.emit({
+        sessionKey: "agent:main:dirty-0",
+        agentId: "main",
+        storePath: database.path,
+        factsInvalidated: true,
+      });
       let dirtySettled = false;
       const dirty = authorize("agent:main:dirty-0").then((result) => {
         dirtySettled = true;

@@ -26,6 +26,11 @@ export async function describeOpenAiCompatibleVideo(
     providerLabel: string;
   },
 ): Promise<VideoDescriptionResult> {
+  const { resolvePluginMetadataSnapshotAsync } =
+    await import("../plugins/plugin-metadata-snapshot.js");
+  const { owners } = await resolvePluginMetadataSnapshotAsync({
+    allowWorkspaceScopedCurrent: true,
+  });
   const fetchFn = params.fetchFn ?? fetch;
   const model = resolveMediaUnderstandingString(params.model, params.defaultModel);
   const mime = resolveMediaUnderstandingString(params.mime, "video/mp4");
@@ -42,6 +47,7 @@ export async function describeOpenAiCompatibleVideo(
         ...buildOpenAiCompatibleAuthHeaders(params),
       },
       provider: params.provider,
+      providerMetadataOwners: owners,
       api: "openai-completions",
       capability: "video",
       transport: "media-understanding",

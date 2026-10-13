@@ -4,7 +4,7 @@ import { afterEach, expect, it } from "vitest";
 import { retainPreparedPluginRegistry } from "../agents/prepared-model-runtime.plugin-lifetime.js";
 import { activatePluginRegistry } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
-import { acquirePluginRegistryForInspection, loadOpenClawPlugins } from "./loader.js";
+import { acquirePluginRegistryForInspection, loadOpenClawPluginsAsync } from "./loader.js";
 import {
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
@@ -54,7 +54,7 @@ afterEach(async () => {
 });
 
 /** A Gateway-mode lender plus the options a prepared, non-activating load uses to borrow from it. */
-function setupLender(freshBody?: string) {
+async function setupLender(freshBody?: string) {
   useNoBundledPlugins();
   const lender = writeProbePlugin(lenderId);
   const fresh = writeProbePlugin(freshId, freshBody);
@@ -68,7 +68,7 @@ function setupLender(freshBody?: string) {
     },
     cache: false,
   };
-  const gateway = loadOpenClawPlugins({
+  const gateway = await loadOpenClawPluginsAsync({
     ...options,
     onlyPluginIds: [lenderId],
     activate: false,
@@ -104,13 +104,13 @@ const firstGeneration = { content: [{ type: "text", text: "1" }] };
 it.each(["prepared", "inspection"] as const)(
   "releases a %s registry without disposing borrowed Gateway instances",
   async (mode) => {
-    const { gateway, gatewayRecord, gatewayInstance, borrowOptions } = setupLender();
+    const { gateway, gatewayRecord, gatewayInstance, borrowOptions } = await setupLender();
     const { cache: _cache, ...inspectionOptions } = borrowOptions;
     const inspection =
       mode === "inspection"
         ? await acquirePluginRegistryForInspection(inspectionOptions)
         : undefined;
-    const prepared = inspection?.registry ?? loadOpenClawPlugins(borrowOptions);
+    const prepared = inspection?.registry ?? (await loadOpenClawPluginsAsync(borrowOptions));
     if (!inspection) {
       registries.push(prepared);
     }
@@ -136,12 +136,12 @@ it.each(["prepared", "inspection"] as const)(
 );
 
 it("rolls back a failed borrowing load without retiring borrowed Gateway instances", async () => {
-  const { gateway, gatewayInstance, borrowOptions } = setupLender(
+  const { gateway, gatewayInstance, borrowOptions } = await setupLender(
     'throw new Error("fresh plugin failed");',
   );
-  expect(() => loadOpenClawPlugins({ ...borrowOptions, throwOnLoadError: true })).toThrow(
-    /fresh plugin failed|failed to load/,
-  );
+  await expect(
+    loadOpenClawPluginsAsync({ ...borrowOptions, throwOnLoadError: true }),
+  ).rejects.toThrow(/fresh plugin failed|failed to load/);
   expect(gatewayInstance.acceptingCalls).toBe(true);
   expect(gatewayInstance.disposing).toBe(false);
   await expect(bindProbe(gateway, lenderId).execute("lender", {})).resolves.toMatchObject(
@@ -150,8 +150,8 @@ it("rolls back a failed borrowing load without retiring borrowed Gateway instanc
 });
 
 it("stops borrowed callbacks when the lending Gateway retires the instance", async () => {
-  const { gateway, borrowOptions } = setupLender();
-  const prepared = loadOpenClawPlugins(borrowOptions);
+  const { gateway, borrowOptions } = await setupLender();
+  const prepared = await loadOpenClawPluginsAsync(borrowOptions);
   registries.push(prepared);
   const bound = bindProbe(prepared, lenderId);
   await expect(bound.execute("before", {})).resolves.toMatchObject(firstGeneration);
@@ -160,11 +160,11 @@ it("stops borrowed callbacks when the lending Gateway retires the instance", asy
 });
 
 it.each([true, false])("never adopts a predecessor's loan (lender supplied: %s)", async (lend) => {
-  const { gateway, gatewayRecord, gatewayInstance, borrowOptions } = setupLender();
-  const first = loadOpenClawPlugins({ ...borrowOptions, onlyPluginIds: [lenderId] });
+  const { gateway, gatewayRecord, gatewayInstance, borrowOptions } = await setupLender();
+  const first = await loadOpenClawPluginsAsync({ ...borrowOptions, onlyPluginIds: [lenderId] });
   registries.push(first);
   const releaseFirst = retainPreparedPluginRegistry(first);
-  const next = loadOpenClawPlugins({
+  const next = await loadOpenClawPluginsAsync({
     ...borrowOptions,
     onlyPluginIds: [lenderId],
     previousRegistry: first,

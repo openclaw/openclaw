@@ -127,7 +127,7 @@ export function loadEnabledClaudeBundleCommands(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
 }): ClaudeBundleCommandSpec[] {
-  if (!hasExplicitPluginConfig(params.cfg?.plugins)) {
+  if (params.cfg?.plugins?.enabled === false || !hasExplicitPluginConfig(params.cfg?.plugins)) {
     return [];
   }
   const registry = loadPluginManifestRegistryForPluginRegistry({

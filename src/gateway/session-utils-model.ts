@@ -597,6 +597,7 @@ export function projectSessionPatchResult(params: {
   preparedAcpMeta: SessionEntry["acp"] | null;
   modelCatalog?: ModelCatalogEntry[];
   modelCatalogRouteVariants?: readonly ModelCatalogEntry[];
+  metadataSnapshot?: PluginMetadataSnapshot | null;
   storePath: string;
   targetAgentId: string;
 }): SessionsPatchResult {
@@ -610,6 +611,7 @@ export function projectSessionPatchResult(params: {
     cfg: params.cfg,
     provider: resolved.provider,
     model: resolved.model,
+    metadataSnapshot: params.metadataSnapshot ?? null,
   });
   const modelCatalog = params.modelCatalog;
   const thinking = resolveGatewaySessionThinkingProjectionInternal({

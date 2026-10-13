@@ -13,6 +13,7 @@ import {
   listPluginDoctorStateMigrationEntries,
 } from "./doctor-contract-registry.js";
 import { clearPluginDoctorContractRegistryCache } from "./doctor-contract-registry.test-fixtures.js";
+import { resolvePluginMetadataSnapshotAsync } from "./plugin-metadata-snapshot.js";
 
 const tempDirs = createTempDirTracker();
 
@@ -25,6 +26,12 @@ function makeHermeticDoctorEnv(stateDir: string): NodeJS.ProcessEnv {
     OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
   };
+}
+
+async function prepareDoctorMetadata(config: OpenClawConfig, stateDir: string) {
+  const env = makeHermeticDoctorEnv(stateDir);
+  const { manifestRegistry } = await resolvePluginMetadataSnapshotAsync({ config, env });
+  return { config, env, manifestRegistry };
 }
 
 function writeDoctorFixture(
@@ -476,7 +483,7 @@ describe("doctor contract registry load-path plugins", () => {
     });
   });
 
-  it("discovers doctor warning rules from plugins.load.paths", () => {
+  it("discovers doctor warning rules from plugins.load.paths", async () => {
     const stateDir = tempDirs.make("openclaw-doctor-contract-load-paths-");
     const pluginRoot = tempDirs.make("openclaw-doctor-contract-load-paths-");
     const pluginId = "load-path-doctor";
@@ -484,8 +491,7 @@ describe("doctor contract registry load-path plugins", () => {
     const config = createDoctorPluginConfig(pluginRoot, pluginId);
 
     const rules = listPluginDoctorLegacyConfigRules({
-      config,
-      env: makeHermeticDoctorEnv(stateDir),
+      ...(await prepareDoctorMetadata(config, stateDir)),
       pluginIds: [pluginId],
     });
     expect(rules).toEqual([
@@ -502,7 +508,7 @@ describe("doctor contract registry load-path plugins", () => {
     ]);
   });
 
-  it("discovers doctor warning rules from package dist contracts", () => {
+  it("discovers doctor warning rules from package dist contracts", async () => {
     const stateDir = tempDirs.make("openclaw-doctor-contract-load-paths-");
     const pluginRoot = tempDirs.make("openclaw-doctor-contract-load-paths-");
     const pluginId = "dist-doctor";
@@ -510,8 +516,7 @@ describe("doctor contract registry load-path plugins", () => {
     const config = createDoctorPluginConfig(pluginRoot, pluginId);
 
     const rules = listPluginDoctorLegacyConfigRules({
-      config,
-      env: makeHermeticDoctorEnv(stateDir),
+      ...(await prepareDoctorMetadata(config, stateDir)),
       pluginIds: [pluginId],
     });
     expect(rules).toEqual([
@@ -540,7 +545,7 @@ describe("doctor contract registry load-path plugins", () => {
         "stripRetiredChannelKeys",
       ],
     },
-  ])("loads the preserved $pluginId package contract", ({ pluginId, importedSymbols }) => {
+  ])("loads the preserved $pluginId package contract", async ({ pluginId, importedSymbols }) => {
     const stateDir = tempDirs.make("openclaw-doctor-contract-legacy-package-");
     const pluginRoot = tempDirs.make("openclaw-doctor-contract-legacy-package-");
     writeLegacyRuntimeDoctorPlugin({ pluginRoot, pluginId, importedSymbols });
@@ -548,8 +553,7 @@ describe("doctor contract registry load-path plugins", () => {
 
     expect(
       listPluginDoctorLegacyConfigRules({
-        config,
-        env: makeHermeticDoctorEnv(stateDir),
+        ...(await prepareDoctorMetadata(config, stateDir)),
         pluginIds: [pluginId],
       }),
     ).toEqual([
@@ -560,7 +564,7 @@ describe("doctor contract registry load-path plugins", () => {
     ]);
   });
 
-  it("applies compatibility normalizers from plugins.load.paths", () => {
+  it("applies compatibility normalizers from plugins.load.paths", async () => {
     const stateDir = tempDirs.make("openclaw-doctor-contract-load-paths-");
     const pluginRoot = tempDirs.make("openclaw-doctor-contract-load-paths-");
     const pluginId = "load-path-doctor";
@@ -568,8 +572,7 @@ describe("doctor contract registry load-path plugins", () => {
     const config = createDoctorPluginConfig(pluginRoot, pluginId);
 
     const result = applyPluginDoctorCompatibilityMigrations(config, {
-      config,
-      env: makeHermeticDoctorEnv(stateDir),
+      ...(await prepareDoctorMetadata(config, stateDir)),
       pluginIds: [pluginId],
     });
     const llm = readPluginLlmPolicy(result.config, pluginId);
@@ -581,7 +584,7 @@ describe("doctor contract registry load-path plugins", () => {
     });
   });
 
-  it("discovers session route-state owners from plugins.load.paths", () => {
+  it("discovers session route-state owners from plugins.load.paths", async () => {
     const stateDir = tempDirs.make("openclaw-doctor-contract-load-paths-");
     const pluginRoot = tempDirs.make("openclaw-doctor-contract-load-paths-");
     const pluginId = "load-path-session-owner";
@@ -590,8 +593,7 @@ describe("doctor contract registry load-path plugins", () => {
 
     expect(
       listPluginDoctorSessionRouteStateOwners({
-        config,
-        env: makeHermeticDoctorEnv(stateDir),
+        ...(await prepareDoctorMetadata(config, stateDir)),
       }),
     ).toEqual([
       {
@@ -605,7 +607,7 @@ describe("doctor contract registry load-path plugins", () => {
     ]);
   });
 
-  it("keeps the deprecated module owner route for external load-path plugins", () => {
+  it("keeps the deprecated module owner route for external load-path plugins", async () => {
     const stateDir = tempDirs.make("openclaw-doctor-contract-load-paths-");
     const pluginRoot = tempDirs.make("openclaw-doctor-contract-load-paths-");
     const pluginId = "legacy-load-path-owner";
@@ -614,8 +616,7 @@ describe("doctor contract registry load-path plugins", () => {
 
     expect(
       listPluginDoctorSessionRouteStateOwners({
-        config,
-        env: makeHermeticDoctorEnv(stateDir),
+        ...(await prepareDoctorMetadata(config, stateDir)),
       }),
     ).toEqual([
       {

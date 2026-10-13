@@ -11,7 +11,7 @@ import { createEmptyAgentDiscoveryStores } from "./embedded-agent-runner/model.j
 import { appendLiveModelCandidates } from "./test-helpers/live-model-dynamic-candidates.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
-const metadataSnapshot = createPluginMetadataSnapshotFixture({
+const metadataRegistry = {
   plugins: ["deepseek", "xai"].map((id) => {
     const rootDir = fileURLToPath(new URL(`../../extensions/${id}`, import.meta.url));
     const loaded = loadPluginManifest(rootDir);
@@ -20,7 +20,8 @@ const metadataSnapshot = createPluginMetadataSnapshotFixture({
     }
     return Object.assign(loaded.manifest, { rootDir, source: path.join(rootDir, "index.ts") });
   }),
-});
+};
+let metadataSnapshot: ReturnType<typeof createPluginMetadataSnapshotFixture>;
 const config: OpenClawConfig = {
   plugins: {
     enabled: true,
@@ -34,6 +35,7 @@ const fetchMock = vi.fn(() => {
 });
 
 beforeEach(() => {
+  metadataSnapshot = createPluginMetadataSnapshotFixture(metadataRegistry);
   // Model selection uses empty auth data; credential storage is outside this contract.
   vi.spyOn(authProfileStore, "loadAuthProfileStoreForRuntimeAsync").mockResolvedValue({
     version: 1,

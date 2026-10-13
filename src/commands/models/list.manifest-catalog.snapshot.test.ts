@@ -3,9 +3,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { clearBundledDiscoveryModeMemo } from "../../plugins/bundled-discovery-state.js";
+import {
+  clearBundledDiscoveryModeMemo,
+  prepareBundledDiscoveryMode,
+} from "../../plugins/bundled-discovery-state.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
-import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   createColdPluginFixture,
   isColdPluginRuntimeLoaded,
@@ -28,7 +31,7 @@ afterEach(() => {
   tempRoots.cleanup();
 });
 
-function prepareFixture() {
+async function prepareFixture() {
   const root = fs.realpathSync(tempRoots.makeTempDir());
   const bundled = path.join(root, "bundled");
   const workspaceDir = path.join(root, "workspace");
@@ -104,7 +107,7 @@ function prepareFixture() {
     OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: "1",
     VITEST: "true",
   };
-  const metadataSnapshot = loadPluginMetadataSnapshot({
+  const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
     config: cfg,
     env,
     workspaceDir,
@@ -117,7 +120,7 @@ function prepareFixture() {
   return { cfg, env, workspaceDir, metadataSnapshot, fixtures, manifestPaths };
 }
 
-function withoutManifestIo<T>(fixture: ReturnType<typeof prepareFixture>, run: () => T) {
+function withoutManifestIo<T>(fixture: Awaited<ReturnType<typeof prepareFixture>>, run: () => T) {
   const opens = vi.spyOn(fs, "openSync");
   const reads = vi.spyOn(fs, "readFileSync");
   const isManifest = (file: unknown) =>
@@ -136,12 +139,13 @@ function withoutManifestIo<T>(fixture: ReturnType<typeof prepareFixture>, run: (
 }
 
 describe("setup prepared manifest snapshot", () => {
-  it("uses the explicit profile's allowlist instead of process compatibility policy", () => {
-    const fixture = prepareFixture();
+  it("uses the explicit profile's allowlist instead of process compatibility policy", async () => {
+    const fixture = await prepareFixture();
     const processEnv = { OPENCLAW_STATE_DIR: path.join(fixture.workspaceDir, "other-profile") };
     writeConfigMachineState("plugins.bundledDiscovery", "allowlist", { env: fixture.env });
     writeConfigMachineState("plugins.bundledDiscovery", "compat", { env: processEnv });
     clearBundledDiscoveryModeMemo();
+    (await prepareBundledDiscoveryMode(fixture.env))();
     const cfg: OpenClawConfig = {
       ...fixture.cfg,
       plugins: { ...fixture.cfg.plugins, allow: ["unrelated-owner"] },
@@ -157,8 +161,8 @@ describe("setup prepared manifest snapshot", () => {
     );
   });
 
-  it("keeps captured static provider and alias rows after manifest removal without I/O", () => {
-    const fixture = prepareFixture();
+  it("keeps captured static provider and alias rows after manifest removal without I/O", async () => {
+    const fixture = await prepareFixture();
     const coldRows = withEnv(fixture.env, () =>
       loadStaticManifestCatalogRowsForList({ cfg: fixture.cfg }),
     );

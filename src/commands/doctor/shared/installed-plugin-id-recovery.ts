@@ -3,10 +3,11 @@ import {
   getDeferredPluginMigrationConfigFacts,
   setDeferredPluginMigrationConfigFacts,
 } from "../../../config/deferred-plugin-migration-config.js";
-import { resolveConfigWidePluginMetadataSnapshot } from "../../../config/io.plugin-metadata.js";
+import { resolveConfigWidePluginMetadataSnapshotAsync } from "../../../config/io.plugin-metadata.js";
 import { ConfigMutationConflictError } from "../../../config/mutation-conflict.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
+import { preparePluginMetadataMachineStateAsync } from "../../../plugins/installed-plugin-index-record-state.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-records.js";
 import { resolvePluginManifestInstallOwner } from "../../../plugins/manifest-install-owner.js";
 import {
@@ -30,11 +31,12 @@ export type InstalledPluginIdRecovery = ReadonlyMap<string, InstalledPluginIdOwn
 
 async function resolveInstalledPluginIdOwners(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
   await using cache = createPluginCache();
-  return withPluginCache(cache, () => {
+  return await withPluginCache(cache, async () => {
+    await preparePluginMetadataMachineStateAsync({ env });
     const records = loadInstalledPluginIndexInstallRecordsSync({ env });
     // Explicit records force complete maintenance discovery, including disabled,
     // local-load and every workspace owner; a partial runtime index cannot prove absence.
-    const snapshot = resolveConfigWidePluginMetadataSnapshot({
+    const snapshot = await resolveConfigWidePluginMetadataSnapshotAsync({
       config,
       env,
       allowCurrent: false,

@@ -6,12 +6,13 @@ vi.mock("../../../browser-lifecycle-cleanup.js", { spy: true });
 vi.mock("../../../context-engine/init.js", { spy: true });
 vi.mock("../../../context-engine/registry.js", { spy: true });
 vi.mock("../../../state/openclaw-state-worker-store.js", { spy: true });
+// mock-isolation: Subagent control fixtures reuse the test registry without acquiring plugin resources.
 vi.mock("../../runtime-plugins.js", async () => {
   const { getActivePluginRegistry } = await import("../../../plugins/runtime.js");
   const { createEmptyPluginRegistry } = await import("../../../plugins/registry-empty.js");
   return {
     loadAgentRuntimePluginRegistryHandle: vi.fn<typeof loadAgentRuntimePluginRegistryHandle>(
-      () => getActivePluginRegistry() ?? createEmptyPluginRegistry(),
+      async () => getActivePluginRegistry() ?? createEmptyPluginRegistry(),
     ),
   };
 });

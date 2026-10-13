@@ -8,6 +8,7 @@ import {
 /** Resolves the concrete harness runtime that owns the next agent turn. */
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { resolveAvailableAgentHarnessPolicy } from "./harness/availability.js";
 import { resolveAutoAgentHarnessId } from "./harness/support.js";
 import type { AgentRuntimePolicyScope } from "./model-runtime-policy.js";
@@ -58,6 +59,7 @@ export function resolveEffectiveAgentRuntime(
     modelId: string;
     modelApi?: string | null;
     modelBaseUrl?: unknown;
+    metadataSnapshot?: PluginMetadataSnapshot | null;
     sessionEntry?: Pick<
       SessionEntry,
       "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked"
@@ -70,6 +72,7 @@ export function resolveEffectiveAgentRuntime(
     provider: params.provider,
     entry: params.sessionEntry,
     cfg: params.cfg,
+    metadataSnapshot: params.metadataSnapshot,
   });
   const runtime = resolveAvailableAgentHarnessPolicy({
     ...params,

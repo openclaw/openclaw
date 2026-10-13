@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../plugin-sdk/file-lock.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { captureEnv } from "../../test-utils/env.js";
 import "./oauth-external-auth-passthrough.test-support.js";
 import {
@@ -24,9 +25,10 @@ vi.mock("../../llm/oauth.js", () => ({
   getOAuthProviders: () => [{ id: "openai" }],
 }));
 
-vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
+vi.mock("../../plugins/provider-runtime.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/provider-runtime.runtime.js")>()),
   buildProviderAuthDoctorHintWithPlugin: async () => undefined,
-  formatProviderAuthProfileApiKeyWithPlugin: async (params: { context?: OAuthCredential }) =>
+  formatProviderAuthProfileApiKeyWithLazyRuntime: async (params: { context?: OAuthCredential }) =>
     params.context?.access,
   resolveProviderOAuthCredentialWithPlugin: async (params: { credential: OAuthCredential }) => {
     const credential = await refreshProviderOAuthCredentialWithPluginMock(params.credential);
@@ -34,7 +36,7 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
       ? { status: "available" as const, credential, apiKey: credential.access }
       : { status: "unhandled" as const };
   },
-  resolveProviderOAuthRefreshCapabilityWithPlugin: async () => ({
+  resolveProviderOAuthRefreshCapabilityWithLazyRuntime: async () => ({
     status: "available" as const,
   }),
 }));
@@ -97,6 +99,8 @@ describe("resolveApiKeyForProfile fallback credential validation", () => {
           throw new Error(`rejected ${credential.accountId}`);
         }
       });
+      // The passthrough external-auth fixture omits the real overlay's metadata preparation.
+      await resolvePluginMetadataSnapshotAsync({ config: {} });
       const { resolveApiKeyForProfile } = await import("./oauth.js");
 
       const resolution = resolveApiKeyForProfile({

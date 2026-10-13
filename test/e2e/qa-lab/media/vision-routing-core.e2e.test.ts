@@ -32,8 +32,17 @@ vi.mock("../../../../src/agents/prepared-model-catalog.js", () => ({
   readPreparedModelCatalog: vi.fn(async () => preparedVisionCatalog),
 }));
 
+// mock-isolation: Explicit media fixtures supply providers without loading installed capabilities.
 vi.mock("../../../../src/plugins/capability-provider-runtime.js", () => ({
   resolvePluginCapabilityProviders: () => [],
+  preparePluginCapabilityProviderResolutionAsync: async () => ({
+    load: undefined,
+    resolve: () => [],
+  }),
+  preparePluginCapabilityProviderLookupAsync: async () => ({
+    load: undefined,
+    resolve: () => undefined,
+  }),
 }));
 
 vi.mock("../../../../src/media-understanding/image-runtime.js", () => ({

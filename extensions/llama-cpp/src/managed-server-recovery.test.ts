@@ -22,7 +22,7 @@ vi.mock("./llama-server-install.js", async (importOriginal) => ({
 }));
 // mock-isolation: Exercise preparation without initializing the shared provider registry.
 vi.mock("openclaw/plugin-sdk/embedding-providers", () => ({
-  getEmbeddingProvider: () => ({ create: mocks.genericCreate }),
+  getEmbeddingProviderAsync: async () => ({ create: mocks.genericCreate }),
 }));
 // mock-isolation: Plugin preparation selects recovery policy; native process custody has owner tests.
 vi.mock("openclaw/plugin-sdk/process-runtime", () => ({

@@ -117,7 +117,11 @@ export function resolveUtilityModelRefForAgent(params: {
   }
   const provider =
     params.primaryProvider?.trim() ||
-    resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId }).provider;
+    resolveDefaultModelForAgent({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      manifestPlugins: params.metadataSnapshot?.plugins,
+    }).provider;
   return resolveAutomaticUtilityModelRef({
     cfg: params.cfg,
     primaryProvider: provider,
@@ -140,7 +144,11 @@ export function resolveAutomaticUtilityRuntimeOverride(params: {
   if (readUtilityModelSetting(params.cfg, params.agentId).kind !== "auto") {
     return undefined;
   }
-  const primary = resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
+  const primary = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    manifestPlugins: params.metadataSnapshot?.plugins,
+  });
   const utilityProvider = params.utilityProvider.trim().toLowerCase();
   if (!primary.provider || !primary.model || primary.provider.toLowerCase() !== utilityProvider) {
     return undefined;

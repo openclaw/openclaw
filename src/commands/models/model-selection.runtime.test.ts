@@ -9,13 +9,13 @@ import {
 } from "../../config/config.js";
 import { DEFAULT_MODEL_ALIASES } from "../../config/defaults.js";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
+import { nativePluginBindings } from "../../plugins/loader-runtime-load.js";
 import {
-  loadOpenClawPlugins,
+  loadOpenClawPluginsForTest,
   resetPluginLoaderTestStateForTest,
 } from "../../plugins/loader.test-fixtures.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
-import { resolvePluginProviderRegistryCore } from "../../plugins/providers.runtime.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -312,7 +312,7 @@ describe("model command provider preparation", () => {
     config.plugins!.load!.paths!.unshift(foreignDir);
     config.agents!.entries!.probe = { workspace: root };
     await isolated(async () => {
-      const registry = loadOpenClawPlugins({ config, workspaceDir: root, env: process.env });
+      const registry = loadOpenClawPluginsForTest({ config, workspaceDir: root, env: process.env });
       expect(registry.providers.map((entry) => entry.pluginId)).toEqual([
         "aaa-foreign",
         "alias-fixture",
@@ -346,14 +346,18 @@ describe("model command provider preparation", () => {
       config.agents!.entries!.probe = { workspace: root };
       await withEnvAsync({ ALIAS_CACHE_RETENTION: "long" }, () =>
         isolated(async () => {
+          const registry = loadOpenClawPluginsForTest({
+            config,
+            env: process.env,
+            workspaceDir: root,
+          });
           const metadataSnapshot = loadManifestMetadataSnapshot({
             config,
             env: process.env,
             workspaceDir: root,
           });
-          const registry = loadOpenClawPlugins({ config, env: process.env, workspaceDir: root });
           expect(
-            resolvePluginProviderRegistryCore({
+            nativePluginBindings.providerRegistry.resolvePluginProviderRegistryCore({
               config,
               workspaceDir: root,
               providerRefs: ["compat"],

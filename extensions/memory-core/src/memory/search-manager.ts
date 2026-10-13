@@ -4,10 +4,10 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   resolveAgentWorkspaceDir,
-  resolveMemorySearchConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemorySearchManager } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { resolveMemorySearchIndexConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import type { MemoryCoreRuntimeHost } from "./runtime-host.js";
@@ -40,7 +40,7 @@ export async function getMemorySearchManager(
   const startedAt = Date.now();
   let result: Omit<MemorySearchManagerResult, "debug">;
   try {
-    const settings = resolveMemorySearchConfig(params.cfg, params.agentId);
+    const settings = resolveMemorySearchIndexConfig(params.cfg, params.agentId);
     const access = settings?.sources.includes("memory")
       ? getAgentWorkspaceAccess(resolveAgentWorkspaceDir(params.cfg, params.agentId), "memoryFiles")
       : undefined;

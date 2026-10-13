@@ -5,7 +5,7 @@ import type {
   DocumentExtractionRequest,
   DocumentExtractionResult,
 } from "../plugins/document-extractor-types.js";
-import { resolvePluginDocumentExtractors } from "../plugins/document-extractors.runtime.js";
+import { resolvePluginDocumentExtractorsAsync } from "../plugins/document-extractors.runtime.js";
 
 const extractionIntegerSchema = z.number().int().max(Number.MAX_SAFE_INTEGER);
 const extractionMetadataSchema = z.object({
@@ -29,7 +29,7 @@ export async function extractDocumentContent(
 ): Promise<(DocumentExtractionResult & { extractor: string }) | null> {
   const mimeType = normalizeLowercaseStringOrEmpty(params.mimeType);
   params.signal?.throwIfAborted();
-  const extractors = resolvePluginDocumentExtractors({ config: params.config });
+  const extractors = await resolvePluginDocumentExtractorsAsync({ config: params.config });
   params.signal?.throwIfAborted();
   // Keep config and loader-only fields out of plugin calls; extractors receive the SDK request shape.
   const request: DocumentExtractionRequest = {

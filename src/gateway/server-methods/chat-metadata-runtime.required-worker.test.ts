@@ -1,5 +1,7 @@
 import { expect, test } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { createChatMetadataHarness } from "./chat-metadata-runtime.test-support.js";
 
 const config: OpenClawConfig = {
@@ -19,8 +21,28 @@ const models = ["worker-model", "other-model"].map((id) => ({
   unavailableReason: "missing-auth",
 }));
 
+async function createPreparedChatMetadataHarness(cfg: OpenClawConfig) {
+  const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({ config: cfg });
+  const harness = createChatMetadataHarness(cfg);
+  const runtime = harness.runtime;
+  return {
+    ...harness,
+    runtime: {
+      ...runtime,
+      read: (...args: Parameters<typeof runtime.read>) =>
+        withPluginMetadataSnapshotScope(metadataSnapshot, () => runtime.read(...args), {
+          config: cfg,
+        }),
+      readStartup: (...args: Parameters<typeof runtime.readStartup>) =>
+        withPluginMetadataSnapshotScope(metadataSnapshot, () => runtime.readStartup(...args), {
+          config: cfg,
+        }),
+    },
+  };
+}
+
 test("required worker chat metadata admits cold main and bookmarked sessions without Gateway auth", async () => {
-  const harness = createChatMetadataHarness(config);
+  const harness = await createPreparedChatMetadataHarness(config);
   harness.buildProjection.mockResolvedValue({ modelCatalog: models, models });
   try {
     await harness.runtime.refresh();
@@ -69,7 +91,7 @@ test.each(["missing", "gateway", "invalid-provider", "no-device", "optional"])(
     if (kind === "optional") {
       delete cfg.cloudWorkers!.requiredProfile;
     }
-    const harness = createChatMetadataHarness(cfg);
+    const harness = await createPreparedChatMetadataHarness(cfg);
     harness.buildProjection.mockResolvedValue({ modelCatalog: models, models });
     try {
       await harness.runtime.refresh();
@@ -83,7 +105,7 @@ test.each(["missing", "gateway", "invalid-provider", "no-device", "optional"])(
 );
 
 test("scopes worker metadata to the saved selection and preserves non-auth availability", async () => {
-  const harness = createChatMetadataHarness(config);
+  const harness = await createPreparedChatMetadataHarness(config);
   const cooldown = models.map((model) => ({ ...model, unavailableReason: "cooldown" }));
   harness.buildProjection.mockResolvedValue({ modelCatalog: cooldown, models: cooldown });
   try {
@@ -102,7 +124,7 @@ test.each([
   { agentRuntimeOverride: "openclaw" },
   { agentHarnessId: "codex", modelSelectionLocked: true, agentRuntimeOverride: "openclaw" },
 ])("retains upstream availability for explicit runtime selection %j", async (sessionEntry) => {
-  const harness = createChatMetadataHarness(config);
+  const harness = await createPreparedChatMetadataHarness(config);
   harness.buildProjection.mockResolvedValue({ modelCatalog: models, models });
   try {
     await harness.runtime.refresh();

@@ -1,8 +1,9 @@
-import { getRuntimeConfig } from "../../config/config.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/config.js";
 import { readActiveTranscriptEntryAnchor } from "../../config/sessions/session-accessor.sqlite-transcript-anchor.js";
 import { readActiveTranscriptEntryAnchorAsync } from "../../config/sessions/session-transcript-anchor-read.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { consumeRunSkillUsage } from "../../skills/runtime/run-usage.js";
 import {
@@ -48,26 +49,24 @@ function runCoreAgentEndSideEffects(
   if (!foregroundPromptContext) {
     return;
   }
-  // Hook contexts do not always carry the config; the runtime config is the owner at this boundary.
-  const config = params.ctx.config ?? getRuntimeConfig();
-  const schedule = (anchor: TranscriptEntryAnchor | undefined) => {
-    if (!anchor) {
-      return;
-    }
-    const ctx = { ...params.ctx, foregroundPromptContext };
-    scheduleSkillExperienceReview({
-      event: params.event,
-      ctx,
-      usedSkills,
-      config,
-      source: anchor,
-    });
-  };
   const failed = (error: unknown) => {
     // Side effects are observational; failures must not change the completed run result.
     log.warn(`skill experience review scheduling failed: ${String(error)}`);
   };
-  try {
+  const runWithConfig = (config: OpenClawConfig): void | Promise<void> => {
+    const schedule = (anchor: TranscriptEntryAnchor | undefined) => {
+      if (!anchor) {
+        return;
+      }
+      const ctx = { ...params.ctx, foregroundPromptContext };
+      scheduleSkillExperienceReview({
+        event: params.event,
+        ctx,
+        usedSkills,
+        config,
+        source: anchor,
+      });
+    };
     scheduleUnusedWorkshopSkillArchive(config, foregroundPromptContext.agentId);
     // CLI hook contexts omit skillWorkshopAvailable, so isEligibleContext rejects them.
     const source = params.skillExperienceReviewSource;
@@ -91,6 +90,16 @@ function runCoreAgentEndSideEffects(
         .catch(failed);
     }
     schedule(readActiveTranscriptEntryAnchor(source));
+  };
+  try {
+    if (params.ctx.config) {
+      return runWithConfig(params.ctx.config);
+    }
+    // Hook contexts may omit config; async callers prepare it at this owner boundary.
+    if (read === "worker") {
+      return captureRuntimeConfigAsyncReader()().then(runWithConfig).catch(failed);
+    }
+    return runWithConfig(getRuntimeConfig());
   } catch (error) {
     failed(error);
   }

@@ -13,7 +13,7 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import type { OpenClawPluginToolDelivery } from "../plugins/tool-types.js";
-import { resolvePluginTools, resolvePluginToolsSteps } from "../plugins/tools.js";
+import { resolvePluginToolsSteps } from "../plugins/tools.js";
 import type { OpenClawPluginToolContext } from "../plugins/types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveApiKeyForProfile, resolveAuthProfileOrder } from "./auth-profiles.js";
@@ -370,9 +370,7 @@ function* resolveOpenClawPluginToolSteps(
         }
       : {}),
   };
-  const pluginTools = captureAgentWorkspaceReadiness(pluginToolInputs.context.sessionKey)
-    ? yield* resolvePluginToolsSteps(resolution)
-    : resolvePluginTools(resolution);
+  const pluginTools = yield* resolvePluginToolsSteps(resolution);
   for (const tool of pluginTools) {
     existingToolNames.add(tool.name);
   }

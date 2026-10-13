@@ -2,6 +2,7 @@ import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/nu
 import { formatThinkingLevels } from "../../../auto-reply/thinking.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../../plugins/plugin-metadata-snapshot.js";
 import type { FastMode } from "../../../shared/fast-mode.js";
 import type { ResolvedAgentConfig } from "../../agent-scope-config.js";
 import {
@@ -56,12 +57,18 @@ export async function resolveSubagentModelAndThinkingPlan(params: {
   workspaceDir?: string;
   requiresTools?: boolean;
 }) {
+  const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    allowWorkspaceScopedCurrent: true,
+  });
   const { model: rawResolvedModel, resolvedModel: inheritedModel } =
     resolveSubagentSpawnModelSelection({
       cfg: params.cfg,
       agentId: params.targetAgentId,
       modelOverride: params.modelOverride,
       inheritedModel: params.inheritedModel,
+      manifestPlugins: metadataSnapshot,
     });
   const { model: requestedModel, profile: authProfileId } =
     splitTrailingAuthProfile(rawResolvedModel);

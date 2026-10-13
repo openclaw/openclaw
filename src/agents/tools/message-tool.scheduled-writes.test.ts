@@ -7,6 +7,7 @@ import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
@@ -122,6 +123,7 @@ it("separates generic sends, source reads, and simulated writes", async () => {
     setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
     const config: OpenClawConfig = { channels: { discord: { token: "fixture-token" } } };
     setRuntimeConfigSnapshot(config);
+    await prepareBundledDiscoveryMode(process.env);
     const tool = createMessageTool({
       config,
       agentId: identity.agentId,
@@ -225,6 +227,7 @@ it.each([
     const defaultAccounts: Array<string | undefined> = [];
     const outboundBoundary = new Error("account selection observed at the outbound boundary");
     setRuntimeConfigSnapshot(config);
+    await prepareBundledDiscoveryMode(process.env);
     const tool = createMessageTool({
       config,
       agentId: identity.agentId,

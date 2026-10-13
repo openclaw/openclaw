@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as currentMetadata from "../../plugins/current-plugin-metadata-snapshot.js";
+import * as metadata from "../../plugins/plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { createProviderExternalAuthResolver } from "../../plugins/provider-external-auth-core.js";
 import {
   createExternalAuthRuntime,
   syncPersistedExternalCliAuthProfiles,
@@ -35,6 +39,7 @@ beforeEach(() => {
 afterEach(() => {
   testing.resetResolveExternalAuthProfilesForTest();
   clearRuntimeAuthProfileStoreSnapshots();
+  vi.restoreAllMocks();
 });
 
 describe("external auth owner", () => {
@@ -80,7 +85,10 @@ describe("external auth owner", () => {
         }),
       ).toBe(false);
       expect(readMiniMax).toHaveBeenCalledOnce();
-      const overlaid = createExternalAuthRuntime(() => []).overlayExternalAuthProfiles(store);
+      const overlaid = createExternalAuthRuntime(
+        () => [],
+        async () => () => [],
+      ).overlayExternalAuthProfiles(store);
       expect(overlaid.profiles[profileId]).toEqual(synced.profiles[profileId]);
     },
   );
@@ -90,15 +98,17 @@ describe("external auth owner", () => {
     const config = {
       models: { providers: { openai: { auth: "oauth" as const, baseUrl: "", models: [] } } },
     };
+    const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture();
     const pluginCredential = credential();
     const resolver = vi.fn(() => [{ profileId: "openai:default", credential: pluginCredential }]);
-    const runtime = createExternalAuthRuntime(resolver);
+    const runtime = createExternalAuthRuntime(resolver, async () => resolver);
     const first = runtime.overlayExternalAuthProfiles(
       { version: 1, profiles: {} },
-      { config, externalCliProviderIds: ["openai"] },
+      { config, pluginMetadataSnapshot, externalCliProviderIds: ["openai"] },
     );
     const next = runtime.overlayExternalAuthProfiles(first, {
       config,
+      pluginMetadataSnapshot,
       externalCliProviderIds: ["openai"],
     });
     expect(next.profiles["openai:default"]).toEqual(pluginCredential);
@@ -107,6 +117,103 @@ describe("external auth owner", () => {
     expect(resolver).toHaveBeenLastCalledWith(
       expect.objectContaining({ config, context: expect.objectContaining({ config }) }),
     );
+  });
+
+  it("prepares cold external hooks and applies auth pins with the captured metadata", async () => {
+    testing.resetResolveExternalAuthProfilesForTest();
+    vi.spyOn(currentMetadata, "getCurrentPluginMetadataSnapshot").mockReturnValue(undefined);
+    const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "alias-owner",
+          providers: ["alias"],
+          contracts: { externalAuthProviders: ["alias"] },
+          providerAuthAliases: { alias: "canonical" },
+        },
+      ],
+    });
+    const prepareMetadata = vi
+      .spyOn(metadata, "resolvePluginMetadataSnapshotAsync")
+      .mockResolvedValue(pluginMetadataSnapshot);
+    const syncHooks = vi.fn(() => {
+      throw new Error("synchronous hook discovery");
+    });
+    const asyncHooks = vi.fn(async () => [
+      {
+        id: "alias",
+        label: "Alias",
+        auth: [],
+        resolveExternalAuthProfiles: () => [
+          {
+            profileId: "alias:external",
+            credential: credential({ provider: "alias" }),
+          },
+        ],
+      },
+    ]);
+    const resolver = createProviderExternalAuthResolver({
+      resolveProviderPluginsForHooks: syncHooks,
+      resolveProviderPluginsForHooksAsync: asyncHooks,
+    });
+    const runtime = createExternalAuthRuntime(
+      resolver.resolveExternalAuthProfilesWithPlugins,
+      resolver.prepareExternalAuthProfilesWithPlugins,
+    );
+    const config = {
+      models: { providers: { canonical: { auth: "api-key" as const, baseUrl: "", models: [] } } },
+    };
+    const result = await runtime.overlayExternalAuthProfilesAsync(
+      { version: 1, profiles: {} },
+      { config, env: {}, externalCliProviderIds: [] },
+    );
+    expect(result.profiles).toEqual({});
+    expect(prepareMetadata).toHaveBeenCalledWith({ config, env: {} });
+    expect(asyncHooks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginMetadataSnapshot,
+        onlyPluginIds: ["alias-owner"],
+      }),
+    );
+    expect(syncHooks).not.toHaveBeenCalled();
+  });
+
+  it("prepares hook ownership once and reads the current store at each write", async () => {
+    testing.resetResolveExternalAuthProfilesForTest();
+    const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "external-owner", contracts: { externalAuthProviders: ["custom"] } }],
+    });
+    const hook = vi.fn((context: { store: RuntimeAuthProfileStore }) => [
+      {
+        profileId: "custom:external",
+        credential: credential({
+          provider: "custom",
+          access: Object.keys(context.store.profiles).join(","),
+        }),
+      },
+    ]);
+    const asyncHooks = vi.fn(async () => [
+      { id: "custom", label: "Custom", auth: [], resolveExternalAuthProfiles: hook },
+    ]);
+    const resolver = createProviderExternalAuthResolver({
+      resolveProviderPluginsForHooks: () => {
+        throw new Error("synchronous discovery");
+      },
+      resolveProviderPluginsForHooksAsync: asyncHooks,
+    });
+    const runtime = createExternalAuthRuntime(
+      resolver.resolveExternalAuthProfilesWithPlugins,
+      resolver.prepareExternalAuthProfilesWithPlugins,
+    );
+    const list = await runtime.prepareRuntimeExternalAuthProfiles({
+      pluginMetadataSnapshot,
+      externalCliProviderIds: [],
+    });
+    expect(hook).not.toHaveBeenCalled();
+    const store: RuntimeAuthProfileStore = { version: 1, profiles: {} };
+    expect(list({ store })[0]?.credential.access).toBe("");
+    store.profiles.written = credential();
+    expect(list({ store })[0]?.credential.access).toBe("written");
+    expect(asyncHooks).toHaveBeenCalledOnce();
   });
 
   it.each([false, true])("retains external account health during a scoped=%s refresh", (scoped) => {

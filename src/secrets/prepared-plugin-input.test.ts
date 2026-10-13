@@ -4,7 +4,7 @@ import {
   getRuntimeAuthProfileStoreSnapshotsRevision,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadOpenClawPlugins } from "../plugins/loader.js";
+import { loadOpenClawPluginsAsync } from "../plugins/loader.js";
 import {
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
@@ -86,7 +86,7 @@ describe("prepared plugin secret input authority", () => {
         slots: { memory: "none" },
       },
     } satisfies OpenClawConfig;
-    const registry = loadOpenClawPlugins({ config, activate: false, cache: false });
+    const registry = await loadOpenClawPluginsAsync({ config, activate: false, cache: false });
     const record = registry.plugins.find((entry) => entry.id === plugin.id);
     const instance = record ? getPluginInstance(record) : undefined;
     expect(record?.status).toBe("loaded");
@@ -97,7 +97,7 @@ describe("prepared plugin secret input authority", () => {
 
     const started = createDeferredCore();
     const release = createDeferredCore();
-    let replacementRegistry: ReturnType<typeof loadOpenClawPlugins> | undefined;
+    let replacementRegistry: Awaited<ReturnType<typeof loadOpenClawPluginsAsync>> | undefined;
     try {
       activate("old-key", plugin.id);
       const delayed = instance.run(async () => {
@@ -108,7 +108,11 @@ describe("prepared plugin secret input authority", () => {
       await started.promise;
 
       const disposal = instance.dispose();
-      replacementRegistry = loadOpenClawPlugins({ config, activate: false, cache: false });
+      replacementRegistry = await loadOpenClawPluginsAsync({
+        config,
+        activate: false,
+        cache: false,
+      });
       const replacementRecord = replacementRegistry.plugins.find((entry) => entry.id === plugin.id);
       const replacement = replacementRecord ? getPluginInstance(replacementRecord) : undefined;
       expect(replacementRecord?.status).toBe("loaded");

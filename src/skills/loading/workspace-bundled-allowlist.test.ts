@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { preparePluginAutoEnableTestDiscovery } from "../../config/plugin-auto-enable.test-helpers.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
@@ -21,6 +22,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
       setTestEnvValue("USERPROFILE", workspaceDir);
       deleteTestEnvValue("OPENCLAW_HOME");
       deleteTestEnvValue("OPENCLAW_STATE_DIR");
+      preparePluginAutoEnableTestDiscovery();
       const bundledDir = path.join(workspaceDir, ".bundled");
       const bundledSkillDir = path.join(bundledDir, "peekaboo");
       const workspaceSkillDir = path.join(workspaceDir, "skills", "demo-skill");

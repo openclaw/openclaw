@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { useProviderCatalogMetadata } from "../../plugin-sdk/test-helpers/provider-catalog.js";
 import { inspectModelReference } from "./model-reference-validation.js";
+
+useProviderCatalogMetadata(
+  new URL("../../../extensions/openai", import.meta.url),
+  new URL("../../../extensions/openrouter", import.meta.url),
+);
 
 function inspect(cfg: OpenClawConfig, provider: string, model: string) {
   return inspectModelReference({ cfg, env: {}, ref: { provider, model } }).status;

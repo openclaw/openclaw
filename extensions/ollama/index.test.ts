@@ -1,7 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { ProviderAuthMethod, ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createPluginRuntimeMock,
+  useProviderCatalogMetadata,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { LiveModelCatalogHttpError } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createModelProviderConfig } from "../test-support/model-provider-config.test-support.js";
@@ -9,6 +12,8 @@ import plugin from "./index.js";
 import { createModel } from "./model.test-support.js";
 import { OLLAMA_DEFAULT_API_KEY } from "./src/discovery-shared.js";
 import { buildOllamaModelDefinition } from "./src/provider-models.js";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 const localBaseUrl = "http://127.0.0.1:11434";
 const cloudBaseUrl = "https://ollama.com";

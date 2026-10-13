@@ -4,7 +4,7 @@ import * as sessionHistoryWorkers from "../config/sessions/session-history-worke
 import { createHookRunner } from "../plugins/hooks.js";
 import {
   cleanupPluginLoaderFixturesForTest,
-  loadOpenClawPlugins,
+  loadOpenClawPluginsForTest,
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
   writePlugin,
@@ -102,7 +102,7 @@ test("sessions.reset delivers the ended SQLite window only to a loaded granted p
   useNoBundledPlugins();
   const grantedPlugin = writeReaderPlugin("granted");
   const ungrantedPlugin = writeReaderPlugin("ungranted");
-  const registry = loadOpenClawPlugins({
+  const registry = loadOpenClawPluginsForTest({
     cache: false,
     config: {
       plugins: {

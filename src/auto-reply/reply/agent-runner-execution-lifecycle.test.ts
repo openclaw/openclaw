@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type {
   CompactionAccountingFact,
   RunEmbeddedAgentInternalParams,
@@ -927,11 +927,13 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
   it("registers run ownership before asynchronous image preflight", async () => {
     const agentRunRegistry = await import("../../infra/agent-run-registry.js");
     const registerAgentRunContext = vi.mocked(agentRunRegistry.registerAgentRunContext);
+    const imagePreflight = createDeferred();
     let resolveImages: (() => void) | undefined;
     state.resolveCurrentTurnImagesMock.mockImplementationOnce(
       () =>
         new Promise<Record<string, never>>((resolve) => {
           resolveImages = () => resolve({});
+          imagePreflight.resolve();
         }),
     );
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -941,6 +943,11 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const runPromise = executeAgentTurn(createMinimalRunAgentTurnParams());
+    await awaitGateBeforeSettlement(
+      imagePreflight.promise,
+      runPromise,
+      "Turn settled before image preflight",
+    );
 
     expect(registerAgentRunContext).toHaveBeenCalledWith(
       expect.any(String),

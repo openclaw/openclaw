@@ -518,6 +518,10 @@ function resolveTlonOutboundSessionRouteForTest(params: ChannelOutboundSessionRo
 /** Installs a minimal channel registry for outbound session route tests. */
 export function setMinimalOutboundSessionPluginRegistryForTests(): void {
   const plugins: ChannelPlugin[] = [
+    createChannelTestPluginBase({
+      id: "openclaw-weixin",
+      capabilities: { chatTypes: ["direct"] },
+    }),
     createSessionRouteTestPlugin({
       id: "mobilechat",
       label: "Mobile Chat",

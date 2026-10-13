@@ -954,7 +954,7 @@ describe("session.message websocket events", () => {
         scopes: ["operator.read"],
       });
       const subscription = await rpcReq(ws, "sessions.messages.subscribe", { key: sessionKey });
-      expect(subscription.ok).toBe(true);
+      expect(subscription).toMatchObject({ ok: true });
 
       const persistTurn = async (params: {
         idempotencyKey: string;

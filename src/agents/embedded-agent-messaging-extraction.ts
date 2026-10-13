@@ -291,7 +291,8 @@ export function extractMessagingToolSend(
     const pluginExtracted = providerId
       ? getChannelPlugin(providerId)?.actions?.extractToolSend?.({ args: pluginExtractionArgs })
       : null;
-    to = normalizeTargetForProvider(provider, pluginExtracted?.to ?? toRaw);
+    // Without a channel, the core message tool records an opaque target.
+    to = providerHint ? normalizeTargetForProvider(provider, pluginExtracted?.to ?? toRaw) : toRaw;
     resolvedAccountId = normalizeOptionalString(pluginExtracted?.accountId) ?? accountId;
     threadId =
       normalizeOptionalString(pluginExtracted?.threadId) ?? normalizeOptionalString(args.threadId);

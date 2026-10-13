@@ -10,7 +10,7 @@ import {
 } from "../../plugin-sdk/runtime-config-snapshot.js";
 import { setGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
-import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import {
   createOperationalRunInstanceRef,
@@ -116,22 +116,22 @@ async function withSurface(
     };
     await fs.mkdir(workspaceDir, { recursive: true });
     setRuntimeConfigSnapshot(config, config);
-    const tools = withPluginCache(createPluginCache(), () => {
+    const tools = await withPluginCache(createPluginCache(), async () => {
       resetPluginRuntimeStateForTest();
       setGatewayPluginMetadataSnapshot(
-        loadPluginMetadataSnapshot({ config, workspaceDir, env: process.env }),
+        await resolvePluginMetadataSnapshotAsync({ config, workspaceDir, env: process.env }),
       );
       host = createAgentHarnessHostCapabilities({ attempt, pluginId: "test-host" });
       afterCapture?.(attempt);
       return (
-        host.capabilities.createToolSurface?.({
+        (await host.capabilities.createToolSurfaceAsync?.({
           config,
           sessionKey: attempt.sessionKey,
           workspaceDir,
           cwd: workspaceDir,
           agentDir: path.join(tempDir, "agent"),
           ...harnessOptions,
-        }) ?? []
+        })) ?? []
       );
     });
     await check(tools);

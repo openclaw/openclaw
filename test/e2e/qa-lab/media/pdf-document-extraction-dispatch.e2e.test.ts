@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { extractDocumentContent } from "../../../../src/media/document-extractors.runtime.js";
 import { extractPdfContent } from "../../../../src/media/pdf-extract.js";
-import { resolvePluginDocumentExtractors } from "../../../../src/plugins/document-extractors.runtime.js";
+import { resolvePluginDocumentExtractorsAsync } from "../../../../src/plugins/document-extractors.runtime.js";
 
 const SENTINEL = "OPENCLAW_PDF_DISPATCH_SENTINEL";
 
@@ -53,7 +53,7 @@ ${xrefOffset}
 describe("PDF document extraction dispatch", () => {
   it("uses the bundled PDF extractor and reports disabled extraction explicitly", async () => {
     const buffer = createInlinePdf(SENTINEL);
-    const bundledPdfExtractor = resolvePluginDocumentExtractors().find(
+    const bundledPdfExtractor = (await resolvePluginDocumentExtractorsAsync()).find(
       (extractor) => extractor.id === "pdf",
     );
 

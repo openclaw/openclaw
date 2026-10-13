@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as pluginState from "../plugin-state/plugin-state-store.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import * as pluginModuleRuntime from "../plugins/loader-module-runtime.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import {
@@ -11,7 +12,7 @@ import {
   makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
 } from "../plugins/loader.test-fixtures.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
@@ -24,6 +25,7 @@ afterEach(() => {
 afterAll(cleanupPluginLoaderFixturesForTest);
 
 it("prepares an agent-local Copilot BYOK harness without replacing the active root registry", async () => {
+  await preparePluginMetadataMachineStateAsync({});
   const openStore = vi
     .spyOn(pluginState, "createPluginStateSyncKeyedStore")
     .mockImplementation(() => {
@@ -87,7 +89,7 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
     onlyPluginIds: [],
     cache: false,
   });
-  const metadata = loadPluginMetadataSnapshot({
+  const metadata = await resolvePluginMetadataSnapshotAsync({
     config,
     env,
     workspaceDir,

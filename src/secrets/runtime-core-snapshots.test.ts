@@ -1,6 +1,6 @@
 /** Tests core secrets runtime snapshot preparation and activation behavior. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
+import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { resolveConfigForRead } from "../config/io.read-helpers.js";
 import {
@@ -31,13 +31,16 @@ const { resolveExternalAuthProfilesWithPluginsMock, resolvePluginWebSearchProvid
     resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
   }));
 
+// mock-isolation: Secret snapshot fixtures isolate configured provider facts from plugin discovery.
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
-  resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
+  resolvePluginWebSearchProvidersAsync: resolvePluginWebSearchProvidersMock,
 }));
 
-vi.mock("../plugins/provider-external-auth-core.js", () => ({
+vi.mock("../plugins/provider-external-auth-core.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/provider-external-auth-core.js")>()),
   createProviderExternalAuthResolver: () => ({
     resolveExternalAuthProfilesWithPlugins: resolveExternalAuthProfilesWithPluginsMock,
+    prepareExternalAuthProfilesWithPlugins: async () => resolveExternalAuthProfilesWithPluginsMock,
   }),
 }));
 
@@ -510,11 +513,11 @@ describe("secrets runtime snapshot core lanes", () => {
     });
   });
 
-  it("activates runtime snapshots for ensureAuthProfileStore", async () => {
+  it("activates runtime snapshots for ensureAuthProfileStoreAsync", async () => {
     const prepared = await prepareOpenAiRuntimeSnapshot();
     activateSecretsRuntimeSnapshot(prepared);
 
-    const runtimeProfile = ensureAuthProfileStore("/tmp/openclaw-agent-main").profiles[
+    const runtimeProfile = (await ensureAuthProfileStoreAsync("/tmp/openclaw-agent-main")).profiles[
       "openai:default"
     ] as Record<string, unknown> | undefined;
     expect(runtimeProfile?.type).toBe("api_key");

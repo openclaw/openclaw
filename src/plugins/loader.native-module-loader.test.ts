@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createCompiledSdkHost } from "./compiled-sdk-host.test-support.js";
 import { publishedSdkBridgeEntrypoints } from "./loader-sdk-bridge-artifacts.test-support.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { loadOpenClawPluginsAsync } from "./loader.js";
 import { resetPluginCache } from "./plugin-cache.js";
 import { getPluginModuleLoaderStats } from "./plugin-module-loader-cache.js";
 
@@ -102,7 +102,7 @@ afterEach(() => {
 });
 
 describe("createPluginModuleLoader", () => {
-  it("loads published pre-split SDK bridge imports (doctor repair, WhatsApp ack, Slack render)", () => {
+  it("loads published pre-split SDK bridge imports (doctor repair, WhatsApp ack, Slack render)", async () => {
     const pluginRoot = writePreSplitSdkBridgeConsumerFixture();
     const hostRoot = createCompiledSdkHost(
       publishedSdkBridgeEntrypoints,
@@ -119,7 +119,7 @@ describe("createPluginModuleLoader", () => {
     }
     const before = getPluginModuleLoaderStats();
 
-    const registry = loadOpenClawPlugins({
+    const registry = await loadOpenClawPluginsAsync({
       cache: false,
       pluginSdkResolution: hasCompiledSdk ? "dist" : "auto",
       onlyPluginIds: ["sdk-bridge-consumer"],

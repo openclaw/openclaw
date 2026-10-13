@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
 
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
@@ -14,6 +15,7 @@ const NATIVE_MODEL = "anthropic/claude-sonnet-4-6";
 const HARNESS_MODEL = "harness-only[context=272k,reasoning=medium,fast=false]";
 
 async function detect(cfg: OpenClawConfigWithLegacyRoster) {
+  await preparePluginMetadataMachineStateAsync({});
   const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/acp-agent-model");
   if (!check) {
     throw new Error("missing registered ACP agent model check");

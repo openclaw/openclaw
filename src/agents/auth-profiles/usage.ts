@@ -19,7 +19,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { resolveProviderModelAuthPolicy } from "../model-auth-policy.js";
 import { readProviderJsonResponse } from "../provider-http-errors.js";
-import { resolveProviderRequestHeaders } from "../provider-request-config.js";
+import { resolveProviderRequestHeadersAsync } from "../provider-request-config.js";
 import { persistInlineAuthFailure } from "./inline-usage.js";
 import { isSettledOAuthRefreshFailure } from "./oauth-refresh-failure.js";
 import { resolveAuthProfileOrder } from "./order.js";
@@ -219,13 +219,13 @@ async function probeWhamForCooldown(
       defaultHeaders["ChatGPT-Account-Id"] = profile.accountId;
     }
     const headers =
-      resolveProviderRequestHeaders({
+      (await resolveProviderRequestHeadersAsync({
         provider: "openai",
         baseUrl: WHAM_USAGE_URL,
         capability: "other",
         transport: "http",
         defaultHeaders,
-      }) ?? defaultHeaders;
+      })) ?? defaultHeaders;
 
     const res = await fetch(WHAM_USAGE_URL, {
       method: "GET",

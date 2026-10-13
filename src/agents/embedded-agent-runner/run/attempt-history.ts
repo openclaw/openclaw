@@ -3,6 +3,7 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion"
 import { formatContextJsonBlock } from "../../../auto-reply/reply/channel-prompt-context.js";
 import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-context-marker.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { getModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import {
   hasInterSessionUserProvenance,
@@ -336,6 +337,7 @@ export function resolveAttemptTranscriptPolicy(params: {
     resolveTranscriptPolicy({
       modelApi: params.runtimePlanModelContext.modelApi,
       directApiKey: params.runtimePlanModelContext.directApiKey,
+      runtimeHandle: getModelProviderRuntimePluginHandle(params.runtimePlanModelContext.model),
       provider: params.provider,
       modelId: params.modelId,
       config: params.config,

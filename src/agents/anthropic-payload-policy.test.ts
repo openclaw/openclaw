@@ -4,12 +4,18 @@ import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "@openclaw/ai/transports";
+import { describe, expect, it } from "vitest";
 /**
  * Tests Anthropic payload policy mutation.
  * Covers service tier, cache-control retention, prompt cache boundaries, and
  * deprecated marker compatibility.
  */
-import { describe, expect, it } from "vitest";
+import { useProviderCatalogMetadata } from "../plugin-sdk/test-helpers/provider-catalog.js";
+
+useProviderCatalogMetadata(
+  new URL("../../extensions/anthropic/", import.meta.url),
+  new URL("../../extensions/anthropic-vertex/", import.meta.url),
+);
 
 type TestPayload = {
   context_management?: unknown;

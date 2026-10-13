@@ -195,7 +195,7 @@ beforeEach(async () => {
   });
   await resetSubagentRegistryForTests({ persist: false });
   preparedRuntime.loadAgentRuntimePluginRegistryHandle.mockImplementation(
-    () => getActivePluginRegistry() ?? createTestRegistry([]),
+    async () => getActivePluginRegistry() ?? createTestRegistry([]),
   );
   vi.mocked(runSubagentAnnounceFlow).mockResolvedValue("delivered");
   vi.mocked(callGateway).mockImplementation(

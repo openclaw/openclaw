@@ -20,6 +20,7 @@ import { prepareSimpleCompletionModel } from "../../agents/simple-completion-run
 import { resolveTranscriptPolicy } from "../../agents/transcript-policy.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { resolveProviderModelRoutes } from "../../plugins/provider-model-routes.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 
@@ -91,6 +92,7 @@ async function resolveApprovedWorkerModelSelection(params: ResolveApprovedWorker
 export async function resolveApprovedWorkerLocalModel(params: ResolveApprovedWorkerModelParams) {
   const { runtimeSnapshot } = params;
   return await withPluginRuntimeGenerationScope(runtimeSnapshot, async () => {
+    await prepareBundledDiscoveryMode();
     const approved = await resolveApprovedWorkerModelSelection(params);
     if (!approved) {
       return undefined;
@@ -126,6 +128,7 @@ export async function resolveApprovedWorkerLocalModel(params: ResolveApprovedWor
 export async function resolveApprovedWorkerModel(params: ResolveApprovedWorkerModelParams) {
   const { target, signal, runtimeSnapshot, modelRef } = params;
   return await withPluginRuntimeGenerationScope(runtimeSnapshot, async () => {
+    await prepareBundledDiscoveryMode();
     const approved = await resolveApprovedWorkerModelSelection(params);
     if (!approved) {
       return undefined;

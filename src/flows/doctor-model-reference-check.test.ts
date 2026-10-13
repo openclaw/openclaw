@@ -1,8 +1,12 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as gateway from "../gateway/call.js";
 import * as gatewayLock from "../infra/gateway-lock.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { createModelReferenceCheck } from "./doctor-model-reference-check.js";
 
+beforeEach(async () => {
+  await preparePluginMetadataMachineStateAsync({});
+});
 afterEach(() => vi.restoreAllMocks());
 
 it.each([false, true])(
@@ -51,6 +55,7 @@ it.each([false, true])(
 );
 
 it("does not execute Gateway secret providers without Doctor's allow-exec opt-in", async () => {
+  await preparePluginMetadataMachineStateAsync({ env: {} });
   vi.spyOn(gateway, "isImplicitLocalGatewayTarget").mockResolvedValue(true);
   vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue({
     pid: 123,

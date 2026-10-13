@@ -128,9 +128,10 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
       replyOperation?.recordActivity();
     }
   };
-  const replyContextAccountId = routeReplyChannel
-    ? resolveReplyDeliveryAccountId(cfg, routeReplyChannel, replyRoute.accountId)
-    : undefined;
+  const replyContextAccountId =
+    routeReplyChannel && !isInternalWebchatTurn
+      ? resolveReplyDeliveryAccountId(cfg, routeReplyChannel, replyRoute.accountId)
+      : undefined;
   let normalizeReplyMediaPaths:
     | ReturnType<(typeof import("./reply-media-paths.js"))["createReplyMediaPathNormalizer"]>
     | undefined;

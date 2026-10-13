@@ -75,19 +75,23 @@ export function linkPrWrapperDependencies(destination: string): void {
       process.platform === "win32" ? "junction" : "dir",
     );
   }
-  for (const dependency of [
-    "mdast-util-from-markdown",
-    "mdast-util-gfm-table",
-    "micromark-extension-gfm-table",
-  ]) {
-    const linkedDependency = join(destination, "packages/markdown-core/node_modules", dependency);
-    mkdirSync(dirname(linkedDependency), { recursive: true });
-    if (!lstatSync(linkedDependency, { throwIfNoEntry: false })) {
-      symlinkSync(
-        realpathSync(join("packages/markdown-core/node_modules", dependency)),
-        linkedDependency,
-        process.platform === "win32" ? "junction" : "dir",
-      );
+  for (const [workspace, dependencies] of [
+    [
+      "packages/markdown-core",
+      ["mdast-util-from-markdown", "mdast-util-gfm-table", "micromark-extension-gfm-table"],
+    ],
+    ["packages/ai", ["@anthropic-ai/sdk", "@google/genai", "@mistralai/mistralai", "openai"]],
+  ] as const) {
+    for (const dependency of dependencies) {
+      const linkedDependency = join(destination, workspace, "node_modules", dependency);
+      mkdirSync(dirname(linkedDependency), { recursive: true });
+      if (!lstatSync(linkedDependency, { throwIfNoEntry: false })) {
+        symlinkSync(
+          realpathSync(join(workspace, "node_modules", dependency)),
+          linkedDependency,
+          process.platform === "win32" ? "junction" : "dir",
+        );
+      }
     }
   }
 }

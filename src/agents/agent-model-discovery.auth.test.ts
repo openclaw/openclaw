@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   resolveAgentCredentialMapFromStore,
   resolveUsableAgentCredentialModes,
@@ -90,6 +91,7 @@ describe("discoverAuthStorageFacts auth storage", () => {
           expires: Date.now() + 60_000,
         },
       }),
+      { metadataSnapshot: createPluginMetadataSnapshotFixture() },
     );
 
     expect(credentials.openrouter).toEqual({
@@ -120,24 +122,27 @@ describe("discoverAuthStorageFacts auth storage", () => {
   });
 
   it("drops runtime auth profiles with out-of-range expiry values", () => {
-    const credentials = resolveAgentCredentialMapFromStore({
-      version: 1,
-      profiles: {
-        "anthropic:bad-token-expiry": {
-          type: "token",
-          provider: "anthropic",
-          token: "sk-ant-runtime",
-          expires: MAX_DATE_TIMESTAMP_MS + 1,
-        },
-        "openai:bad-oauth-expiry": {
-          type: "oauth",
-          provider: "openai",
-          access: "oauth-access",
-          refresh: "oauth-refresh",
-          expires: MAX_DATE_TIMESTAMP_MS + 1,
+    const credentials = resolveAgentCredentialMapFromStore(
+      {
+        version: 1,
+        profiles: {
+          "anthropic:bad-token-expiry": {
+            type: "token",
+            provider: "anthropic",
+            token: "sk-ant-runtime",
+            expires: MAX_DATE_TIMESTAMP_MS + 1,
+          },
+          "openai:bad-oauth-expiry": {
+            type: "oauth",
+            provider: "openai",
+            access: "oauth-access",
+            refresh: "oauth-refresh",
+            expires: MAX_DATE_TIMESTAMP_MS + 1,
+          },
         },
       },
-    });
+      { metadataSnapshot: createPluginMetadataSnapshotFixture() },
+    );
 
     expect(credentials.anthropic).toBeUndefined();
     expect(credentials.openai).toBeUndefined();
@@ -162,6 +167,7 @@ describe("discoverAuthStorageFacts auth storage", () => {
           expires: Date.now() + 3600_000,
         },
       }),
+      { metadataSnapshot: createPluginMetadataSnapshotFixture() },
     );
 
     expect(resolved.openai).toEqual({
@@ -188,6 +194,7 @@ describe("discoverAuthStorageFacts auth storage", () => {
         }),
       );
       const { authStorage } = await discoverAuthStorageFacts(agentDir, {
+        metadataSnapshot: createPluginMetadataSnapshotFixture(),
         skipExternalAuthProfiles: true,
         env: {},
         config: {
@@ -221,8 +228,11 @@ describe("discoverAuthStorageFacts auth storage", () => {
         expires: Date.now() - 1_000,
       },
     });
-    const credentials = resolveAgentCredentialMapFromStore(store);
+    const credentials = resolveAgentCredentialMapFromStore(store, {
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
+    });
     const discoveryCredentials = resolveAgentCredentialMapFromStore(store, {
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
       includeSecretRefPlaceholders: true,
     });
 
@@ -248,11 +258,13 @@ describe("discoverAuthStorageFacts auth storage", () => {
       );
 
       const { authStorage: readOnlyStorage } = await discoverAuthStorageFacts(agentDir, {
+        metadataSnapshot: createPluginMetadataSnapshotFixture(),
         readOnly: true,
         skipExternalAuthProfiles: true,
         env: {},
       });
       const { authStorage: runtimeStorage } = await discoverAuthStorageFacts(agentDir, {
+        metadataSnapshot: createPluginMetadataSnapshotFixture(),
         skipExternalAuthProfiles: true,
         env: {},
       });
@@ -286,6 +298,7 @@ describe("discoverAuthStorageFacts auth storage", () => {
         );
 
         const { authStorage: storage } = await discoverAuthStorageFacts(agentDir, {
+          metadataSnapshot: createPluginMetadataSnapshotFixture(),
           inheritedAuthDir,
           skipExternalAuthProfiles: true,
           env: {},

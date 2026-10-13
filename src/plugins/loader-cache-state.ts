@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { LruCache } from "../infra/lru-cache.js";
 
 /** Error thrown when one plugin registry cache key attempts nested loading. */
@@ -15,6 +16,8 @@ class PluginLoadReentryError extends Error {
 export class PluginLoaderCacheState<T> {
   readonly #registryCache: LruCache<T>;
   readonly #inFlightLoads = new Set<string>();
+  readonly #asyncLoads = new Map<string, Promise<T>>();
+  readonly #asyncLoadScope = new AsyncLocalStorage<ReadonlyMap<string, { active: boolean }>>();
   readonly #openAllowlistWarningCache: LruCache<true>;
 
   constructor(
@@ -47,6 +50,38 @@ export class PluginLoaderCacheState<T> {
 
   deleteValue(state: T): void {
     this.#registryCache.deleteValue(state);
+  }
+
+  /** Serialize registration while each caller retains its own cache-hit policy. */
+  loadAsync(cacheKey: string, load: () => Promise<T>): Promise<T> {
+    const parents = this.#asyncLoadScope.getStore();
+    if (parents?.get(cacheKey)?.active) {
+      return Promise.reject(new PluginLoadReentryError(cacheKey));
+    }
+    const previous = this.#asyncLoads.get(cacheKey);
+    // The predecessor owns its failure; this caller still gets its own load policy.
+    const pending = Promise.resolve(previous)
+      .catch(() => undefined)
+      .then(() => {
+        const current = { active: true };
+        return this.#asyncLoadScope.run(
+          new Map([...(parents ?? []), [cacheKey, current]]),
+          async () => {
+            try {
+              return await load();
+            } finally {
+              current.active = false;
+            }
+          },
+        );
+      })
+      .finally(() => {
+        if (this.#asyncLoads.get(cacheKey) === pending) {
+          this.#asyncLoads.delete(cacheKey);
+        }
+      });
+    this.#asyncLoads.set(cacheKey, pending);
+    return pending;
   }
 
   isLoadInFlight(cacheKey: string): boolean {

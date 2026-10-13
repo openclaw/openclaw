@@ -21,7 +21,11 @@ import {
   createExternalChatCatalogEntry,
   createExternalChatDeletePlugin,
 } from "./channels.plugin-install.test-helpers.js";
-import { createTestConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
+import {
+  createTestConfigSnapshot,
+  createTestRuntime,
+  prepareTestCommandPluginMetadata,
+} from "./test-runtime-config-helpers.js";
 
 let channelsRemoveCommand: typeof import("./channels.js").channelsRemoveCommand;
 
@@ -520,13 +524,14 @@ describe("channelsRemoveCommand", () => {
     plugin.lifecycle = { onAccountRemoved };
 
     await expect(
-      withPluginCache(createPluginCache(), () =>
-        channelsRemoveCommand(
+      withPluginCache(createPluginCache(), async () => {
+        await prepareTestCommandPluginMetadata();
+        return channelsRemoveCommand(
           { channel: "external-chat", account: "work-phone", delete: true },
           runtime,
           { hasFlags: true },
-        ),
-      ),
+        );
+      }),
     ).rejects.toThrow('stored keys "work-phone" and "Work Phone"');
     expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
     expect(onAccountRemoved).not.toHaveBeenCalled();

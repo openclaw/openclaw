@@ -6,7 +6,7 @@ import { collectPluginConfigAssignments } from "./runtime-config-collectors-plug
 import type { ResolverContext } from "./runtime-shared.js";
 
 /** Collects every config-backed SecretRef assignment before runtime values are materialized. */
-export function collectConfigAssignments(params: {
+export async function collectConfigAssignments(params: {
   /** Mutable config snapshot that resolved secret values will be written back into. */
   config: OpenClawConfig;
   context: ResolverContext;
@@ -14,10 +14,10 @@ export function collectConfigAssignments(params: {
   agentId?: string;
   /** Optional installed plugin roots for channel/plugin contract lookup. */
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
-}): void {
+}): Promise<void> {
   const defaults = params.context.sourceConfig.secrets?.defaults;
 
-  collectCoreConfigAssignments({
+  await collectCoreConfigAssignments({
     config: params.config,
     defaults,
     context: params.context,

@@ -1,17 +1,18 @@
 // Scheduled show_widget registration and allowlist coverage.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
+import { createOpenClawCodingToolsAsync } from "./agent-tools.js";
 import { resolveEmbeddedAttemptToolConstructionPlan } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { createOpenClawToolsAsync } from "./openclaw-tools.js";
 
+// mock-isolation: Scheduled widget assembly excludes installed plugin activation.
 vi.mock("./openclaw-plugin-tools.js", () => ({
-  resolveOpenClawPluginToolsForOptions: () => [],
+  resolveOpenClawPluginToolsForOptionsAsync: async () => [],
 }));
 beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => clearRuntimeConfigSnapshot());
 
-function expectWidget(tools: ReturnType<typeof createOpenClawTools>) {
+function expectWidget(tools: Awaited<ReturnType<typeof createOpenClawToolsAsync>>) {
   const tool = tools.find((candidate) => candidate.name === "show_widget");
   if (!tool) {
     throw new Error("Expected show_widget to be registered");
@@ -32,13 +33,16 @@ function expectPinnedOnlySchema(tool: ReturnType<typeof expectWidget>): void {
 describe("pinned show_widget registration", () => {
   it.each([undefined, "agent:main:cron:job:run:detached"])(
     "requires a persistent session for recovered authoring (%s)",
-    (agentSessionKey) => {
-      const tools = createOpenClawTools({ agentSessionKey, pinnedWidgetAuthoring: true });
+    async (agentSessionKey) => {
+      const tools = await createOpenClawToolsAsync({
+        agentSessionKey,
+        pinnedWidgetAuthoring: true,
+      });
       expect(tools.some((tool) => tool.name === "show_widget")).toBe(false);
     },
   );
 
-  it("applies tool policy to recovered dashboard authoring", () => {
+  it("applies tool policy to recovered dashboard authoring", async () => {
     const options = {
       sessionKey: "agent:main:dashboard:recovered",
       pinnedWidgetAuthoring: true,
@@ -50,16 +54,16 @@ describe("pinned show_widget registration", () => {
         includePluginTools: false,
       },
     };
-    expectPinnedOnlySchema(expectWidget(createOpenClawCodingTools(options)));
-    const deniedTools = createOpenClawCodingTools({
+    expectPinnedOnlySchema(expectWidget(await createOpenClawCodingToolsAsync(options)));
+    const deniedTools = await createOpenClawCodingToolsAsync({
       ...options,
       config: { tools: { deny: ["show_widget"] } },
     });
     expect(deniedTools.some((tool) => tool.name === "show_widget")).toBe(false);
   });
 
-  it("does not let scheduled provenance replace an explicit widget cap", () => {
-    const tools = createOpenClawTools({
+  it("does not let scheduled provenance replace an explicit widget cap", async () => {
+    const tools = await createOpenClawToolsAsync({
       agentSessionKey: "agent:main:dashboard:scheduled",
       gatewayCallerScheduled: true,
     });
@@ -67,8 +71,8 @@ describe("pinned show_widget registration", () => {
     expect(tools.some((tool) => tool.name === "show_widget")).toBe(false);
   });
 
-  it("honors an explicit widget deny on the scheduled surface", () => {
-    const tools = createOpenClawTools({
+  it("honors an explicit widget deny on the scheduled surface", async () => {
+    const tools = await createOpenClawToolsAsync({
       agentSessionKey: "agent:main:dashboard:scheduled",
       gatewayCallerScheduled: true,
       runtimeToolAllowlist: ["show_widget"],
@@ -80,10 +84,10 @@ describe("pinned show_widget registration", () => {
 
   it.each(["canvas"])(
     "lets a server-authorized %s cap select pinned widget authoring",
-    (toolName) => {
+    async (toolName) => {
       const toolsAllow = [toolName];
       const plan = resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow });
-      const tools = createOpenClawCodingTools({
+      const tools = await createOpenClawCodingToolsAsync({
         sessionKey: "agent:main:dashboard:scheduled",
         scheduledToolPolicy: { version: 1, mode: "trusted" },
         runtimeToolAllowlist: plan.runtimeToolAllowlist,
@@ -96,9 +100,9 @@ describe("pinned show_widget registration", () => {
     },
   );
 
-  it("keeps scheduled turns with a real inline client on the normal widget surface", () => {
+  it("keeps scheduled turns with a real inline client on the normal widget surface", async () => {
     const tool = expectWidget(
-      createOpenClawTools({
+      await createOpenClawToolsAsync({
         agentSessionKey: "agent:main:dashboard:scheduled",
         gatewayCallerScheduled: true,
         runtimeToolAllowlist: ["show_widget"],

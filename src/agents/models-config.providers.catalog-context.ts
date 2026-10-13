@@ -25,7 +25,7 @@ import { buildOAuthRefreshFailureLoginCommand } from "./auth-profiles/oauth-refr
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { ProviderConfig } from "./models-config.providers.secret-helpers.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
-import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+import { resolvePreparedProviderIdForAuth as resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 const log = createSubsystemLogger("agents/model-providers");
 
@@ -229,11 +229,16 @@ export async function loadSelectedProviderAccountCatalog(params: {
   if (!credential) {
     return [];
   }
-  const [{ runProviderCatalogWithTimeout }, { createProviderAuthResolver }] = await Promise.all([
+  const [
+    { runProviderCatalogWithTimeout },
+    { createProviderAuthResolver },
+    { preparePluginMetadataMachineStateAsync },
+  ] = await Promise.all([
     import("./models-config.providers.implicit.js"),
     import("./models-config.providers.secrets.js"),
+    import("../plugins/installed-plugin-index-record-state.js"),
   ]);
-  await withCurrentReadAuthority(authority, () => {});
+  await withCurrentReadAuthority(authority, () => preparePluginMetadataMachineStateAsync({}));
   const selectedStore = { ...authStore, profiles: { [profileId]: credential } };
   const selectedConfig = {
     ...params.config,

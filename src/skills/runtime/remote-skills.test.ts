@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSyntheticSourceInfo } from "../../agents/sessions/source-info.js";
+import { preparePluginAutoEnableTestDiscovery } from "../../config/plugin-auto-enable.test-helpers.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
 import { buildWorkspaceSkillCommandSpecs } from "../discovery/command-specs.js";
@@ -38,6 +39,7 @@ function localEntry(name: string): SkillEntry {
 
 beforeEach(() => {
   resetRemoteNodeSkillsForTests();
+  preparePluginAutoEnableTestDiscovery();
 });
 
 afterEach(() => {

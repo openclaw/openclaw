@@ -332,10 +332,16 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
   resolveMemoryConfig: (
     cfg: OpenClawConfig,
     agentId: string,
-  ) => { store: { databasePath: string } } | null;
+  ) =>
+    | { store: { databasePath: string } }
+    | null
+    | Promise<{ store: { databasePath: string } } | null>;
   getMemorySearchManager: StatusMemorySearchManagerResolver;
   /** Whether the selected slot owner registers the provider-neutral runtime. */
-  isMemoryProviderNative?: (params: { cfg: OpenClawConfig; agentId: string }) => boolean;
+  isMemoryProviderNative?: (params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+  }) => boolean | Promise<boolean>;
   getMemoryProvider?: (params: {
     cfg: OpenClawConfig;
     agentId: string;
@@ -361,7 +367,7 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
   if (memoryPlugin.slot !== defaultSlotIdForKey("memory")) {
     // Non-default memory slots are plugin-owned; a native provider reports its health,
     // and a legacy runtime's manager reports status instead of checking built-in files.
-    if (params.isMemoryProviderNative?.({ cfg, agentId })) {
+    if (await params.isMemoryProviderNative?.({ cfg, agentId })) {
       return await resolveProviderStatusSnapshot(params, agentId, memoryPlugin.slot);
     }
     return await resolveMemoryManagerStatusSnapshot(params, agentId);
@@ -377,7 +383,7 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
     // Avoid instantiating built-in memory for users who never created the default store.
     return null;
   }
-  const resolvedMemory = params.resolveMemoryConfig(cfg, agentId);
+  const resolvedMemory = await params.resolveMemoryConfig(cfg, agentId);
   if (!resolvedMemory) {
     return null;
   }

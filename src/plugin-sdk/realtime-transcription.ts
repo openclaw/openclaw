@@ -9,7 +9,9 @@ export type {
 } from "../realtime-transcription/provider-types.js";
 export {
   getRealtimeTranscriptionProvider,
+  getRealtimeTranscriptionProviderAsync,
   listRealtimeTranscriptionProviders,
+  listRealtimeTranscriptionProvidersAsync,
   normalizeRealtimeTranscriptionProviderId,
 } from "../realtime-transcription/provider-registry.js";
 export {

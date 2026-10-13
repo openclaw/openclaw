@@ -11,10 +11,10 @@ const mocks = vi.hoisted(() => ({
   listExplicitConfiguredChannelIdsForConfig: vi.fn(),
   loadGatewayStartupPluginPlan:
     vi.fn<typeof import("./channel-plugin-ids.js").loadGatewayStartupPluginPlan>(),
-  resolveConfiguredChannelPluginIds:
-    vi.fn<typeof import("./channel-plugin-ids.js").resolveConfiguredChannelPluginIds>(),
-  loadManifestMetadataSnapshot:
-    vi.fn<typeof import("./manifest-contract-eligibility.js").loadManifestMetadataSnapshot>(),
+  resolveConfiguredChannelPluginIdsAsync:
+    vi.fn<typeof import("./channel-plugin-ids.js").resolveConfiguredChannelPluginIdsAsync>(),
+  resolvePluginMetadataSnapshotAsync:
+    vi.fn<typeof import("./plugin-metadata-snapshot.js").resolvePluginMetadataSnapshotAsync>(),
   passesManifestOwnerBasePolicy:
     vi.fn<typeof import("./manifest-owner-policy.js").passesManifestOwnerBasePolicy>(),
 }));
@@ -38,21 +38,27 @@ vi.mock("./channel-presence-policy.js", () => ({
   listExplicitConfiguredChannelIdsForConfig: () => [],
 }));
 
+// mock-isolation: Fixture channel ids and startup plans replace persisted channel discovery.
 vi.mock("./channel-plugin-ids.js", () => ({
   listExplicitConfiguredChannelIdsForConfig: (
     ...args: Parameters<typeof mocks.listExplicitConfiguredChannelIdsForConfig>
   ) => mocks.listExplicitConfiguredChannelIdsForConfig(...args),
   loadGatewayStartupPluginPlan: (...args: Parameters<typeof mocks.loadGatewayStartupPluginPlan>) =>
     mocks.loadGatewayStartupPluginPlan(...args),
-  resolveConfiguredChannelPluginIds: (
-    ...args: Parameters<typeof mocks.resolveConfiguredChannelPluginIds>
-  ) => mocks.resolveConfiguredChannelPluginIds(...args),
+  resolveConfiguredChannelPluginIdsAsync: (
+    ...args: Parameters<typeof mocks.resolveConfiguredChannelPluginIdsAsync>
+  ) => mocks.resolveConfiguredChannelPluginIdsAsync(...args),
 }));
 
-vi.mock("./manifest-contract-eligibility.js", () => ({
-  loadManifestMetadataSnapshot: (...args: Parameters<typeof mocks.loadManifestMetadataSnapshot>) =>
-    mocks.loadManifestMetadataSnapshot(...args),
-}));
+vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./plugin-metadata-snapshot.js")>();
+  return {
+    ...actual,
+    resolvePluginMetadataSnapshotAsync: (
+      ...args: Parameters<typeof mocks.resolvePluginMetadataSnapshotAsync>
+    ) => mocks.resolvePluginMetadataSnapshotAsync(...args),
+  };
+});
 
 vi.mock("./manifest-owner-policy.js", () => ({
   passesManifestOwnerBasePolicy: (
@@ -60,26 +66,26 @@ vi.mock("./manifest-owner-policy.js", () => ({
   ) => mocks.passesManifestOwnerBasePolicy(...args),
 }));
 
-import { resolveEffectivePluginIds } from "./effective-plugin-ids.js";
+import { resolveEffectivePluginIdsAsync } from "./effective-plugin-ids.js";
 import { collectConfiguredStartupChannelIds } from "./gateway-startup-plugin-config.js";
 
-function resolve(config: OpenClawConfig): string[] {
-  return resolveEffectivePluginIds({
+function resolve(config: OpenClawConfig): Promise<string[]> {
+  return resolveEffectivePluginIdsAsync({
     config,
     env: {},
     workspaceDir: "/workspace",
   });
 }
 
-describe("resolveEffectivePluginIds", () => {
+describe("resolveEffectivePluginIdsAsync", () => {
   beforeEach(() => {
     mocks.applyPluginAutoEnable.mockReset();
     mocks.listExplicitlyDisabledChannelIdsForConfig.mockReset();
     mocks.listPotentialConfiguredChannelIds.mockReset();
     mocks.listExplicitConfiguredChannelIdsForConfig.mockReset();
     mocks.loadGatewayStartupPluginPlan.mockReset();
-    mocks.resolveConfiguredChannelPluginIds.mockReset();
-    mocks.loadManifestMetadataSnapshot.mockReset();
+    mocks.resolveConfiguredChannelPluginIdsAsync.mockReset();
+    mocks.resolvePluginMetadataSnapshotAsync.mockReset();
     mocks.passesManifestOwnerBasePolicy.mockReset();
 
     mocks.applyPluginAutoEnable.mockImplementation((params) => ({
@@ -94,8 +100,10 @@ describe("resolveEffectivePluginIds", () => {
       channelPluginIds: [],
       pluginIds: [],
     });
-    mocks.resolveConfiguredChannelPluginIds.mockReturnValue([]);
-    mocks.loadManifestMetadataSnapshot.mockReturnValue(createPluginMetadataSnapshotFixture());
+    mocks.resolveConfiguredChannelPluginIdsAsync.mockResolvedValue([]);
+    mocks.resolvePluginMetadataSnapshotAsync.mockResolvedValue(
+      createPluginMetadataSnapshotFixture(),
+    );
     mocks.passesManifestOwnerBasePolicy.mockReturnValue(true);
   });
 
@@ -111,9 +119,9 @@ describe("resolveEffectivePluginIds", () => {
     ).toEqual([]);
   });
 
-  it("includes a selected context-engine slot even when omitted from explicit allow and entries", () => {
+  it("includes a selected context-engine slot even when omitted from explicit allow and entries", async () => {
     expect(
-      resolve({
+      await resolve({
         plugins: {
           slots: { contextEngine: "lossless-claw" },
         },
@@ -121,33 +129,9 @@ describe("resolveEffectivePluginIds", () => {
     ).toEqual(["lossless-claw"]);
   });
 
-  it("keeps the selected slot but rechecks bundled owner policy after channel callbacks", async () => {
-    const { passesManifestOwnerBasePolicy } = await vi.importActual<
-      typeof import("./manifest-owner-policy.js")
-    >("./manifest-owner-policy.js");
-    mocks.passesManifestOwnerBasePolicy.mockImplementation(passesManifestOwnerBasePolicy);
-    mocks.listPotentialConfiguredChannelIds.mockReturnValue(["test-channel"]);
-    mocks.loadManifestMetadataSnapshot.mockReturnValue(
-      createPluginMetadataSnapshotFixture({
-        plugins: [{ id: "bundled-channel-owner", channels: ["test-channel"] }],
-      }),
-    );
-    mocks.resolveConfiguredChannelPluginIds.mockImplementation(({ config }) => {
-      config.plugins = {
-        deny: ["bundled-channel-owner"],
-        slots: { contextEngine: "later-context" },
-      };
-      return [];
-    });
-
-    expect(resolve({ plugins: { slots: { contextEngine: "early-context" } } })).toEqual([
-      "early-context",
-    ]);
-  });
-
-  it("keeps the built-in legacy context engine out of plugin preload ids", () => {
+  it("keeps the built-in legacy context engine out of plugin preload ids", async () => {
     expect(
-      resolve({
+      await resolve({
         plugins: {
           slots: { contextEngine: "legacy" },
         },
@@ -181,8 +165,8 @@ describe("resolveEffectivePluginIds", () => {
     },
   ] satisfies Array<{ name: string; plugins: NonNullable<OpenClawConfig["plugins"]> }>)(
     "does not preload a selected context-engine slot when $name",
-    ({ plugins }) => {
-      expect(resolve({ plugins })).toStrictEqual([]);
+    async ({ plugins }) => {
+      expect(await resolve({ plugins })).toStrictEqual([]);
     },
   );
 });

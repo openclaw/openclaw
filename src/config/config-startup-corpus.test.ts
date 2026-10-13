@@ -10,6 +10,7 @@ import { normalizeCompatibilityConfigValues } from "../commands/doctor/shared/le
 import { migrateLegacyConfig } from "../commands/doctor/shared/legacy-config-migrate.js";
 import { loadGatewayStartupConfigSnapshot } from "../gateway/server-startup-config-helpers.js";
 import { resolveBundledDirFromPackageRoot } from "../plugins/bundled-dir.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { resolveProviderChannelLoginChoice } from "../plugins/provider-login-options.js";
 import {
   listConfigCorpusFixtureNames,
@@ -134,6 +135,7 @@ describe("operator config startup corpus", () => {
       observe: false,
     }).readConfigFileSnapshot();
     expect(snapshot.valid).toBe(false);
+    await prepareBundledDiscoveryMode(env);
     const migrated = migrateLegacyConfig(snapshot.sourceConfig, {
       sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
     });
@@ -168,6 +170,7 @@ describe("operator config startup corpus", () => {
       expect(snapshot.sourceConfig.plugins?.entries?.["github-copilot"]?.config).toEqual({
         discovery: { enabled },
       });
+      await prepareBundledDiscoveryMode();
       const repaired = migrateLegacyConfig(snapshot.sourceConfig, {
         sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
       });
@@ -234,6 +237,7 @@ describe("operator config startup corpus", () => {
         observe: false,
       });
       const snapshot = await io.readConfigFileSnapshot();
+      await prepareBundledDiscoveryMode(env);
       const migrated = applyLegacyCompatibilityStep({
         snapshot,
         state: {
@@ -245,6 +249,7 @@ describe("operator config startup corpus", () => {
         shouldRepair: true,
         doctorFixCommand: "openclaw doctor --fix",
       });
+      await prepareBundledDiscoveryMode(env);
       const normalized = normalizeCompatibilityConfigValues(migrated.state.candidate, {
         sourceRaw: snapshot.parsed,
       });

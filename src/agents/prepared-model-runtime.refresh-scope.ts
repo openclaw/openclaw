@@ -2,6 +2,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  getCurrentPluginMetadataSnapshot,
+  withPluginMetadataSnapshotScope,
+} from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { withAgentRosterFactsBatch } from "./agent-scope-config.js";
 import { assertPreparedModelRuntimeAdmissionCanWait } from "./prepared-model-runtime-admission.js";
@@ -152,6 +157,41 @@ export function updateOwnersForScopedRefresh(
   // Fence the whole scope before disposal can reenter plugin code. Idle publications
   // must not hold the replacement drain; admitted leases retain their own generation.
   retiredPublications.forEach(releasePreparedPluginPublication);
+}
+
+/** Resolve the refresh scope from published metadata and its prepared policy facts. */
+export function resolveInitialRefreshAgentIds(
+  config: OpenClawConfig | (() => OpenClawConfig | Promise<OpenClawConfig>),
+  options: PreparedModelRuntimeRefreshOptions,
+  owners: Map<string, PreparedModelRuntimeOwner>,
+): ReadonlySet<string> | undefined {
+  if (typeof config === "function" || !options.agentIds) {
+    return undefined;
+  }
+  const metadata =
+    options.pluginMetadataSnapshot ??
+    getCurrentPluginMetadataSnapshot({
+      config,
+      allowWorkspaceScopedSnapshot: true,
+    });
+  return metadata
+    ? withPluginMetadataSnapshotScope(
+        metadata,
+        () => resolveSafeRefreshAgentIds(config, options, owners),
+        { config },
+      )
+    : undefined;
+}
+
+/** Prepares config selection without replacing workspace-owned build metadata. */
+export async function withPreparedModelRefreshScope<T>(
+  config: OpenClawConfig,
+  options: PreparedModelRuntimeRefreshOptions,
+  run: () => Promise<T>,
+): Promise<T> {
+  const metadata =
+    options.pluginMetadataSnapshot ?? (await resolvePluginMetadataSnapshotAsync({ config }));
+  return await withPluginMetadataSnapshotScope(metadata, run, { config });
 }
 
 /** Includes unfinished or changed owners without replacing unrelated prepared generations. */

@@ -30,12 +30,19 @@ async function fetchGeneratedVideoDownload(params: {
     resolveProviderHttpRequestConfig,
     sanitizeConfiguredModelProviderRequest,
   } = await import("../../plugin-sdk/provider-http.js");
+  const { resolvePluginMetadataSnapshotAsync } =
+    await import("../../plugins/plugin-metadata-snapshot.js");
+  const snapshot = await resolvePluginMetadataSnapshotAsync({
+    config: params.cfg,
+    allowWorkspaceScopedCurrent: true,
+  });
   const providerConfig = params.cfg.models?.providers?.[params.provider];
   const { allowPrivateNetwork, dispatcherPolicy } = resolveProviderHttpRequestConfig({
     baseUrl: params.url,
     defaultBaseUrl: params.url,
     request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
     provider: params.provider,
+    providerMetadataOwners: snapshot.owners,
     capability: "video",
     transport: "http",
   });

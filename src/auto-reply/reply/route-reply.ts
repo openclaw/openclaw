@@ -16,6 +16,7 @@ import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloa
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
@@ -169,6 +170,9 @@ async function routeReplyOperation(
   const channelId =
     normalizeChannelId(channel) ?? normalizeOptionalLowercaseString(channel) ?? null;
   const loadedPlugin = channelId ? getLoadedChannelPlugin(channelId) : undefined;
+  if (channelId && !loadedPlugin) {
+    await resolvePluginMetadataSnapshotAsync({ config: cfg, allowWorkspaceScopedCurrent: true });
+  }
   const bundledPlugin = channelId && !loadedPlugin ? getBundledChannelPlugin(channelId) : undefined;
   const messaging = loadedPlugin?.messaging ?? bundledPlugin?.messaging;
   const threading = loadedPlugin?.threading ?? bundledPlugin?.threading;

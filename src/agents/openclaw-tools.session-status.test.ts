@@ -146,21 +146,26 @@ function createModelCatalogModuleMock() {
     readPreparedModelCatalog: async () => {
       throw new Error("prepared model catalog owner config was replaced during the read (/tmp)");
     },
-    loadPublishedPreparedModelCatalog: async () => [
-      {
-        provider: "anthropic",
-        id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.6",
-        contextWindow: 200000,
+    loadPublishedPreparedModelCatalogOwnerSnapshot: async () => ({
+      metadataSnapshot: emptyPluginMetadataSnapshot,
+      modelCatalog: {
+        entries: [
+          {
+            provider: "anthropic",
+            id: "claude-sonnet-4-6",
+            name: "Claude Sonnet 4.6",
+            contextWindow: 200000,
+          },
+          {
+            provider: "openai",
+            id: "gpt-5.4",
+            name: "GPT-5.4",
+            reasoning: true,
+            contextWindow: 400000,
+          },
+        ],
       },
-      {
-        provider: "openai",
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        reasoning: true,
-        contextWindow: 400000,
-      },
-    ],
+    }),
   };
 }
 
@@ -168,6 +173,7 @@ function createAuthProfilesModuleMock() {
   return {
     ensureAuthProfileStore: () => ({ profiles: {} }),
     resolveAuthProfileDisplayLabel: () => undefined,
+    isConfiguredAwsSdkAuthProfileForProvider: () => false,
     resolveAuthProfileOrder: () => [],
   };
 }
@@ -256,7 +262,10 @@ vi.mock("./tools/in-process-gateway.js", () => ({
   hasGatewayToolRoutingContext: () => false,
 }));
 vi.mock("../config/config.js", createConfigModuleMock);
-vi.mock("../agents/prepared-model-catalog.js", createModelCatalogModuleMock);
+vi.mock("../agents/prepared-model-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/prepared-model-catalog.js")>()),
+  ...createModelCatalogModuleMock(),
+}));
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: () => undefined,
 }));
@@ -269,7 +278,9 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
   isPluginMetadataSnapshotCompatible: () => true,
   resolvePluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
+// mock-isolation: Session status uses fixture thinking facts without loading provider policy runtimes.
 vi.mock("../plugins/provider-thinking.js", () => ({
+  prepareModelCatalogThinkingPolicies: () => undefined,
   resolveProviderBinaryThinking: () => undefined,
   resolveProviderDefaultThinkingLevel: () => undefined,
   resolveEffectiveThinkingProfile: () => undefined,
@@ -281,6 +292,7 @@ vi.mock("../plugins/provider-thinking.js", () => ({
 vi.mock("../plugins/providers.runtime.js", () => ({
   resolvePluginProvidersCore: () => [],
 }));
+// mock-isolation: Session status uses fixture auth profiles without reading host credentials.
 vi.mock("../agents/auth-profiles.js", createAuthProfilesModuleMock);
 // mock-isolation: Session status uses fixture auth labels without discovering host keys or accounts.
 vi.mock("../agents/model-auth.js", createModelAuthModuleMock);

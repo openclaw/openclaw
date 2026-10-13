@@ -12,6 +12,7 @@ import {
 } from "../config/types.secrets.js";
 import { visitConfigValueTree } from "../config/value-tree.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import {
   formatExecSecretRefIdValidationMessage,
   isValidFileSecretRefId,
@@ -474,6 +475,7 @@ export async function readConfigPatchOperations(
   if (!isPlainRecord(patch)) {
     throw configPatchModeError("input must be a JSON5 object patch.");
   }
+  await resolvePluginMetadataSnapshotAsync({});
   const operations: ConfigSetOperation[] = [];
   const pathKey = (path: readonly PathSegment[]) => JSON.stringify(path);
   const replacePathKeys = new Set(replacePaths.map(pathKey));

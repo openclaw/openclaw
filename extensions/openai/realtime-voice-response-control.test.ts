@@ -1,3 +1,4 @@
+import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 // Openai tests cover realtime voice provider plugin behavior.
 import type {
   RealtimeVoiceBridge,
@@ -52,6 +53,8 @@ const {
   restoreTestEnvironment,
 } = createOpenAIRealtimeTestSupport({ ...mocks, buildOpenAIRealtimeVoiceProvider });
 
+useProviderCatalogMetadata(new URL(".", import.meta.url));
+
 describe("OpenAI realtime voice response control", () => {
   beforeEach(() => {
     resetTestState();
@@ -71,7 +74,7 @@ describe("OpenAI realtime voice response control", () => {
       onReady,
     });
     bridgeRef.current = bridge;
-    const { connecting, socket } = beginBridgeConnection(bridge);
+    const { connecting, socket } = await beginBridgeConnection(bridge);
 
     openSocket(socket);
     await Promise.resolve();

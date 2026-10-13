@@ -321,8 +321,12 @@ export async function createPairedNodeWorkerHost(
     { handleInvoke },
     { NodeWorkerBundleInstaller },
     { createNodeWorkerSupervisor },
-    { snapshotNodeWorkerNativeInference },
+    { snapshotNodeWorkerNativeInferenceAsync },
     { NodeWorkerWorkspaceRuntime },
+    { withPluginMetadataSnapshotScope },
+    { createPluginCache, withPluginCache },
+    { resolvePluginMetadataSnapshotAsync },
+    { withEnvAsync },
   ] = await Promise.all([
     import("../../../../src/infra/device-identity.js"),
     import("../../../../src/node-host/invoke.js"),
@@ -330,6 +334,10 @@ export async function createPairedNodeWorkerHost(
     import("../../../../src/node-host/node-worker-supervisor.js"),
     import("../../../../src/node-host/node-worker-native-inference.js"),
     import("../../../../src/node-host/node-worker-workspace.js"),
+    import("../../../../src/plugins/current-plugin-metadata-snapshot.js"),
+    import("../../../../src/plugins/plugin-cache.js"),
+    import("../../../../src/plugins/plugin-metadata-snapshot.js"),
+    import("../../../../src/test-utils/env.js"),
   ]);
   const label = options.label ?? "node";
   const nodeStateDir = path.join(options.root, `${label}-state`);
@@ -344,9 +352,21 @@ export async function createPairedNodeWorkerHost(
   await fs.mkdir(nodeEnv.HOME, { recursive: true });
   const workspace = new NodeWorkerWorkspaceRuntime({ root: nodeHostRoot, env: nodeEnv });
   const bundleInstaller = new NodeWorkerBundleInstaller({ root: nodeHostRoot, env: nodeEnv });
-  const nativeInferenceSnapshot = options.nodeConfig
-    ? snapshotNodeWorkerNativeInference(options.nodeConfig, nodeEnv)
-    : undefined;
+  let nativeInferenceSnapshot: Awaited<ReturnType<typeof snapshotNodeWorkerNativeInferenceAsync>>;
+  if (options.nodeConfig) {
+    const config = options.nodeConfig;
+    await using cache = createPluginCache();
+    const metadata = await withPluginCache(cache, () =>
+      resolvePluginMetadataSnapshotAsync({ config, env: nodeEnv }),
+    );
+    nativeInferenceSnapshot = await withEnvAsync(nodeEnv, () =>
+      withPluginMetadataSnapshotScope(
+        metadata,
+        () => snapshotNodeWorkerNativeInferenceAsync(config, nodeEnv),
+        { config, env: nodeEnv },
+      ),
+    );
+  }
   let capacity = { total: options.capacity ?? 2, available: 0 };
   let environmentSession = options.environmentSession ?? true;
   let client: GatewayClient | undefined;

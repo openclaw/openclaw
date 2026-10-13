@@ -124,7 +124,7 @@ export function readSessionRowInputs(params: {
     params.rowContext ??
     buildSessionListRowMetadataContext({ now, sessionKeys: [key, ...Object.keys(store)] });
   const displayName = resolveGatewaySessionDisplayName(key, entry);
-  const { selectedModel, rowModelIdentity, thinkingProjection, catalogEntry } =
+  const { selectedModel, rowModelIdentity, thinkingProjection, catalogEntry, metadataSnapshot } =
     readSessionRowModelFacts({
       cfg,
       key,
@@ -167,6 +167,7 @@ export function readSessionRowInputs(params: {
     terminalModel: params.terminalModel,
     storeAgentId: params.storeAgentId,
     selectedModel,
+    metadataSnapshot,
     projectedAgentRuns: (rowContext.projectedAgentRuns ??= buildProjectedAgentRunIndex()),
     entry,
     agentId,
@@ -259,6 +260,7 @@ export function readSessionRowInputs(params: {
       hasAutomation: sessionHasAutomation(key, cfg, agentId) ? true : undefined,
       rowModelIdentity,
       selectedModel,
+      modelMetadata: metadataSnapshot,
       contextTokens: resolveProjectedSessionContextTokens({
         entry,
         provider,
@@ -323,6 +325,7 @@ export function resolveGatewaySessionActiveModel(params: {
   sessionKey: string;
   projectedAgentRuns: ProjectedAgentRunIndex;
   selectedModel: { provider: string; model: string };
+  metadataSnapshot?: PluginMetadataSnapshot | null;
   entry?: InternalSessionEntry;
   storePath: string;
 }): { provider: string; model: string } | undefined {
@@ -334,9 +337,6 @@ export function resolveGatewaySessionActiveModel(params: {
   if (params.active ?? liveModel !== undefined) {
     return liveModel ?? undefined;
   }
-  if (!params.entry?.fallbackNotice) {
-    return undefined;
-  }
   const { selectedModel } = params;
 
   const fallbackEntry =
@@ -346,6 +346,7 @@ export function resolveGatewaySessionActiveModel(params: {
           selectedModel: selectedModel.model,
           sessionEntry: params.entry,
           config: params.cfg,
+          metadataSnapshot: params.metadataSnapshot,
           terminalModel: params.terminalModel ?? null,
           sessionScope: {
             agentId: params.storeAgentId ?? params.agentId,
@@ -365,6 +366,7 @@ export function resolveGatewaySessionActiveModel(params: {
     selectedModelRef: selected.label,
     activeModelRef: active.label,
     config: params.cfg,
+    metadataSnapshot: params.metadataSnapshot,
     state: params.entry,
   }).active
     ? { provider: active.provider, model: active.model }
@@ -628,6 +630,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
       cfg,
       entry,
       selectedModel: input.selectedModel,
+      modelMetadata: input.modelMetadata,
       rowModelIdentity: input.rowModelIdentity,
       thinkingProjection: {
         acpMeta: input.thinkingProjection.acpMeta,

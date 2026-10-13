@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEnabledBundledManifestContractPlugins } from "./bundled-manifest-contract-plugins.js";
+import { preparePluginMetadataMachineStateAsync } from "./installed-plugin-index-record-state.js";
 import { sortPluginEntriesForAutoDetect } from "./plugin-entry-order.js";
 import { loadBundledPublicArtifactEntries } from "./public-artifact-factories.js";
 import type {
@@ -8,7 +9,7 @@ import type {
   WebContentExtractorPlugin,
 } from "./web-content-extractor-types.js";
 
-export function resolvePluginWebContentExtractors(params?: {
+function resolvePluginWebContentExtractors(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -41,4 +42,13 @@ export function resolvePluginWebContentExtractors(params?: {
     }
   }
   return sortPluginEntriesForAutoDetect(extractors);
+}
+
+/** Prepares worker-owned metadata before resolving the caller's extractor inventory. */
+export async function resolvePluginWebContentExtractorsAsync(
+  params?: Parameters<typeof resolvePluginWebContentExtractors>[0],
+): Promise<PluginWebContentExtractorEntry[]> {
+  const activateMetadata = await preparePluginMetadataMachineStateAsync({ env: params?.env });
+  activateMetadata();
+  return resolvePluginWebContentExtractors(params);
 }

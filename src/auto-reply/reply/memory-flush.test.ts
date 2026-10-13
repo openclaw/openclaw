@@ -3,13 +3,14 @@ import {
   resolveOpenAIResponsesPayloadPolicy,
 } from "@openclaw/ai/transports";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   createEmptyAgentDiscoveryStores,
   resolveModelAsync,
 } from "../../agents/embedded-agent-runner/model.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { modelKey } from "../../shared/model-key.js";
@@ -19,6 +20,10 @@ import { createMockFollowupRun } from "./test-helpers.js";
 
 const TEST_MODEL_ID = "gpt-5.4";
 const TEST_CONTEXT_WINDOW = 200_000;
+
+beforeAll(async () => {
+  await prepareBundledDiscoveryMode();
+});
 
 function buildModelConfig(
   route: Pick<

@@ -3,7 +3,7 @@ import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   buildRemoteCommand,
   prepareSandboxProcessCleanup,
-  sanitizeEnvVars,
+  sanitizeEnvVarsAsync,
 } from "openclaw/plugin-sdk/sandbox";
 import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexNativeProcessClient } from "../native-process-authority.js";
@@ -27,9 +27,6 @@ export async function startProcess(
 ): Promise<JsonObject> {
   const record = requireObject(params, "process/start params");
   const processId = requireString(record.processId, "processId");
-  if (processes.has(processId)) {
-    throw new Error(`process already exists: ${processId}`);
-  }
   const argv = requireStringArray(record.argv, "argv");
   const cwd = resolveExecServerPath(requireString(record.cwd, "cwd"), "process cwd");
   if (record.arg0 !== undefined && record.arg0 !== null) {
@@ -40,7 +37,10 @@ export async function startProcess(
     );
   }
   assertSupportedProcessSandbox(execServer, record);
-  const env = readProcessEnv(record);
+  const env = await readProcessEnv(record);
+  if (processes.has(processId)) {
+    throw new Error(`process already exists: ${processId}`);
+  }
   const tty = record.tty === true;
   const pipeStdin = record.pipeStdin === true;
   const managed: ManagedProcess = {
@@ -451,7 +451,7 @@ function readEnv(value: unknown): Record<string, string> {
   return env;
 }
 
-function readProcessEnv(record: JsonObject): Record<string, string> {
+async function readProcessEnv(record: JsonObject): Promise<Record<string, string>> {
   const value = record.envPolicy;
   const policy = value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
   const inheritedEnv = readEnv(policy?.set);
@@ -466,7 +466,7 @@ function readProcessEnv(record: JsonObject): Record<string, string> {
   }
   // Codex inherits its app-server's full environment by default. Scrub again at
   // this last boundary so no credential can cross into any sandbox backend.
-  return sanitizeEnvVars({ ...inheritedEnv, ...readEnv(record.env) }).allowed;
+  return (await sanitizeEnvVarsAsync({ ...inheritedEnv, ...readEnv(record.env) })).allowed;
 }
 
 function wildcardPatternToRegex(pattern: string): RegExp {

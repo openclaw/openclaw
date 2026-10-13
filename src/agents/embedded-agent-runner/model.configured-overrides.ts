@@ -135,6 +135,7 @@ export function resolveConfiguredProviderDefaultApi(params: {
   provider: string;
   providerConfig: InlineProviderConfig | undefined;
   cfg?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
 }): Api | undefined {

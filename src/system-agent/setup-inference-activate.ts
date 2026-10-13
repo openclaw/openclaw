@@ -385,7 +385,7 @@ async function verifyAndActivateCandidate(
               agentId: routeAgentId,
             },
             pendingPluginInstalls: staged.pendingPluginInstalls,
-            resolvePluginMetadataSnapshot: resolveMetadata,
+            resolvePluginMetadataSnapshot: deps.resolvePluginMetadataSnapshot,
           }),
         )
       : undefined;

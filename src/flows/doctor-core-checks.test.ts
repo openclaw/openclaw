@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretProviderConfig } from "../config/types.secrets.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { withSecureTestNodeCommand } from "../secrets/test-node-command.test-support.js";
 import type { SecurityAuditFinding } from "../security/audit.types.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
@@ -112,7 +113,7 @@ function getCheck(checks: readonly HealthCheck[], id: string): HealthCheck {
 
 describe("CORE_HEALTH_CHECKS", () => {
   let tmp: string | undefined;
-  beforeEach(() => {
+  beforeEach(async () => {
     mocks.loadModelCatalog.mockClear();
     mocks.loadModelCatalog.mockResolvedValue([]);
     mocks.callGateway.mockReset();
@@ -122,6 +123,7 @@ describe("CORE_HEALTH_CHECKS", () => {
     mocks.collectSecurityWarnings.mockReset();
     mocks.collectWorkspaceSuggestionNotes.mockReset();
     tmp = undefined;
+    await preparePluginMetadataMachineStateAsync({});
   });
 
   afterEach(async () => {

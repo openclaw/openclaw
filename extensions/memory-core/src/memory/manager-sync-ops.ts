@@ -490,7 +490,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       provider: this.provider,
       lifecycle: this.providerLifecycle,
     });
-    const fallbackRequest = resolveMemoryFallbackProviderRequest({
+    const fallbackRequest = await resolveMemoryFallbackProviderRequest({
       cfg: this.cfg,
       settings: this.settings,
       currentProviderId,

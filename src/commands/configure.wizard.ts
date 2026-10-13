@@ -157,7 +157,7 @@ async function promptWebToolsConfig(
     if (configureManagedProvider) {
       const { resolveSearchProviderOptions, runSearchSetupFlow } =
         await import("../flows/search-setup.js");
-      const searchProviderOptions = resolveSearchProviderOptions(nextConfig);
+      const searchProviderOptions = await resolveSearchProviderOptions(nextConfig);
       if (searchProviderOptions.length === 0) {
         note(
           [

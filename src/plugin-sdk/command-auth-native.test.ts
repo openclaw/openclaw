@@ -1,5 +1,7 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import {
   resolveCommandAuthorization,
   resolveCommandAuthorizationAsync,
@@ -10,55 +12,61 @@ import type { GatewayRequestHandlerOptions } from "./gateway-runtime.js";
 import { resolveSessionModelRef } from "./model-session-runtime.js";
 
 describe("plugin-sdk/command-auth-native", () => {
-  it("keeps prepared host metadata outside public model resolver inputs", () => {
-    type PublishedCatalog = NonNullable<
-      Awaited<
-        ReturnType<
-          NonNullable<GatewayRequestHandlerOptions["context"]["readPreparedGatewayModelCatalog"]>
-        >
-      >
-    >;
-    expectTypeOf<keyof PublishedCatalog>().toEqualTypeOf<
-      "entries" | "pluginRegistry" | "routeVariants"
-    >();
-    type StoredModelInput = Parameters<typeof resolveStoredModelOverride>[0];
-    expectTypeOf<keyof StoredModelInput>().toEqualTypeOf<
-      | "loadSessionEntry"
-      | "sessionEntry"
-      | "sessionStore"
-      | "sessionKey"
-      | "parentSessionKey"
-      | "defaultProvider"
-      | "allowPluginNormalization"
-    >();
-    expectTypeOf<NonNullable<Parameters<typeof resolveSessionModelRef>[3]>>().toEqualTypeOf<{
-      allowPluginNormalization?: boolean;
-    }>();
-    const options = {
-      allowPluginNormalization: false,
-      manifestPlugins: [
-        {
-          modelIdNormalization: {
-            providers: { example: { aliases: { raw: "injected" } } },
-          },
-        },
-      ],
-    };
-    const params = {
-      defaultProvider: "example",
-      sessionEntry: { sessionId: "sdk-model", updatedAt: 1, modelOverride: "raw" },
-      ...options,
-    };
-    expect(resolveStoredModelOverride(params)?.model).toBe("raw");
-    expect(
-      resolveSessionModelRef(
-        { agents: { defaults: { model: "example/raw" } } },
-        undefined,
-        undefined,
-        options,
-      ),
-    ).toEqual({ provider: "example", model: "raw" });
-  });
+  it("keeps prepared host metadata outside public model resolver inputs", () =>
+    withPluginRuntimeGenerationScope(
+      { metadataSnapshot: createPluginMetadataSnapshotFixture() },
+      () => {
+        type PublishedCatalog = NonNullable<
+          Awaited<
+            ReturnType<
+              NonNullable<
+                GatewayRequestHandlerOptions["context"]["readPreparedGatewayModelCatalog"]
+              >
+            >
+          >
+        >;
+        expectTypeOf<keyof PublishedCatalog>().toEqualTypeOf<
+          "entries" | "pluginRegistry" | "routeVariants"
+        >();
+        type StoredModelInput = Parameters<typeof resolveStoredModelOverride>[0];
+        expectTypeOf<keyof StoredModelInput>().toEqualTypeOf<
+          | "loadSessionEntry"
+          | "sessionEntry"
+          | "sessionStore"
+          | "sessionKey"
+          | "parentSessionKey"
+          | "defaultProvider"
+          | "allowPluginNormalization"
+        >();
+        expectTypeOf<NonNullable<Parameters<typeof resolveSessionModelRef>[3]>>().toEqualTypeOf<{
+          allowPluginNormalization?: boolean;
+        }>();
+        const options = {
+          allowPluginNormalization: false,
+          manifestPlugins: [
+            {
+              modelIdNormalization: {
+                providers: { example: { aliases: { raw: "injected" } } },
+              },
+            },
+          ],
+        };
+        const params = {
+          defaultProvider: "example",
+          sessionEntry: { sessionId: "sdk-model", updatedAt: 1, modelOverride: "raw" },
+          ...options,
+        };
+        expect(resolveStoredModelOverride(params)?.model).toBe("raw");
+        expect(
+          resolveSessionModelRef(
+            { agents: { defaults: { model: "example/raw" } } },
+            undefined,
+            undefined,
+            options,
+          ),
+        ).toEqual({ provider: "example", model: "raw" });
+      },
+    ));
 
   it("preserves the native authorization result contract", async () => {
     type PublishedAuthorization = {

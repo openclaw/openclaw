@@ -74,8 +74,9 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir,
 }));
 
+// mock-isolation: Doctor memory diagnostics use fixture search configuration without provider discovery.
 vi.mock("../agents/memory-search.js", () => ({
-  resolveMemorySearchConfig,
+  resolveMemorySearchConfigAsync: async (...args: unknown[]) => resolveMemorySearchConfig(...args),
 }));
 
 vi.mock("../agents/model-auth.js", () => ({
@@ -262,7 +263,7 @@ describe("noteMemorySearchHealth", () => {
     resolveManifestOwnerBasePolicyBlock.mockReset();
     resolveManifestOwnerBasePolicyBlock.mockReturnValue(null);
     resolveActiveMemoryBackendConfig.mockReset();
-    resolveActiveMemoryBackendConfig.mockReturnValue({ backend: "builtin" });
+    resolveActiveMemoryBackendConfig.mockResolvedValue({ backend: "builtin" });
     noteWorkspaceMemoryHealth.mockClear();
   });
 
@@ -389,7 +390,7 @@ describe("noteMemorySearchHealth", () => {
   });
 
   it("reports global plugin disablement before the inactive memory-runtime gate", async () => {
-    resolveActiveMemoryBackendConfig.mockReturnValueOnce(null);
+    resolveActiveMemoryBackendConfig.mockResolvedValueOnce(null);
 
     await runMemorySearchHealth(
       "local",
@@ -442,7 +443,7 @@ describe("noteMemorySearchHealth", () => {
   });
 
   it("still reports a missing memory backend in intentional FTS-only mode", async () => {
-    resolveActiveMemoryBackendConfig.mockReturnValue(null);
+    resolveActiveMemoryBackendConfig.mockResolvedValue(null);
     await runMemorySearchHealth("none", {}, { fallback: "none" });
 
     expect(note).toHaveBeenCalledWith(
@@ -600,7 +601,7 @@ describe("noteMemorySearchHealth", () => {
       false,
     ],
   ])("%s", async (_name, plugins, isActive) => {
-    resolveActiveMemoryBackendConfig.mockReturnValue(null);
+    resolveActiveMemoryBackendConfig.mockResolvedValue(null);
     const config = { session: { dmScope: "per-peer" }, plugins } as unknown as OpenClawConfig;
     await runMemorySearchHealth("auto", undefined, undefined, config);
     expect(resolveApiKeyForProviderCore).not.toHaveBeenCalled();
@@ -613,7 +614,7 @@ describe("noteMemorySearchHealth", () => {
   });
 
   it("does not warn when CLI backend resolution is missing but gateway memory is ready", async () => {
-    resolveActiveMemoryBackendConfig.mockReturnValue(null);
+    resolveActiveMemoryBackendConfig.mockResolvedValue(null);
     await runMemorySearchHealth("auto", readyGatewayOptions);
     expect(resolveApiKeyForProviderCore).not.toHaveBeenCalled();
     expect(note).not.toHaveBeenCalled();

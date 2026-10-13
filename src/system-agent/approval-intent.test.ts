@@ -56,11 +56,11 @@ const classifySystemAgentApprovalIntent: typeof classifySystemAgentApprovalInten
 
 beforeAll(async () => {
   restoreCliBackendFixture = installSystemAgentClaudeCliBackendTestFixture();
-  const defaultSnapshot = createSystemAgentPluginMetadataTestSnapshot(
+  const defaultSnapshot = await createSystemAgentPluginMetadataTestSnapshot(
     verifiedInferenceConfig(DEFAULT_MODEL),
   );
   sharedVerifiedInference = await createVerifiedInference(DEFAULT_MODEL, defaultSnapshot);
-  cliPluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot(
+  cliPluginMetadataSnapshot = await createSystemAgentPluginMetadataTestSnapshot(
     verifiedInferenceConfig(CLI_MODEL),
   );
 });

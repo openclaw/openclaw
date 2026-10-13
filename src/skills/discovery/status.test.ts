@@ -3,8 +3,9 @@ import { execFileSync } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { preparePluginAutoEnableTestDiscovery } from "../../config/plugin-auto-enable.test-helpers.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { readLocalSkillCardContentSync } from "../lifecycle/clawhub-status.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
@@ -13,6 +14,10 @@ import { buildWorkspaceSkillReadiness, buildWorkspaceSkillStatus } from "./statu
 
 type SkillStatus = ReturnType<typeof buildWorkspaceSkillStatus>["skills"][number];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+beforeEach(() => {
+  preparePluginAutoEnableTestDiscovery();
+});
 
 describe("buildWorkspaceSkillStatus", () => {
   it("selects dependency recipes using the workspace host platform and binaries", () => {

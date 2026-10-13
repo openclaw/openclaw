@@ -160,7 +160,7 @@ const WebFetchOutputSchema = Type.Object(
 type WebFetchConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["fetch"];
 type ResolveWebFetchDefinition =
   (typeof import("../../web-fetch/runtime.js"))["resolveWebFetchDefinition"];
-type WebFetchProviderFallback = ReturnType<ResolveWebFetchDefinition>;
+type WebFetchProviderFallback = Awaited<ReturnType<ResolveWebFetchDefinition>>;
 const loadWebFetchRuntime = createLazyPromise(() => import("../../web-fetch/runtime.js"));
 const loadWebGuardedFetch = createLazyPromise(() => import("./web-guarded-fetch.js"));
 

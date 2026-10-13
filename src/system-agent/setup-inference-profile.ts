@@ -1,5 +1,5 @@
 import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
-import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
+import { resolvePreparedProviderIdForAuth as resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { buildAgentRuntimeAuthPlan } from "../agents/runtime-plan/auth.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
 import type { ActivateSetupInferenceDeps } from "./setup-inference-core.js";

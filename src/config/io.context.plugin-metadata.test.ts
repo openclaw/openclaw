@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { publishBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import {
   recordPluginCandidateInstallOwner,
   resolvePluginCandidateInstallOwner,
@@ -103,6 +104,7 @@ describe("config IO plugin metadata snapshots", () => {
   beforeEach(() => {
     clearCurrentPluginMetadataSnapshot();
     clearPluginMetadataLifecycleCaches();
+    publishBundledDiscoveryMode(undefined, {});
     mocks.resolvePluginMetadataSnapshotInput.mockReset();
   });
 

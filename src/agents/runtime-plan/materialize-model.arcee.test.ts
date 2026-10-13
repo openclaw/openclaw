@@ -1,8 +1,19 @@
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { registerSingleProviderPlugin } from "../../plugin-sdk/plugin-test-runtime.js";
+import { loadPluginManifest } from "../../plugins/manifest.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { materializePreparedRuntimeModel } from "./materialize-model.js";
+
+const arceeManifest = loadPluginManifest(
+  fileURLToPath(new URL("../../../extensions/arcee/", import.meta.url)),
+);
+if (!arceeManifest.ok) {
+  throw new Error(arceeManifest.error);
+}
+const metadataSnapshot = createPluginMetadataSnapshotFixture({ plugins: [arceeManifest.manifest] });
 
 describe("Arcee OpenRouter profile materialization", () => {
   it("retains the selected default while materializing its vendor wire id", async () => {
@@ -27,6 +38,7 @@ describe("Arcee OpenRouter profile materialization", () => {
       modelId: "trinity-large-thinking",
       model,
       config: {},
+      metadataSnapshot,
       forceResolve: true,
       plan: {
         providerForAuth: "openrouter",
@@ -54,6 +66,7 @@ describe("Arcee OpenRouter profile materialization", () => {
         provider: "arcee",
         modelId: "trinity-large-thinking",
         config: {},
+        metadataSnapshot,
         forceResolve: true,
         plan: {
           providerForAuth: "openrouter",

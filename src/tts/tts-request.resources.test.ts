@@ -7,7 +7,10 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "../plugins/loader.js";
+import {
+  acquirePluginRegistryForInspection,
+  loadPluginRegistryHandleAsync,
+} from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   makePluginLoaderTempDir,
@@ -282,7 +285,7 @@ describe.each([
               ? undefined
               : await acquirePluginRegistryForInspection({ config: fixture.cfg });
           const registry =
-            inspection?.registry ?? loadPluginRegistryHandle({ config: fixture.cfg });
+            inspection?.registry ?? (await loadPluginRegistryHandleAsync({ config: fixture.cfg }));
           let parentRelease: Promise<void> | undefined;
           if (owner === "managed-config") {
             fixture.state.callbacks.onResolveConfig = () => {

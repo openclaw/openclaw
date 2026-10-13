@@ -1,3 +1,4 @@
+import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 // Openai tests cover realtime voice provider plugin behavior.
 import type { RealtimeVoiceBridgeEvent } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -49,6 +50,8 @@ const {
   rejectedKeyMessage: OPENAI_REALTIME_REJECTED_KEY_MESSAGE,
 } = createOpenAIRealtimeTestSupport({ ...mocks, buildOpenAIRealtimeVoiceProvider });
 
+useProviderCatalogMetadata(new URL(".", import.meta.url));
+
 describe("OpenAI realtime voice bridge reconnect", () => {
   beforeEach(() => {
     resetTestState();
@@ -64,7 +67,7 @@ describe("OpenAI realtime voice bridge reconnect", () => {
     const onEvent = vi.fn();
     const onReady = vi.fn();
     const bridge = createNativeBridge({ onError, onEvent, onReady });
-    const { connecting, socket: firstSocket } = beginBridgeConnection(bridge);
+    const { connecting, socket: firstSocket } = await beginBridgeConnection(bridge);
 
     openSocket(firstSocket);
     emitSessionUpdated(firstSocket);
@@ -122,7 +125,7 @@ describe("OpenAI realtime voice bridge reconnect", () => {
     const onEvent = vi.fn();
     const onReady = vi.fn();
     const bridge = createNativeBridge({ onClose, onError, onEvent, onReady });
-    const { connecting, socket: firstSocket } = beginBridgeConnection(bridge);
+    const { connecting, socket: firstSocket } = await beginBridgeConnection(bridge);
 
     firstSocket.deferClose = true;
     openSocket(firstSocket);
@@ -141,7 +144,10 @@ describe("OpenAI realtime voice bridge reconnect", () => {
     expect(onClose).toHaveBeenCalledOnce();
     expect(onClose).toHaveBeenCalledWith("completed");
 
-    const { connecting: reconnecting, socket: secondSocket } = beginBridgeConnection(bridge, 1);
+    const { connecting: reconnecting, socket: secondSocket } = await beginBridgeConnection(
+      bridge,
+      1,
+    );
     firstSocket.emitDeferredClose();
     openSocket(secondSocket);
     emitSessionUpdated(secondSocket);
@@ -269,7 +275,7 @@ describe("OpenAI realtime voice bridge reconnect", () => {
       onClose,
       onError,
     });
-    const { connecting, socket: firstSocket } = beginBridgeConnection(bridge);
+    const { connecting, socket: firstSocket } = await beginBridgeConnection(bridge);
 
     openSocket(firstSocket);
     emitSessionUpdated(firstSocket);
@@ -310,7 +316,7 @@ describe("OpenAI realtime voice bridge reconnect", () => {
     const onError = vi.fn();
     const onEvent = vi.fn();
     const bridge = createNativeBridge({ onClose, onError, onEvent });
-    const { connecting, socket: firstSocket } = beginBridgeConnection(bridge);
+    const { connecting, socket: firstSocket } = await beginBridgeConnection(bridge);
 
     openSocket(firstSocket);
     emitSessionUpdated(firstSocket);
@@ -358,7 +364,7 @@ describe("OpenAI realtime voice bridge reconnect", () => {
   it("keeps a retried connection ready after delayed startup failure close", async () => {
     const onClose = vi.fn();
     const bridge = createNativeBridge({ onClose });
-    const { connecting: failedConnect, socket: failedSocket } = beginBridgeConnection(bridge);
+    const { connecting: failedConnect, socket: failedSocket } = await beginBridgeConnection(bridge);
     failedSocket.deferClose = true;
 
     openSocket(failedSocket);
@@ -375,7 +381,10 @@ describe("OpenAI realtime voice bridge reconnect", () => {
     await expect(failedConnect).rejects.toThrow(OPENAI_REALTIME_REJECTED_KEY_MESSAGE);
     expect(failedSocket.deferredClose).toBeDefined();
 
-    const { connecting: retryConnect, socket: retrySocket } = beginBridgeConnection(bridge, 1);
+    const { connecting: retryConnect, socket: retrySocket } = await beginBridgeConnection(
+      bridge,
+      1,
+    );
     openSocket(retrySocket);
     emitSessionUpdated(retrySocket);
     await retryConnect;

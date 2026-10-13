@@ -7,8 +7,8 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { normalizeMediaFacts } from "../media/media-facts.js";
 import { isAudioAttachment } from "./attachments.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
+import { acquireMediaUnderstandingRegistry } from "./provider-registry.js";
 import {
-  buildProviderRegistry,
   createMediaAttachmentCache,
   normalizeMediaAttachments,
   resolveMediaAttachmentLocalRoots,
@@ -51,29 +51,36 @@ export async function transcribeFirstAudio(params: {
     const media = [firstAudio];
     const { agentDir, providers, activeModel } = params;
     const localPathRoots = resolveMediaAttachmentLocalRoots({ cfg, ctx });
-    const providerRegistry = buildProviderRegistry(providers, cfg);
+    const acquired = await acquireMediaUnderstandingRegistry({ cfg, overrides: providers });
+    const providerRegistry = acquired.registry;
     const cache = createMediaAttachmentCache(media, {
       localPathRoots,
       ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
     });
     let transcript: string | undefined;
     try {
-      const result = await runCapability({
-        capability: "audio",
-        cfg,
-        ctx,
-        attachments: cache,
-        media,
-        agentDir,
-        providerRegistry,
-        config: cfg.tools?.media?.audio,
-        activeModel,
-      });
+      const result = await acquired.run(() =>
+        runCapability({
+          capability: "audio",
+          cfg,
+          ctx,
+          attachments: cache,
+          media,
+          agentDir,
+          providerRegistry,
+          config: cfg.tools?.media?.audio,
+          activeModel,
+        }),
+      );
       transcript = result.outputs
         .find((entry) => entry.kind === "audio.transcription")
         ?.text?.trim();
     } finally {
-      await cache.cleanup();
+      try {
+        await cache.cleanup();
+      } finally {
+        await acquired.release();
+      }
     }
     if (!transcript) {
       return undefined;

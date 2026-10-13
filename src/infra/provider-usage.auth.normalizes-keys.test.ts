@@ -3,6 +3,10 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type {
   ProviderResolveUsageAuthContext,
   ProviderResolvedUsageAuth,
@@ -108,6 +112,34 @@ describe("resolveProviderAuths key normalization", () => {
   });
 
   beforeEach(() => {
+    vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync").mockResolvedValue(
+      createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "zai",
+            providers: ["zai"],
+            setup: { providers: [{ id: "zai", envVars: ["ZAI_API_KEY", "Z_AI_API_KEY"] }] },
+          },
+          {
+            id: "minimax",
+            providers: ["minimax"],
+            setup: {
+              providers: [
+                {
+                  id: "minimax",
+                  envVars: ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY", "MINIMAX_API_KEY"],
+                },
+              ],
+            },
+          },
+          {
+            id: "xiaomi",
+            providers: ["xiaomi"],
+            setup: { providers: [{ id: "xiaomi", envVars: ["XIAOMI_API_KEY"] }] },
+          },
+        ],
+      }),
+    );
     authProfileMocks.store.profiles = {};
     authProfileMocks.orders = {};
     authProfileMocks.resolvedProfiles.clear();
@@ -159,15 +191,26 @@ describe("resolveProviderAuths key normalization", () => {
     config: OpenClawConfig = {},
     env: NodeJS.ProcessEnv = {},
   ) {
-    return withSuiteHome(async (home) =>
-      resolveProviderAuths({
-        providers,
+    return withSuiteHome(async (home) => {
+      const suiteEnv = buildSuiteEnv(home, env);
+      await preparePluginMetadataMachineStateAsync({ env: suiteEnv });
+      const snapshot = await pluginMetadata.resolvePluginMetadataSnapshotAsync({
         config,
-        env: buildSuiteEnv(home, env),
-        store: authProfileMocks.store,
-        agentDir: agentDirForHome(home),
-      }),
-    );
+        env: suiteEnv,
+      });
+      return withPluginMetadataSnapshotScope(
+        snapshot,
+        () =>
+          resolveProviderAuths({
+            providers,
+            config,
+            env: suiteEnv,
+            store: authProfileMocks.store,
+            agentDir: agentDirForHome(home),
+          }),
+        { env: suiteEnv, trustConfigIdentity: true },
+      );
+    });
   }
 
   it("strips embedded CR/LF from env credentials", async () => {

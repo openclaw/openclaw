@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   cleanupPluginLoaderFixturesForTest,
-  loadOpenClawPlugins,
+  loadOpenClawPluginsForTest,
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
   writePlugin,
@@ -41,7 +41,7 @@ describe("native Control UI manifest", () => {
       },
       ["widget", "page", "widget"],
     );
-    const registry = loadOpenClawPlugins({
+    const registry = loadOpenClawPluginsForTest({
       cache: false,
       workspaceDir: plugin.dir,
       config: { plugins: { load: { paths: [plugin.file] }, allow: [plugin.id] } },

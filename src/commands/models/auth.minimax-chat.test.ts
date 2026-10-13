@@ -20,7 +20,7 @@ const discovery = vi.hoisted(() => {
 });
 vi.mock("../../plugins/providers.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/providers.runtime.js")>()),
-  resolvePluginProvidersCore: () => discovery.providers,
+  resolvePluginProvidersCoreAsync: async () => discovery.providers,
 }));
 vi.mock("../../plugins/setup-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/setup-registry.js")>()),

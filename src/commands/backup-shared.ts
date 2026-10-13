@@ -16,6 +16,7 @@ import {
 } from "../infra/backup-config-capture.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { assertNotUpdateCapturePath, isUpdateCapturePath } from "../infra/update-capture-paths.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import {
   resolveActivatedPluginBackupInventory,
   type ActivatedPluginBackupInventory,
@@ -583,6 +584,11 @@ async function resolveBackupPlanFromState(params: {
     oauthDir,
   }).workspaceDirs;
   const agentRoots = await resolveBackupAgentRoots(discoverySnapshot.config);
+  await preparePluginMetadataMachineStateAsync({
+    env: process.env,
+    stateDir,
+    artifactPreservingReadOnly: true,
+  });
   const pluginInventory = resolveActivatedPluginBackupInventory({
     config: discoverySnapshot.config,
     env: process.env,

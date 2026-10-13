@@ -1,3 +1,4 @@
+import { EventEmitter as SocketCreationEvents, once } from "node:events";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
@@ -16,6 +17,17 @@ export function createOpenAIRealtimeMockState() {
     static readonly OPEN = 1;
     static readonly CLOSED = 3;
     static instances: MockWebSocket[] = [];
+    private static readonly created = new SocketCreationEvents();
+
+    static async waitForInstance(index: number, signal: AbortSignal): Promise<MockWebSocket> {
+      for (;;) {
+        const socket = this.instances[index];
+        if (socket) {
+          return socket;
+        }
+        await once(this.created, "socket", { signal });
+      }
+    }
 
     readonly listeners = new Map<string, Listener[]>();
     readyState = 0;
@@ -30,6 +42,7 @@ export function createOpenAIRealtimeMockState() {
     constructor(...args: unknown[]) {
       this.args = args;
       MockWebSocket.instances.push(this);
+      MockWebSocket.created.emit("socket");
     }
 
     on(event: string, listener: Listener): this {
@@ -116,6 +129,7 @@ type FakeWebSocketConstructor<T extends FakeWebSocketLike> = {
   new (...args: unknown[]): T;
   readonly OPEN: number;
   instances: T[];
+  waitForInstance(index: number, signal: AbortSignal): Promise<T>;
 };
 
 type OpenAIInternalRealtimeVoiceProviderApi = Required<
@@ -231,12 +245,21 @@ export function createOpenAIRealtimeTestSupport<T extends FakeWebSocketLike>(dep
     return socket;
   }
 
-  function beginBridgeConnection(
+  async function beginBridgeConnection(
     bridge: RealtimeVoiceBridge,
     socketIndex = 0,
-  ): { connecting: Promise<void>; socket: FakeWebSocketInstance } {
+  ): Promise<{ connecting: Promise<void>; socket: FakeWebSocketInstance }> {
     const connecting = bridge.connect();
-    return { connecting, socket: requireSocket(socketIndex) };
+    const waiting = new AbortController();
+    try {
+      const socket = await Promise.race([
+        FakeWebSocket.waitForInstance(socketIndex, waiting.signal),
+        connecting.then(() => requireSocket(socketIndex)),
+      ]);
+      return { connecting, socket };
+    } finally {
+      waiting.abort();
+    }
   }
 
   function openSocket(socket: FakeWebSocketInstance): void {
@@ -310,7 +333,7 @@ export function createOpenAIRealtimeTestSupport<T extends FakeWebSocketLike>(dep
     bridge: RealtimeVoiceBridge,
     socketIndex = 0,
   ): Promise<FakeWebSocketInstance> {
-    const { connecting, socket } = beginBridgeConnection(bridge, socketIndex);
+    const { connecting, socket } = await beginBridgeConnection(bridge, socketIndex);
     openSocket(socket);
     emitSessionUpdated(socket);
     await connecting;

@@ -4,6 +4,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { resetSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import {
   emitSessionTranscriptUpdate,
   onInternalSessionTranscriptUpdate,
@@ -49,6 +50,7 @@ describe("session history SSE source ownership", () => {
   test.each(["physical store", "canonical key", "lifecycle revision", "lifecycle owner"] as const)(
     "does not publish inline payloads from a different %s",
     async (mismatch) => {
+      await prepareBundledDiscoveryMode();
       // Reserved sentinels keep their physical owners across multiple stores.
       const requestedKey = mismatch === "physical store" ? "global" : sessionKey;
       const root = tempDirs.make("openclaw-history-source-");

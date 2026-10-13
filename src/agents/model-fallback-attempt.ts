@@ -4,6 +4,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronTerminalAbortReasonText } from "../cron/service/execution-errors.js";
 import { renewAgentRunDeadline } from "../infra/agent-run-deadline.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isCommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { findAgentRunTerminalOutcome } from "./agent-run-terminal-error.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
@@ -85,6 +88,7 @@ export function resolveFallbackAuthScope(params: {
 
 export type ModelFallbackRuntimeContext = {
   cfg?: OpenClawConfig;
+  metadataSnapshot?: PluginMetadataSnapshot;
   agentId?: string;
   sessionKey?: string;
   resolveAgentHarnessRuntimeOverride?: (provider: string, model: string) => string | undefined;
@@ -419,17 +423,30 @@ export function resolveNextFallbackCandidateIndex(params: {
 
 export async function resolveModelFallbackCandidateHarnessAuthPrecheck(
   params: ModelFallbackRuntimeContext & ModelCandidate,
-): Promise<{ skipsProviderAuthCooldown: boolean; agentHarnessRuntimeOverride?: string }> {
+): Promise<{
+  skipsProviderAuthCooldown: boolean;
+  agentHarnessRuntimeOverride?: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
+}> {
+  const metadataSnapshot =
+    params.metadataSnapshot ??
+    (params.cfg
+      ? await resolvePluginMetadataSnapshotAsync({
+          config: params.cfg,
+          allowWorkspaceScopedCurrent: true,
+        })
+      : undefined);
   const { agentHarnessRuntimeOverride, explicitAgentRuntime, runtime, runtimeSource } =
-    resolveModelFallbackCandidateAgentRuntime(params);
+    resolveModelFallbackCandidateAgentRuntime({ ...params, metadataSnapshot });
   const result = (skipsProviderAuthCooldown: boolean) => ({
     skipsProviderAuthCooldown,
+    metadataSnapshot,
     agentHarnessRuntimeOverride,
   });
   if (!params.cfg) {
     return result(false);
   }
-  if (!explicitAgentRuntime && isCliProvider(params.provider, params.cfg)) {
+  if (!explicitAgentRuntime && isCliProvider(params.provider, params.cfg, metadataSnapshot)) {
     return result(true);
   }
   if (!runtime) {
@@ -452,7 +469,10 @@ export async function resolveModelFallbackCandidateHarnessAuthPrecheck(
     return result(true);
   }
   const cliRuntime = normalizeOptionalString(runtime);
-  if (cliRuntime && (isCliRuntimeAlias(cliRuntime) || isCliProvider(cliRuntime, params.cfg))) {
+  if (
+    cliRuntime &&
+    (isCliRuntimeAlias(cliRuntime) || isCliProvider(cliRuntime, params.cfg, metadataSnapshot))
+  ) {
     // CLI-owned auth must not inherit provider-profile cooldowns.
     return result(true);
   }
@@ -483,13 +503,17 @@ export function resolveModelFallbackCandidateAgentRuntime(
       runtime: explicitAgentRuntime,
     };
   }
-  const harnessPolicy = resolveAgentHarnessPolicy({
-    provider: params.provider,
-    modelId: params.model,
-    config: params.cfg,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
+  const resolvePolicy = () =>
+    resolveAgentHarnessPolicy({
+      provider: params.provider,
+      modelId: params.model,
+      config: params.cfg,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+    });
+  const harnessPolicy = params.metadataSnapshot
+    ? withPluginMetadataSnapshotScope(params.metadataSnapshot, resolvePolicy)
+    : resolvePolicy();
   return {
     agentHarnessRuntimeOverride,
     explicitAgentRuntime,

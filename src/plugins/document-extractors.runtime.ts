@@ -7,12 +7,13 @@ import type {
   DocumentExtractorPlugin,
   PluginDocumentExtractorEntry,
 } from "./document-extractor-types.js";
+import { preparePluginMetadataMachineStateAsync } from "./installed-plugin-index-record-state.js";
 import { sortPluginEntriesForAutoDetect } from "./plugin-entry-order.js";
 import { createPluginIdScopeSet } from "./plugin-scope.js";
 import { loadBundledPublicArtifactEntries } from "./public-artifact-factories.js";
 
 /** Returns enabled document extractors in deterministic auto-detect order. */
-export function resolvePluginDocumentExtractors(params?: {
+function resolvePluginDocumentExtractors(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -67,4 +68,13 @@ export function resolvePluginDocumentExtractors(params?: {
     });
   }
   return sortPluginEntriesForAutoDetect(extractors);
+}
+
+/** Prepares worker-owned metadata before resolving the caller's extractor inventory. */
+export async function resolvePluginDocumentExtractorsAsync(
+  params?: Parameters<typeof resolvePluginDocumentExtractors>[0],
+): Promise<PluginDocumentExtractorEntry[]> {
+  const activateMetadata = await preparePluginMetadataMachineStateAsync({ env: params?.env });
+  activateMetadata();
+  return resolvePluginDocumentExtractors(params);
 }

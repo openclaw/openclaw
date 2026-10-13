@@ -5,6 +5,7 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { testApi as loggerTestApi } from "../logging/logger.test-support.js";
 import { loggingState } from "../logging/state.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
 import { AgentRunTerminalOutcomeError } from "./agent-run-terminal-error.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
@@ -47,7 +48,8 @@ let previousConsole: typeof loggingState.rawConsole;
 let laneSequence = 0;
 beforeAll(() => logPaths.setup());
 afterAll(() => logPaths.cleanup());
-beforeEach(() => {
+beforeEach(async () => {
+  await preparePluginMetadataMachineStateAsync({});
   capture = createDiagnosticLogRecordCapture();
   previousConsole = loggingState.rawConsole;
   warn.mockClear();

@@ -1,11 +1,12 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { testApi as loggerTestApi } from "../logging/logger.test-support.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import {
   normalizePluginDiscoveryResult,
@@ -29,6 +30,11 @@ import type { ProviderAuthResolver } from "./models-config.providers.secret-help
 vi.mock("./auth-profiles/oauth.js", () => ({ resolveApiKeyForProfile: vi.fn() }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+beforeEach(async () => {
+  await preparePluginMetadataMachineStateAsync({});
+  await preparePluginMetadataMachineStateAsync({ env: {} });
+});
 
 afterEach(async () => {
   await loggerTestApi.flushFileLogQueueForTests();

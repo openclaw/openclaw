@@ -9,6 +9,7 @@ import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import type { HookRunner } from "../../plugins/hooks.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -18,7 +19,7 @@ import {
   initializeSessionReadContext,
 } from "../server-methods/sessions-read-cache.test-support.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
-import { loadGatewayTestConfig } from "../test-helpers.config-runtime.js";
+import { loadGatewayTestConfigAsync } from "../test-helpers.config-runtime.js";
 import { embeddedRunMock, testState } from "../test-helpers.runtime-state.js";
 import * as gatewayTestHelpers from "../test-helpers.server.js";
 import {
@@ -367,7 +368,7 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     const dir = path.join(requireSharedSessionStoreDir(), `case-${sessionStoreCaseSeq++}`);
     await fs.mkdir(dir, { recursive: true });
     testState.sessionStorePath = path.join(dir, "sessions.json");
-    setRuntimeConfigSnapshot(loadGatewayTestConfig());
+    setRuntimeConfigSnapshot(await loadGatewayTestConfigAsync());
     return { dir, storePath: testState.sessionStorePath };
   }
 
@@ -382,7 +383,7 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
       systemAgent: { agentId: "main" },
       sessionStore: { agentId: "main" },
     };
-    setRuntimeConfigSnapshot(loadGatewayTestConfig());
+    setRuntimeConfigSnapshot(await loadGatewayTestConfigAsync());
     return {
       dir,
       storeTemplate,
@@ -588,6 +589,7 @@ export async function directSessionReq<TPayload = unknown>(
   payload?: TPayload;
   error?: { code?: string; message?: string; details?: unknown };
 }> {
+  await prepareBundledDiscoveryMode();
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
   let result:

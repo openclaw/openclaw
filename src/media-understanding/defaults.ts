@@ -67,7 +67,7 @@ function isExecutionAliasProvider(providerId: string): boolean {
 }
 
 /** Resolves the default provider model for a media capability from config or manifest metadata. */
-export function resolveDefaultMediaModel(params: {
+export function resolveDefaultMediaModelCore(params: {
   providerId: string;
   capability: MediaUnderstandingCapability;
   cfg?: OpenClawConfig;
@@ -98,7 +98,7 @@ export function resolveDefaultMediaModel(params: {
 }
 
 /** Resolves auto-discovery provider order for a media capability using manifest priorities. */
-export function resolveAutoMediaKeyProviders(params: {
+export function resolveAutoMediaKeyProvidersCore(params: {
   capability: MediaUnderstandingCapability;
   cfg?: OpenClawConfig;
   workspaceDir?: string;

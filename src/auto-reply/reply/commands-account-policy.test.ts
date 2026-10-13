@@ -114,7 +114,7 @@ async function dispatch(params: {
       });
       return { result, command: commandParams.command, reset };
     },
-    { config: cfg },
+    { trustConfigIdentity: true },
   );
 }
 

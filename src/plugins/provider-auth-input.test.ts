@@ -14,6 +14,12 @@ import {
 
 const acceptAnyApiKeyInput = () => undefined;
 
+const preparePluginMetadataMachineStateAsync = vi.hoisted(() => vi.fn(async () => () => {}));
+vi.mock("./installed-plugin-index-record-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./installed-plugin-index-record-state.js")>()),
+  preparePluginMetadataMachineStateAsync,
+}));
+
 const resolveEnvApiKey = vi.hoisted(() =>
   vi.fn(
     (
@@ -176,6 +182,7 @@ describe("captureProviderApiKey", () => {
       input: { source: "env", provider: "default", id: "MINIMAX_API_KEY" },
       mode: "ref",
     });
+    expect(preparePluginMetadataMachineStateAsync).toHaveBeenCalledWith({ env });
     expect(resolveEnvApiKey).toHaveBeenCalledWith("minimax", env, { config, workspaceDir });
     expect(text).not.toHaveBeenCalled();
   });

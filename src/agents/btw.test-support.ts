@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -83,7 +83,9 @@ const DEFAULT_STORE_PATH = "/tmp/sessions.json";
 const DEFAULT_QUESTION = "What changed?";
 const MATH_QUESTION = "What is 17 * 19?";
 const MATH_ANSWER = "323";
-let defaultPluginMetadataSnapshot: ReturnType<typeof resolvePluginMetadataSnapshot> | undefined;
+let defaultPluginMetadataSnapshot:
+  | Awaited<ReturnType<typeof resolvePluginMetadataSnapshotAsync>>
+  | undefined;
 
 const DEFAULT_USAGE = {
   input: 1,
@@ -395,7 +397,7 @@ export function setupBtwTestHooks() {
     resetModelGenerationFixtureState();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     streamSimpleMock.mockReset();
     readFileMock.mockReset();
     parseSessionEntriesMock.mockReset();
@@ -445,7 +447,7 @@ export function setupBtwTestHooks() {
     resolveProviderEntryApiKeyProfileReferenceMock.mockReturnValue({ kind: "none" });
     clearAgentHarnesses();
     if (!defaultPluginMetadataSnapshot) {
-      defaultPluginMetadataSnapshot = resolvePluginMetadataSnapshot({
+      defaultPluginMetadataSnapshot = await resolvePluginMetadataSnapshotAsync({
         config: {},
         workspaceDir: state.workspaceDir,
         allowCurrent: false,

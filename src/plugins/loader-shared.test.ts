@@ -12,7 +12,7 @@ import {
   preparePluginLoadRecord,
   validatePluginConfig as validatePluginConfigByOrigin,
 } from "./loader-shared.js";
-import { loadOpenClawPluginCliRegistry, loadOpenClawPlugins } from "./loader.js";
+import { loadOpenClawPluginCliRegistry, loadOpenClawPluginsAsync } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   resetPluginLoaderTestStateForTest,
@@ -297,7 +297,7 @@ module.exports = { id: "source-fixture", register(api) {
                 };
                 const registry =
                   surface === "runtime"
-                    ? loadOpenClawPlugins(options)
+                    ? await loadOpenClawPluginsAsync(options)
                     : await loadOpenClawPluginCliRegistry(options);
                 expect(registry.plugins.find((plugin) => plugin.id === id)?.status).toBe(
                   accepted ? "loaded" : "error",
@@ -308,18 +308,21 @@ module.exports = { id: "source-fixture", register(api) {
                 expect(fs.existsSync(marker)).toBe(accepted);
                 if (surface === "runtime" && scenario === "paired") {
                   const candidate = structuredClone(runtime);
-                  const unpaired = loadOpenClawPlugins({ ...options, config: candidate });
+                  const unpaired = await loadOpenClawPluginsAsync({
+                    ...options,
+                    config: candidate,
+                  });
                   expect
                     .soft(unpaired.plugins.find((plugin) => plugin.id === id)?.status)
                     .toBe("error");
                   // Identity failures must not expand the registries' lazy runtime properties.
                   expect.soft(unpaired === registry).toBe(false);
                   expect(
-                    loadOpenClawPlugins({
+                    (await loadOpenClawPluginsAsync({
                       ...options,
                       config: candidate,
                       activationSourceConfig: structuredClone(source),
-                    }) === registry,
+                    })) === registry,
                   ).toBe(true);
 
                   const alternateSource: OpenClawConfig = {
@@ -341,19 +344,19 @@ module.exports = { id: "source-fixture", register(api) {
                     config: candidate,
                     activationSourceConfig: alternateSource,
                   };
-                  const alternate = loadOpenClawPlugins(alternateOptions);
+                  const alternate = await loadOpenClawPluginsAsync(alternateOptions);
                   expect.soft(alternate === registry).toBe(false);
                   expect
                     .soft(alternate.cliRegistrars.flatMap((registrar) => registrar.descriptors))
                     .toEqual([{ ...descriptor, description: "Alternate command" }]);
                   expect(
-                    loadOpenClawPlugins({
+                    (await loadOpenClawPluginsAsync({
                       ...alternateOptions,
                       activationSourceConfig: structuredClone(alternateSource),
-                    }) === alternate,
+                    })) === alternate,
                   ).toBe(true);
 
-                  const replacement = loadOpenClawPlugins({
+                  const replacement = await loadOpenClawPluginsAsync({
                     ...alternateOptions,
                     cache: false,
                     previousRegistry: registry,
@@ -394,7 +397,7 @@ module.exports = { id: "source-fixture", register(api) {
                               },
                             },
                           };
-                    const rejected = loadOpenClawPlugins({
+                    const rejected = await loadOpenClawPluginsAsync({
                       ...options,
                       config: nextRuntime,
                       activationSourceConfig: nextSource,
@@ -415,9 +418,10 @@ module.exports = { id: "source-fixture", register(api) {
                   }
 
                   setRuntimeConfigSnapshot(candidate, structuredClone(source));
-                  expect(loadOpenClawPlugins({ ...options, config: candidate }) === registry).toBe(
-                    true,
-                  );
+                  expect(
+                    (await loadOpenClawPluginsAsync({ ...options, config: candidate })) ===
+                      registry,
+                  ).toBe(true);
                 }
                 expect(
                   JSON.stringify({ messages, diagnostics: registry.diagnostics }),

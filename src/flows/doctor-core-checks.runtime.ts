@@ -469,11 +469,11 @@ export async function collectProviderCatalogProjectionFindings(
   workspaceDir?: string,
 ): Promise<readonly HealthFinding[]> {
   const { runProviderStaticCatalog } = await import("../plugins/provider-discovery.js");
-  const { resolvePluginProvidersCore } = await import("../plugins/providers.runtime.js");
+  const { resolvePluginProvidersCoreAsync } = await import("../plugins/providers.runtime.js");
   const env = process.env;
-  let providers: Awaited<ReturnType<typeof resolvePluginProvidersCore>>;
+  let providers: Awaited<ReturnType<typeof resolvePluginProvidersCoreAsync>>;
   try {
-    providers = resolvePluginProvidersCore({
+    providers = await resolvePluginProvidersCoreAsync({
       config: cfg,
       workspaceDir,
       env,

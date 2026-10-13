@@ -299,7 +299,7 @@ export async function applyNonInteractivePluginProviderChoice(
   ) {
     const [
       { withAuthProfileStoreAgentDir, clearRuntimeAuthProfileStoreSnapshot },
-      { loadAuthProfileStoreWithoutExternalProfilesAsync, saveAuthProfileStore },
+      { loadAuthProfileStoreWithoutExternalProfilesAsync, saveAuthProfileStoreAsync },
       { loadPersistedAuthProfileStore },
       { closeAuthProfileReadPool },
       { closeOpenClawAgentDatabasesAsync },
@@ -338,7 +338,7 @@ export async function applyNonInteractivePluginProviderChoice(
     try {
       await fs.mkdir(stagingAgentDir, { recursive: true });
       result = await withAuthProfileStoreAgentDir(stagingAgentDir, stagingRoot, async () => {
-        saveAuthProfileStore(seeded, stagingAgentDir, { syncExternalCli: false });
+        await saveAuthProfileStoreAsync(seeded, stagingAgentDir, { syncExternalCli: false });
         return await runNonInteractive({
           ...context,
           agentDir: stagingAgentDir,

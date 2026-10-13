@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { resolveEnvApiKey } from "./model-auth-env.js";
@@ -71,7 +72,9 @@ describe("workspace plugin model auth evidence", () => {
         WORKSPACE_CLOUD_CREDENTIALS: credentialsPath,
       },
       async () => {
+        await resolvePluginMetadataSnapshotAsync({ config: cfg });
         expect(resolveEnvApiKey("workspace-cloud", process.env, { config: cfg })).toBeNull();
+        await resolvePluginMetadataSnapshotAsync({ config: cfg, workspaceDir });
         expect(
           resolveEnvApiKey("workspace-cloud", process.env, {
             config: cfg,

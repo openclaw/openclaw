@@ -1,4 +1,5 @@
 import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
+import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import {
@@ -6,6 +7,8 @@ import {
   registerProviderWithPluginConfig,
   requireAuthMethod,
 } from "./provider.test-support.js";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 const mocks = vi.hoisted(() => ({
   resolveCopilotStarterModel: vi.fn(async () => "github-copilot/claude-sonnet-5"),

@@ -6,7 +6,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "../../packages/normalization-core/src/number-coercion.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
-import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
+import { resolveProviderRequestCapabilitiesLegacy as resolveProviderRequestCapabilities } from "../agents/provider-attribution-sdk.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";

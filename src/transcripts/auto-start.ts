@@ -594,7 +594,7 @@ function startTranscriptsAutoStartEntry(
       }
       watchRegistration = runPending(async (controller) => {
         try {
-          const provider = resolveSourceProvider(entry.providerId, ctx);
+          const provider = await resolveSourceProvider(entry.providerId, ctx);
           if (!provider) {
             throw new Error("provider is not available");
           }

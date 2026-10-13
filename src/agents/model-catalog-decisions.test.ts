@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { connectUserModelAccount } from "../state/user-model-accounts.js";
@@ -75,6 +76,7 @@ function nativeOwner(complete: boolean, loggedIn: boolean, isCurrent = () => tru
 describe("captured model decisions", () => {
   it("does not start private reads after retained authority revokes during reader preparation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await preparePluginMetadataMachineStateAsync({});
       const owner = ensureProfileForEmail("catalog-authority@example.test");
       const { authProfileId } = connectUserModelAccount({
         ownerProfileId: owner.id,
@@ -116,7 +118,8 @@ describe("captured model decisions", () => {
     });
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await preparePluginMetadataMachineStateAsync({});
     // These cases describe prepared auth facts, not credentials from the host shell.
     for (const key of [
       "OPENAI_API_KEY",
@@ -544,7 +547,8 @@ describe("captured model decisions", () => {
 });
 
 describe("catalog decisions with prepared CLI auth directories", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await preparePluginMetadataMachineStateAsync({});
     vi.stubEnv("ANTHROPIC_API_KEY", "");
     cliBackendsTesting.setDepsForTest({
       resolvePluginSetupCliBackend: () => undefined,
@@ -629,6 +633,7 @@ describe("catalog decisions with prepared CLI auth directories", () => {
 
   it("reads replaced stored CLI choices for new rows in one decisions instance", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      await preparePluginMetadataMachineStateAsync({});
       noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" });
       const cfg: OpenClawConfig = {
         agents: { entries: { worker: { agentDir: state.path("custom-worker") } } },
@@ -664,6 +669,7 @@ describe("catalog decisions with prepared CLI auth directories", () => {
 
   it("follows shared ownership relocation after preparing a legacy inherited directory", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      await preparePluginMetadataMachineStateAsync({});
       noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" });
       const legacyDir = state.path("custom-inherited");
       const cfg: OpenClawConfig = {
@@ -688,6 +694,7 @@ describe("catalog decisions with prepared CLI auth directories", () => {
 
   it("keeps custom agent paths separate and prepares a changed path for a new decisions instance", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      await preparePluginMetadataMachineStateAsync({});
       noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" });
       const firstDir = state.path("custom-first");
       const secondDir = state.path("custom-second");
@@ -731,6 +738,7 @@ describe("catalog decisions with prepared CLI auth directories", () => {
 
   it.each(["ready", "unavailable"] as const)("keeps CLI menu on %s", async (status) => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      await preparePluginMetadataMachineStateAsync({});
       cliBackendsTesting.setDepsForTest({
         resolvePluginSetupCliBackend: () => undefined,
         resolveRuntimeCliBackends: () => [

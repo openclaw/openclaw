@@ -13,6 +13,7 @@ import type { ContextEngine } from "../../context-engine/types.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../../plugins/registry-inspection-resources.js";
@@ -20,7 +21,7 @@ import { retireInspectionInstances } from "../../plugins/registry-inspection.tes
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
-import { withEnv } from "../../test-utils/env.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import {
   clearPreparedEmbeddedAgentSettings,
   createPreparedEmbeddedAgentSettingsManager,
@@ -1285,9 +1286,10 @@ describe("runCliTurnCompactionLifecycle", () => {
         `export { default } from ${JSON.stringify(resolveRuntimeWorkerUrl(entry).href)};`,
       );
       await fs.copyFile(path.join(pluginRoot, "setup-api.mjs"), path.join(pluginRoot, "index.mjs"));
-      const backend = withEnv({ OPENCLAW_BUNDLED_PLUGINS_DIR: bundled }, () =>
-        resolveCliBackendConfig(provider),
-      );
+      const backend = await withEnvAsync({ OPENCLAW_BUNDLED_PLUGINS_DIR: bundled }, async () => {
+        const metadata = await resolvePluginMetadataSnapshotAsync({});
+        return withPluginMetadataSnapshotScope(metadata, () => resolveCliBackendConfig(provider));
+      });
       expect(backend).not.toBeNull();
       const compactAgentHarnessSession = vi.fn();
       const scenario = await prepareCompactionScenario({

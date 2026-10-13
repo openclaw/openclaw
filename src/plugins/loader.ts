@@ -1,5 +1,5 @@
 /** Stable public facade for plugin loading and runtime-registry resolution. */
-import { loadOpenClawPlugins } from "./loader-runtime-load.js";
+import { loadOpenClawPlugins, loadOpenClawPluginsAsync } from "./loader-runtime-load.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 export { resolveCompatibleRuntimePluginRegistry } from "./active-runtime-registry.js";
 export {
@@ -8,7 +8,6 @@ export {
   resolvePluginRegistryLoadCacheKey,
 } from "./loader-cache.js";
 export {
-  resolveRuntimePluginRegistry,
   acquirePluginRegistryForInspection,
   loadAndActivateRootPluginRegistry,
   loadOpenClawPluginsAsync,
@@ -19,9 +18,14 @@ export function loadPluginRegistryHandle(options: PluginLoadOptions = {}) {
   return loadOpenClawPlugins({ ...options, activate: false });
 }
 
+/** Prepares metadata through the worker before loading a caller-owned registry. */
+export function loadPluginRegistryHandleAsync(options: PluginLoadOptions = {}) {
+  return loadOpenClawPluginsAsync({ ...options, activate: false });
+}
+
 /** Collects CLI descriptors through the same validation and instance owner as runtime loading. */
 export async function loadOpenClawPluginCliRegistry(options: PluginLoadOptions = {}) {
-  return loadOpenClawPlugins({
+  return loadOpenClawPluginsAsync({
     ...options,
     mode: "cli-metadata",
     activate: false,

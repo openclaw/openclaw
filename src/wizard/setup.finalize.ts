@@ -44,7 +44,7 @@ import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-f
 import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { runTui } from "../tui/tui.js";
 import { resolveUserPath } from "../utils.js";
-import { listConfiguredWebSearchProviders } from "../web-search/runtime.js";
+import { listConfiguredWebSearchProvidersAsync } from "../web-search/runtime.js";
 import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 import { setupWizardShellCompletion } from "./setup.completion.js";
@@ -792,15 +792,17 @@ export async function finalizeSetupWizard(
     const codexNativeSummary = describeCodexNativeWebSearch(nextConfig);
     const webSearchProvider = nextConfig.tools?.web?.search?.provider;
     const webSearchEnabled = nextConfig.tools?.web?.search?.enabled;
-    const configuredSearchProviders = listConfiguredWebSearchProviders({ config: nextConfig });
+    const configuredSearchProviders = await listConfiguredWebSearchProvidersAsync({
+      config: nextConfig,
+    });
     let webSearchLines: string[];
     if (webSearchProvider) {
       const { resolveExistingKey, hasExistingKey, hasKeyInEnv } =
         await import("../flows/search-setup.js");
       const entry = configuredSearchProviders.find((e) => e.id === webSearchProvider);
       const label = entry?.label ?? webSearchProvider;
-      const storedKey = entry ? resolveExistingKey(nextConfig, webSearchProvider) : undefined;
-      const keyConfigured = entry ? hasExistingKey(nextConfig, webSearchProvider) : false;
+      const storedKey = entry ? resolveExistingKey(nextConfig, entry) : undefined;
+      const keyConfigured = entry ? hasExistingKey(nextConfig, entry) : false;
       const envAvailable = entry ? hasKeyInEnv(entry) : false;
       const hasKey = keyConfigured || envAvailable;
       const authProviderId = entry?.authProviderId?.trim();
@@ -880,7 +882,7 @@ export async function finalizeSetupWizard(
       // an explicit provider. Runtime auto-detects these, so avoid saying "skipped".
       const { hasExistingKey, hasKeyInEnv } = await import("../flows/search-setup.js");
       const legacyDetected = configuredSearchProviders.find(
-        (e) => hasExistingKey(nextConfig, e.id) || hasKeyInEnv(e),
+        (e) => hasExistingKey(nextConfig, e) || hasKeyInEnv(e),
       );
       if (legacyDetected) {
         webSearchLines = [

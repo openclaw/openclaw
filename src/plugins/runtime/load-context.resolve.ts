@@ -1,14 +1,19 @@
-import { getRuntimeConfig } from "../../config/config.js";
-import { resolveConfigWidePluginMetadataSnapshot } from "../../config/io.plugin-metadata.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/config.js";
+import {
+  resolveConfigWidePluginMetadataSnapshot,
+  resolveConfigWidePluginMetadataSnapshotAsync,
+} from "../../config/io.plugin-metadata.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolvePluginActivationSourceConfig } from "../activation-source-config.js";
+import { prepareBundledDiscoveryMode } from "../bundled-discovery-state.js";
 import { resolvePluginControlPlaneWorkspace } from "../control-plane-workspace.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../installed-plugin-index-install-records.js";
 import type { PluginManifestRegistry } from "../manifest-registry.js";
 import {
   projectPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot,
+  resolvePluginMetadataSnapshotAsync,
 } from "../plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugin-metadata-snapshot.types.js";
 import type { PluginLogger } from "../types.js";
@@ -26,6 +31,36 @@ type PluginRuntimeLoadContextOptions = {
   preferBuiltPluginArtifacts?: boolean;
   expectedSourceDigests?: PluginRuntimeLoadContext["expectedSourceDigests"];
 };
+
+/** Prepare persisted policy before the existing synchronous runtime projection. */
+export async function resolvePluginRuntimeLoadContextAsync(
+  options?: PluginRuntimeLoadContextOptions,
+): Promise<PluginRuntimeLoadContext> {
+  const env = options?.env ?? process.env;
+  const config = options?.config ?? (await captureRuntimeConfigAsyncReader()());
+  await prepareBundledDiscoveryMode(env);
+  if (options?.metadataSnapshot || options?.manifestRegistry) {
+    return resolvePluginRuntimeLoadContext({ ...options, config, env });
+  }
+  const metadataSnapshot =
+    options?.workspaceDir === undefined
+      ? projectPluginMetadataSnapshot(
+          await resolveConfigWidePluginMetadataSnapshotAsync({ config, env }),
+          options?.onlyPluginIds,
+        )
+      : await resolvePluginMetadataSnapshotAsync({
+          config,
+          env,
+          workspaceDir: resolvePluginControlPlaneWorkspace({
+            config,
+            env,
+            workspaceDir: options.workspaceDir,
+          }).workspaceDir,
+          allowWorkspaceScopedCurrent: true,
+          ...(options.onlyPluginIds !== undefined ? { pluginIds: options.onlyPluginIds } : {}),
+        });
+  return resolvePluginRuntimeLoadContext({ ...options, config, env, metadataSnapshot });
+}
 
 export function resolvePluginRuntimeLoadContext(
   options?: PluginRuntimeLoadContextOptions,

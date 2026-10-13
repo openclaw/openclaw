@@ -2,6 +2,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import {
   externalCliDiscoveryForProviderAuth,
@@ -60,6 +61,7 @@ export async function resolveModelAuthLabelAsync(
   if (!params.provider?.trim()) {
     return undefined;
   }
+  await preparePluginMetadataMachineStateAsync({});
   const profileOverride = params.sessionEntry?.authProfileOverride?.trim();
   const store =
     params.authStore ??

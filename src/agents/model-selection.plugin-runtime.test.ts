@@ -1,6 +1,7 @@
 // Covers plugin-owned model id normalization through selection surfaces.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 
 const normalizeProviderModelIdWithPluginMock = vi.fn();
@@ -259,6 +260,8 @@ describe("model-selection plugin runtime normalization", () => {
       providerOverride: "custom-provider",
       modelOverride: "stored-legacy",
     };
+
+    await resolvePluginMetadataSnapshotAsync({ config: cfg });
 
     const state = await selectModel(cfg, "custom-provider", "configured-legacy", {
       sessionEntry,

@@ -298,9 +298,9 @@ async function rejectsRecovery(
   expectPending(pending);
 }
 
-beforeAll(() => {
+beforeAll(async () => {
   restoreBackend = installSystemAgentClaudeCliBackendTestFixture();
-  metadata = createSystemAgentPluginMetadataTestSnapshot();
+  metadata = await createSystemAgentPluginMetadataTestSnapshot();
   mockConfig.bind((config) => metadata.bindForConfig(config));
 });
 afterAll(() => {

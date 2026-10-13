@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  anthropicModel,
   captureAnthropicRequest,
   registerParityHostLifecycle,
 } from "../../../../packages/ai/src/provider-transport-parity.test-support.js";
+import { attachPreparedProviderModelFixture } from "../../provider-request.test-support.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
@@ -75,7 +77,7 @@ describe("runtime-context session compatibility", () => {
       { role: "user", content: "Continue", timestamp: 4 },
     ]);
     const { payload } = await captureAnthropicRequest("transport", {
-      model: { id: "claude-opus-5" },
+      model: attachPreparedProviderModelFixture({ ...anthropicModel, id: "claude-opus-5" }),
       cacheRetention: "none",
       context: { systemPrompt: "Be exact.", messages: converted },
     });
@@ -125,7 +127,7 @@ describe("runtime-context session compatibility", () => {
       { role: "user", content: "Continue", timestamp: 4 },
     ]);
     const { payload } = await captureAnthropicRequest("transport", {
-      model: { id: "claude-opus-5" },
+      model: attachPreparedProviderModelFixture({ ...anthropicModel, id: "claude-opus-5" }),
       cacheRetention: "none",
       context: { systemPrompt: "Be exact.", messages: converted },
     });

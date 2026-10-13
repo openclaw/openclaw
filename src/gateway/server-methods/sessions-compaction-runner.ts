@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
-import { resolveManualCompactionCliTarget } from "../../agents/session-runtime-compat.js";
+import { resolveManualCompactionCliTargetAsync } from "../../agents/session-runtime-compat.js";
 import { preflightManualSessionCompaction } from "../../agents/sessions/manual-compaction-preflight.js";
 import { isIndexedSessionEntry } from "../../agents/sessions/session-manager-codec.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
@@ -34,11 +34,13 @@ export async function preflightGatewaySessionCompaction(
   params: GatewaySessionCompactionParams,
 ): Promise<{ reason: "Already compacted" | "Nothing to compact (session too small)" } | undefined> {
   const resolvedModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
-  const persistedRuntime = resolveManualCompactionCliTarget({
-    provider: resolvedModel.provider,
-    entry: params.entry,
-    cfg: params.cfg,
-  }).agentHarnessId;
+  const persistedRuntime = (
+    await resolveManualCompactionCliTargetAsync({
+      provider: resolvedModel.provider,
+      entry: params.entry,
+      cfg: params.cfg,
+    })
+  ).agentHarnessId;
   const contextEngine = params.cfg.plugins?.slots?.contextEngine?.trim();
   if (
     (persistedRuntime && persistedRuntime !== "openclaw") ||
@@ -87,7 +89,7 @@ export async function runGatewaySessionCompaction(
       workspaceDir: params.entry.spawnedWorkspaceDir,
       cwd: params.entry.spawnedCwd,
     }) ?? resolveAgentWorkspaceDir(params.cfg, params.agentId);
-  const compactionCliTarget = resolveManualCompactionCliTarget({
+  const compactionCliTarget = await resolveManualCompactionCliTargetAsync({
     provider: resolvedModel.provider,
     entry: params.entry,
     cfg: params.cfg,

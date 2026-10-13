@@ -8,6 +8,7 @@ import { loadBundledPluginFacade } from "../../../test-utils/bundled-plugin-publ
 import { registerSingleProviderPlugin } from "../../../test-utils/plugin-registration.js";
 import { buildAssistantFailoverSignal } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import { coerceToFailoverError } from "../../failover-error.js";
+import { attachPreparedProviderModelFixture } from "../../provider-request.test-support.js";
 import { recoverAfterTransportDrop } from "./attempt-recovery.test-support.js";
 
 vi.mock("../../../infra/backoff.js", async (importOriginal) => ({
@@ -40,7 +41,7 @@ async function fetchRealPerDayCapErrorMessage(): Promise<string | undefined> {
   });
   try {
     const address = server.address() as AddressInfo;
-    const model = {
+    const model = attachPreparedProviderModelFixture({
       id: "example/model",
       name: "OpenRouter mock",
       api: "openai-completions",
@@ -51,7 +52,7 @@ async function fetchRealPerDayCapErrorMessage(): Promise<string | undefined> {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 16_000,
       maxTokens: 1_024,
-    } satisfies Model<"openai-completions">;
+    } satisfies Model<"openai-completions">);
     const context: Context = { messages: [{ role: "user", content: "hello", timestamp: 1 }] };
     const result = await streamOpenAICompletions(model, context, {
       apiKey: ["test", "key"].join("-"),

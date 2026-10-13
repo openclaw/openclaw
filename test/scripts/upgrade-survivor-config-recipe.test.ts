@@ -26,6 +26,7 @@ import {
 import { buildInlineProviderModels } from "../../src/agents/embedded-agent-runner/model.inline-provider.js";
 import { AgentsSchema } from "../../src/config/zod-schema.agents.js";
 import { ModelsConfigSchema } from "../../src/config/zod-schema.core.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../src/plugins/plugin-metadata-snapshot.js";
 
 const RECIPE_PATH = "scripts/e2e/lib/upgrade-survivor/config-recipe.mts";
 const RUN_PATH = "scripts/e2e/lib/upgrade-survivor/run.sh";
@@ -381,7 +382,7 @@ esac
 
   it.each([null])(
     "authors schema-valid provider credentials without changing the primary model for %s",
-    (version) => {
+    async (version) => {
       const writes = configLeafWrites(
         resolveUpgradeSurvivorConfigStepsForBaseline("base", version),
       );
@@ -428,7 +429,12 @@ esac
         (step) => step.id === "models-google",
       );
       const google = JSON.parse(googleStep?.argv[3] ?? "{}");
-      expect(buildInlineProviderModels({ google })).toEqual([
+      const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+        config: { models: { providers: { google } } },
+      });
+      expect(
+        buildInlineProviderModels({ google }, { providerMetadataOwners: metadataSnapshot.owners }),
+      ).toEqual([
         expect.objectContaining({
           provider: "google",
           id: "gemini-3.1-pro-preview",

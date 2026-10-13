@@ -294,7 +294,7 @@ export async function agentExecCommand(
     const [
       { withAuthProfileStoreAgentDir, withEnvOnlyAuthProfileStore },
       { withHostExecInheritedEnvOmitted },
-      { listKnownProviderAuthEnvVarNamesCore },
+      { listKnownProviderAuthEnvVarNamesAsync },
       { agentCommand },
     ] = await Promise.all([
       import("../agents/auth-profiles.js"),
@@ -359,9 +359,9 @@ export async function agentExecCommand(
           // Admission emits a bounded warning if the direct-process writer is unavailable.
         }
       }
-      return await toolBudget.run(() =>
+      return await toolBudget.run(async () =>
         withHostExecInheritedEnvOmitted(
-          listKnownProviderAuthEnvVarNamesCore({ env: process.env }),
+          await listKnownProviderAuthEnvVarNamesAsync({ env: process.env }),
           runWithAuthScope,
         ),
       );

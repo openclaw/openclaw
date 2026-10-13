@@ -1,6 +1,8 @@
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { PreparedModelRuntimeLeaseOptions } from "../agents/prepared-model-runtime.types.js";
+import { attachProviderRequestFactsFixture } from "../agents/provider-request.test-support.js";
+import { preparePluginAutoEnableTestDiscovery } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -66,7 +68,12 @@ const {
 export const preparedAuthStorage = { [SET_RUNTIME_API_KEY_FIELD]: setRuntimeApiKeyMock };
 
 type ResolveModelWithRegistryTestParams = {
-  modelRegistry: { find: (provider: string, modelId: string) => unknown };
+  modelRegistry: {
+    find: (
+      provider: string,
+      modelId: string,
+    ) => Parameters<typeof attachProviderRequestFactsFixture>[0] | undefined;
+  };
   provider: string;
   modelId: string;
 };
@@ -178,6 +185,7 @@ export function installImageRuntimeTestHooks({
         input: { agentDir: string; config: OpenClawConfig; workspaceDir?: string },
         options?: PreparedModelRuntimeLeaseOptions,
       ) => {
+        preparePluginAutoEnableTestDiscovery();
         const metadataSnapshot = resolvePluginMetadataSnapshot({
           config: input.config,
           workspaceDir: input.workspaceDir,
@@ -223,8 +231,10 @@ export function installImageRuntimeTestHooks({
     });
     resolveModelWithRegistryMock.mockImplementation(
       // Per-case discovery overrides must reach model dispatch.
-      ({ modelRegistry, provider, modelId }: ResolveModelWithRegistryTestParams) =>
-        modelRegistry.find(provider, modelId),
+      ({ modelRegistry, provider, modelId }: ResolveModelWithRegistryTestParams) => {
+        const model = modelRegistry.find(provider, modelId);
+        return model ? attachProviderRequestFactsFixture(model) : model;
+      },
     );
     resolveModelAsyncMock.mockImplementation(
       async (provider: string, modelId: string, agentDir?: string, cfg?: unknown) => {

@@ -422,6 +422,13 @@ const annotationParams = {
 };
 
 describe("annotateSourceDelivery thread replies", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "testchat", source: "test", plugin: annotationParams.channelPlugin },
+      ]),
+    );
+  });
   afterEach(() => resetPluginRuntimeStateForTest());
   it.each([true, false, "error", "stale"] as const)(
     "awaits owner proof for a receiptless thread reply without legacy fallback (%s)",
@@ -690,13 +697,10 @@ async function runPollAction(params: {
 }
 
 describe("executeMessagePoll", () => {
-  beforeAll(() => {
+  beforeEach(() => {
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "poller", source: "test", plugin: pollerTestPlugin }]),
     );
-  });
-
-  beforeEach(() => {
     pollerSendPoll.mockReset();
     pollerSendPoll.mockImplementation(sendPoll);
   });

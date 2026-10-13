@@ -48,12 +48,50 @@ function readableRows(
   return { store: { status: "readable", raw: store }, state, cacheable: true };
 }
 
-function createRuntime(overlayExternalAuthProfiles = (store: AuthProfileStore) => store) {
+function createRuntime(
+  overlayExternalAuthProfiles: ReturnType<
+    typeof import("./external-auth.js").createExternalAuthRuntime
+  >["overlayExternalAuthProfiles"] = (store) => store,
+) {
   return createAuthProfileStoreRuntime({
     listRuntimeExternalAuthProfiles: () => [],
+    prepareRuntimeExternalAuthProfiles: async () => () => [],
     overlayExternalAuthProfiles,
+    overlayExternalAuthProfilesAsync: async (store, options) =>
+      overlayExternalAuthProfiles(store, options),
   });
 }
+
+it.each(["ensure", "runtime"] as const)(
+  "awaits the external overlay during %s reads",
+  async (kind) => {
+    const root = tempDirs.make("openclaw-async-external-overlay-");
+    const agentDir = path.join(root, "agents/worker/agent");
+    createCacheDatabase(agentDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    reader.read.mockResolvedValue(readableRows());
+    const syncOverlay = vi.fn(() => {
+      throw new Error("synchronous external overlay");
+    });
+    const asyncOverlay = vi.fn(async (store: AuthProfileStore) => ({
+      ...store,
+      lastGood: { custom: "external" },
+    }));
+    const runtime = createAuthProfileStoreRuntime({
+      listRuntimeExternalAuthProfiles: () => [],
+      prepareRuntimeExternalAuthProfiles: async () => () => [],
+      overlayExternalAuthProfiles: syncOverlay,
+      overlayExternalAuthProfilesAsync: asyncOverlay,
+    });
+    const options = { inheritedAuthDir: agentDir, externalCli: { mode: "none" as const } };
+    const result = await (kind === "ensure"
+      ? runtime.ensureAuthProfileStoreAsync(agentDir, options)
+      : runtime.loadAuthProfileStoreForRuntimeAsync(agentDir, options));
+    expect(result.lastGood).toEqual({ custom: "external" });
+    expect(asyncOverlay).toHaveBeenCalledOnce();
+    expect(syncOverlay).not.toHaveBeenCalled();
+  },
+);
 
 it.each(["snapshot", "requested", "shared", "absent"] as const)(
   "prepares the %s provider from recorded facts without synchronous persisted reads",

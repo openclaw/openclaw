@@ -4,6 +4,8 @@ import path from "node:path";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { closeSkillsWatchers } from "../../skills/runtime/refresh.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -435,7 +437,13 @@ describe("skill upload gateway handlers", () => {
     expect(skillUploadExists(stateDir, uploadId)).toBe(false);
     await expectPathMissing(path.join(stateDir, "tmp", "skill-uploads"));
 
-    const status = await call(handlers, "skills.status", {});
+    const config = { skills: { install: { allowUploadedArchives: true } } };
+    const metadata = await resolvePluginMetadataSnapshotAsync({ config, workspaceDir });
+    const status = await withPluginMetadataSnapshotScope(
+      metadata,
+      () => call(handlers, "skills.status", {}, { config }),
+      { config, workspaceDir },
+    );
     expect(status.ok).toBe(true);
     expect(JSON.stringify(status.payload)).toContain("Uploaded Demo");
   });

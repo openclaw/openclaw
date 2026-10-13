@@ -16,7 +16,7 @@ import {
 import { createSubscribedSessionHarness } from "../embedded-agent-subscribe.e2e-harness.js";
 import type { ExecSessionDefaults } from "../exec-defaults.js";
 import { createAgentHarnessHostCapabilities } from "../harness/host-capability.js";
-import { createOpenClawTools } from "../openclaw-tools.js";
+import { createOpenClawToolsAsync } from "../openclaw-tools.js";
 import {
   createEmbeddedRunReplayState,
   type EmbeddedRunReplayState,
@@ -457,9 +457,11 @@ describe("embedded run retry dispatch", () => {
       input.preparedRuntime.snapshot().pluginHarnessOwnsTransport = false;
       input.sessionPromptState.activePrompt.internal = continuation;
       const { dispatchedAttempt } = await prepareAndDispatchEmbeddedRunAttempt(input);
-      const names = createOpenClawTools({
-        githubPublicationAvailable: dispatchedAttempt.preparedAttempt.githubPublicationAvailable,
-      }).map((tool) => tool.name);
+      const names = (
+        await createOpenClawToolsAsync({
+          githubPublicationAvailable: dispatchedAttempt.preparedAttempt.githubPublicationAvailable,
+        })
+      ).map((tool) => tool.name);
 
       expect(names).toContain("github_identity_status");
       expect(names).toContain("github_publish");
@@ -486,9 +488,11 @@ describe("embedded run retry dispatch", () => {
     mocks.readGitHubPublicationFact.mockReturnValue({ available: false });
 
     const { dispatchedAttempt } = await prepareAndDispatchEmbeddedRunAttempt(input);
-    const names = createOpenClawTools({
-      githubPublicationAvailable: dispatchedAttempt.preparedAttempt.githubPublicationAvailable,
-    }).map((tool) => tool.name);
+    const names = (
+      await createOpenClawToolsAsync({
+        githubPublicationAvailable: dispatchedAttempt.preparedAttempt.githubPublicationAvailable,
+      })
+    ).map((tool) => tool.name);
 
     expect(names).toContain("github_identity_status");
     expect(names).not.toContain("github_publish");

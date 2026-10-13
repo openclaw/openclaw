@@ -195,7 +195,7 @@ const mocks = vi.hoisted(() => ({
     { id: "openai", defaultModel: "text-embedding-3-small", transport: "remote" },
   ]),
   listEmbeddingProviders: vi.fn(() => []),
-  buildMediaUnderstandingRegistry: vi.fn(() => new Map()),
+  mediaUnderstandingRegistry: vi.fn(() => new Map()),
   inspectLocalAudioSelection: vi.fn<() => Promise<LocalAudioSelection>>(async () => ({
     candidates: [],
     entries: [],
@@ -346,8 +346,11 @@ vi.mock("../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
   })),
 }));
 
+// mock-isolation: Capability CLI cases use fixed provider/config facts without initializing runtime discovery.
 vi.mock("../agents/memory-search.js", () => ({
-  resolveMemorySearchConfig: mocks.resolveMemorySearchConfig,
+  resolveMemorySearchConfigAsync: async (
+    ...args: Parameters<typeof mocks.resolveMemorySearchConfig>
+  ) => mocks.resolveMemorySearchConfig(...args),
 }));
 
 vi.mock("../commands/models/auth.js", () => ({
@@ -371,9 +374,27 @@ vi.mock("../media-understanding/runtime.js", () => ({
   transcribeAudioFile: mocks.transcribeAudioFile,
 }));
 
+// mock-isolation: Capability output tests use an acquired fixture registry without loading media provider plugins.
 vi.mock("../media-understanding/provider-registry.js", () => ({
-  buildMediaUnderstandingRegistry: mocks.buildMediaUnderstandingRegistry,
+  acquireMediaUnderstandingRegistry: async () => ({
+    registry: mocks.mediaUnderstandingRegistry(),
+    release: async () => {},
+  }),
 }));
+
+// mock-isolation: Provider execution is mocked; retain only fixture construction and async metadata.
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
+  const { rebasePluginMetadataSnapshotManifestRegistry } =
+    await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
+  return {
+    rebasePluginMetadataSnapshotManifestRegistry,
+    resolvePluginMetadataSnapshotAsync: async () => {
+      const { createPluginMetadataSnapshotFixture } =
+        await import("../plugins/plugin-metadata.test-support.js");
+      return createPluginMetadataSnapshotFixture();
+    },
+  };
+});
 
 vi.mock("../media-understanding/local-audio.js", () => ({
   inspectLocalAudioSelection: mocks.inspectLocalAudioSelection,
@@ -391,8 +412,9 @@ vi.mock("../plugins/memory-embedding-provider-runtime.js", () => ({
   listRegisteredMemoryEmbeddingProviderAdapters: mocks.listMemoryEmbeddingProviders,
 }));
 
+// mock-isolation: Capability CLI cases use fixed provider/config facts without initializing runtime discovery.
 vi.mock("../plugins/embedding-provider-runtime.js", () => ({
-  listEmbeddingProviders: mocks.listEmbeddingProviders,
+  listEmbeddingProvidersAsync: async () => mocks.listEmbeddingProviders(),
 }));
 
 vi.mock("../plugin-sdk/memory-core-bundled-runtime.js", () => ({
@@ -424,9 +446,21 @@ vi.mock("../tts/tts.js", () => ({
   textToSpeech: mocks.textToSpeech,
 }));
 
+// mock-isolation: Capability CLI cases use fixed provider/config facts without initializing runtime discovery.
 vi.mock("../tts/provider-registry.js", () => ({
   canonicalizeSpeechProviderId: vi.fn((provider: string) => provider),
   listSpeechProviders: mocks.listSpeechProviders,
+  withSpeechProviderRegistry: async (
+    cfg: unknown,
+    run: (registry: {
+      canonicalizeSpeechProviderId: (provider: string | undefined) => string | undefined;
+      listSpeechProviders: () => unknown[];
+    }) => unknown,
+  ) =>
+    run({
+      canonicalizeSpeechProviderId: (provider) => provider,
+      listSpeechProviders: () => mocks.listSpeechProviders(),
+    }),
   normalizeSpeechProviderId: vi.fn(
     (provider: string | undefined) => provider?.trim().toLowerCase() || undefined,
   ),
@@ -861,7 +895,7 @@ describe("capability cli", () => {
               { id: "gemini", envVars: ["GEMINI_API_KEY"] } as never,
             ],
       );
-      vi.mocked(fetch.listWebFetchProviders).mockReturnValueOnce(
+      vi.mocked(fetch.listWebFetchProviders).mockResolvedValueOnce(
         scoped ? [] : [{ id: "firecrawl", envVars: ["FIRECRAWL_API_KEY"] } as never],
       );
       if (!scoped) {
@@ -2103,7 +2137,7 @@ describe("capability cli", () => {
     mocks.listRuntimeVideoGenerationProviders.mockReturnValueOnce([
       { id: "runway", label: "Runway", defaultModel: "gen4", models: [] },
     ] as never);
-    mocks.buildMediaUnderstandingRegistry.mockReturnValueOnce(
+    mocks.mediaUnderstandingRegistry.mockReturnValueOnce(
       new Map([
         [
           "google",
@@ -2140,7 +2174,7 @@ describe("capability cli", () => {
 
   it("distinguishes the local STT fallback winner from global provider selection", async () => {
     vi.stubEnv("DEEPGRAM_API_KEY", "deepgram-test-key");
-    mocks.buildMediaUnderstandingRegistry.mockReturnValueOnce(
+    mocks.mediaUnderstandingRegistry.mockReturnValueOnce(
       new Map([
         [
           "deepgram",
@@ -2244,7 +2278,7 @@ describe("capability cli", () => {
           result: { results: [] },
         });
       } else {
-        vi.mocked(fetch.resolveWebFetchDefinition).mockReturnValueOnce({
+        vi.mocked(fetch.resolveWebFetchDefinition).mockResolvedValueOnce({
           provider: { id: "firecrawl" },
           definition: { execute },
         } as never);

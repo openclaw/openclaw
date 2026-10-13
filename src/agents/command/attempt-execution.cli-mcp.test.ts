@@ -11,6 +11,8 @@ import {
 } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
@@ -178,7 +180,12 @@ describe("CLI attempt session MCP overrides", () => {
         },
       };
       setRuntimeConfigSnapshot(cfg);
+      const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+        config: cfg,
+        workspaceDir: root,
+      });
       const params = makeRunAgentAttemptParams({
+        metadataSnapshot,
         agentDir: path.join(root, "agents", "main", "agent"),
         workspaceDir: root,
         sessionEntry,
@@ -195,7 +202,11 @@ describe("CLI attempt session MCP overrides", () => {
         ),
       });
       try {
-        const result = await runAgentAttempt(params);
+        const result = await withPluginMetadataSnapshotScope(
+          metadataSnapshot,
+          () => runAgentAttempt(params),
+          { config: cfg, workspaceDir: root },
+        );
         expect(result.payloads).toEqual([expect.objectContaining({ text: "done" })]);
         expect(overlays).toHaveLength(1);
         expect(Object.hasOwn(overlays[0]!, "docs")).toBe(expectedEnabled);

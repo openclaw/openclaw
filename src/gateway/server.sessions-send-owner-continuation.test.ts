@@ -54,7 +54,7 @@ import {
 } from "./test-helpers.js";
 import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 
-const { createOpenClawTools } = await import("../agents/openclaw-tools.js");
+const { createOpenClawToolsAsync } = await import("../agents/openclaw-tools.js");
 const { resolveOpenClawPluginToolsForOptions } = await import("../agents/openclaw-plugin-tools.js");
 
 installGatewayTestHooks({ scope: "suite" });
@@ -347,12 +347,14 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
           () =>
             runWithCronCreatorAuthorityCapability(capability, async () => {
               const send = expectDefined(
-                createOpenClawTools({
-                  runId: originalRun,
-                  agentSessionKey: parent,
-                  sessionId: parentId,
-                  config: { ...config, tools: { sessions: { visibility: "all" } } },
-                }).find((tool) => tool.name === "sessions_send"),
+                (
+                  await createOpenClawToolsAsync({
+                    runId: originalRun,
+                    agentSessionKey: parent,
+                    sessionId: parentId,
+                    config: { ...config, tools: { sessions: { visibility: "all" } } },
+                  })
+                ).find((tool) => tool.name === "sessions_send"),
                 "sessions_send tool",
               );
               const result = await send.execute("send-followup", {

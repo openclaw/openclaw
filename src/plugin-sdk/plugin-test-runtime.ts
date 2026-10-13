@@ -9,6 +9,13 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 
+/** Prepares host metadata for plugin tests after selecting their isolated state directory. */
+export async function preparePluginTestRuntimeMetadata(config: OpenClawConfig = {}): Promise<void> {
+  const { resolvePluginMetadataSnapshotAsync } =
+    await import("../plugins/plugin-metadata-snapshot.js");
+  await resolvePluginMetadataSnapshotAsync({ config });
+}
+
 /** Builds a bundled-plugin Gateway runtime backed by the real session projection and handlers. */
 export async function createTestPluginGatewayRuntime(params: {
   pluginId: string;

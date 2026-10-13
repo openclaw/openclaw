@@ -514,6 +514,7 @@ export function createNativeLoginRecheck(
       },
       async () => {
         const credentials = await prepareAmbientAgentCredentialsForDiscovery({
+          metadataSnapshot: owner.pluginGeneration.pluginMetadataSnapshot,
           config: input.config,
           env,
           workspaceDir: input.workspaceDir,
@@ -528,7 +529,10 @@ export function createNativeLoginRecheck(
         // Native availability changes independently of stored profiles; reuse their current owner.
         Object.assign(
           credentials,
-          resolveAgentCredentialMapFromStore(current.authStore, { config: input.config }),
+          resolveAgentCredentialMapFromStore(current.authStore, {
+            config: input.config,
+            metadataSnapshot: owner.pluginGeneration.pluginMetadataSnapshot,
+          }),
         );
         const auth = replacePreparedModelCatalogAuth(
           current,

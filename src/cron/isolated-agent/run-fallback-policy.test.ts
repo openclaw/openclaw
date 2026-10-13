@@ -208,9 +208,9 @@ describe("resolveCronFallbacksOverride", () => {
     ).toEqual(["deepseek/deepseek-v4-flash", "moonshot/kimi-k2.6"]);
   });
 
-  it("keeps cron preflight strict when payload fallbacks are explicitly empty", () => {
+  it("keeps cron preflight strict when payload fallbacks are explicitly empty", async () => {
     expect(
-      resolveCronPreflightCandidates({
+      await resolveCronPreflightCandidates({
         cfg: makeConfig(["openai/gpt-5.4"]),
         agentId: "main",
         provider: "ollama",
@@ -231,9 +231,9 @@ describe("resolveCronFallbacksOverride", () => {
     ]);
   });
 
-  it("plans the full configured candidate chain for cron preflight", () => {
+  it("plans the full configured candidate chain for cron preflight", async () => {
     expect(
-      resolveCronPreflightCandidates({
+      await resolveCronPreflightCandidates({
         cfg: {
           agents: {
             defaults: {

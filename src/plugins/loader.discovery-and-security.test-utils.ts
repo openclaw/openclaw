@@ -7,8 +7,9 @@ import { withEnv, withEnvAsync } from "../test-utils/env.js";
 // Imported by loader.test.ts to keep its mocked suite in one Vitest module graph.
 import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { warnWhenAllowlistIsOpen } from "./loader-provenance.js";
-import { loadOpenClawPluginCliRegistry, loadOpenClawPlugins } from "./loader.js";
+import { loadOpenClawPluginCliRegistry } from "./loader.js";
 import {
+  loadOpenClawPluginsForTest,
   clearPluginLoaderCache,
   EMPTY_PLUGIN_SCHEMA,
   makePluginLoaderTempDir,
@@ -56,7 +57,7 @@ describe("loadOpenClawPlugins", () => {
     withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
       writeMultiEntryPluginPack(path.join(stateDir, "extensions", "pack"));
 
-      const registry = loadOpenClawPlugins({
+      const registry = loadOpenClawPluginsForTest({
         cache: false,
         config: {
           plugins: {
@@ -147,7 +148,7 @@ describe("loadOpenClawPlugins", () => {
               OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
             },
             () =>
-              loadOpenClawPlugins({
+              loadOpenClawPluginsForTest({
                 cache: false,
                 config: {
                   plugins: {
@@ -158,7 +159,7 @@ describe("loadOpenClawPlugins", () => {
               }),
           );
         },
-        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+        assert: (registry: ReturnType<typeof loadOpenClawPluginsForTest>) => {
           const a = registry.plugins.find((entry) => entry.id === "memory-a");
           const b = registry.plugins.find((entry) => entry.id === "memory-b");
           expect(b?.status).toBe("loaded");
@@ -189,7 +190,7 @@ describe("loadOpenClawPlugins", () => {
           updatePluginManifest({ dir: memoryBDir }, { kind: "memory" });
           process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
-          return loadOpenClawPlugins({
+          return loadOpenClawPluginsForTest({
             cache: false,
             config: {
               plugins: {
@@ -203,7 +204,7 @@ describe("loadOpenClawPlugins", () => {
             },
           });
         },
-        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+        assert: (registry: ReturnType<typeof loadOpenClawPluginsForTest>) => {
           const a = registry.plugins.find((entry) => entry.id === "memory-a");
           const b = registry.plugins.find((entry) => entry.id === "memory-b");
           expect(a?.status).toBe("disabled");
@@ -217,7 +218,7 @@ describe("loadOpenClawPlugins", () => {
         loadRegistry: () => {
           const { selectedId } = setupBundledDreamingMemoryPlugins();
 
-          return loadOpenClawPlugins({
+          return loadOpenClawPluginsForTest({
             cache: false,
             config: {
               plugins: {
@@ -230,7 +231,7 @@ describe("loadOpenClawPlugins", () => {
             },
           });
         },
-        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+        assert: (registry: ReturnType<typeof loadOpenClawPluginsForTest>) => {
           const core = registry.plugins.find((entry) => entry.id === "memory-core");
           const lance = registry.plugins.find((entry) => entry.id === "memory-lancedb");
           expect(core?.status).toBe("loaded");
@@ -246,7 +247,7 @@ describe("loadOpenClawPlugins", () => {
             coreBody: `throw new Error("manifest-only snapshot should not import memory-core");`,
           });
 
-          return loadOpenClawPlugins({
+          return loadOpenClawPluginsForTest({
             cache: false,
             activate: false,
             loadModules: false,
@@ -261,7 +262,7 @@ describe("loadOpenClawPlugins", () => {
             },
           });
         },
-        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+        assert: (registry: ReturnType<typeof loadOpenClawPluginsForTest>) => {
           const core = registry.plugins.find((entry) => entry.id === "memory-core");
           const lance = registry.plugins.find((entry) => entry.id === "memory-lancedb");
           expect(core?.status).toBe("loaded");
@@ -276,7 +277,7 @@ describe("loadOpenClawPlugins", () => {
             coreBody: `throw new Error("denied memory-core should not load");`,
           });
 
-          return loadOpenClawPlugins({
+          return loadOpenClawPluginsForTest({
             cache: false,
             config: {
               plugins: {
@@ -290,7 +291,7 @@ describe("loadOpenClawPlugins", () => {
             },
           });
         },
-        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+        assert: (registry: ReturnType<typeof loadOpenClawPluginsForTest>) => {
           const core = registry.plugins.find((entry) => entry.id === "memory-core");
           const lance = registry.plugins.find((entry) => entry.id === "memory-lancedb");
           expect(core?.status).toBe("disabled");
@@ -305,7 +306,7 @@ describe("loadOpenClawPlugins", () => {
             coreBody: `throw new Error("disabled memory-core should not load");`,
           });
 
-          return loadOpenClawPlugins({
+          return loadOpenClawPluginsForTest({
             cache: false,
             config: {
               plugins: {
@@ -319,7 +320,7 @@ describe("loadOpenClawPlugins", () => {
             },
           });
         },
-        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+        assert: (registry: ReturnType<typeof loadOpenClawPluginsForTest>) => {
           const core = registry.plugins.find((entry) => entry.id === "memory-core");
           const lance = registry.plugins.find((entry) => entry.id === "memory-lancedb");
           expect(core?.status).toBe("disabled");
@@ -335,7 +336,7 @@ describe("loadOpenClawPlugins", () => {
             coreBody: `throw new Error("non-memory selected slot should not load memory-core");`,
           });
 
-          return loadOpenClawPlugins({
+          return loadOpenClawPluginsForTest({
             cache: false,
             config: {
               plugins: {
@@ -348,7 +349,7 @@ describe("loadOpenClawPlugins", () => {
             },
           });
         },
-        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+        assert: (registry: ReturnType<typeof loadOpenClawPluginsForTest>) => {
           const core = registry.plugins.find((entry) => entry.id === "memory-core");
           const selected = registry.plugins.find((entry) => entry.id === "memory-lancedb");
           expect(core?.status).toBe("disabled");
@@ -377,7 +378,7 @@ describe("loadOpenClawPlugins", () => {
             };`,
           });
 
-          return loadOpenClawPlugins({
+          return loadOpenClawPluginsForTest({
             cache: false,
             config: {
               plugins: {
@@ -391,7 +392,7 @@ describe("loadOpenClawPlugins", () => {
             },
           });
         },
-        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+        assert: (registry: ReturnType<typeof loadOpenClawPluginsForTest>) => {
           const core = registry.plugins.find((entry) => entry.id === "memory-core");
           const lance = registry.plugins.find((entry) => entry.id === "memory-lancedb");
           expect(core?.status).toBe("loaded");
@@ -412,7 +413,7 @@ describe("loadOpenClawPlugins", () => {
             coreBody: `throw new Error("memory-core should not load when dreaming is disabled");`,
           });
 
-          return loadOpenClawPlugins({
+          return loadOpenClawPluginsForTest({
             cache: false,
             config: {
               plugins: {
@@ -429,7 +430,7 @@ describe("loadOpenClawPlugins", () => {
             },
           });
         },
-        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+        assert: (registry: ReturnType<typeof loadOpenClawPluginsForTest>) => {
           const core = registry.plugins.find((entry) => entry.id === "memory-core");
           const lance = registry.plugins.find((entry) => entry.id === "memory-lancedb");
           expect(core?.status).toBe("disabled");
@@ -451,7 +452,7 @@ describe("loadOpenClawPlugins", () => {
           updatePluginManifest({ dir: memoryCoreDir }, { kind: "memory" });
           process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
-          return loadOpenClawPlugins({
+          return loadOpenClawPluginsForTest({
             cache: false,
             config: {
               plugins: {
@@ -464,7 +465,7 @@ describe("loadOpenClawPlugins", () => {
             },
           });
         },
-        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+        assert: (registry: ReturnType<typeof loadOpenClawPluginsForTest>) => {
           const core = registry.plugins.find((entry) => entry.id === "memory-core");
           expect(core?.status).toBe("disabled");
         },
@@ -483,7 +484,7 @@ describe("loadOpenClawPlugins", () => {
               OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
             },
             () =>
-              loadOpenClawPlugins({
+              loadOpenClawPluginsForTest({
                 cache: false,
                 config: {
                   plugins: {
@@ -494,7 +495,7 @@ describe("loadOpenClawPlugins", () => {
               }),
           );
         },
-        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+        assert: (registry: ReturnType<typeof loadOpenClawPluginsForTest>) => {
           const entry = registry.plugins.find((item) => item.id === "memory-off");
           expect(entry?.status).toBe("disabled");
         },
@@ -568,7 +569,7 @@ describe("loadOpenClawPlugins", () => {
         },
       },
     };
-    const registry = loadOpenClawPlugins({ cache: false, config });
+    const registry = loadOpenClawPluginsForTest({ cache: false, config });
     const resolved = resolveMemoryCapabilityRegistration(registry.memoryCapabilities);
     const acquired = await getActiveMemorySearchManagerCore({
       cfg: config,
@@ -627,7 +628,7 @@ describe("loadOpenClawPlugins", () => {
             body: simplePluginBody("shadow"),
           });
 
-          return loadOpenClawPlugins({
+          return loadOpenClawPluginsForTest({
             cache: false,
             config: {
               plugins: {
@@ -668,7 +669,7 @@ describe("loadOpenClawPlugins", () => {
               filename: "index.cjs",
             });
 
-            return loadOpenClawPlugins({
+            return loadOpenClawPluginsForTest({
               cache: false,
               config: {
                 plugins: {
@@ -716,7 +717,7 @@ describe("loadOpenClawPlugins", () => {
               },
             });
 
-            return loadOpenClawPlugins({
+            return loadOpenClawPluginsForTest({
               cache: false,
               config: {
                 plugins: {
@@ -771,7 +772,7 @@ describe("loadOpenClawPlugins", () => {
                 },
               });
 
-              return loadOpenClawPlugins({
+              return loadOpenClawPluginsForTest({
                 cache: false,
                 config: {
                   plugins: {
@@ -837,7 +838,7 @@ describe("loadOpenClawPlugins", () => {
               "utf-8",
             );
 
-            return loadOpenClawPlugins({
+            return loadOpenClawPluginsForTest({
               cache: false,
               config: {
                 plugins: {
@@ -896,7 +897,7 @@ describe("loadOpenClawPlugins", () => {
             id: "warn-open-allow-config",
             body: simplePluginBody("warn-open-allow-config"),
           });
-          return loadOpenClawPlugins({
+          return loadOpenClawPluginsForTest({
             cache: false,
             logger: createWarningLogger(warnings),
             config: {
@@ -917,7 +918,7 @@ describe("loadOpenClawPlugins", () => {
             id: "warn-open-allow-workspace",
           });
           return (warnings: string[]) =>
-            loadOpenClawPlugins({
+            loadOpenClawPluginsForTest({
               cache: false,
               workspaceDir,
               logger: createWarningLogger(warnings),
@@ -954,7 +955,7 @@ describe("loadOpenClawPlugins", () => {
       id: "warn-explicitly-enabled-plugin",
     });
     const warnings: string[] = [];
-    loadOpenClawPlugins({
+    loadOpenClawPluginsForTest({
       cache: false,
       workspaceDir,
       logger: createWarningLogger(warnings),
@@ -976,7 +977,7 @@ describe("loadOpenClawPlugins", () => {
       id: "warn-mismatch-allow-plugin",
     });
     const warnings: string[] = [];
-    loadOpenClawPlugins({
+    loadOpenClawPluginsForTest({
       cache: false,
       workspaceDir,
       logger: createWarningLogger(warnings),
@@ -1006,7 +1007,7 @@ describe("loadOpenClawPlugins", () => {
       id: "warn-partial-allow-plugin",
     });
     const warnings: string[] = [];
-    loadOpenClawPlugins({
+    loadOpenClawPluginsForTest({
       cache: false,
       workspaceDir,
       logger: createWarningLogger(warnings),
@@ -1044,7 +1045,7 @@ describe("loadOpenClawPlugins", () => {
       id: "warn-noise-workspace-plugin",
     });
     const warnings: string[] = [];
-    loadOpenClawPlugins({
+    loadOpenClawPluginsForTest({
       cache: false,
       workspaceDir,
       logger: createWarningLogger(warnings),
@@ -1075,7 +1076,7 @@ describe("loadOpenClawPlugins", () => {
       id: "warn-open-allow-remediation",
     });
     const warnings: string[] = [];
-    loadOpenClawPlugins({
+    loadOpenClawPluginsForTest({
       cache: false,
       workspaceDir,
       logger: createWarningLogger(warnings),
@@ -1108,7 +1109,7 @@ describe("loadOpenClawPlugins", () => {
       });
 
       const warnings: string[] = [];
-      const registry = loadOpenClawPlugins({
+      const registry = loadOpenClawPluginsForTest({
         cache: false,
         logger: createWarningLogger(warnings),
         config: {
@@ -1191,7 +1192,7 @@ describe("loadOpenClawPlugins", () => {
             id: "workspace-helper",
           });
 
-          return loadOpenClawPlugins({
+          return loadOpenClawPluginsForTest({
             cache: false,
             workspaceDir,
             config: {
@@ -1201,7 +1202,7 @@ describe("loadOpenClawPlugins", () => {
             },
           });
         },
-        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+        assert: (registry: ReturnType<typeof loadOpenClawPluginsForTest>) => {
           expectPluginOriginAndStatus({
             registry,
             pluginId: "workspace-helper",
@@ -1220,7 +1221,7 @@ describe("loadOpenClawPlugins", () => {
             id: "workspace-helper",
           });
 
-          return loadOpenClawPlugins({
+          return loadOpenClawPluginsForTest({
             cache: false,
             workspaceDir,
             config: {
@@ -1231,7 +1232,7 @@ describe("loadOpenClawPlugins", () => {
             },
           });
         },
-        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+        assert: (registry: ReturnType<typeof loadOpenClawPluginsForTest>) => {
           expectPluginOriginAndStatus({
             registry,
             pluginId: "workspace-helper",
@@ -1255,7 +1256,7 @@ describe("loadOpenClawPlugins", () => {
             id: "shadowed",
           });
 
-          return loadOpenClawPlugins({
+          return loadOpenClawPluginsForTest({
             cache: false,
             workspaceDir,
             config: {
@@ -1303,7 +1304,7 @@ describe("loadOpenClawPlugins", () => {
       "utf-8",
     );
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadOpenClawPluginsForTest({
       cache: false,
       workspaceDir: bundledDir,
       config: {
@@ -1331,7 +1332,7 @@ describe("loadOpenClawPlugins", () => {
       filename: "unscoped.cjs",
     });
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadOpenClawPluginsForTest({
       cache: false,
       config: {
         plugins: {
@@ -1363,7 +1364,7 @@ describe("loadOpenClawPlugins", () => {
             });
 
             const warnings: string[] = [];
-            const registry = loadOpenClawPlugins({
+            const registry = loadOpenClawPluginsForTest({
               cache: false,
               logger: createWarningLogger(warnings),
               config: {
@@ -1392,7 +1393,7 @@ describe("loadOpenClawPlugins", () => {
             });
 
             const warnings: string[] = [];
-            const registry = loadOpenClawPlugins({
+            const registry = loadOpenClawPluginsForTest({
               cache: false,
               logger: createWarningLogger(warnings),
               config: {
@@ -1411,7 +1412,7 @@ describe("loadOpenClawPlugins", () => {
         loadRegistry: () => {
           const { plugin, env } = createEnvResolvedPluginFixture("tracked-load-path");
           const warnings: string[] = [];
-          const registry = loadOpenClawPlugins({
+          const registry = loadOpenClawPluginsForTest({
             cache: false,
             logger: createWarningLogger(warnings),
             env,
@@ -1437,7 +1438,7 @@ describe("loadOpenClawPlugins", () => {
         loadRegistry: () => {
           const { plugin, env } = createEnvResolvedPluginFixture("tracked-install-path");
           const warnings: string[] = [];
-          const registry = loadOpenClawPlugins({
+          const registry = loadOpenClawPluginsForTest({
             cache: false,
             logger: createWarningLogger(warnings),
             env,
@@ -1516,7 +1517,7 @@ describe("loadOpenClawPlugins", () => {
       setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
 
       const warnings: string[] = [];
-      const registry = loadOpenClawPlugins({
+      const registry = loadOpenClawPluginsForTest({
         cache: false,
         logger: createWarningLogger(warnings),
         config: runtimeConfig,
@@ -1594,7 +1595,7 @@ describe("loadOpenClawPlugins", () => {
     }
 
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
-    const registry = loadOpenClawPlugins({
+    const registry = loadOpenClawPluginsForTest({
       cache: false,
       workspaceDir: bundledDir,
       config: {
@@ -1663,7 +1664,7 @@ describe("loadOpenClawPlugins", () => {
       });
 
       const warnings: string[] = [];
-      const registry = loadOpenClawPlugins({
+      const registry = loadOpenClawPluginsForTest({
         activate: false,
         cache: false,
         logger: createWarningLogger(warnings),
@@ -1708,7 +1709,7 @@ describe("loadOpenClawPlugins", () => {
       "utf-8",
     );
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadOpenClawPluginsForTest({
       cache: false,
       workspaceDir: plugin.dir,
       config: {

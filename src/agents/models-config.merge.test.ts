@@ -1,5 +1,6 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import type { ExistingProviderConfig, ProviderModelCatalog } from "./models-config.merge.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
@@ -11,6 +12,10 @@ beforeAll(async () => {
   vi.doUnmock("../plugins/manifest-registry.js");
   ({ mergeProviderModels, mergeProviders, mergeWithExistingProviderSecrets } =
     await import("./models-config.merge.js"));
+});
+
+beforeEach(async () => {
+  await preparePluginMetadataMachineStateAsync({});
 });
 
 const model = (

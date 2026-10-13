@@ -57,7 +57,7 @@ import {
 } from "../src/plugin-state/plugin-state-store.js";
 import { createRuntimePluginManifestLookup } from "../src/plugins/active-runtime-registry.js";
 import { resolvePluginCapabilityCatalogContext } from "../src/plugins/loader-runtime-load.js";
-import { resolvePluginMetadataSnapshot } from "../src/plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../src/plugins/plugin-metadata-snapshot.js";
 import { bindPluginRuntimeArtifactSelection } from "../src/plugins/plugin-runtime-artifact-binding.js";
 import {
   resolvePluginRuntimeArtifactSelection,
@@ -404,7 +404,7 @@ async function withFixture(
         activateGlobalSideEffects: false,
       });
       try {
-        const metadataSnapshot = resolvePluginMetadataSnapshot({
+        const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
           config,
           workspaceDir: state.workspaceDir,
           preferPersisted: false,

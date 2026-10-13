@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { resolveAgentDiscoveryAuthFacts } from "./agent-auth-discovery.js";
 
 const resolveRuntimeSyntheticAuthProviderRefs = vi.hoisted(() => vi.fn(() => ["claude-cli"]));
@@ -19,14 +20,23 @@ const resolveProviderSyntheticAuthWithPlugin = vi.hoisted(() =>
   ),
 );
 
+// mock-isolation: Synthetic auth owns its catalog fixture and does not inspect host metadata.
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
+  resolvePluginMetadataSnapshotAsync: async () => createPluginMetadataSnapshotFixture(),
+}));
+
 vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
   resolveRuntimeSyntheticAuthProviderRefs,
 }));
 
+// mock-isolation: Synthetic auth callbacks use fixture credentials instead of installed provider runtimes.
 vi.mock("../plugins/provider-runtime.js", () => ({
   applyProviderResolvedTransportWithPlugin: () => undefined,
   normalizeProviderResolvedModelWithPlugin: () => undefined,
   resolveProviderSyntheticAuthWithPlugin,
+  prepareProviderSyntheticAuthWithPlugin: async (params: { provider: string }) =>
+    resolveProviderSyntheticAuthWithPlugin(params),
 }));
 
 // mock-isolation: Synthetic credential discovery uses an empty profile store, never host credentials.
@@ -65,19 +75,23 @@ describe("agent model discovery synthetic auth", () => {
       const { credentials } = await resolveAgentDiscoveryAuthFacts(agentDir, { readOnly: true });
 
       expect(resolveRuntimeSyntheticAuthProviderRefs).toHaveBeenCalledTimes(1);
-      expect(resolveRuntimeSyntheticAuthProviderRefs).toHaveBeenCalledWith();
+      expect(resolveRuntimeSyntheticAuthProviderRefs).toHaveBeenCalledWith(
+        expect.objectContaining({ index: expect.objectContaining({ plugins: [] }) }),
+      );
       expect(resolveProviderSyntheticAuthWithPlugin).toHaveBeenCalledTimes(1);
-      expect(resolveProviderSyntheticAuthWithPlugin).toHaveBeenCalledWith({
-        provider: "claude-cli",
-        config: undefined,
-        workspaceDir: undefined,
-        env: undefined,
-        context: {
-          config: undefined,
+      expect(resolveProviderSyntheticAuthWithPlugin).toHaveBeenCalledWith(
+        expect.objectContaining({
           provider: "claude-cli",
-          providerConfig: undefined,
-        },
-      });
+          config: undefined,
+          workspaceDir: undefined,
+          env: undefined,
+          context: {
+            config: undefined,
+            provider: "claude-cli",
+            providerConfig: undefined,
+          },
+        }),
+      );
       expect(credentials["claude-cli"]).toEqual({
         type: "api_key",
         key: "claude-cli-access-token",

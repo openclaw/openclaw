@@ -4,8 +4,9 @@ import { resolvePluginDoctorProviderRenames } from "../../../plugins/doctor-cont
 import type * as DoctorContractRegistry from "../../../plugins/doctor-contract-registry.js";
 import {
   prepareDoctorConfigReferenceSource,
-  restoreDoctorConfigEnvRefs,
+  restoreDoctorConfigEnvRefs as restoreDoctorConfigEnvRefsUnprepared,
 } from "./config-flow-steps.js";
+import { withDoctorPluginMetadataForTest } from "./plugin-metadata.test-support.js";
 import { applyProviderRenames } from "./provider-rename.js";
 
 vi.mock("../../../plugins/doctor-contract-registry.js", async (importOriginal) => ({
@@ -14,6 +15,14 @@ vi.mock("../../../plugins/doctor-contract-registry.js", async (importOriginal) =
     typeof DoctorContractRegistry.resolvePluginDoctorProviderRenames
   >(() => []),
 }));
+
+function restoreDoctorConfigEnvRefs(
+  ...params: Parameters<typeof restoreDoctorConfigEnvRefsUnprepared>
+) {
+  return withDoctorPluginMetadataForTest(params[0], () =>
+    restoreDoctorConfigEnvRefsUnprepared(...params),
+  );
+}
 
 function pairedSnapshot(authored: OpenClawConfig, resolved: OpenClawConfig): ConfigFileSnapshot {
   return {

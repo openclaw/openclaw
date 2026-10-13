@@ -296,7 +296,7 @@ it.each([
       const registry = createMockPluginRegistry([
         { hookName: "subagent_ended", handler: endedHook },
       ]);
-      vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(registry);
+      vi.mocked(loadAgentRuntimePluginRegistryHandle).mockResolvedValue(registry);
       initializeGlobalHookRunner(registry);
       onTestFinished(resetGlobalHookRunner);
       fixture.capture.mockResolvedValue("Completed before Stop");

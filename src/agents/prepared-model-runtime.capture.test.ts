@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { Model } from "../llm/types.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   bindPreparedModelRuntimeAuth,
@@ -75,6 +76,10 @@ function fixture() {
     },
   };
 }
+
+beforeEach(async () => {
+  await prepareBundledDiscoveryMode();
+});
 
 describe("captured model catalog generations", () => {
   it("materializes only requested runtime stores while isolating each run", () => {

@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
-import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
+import { resolveSessionRuntimeOverrideForProviderAsync } from "../../agents/session-runtime-compat.js";
 import type { SessionEntry } from "../../config/sessions.js";
 
 describe("resolveSessionRuntimeOverrideForProvider", () => {
-  it("honors an explicit OpenClaw override for OpenAI", () => {
+  it("honors an explicit OpenClaw override for OpenAI", async () => {
     expect(
-      resolveSessionRuntimeOverrideForProvider({
+      await resolveSessionRuntimeOverrideForProviderAsync({
         provider: "openai",
         entry: { agentRuntimeOverride: "openclaw" } as SessionEntry,
       }),
@@ -17,9 +17,9 @@ describe("resolveSessionRuntimeOverrideForProvider", () => {
     cliBackendsTesting.resetDepsForTest();
   });
 
-  it("ignores unsupported session runtime pins", () => {
+  it("ignores unsupported session runtime pins", async () => {
     expect(
-      resolveSessionRuntimeOverrideForProvider({
+      await resolveSessionRuntimeOverrideForProviderAsync({
         provider: "openai",
         entry: { agentRuntimeOverride: "unsupported-runtime" },
       }),
@@ -30,25 +30,25 @@ describe("resolveSessionRuntimeOverrideForProvider", () => {
     { provider: "openai", expected: "codex" },
     { provider: "codex", expected: "codex" },
     { provider: "anthropic", expected: undefined },
-  ])("resolves Codex runtime compatibility for $provider", ({ provider, expected }) => {
+  ])("resolves Codex runtime compatibility for $provider", async ({ provider, expected }) => {
     expect(
-      resolveSessionRuntimeOverrideForProvider({
+      await resolveSessionRuntimeOverrideForProviderAsync({
         provider,
         entry: { agentRuntimeOverride: "codex" },
       }),
     ).toBe(expected);
   });
 
-  it("does not treat an observed harness as a future-turn override", () => {
+  it("does not treat an observed harness as a future-turn override", async () => {
     expect(
-      resolveSessionRuntimeOverrideForProvider({
+      await resolveSessionRuntimeOverrideForProviderAsync({
         provider: "anthropic",
         entry: { agentHarnessId: "codex" },
       }),
     ).toBeUndefined();
   });
 
-  it("keeps CLI runtime pins only when the runtime serves the selected provider", () => {
+  it("keeps CLI runtime pins only when the runtime serves the selected provider", async () => {
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [],
       resolvePluginSetupCliBackend: ({ backend }) =>
@@ -67,14 +67,14 @@ describe("resolveSessionRuntimeOverrideForProvider", () => {
     const cfg = {};
 
     expect(
-      resolveSessionRuntimeOverrideForProvider({
+      await resolveSessionRuntimeOverrideForProviderAsync({
         provider: "anthropic",
         entry: { agentRuntimeOverride: "claude-cli" },
         cfg,
       }),
     ).toBe("claude-cli");
     expect(
-      resolveSessionRuntimeOverrideForProvider({
+      await resolveSessionRuntimeOverrideForProviderAsync({
         provider: "openai",
         entry: { agentRuntimeOverride: "claude-cli" },
         cfg,

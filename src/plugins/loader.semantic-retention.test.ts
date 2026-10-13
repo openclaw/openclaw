@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { PluginLoadOptions } from "./loader-types.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { loadOpenClawPluginsAsync } from "./loader.js";
 import {
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
@@ -55,7 +55,7 @@ it.each(["manifest", "config"] as const)(
       cache: false,
       throwOnLoadError: true,
     };
-    const initial = loadOpenClawPlugins(options);
+    const initial = await loadOpenClawPluginsAsync(options);
     registries.push(initial);
     const manifestRegistry = getPluginRuntimeLoadContext(initial)?.manifestRegistry;
     assert(manifestRegistry);
@@ -90,7 +90,7 @@ it.each(["manifest", "config"] as const)(
     };
     // Gateway replacement first plans without modules, then registers the candidate.
     for (const loadModules of [false, true]) {
-      const next = loadOpenClawPlugins({ ...reordered, loadModules });
+      const next = await loadOpenClawPluginsAsync({ ...reordered, loadModules });
       registries.push(next);
       expect(next.plugins[0]).toBe(initial.plugins[0]);
       const handler = next.gatewayHandlers["semantic-retention.probe"];
@@ -108,7 +108,7 @@ it.each(["manifest", "config"] as const)(
       expect(respond).toHaveBeenCalledWith(true, "available", undefined, undefined);
     }
     // An ordered setting or real manifest value still invalidates registration.
-    const changed = loadOpenClawPlugins({
+    const changed = await loadOpenClawPluginsAsync({
       ...reordered,
       loadModules: false,
       ...(input === "manifest"
@@ -134,7 +134,7 @@ it.each(["manifest", "config"] as const)(
     });
     registries.push(changed);
     expect(changed.plugins[0]).not.toBe(initial.plugins[0]);
-    const forced = loadOpenClawPlugins({
+    const forced = await loadOpenClawPluginsAsync({
       ...reordered,
       loadModules: false,
       replacePluginIds: [plugin.id],
@@ -144,7 +144,7 @@ it.each(["manifest", "config"] as const)(
   },
 );
 
-it("retains an untracked plugin across Control UI rebuilds, not declaration changes, without duplicate warnings", () => {
+it("retains an untracked plugin across Control UI rebuilds, not declaration changes, without duplicate warnings", async () => {
   useNoBundledPlugins();
   const plugin = writePlugin({
     id: "ui-retention",
@@ -171,12 +171,12 @@ it("retains an untracked plugin across Control UI rebuilds, not declaration chan
       }),
     );
   };
-  const load = (loadModules = true, previousRegistry = registries.at(-1)) => {
+  const load = async (loadModules = true, previousRegistry = registries.at(-1)) => {
     // Each reload reads fresh disk metadata, as the Gateway's plugin operation does.
     const cache = createPluginCache();
     caches.push(cache);
-    const registry = withPluginCache(cache, () =>
-      loadOpenClawPlugins({
+    const registry = await withPluginCache(cache, () =>
+      loadOpenClawPluginsAsync({
         config: {
           plugins: {
             load: { paths: [plugin.file] },
@@ -206,14 +206,14 @@ it("retains an untracked plugin across Control UI rebuilds, not declaration chan
     return registry;
   };
   writeManifest("build-a");
-  const initial = load();
+  const initial = await load();
   const record = initial.plugins.find((entry) => entry.id === plugin.id);
   const handler = initial.gatewayHandlers["ui-retention.probe"];
   assert(record && handler);
   writeManifest("build-b");
   // Gateway replacement plans without modules, then registers against the same published registry.
   for (const loadModules of [false, true]) {
-    const next = load(loadModules, initial);
+    const next = await load(loadModules, initial);
     expect.soft(next.plugins.find((entry) => entry.id === plugin.id)).toBe(record);
     expect.soft(next.gatewayHandlers["ui-retention.probe"]).toBe(handler);
   }
@@ -221,7 +221,7 @@ it("retains an untracked plugin across Control UI rebuilds, not declaration chan
   let current = record;
   for (const build of [undefined, "build-c"]) {
     writeManifest(build);
-    const next = load();
+    const next = await load();
     const replaced = next.plugins.find((entry) => entry.id === plugin.id);
     expect(replaced).not.toBe(current);
     expect(replaced?.controlUi?.entry).toBe(build && `dist/control-ui/${build}/index.js`);
@@ -229,6 +229,6 @@ it("retains an untracked plugin across Control UI rebuilds, not declaration chan
     current = replaced;
   }
   writeManifest("build-c", { type: "object", properties: { label: { type: "string" } } });
-  const changed = load();
+  const changed = await load();
   expect(changed.plugins.find((entry) => entry.id === plugin.id)).not.toBe(current);
 });

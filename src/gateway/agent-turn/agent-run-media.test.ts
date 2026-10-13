@@ -25,6 +25,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import * as hookRunnerGlobal from "../../plugins/hook-runner-global.js";
 import { createHookRunnerWithRegistry } from "../../plugins/hooks.test-fixtures.js";
+import { preparePluginMetadataMachineStateAsync } from "../../plugins/installed-plugin-index-record-state.js";
 import { attachSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import {
   type OpenClawTestState,
@@ -97,6 +98,7 @@ async function runMediaTurn(
   };
   await state.writeConfig(cfg);
   setRuntimeConfigSnapshot(cfg);
+  await preparePluginMetadataMachineStateAsync({ env: state.env });
   const scope = {
     agentId: "main",
     sessionId,

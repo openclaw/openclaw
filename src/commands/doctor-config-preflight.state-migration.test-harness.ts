@@ -7,6 +7,7 @@ import type { DeferredPluginMigration } from "../infra/deferred-plugin-migration
 import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
 import * as tempRoot from "../infra/tmp-openclaw-dir.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
@@ -149,6 +150,7 @@ const readConfigFileSnapshotWithPluginMetadata = vi.hoisted(() =>
     }) => Promise<ConfigSnapshotWithPluginMetadataFixture>
   >(async (options) => {
     const snapshot = await readConfigFileSnapshot();
+    await prepareBundledDiscoveryMode();
     return {
       snapshot,
       pluginMetadataSnapshot: {

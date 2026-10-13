@@ -5,6 +5,7 @@ import {
   createRuntimeEnv,
   registerProviderPlugin,
   requireRegisteredProvider,
+  useProviderCatalogMetadata,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ProviderCatalogResult } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
@@ -24,6 +25,8 @@ import qwenPlugin from "./index.js";
 import { applyQwenTokenPlanConfig } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { wrapQwenProviderStream } from "./stream.js";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 function requireCatalogProvider(result: ProviderCatalogResult): ModelProviderConfig {
   if (!result || !("provider" in result)) {

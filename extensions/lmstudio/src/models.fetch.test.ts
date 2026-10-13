@@ -1,10 +1,15 @@
 import type { ProviderCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
-import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  capturePluginRegistration,
+  useProviderCatalogMetadata,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, afterEach, assert, describe, expect, it, vi } from "vitest";
 import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import plugin from "../index.js";
 import { fetchLmstudioModels } from "./models.fetch.js";
 import { discoverLmstudioProvider } from "./setup.js";
+
+useProviderCatalogMetadata(new URL("..", import.meta.url));
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 

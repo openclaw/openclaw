@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { doctorCommand } from "../commands/doctor.js";
-import { loadPluginRegistryHandle } from "../plugins/loader.js";
+import { loadPluginRegistryHandleAsync } from "../plugins/loader.js";
 import * as pluginSourceFiles from "../plugins/plugin-source-file.js";
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -73,7 +73,7 @@ it.each([
       }
       mocks.runContributions.mockImplementation(async () => {
         for (let attempt = 0; attempt < 2; attempt++) {
-          const registry = loadPluginRegistryHandle({ config: cfg, cache: false });
+          const registry = await loadPluginRegistryHandleAsync({ config: cfg, cache: false });
           try {
             expect(registry.plugins.find((plugin) => plugin.id === id)).toMatchObject({
               status: "error",

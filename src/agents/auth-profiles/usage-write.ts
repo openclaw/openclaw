@@ -9,6 +9,7 @@ import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -241,8 +242,9 @@ export async function withAuthProfileUsage<T>(
         throw new Error("Auth profile credential owner changed during usage preparation");
       }
     };
+    const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({ env });
     assertOwnerCurrent();
-    const providerAliases = resolveProviderAuthAliasMap({ env });
+    const providerAliases = resolveProviderAuthAliasMap({ env, metadataSnapshot });
     let recordingStarted = false;
     const operation = consume({
       observed,

@@ -1,7 +1,10 @@
+import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildComfyConfig, fetchGuardJson } from "./test-helpers.js";
 import { buildComfyVideoGenerationProvider } from "./video-generation-provider.js";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),

@@ -26,9 +26,9 @@ export const AUTH_ASYNC_COMPAT_RECORD = {
     "openclaw/plugin-sdk/agent-runtime ensureAuthProfileStore",
     "openclaw/plugin-sdk/agent-runtime loadAuthProfileStoreWithoutExternalProfiles",
     "openclaw/plugin-sdk/agent-runtime loadAuthProfileStoreForRuntime",
+    "openclaw/plugin-sdk/agent-runtime saveAuthProfileStore",
     "openclaw/plugin-sdk/agent-runtime replaceRuntimeAuthProfileStoreSnapshots",
     "openclaw/plugin-sdk/agent-runtime loadAuthProfileStoreForSecretsRuntime",
-    "openclaw/plugin-sdk/agent-runtime saveAuthProfileStore",
     "openclaw/plugin-sdk/agent-runtime resolveAuthStorePathForDisplay",
     "openclaw/plugin-sdk/agent-runtime findPersistedAuthProfileCredential",
     "openclaw/plugin-sdk/agent-runtime resolvePersistedAuthProfileOwnerAgentDir",
@@ -64,6 +64,7 @@ export const AUTH_ASYNC_COMPAT_RECORD = {
   ],
   tests: [
     "src/agents/auth-profiles.sqlite-store.test.ts",
+    "src/agents/auth-profiles/store-state-owner.test.ts",
     "src/plugin-sdk/provider-auth-runtime.test.ts",
     "src/agents/sessions/auth-storage.test.ts",
     "src/agents/auth-profiles/paths-direct-import.test.ts",

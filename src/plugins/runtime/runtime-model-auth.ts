@@ -1,7 +1,7 @@
 // Inject store operations to avoid importing loader-backed auth facades during registration.
 import { resolveAuthProfileOrder } from "../../agents/auth-profiles/order.js";
 import { listProfilesForProvider } from "../../agents/auth-profiles/profile-list.js";
-import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { resolvePreparedProviderIdForAuth as resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import type { PluginRuntime } from "./types.js";
 

@@ -168,12 +168,16 @@ describe("createOpenClawTools sessions_spawn session-key selection", () => {
     const policyKey = "agent:main:telegram:default:direct:456";
     const durableKey = "agent:main:telegram:direct:456";
 
-    createOpenClawTools({
-      agentSessionKey: policyKey,
-      runSessionKey: durableKey,
-      disableMessageTool: true,
-      disablePluginTools: true,
-    });
+    createOpenClawTools(
+      {
+        agentSessionKey: policyKey,
+        runSessionKey: durableKey,
+        disableMessageTool: true,
+        disablePluginTools: true,
+      },
+      undefined,
+      false,
+    );
 
     expect(mocks.spawnToolOptions).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -217,11 +221,15 @@ describe("createOpenClawTools sessions_spawn session-key selection", () => {
   it("falls back to agentSessionKey when runSessionKey is absent", () => {
     const policyKey = "agent:main:telegram:default:direct:456";
 
-    createOpenClawTools({
-      agentSessionKey: policyKey,
-      disableMessageTool: true,
-      disablePluginTools: true,
-    });
+    createOpenClawTools(
+      {
+        agentSessionKey: policyKey,
+        disableMessageTool: true,
+        disablePluginTools: true,
+      },
+      undefined,
+      false,
+    );
 
     expect(mocks.spawnToolOptions).toHaveBeenCalledWith(
       expect.objectContaining({ agentSessionKey: policyKey }),

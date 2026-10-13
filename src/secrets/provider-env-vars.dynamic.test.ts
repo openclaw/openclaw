@@ -1,7 +1,7 @@
 /** Tests dynamic provider env-var discovery from plugin metadata. */
 import fs from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { sanitizeEnvVars } from "../agents/sandbox/sanitize-env-vars.js";
+import { sanitizeEnvVarsAsync } from "../agents/sandbox/sanitize-env-vars.js";
 import * as pluginConfigState from "../plugins/config-state.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { buildPluginMetadataProviderFacts } from "../plugins/plugin-metadata-provider-facts.js";
@@ -154,8 +154,11 @@ vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
   loadPluginMetadataSnapshot: pluginRegistryMocks.loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshotAsync: async (params: unknown) =>
+    pluginRegistryMocks.loadPluginMetadataSnapshot(params),
 }));
 
 describe("provider env vars dynamic manifest metadata", () => {
@@ -169,7 +172,7 @@ describe("provider env vars dynamic manifest metadata", () => {
     pluginRegistryMocks.loadPluginMetadataSnapshot.mockClear();
   });
 
-  it("scrubs provider usage credentials without making them inference auth candidates", () => {
+  it("scrubs provider usage credentials without making them inference auth candidates", async () => {
     useInstalledPlugins({
       id: "provider-billing",
       origin: "global",
@@ -184,14 +187,17 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(resolveProviderAuthEnvVarCandidatesCore()["provider-billing"]).toBeUndefined();
     expect(getProviderEnvVarsCore("provider-billing")).toStrictEqual([]);
     expect(
-      sanitizeEnvVars({ PROVIDER_BILLING_CREDENTIAL: "billing-secret", SAFE_VALUE: "ok" }),
+      await sanitizeEnvVarsAsync({
+        PROVIDER_BILLING_CREDENTIAL: "billing-secret",
+        SAFE_VALUE: "ok",
+      }),
     ).toMatchObject({
       allowed: { SAFE_VALUE: "ok" },
       blocked: ["PROVIDER_BILLING_CREDENTIAL"],
     });
   });
 
-  it("scrubs usage credentials using host metadata rather than the candidate sandbox env", () => {
+  it("scrubs usage credentials using host metadata rather than the candidate sandbox env", async () => {
     const configuredSnapshot = {
       workspaceDir: "/workspace",
       owners: buildPluginMetadataProviderFacts([]),
@@ -234,7 +240,7 @@ describe("provider env vars dynamic manifest metadata", () => {
     );
 
     expect(
-      sanitizeEnvVars({
+      await sanitizeEnvVarsAsync({
         CONFIGURED_BILLING_CREDENTIAL: "billing-secret",
         PATH: "/usr/bin",
         SAFE_VALUE: "ok",

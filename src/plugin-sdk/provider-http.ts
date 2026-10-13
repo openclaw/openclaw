@@ -1,5 +1,6 @@
 // Shared provider-facing HTTP helpers. Keep generic transport utilities here so
 // capability SDKs do not depend on each other.
+export { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 
 export {
   inspectTlsCertificateError,
@@ -89,9 +90,14 @@ export type {
   ProviderRequestTlsOverride,
   ProviderRequestTransportOverrides,
 } from "../agents/provider-request-config.types.js";
-export { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
 export {
-  resolveProviderEndpoint,
-  resolveProviderRequestCapabilities,
-  resolveProviderRequestPolicy,
-} from "../agents/provider-attribution.js";
+  getModelProviderRequestRouteFacts,
+  prepareModelProviderRequestRouteFacts,
+  resolveProviderRequestHeadersAsync,
+} from "../agents/provider-request-config.js";
+export {
+  resolveProviderEndpointLegacy as resolveProviderEndpoint,
+  resolveProviderRequestCapabilitiesLegacy as resolveProviderRequestCapabilities,
+  resolveProviderRequestPolicyLegacy as resolveProviderRequestPolicy,
+  resolveProviderRequestHeadersLegacy as resolveProviderRequestHeaders,
+} from "../agents/provider-attribution-sdk.js";

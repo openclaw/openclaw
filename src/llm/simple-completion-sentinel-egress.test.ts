@@ -7,27 +7,32 @@ import "../agents/ai-transport-runtime-host.js";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "../agents/model-auth-markers.js";
 import { applyLocalNoAuthHeaderOverride } from "../agents/model-auth-model.js";
 import {
+  attachModelProviderRequestRouteFacts,
   attachModelProviderRequestTransport,
   getModelProviderRequestTransport,
 } from "../agents/provider-request-config.js";
 import type { ProviderRequestAuthOverride } from "../agents/provider-request-config.types.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
+import { makeEmptyPluginMetadataOwners } from "../plugins/current-plugin-metadata.test-support.js";
 import { attachModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import type { ProviderPlugin } from "../plugins/provider-plugin.types.js";
 import { sealSecretSentinel } from "../secrets/sentinel.js";
 
-const model: Model = {
-  id: "sentinel-test-model",
-  name: "Sentinel test model",
-  api: "openai-completions",
-  provider: "sentinel-test-provider",
-  baseUrl: "https://provider.example.invalid/v1",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 8192,
-  maxTokens: 1024,
-};
+const model: Model = attachModelProviderRequestRouteFacts(
+  {
+    id: "sentinel-test-model",
+    name: "Sentinel test model",
+    api: "openai-completions",
+    provider: "sentinel-test-provider",
+    baseUrl: "https://provider.example.invalid/v1",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 8192,
+    maxTokens: 1024,
+  } satisfies Model,
+  makeEmptyPluginMetadataOwners(),
+);
 const unknownSentinel = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
 const seal = (value: string) => sealSecretSentinel(value, { label: "simple-completion-test" });
 

@@ -13,6 +13,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { prepareBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import {
   commitPluginInstallRecordsOnly,
   commitPluginInstallRecordsWithConfig,
@@ -230,6 +231,7 @@ describe("installed plugin index mutation receipts", () => {
   it("discards mutation receipts when the actual outer SQLite transaction rolls back", async () => {
     const env = makeEnv();
     await withPluginLifecycleLease({ env }, async (lease) => {
+      await prepareBundledDiscoveryMode(env);
       const failure = new Error("outer transaction rollback");
       expect(() =>
         runOpenClawStateWriteTransaction(
@@ -456,6 +458,7 @@ describe("installed plugin index mutation receipts", () => {
   it("rejects a failed SQLite commit without returning a receipt or publishing its row", async () => {
     const env = makeEnv();
     await withPluginLifecycleLease({ env }, async (lease) => {
+      await prepareBundledDiscoveryMode(env);
       let receipt;
       try {
         runOpenClawStateWriteTransaction(

@@ -26,8 +26,15 @@ vi.mock("../plugins/runtime.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Collector scope uses synthetic activation facts without installed plugin discovery.
+vi.mock("../plugins/runtime/load-context.resolve.js", () => ({
+  resolvePluginRuntimeLoadContextAsync: async (...args: unknown[]) =>
+    applyPluginAutoEnableMock(...args),
+}));
+
+// mock-isolation: Audit scope tests capture loader requests without executing installed plugin runtimes.
 vi.mock("../plugins/runtime/metadata-registry-loader.js", () => ({
-  loadPluginMetadataRegistrySnapshot: (...args: unknown[]) =>
+  loadPluginMetadataRegistrySnapshotAsync: async (...args: unknown[]) =>
     loadPluginMetadataRegistrySnapshotMock(...args),
 }));
 

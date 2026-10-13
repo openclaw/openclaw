@@ -8,11 +8,16 @@ import {
   type Model,
   type ProviderContext,
 } from "openclaw/plugin-sdk/llm";
-import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  registerSingleProviderPlugin,
+  useProviderCatalogMetadata,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import { wrapMoonshotStream } from "./native-video.js";
 import { MOONSHOT_BASE_URL } from "./provider-catalog.js";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 const MP4_A = "data:video/mp4;base64,YWFhYWFhYWFhYWFhYWFhYQ==";
 const MP4_B = "data:video/mp4;base64,YmJiYmJiYmJiYmJiYmJiYg==";

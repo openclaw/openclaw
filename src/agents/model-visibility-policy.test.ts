@@ -1,9 +1,17 @@
 // Explicit model policy tests keep catalog metadata separate from override restrictions.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { useProviderCatalogMetadata } from "../plugin-sdk/test-helpers/provider-catalog.js";
+import { useBundledProviderPolicyArtifactsForTest } from "../plugin-sdk/test-helpers/provider-policy-artifacts.test-support.js";
 import { resolveDefaultModelForAgent } from "./model-selection-config.js";
 import { getModelRefStatus } from "./model-selection-resolve.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
+
+useProviderCatalogMetadata(
+  new URL("../../extensions/openai/", import.meta.url),
+  new URL("../../extensions/anthropic/", import.meta.url),
+);
+useBundledProviderPolicyArtifactsForTest(["openai", "anthropic"]);
 
 function createPolicy(cfg: OpenClawConfig, agentId?: string) {
   return createModelVisibilityPolicy({

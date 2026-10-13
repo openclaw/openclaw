@@ -6,6 +6,7 @@ import type { ChannelOutboundContext } from "../../channels/plugins/outbound.typ
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -133,6 +134,7 @@ describe("message tool sandbox attachments", () => {
       });
       registerSandboxMediaPlugin(sendMedia);
 
+      await prepareBundledDiscoveryMode(process.env);
       const tool = createMessageTool({
         config: cfg,
         getRuntimeConfig: () => cfg,
@@ -179,6 +181,7 @@ describe("message tool sandbox attachments", () => {
         channels: { sandboxchat: { enabled: true } },
         tools: { allow: ["message"], deny: ["read"] },
       } as OpenClawConfig;
+      await prepareBundledDiscoveryMode(process.env);
       const tool = createMessageTool({
         config: deniedCfg,
         getRuntimeConfig: () => deniedCfg,
@@ -277,6 +280,7 @@ describe("message tool captured workspace readiness", () => {
           waiting.resolve();
           return ready.promise;
         });
+        await prepareBundledDiscoveryMode(process.env);
         const tool = await runWithAgentWorkspaceReadiness(
           {
             sessionKey: "agent:main:attachment-readiness",

@@ -29,7 +29,7 @@ function hasSupportedTargetIdsWiring(source: string): boolean {
     /targetIds:\s*get[A-Za-z0-9_]+\(\)/m.test(source) ||
     /targetIds:\s*getAgentRuntimeCommandSecretTargetIds\(/m.test(source) ||
     /targetIds:\s*scopedTargets\.targetIds/m.test(source) ||
-    (/\bconst\s+scopedTargets\s*=\s*getCapabilityWeb(?:Fetch|Search)CommandSecretTargets\(/m.test(
+    (/\bconst\s+scopedTargets\s*=\s*(?:await\s+)?getCapabilityWeb(?:Fetch|Search)CommandSecretTargets\(/m.test(
       source,
     ) &&
       /\bresolveLocalCapabilityRuntimeConfig\(\{[^}]*\.\.\.scopedTargets\s*[,}]/m.test(source)) ||

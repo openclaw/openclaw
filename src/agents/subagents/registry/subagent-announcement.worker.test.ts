@@ -492,7 +492,7 @@ it.each(["current", "revoked", "source switched", "yielded"] as const)(
     const { registry, runner } = createHookRunnerWithRegistry([
       { hookName: "subagent_ended", handler: ended },
     ]);
-    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(registry);
+    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockResolvedValue(registry);
     vi.spyOn(hookRuntime, "getGlobalHookRunner").mockReturnValue(runner);
     const ready = createDeferredCore();
     const release = createDeferredCore();
@@ -602,7 +602,7 @@ it.each([false, true])(
     const { registry, runner } = createHookRunnerWithRegistry([
       { hookName: "subagent_ended", handler: ended },
     ]);
-    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(registry);
+    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockResolvedValue(registry);
     vi.spyOn(hookRuntime, "getGlobalHookRunner").mockReturnValue(runner);
 
     const context = createContext();

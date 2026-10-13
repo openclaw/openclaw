@@ -1094,11 +1094,11 @@ async function prepareRuntimeEntrypoint(repoRoot: string, runtimeRoot: string) {
   };
 }
 
-export function buildCodeModeMatrixAgentEnv(
+export async function buildCodeModeMatrixAgentEnv(
   model: string,
   runtimeCwd: string,
   baseEnv: NodeJS.ProcessEnv = process.env,
-): NodeJS.ProcessEnv {
+): Promise<NodeJS.ProcessEnv> {
   const provider = model.slice(0, model.indexOf("/"));
   const config: OpenClawConfig = {
     plugins: { allow: [provider], entries: { [provider]: { enabled: true } } },
@@ -1106,7 +1106,7 @@ export function buildCodeModeMatrixAgentEnv(
   return {
     PATH: baseEnv.PATH,
     SystemRoot: baseEnv.SystemRoot,
-    ...matrixProviderEnv(model, config, baseEnv),
+    ...(await matrixProviderEnv(model, config, baseEnv)),
     NODE_DISABLE_COMPILE_CACHE: "1",
     OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(runtimeCwd, "dist", "extensions"),
   };
@@ -1164,7 +1164,7 @@ async function executeAgentExec(params: {
   let output: { stdout: string; stderr: string };
   try {
     const env: NodeJS.ProcessEnv = {
-      ...buildCodeModeMatrixAgentEnv(params.matrix.cell.model, runtime.cwd),
+      ...(await buildCodeModeMatrixAgentEnv(params.matrix.cell.model, runtime.cwd)),
       HOME: home,
       USERPROFILE: home,
       OPENCLAW_HOME: home,
@@ -1580,10 +1580,12 @@ export async function runCodeModeModelMatrix(
     ...sourceIdentity,
     buildSha256,
     models: options.models,
-    authentication: options.models.map((model) => ({
-      model,
-      ...matrixProviderAuthSelection(model),
-    })),
+    authentication: await Promise.all(
+      options.models.map(async (model) => ({
+        model,
+        ...(await matrixProviderAuthSelection(model)),
+      })),
+    ),
     modes: options.modes,
     ...(options.tasks.some(isGatewayTask)
       ? { gatewayExecutor: options.gatewayExecutor ?? "node" }

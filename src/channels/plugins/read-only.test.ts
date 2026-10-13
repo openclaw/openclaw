@@ -16,7 +16,7 @@ import {
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import {
   rebasePluginMetadataSnapshotManifestRegistry,
-  resolvePluginMetadataSnapshot,
+  resolvePluginMetadataSnapshotAsync,
   restorePluginMetadataSnapshot,
 } from "../../plugins/plugin-metadata-snapshot.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -335,13 +335,13 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
 
-  it("keeps explicitly supplied metadata inventories separate for the same config", () => {
+  it("keeps explicitly supplied metadata inventories separate for the same config", async () => {
     const { pluginDir } = writeExternalSetupChannelPlugin({
       setupEntry: false,
       manifestChannelConfig: true,
     });
     const cfg = createExternalChannelTestConfig({ pluginDir });
-    const original = resolvePluginMetadataSnapshot({ config: cfg });
+    const original = await resolvePluginMetadataSnapshotAsync({ config: cfg });
     const replacement = restorePluginMetadataSnapshot(
       rebasePluginMetadataSnapshotManifestRegistry(original, {
         ...original.manifestRegistry,
@@ -373,12 +373,12 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     ]);
   });
 
-  it("reuses manifest adapters while account settings and channel policy stay live", () => {
+  it("reuses manifest adapters while account settings and channel policy stay live", async () => {
     const { pluginDir, setupMarker, fullMarker } = writeExternalSetupChannelPlugin({
       manifestChannelConfig: true,
     });
     const cfg = createExternalChannelTestConfig({ pluginDir });
-    const metadataSnapshot = resolvePluginMetadataSnapshot({ config: cfg });
+    const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({ config: cfg });
     const first = listReadOnlyChannelPluginsForConfig(cfg, { metadataSnapshot }).find(
       (plugin) => plugin.id === "external-chat",
     );
@@ -428,7 +428,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
 
-  it("reevaluates persisted auth without replacing manifest adapters or loading channel runtime", () => {
+  it("reevaluates persisted auth without replacing manifest adapters or loading channel runtime", async () => {
     const stateDir = makePluginLoaderTempDir();
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const persistedAuthPath = path.join(stateDir, "linked-auth");
@@ -436,7 +436,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       persistedAuthPath,
     });
     const cfg = { plugins: { allow: [channelId], entries: { [channelId]: { enabled: true } } } };
-    const metadataSnapshot = resolvePluginMetadataSnapshot({ config: cfg });
+    const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({ config: cfg });
     const read = () => listReadOnlyChannelPluginsForConfig(cfg, { metadataSnapshot });
 
     expect(pluginIds(read())).not.toContain(channelId);

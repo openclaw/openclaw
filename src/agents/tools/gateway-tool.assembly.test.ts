@@ -2,18 +2,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createOpenClawCodingTools } from "../agent-tools.js";
+import { createOpenClawCodingToolsAsync } from "../agent-tools.js";
 import "../test-helpers/fast-coding-tools.js";
 import type { AnyAgentTool } from "./common.js";
 
+// mock-isolation: Keep plugin tool loading outside Gateway action-policy assembly.
 vi.mock("../openclaw-plugin-tools.js", () => ({
   resolveOpenClawPluginToolsForOptions: () => [],
+  resolveOpenClawPluginToolsForOptionsAsync: async () => [],
 }));
 
-type AssemblyOptions = NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>;
+type AssemblyOptions = NonNullable<Parameters<typeof createOpenClawCodingToolsAsync>[0]>;
 
-function createTools(config: OpenClawConfig, options: AssemblyOptions = {}) {
-  return createOpenClawCodingTools({
+async function createTools(config: OpenClawConfig, options: AssemblyOptions = {}) {
+  return createOpenClawCodingToolsAsync({
     config: {
       ...config,
       agents: config.agents ?? { entries: { main: {} } },
@@ -60,8 +62,8 @@ describe("assembled Gateway update capability", () => {
 
   it.each(["coding"] as const)(
     "makes the existing update action available in the %s profile without config reads",
-    (profile) => {
-      const tools = createTools({ tools: { profile } });
+    async (profile) => {
+      const tools = await createTools({ tools: { profile } });
 
       expect(gatewayActions(tools)).toEqual(["update.run"]);
       expect(Object.keys(gatewayParameters(tools).properties).toSorted()).toEqual([
@@ -73,8 +75,8 @@ describe("assembled Gateway update capability", () => {
 
   it.each([undefined, "full"] as const)(
     "retains existing config read authority with profile %s",
-    (profile) => {
-      expect(gatewayActions(createTools({ tools: { profile } }))).toEqual([
+    async (profile) => {
+      expect(gatewayActions(await createTools({ tools: { profile } }))).toEqual([
         "config.get",
         "config.schema.lookup",
         "update.run",
@@ -84,19 +86,19 @@ describe("assembled Gateway update capability", () => {
 
   it.each(["group:automation", "gate*"])(
     "retains explicit config read authority from alsoAllow %s",
-    (grant) => {
+    async (grant) => {
       expect(
-        gatewayActions(createTools({ tools: { profile: "coding", alsoAllow: [grant] } })),
+        gatewayActions(await createTools({ tools: { profile: "coding", alsoAllow: [grant] } })),
       ).toContain("config.get");
     },
   );
 
   it.each([{ alsoAllow: ["session_status"] }])(
     "does not widen config reads from alsoAllow $alsoAllow",
-    ({ alsoAllow }) => {
-      expect(gatewayActions(createTools({ tools: { profile: "coding", alsoAllow } }))).toEqual([
-        "update.run",
-      ]);
+    async ({ alsoAllow }) => {
+      expect(
+        gatewayActions(await createTools({ tools: { profile: "coding", alsoAllow } })),
+      ).toEqual(["update.run"]);
     },
   );
 
@@ -106,9 +108,9 @@ describe("assembled Gateway update capability", () => {
     { mainGrant: true, providerGrant: true, configRead: true },
   ])(
     "requires config read grants in both limited profiles: main=$mainGrant provider=$providerGrant",
-    ({ mainGrant, providerGrant, configRead }) => {
+    async ({ mainGrant, providerGrant, configRead }) => {
       const actions = gatewayActions(
-        createTools({
+        await createTools({
           tools: {
             profile: "coding",
             ...(mainGrant ? { alsoAllow: ["gateway"] } : {}),
@@ -129,9 +131,9 @@ describe("assembled Gateway update capability", () => {
 
   it.each(["coding"] as const)(
     "uses the %s policy agent's authority rather than the execution agent's",
-    (policyProfile) => {
+    async (policyProfile) => {
       const actions = gatewayActions(
-        createTools(
+        await createTools(
           {
             session: { scope: "global" },
             agents: {
@@ -160,9 +162,9 @@ describe("assembled Gateway update capability", () => {
     { name: "explicit deny", tools: { deny: ["gateway"] } },
     { name: "restrictive allow", tools: { allow: ["session_status"] } },
     { name: "provider deny", tools: { byProvider: { openai: { deny: ["gateway"] } } } },
-  ])("preserves $name restrictions", ({ tools }) => {
+  ])("preserves $name restrictions", async ({ tools }) => {
     expect(
-      createTools({ tools: { profile: "coding", ...tools } }).map((tool) => tool.name),
+      (await createTools({ tools: { profile: "coding", ...tools } })).map((tool) => tool.name),
     ).not.toContain("gateway");
   });
 
@@ -180,9 +182,9 @@ describe("assembled Gateway update capability", () => {
       name: "runtime allowlist",
       options: { runtimeToolAllowlist: ["session_status"], inheritRuntimeToolAllowlist: true },
     },
-  ])("preserves the $name boundary", ({ options }) => {
+  ])("preserves the $name boundary", async ({ options }) => {
     expect(
-      createTools({ tools: { profile: "coding" } }, options).map((tool) => tool.name),
+      (await createTools({ tools: { profile: "coding" } }, options)).map((tool) => tool.name),
     ).not.toContain("gateway");
   });
 });

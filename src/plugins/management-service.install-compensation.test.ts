@@ -95,7 +95,6 @@ vi.mock("./registry-refresh.js", () => ({
 }));
 // mock-isolation: Keep status discovery and its persistent state outside the install fixture.
 vi.mock("./status.js", () => ({
-  buildPluginSnapshotReport: () => ({ plugins: [] }),
   buildPluginSnapshotReportAsync: async () => ({ plugins: [] }),
 }));
 const { installManagedPluginSource } = await import("./management-install.js");

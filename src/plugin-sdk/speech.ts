@@ -20,7 +20,7 @@ export type {
 } from "../tts/provider-types.js";
 
 export { parseTtsDirectives } from "../tts/directives.js";
-export { getSpeechProvider } from "../tts/provider-registry.js";
+export { getSpeechProvider, getSpeechProviderAsync } from "../tts/provider-registry.js";
 // Public compatibility: preserve the established `asObject` export name.
 export { asOptionalRecord as asObject } from "@openclaw/normalization-core/record-coerce";
 export { asBoolean, asFiniteNumber, trimToUndefined } from "../agents/provider-http-errors.js";

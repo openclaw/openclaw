@@ -14,7 +14,7 @@ import {
   cleanupPluginLoaderFixturesForTest,
   clearPluginLoaderCache,
   EMPTY_PLUGIN_SCHEMA,
-  loadOpenClawPlugins,
+  loadOpenClawPluginsForTest,
   makePluginLoaderTempDir,
   writePlugin,
 } from "./loader.test-fixtures.js";
@@ -59,7 +59,7 @@ function metadata(
 }
 
 function registry(snapshot: ReturnType<typeof metadata>, workspaceDir?: string) {
-  return loadOpenClawPlugins({
+  return loadOpenClawPluginsForTest({
     config,
     env: {},
     workspaceDir,
@@ -210,7 +210,7 @@ describe("provider runtime physical ownership", () => {
           onlyPluginIds: ["same-id"],
           activate: false,
         };
-        const loadedRegistry = loadOpenClawPlugins(loadOptions);
+        const loadedRegistry = loadOpenClawPluginsForTest(loadOptions);
         setActivePluginRegistry(
           loadedRegistry,
           resolvePluginLoadCacheContext(loadOptions).cacheKey,
@@ -311,7 +311,7 @@ describe("provider runtime physical ownership", () => {
         manifestRegistry: firstSnapshot.manifestRegistry,
         activate: false,
       };
-      const loadedRegistry = loadOpenClawPlugins(loadOptions);
+      const loadedRegistry = loadOpenClawPluginsForTest(loadOptions);
       setActivePluginRegistry(loadedRegistry, resolvePluginLoadCacheContext(loadOptions).cacheKey);
       const lookup = { provider: receiver === "declared" ? "same-provider" : "runtime-alias", env };
       const modelOnlyConfig = { ...firstConfig, agents: { defaults: { model: "other/model" } } };
@@ -372,7 +372,7 @@ describe("provider runtime physical ownership", () => {
     });
     const originalConfig = configFor(old);
     const originalSnapshot = loadPluginMetadataSnapshot({ config: originalConfig, env });
-    const loaded = loadOpenClawPlugins({
+    const loaded = loadOpenClawPluginsForTest({
       config: originalConfig,
       env,
       installRecords: {},
@@ -458,7 +458,7 @@ describe("provider runtime physical ownership", () => {
       const snapshot = createPluginMetadataSnapshotFixture({
         plugins: [...selected.plugins, ...aliasMetadata.plugins],
       });
-      const loaded = loadOpenClawPlugins({
+      const loaded = loadOpenClawPluginsForTest({
         config: pluginConfig,
         env: {},
         installRecords: {},
@@ -508,7 +508,7 @@ describe("provider runtime physical ownership", () => {
           provider: "same-provider",
         })?.label,
       ).toBe("alias");
-      const complete = loadOpenClawPlugins({
+      const complete = loadOpenClawPluginsForTest({
         config: pluginConfig,
         env: {},
         installRecords: {},
@@ -662,7 +662,7 @@ describe("provider runtime physical ownership", () => {
   it("uses the loaded owner rather than a later disabled duplicate record", () => {
     const old = loadFixture("old");
     const next = loadFixture("new");
-    const loaded = loadOpenClawPlugins({
+    const loaded = loadOpenClawPluginsForTest({
       config,
       env: {},
       installRecords: {},
@@ -731,7 +731,7 @@ describe("provider runtime physical ownership", () => {
         activate: false,
         preferBuiltPluginArtifacts: true,
       };
-      const loaded = loadOpenClawPlugins({
+      const loaded = loadOpenClawPluginsForTest({
         ...options,
         manifestRegistry: original.manifestRegistry,
       });
@@ -747,7 +747,9 @@ describe("provider runtime physical ownership", () => {
         getLoadedRuntimePluginRegistry({ loadOptions: selectedOptions }) ===
           (selection === "omitted load preference" ? loaded : undefined),
       ).toBe(true);
-      expect(loadOpenClawPlugins(selectedOptions).providers[0]?.provider.label).toBe("source");
+      expect(loadOpenClawPluginsForTest(selectedOptions).providers[0]?.provider.label).toBe(
+        "source",
+      );
       if (selection === "source preference") {
         withPluginRuntimeRegistryScope(loaded, () => {
           expect(
@@ -783,7 +785,7 @@ describe("provider runtime physical ownership", () => {
     const old = memoryPlugin("memory-core", "old");
     const next = memoryPlugin("memory-core", "new");
     const load = (sidecar: ReturnType<typeof memoryPlugin>) =>
-      loadOpenClawPlugins({
+      loadOpenClawPluginsForTest({
         config: {
           plugins: {
             allow: ["selected-memory", "memory-core"],
@@ -881,7 +883,7 @@ describe("provider runtime physical ownership", () => {
         const other =
           scope === "empty active"
             ? createEmptyPluginRegistry()
-            : loadOpenClawPlugins({
+            : loadOpenClawPluginsForTest({
                 config,
                 env: process.env,
                 installRecords: {},
@@ -924,7 +926,7 @@ describe("provider runtime physical ownership", () => {
     (selection) => {
       const snapshot = loadFixture("shared");
       const load = (workspaceDir: string) =>
-        loadOpenClawPlugins({
+        loadOpenClawPluginsForTest({
           config,
           env: {},
           installRecords: {},
@@ -975,7 +977,7 @@ describe("provider runtime physical ownership", () => {
     const stateDir = makePluginLoaderTempDir();
     const load = (snapshot: typeof old) =>
       surface !== "provider"
-        ? loadOpenClawPlugins({
+        ? loadOpenClawPluginsForTest({
             config,
             env: process.env,
             installRecords: {},

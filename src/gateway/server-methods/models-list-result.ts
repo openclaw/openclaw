@@ -46,6 +46,7 @@ import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { createThinkingCatalogResolver } from "../../auto-reply/thinking.js";
 import { getRuntimeConfigSourceSnapshot } from "../../config/config.js";
 import { resolveRuntimeModelConfigCacheKey } from "../../config/runtime-snapshot.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { resolveProviderModelCatalogId } from "../../plugins/provider-model-routes.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { withCurrentReadAuthority } from "../../shared/current-read-authority.js";
@@ -93,12 +94,21 @@ export async function prepareModelsListResult(
   if (!owner) {
     return { read: () => ({ models: [] }), isCurrent: () => true };
   }
-  // A prepared owner's registry can differ from the caller's (standalone CLI, workspace
-  // generations); preparation resolves plugin facts from the owner. Reads stay pure
-  // projections of those prepared facts.
-  return withPluginRuntimeRegistryScope(owner.preparedPluginRegistry, () =>
-    prepareOwnedModelsListResult(owner),
+  const { metadataSnapshot, preparedAuthStore } = owner;
+  if (!metadataSnapshot || !preparedAuthStore) {
+    throw new Error("Gateway model catalog owner omitted prepared metadata or auth state");
+  }
+  // Preparation and retained reads use the owner's metadata and registry together.
+  const runOwned = <T>(run: () => T) =>
+    withPluginRuntimeRegistryScope(owner.preparedPluginRegistry, () =>
+      withPluginMetadataSnapshotScope(metadataSnapshot, run, {
+        trustConfigIdentity: true,
+      }),
+    );
+  const prepared = await runOwned(() =>
+    prepareOwnedModelsListResult({ ...owner, metadataSnapshot, preparedAuthStore }),
   );
+  return { ...prepared, read: () => runOwned(prepared.read) };
 }
 
 async function prepareOwnedModelsListResult({
@@ -126,7 +136,10 @@ async function prepareOwnedModelsListResult({
   metadataSnapshot,
   preparedAuthStore,
   preparedPluginRegistry,
-}: ModelsListOwner): Promise<PreparedModelsListResult> {
+}: ModelsListOwner & {
+  metadataSnapshot: NonNullable<ModelsListOwner["metadataSnapshot"]>;
+  preparedAuthStore: NonNullable<ModelsListOwner["preparedAuthStore"]>;
+}): Promise<PreparedModelsListResult> {
   const preparedOwnerIsCurrent = preparedProjectionOwner?.isCurrent;
   const configKey = resolveRuntimeModelConfigCacheKey(requestConfig);
   // Native readiness belongs to the prepared generation, even across config publication.
@@ -134,9 +147,6 @@ async function prepareOwnedModelsListResult({
     resolveRuntimeModelConfigCacheKey(currentConfig()) === configKey &&
     preparedOwnerIsCurrent?.() === true &&
     publicationScope?.isCurrent?.() !== false;
-  if (!metadataSnapshot || !preparedAuthStore) {
-    throw new Error("Gateway model catalog owner omitted prepared metadata or auth state");
-  }
   const availableDecisionModels = listDecisionModels({
     config: cfg,
     snapshot: metadataSnapshot,

@@ -17,6 +17,7 @@ import {
 } from "../../admitted-run-context.js";
 import { readBtwTranscriptMessages } from "../../btw-transcript.js";
 import { RUNTIME_EVENT_USER_PROMPT } from "../../internal-runtime-context.js";
+import { attachPreparedProviderModelFixture } from "../../provider-request.test-support.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import {
@@ -27,7 +28,7 @@ import {
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
-  testModel,
+  testModel as rawTestModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import {
   createCompactionHandlers,
@@ -60,6 +61,8 @@ import {
   buildRuntimeContextCustomMessage,
   type RuntimeContextCustomMessage,
 } from "./runtime-context-prompt.js";
+
+const testModel = attachPreparedProviderModelFixture(rawTestModel);
 
 registerAgentSessionLoopTestLifecycle();
 

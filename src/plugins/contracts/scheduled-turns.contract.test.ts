@@ -11,7 +11,7 @@ import type {
   GatewayRequestHandler,
   GatewayRequestHandlerOptions,
 } from "../../gateway/server-methods/types.js";
-import { withEnv } from "../../test-utils/env.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { createPluginHostRegistryRetirement } from "../host-hook-cleanup.js";
 import {
   clearPluginHostRuntimeState,
@@ -22,7 +22,7 @@ import {
   schedulePluginSessionTurn,
   unschedulePluginSessionTurnsByTag,
 } from "../host-hook-scheduled-turns.js";
-import { loadOpenClawPlugins } from "../loader.js";
+import { loadOpenClawPluginsAsync } from "../loader.js";
 import {
   clearPluginLoaderCache,
   makePluginLoaderTempDir,
@@ -515,13 +515,13 @@ describe("plugin scheduled turns", () => {
     workflowMocks.cronAdd.mockResolvedValue(makeCronJob({ id: "loader-scheduled-job" }));
     workflowMocks.cronRemove.mockResolvedValue({ ok: true, removed: true });
 
-    const registry = withEnv(
+    const registry = await withEnvAsync(
       {
         OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
       },
       () =>
-        loadOpenClawPlugins({
+        loadOpenClawPluginsAsync({
           cache: false,
           hostServices: { cron },
           config: {
@@ -648,13 +648,13 @@ describe("plugin scheduled turns", () => {
       return { ok: true, removed: true };
     });
 
-    const registry = withEnv(
+    const registry = await withEnvAsync(
       {
         OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
       },
       () =>
-        loadOpenClawPlugins({
+        loadOpenClawPluginsAsync({
           cache: false,
           hostServices: { cron },
           config: {

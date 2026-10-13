@@ -957,6 +957,27 @@ displays either the date or named gate, counts local code/doc references, lists
 references, and summarizes the private memory-host SDK bridge. Those reader
 references are triage signals, not published-artifact proof.
 
+### Model-reference parsing
+
+The `model-ref-sync-discovery` record deprecates the synchronous `parseModelRef`
+exports from `model-ref-parse`, `provider-model-shared`, and `agent-runtime`, plus
+`resolveModelRefFromString` from `agent-runtime`. Their argument and return
+shapes, custom manifest aliases, and cold discovery remain supported for
+installed plugins. Actual legacy use emits one `DEP_PLUGIN_SDK` warning per
+plugin and capability family per process. Removal follows in a later release
+after stable deprecation and migration of published readers.
+
+Await `parseModelRefAsync` from `openclaw/plugin-sdk/agent-runtime` for one
+lookup. For repeated parsing, await `prepareModelRefResolver` once and use its
+`parseModelRef` or `resolveModelRefFromString` method. Its `manifestPlugins`
+property carries the same source into other model helpers. Prepared resolvers
+keep the selected manifest policies even after a plugin metadata reload;
+recreate the resolver when adopting the new generation. This accepted lifetime
+avoids synchronous discovery or per-lookup freshness checks. Credentials and
+execution authority remain the responsibility of their existing effect owners.
+Bundled plugins may use the narrow private `model-ref-parse` seam; third-party
+plugins use the typed public exports from `agent-runtime`.
+
 ### TTS preference resolution
 
 Await `resolveTtsPrefsPathAsync(config)` from
@@ -1064,3 +1085,16 @@ shape for installed plugins and emits one bounded `DEP_PLUGIN_SDK` warning per
 plugin and capability family. It is scheduled for removal in the next Plugin SDK
 major. Native synchronous discovery remains for offline CLI/Doctor preparation
 and this compatibility method; Gateway web-search preparation uses the async owner.
+
+### Media discovery
+
+Await `resolveAutoMediaKeyProvidersAsync(params)` and
+`resolveDefaultMediaModelAsync(params)` from `openclaw/plugin-sdk/media-runtime`
+when media defaults need plugin discovery. Supplying `providerRegistry` uses that
+prepared registry directly.
+
+The synchronous names retain their signatures and return values, prepare native
+discovery only for compatibility, and emit one bounded `DEP_PLUGIN_SDK` warning
+per plugin and capability family. Removal follows in a later release after
+stable deprecation. Core media execution prepares discovery asynchronously before
+deriving image, document, or transcription defaults.

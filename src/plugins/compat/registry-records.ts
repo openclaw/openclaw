@@ -6,10 +6,13 @@ import { BINDING_PERSISTENCE_COMPAT_RECORDS } from "./binding-persistence-record
 import { CHANNEL_PAIRING_COMPAT_RECORD } from "./channel-pairing-record.js";
 import { CRON_STORE_PATH_COMPAT_RECORD } from "./cron-store-path-record.js";
 import { DEPRECATION_MARKING_COMPAT_RECORDS } from "./deprecation-marking.js";
+import { MEDIA_DISCOVERY_COMPAT_RECORD } from "./media-discovery-record.js";
 import { MEDIA_LEGACY_PROJECTION_COMPAT_RECORD } from "./media-legacy-projection.js";
 import { MEMORY_SESSION_COMPAT_RECORDS } from "./memory-session-records.js";
 import { MENTION_INBOX_COMPAT_RECORD } from "./mention-inbox-record.js";
 import { MODEL_ACCOUNT_CONNECT_COMPAT_RECORD } from "./model-account-connect-record.js";
+import { MODEL_REF_COMPAT_RECORD } from "./model-ref-record.js";
+import { MODEL_SESSION_AUTH_PROFILE_COMPAT_RECORD } from "./model-session-auth-profile-record.js";
 import { NATIVE_EXEC_APPROVAL_COMPAT_RECORD } from "./native-exec-approval-record.js";
 import { PLUGIN_SDK_REMOVED_EXPORT_RECORDS } from "./plugin-sdk-removed-export-records.js";
 import {
@@ -17,7 +20,9 @@ import {
   PLUGIN_SDK_SUBPATH_RECORDS,
 } from "./plugin-sdk-subpath-records.js";
 import { PROGRESS_RECEIPT_HANDOFF_COMPAT_RECORD } from "./progress-receipt-handoff-record.js";
+import { PROVIDER_DISCOVERY_COMPAT_RECORDS } from "./provider-discovery-records.js";
 import { RUNTIME_CONFIG_COMPAT_RECORD } from "./runtime-config-record.js";
+import { SESSION_HEADER_LINK_COMPAT_RECORD } from "./session-header-link-record.js";
 import { SESSION_PERSISTENCE_COMPAT_RECORDS } from "./session-persistence-records.js";
 import { SESSION_TRANSCRIPT_VIEW_COMPAT_RECORD } from "./session-transcript-view-record.js";
 import { SKILL_COMMAND_DISCOVERY_COMPAT_RECORD } from "./skill-command-discovery-record.js";
@@ -42,11 +47,15 @@ export const PLUGIN_COMPAT_RECORDS = [
   ...PLUGIN_SDK_REMOVED_EXPORT_RECORDS,
   ...AGENT_HARNESS_COMPAT_RECORDS,
   AUTH_ASYNC_COMPAT_RECORD,
+  ...PROVIDER_DISCOVERY_COMPAT_RECORDS,
   ...BINDING_PERSISTENCE_COMPAT_RECORDS,
   CHANNEL_PAIRING_COMPAT_RECORD,
   CRON_STORE_PATH_COMPAT_RECORD,
   MENTION_INBOX_COMPAT_RECORD,
   MODEL_ACCOUNT_CONNECT_COMPAT_RECORD,
+  MODEL_REF_COMPAT_RECORD,
+  MODEL_SESSION_AUTH_PROFILE_COMPAT_RECORD,
+  MEDIA_DISCOVERY_COMPAT_RECORD,
   WORKSPACE_MUTATION_GUARD_COMPAT_RECORD,
   ...SESSION_PERSISTENCE_COMPAT_RECORDS,
   SKILL_COMMAND_DISCOVERY_COMPAT_RECORD,
@@ -60,23 +69,7 @@ export const PLUGIN_COMPAT_RECORDS = [
   RUNTIME_CONFIG_COMPAT_RECORD,
   ASSISTANT_TEXT_PHASE_TERMINAL_HINT_COMPAT_RECORD,
   SESSION_TRANSCRIPT_VIEW_COMPAT_RECORD,
-  {
-    code: "plugin-sdk-session-header-link",
-    status: "deprecated",
-    owner: "sdk",
-    introduced: "2026-10-01",
-    deprecated: "2026-10-12",
-    warningStarts: "2026-10-12",
-    removeAfter: "2027-01-12",
-    replacement:
-      "Register a plugin-owned `session-header` accessory that renders its own content; the host no longer supplies session conversation-link metadata",
-    docsPath: "/plugins/sdk-migration/compatibility-policy#session-header-link-helper",
-    surfaces: ["openclaw/plugin-sdk/control-ui.createSessionHeaderLink"],
-    diagnostics: ["TypeScript @deprecated annotation and shipped Plugin SDK surface check"],
-    tests: ["src/plugins/compat/registry.test.ts"],
-    releaseNote:
-      "`createSessionHeaderLink` from 2026.10.1 remains importable but renders nothing, because session conversation links were retired.",
-  },
+  SESSION_HEADER_LINK_COMPAT_RECORD,
   {
     code: "gateway-placement-sync-results",
     status: "deprecated",

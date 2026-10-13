@@ -21,6 +21,7 @@ import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.
 import { readSessionFallbackModelAsync } from "../../status/session-fallback-model.js";
 import { withAgentTurnCompletion } from "./agent-runner-completion.js";
 import { accountAgentTurn } from "./agent-runner-result-accounting.js";
+import { withAgentRunnerTestMetadata } from "./agent-runner.test-fixtures.js";
 import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
 import { createMockFollowupRun } from "./test-helpers.js";
 
@@ -117,19 +118,21 @@ async function createFixture(selected = diagnostic) {
         contextTokens: 1_000,
         ...route,
       };
-      return withAgentTurnCompletion(
-        {
-          agentId: "main",
-          storePath,
-          sessionKey,
-          entry: context.activeSessionEntry,
-          operation: replyOperation,
-          publish(next) {
-            context.activeSessionEntry = next;
-            context.activeSessionStore![sessionKey] = next;
+      return withAgentRunnerTestMetadata({ config: context.cfg, workspaceDir: root }, () =>
+        withAgentTurnCompletion(
+          {
+            agentId: "main",
+            storePath,
+            sessionKey,
+            entry: context.activeSessionEntry,
+            operation: replyOperation,
+            publish(next) {
+              context.activeSessionEntry = next;
+              context.activeSessionStore![sessionKey] = next;
+            },
           },
-        },
-        (completion) => accountAgentTurn({ ...context, completion }),
+          (completion) => accountAgentTurn({ ...context, completion }),
+        ),
       );
     },
   };

@@ -11,7 +11,7 @@ import {
   createProviderHttpError,
   readProviderJsonResponse,
   readProviderTextResponse,
-  resolveProviderRequestHeaders,
+  resolveProviderRequestHeadersAsync,
 } from "openclaw/plugin-sdk/provider-http";
 import * as proxyCaptureSdk from "openclaw/plugin-sdk/proxy-capture";
 import { createRealtimeTranscriptionWebSocketSession } from "openclaw/plugin-sdk/realtime-transcription-session";
@@ -27,7 +27,7 @@ export const openAIRealtimeHost = {
   isProviderAuthProfileConfigured,
   isProviderAuthProfileConfiguredAsync,
   resolveProviderAuthProfileApiKey,
-  resolveProviderRequestHeaders,
+  resolveProviderRequestHeadersAsync,
   createRealtimeTranscriptionWebSocketSession,
   captureWsEventAsync: captureHost.captureWsEventAsync,
   createDebugProxyWebSocketAgent: proxyCaptureSdk.createDebugProxyWebSocketAgent,
@@ -44,6 +44,7 @@ export const openAIRealtimeHost = {
   | "isProviderApiKeyConfigured"
   | "isProviderApiKeyConfiguredAsync"
   | "resolveApiKeyForProvider"
+  | "resolveProviderRequestHeaders"
   | "captureWsEvent"
   | "captureWsEventAsync"
 > &

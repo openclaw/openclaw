@@ -4239,7 +4239,7 @@ describe("requester settle wake trigger", () => {
       vi.mocked(getRuntimeConfig).mockReturnValue({
         plugins: { slots: { contextEngine: "cleanup-owned" } },
       });
-      vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(registry);
+      vi.mocked(loadAgentRuntimePluginRegistryHandle).mockResolvedValue(registry);
       const warn = vi.fn();
       const cleanup = createSubagentRegistryContextCleanup({
         isEndedHookOwnerCurrent: () => false,

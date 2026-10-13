@@ -2,11 +2,21 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { useProviderCatalogMetadata } from "../plugin-sdk/test-helpers/provider-catalog.js";
+import { useBundledProviderPolicyArtifactsForTest } from "../plugin-sdk/test-helpers/provider-policy-artifacts.test-support.js";
 import {
   resolveAllowedModelRefCore,
   resolveConfiguredModelRef,
 } from "./model-selection-resolve.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
+
+useProviderCatalogMetadata(
+  new URL("../../extensions/openai/", import.meta.url),
+  new URL("../../extensions/anthropic/", import.meta.url),
+  new URL("../../extensions/openrouter/", import.meta.url),
+);
+
+useBundledProviderPolicyArtifactsForTest(["openai", "anthropic", "openrouter"]);
 
 describe("implicit primary selection with an explicit utility model", () => {
   const provider = "local-utility";

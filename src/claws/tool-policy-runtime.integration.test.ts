@@ -25,6 +25,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import {
   closeOpenClawStateDatabase,
@@ -67,6 +68,7 @@ async function migrateToolConsentAgent() {
   const root = tempDirs.make("openclaw-adopted-claw-tool-consent-");
   const env = stateEnv(root);
   vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+  await preparePluginMetadataMachineStateAsync({});
   const workspace = join(root, "workspace");
   mkdirSync(workspace);
   writeFileSync(join(workspace, "AGENTS.md"), "Use the existing workspace.\n");

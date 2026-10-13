@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseSecretRef } from "../config/types.secrets.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
@@ -90,6 +91,7 @@ export async function resolveModelAuthModeAsync(
   if (authConfig.resolveProviderAuthOverride(cfg, resolved) === "aws-sdk") {
     return "aws-sdk";
   }
+  await preparePluginMetadataMachineStateAsync({});
   const authStore =
     store ?? (await resolveScopedAuthProfileStoreAsync({ cfg, provider: resolved }));
   return resolveModelAuthModeFromStore(resolved, cfg, authStore, options);
@@ -151,6 +153,7 @@ export async function hasAvailableAuthForProvider(params: {
   if (authOverride === "aws-sdk") {
     return true;
   }
+  await preparePluginMetadataMachineStateAsync({});
   const store =
     params.store ??
     (await resolveScopedAuthProfileStoreAsync({

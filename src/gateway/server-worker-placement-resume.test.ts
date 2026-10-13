@@ -11,6 +11,8 @@ vi.mock("./worker-environments/workspace-sync-preflight.js", () => ({
 
 import { getRuntimeConfig } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabases } from "../state/openclaw-agent-db-lifecycle.js";
@@ -148,31 +150,35 @@ describe("worker automatic resume", () => {
         });
         return { payloads: [{ text: "The resumed workspace is ready." }], meta: { durationMs: 1 } };
       });
-      const pending = admission
-        .run(() =>
-          runtime.admissionProvider.executeTurn(
-            { ...REQUEST, runId },
-            {
-              ...REQUEST,
-              runId,
-              config,
-              sessionTarget: target,
-              sessionFile: REQUEST.sessionKey,
-              workspaceDir: root,
-              prompt: "Continue",
-              timeoutMs: 60_000,
-              abortSignal: controller.signal,
-            },
-            runLocal,
-            undefined,
-            () => {
-              if (!current) {
-                throw termination;
-              }
-            },
+      const metadata = await resolvePluginMetadataSnapshotAsync({ config, workspaceDir: root });
+      const pending = withPluginMetadataSnapshotScope(
+        metadata,
+        () =>
+          admission.run(() =>
+            runtime.admissionProvider.executeTurn(
+              { ...REQUEST, runId },
+              {
+                ...REQUEST,
+                runId,
+                config,
+                sessionTarget: target,
+                sessionFile: REQUEST.sessionKey,
+                workspaceDir: root,
+                prompt: "Continue",
+                timeoutMs: 60_000,
+                abortSignal: controller.signal,
+              },
+              runLocal,
+              undefined,
+              () => {
+                if (!current) {
+                  throw termination;
+                }
+              },
+            ),
           ),
-        )
-        .catch((error: unknown) => error);
+        { config, workspaceDir: root },
+      ).catch((error: unknown) => error);
       try {
         const signal = await Promise.race([
           setupEntered.promise,

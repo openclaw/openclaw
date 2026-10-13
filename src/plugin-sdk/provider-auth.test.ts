@@ -14,7 +14,7 @@ import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-pro
 import { clearRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  isProviderApiKeyConfigured,
+  isProviderApiKeyConfiguredAsync,
   normalizeGithubCopilotDomain,
   readClaudeCliCredentialsCached,
 } from "./provider-auth.js";
@@ -278,7 +278,7 @@ describe("provider API-key readiness", () => {
     } as OpenClawConfig;
   }
 
-  it("recognizes allowed env SecretRefs through their configured provider alias", () => {
+  it("recognizes allowed env SecretRefs through their configured provider alias", async () => {
     vi.stubEnv("MEDIA_READINESS_TEST_KEY", "resolved-media-secret");
     const cfg = configuredProvider({
       source: "env",
@@ -292,7 +292,7 @@ describe("provider API-key readiness", () => {
       },
     };
 
-    expect(isProviderApiKeyConfigured({ provider, cfg })).toBe(true);
+    expect(await isProviderApiKeyConfiguredAsync({ provider, cfg })).toBe(true);
   });
 
   it.each([
@@ -330,7 +330,7 @@ describe("provider API-key readiness", () => {
         });
 
         expect(
-          isProviderApiKeyConfigured({
+          await isProviderApiKeyConfiguredAsync({
             provider,
             agentDir,
             cfg: configuredProvider(profileId),

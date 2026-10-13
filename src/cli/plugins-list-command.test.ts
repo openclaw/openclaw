@@ -37,6 +37,10 @@ function mockPluginListSnapshot(
     loadConfig: () => config,
     captureRuntimeConfigAsyncReader: () => async () => config,
   }));
+  vi.doMock("../plugins/installed-plugin-index-record-state.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../plugins/installed-plugin-index-record-state.js")>()),
+    preparePluginMetadataMachineStateAsync: vi.fn().mockResolvedValue(undefined),
+  }));
   vi.doMock("../plugins/status-snapshot.js", () => ({
     buildPluginRegistrySnapshotReport: () => ({
       workspaceDir: scope?.workspaceDir ?? "/workspace",
@@ -93,6 +97,7 @@ describe("runPluginsListCommand", () => {
     vi.doUnmock("../config/config.js");
     vi.doUnmock("../plugins/status.js");
     vi.doUnmock("../plugins/status-snapshot.js");
+    vi.doUnmock("../plugins/installed-plugin-index-record-state.js");
     vi.doUnmock("../plugins/source-display.js");
     vi.doUnmock("../../packages/terminal-core/src/table.js");
     vi.doUnmock("../../packages/terminal-core/src/theme.js");

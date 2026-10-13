@@ -3,7 +3,7 @@ import { projectPublicSessionEntry } from "../../config/sessions/session-entry-p
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   runOutsidePluginRuntimeGenerationScope,
   withPluginRuntimeGenerationScope,
@@ -28,7 +28,7 @@ import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
 import { runWithModelFallback } from "../model-fallback-runner.js";
 import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
 import { prepareAgentPromptProjects } from "../prompt-projects.js";
-import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { resolvePreparedProviderIdForAuth as resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
@@ -60,9 +60,10 @@ export async function compactNativeCliSession(params: {
   runControlOperation?: (run: () => Promise<void>) => Promise<void>;
 }): Promise<EmbeddedAgentCompactResult | undefined> {
   const runtime = normalizeOptionalAgentRuntimeId(params.runtime);
-  if (!runtime || params.compactParams.trigger !== "manual") {
+  if (!runtime || runtime === "openclaw" || params.compactParams.trigger !== "manual") {
     return undefined;
   }
+  await resolvePluginMetadataSnapshotAsync({ config: params.compactParams.config });
   const backend = resolveCliBackendConfig(runtime, params.compactParams.config, {
     agentId: params.compactParams.agentId,
   });
@@ -273,6 +274,11 @@ export async function compactEmbeddedAgentSessionDirect(
       { reason: "model_selection_locked" },
     );
   }
+  const pluginMetadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+    config: requestedParams.config ?? {},
+    workspaceDir: requestedWorkspaceDir,
+    env: process.env,
+  });
   const sharedRuntimeWorkspace = resolveSharedPluginRuntimeWorkspace(
     {
       ...requestedParams,
@@ -280,12 +286,7 @@ export async function compactEmbeddedAgentSessionDirect(
       agentId: requestedAgentIds.sessionAgentId,
       isCanonicalWorkspace: requestedWorkspaceDir === canonicalWorkspaceDir,
     },
-    () =>
-      loadPluginMetadataSnapshot({
-        config: requestedParams.config ?? {},
-        workspaceDir: requestedWorkspaceDir,
-        env: process.env,
-      }),
+    () => pluginMetadataSnapshot,
   );
   return await runForegroundCompactionWork(async (owner) => {
     // Compaction admits new work even when an engine restores a predecessor context.

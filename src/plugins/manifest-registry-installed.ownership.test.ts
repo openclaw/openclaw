@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { prepareBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import {
   recordInstalledPluginIndexInstallOwner,
   resolveInstalledPluginIndexInstallOwner,
@@ -77,6 +78,8 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
         installPath: packageDir,
       },
     };
+    const activateDiscovery = await prepareBundledDiscoveryMode(env);
+    activateDiscovery();
     const index = loadInstalledPluginIndex({ config, env, installRecords, stateDir });
 
     expect(

@@ -7,12 +7,20 @@ const mocks = vi.hoisted(() => ({
   onboardRecommendationsCommand: vi.fn(),
   refreshOnboardRecommendationsCommand: vi.fn(),
   runSystemAgentWithInference: vi.fn(),
+  preparePluginMetadataMachineStateAsync: vi.fn(async () => () => {}),
   setupWizardCommandMock: vi.fn(),
   runtime: {
     log: vi.fn(),
     error: vi.fn(),
     exit: vi.fn(),
   },
+}));
+
+vi.mock("../../plugins/installed-plugin-index-record-state.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../plugins/installed-plugin-index-record-state.js")
+  >()),
+  preparePluginMetadataMachineStateAsync: mocks.preparePluginMetadataMachineStateAsync,
 }));
 
 const setupWizardCommandMock = mocks.setupWizardCommandMock;
@@ -58,13 +66,34 @@ vi.mock("../../runtime.js", async (importOriginal) => ({
 
 async function runCli(args: string[]) {
   const program = new Command().enablePositionalOptions().exitOverride();
-  registerOnboardCommand(program);
+  await registerOnboardCommand(program);
   await program.parseAsync(["onboard", ...args], { from: "user" });
 }
 
 beforeEach(() => vi.resetAllMocks());
 
 describe("registered onboarding", () => {
+  it("awaits cold metadata before exposing provider auth options", async () => {
+    let publishMetadata!: (activate: () => void) => void;
+    mocks.preparePluginMetadataMachineStateAsync.mockReturnValueOnce(
+      new Promise((resolve) => {
+        publishMetadata = resolve;
+      }),
+    );
+    const program = new Command();
+    const registration = registerOnboardCommand(program);
+    const command = program.commands.find((entry) => entry.name() === "onboard")!;
+    expect(command.options.find((option) => option.long === "--auth-choice")).toBeUndefined();
+
+    publishMetadata(() => {});
+    await registration;
+
+    expect(command.options.find((option) => option.long === "--auth-choice")?.description).toBe(
+      "Auth: token|oauth|openai-api-key",
+    );
+    expect(command.options.filter((option) => option.long === "--openai-api-key")).toHaveLength(1);
+  });
+
   it.each([
     {
       args: "recommendations --agent writer --json",
@@ -102,7 +131,7 @@ describe("registered onboarding", () => {
 
   it("inherits the parent agent instead of a leaf default", async () => {
     const program = new Command().enablePositionalOptions().exitOverride();
-    registerOnboardCommand(program);
+    await registerOnboardCommand(program);
     const recommendations = program.commands
       .find((command) => command.name() === "onboard")
       ?.commands.find((command) => command.name() === "recommendations");

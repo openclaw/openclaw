@@ -38,10 +38,9 @@ export async function runCodeModeExecutor(
     const executor =
       options.executor === "node"
         ? (await import("./code-mode-node.js")).nodeCodeModeExecutor
-        : (await import("../plugins/code-mode-executor.js")).resolvePluginCodeModeExecutor(
-            options.executor,
-            options.runtimeConfig,
-          );
+        : await (
+            await import("../plugins/code-mode-executor.js")
+          ).resolvePluginCodeModeExecutor(options.executor, options.runtimeConfig);
     options.signal?.throwIfAborted();
     const preparationMs = performance.now() - startedAt;
     const timeoutMs = input.config.timeoutMs - preparationMs;

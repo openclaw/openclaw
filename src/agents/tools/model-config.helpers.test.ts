@@ -2,6 +2,7 @@
 // stored agent auth profiles for reusable media tools.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import * as authSource from "../auth-profiles/source-check.js";
 import * as authStoreRuntime from "../auth-profiles/store-runtime.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
@@ -98,8 +99,9 @@ const resolveMedia = (
     ...overrides,
   });
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.stubEnv("OPENAI_API_KEY", "");
+  await prepareBundledDiscoveryMode(process.env);
   authMocks.resolveEnvApiKey.mockReset();
   authMocks.resolveEnvApiKey.mockImplementation(
     (provider: string, _env?: unknown, options?: { config?: unknown }) =>

@@ -5,7 +5,7 @@
  */
 import { isDeepStrictEqual } from "node:util";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { getRuntimeConfig } from "../../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseSecretRef } from "../../config/types.secrets.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -13,9 +13,9 @@ import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contrac
 import { getOAuthApiKey, getOAuthProviders, type OAuthCredentials } from "../../llm/oauth.js";
 import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
 import {
-  formatProviderAuthProfileApiKeyWithPlugin,
+  formatProviderAuthProfileApiKeyWithLazyRuntime,
   resolveProviderOAuthCredentialWithPlugin,
-  resolveProviderOAuthRefreshCapabilityWithPlugin,
+  resolveProviderOAuthRefreshCapabilityWithLazyRuntime,
 } from "../../plugins/provider-runtime.runtime.js";
 import { secretRefKey } from "../../secrets/ref-contract.js";
 import { resolveAuthProfileSecretOwnerId } from "../../secrets/runtime-auth-profile-owner.js";
@@ -25,7 +25,7 @@ import {
 } from "../../secrets/runtime-degraded-state.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input.js";
-import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { resolvePreparedProviderIdForAuth as resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { authProfilesLog, CLAUDE_CLI_PROFILE_ID } from "./constants.js";
 import {
   evaluateStoredCredentialEligibility,
@@ -171,7 +171,7 @@ export async function refreshOAuthCredentialForRuntime(params: {
 
 const oauthManager = createOAuthManager({
   async buildApiKey(provider, credentials, context) {
-    const formatted = await formatProviderAuthProfileApiKeyWithPlugin({
+    const formatted = await formatProviderAuthProfileApiKeyWithLazyRuntime({
       provider,
       config: context.cfg,
       context: credentials,
@@ -180,7 +180,7 @@ const oauthManager = createOAuthManager({
   },
   refreshCredential: refreshOAuthCredential,
   async canRefreshCredential(credential, context) {
-    const pluginCapability = await resolveProviderOAuthRefreshCapabilityWithPlugin({
+    const pluginCapability = await resolveProviderOAuthRefreshCapabilityWithLazyRuntime({
       provider: credential.provider,
       config: context.cfg,
     });
@@ -353,7 +353,7 @@ async function resolveApiKeyForProfileOwned(
   if (profileId === CLAUDE_CLI_PROFILE_ID) {
     return null;
   }
-  const configForRefResolution = cfg ?? getRuntimeConfig();
+  const configForRefResolution = cfg ?? (await captureRuntimeConfigAsyncReader()());
   const refDefaults = configForRefResolution.secrets?.defaults;
   const runtimeProfile = resolveRuntimeAuthProfile({
     agentDir: params.agentDir,

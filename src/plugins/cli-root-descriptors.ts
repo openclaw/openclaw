@@ -1,6 +1,7 @@
 /** Resolves root CLI help from process-stable manifests before plugin code loads. */
 import { collectUniqueCommandDescriptors } from "../cli/program/command-descriptor-utils.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import type { PluginCliLoaderOptions } from "./cli-registry-loader.js";
 import { normalizePluginsConfig, resolveMemorySlotDecision } from "./config-state.js";
 import { createInstalledPluginEnabledPredicate } from "./installed-plugin-index.js";
@@ -25,6 +26,8 @@ export async function getPluginCliCommandDescriptors(
 ): Promise<OpenClawPluginCliRootCommandDescriptor[]> {
   const descriptorGroups: OpenClawPluginCliRootCommandDescriptor[][] = [];
   try {
+    const activateDiscovery = await prepareBundledDiscoveryMode(env);
+    activateDiscovery();
     const context = resolvePluginRuntimeLoadContext({ config: cfg, env, logger: quietLogger });
     const snapshot = context.metadataSnapshot;
     if (!snapshot) {

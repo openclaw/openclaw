@@ -654,7 +654,17 @@ async function detectSkillsReadiness(
     return detectUnavailableSkills(ctx.cfg, ctx.cwd);
   };
   if (!runWithPluginMetadataSnapshot) {
-    return await detect();
+    const [{ resolvePluginMetadataSnapshotAsync }, { withPluginMetadataSnapshotScope }] =
+      await Promise.all([
+        import("../plugins/plugin-metadata-snapshot.js"),
+        import("../plugins/current-plugin-metadata-snapshot.js"),
+      ]);
+    const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+      config: ctx.cfg,
+      env: ctx.env,
+      workspaceDir: ctx.cwd,
+    });
+    return await withPluginMetadataSnapshotScope(metadataSnapshot, detect, { env: ctx.env });
   }
   return await runWithPluginMetadataSnapshot(
     {

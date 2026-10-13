@@ -55,6 +55,7 @@ import {
   loadLegacySessionStore,
   updateLegacySessionStore,
 } from "../infra/state-migrations.legacy-session-store.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
@@ -797,6 +798,7 @@ export async function noteStateIntegrity(
     warnings.push(...collectRetainedUnconfiguredAgentDatabaseWarnings({ cfg, env }));
   }
 
+  await prepareBundledDiscoveryMode(env);
   const compatibilityAgentId = resolveSessionStoreCompatibilityAgentId(cfg);
   const pending = readDeferredPluginMigrations({ env });
   const isRetained = createRetainedAgentDatabaseMatcher(env, () =>

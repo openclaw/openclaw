@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { preparePluginMetadataMachineStateAsync } from "../../../plugins/installed-plugin-index-record-state.js";
 import * as manifestRegistry from "../../../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../../../plugins/plugin-metadata-lifecycle.js";
 import {
@@ -54,9 +55,13 @@ function mockManifestPlugins(plugins: unknown[]) {
 }
 
 describe("channel plugin blockers", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.restoreAllMocks();
     clearPluginMetadataLifecycleCaches();
+    await Promise.all([
+      preparePluginMetadataMachineStateAsync({}),
+      preparePluginMetadataMachineStateAsync({ env: {} }),
+    ]);
   });
 
   it("reports external channel plugins that are installed but not explicitly enabled", () => {

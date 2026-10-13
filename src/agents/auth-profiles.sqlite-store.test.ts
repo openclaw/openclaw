@@ -64,9 +64,11 @@ vi.mock("./auth-profiles/external-cli-sync.js", () => ({
   resolveExternalCliAuthProfiles: () => [],
 }));
 
-vi.mock("../plugins/provider-external-auth-core.js", () => ({
+vi.mock("../plugins/provider-external-auth-core.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/provider-external-auth-core.js")>()),
   createProviderExternalAuthResolver: () => ({
     resolveExternalAuthProfilesWithPlugins: () => [],
+    prepareExternalAuthProfilesWithPlugins: async () => () => [],
   }),
 }));
 

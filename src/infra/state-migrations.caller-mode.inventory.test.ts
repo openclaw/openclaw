@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
   listPluginDoctorStateMigrationEntries,
@@ -97,9 +98,10 @@ module.exports = { stateMigrations: [{
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
   };
   fs.writeFileSync(configPath, JSON.stringify(config));
-  const fullIndex = withPluginCache(createPluginCache(), () =>
-    loadInstalledPluginIndex({ config, env }),
-  );
+  const fullIndex = await withPluginCache(createPluginCache(), async () => {
+    await prepareBundledDiscoveryMode(env);
+    return loadInstalledPluginIndex({ config, env });
+  });
   // Older Doctor initialization persisted a projection with otherwise current metadata.
   await writePersistedInstalledPluginIndex(
     {
@@ -109,7 +111,8 @@ module.exports = { stateMigrations: [{
     },
     { env },
   );
-  withPluginCache(createPluginCache(), () => {
+  await withPluginCache(createPluginCache(), async () => {
+    await prepareBundledDiscoveryMode(env);
     const cached = loadPluginRegistrySnapshotWithMetadata({ config, env });
     expect(cached.source).toBe("persisted");
     expect(cached.snapshot.plugins.map((plugin) => plugin.pluginId)).toEqual(["kept-owner"]);

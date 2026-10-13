@@ -13,12 +13,11 @@ import type { ThinkLevel } from "../auto-reply/thinking.js";
  */
 import { requiredWorkerHelperError } from "../config/required-worker-profile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { Model } from "../llm/types.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
-import { estimateAggregateUsageCost } from "../utils/usage-format.js";
 import {
   assertOperatorModelAllowed,
   prepareSystemAgentRunAdmission,
@@ -29,6 +28,7 @@ import { reconcileAuthProfileQuotaBlocks } from "./auth-profiles/usage.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
 import { normalizeCliModel } from "./cli-runner/helpers.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
+import { createAgentRuntimeMetadataPluginIdScope } from "./harness/runtime-plugin-load-plan.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import type {
   AgentHarness,
@@ -38,6 +38,8 @@ import type {
 } from "./harness/types.js";
 import { createIsolatedCompletionModelAuthority } from "./isolated-completion-model-authority.js";
 import {
+  emitIsolatedCompletionUsage,
+  type IsolatedCompletionResult,
   hasCliSideEffectEvidence,
   IsolatedCompletionError,
   isRetryableIsolatedQuotaFailure,
@@ -74,12 +76,7 @@ import {
 } from "./runtime-plan/prepare-auth.js";
 import { scopeAuthProfileStoreToPreparedPlan } from "./runtime-plan/resolve-auth.js";
 import { prepareSimpleCompletionModel } from "./simple-completion-runtime.js";
-import {
-  hasObservedModelUsage,
-  normalizeUsage,
-  toDiagnosticUsage,
-  type UsageLike,
-} from "./usage.js";
+export type { IsolatedCompletionResult } from "./isolated-completion-output.js";
 
 type RunIsolatedCompletionParams = {
   purpose?: IsolatedCompletionPurpose;
@@ -112,17 +109,6 @@ type RunIsolatedCompletionParams = {
   /** Internal answer budget; reasoning reserves still obey model and explicit stream limits. */
   answerTokenBudget?: number;
   streamParams?: AgentHarnessIsolatedCompletionParamsV2["streamParams"];
-};
-
-export type IsolatedCompletionResult = {
-  text: string;
-  provider: string;
-  model: string;
-  owner: { kind: "cli" | "harness"; id: string };
-  /** CLI runtimes may not report token usage; absence must not be projected as zero. */
-  usage?: UsageLike;
-  /** Terminal cumulative CLI turn usage; diagnostics prefer it over `usage`. */
-  diagnosticUsage?: UsageLike;
 };
 
 type AgentHarnessIsolatedCompletionParams = Parameters<
@@ -301,38 +287,6 @@ function prepareIsolatedHostAuthorization<
   };
 }
 
-/** Plugin completions finalize usage with host-plugin attribution; core callers have no other path. */
-function emitIsolatedCompletionUsage(params: {
-  config: OpenClawConfig;
-  agentId: string;
-  agentDir: string;
-  purpose?: IsolatedCompletionPurpose;
-  result: IsolatedCompletionResult;
-}): void {
-  const { config, result } = params;
-  if (params.purpose === "plugin-completion" || !isDiagnosticsEnabled(config)) {
-    return;
-  }
-  const usage = normalizeUsage(result.diagnosticUsage ?? result.usage);
-  if (!hasObservedModelUsage(usage)) {
-    return;
-  }
-  emitTrustedDiagnosticEvent({
-    type: "model.usage",
-    agentId: params.agentId,
-    provider: result.provider,
-    model: result.model,
-    usage: toDiagnosticUsage(usage),
-    costUsd: estimateAggregateUsageCost({
-      usage,
-      provider: result.provider,
-      model: result.model,
-      config,
-      agentDir: params.agentDir,
-    }),
-  });
-}
-
 /** Run one fresh completion with the selected runtime's documented isolation boundary. */
 export async function runIsolatedCompletion(
   params: RunIsolatedCompletionParams,
@@ -357,10 +311,21 @@ async function runIsolatedCompletionOwned(
   const requestAgentDir = input.agentDir ?? resolveAgentDir(requestConfig, agentId);
   const requestedWorkspaceDir =
     input.workspaceDir ?? resolveAgentWorkspaceDir(requestConfig, agentId);
+  const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+    config: requestConfig,
+    workspaceDir: requestedWorkspaceDir,
+    allowWorkspaceScopedCurrent: true,
+    pluginIdScope: createAgentRuntimeMetadataPluginIdScope({
+      config: requestConfig,
+      workspaceDir: requestedWorkspaceDir,
+      selections: [{ provider: input.provider, modelId: input.model, agentId }],
+    }),
+  });
   const { provider, runtimeOverride } = resolveIsolatedCompletionProvider({
     provider: input.provider,
     config: requestConfig,
     agentHarnessRuntimeOverride: input.agentHarnessRuntimeOverride,
+    metadataSnapshot,
   });
   let closed = false;
   let modelForAuthorization: ModelRef | undefined = { provider, model: input.model };
@@ -402,6 +367,7 @@ async function runIsolatedCompletionOwned(
     {
       catalogMode: "static",
       abortSignal: input.abortSignal,
+      pluginMetadataSnapshot: metadataSnapshot,
       deriveRuntimePluginSelections: () => [
         {
           provider,

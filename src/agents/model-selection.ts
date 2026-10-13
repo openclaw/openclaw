@@ -135,8 +135,15 @@ export async function canonicalizeCaseOnlyCatalogModelRef(params: {
   if (slash <= 0 || slash === split.model.length - 1 || split.model === split.model.toLowerCase()) {
     return rawModel;
   }
+  const { resolvePluginMetadataSnapshotAsync } =
+    await import("../plugins/plugin-metadata-snapshot.js");
+  const manifestPlugins = await resolvePluginMetadataSnapshotAsync({
+    config: params.cfg,
+    allowWorkspaceScopedCurrent: true,
+  });
   const resolved = resolveModelRefFromString({
     cfg: params.cfg,
+    manifestPlugins,
     raw: split.model,
     defaultProvider: params.defaultProvider,
     aliasIndex: params.aliasIndex,
@@ -146,10 +153,11 @@ export async function canonicalizeCaseOnlyCatalogModelRef(params: {
   if (!resolved) {
     return rawModel;
   }
-  const entry = findModelInCatalog(
-    await params.loadCatalog(),
-    resolved.ref.provider,
-    resolved.ref.model,
+  const catalog = await params.loadCatalog();
+  const { withPluginMetadataSnapshotScope } =
+    await import("../plugins/current-plugin-metadata-snapshot.js");
+  const entry = withPluginMetadataSnapshotScope(manifestPlugins, () =>
+    findModelInCatalog(catalog, resolved.ref.provider, resolved.ref.model),
   );
   return entry ? appendAuthProfileSuffix(`${entry.provider}/${entry.id}`, split.profile) : rawModel;
 }
@@ -174,15 +182,18 @@ function resolveModelThroughAliases(value: string, aliasIndex: ModelAliasIndex):
   );
 }
 
-export function resolveSubagentSpawnModelSelection(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  modelOverride?: unknown;
-  inheritedModel?: ModelRef;
-}): { model: string; resolvedModel?: ModelRef } {
+export function resolveSubagentSpawnModelSelection(
+  params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    modelOverride?: unknown;
+    inheritedModel?: ModelRef;
+  } & ModelManifestNormalizationContext,
+): { model: string; resolvedModel?: ModelRef } {
   const runtimeDefault = resolveDefaultModelForAgent({
     cfg: params.cfg,
     agentId: params.agentId,
+    manifestPlugins: params.manifestPlugins,
   });
   const configured = resolveConfiguredSubagentSpawnModelSelection({
     cfg: params.cfg,
@@ -190,6 +201,7 @@ export function resolveSubagentSpawnModelSelection(params: {
     modelOverride: params.modelOverride,
     defaultProvider: runtimeDefault.provider,
     includeAgentPrimary: !params.inheritedModel,
+    manifestPlugins: params.manifestPlugins,
   });
   if (configured) {
     return { model: configured };
@@ -207,18 +219,21 @@ export function resolveSubagentSpawnModelSelection(params: {
     cfg: params.cfg,
     agentId: params.agentId,
     defaultProvider: runtimeDefault.provider,
+    manifestPlugins: params.manifestPlugins,
   });
   return { model: resolveModelThroughAliases(raw, aliasIndex) };
 }
 
-export function resolveConfiguredSubagentSpawnModelSelection(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  modelOverride?: unknown;
-  defaultProvider?: string;
-  includeAgentPrimary?: boolean;
-  modelRuntime?: "native" | "acp";
-}): string | undefined {
+export function resolveConfiguredSubagentSpawnModelSelection(
+  params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    modelOverride?: unknown;
+    defaultProvider?: string;
+    includeAgentPrimary?: boolean;
+    modelRuntime?: "native" | "acp";
+  } & ModelManifestNormalizationContext,
+): string | undefined {
   const raw =
     normalizeModelSelection(params.modelOverride) ??
     resolveSubagentConfiguredModelSelection({
@@ -238,6 +253,7 @@ export function resolveConfiguredSubagentSpawnModelSelection(params: {
         agentId: params.agentId,
         defaultProvider: DEFAULT_PROVIDER,
         defaultModel: DEFAULT_MODEL,
+        manifestPlugins: params.manifestPlugins,
       },
       params.modelRuntime,
     ).provider;
@@ -245,6 +261,7 @@ export function resolveConfiguredSubagentSpawnModelSelection(params: {
     cfg: params.cfg,
     agentId: params.agentId,
     defaultProvider,
+    manifestPlugins: params.manifestPlugins,
   });
   return resolveModelThroughAliases(raw, aliasIndex);
 }

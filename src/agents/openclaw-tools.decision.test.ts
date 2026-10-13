@@ -22,7 +22,7 @@ import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpe
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { isDecisionAssistanceEligible } from "./decision-assistance.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { createOpenClawToolsAsync } from "./openclaw-tools.js";
 
 const batch: DecisionBatch = {
   state: { message: "Please refund this order." },
@@ -103,17 +103,19 @@ function fixture(
 }
 
 // Disable unrelated plugin tool discovery; the core factory and wrappers remain real.
-function assembled(agentId = "main", cfg = config) {
-  return createOpenClawTools({
-    config: cfg,
-    agentSessionKey: `agent:${agentId}:main`,
-    disablePluginTools: true,
-    disableMessageTool: true,
-    wrapBeforeToolCallHook: false,
-  }).find((tool) => tool.name === "decision_evaluate");
+async function assembled(agentId = "main", cfg = config) {
+  return (
+    await createOpenClawToolsAsync({
+      config: cfg,
+      agentSessionKey: `agent:${agentId}:main`,
+      disablePluginTools: true,
+      disableMessageTool: true,
+      wrapBeforeToolCallHook: false,
+    })
+  ).find((tool) => tool.name === "decision_evaluate");
 }
-function requiredTool(agentId = "main") {
-  const tool = assembled(agentId);
+async function requiredTool(agentId = "main") {
+  const tool = await assembled(agentId);
   if (!tool) {
     throw new Error("decision_evaluate was not assembled");
   }
@@ -130,7 +132,7 @@ describe("core decision_evaluate registered flow", () => {
   it("keeps the explicit tool independent of automatic eligibility through Labs on/off transitions", async () => {
     const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
     fixture(evaluate);
-    const retained = requiredTool("alternate");
+    const retained = await requiredTool("alternate");
     for (const decisionAssistance of [false, true, false]) {
       const current: OpenClawConfig = {
         ...config,
@@ -144,8 +146,8 @@ describe("core decision_evaluate registered flow", () => {
       expect(isDecisionAssistanceEligible(current, "main")).toBe(decisionAssistance);
       expect(isDecisionAssistanceEligible(current, "alternate")).toBe(decisionAssistance);
       expect(isDecisionAssistanceEligible(current, "disabled")).toBe(false);
-      expect(assembled("disabled", current)).toBeUndefined();
-      const fresh = assembled("main", current)!;
+      expect(await assembled("disabled", current)).toBeUndefined();
+      const fresh = (await assembled("main", current))!;
       expect(fresh).toBeDefined();
       expect(evaluate).not.toHaveBeenCalled();
       expect((await fresh.execute("fresh", batch)).details).toMatchObject({ status: "ok" });
@@ -203,7 +205,7 @@ describe("core decision_evaluate registered flow", () => {
       undefined,
       "gateway",
     );
-    const tool = requiredTool();
+    const tool = await requiredTool();
     expect(tool.description).toContain("at most 99 questions");
     setRuntimeConfigSnapshot({
       agents: {
@@ -242,7 +244,9 @@ describe("core decision_evaluate registered flow", () => {
     async (input) => {
       const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
       fixture(evaluate);
-      await expect(requiredTool().execute("call", input)).rejects.toThrow("no evidence was sent");
+      await expect((await requiredTool()).execute("call", input)).rejects.toThrow(
+        "no evidence was sent",
+      );
       expect(evaluate).not.toHaveBeenCalled();
     },
   );
@@ -259,7 +263,7 @@ describe("core decision_evaluate registered flow", () => {
       });
     });
     fixture(evaluate);
-    const tool = requiredTool();
+    const tool = await requiredTool();
     const aborted = AbortSignal.abort(cancellation);
     await expect(tool.execute("before", batch, aborted)).rejects.toThrow("caller cancelled");
     expect(evaluate).not.toHaveBeenCalled();

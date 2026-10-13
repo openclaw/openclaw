@@ -17,13 +17,16 @@ import { applyExtraParamsToAgent, resolvePreparedExtraParams } from "./extra-par
 
 describe("prepared provider extra-param lifecycle", () => {
   it("keeps shared MiMo request and output policy when a provider decorates the stream", async () => {
-    const model = makeProviderModelFixture({
-      provider: "fixture-provider",
-      id: "mimo-v2-pro",
-      api: "openai-completions",
-      baseUrl: "https://fixture.invalid/v1",
-      reasoning: true,
-    });
+    const model = attachModelProviderRequestRouteFacts(
+      makeProviderModelFixture({
+        provider: "fixture-provider",
+        id: "mimo-v2-pro",
+        api: "openai-completions",
+        baseUrl: "https://fixture.invalid/v1",
+        reasoning: true,
+      }),
+      providerMetadataOwners,
+    );
     const modelRef = `${model.provider}/${model.id}`;
     const cfg = {
       agents: {
@@ -108,12 +111,15 @@ describe("prepared provider extra-param lifecycle", () => {
 
   it("uses each prepared owner for params and stream wrapping with shared config", () => {
     const cfg = { agents: { defaults: { params: { temperature: 0.1 } } } };
-    const model = makeProviderModelFixture({
-      provider: "fixture-provider",
-      id: "fixture-model",
-      api: "fixture-api",
-      baseUrl: "https://fixture.invalid",
-    });
+    const model = attachModelProviderRequestRouteFacts(
+      makeProviderModelFixture({
+        provider: "fixture-provider",
+        id: "fixture-model",
+        api: "fixture-api",
+        baseUrl: "https://fixture.invalid",
+      }),
+      providerMetadataOwners,
+    );
     const observed: Array<SimpleStreamOptions | undefined> = [];
     for (const owner of ["first", "replacement", "updated"]) {
       if (owner === "updated") {

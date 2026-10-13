@@ -111,7 +111,7 @@ describe("tools.catalog handler", () => {
     setPluginToolMeta(matrixRoom, { pluginId: "matrix", optional: false });
     vi.mocked(resolvePluginTools).mockReturnValue([voiceCall, matrixRoom]);
     getActivePluginRegistryMock.mockReturnValue(null);
-    vi.mocked(ensureStandalonePluginToolRegistryLoaded).mockReturnValue(undefined);
+    vi.mocked(ensureStandalonePluginToolRegistryLoaded).mockResolvedValue(undefined);
   });
 
   it.each([
@@ -199,7 +199,7 @@ describe("tools.catalog handler", () => {
           },
         });
         getActivePluginRegistryMock.mockReturnValue(activeRegistry);
-        vi.mocked(ensureStandalonePluginToolRegistryLoaded).mockReturnValue(toolRegistry);
+        vi.mocked(ensureStandalonePluginToolRegistryLoaded).mockResolvedValue(toolRegistry);
       }
       const { respond, invoke } = createInvokeParams({});
       await invoke();
@@ -302,7 +302,7 @@ describe("tools.catalog handler", () => {
     Object.freeze(tools);
     Object.freeze(registry.tools);
     vi.mocked(resolvePluginTools).mockReturnValue(tools);
-    vi.mocked(ensureStandalonePluginToolRegistryLoaded).mockReturnValue(registry);
+    vi.mocked(ensureStandalonePluginToolRegistryLoaded).mockResolvedValue(registry);
     const first = createInvokeParams({});
     await first.invoke();
     const groups = expectCatalogPayload(first.respond).groups.filter(

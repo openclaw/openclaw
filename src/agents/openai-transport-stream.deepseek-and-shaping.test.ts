@@ -6,6 +6,7 @@ import {
   makeResponsesModel,
 } from "./openai-transport-stream.test-harness.js";
 import { testing } from "./openai-transport-stream.test-support.js";
+import { attachProviderRequestFactsFixture } from "./provider-request.test-support.js";
 
 describe("openai transport stream", () => {
   it("preserves xAI Grok 4.3 default reasoning by omitting default none", () => {
@@ -126,7 +127,7 @@ describe("openai transport stream", () => {
 
   it("keeps Codex response shaping when simple completions use the OpenClaw transport alias", () => {
     const params = buildOpenAIResponsesParams(
-      {
+      attachProviderRequestFactsFixture({
         id: "gpt-5.5",
         name: "GPT-5.5",
         api: "openclaw-openai-chatgpt-responses-transport" as Api,
@@ -137,7 +138,7 @@ describe("openai transport stream", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 8192,
-      } satisfies Model,
+      } satisfies Model),
       {
         systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
         messages: [{ role: "user", content: "Hello", timestamp: 1 }],

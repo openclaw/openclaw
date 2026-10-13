@@ -29,7 +29,7 @@ export async function createOpenAILiveCall(
   const response = await (params.fetchImpl ?? fetch)(OPENAI_LIVE_SESSIONS_URL, {
     method: "POST",
     headers: {
-      ...resolveOpenAIRealtimeRequestHeaders(runtime, OPENAI_LIVE_SESSIONS_URL),
+      ...(await resolveOpenAIRealtimeRequestHeaders(runtime, OPENAI_LIVE_SESSIONS_URL)),
       Authorization: `Bearer ${params.apiKey}`,
       "Content-Type": "application/json",
     },
@@ -81,7 +81,7 @@ export async function hangupOpenAILiveCall(
   const response = await (params.fetchImpl ?? fetch)(url, {
     method: "POST",
     headers: {
-      ...resolveOpenAIRealtimeRequestHeaders(runtime, url),
+      ...(await resolveOpenAIRealtimeRequestHeaders(runtime, url)),
       Authorization: `Bearer ${params.apiKey}`,
     },
     signal: params.signal,

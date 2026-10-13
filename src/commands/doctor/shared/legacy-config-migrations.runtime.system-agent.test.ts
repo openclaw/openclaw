@@ -1,9 +1,10 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { resolveAmbientOwnerAgentId } from "../../../agents/agent-scope-config.js";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { resolveHeartbeatAgents } from "../../../infra/heartbeat-config.js";
+import { preparePluginMetadataMachineStateAsync } from "../../../plugins/installed-plugin-index-record-state.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 import { prepareLegacyConfigMigrationRuntime } from "./legacy-config-migrate.test-support.js";
@@ -17,6 +18,9 @@ beforeAll(async () => {
   restore = await prepareLegacyConfigMigrationRuntime();
 });
 afterAll(() => restore?.());
+beforeEach(async () => {
+  await preparePluginMetadataMachineStateAsync({});
+});
 const migrate = (raw: unknown) =>
   applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw });
 type LegacyAgentEntries = NonNullable<

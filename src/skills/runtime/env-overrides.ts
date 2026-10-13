@@ -1,4 +1,7 @@
-import { sanitizeEnvVars, validateEnvVarValue } from "../../agents/sandbox/sanitize-env-vars.js";
+import {
+  prepareSandboxEnvSanitizer,
+  validateEnvVarValue,
+} from "../../agents/sandbox/sanitize-env-vars.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import {
@@ -73,12 +76,13 @@ function isAlwaysBlockedSkillEnvKey(key: string): boolean {
 function sanitizeSkillEnvOverrides(params: {
   overrides: Record<string, string>;
   allowedSensitiveKeys: Set<string>;
-}): ReturnType<typeof sanitizeEnvVars> {
+  sanitize: Awaited<ReturnType<typeof prepareSandboxEnvSanitizer>>;
+}): ReturnType<Awaited<ReturnType<typeof prepareSandboxEnvSanitizer>>> {
   if (Object.keys(params.overrides).length === 0) {
     return { allowed: {}, blocked: [], warnings: [] };
   }
 
-  const result = sanitizeEnvVars(params.overrides);
+  const result = params.sanitize(params.overrides);
   const allowed: Record<string, string> = {};
   const blocked = new Set<string>();
   const warnings = [...result.warnings];
@@ -120,6 +124,7 @@ function applySkillConfigEnvOverrides(params: {
   primaryEnv?: string | null;
   requiredEnv?: string[] | null;
   skillKey: string;
+  sanitize: Awaited<ReturnType<typeof prepareSandboxEnvSanitizer>>;
 }) {
   const { updates, primaryEnv, requiredEnv, skillKey } = params;
   if (isSkillSecretOwnerUnavailable(skillKey)) {
@@ -172,6 +177,7 @@ function applySkillConfigEnvOverrides(params: {
   const sanitized = sanitizeSkillEnvOverrides({
     overrides: pendingOverrides,
     allowedSensitiveKeys,
+    sanitize: params.sanitize,
   });
 
   if (sanitized.blocked.length > 0) {
@@ -197,15 +203,25 @@ function createEnvReverter(updates: string[]) {
   };
 }
 
-export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: OpenClawConfig }) {
+export async function applySkillEnvOverrides(params: {
+  skills: SkillEntry[];
+  config?: OpenClawConfig;
+  assertCurrent?: () => void;
+}) {
   const { skills } = params;
+  if (skills.length === 0) {
+    return createEnvReverter([]);
+  }
   const config = resolveSkillRuntimeConfig(params.config);
   const updates: string[] = [];
+  const sanitize = await prepareSandboxEnvSanitizer();
+  params.assertCurrent?.();
 
   for (const entry of skills) {
     applySkillConfigEnvOverrides({
       updates,
       config,
+      sanitize,
       primaryEnv: entry.metadata?.primaryEnv,
       requiredEnv: entry.metadata?.requires?.env,
       skillKey: resolveSkillKey(entry),
@@ -215,18 +231,25 @@ export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: 
   return createEnvReverter(updates);
 }
 
-export function applySkillEnvOverridesFromSnapshot(params: {
+export async function applySkillEnvOverridesFromSnapshot(params: {
   snapshot?: SkillSnapshot;
   config?: OpenClawConfig;
+  assertCurrent?: () => void;
 }) {
   const { snapshot } = params;
+  if (!snapshot?.skills.length) {
+    return createEnvReverter([]);
+  }
   const config = resolveSkillRuntimeConfig(params.config);
   const updates: string[] = [];
+  const sanitize = await prepareSandboxEnvSanitizer();
+  params.assertCurrent?.();
 
   for (const skill of snapshot?.skills ?? []) {
     applySkillConfigEnvOverrides({
       updates,
       config,
+      sanitize,
       primaryEnv: skill.primaryEnv,
       requiredEnv: skill.requiredEnv,
       skillKey: skill.skillKey ?? skill.name,

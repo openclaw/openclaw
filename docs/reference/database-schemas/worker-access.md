@@ -342,6 +342,15 @@ likewise seed facts in the worker and apply provenance and deletion-journal
 receipts. Canonical validation predicates consume admitted receipts; only schema
 admission and worker opens load a missing persisted receipt.
 
+Bundled-plugin discovery policy is prepared through the existing metadata read
+worker before synchronous manifest, registry, or capability derivation. The
+runtime lookup consumes an already prepared fact and cannot fall back to SQLite.
+Facts are retained by state root; private artifact snapshots retain their own
+captured policy and never replace live policy. Boot, offline CLI, and Doctor
+metadata reads use an explicit native preparation entry point. Released
+synchronous SDK helpers retain that native entry only during their documented
+deprecation window; bundled callers use the async replacement.
+
 The Gateway process is the single owner of OpenClaw databases and their state.
 Reader workers, writer workers, and main-thread projections share that ownership;
 a separate connection is not a separate state owner. The committing writer's

@@ -7,7 +7,9 @@ import type {
   Model,
 } from "@openclaw/llm-core";
 import { describe, expect, it, vi } from "vitest";
+import { attachModelProviderRequestRouteFacts } from "../agents/provider-request-config.js";
 import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
+import { makeEmptyPluginMetadataOwners } from "../plugins/current-plugin-metadata.test-support.js";
 import { bindModelLlmRuntime } from "./model-runtime-binding.js";
 import { stream, streamSimple } from "./stream.js";
 import { createAssistantMessageEventStream } from "./utils/event-stream.js";
@@ -55,7 +57,10 @@ describe("LLM synchronous stream transport host", () => {
       stream: providerStream,
       streamSimple: providerStream,
     });
-    const boundModel = bindModelLlmRuntime(model, runtime);
+    const boundModel = bindModelLlmRuntime(
+      attachModelProviderRequestRouteFacts(model, makeEmptyPluginMetadataOwners()),
+      runtime,
+    );
 
     const outputs = [
       stream(boundModel, { messages: [] }),

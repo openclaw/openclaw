@@ -42,10 +42,10 @@ function expectInvalidConfigPath(command: string) {
   });
 }
 
-beforeAll(() => {
+beforeAll(async () => {
   const config = {};
   setRuntimeConfigSnapshot(config, config);
-  pluginMetadata = createSystemAgentPluginMetadataTestSnapshot(config);
+  pluginMetadata = await createSystemAgentPluginMetadataTestSnapshot(config);
 });
 
 afterAll(() => {

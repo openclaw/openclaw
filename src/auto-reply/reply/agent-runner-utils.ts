@@ -42,6 +42,7 @@ import {
   buildAgentHookContextIdentityFields,
 } from "../../plugins/hook-agent-context.js";
 import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
+import { resolveProviderRuntimePluginHandleAsync } from "../../plugins/provider-hook-runtime.js";
 import { readUserTurnPromptReactionSource } from "../../sessions/user-turn-transcript-admission.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
@@ -483,6 +484,12 @@ export async function buildEmbeddedRunExecutionParams(params: {
         config,
         workspaceDir: snapshot.run.workspaceDir,
         modelId: snapshot.model,
+        runtimeHandle: await resolveProviderRuntimePluginHandleAsync({
+          provider: snapshot.provider,
+          config,
+          workspaceDir: snapshot.run.workspaceDir,
+          modelId: snapshot.model,
+        }),
       }));
   // Runtime policy keys may differ from session keys for direct-message scoped policy.
   return {

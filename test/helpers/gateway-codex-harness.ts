@@ -5,7 +5,7 @@ import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../../src/gateway/client.js";
 import { buildCodexHarnessAppServerArgs } from "../../src/gateway/gateway-codex-harness.live-helpers.js";
 import type { AgentEventPayload } from "../../src/infra/agent-events.js";
-import { listKnownProviderAuthEnvVarNamesCore } from "../../src/secrets/provider-env-vars.js";
+import { listKnownProviderAuthEnvVarNamesAsync } from "../../src/secrets/provider-env-vars.js";
 import { extractFirstTextBlock } from "../../src/shared/chat-message-content.js";
 // Native live fixture setup and capture shared with its offline boundary regressions.
 import { createOpenClawTestInstance } from "./openclaw-test-instance.js";
@@ -27,7 +27,7 @@ export async function readCodexHarnessSessionId(params: {
   return sessionId as string;
 }
 
-export function createCodexHarnessLiveInstance(
+export async function createCodexHarnessLiveInstance(
   token: string,
   authMode: "codex-auth" | "api-key" = "codex-auth",
 ) {
@@ -38,7 +38,7 @@ export function createCodexHarnessLiveInstance(
     gatewayToken: token,
     env: {
       ...Object.fromEntries(
-        listKnownProviderAuthEnvVarNamesCore().map((name) => [name, undefined]),
+        (await listKnownProviderAuthEnvVarNamesAsync()).map((name) => [name, undefined]),
       ),
       OPENCLAW_AGENT_RUNTIME: "codex",
       OPENCLAW_GATEWAY_TOKEN: token,

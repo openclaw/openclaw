@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
+import { resolveProviderRuntimePluginAsync } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { providerOwnsDynamicModelPreparation } from "../../plugins/provider-runtime.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
@@ -15,6 +18,7 @@ import {
   loadPreparedModelRuntimeSnapshot,
   type PreparedModelRuntimeSnapshot,
 } from "../prepared-model-runtime.js";
+import { attachModelProviderRequestRouteFacts } from "../provider-request-config.js";
 import { AuthStorage } from "../sessions/auth-storage.js";
 import { ModelRegistry } from "../sessions/model-registry.js";
 import { mergeModelMediaInput } from "./model.compat.js";
@@ -124,6 +128,13 @@ export async function resolveModelAsync(
       ...(derivedWorkspaceDir ? { workspaceDir: derivedWorkspaceDir } : {}),
     });
   }
+  const preparedMetadataSnapshot =
+    preparedModelRuntime?.metadataSnapshot ??
+    (await resolvePluginMetadataSnapshotAsync({
+      config: cfg,
+      workspaceDir: options?.workspaceDir ?? derivedWorkspaceDir,
+      allowWorkspaceScopedCurrent: true,
+    }));
   // Route-projected cfg owns transport/auth; the snapshot contributes generation facts only.
   const resolve = async () => {
     options?.assertCurrent?.();
@@ -137,6 +148,15 @@ export async function resolveModelAsync(
       modelIdSource: options?.modelIdSource,
     });
     const logicalRef = { provider: normalizedRef.provider, model: normalizedRef.model };
+    if (!options?.runtimeHooks && !options?.skipProviderRuntimeHooks) {
+      await resolveProviderRuntimePluginAsync({
+        provider: normalizedRef.provider,
+        modelId: normalizedRef.model,
+        config: cfg,
+        workspaceDir,
+        pluginMetadataSnapshot: preparedMetadataSnapshot,
+      });
+    }
     let { authStorage, modelRegistry } = options ?? {};
     if (!authStorage || !modelRegistry) {
       const stores = preparedModelRuntime?.createStores() ?? createEmptyAgentDiscoveryStores();
@@ -176,6 +196,7 @@ export async function resolveModelAsync(
       modelId: normalizedRef.model,
       modelRegistry,
       cfg,
+      pluginMetadataSnapshot: preparedMetadataSnapshot,
       agentDir: resolvedAgentDir,
       ...(options?.agentRuntimeId ? { agentRuntimeId: options.agentRuntimeId } : {}),
       manifestAlias: normalizedRef.manifestAlias,
@@ -201,7 +222,15 @@ export async function resolveModelAsync(
           : undefined;
       options?.assertCurrent?.();
       if (suppressedRuntimeModel) {
-        return { model: suppressedRuntimeModel, logicalRef, authStorage, modelRegistry };
+        return {
+          model: attachModelProviderRequestRouteFacts(
+            suppressedRuntimeModel,
+            preparedMetadataSnapshot.owners,
+          ),
+          logicalRef,
+          authStorage,
+          modelRegistry,
+        };
       }
       return {
         error: explicitModel.error ?? buildUnknownModelError(registryParams),
@@ -210,7 +239,6 @@ export async function resolveModelAsync(
       };
     }
     const providerConfig = resolveConfiguredProviderConfig(cfg, normalizedRef.provider);
-    const preparedMetadataSnapshot = preparedModelRuntime?.metadataSnapshot;
     let providerStaticCatalogLookup: Promise<ProviderRuntimeModel | undefined> | undefined;
     const resolveStaticCatalogModel = async () => {
       if (!options?.allowBundledStaticCatalogFallback) {
@@ -298,7 +326,12 @@ export async function resolveModelAsync(
       }
     }
     if (model) {
-      return { model, logicalRef, authStorage, modelRegistry };
+      return {
+        model: attachModelProviderRequestRouteFacts(model, preparedMetadataSnapshot.owners),
+        logicalRef,
+        authStorage,
+        modelRegistry,
+      };
     }
     return {
       error: buildUnknownModelError(registryParams),
@@ -316,7 +349,7 @@ export async function resolveModelAsync(
   };
   return preparedModelRuntime
     ? await withPluginRuntimeGenerationScope(preparedModelRuntime, resolve)
-    : await resolve();
+    : await withPluginMetadataSnapshotScope(preparedMetadataSnapshot, resolve, { config: cfg });
 }
 
 // Providers registered by setup/auth can explain an otherwise opaque model miss.

@@ -44,6 +44,20 @@ vi.mock("../../../plugins/loader.js", () => ({
   loadPluginRegistryHandle: loadPluginRegistryHandleMock,
 }));
 
+// mock-isolation: Message delivery owns this suite; metadata supplies only a prepared fixture.
+vi.mock("../../../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
+  const { rebasePluginMetadataSnapshotManifestRegistry } =
+    await importOriginal<typeof import("../../../plugins/plugin-metadata-snapshot.js")>();
+  return {
+    rebasePluginMetadataSnapshotManifestRegistry,
+    resolvePluginMetadataSnapshotAsync: async () => {
+      const { createPluginMetadataSnapshotFixture } =
+        await import("../../../plugins/plugin-metadata.test-support.js");
+      return createPluginMetadataSnapshotFixture();
+    },
+  };
+});
+
 const runGatewayStopMock = vi.fn(
   async (_eventValue: { reason?: string }, _ctx: Record<string, unknown>) => {},
 );
@@ -714,10 +728,15 @@ describe("runMessageAction", () => {
     vi.useFakeTimers();
     try {
       registerStopHook();
-      runGatewayStopMock.mockImplementationOnce(() => new Promise(() => {}));
+      const hookStarted = Promise.withResolvers<void>();
+      runGatewayStopMock.mockImplementationOnce(() => {
+        hookStarted.resolve();
+        return new Promise(() => {});
+      });
       const runMessageAction = createRunMessageAction();
 
       const pending = expect(runMessageAction("send", baseSendOptions)).rejects.toThrow("exit");
+      await hookStarted.promise;
       await vi.advanceTimersByTimeAsync(2500);
       await pending;
 

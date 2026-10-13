@@ -3,6 +3,7 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "openclaw/plugin-sdk/agent-runtime";
+import { preparePluginTestRuntimeMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreAsync,
@@ -94,7 +95,8 @@ function createTools(
 }
 
 describe("Codex supervision compatibility tools", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await preparePluginTestRuntimeMetadata();
     requestCodexAppServerJsonMock.mockReset();
   });
 

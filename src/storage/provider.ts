@@ -32,7 +32,7 @@ export async function acquireStorageProvider(params: {
   const enabled = applyPluginAutoEnable({ config: params.config, env: params.env ?? process.env });
   const { resolveManifestContractRuntimePluginResolution } =
     await import("../plugins/manifest-contract-runtime.js");
-  const resolution = resolveManifestContractRuntimePluginResolution({
+  const resolution = await resolveManifestContractRuntimePluginResolution({
     cfg: enabled.config,
     contract: "storageProviders",
     value: params.providerId,

@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   createTestRegistry,
+  preparePluginTestRuntimeMetadata,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -160,6 +161,7 @@ export async function createBot(
   const inbound = (messages.inbound ??= {});
   inbound.debounceMs ??= 0;
   publishTelegramTestConfig(cfg);
+  await preparePluginTestRuntimeMetadata(cfg);
   const abort = new AbortController();
   const token = resolveTelegramAccount({ cfg, accountId }).token;
   // Routing and delivery assertions retain real scheduling without wall-clock pacing.

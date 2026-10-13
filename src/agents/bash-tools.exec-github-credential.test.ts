@@ -105,7 +105,7 @@ describe.skipIf(process.platform === "win32")("local GitHub credential launch bo
       hostsPath = path.join(profileDir, "hosts.yml");
       await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
       await writeToken();
-      const resolved = resolvePreparedExecEnvironment({
+      const resolved = await resolvePreparedExecEnvironment({
         execParams: { command: "echo synthetic" },
         host: "gateway",
         defaultPathPrepend: [],

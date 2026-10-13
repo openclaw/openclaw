@@ -6,7 +6,7 @@ import { defaultRuntime } from "../../runtime.js";
 const mocks = vi.hoisted(() => ({
   listChannelPlugins: vi.fn(),
   listRuntimeVisibleChannelPlugins: vi.fn(),
-  resolveOutboundChannelPlugin: vi.fn(),
+  resolveOutboundChannelPluginAsync: vi.fn(),
   missingOfficialExternalChannels: new Set<string>(),
   scopedRegistryChannelIds: new Set<string>(),
 }));
@@ -33,12 +33,13 @@ vi.mock("../../utils/message-channel.js", () => ({
     typeof value === "string" ? value.trim().toLowerCase() : undefined,
 }));
 
-vi.mock("./channel-resolution.js", () => ({
+vi.mock("./channel-resolution.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./channel-resolution.js")>()),
   normalizeDeliverableOutboundChannel: (value?: string | null) => {
     const normalized = typeof value === "string" ? value.trim().toLowerCase() : undefined;
     return normalized && deliverableChannelIds.includes(normalized) ? normalized : undefined;
   },
-  resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
+  resolveOutboundChannelPluginAsync: mocks.resolveOutboundChannelPluginAsync,
 }));
 
 vi.mock("./runtime-visible-channels.js", () => ({
@@ -98,7 +99,7 @@ beforeEach(() => {
   mocks.scopedRegistryChannelIds.clear();
 });
 
-function resolveFixtureOutboundChannelPlugin({ channel }: { channel: string }) {
+async function resolveFixtureOutboundChannelPlugin({ channel }: { channel: string }) {
   return deliverableChannelIds.includes(channel) || mocks.scopedRegistryChannelIds.has(channel)
     ? { id: channel }
     : undefined;
@@ -138,8 +139,8 @@ describe("listConfiguredMessageChannels", () => {
     mocks.listChannelPlugins.mockReset();
     mocks.listChannelPlugins.mockReturnValue([]);
     mocks.listRuntimeVisibleChannelPlugins.mockReset();
-    mocks.resolveOutboundChannelPlugin.mockReset();
-    mocks.resolveOutboundChannelPlugin.mockImplementation(resolveFixtureOutboundChannelPlugin);
+    mocks.resolveOutboundChannelPluginAsync.mockReset();
+    mocks.resolveOutboundChannelPluginAsync.mockImplementation(resolveFixtureOutboundChannelPlugin);
   });
 
   afterEach(() => {
@@ -200,8 +201,8 @@ describe("resolveMessageChannelSelection", () => {
     mocks.listChannelPlugins.mockReset();
     mocks.listChannelPlugins.mockReturnValue([]);
     mocks.listRuntimeVisibleChannelPlugins.mockReset();
-    mocks.resolveOutboundChannelPlugin.mockReset();
-    mocks.resolveOutboundChannelPlugin.mockImplementation(resolveFixtureOutboundChannelPlugin);
+    mocks.resolveOutboundChannelPluginAsync.mockReset();
+    mocks.resolveOutboundChannelPluginAsync.mockImplementation(resolveFixtureOutboundChannelPlugin);
     mocks.missingOfficialExternalChannels.clear();
   });
 
@@ -301,14 +302,14 @@ describe("resolveMessageChannelSelection", () => {
     {
       setup: () => {
         mocks.scopedRegistryChannelIds.add("scopex");
-        mocks.resolveOutboundChannelPlugin.mockReturnValue(undefined);
+        mocks.resolveOutboundChannelPluginAsync.mockResolvedValue(undefined);
       },
       params: { cfg: {} as never, channel: "scopex" },
       expectedMessage: "Channel is unavailable: scopex",
     },
     {
       setup: () => {
-        mocks.resolveOutboundChannelPlugin.mockReturnValue(undefined);
+        mocks.resolveOutboundChannelPluginAsync.mockResolvedValue(undefined);
         mocks.missingOfficialExternalChannels.add("feishu");
       },
       params: {
@@ -320,7 +321,7 @@ describe("resolveMessageChannelSelection", () => {
     },
     {
       setup: () => {
-        mocks.resolveOutboundChannelPlugin.mockReturnValue(undefined);
+        mocks.resolveOutboundChannelPluginAsync.mockResolvedValue(undefined);
         mocks.missingOfficialExternalChannels.add("whatsapp");
       },
       params: { cfg: { channels: { whatsapp: { enabled: true } } } as never },
@@ -349,8 +350,8 @@ describe("resolveMessageChannelSelection (registry-scoped channel plugins)", () 
     mocks.listChannelPlugins.mockReset();
     mocks.listChannelPlugins.mockReturnValue([]);
     mocks.listRuntimeVisibleChannelPlugins.mockReset();
-    mocks.resolveOutboundChannelPlugin.mockReset();
-    mocks.resolveOutboundChannelPlugin.mockImplementation(resolveFixtureOutboundChannelPlugin);
+    mocks.resolveOutboundChannelPluginAsync.mockReset();
+    mocks.resolveOutboundChannelPluginAsync.mockImplementation(resolveFixtureOutboundChannelPlugin);
   });
 
   it("defaults to the single configured channel seen only through the runtime-visible list", async () => {

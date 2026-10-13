@@ -19,9 +19,12 @@ const manifestMocks = vi.hoisted(() => ({
   ),
 }));
 
+// mock-isolation: The fixture owns plugin origins without discovering ambient installed plugins.
 vi.mock("./runtime-manifest.runtime.js", () => ({
   listPluginOriginsFromMetadataSnapshot: manifestMocks.listPluginOriginsFromMetadataSnapshot,
-  resolveConfigWidePluginManifestRegistry: manifestMocks.loadPluginMetadataSnapshot,
+  resolveConfigWidePluginMetadataSnapshotAsync: async () => ({
+    manifestRegistry: manifestMocks.loadPluginMetadataSnapshot(),
+  }),
 }));
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();

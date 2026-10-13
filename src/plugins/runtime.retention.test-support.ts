@@ -107,12 +107,12 @@ async function retireCapturedSource() {
 }
 
 async function loadReplacement(root: string) {
-  const { loadOpenClawPlugins } = await import("./loader.js");
+  const { loadOpenClawPluginsAsync } = await import("./loader.js");
   const previous = createEmptyPluginRegistry();
   const reference = new WeakRef(previous);
   const cache = createPluginCache();
-  const registry = withPluginCache(cache, () =>
-    loadOpenClawPlugins({
+  const registry = await withPluginCache(cache, () =>
+    loadOpenClawPluginsAsync({
       config: {
         plugins: {
           allow: ["retention-fixture"],

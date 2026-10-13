@@ -96,7 +96,7 @@ describe("provider-neutral memory RPC", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.resolveBackend.mockReturnValue({ backend: "builtin" });
+    mocks.resolveBackend.mockResolvedValue({ backend: "builtin" });
     assertCurrent = vi.fn();
     release = vi.fn();
     mocks.capture.mockResolvedValue({

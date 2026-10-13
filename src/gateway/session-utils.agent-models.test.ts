@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { listAgentsForGateway } from "./session-utils-store.js";
 import { closeSessionSqliteDatabasesForTest } from "./session-utils.test-support.js";
@@ -15,10 +16,11 @@ vi.mock("../plugins/provider-public-artifacts.js", () => ({
   resolveProviderPolicySurface: providerArtifactMocks.resolveBundledProviderPolicySurface,
 }));
 
-beforeEach(() => {
+beforeEach(async () => {
   clearPluginMetadataLifecycleCaches();
   providerArtifactMocks.resolveBundledProviderPolicySurface.mockReset();
   providerArtifactMocks.resolveBundledProviderPolicySurface.mockReturnValue(null);
+  await prepareBundledDiscoveryMode();
 });
 
 afterAll(closeSessionSqliteDatabasesForTest);

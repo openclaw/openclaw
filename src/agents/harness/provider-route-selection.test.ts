@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { useProviderCatalogMetadata } from "../../plugin-sdk/test-helpers/provider-catalog.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -12,6 +13,11 @@ import { prepareAgentRuntimeAuth } from "../runtime-plan/prepare-auth.js";
 import { registerAgentHarness } from "./registry.js";
 import { selectAgentHarness, selectAgentHarnessForPreparedModelProviders } from "./selection.js";
 import { projectPreparedModelProvider } from "./support.js";
+
+useProviderCatalogMetadata(
+  new URL("../../../extensions/openai", import.meta.url),
+  new URL("../../../extensions/codex", import.meta.url),
+);
 
 let registrySnapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
 

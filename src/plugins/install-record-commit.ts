@@ -369,18 +369,21 @@ async function assertPluginConfigActivationConsent(params: {
   if (Object.keys(records).length === 0) {
     return;
   }
-  const { resolvePluginMetadataSnapshot } = await import("./plugin-metadata-snapshot.js");
+  const { resolvePluginMetadataSnapshotAsync } = await import("./plugin-metadata-snapshot.js");
+  const { createPluginCache, withPluginCache } = await import("./plugin-cache.js");
+  await using cache = createPluginCache();
   const { resolvePluginCapabilityConsent } = await import("./capability-consent.js");
   const { resolvePluginControlPlaneWorkspace } = await import("./control-plane-workspace.js");
   const snapshot = await readConfigFileSnapshot();
   const metadataForConfig = (config: OpenClawConfig) =>
-    resolvePluginMetadataSnapshot({
+    resolvePluginMetadataSnapshotAsync({
       config,
       allowCurrent: false,
       workspaceDir: resolvePluginControlPlaneWorkspace({ config }).workspaceDir,
     });
-  const previous = metadataForConfig(snapshot.config);
-  const next = metadataForConfig(params.nextConfig);
+  const [previous, next] = await withPluginCache(cache, () =>
+    Promise.all([metadataForConfig(snapshot.config), metadataForConfig(params.nextConfig)]),
+  );
   const previouslyEnabled = new Set(
     previous.index.plugins
       .filter((plugin) => snapshot.valid && plugin.enabled)

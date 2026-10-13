@@ -1027,6 +1027,7 @@ describe("host-hook fixture plugin contract", () => {
 
     const row = buildGatewaySessionRow({
       cfg: config,
+      preparedModelMetadata: null,
       agentId: "main",
       storePath: "/tmp/sessions.json",
       store: {},
@@ -1117,6 +1118,7 @@ describe("host-hook fixture plugin contract", () => {
 
     const row = buildGatewaySessionRow({
       cfg: config,
+      preparedModelMetadata: null,
       agentId: "main",
       storePath: "/tmp/sessions.json",
       store: {},

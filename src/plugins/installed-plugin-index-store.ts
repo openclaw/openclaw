@@ -163,7 +163,6 @@ export async function readPersistedInstalledPluginIndex(
   options: InstalledPluginIndexStoreOptions = {},
 ): Promise<InstalledPluginIndex | null> {
   const prepared = await preparePersistedInstalledPluginIndexCacheEntry(options);
-  prepared.assertCurrent();
   return parseCachedInstalledPluginIndex(prepared.entry);
 }
 

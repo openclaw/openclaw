@@ -4,10 +4,8 @@ import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getLoadedRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
-import {
-  listAvailableManifestContractPlugins,
-  loadManifestContractSnapshot,
-} from "../plugins/manifest-contract-eligibility.js";
+import { listAvailableManifestContractPlugins } from "../plugins/manifest-contract-eligibility.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import type {
   MigrationPlan,
   MigrationProviderContext,
@@ -131,10 +129,13 @@ function describeSetupMigrationProvider(
   return { providerId: provider.id, label: provider.label, description: provider.description };
 }
 
-function resolveManifestSetupMigrationProviders(
+async function resolveManifestSetupMigrationProviders(
   baseConfig: OpenClawConfig,
-): SetupMigrationProviderDescriptor[] {
-  const snapshot = loadManifestContractSnapshot({ config: baseConfig });
+): Promise<SetupMigrationProviderDescriptor[]> {
+  const snapshot = await resolvePluginMetadataSnapshotAsync({
+    config: baseConfig,
+    allowWorkspaceScopedCurrent: true,
+  });
   return listAvailableManifestContractPlugins({
     snapshot,
     contract: "migrationProviders",
@@ -192,7 +193,7 @@ export async function listSetupMigrationOptions(params: {
   }
   for (const provider of [
     ...providers,
-    ...resolveManifestSetupMigrationProviders(params.baseConfig),
+    ...(await resolveManifestSetupMigrationProviders(params.baseConfig)),
   ]) {
     addOption({
       providerId: provider.providerId,

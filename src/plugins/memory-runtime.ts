@@ -5,7 +5,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
-import { loadPluginRegistryHandle } from "./loader.js";
+import { loadPluginRegistryHandleAsync } from "./loader.js";
 import {
   assertMemoryCallerCurrent,
   isHostMemoryAudience,
@@ -148,10 +148,10 @@ function isValidMemoryProviderCapabilities(
   );
 }
 
-function ensureMemoryRuntime(params: {
+async function ensureMemoryRuntime(params: {
   cfg: OpenClawConfig;
   agentId: string;
-}): MemoryRuntimeOwner | undefined {
+}): Promise<MemoryRuntimeOwner | undefined> {
   const current = getMemoryRuntime();
   const currentProviderRuntime = getMemoryProviderRuntime();
   assertMemoryProviderRuntime(currentProviderRuntime);
@@ -168,7 +168,7 @@ function ensureMemoryRuntime(params: {
     return undefined;
   }
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
-  const registry = loadPluginRegistryHandle({
+  const registry = await loadPluginRegistryHandleAsync({
     config: params.cfg,
     onlyPluginIds,
     workspaceDir,
@@ -249,7 +249,7 @@ export async function getActiveMemorySearchManagerCore(params: {
   purpose?: "default" | "status" | "cli";
   inspectSources?: boolean;
 }) {
-  const owner = ensureMemoryRuntime(params);
+  const owner = await ensureMemoryRuntime(params);
   if (!owner?.runtime) {
     return {
       manager: null,
@@ -275,7 +275,7 @@ export async function getActiveMemorySearchManagerCore(params: {
 export async function authorizeActiveMemorySearchHits(
   params: MemorySearchAuthorization,
 ): Promise<MemorySearchAuthorization["hits"]> {
-  const owner = ensureMemoryRuntime(params);
+  const owner = await ensureMemoryRuntime(params);
   // Session artifacts need plugin-owned identity mapping before they are safe
   // to expose. Runtimes without that capability may still return memory hits.
   return owner?.runtime?.authorizeSearchHits
@@ -288,11 +288,11 @@ export async function authorizeActiveMemorySearchHits(
  * Consumers keep their legacy manager path for every other owner, so this resolves
  * the owner the same way that path would without opening a manager.
  */
-export function isActiveMemoryProviderNative(params: {
+export async function isActiveMemoryProviderNative(params: {
   cfg: OpenClawConfig;
   agentId: string;
-}): boolean {
-  return ensureMemoryRuntime(params)?.providerRuntime !== undefined;
+}): Promise<boolean> {
+  return (await ensureMemoryRuntime(params))?.providerRuntime !== undefined;
 }
 
 /** Resolves one selected provider; native provider failures never retry through legacy storage. */
@@ -320,8 +320,8 @@ export async function getActiveMemoryProviderCore(
   if (before) {
     await racePromiseWithAbortSignal(before, context.signal);
   }
+  const owner = await ensureMemoryRuntime(params);
   context.assertCurrent();
-  const owner = ensureMemoryRuntime(params);
   if (!owner?.runtime && !owner?.providerRuntime) {
     return { provider: null, error: owner?.error ?? "memory plugin unavailable" };
   }
@@ -388,7 +388,7 @@ export async function classifyActiveMemoryWorkspacePaths(
       classifications: Array<{ relativePath: string; originClass: string }>;
     }
 > {
-  const owner = ensureMemoryRuntime(params);
+  const owner = await ensureMemoryRuntime(params);
   if (!owner?.runtime) {
     return { status: "unavailable" };
   }
@@ -403,8 +403,11 @@ export async function classifyActiveMemoryWorkspacePaths(
 }
 
 /** Resolves current memory backend config without constructing a manager. */
-export function resolveActiveMemoryBackendConfig(params: { cfg: OpenClawConfig; agentId: string }) {
-  const owner = ensureMemoryRuntime(params);
+export async function resolveActiveMemoryBackendConfig(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}) {
+  const owner = await ensureMemoryRuntime(params);
   if (owner?.providerRuntime) {
     const providerId =
       owner.providerId ?? normalizePluginsConfig(params.cfg.plugins).slots.memory?.trim();

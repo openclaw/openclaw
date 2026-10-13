@@ -37,7 +37,7 @@ it("uses the verified inference owner for a delegated fleet overview", async () 
         await fs.writeFile(configPath, JSON.stringify(verifiedConfig));
         const verifiedSnapshot = await readConfigFileSnapshot();
         expect(verifiedSnapshot.valid).toBe(true);
-        const metadata = createSystemAgentPluginMetadataTestSnapshot(verifiedConfig);
+        const metadata = await createSystemAgentPluginMetadataTestSnapshot(verifiedConfig);
         await metadata.run(async () => {
           const inference = await createSystemAgentVerifiedInferenceTestFixture(verifiedConfig);
           const fleetConfig: OpenClawConfig = {

@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => ({
   applyAuthChoice: vi.fn(),
   promptModelAllowlist: vi.fn<typeof import("../flows/model-picker.js").promptModelAllowlist>(),
   promptDefaultModel: vi.fn<typeof import("../flows/model-picker.js").promptDefaultModel>(),
-  resolvePluginProvidersCore: vi.fn(() => []),
+  resolvePluginProvidersCore: vi.fn(async () => []),
   resolveProviderPluginChoiceCore: vi.fn<() => unknown>(() => null),
   loadStaticManifestCatalogRowsForList: vi.fn<() => readonly NormalizedModelCatalogRow[]>(() => []),
   resolvePreferredProviderForAuthChoice: vi.fn<() => Promise<string | undefined>>(
@@ -54,8 +54,9 @@ vi.mock("../flows/model-picker.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Prompt tests select fixture providers without activating host auth plugins.
 vi.mock("../plugins/providers.runtime.js", () => ({
-  resolvePluginProvidersCore: mocks.resolvePluginProvidersCore,
+  resolvePluginProvidersCoreAsync: mocks.resolvePluginProvidersCore,
 }));
 
 vi.mock("../plugins/provider-wizard.js", () => ({

@@ -67,11 +67,13 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importO
     await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-embeddings")>();
   return {
     ...actual,
-    getMemoryEmbeddingProvider: (...args: Parameters<typeof actual.getMemoryEmbeddingProvider>) => {
+    getMemoryEmbeddingProviderAsync: async (
+      ...args: Parameters<typeof actual.getMemoryEmbeddingProviderAsync>
+    ) => {
       if (moduleMocks.getMemoryEmbeddingProvider.getMockImplementation()) {
         return moduleMocks.getMemoryEmbeddingProvider(...args);
       }
-      return actual.getMemoryEmbeddingProvider(...args);
+      return await actual.getMemoryEmbeddingProviderAsync(...args);
     },
   };
 });

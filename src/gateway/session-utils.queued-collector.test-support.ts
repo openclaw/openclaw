@@ -43,9 +43,10 @@ vi.mock("./server-recovery-runtime-context.js", async (importOriginal) => ({
 vi.mock("../browser-lifecycle-cleanup.js", () => ({
   cleanupBrowserSessionsForLifecycleEnd: async () => {},
 }));
+// mock-isolation: Queued-collector fixtures supply empty registries without unrelated plugin discovery.
 vi.mock("../agents/runtime-plugins.js", async () => {
   const { createEmptyPluginRegistry } = await import("../plugins/registry-empty.js");
-  return { loadAgentRuntimePluginRegistryHandle: createEmptyPluginRegistry };
+  return { loadAgentRuntimePluginRegistryHandle: async () => createEmptyPluginRegistry() };
 });
 vi.mock(
   "../agents/subagents/registry/subagent-registry-persistence.js",

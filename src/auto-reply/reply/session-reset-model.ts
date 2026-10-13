@@ -12,7 +12,8 @@ import {
   sessionModelOverrideChangesApplied,
 } from "../../config/sessions/session-snapshot-merge.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { applyModelOverrideWithAuthProfileCompatibility } from "../../sessions/auth-profile-preservation.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
+import { applyModelOverrideWithAuthProfileCompatibilityAsync } from "../../sessions/auth-profile-preservation.js";
 import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
 import type { TemplateContext } from "../templating.js";
 import { isKnownModelSelectionProvider } from "./model-runtime-normalization.js";
@@ -67,6 +68,14 @@ export async function applyResetModelOverride(params: {
       readOnly: true,
     });
   }
+  const metadataSnapshot =
+    params.cfg.plugins?.enabled === false
+      ? null
+      : await resolvePluginMetadataSnapshotAsync({
+          config: params.cfg,
+          workspaceDir: params.workspaceDir,
+          allowWorkspaceScopedCurrent: true,
+        });
   const modelPolicy = createModelVisibilityPolicy({
     cfg: params.cfg,
     catalog,
@@ -111,7 +120,12 @@ export async function applyResetModelOverride(params: {
     // use policy independently of inventory. Neither can invent a provider.
     return resolved &&
       (exact || allowedModelKeys.has(modelKey(resolved.provider, resolved.model))) &&
-      isKnownModelSelectionProvider({ cfg: params.cfg, catalog, provider: resolved.provider })
+      isKnownModelSelectionProvider({
+        cfg: params.cfg,
+        catalog,
+        provider: resolved.provider,
+        metadataSnapshot,
+      })
       ? resolved
       : undefined;
   };
@@ -153,7 +167,7 @@ export async function applyResetModelOverride(params: {
   }
   const initialSessionEntry = { ...sessionEntry };
   const nextSessionEntry = { ...sessionEntry };
-  applyModelOverrideWithAuthProfileCompatibility({
+  await applyModelOverrideWithAuthProfileCompatibilityAsync({
     cfg: params.cfg,
     agentDir,
     entry: nextSessionEntry,

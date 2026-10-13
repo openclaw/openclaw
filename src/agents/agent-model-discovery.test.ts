@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   discoverAuthStorageFacts,
@@ -15,9 +16,10 @@ import {
 // present, the openai plugin's normalizeResolvedModel currently overrides
 // authored models.json api values, making these assertions machine-dependent.
 // The ambient plugin metadata snapshot is cleared for the same reason.
-beforeEach(() => {
+beforeEach(async () => {
   vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
   clearPluginMetadataLifecycleCaches();
+  await preparePluginMetadataMachineStateAsync({ env: process.env });
 });
 
 afterEach(() => vi.unstubAllEnvs());

@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createOpenClawCodingTools } from "./agent-tools.js";
+import { createOpenClawCodingToolsAsync } from "./agent-tools.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import * as inProcessGateway from "./tools/in-process-gateway.js";
 import { withSessionToolTestCaller } from "./tools/sessions-tool.test-helpers.js";
 
+// mock-isolation: Exercise session ownership without loading real plugin tools.
 vi.mock("./openclaw-plugin-tools.js", () => ({
-  resolveOpenClawPluginToolsForOptions: () => [],
+  resolveOpenClawPluginToolsForOptionsAsync: async () => [],
 }));
 
 afterEach(() => vi.restoreAllMocks());
@@ -23,7 +24,7 @@ describe("session responsibility assignment in non-owner turns", () => {
         key: "agent:main:main",
         owner: { actor: { type: "human", id: "profile-requester", label: "Requester" } },
       });
-      const tools = createOpenClawCodingTools({
+      const tools = await createOpenClawCodingToolsAsync({
         config: { tools: { allow: ["sessions"] } },
         sessionKey: "agent:main:main",
         messageProvider,
@@ -81,7 +82,7 @@ describe("session responsibility assignment in non-owner turns", () => {
               params: { key: "agent:main:main", label: "Scheduled session" },
             },
       );
-      const denied = createOpenClawCodingTools({
+      const denied = await createOpenClawCodingToolsAsync({
         config: { tools: { allow: ["sessions"], deny: ["sessions"] } },
         sessionKey: "agent:main:main",
         senderIsOwner: false,

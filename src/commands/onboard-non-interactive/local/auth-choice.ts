@@ -42,7 +42,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     rejectOnboardingOption(opts, runtime, message);
     return null;
   };
-  let authChoice = normalizeApiKeyTokenProviderAuthChoice({
+  let authChoice = await normalizeApiKeyTokenProviderAuthChoice({
     authChoice: params.authChoice,
     tokenProvider: opts.tokenProvider,
     config: params.nextConfig,

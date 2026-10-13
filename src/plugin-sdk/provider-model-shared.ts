@@ -157,7 +157,7 @@ export type {
   UnifiedModelCatalogSource,
 } from "@openclaw/model-catalog-core/model-catalog-types";
 export { isCloudModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
-export { parseModelRef } from "../agents/model-selection-normalize.js";
+export { parseModelRefLegacy as parseModelRef } from "../agents/model-ref-sdk.js";
 export type {
   BedrockDiscoveryConfig,
   ModelCompatConfig,
@@ -185,7 +185,7 @@ export {
   resolveGpt5SystemPromptContribution,
   type Gpt5PromptOverlayMode,
 } from "../agents/gpt5-prompt-overlay.js";
-export { resolveProviderEndpoint } from "../agents/provider-attribution.js";
+export { resolveProviderEndpointLegacy as resolveProviderEndpoint } from "../agents/provider-attribution-sdk.js";
 export {
   applyModelCompatPatch,
   hasToolSchemaProfile,

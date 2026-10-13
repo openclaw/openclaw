@@ -118,7 +118,7 @@ export async function openaiTTS({
   const {
     assertOkOrThrowProviderError,
     readProviderBinaryResponse,
-    resolveProviderRequestHeaders,
+    resolveProviderRequestHeadersAsync,
   } = await import("openclaw/plugin-sdk/provider-http");
   const proxyCaptureSdk = await import("openclaw/plugin-sdk/proxy-capture");
   // The shipped 2026.9.6 host lacks async diagnostics; remove optionality when the minimum advances.
@@ -127,7 +127,7 @@ export async function openaiTTS({
   const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
     await import("openclaw/plugin-sdk/ssrf-runtime");
 
-  const requestHeaders = resolveProviderRequestHeaders({
+  const requestHeaders = (await resolveProviderRequestHeadersAsync({
     provider: "openai",
     baseUrl,
     capability: "audio",
@@ -136,7 +136,7 @@ export async function openaiTTS({
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
-  }) ?? {
+  })) ?? {
     Authorization: `Bearer ${apiKey}`,
     "Content-Type": "application/json",
   };

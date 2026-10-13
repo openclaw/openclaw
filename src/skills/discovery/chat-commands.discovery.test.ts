@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { createSkillCommandLoaders } from "../../auto-reply/reply/skill-command-loaders.js";
+import { preparePluginAutoEnableTestDiscovery } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { readWorkspaceSkillSources } from "../loading/workspace-skill-loader.js";
@@ -18,6 +19,10 @@ import {
 } from "./chat-commands.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => afterEach(cleanup));
+
+beforeEach(() => {
+  preparePluginAutoEnableTestDiscovery();
+});
 
 function menuNames(cfg: OpenClawConfig, workspace: string) {
   const agentMenu = listSkillCommandsForAgents({ cfg, agentIds: ["main"] });
@@ -64,6 +69,7 @@ describe("skill command discovery through workspace loading", () => {
     await withEnvAsync(
       { OPENCLAW_STATE_DIR: root, OPENCLAW_BUNDLED_SKILLS_DIR: bundledSkillsDir },
       async () => {
+        preparePluginAutoEnableTestDiscovery();
         const commands = await prepareSkillCommandsForAgents({
           cfg,
           agentIds: ["first", "second"],
@@ -235,6 +241,7 @@ describe("skill command discovery through workspace loading", () => {
       await withEnvAsync(
         { OPENCLAW_STATE_DIR: root, OPENCLAW_BUNDLED_SKILLS_DIR: bundledSkillsDir },
         async () => {
+          preparePluginAutoEnableTestDiscovery();
           const params = { workspaceDir, cfg: config, agentId: "alpha" };
           const skillCommands = listSkillCommandsForWorkspace(params);
           const allSkillCommands = listSkillCommandsForWorkspace({

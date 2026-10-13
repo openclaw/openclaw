@@ -23,6 +23,7 @@ import {
 } from "../../internal-events.js";
 import type { RuntimeContextFragment } from "../../internal-runtime-context.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
+import { getModelProviderRequestRouteFacts } from "../../provider-request-config.js";
 import { buildRuntimeFactsContext } from "../../runtime-facts-prompt.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
@@ -339,6 +340,8 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     provider: attempt.provider,
     api: attempt.model.api,
     baseUrl: attempt.model.baseUrl,
+    providerMetadataOwners: getModelProviderRequestRouteFacts(attempt.model)
+      ?.providerMetadataOwners,
     capability: "llm",
     transport: "stream",
   });

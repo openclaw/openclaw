@@ -96,12 +96,12 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
     "List embedding providers",
     async (cfg, agentId) => {
       const { providerHasGenericConfig } = await import("./shared.js");
-      const { resolveMemorySearchConfig } = await import("../../agents/memory-search.js");
-      const { listEmbeddingProviders } =
+      const { resolveMemorySearchConfigAsync } = await import("../../agents/memory-search.js");
+      const { listEmbeddingProvidersAsync } =
         await import("../../plugins/embedding-provider-runtime.js");
       const { listRegisteredMemoryEmbeddingProviderAdapters } =
         await import("../../plugins/memory-embedding-provider-runtime.js");
-      const resolvedMemory = resolveMemorySearchConfig(cfg, agentId);
+      const resolvedMemory = await resolveMemorySearchConfigAsync(cfg, agentId);
       const selectedProvider = resolvedMemory?.provider;
       const providers = new Map(
         listRegisteredMemoryEmbeddingProviderAdapters().map((provider) => [
@@ -114,7 +114,7 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
           },
         ]),
       );
-      for (const provider of listEmbeddingProviders(cfg)) {
+      for (const provider of await listEmbeddingProvidersAsync(cfg)) {
         if (providers.has(provider.id)) {
           continue;
         }

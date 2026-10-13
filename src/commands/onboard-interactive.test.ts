@@ -65,7 +65,7 @@ vi.mock("../../packages/terminal-core/src/restore.js", () => ({
 
 describe("runConversationalOnboarding", () => {
   let home: Awaited<ReturnType<typeof createTempHomeEnv>>;
-  let metadata: ReturnType<typeof createSystemAgentPluginMetadataTestSnapshot> | undefined;
+  let metadata: Awaited<ReturnType<typeof createSystemAgentPluginMetadataTestSnapshot>> | undefined;
   const runConversationalOnboarding: typeof runConversationalOnboardingImpl = (...args) =>
     metadata!.run(() => runConversationalOnboardingImpl(...args));
   const runSystemAgentWithInference: typeof runSystemAgentWithInferenceImpl = (...args) =>
@@ -109,7 +109,7 @@ describe("runConversationalOnboarding", () => {
       },
       plugins: { entries: { codex: { enabled: true }, "fixture-runtime": { enabled: true } } },
     };
-    metadata = createSystemAgentPluginMetadataTestSnapshot(config);
+    metadata = await createSystemAgentPluginMetadataTestSnapshot(config);
     const fixture = await metadata.run(() => createSystemAgentVerifiedInferenceTestFixture(config));
     // Keep the handoff's actual registry lookup and artifact validation; the binding
     // factory's validator override is only for constructing synthetic probe evidence.
@@ -154,7 +154,7 @@ describe("runConversationalOnboarding", () => {
         },
       },
     });
-    mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
+    mocks.loadAgentRuntimePluginRegistryHandle.mockResolvedValue(registry);
     mocks.verifySetupInference.mockResolvedValue({
       ok: true,
       modelRef: fixture.binding.execution.modelLabel,
@@ -250,7 +250,9 @@ describe("runConversationalOnboarding", () => {
       const { invalidate, launchConversation, registry } = await prepareConversation();
       if (kind === "missing harness") {
         rootRegistry.agentHarnesses.push(...registry.agentHarnesses);
-        mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValueOnce(createEmptyPluginRegistry());
+        mocks.loadAgentRuntimePluginRegistryHandle.mockResolvedValueOnce(
+          createEmptyPluginRegistry(),
+        );
       } else {
         invalidate(kind);
       }

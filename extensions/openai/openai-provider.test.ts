@@ -1,6 +1,10 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import {
+  useBundledProviderPolicyArtifactsForTest,
+  useProviderCatalogMetadata,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
   clearLiveCatalogCacheForTests,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
@@ -179,6 +183,9 @@ function expectNoCatalogEntry(entries: unknown, id: string): void {
   const entryIds = new Set((entries as Array<Record<string, unknown>>).map((entry) => entry.id));
   expect(entryIds.has(id)).toBe(false);
 }
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
+useBundledProviderPolicyArtifactsForTest(["openai"]);
 
 describe("buildOpenAIProvider", () => {
   beforeEach(() => {

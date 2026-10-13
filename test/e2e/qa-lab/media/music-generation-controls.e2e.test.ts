@@ -19,6 +19,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../../../src/plugins/runtime.js";
+import { withPluginRuntimeGenerationRegistryScope } from "../../../../src/plugins/runtime/generation-state.js";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
@@ -160,13 +161,20 @@ function createMusicFixture() {
     metadataSnapshot: pluginMetadataSnapshot,
     mediaCapabilityProviders,
   } as unknown as PreparedModelRuntimeSnapshot;
-  const musicTools = createOpenClawTools({
-    config,
-    preparedModelRuntime,
-    disableMessageTool: true,
-    disablePluginTools: true,
-    wrapBeforeToolCallHook: false,
-  }).filter((candidate) => candidate.name === "music_generate");
+  const musicTools = withPluginMetadataSnapshotScope(
+    pluginMetadataSnapshot,
+    () =>
+      withPluginRuntimeGenerationRegistryScope(registry, () =>
+        createOpenClawTools({
+          config,
+          preparedModelRuntime,
+          disableMessageTool: true,
+          disablePluginTools: true,
+          wrapBeforeToolCallHook: false,
+        }),
+      ),
+    { config },
+  ).filter((candidate) => candidate.name === "music_generate");
   expect(musicTools).toHaveLength(1);
   const [tool] = musicTools;
   if (!tool) {

@@ -19,9 +19,9 @@ import {
   type AttachmentContextBlock,
   renderMediaAttachmentDisposition,
 } from "./media-attachment-outcomes.js";
+import { acquireMediaUnderstandingRegistry } from "./provider-registry.js";
 import { resolveConcurrency } from "./resolve.js";
 import {
-  buildProviderRegistry,
   createMediaAttachmentCache,
   normalizeMediaAttachments,
   resolveMediaAttachmentLocalRoots,
@@ -148,22 +148,22 @@ export async function applyMediaUnderstanding(params: {
     .find(Boolean);
 
   const attachments = normalizeMediaAttachments(ctx);
-  // Built on first read, at most once per turn: the native-vision skip never reads it.
-  // A build failure is memoized and rethrown after the capabilities run, so it still
-  // reaches the caller's raw-content fallback instead of per-capability failures.
-  let builtProviderRegistry: ReturnType<typeof buildProviderRegistry> | undefined;
+  let acquired: Awaited<ReturnType<typeof acquireMediaUnderstandingRegistry>> | undefined;
+  let registryPromise: Promise<Map<string, MediaUnderstandingProvider>> | undefined;
   let providerRegistryError: { error: unknown } | undefined;
-  const providerRegistry = (): ReturnType<typeof buildProviderRegistry> => {
-    if (providerRegistryError) {
-      throw providerRegistryError.error;
-    }
-    try {
-      return (builtProviderRegistry ??= buildProviderRegistry(params.providers, cfg));
-    } catch (error) {
-      providerRegistryError = { error };
-      throw error;
-    }
-  };
+  const providerRegistry = () =>
+    (registryPromise ??= acquireMediaUnderstandingRegistry({
+      cfg,
+      overrides: params.providers,
+    })
+      .then((value) => {
+        acquired = value;
+        return value.registry;
+      })
+      .catch((error: unknown) => {
+        providerRegistryError = { error };
+        throw error;
+      }));
   const cache = createMediaAttachmentCache(attachments, {
     localPathRoots: resolveMediaAttachmentLocalRoots({
       cfg,
@@ -357,6 +357,10 @@ export async function applyMediaUnderstanding(params: {
         : {}),
     };
   } finally {
-    await cache.cleanup();
+    try {
+      await cache.cleanup();
+    } finally {
+      await acquired?.release();
+    }
   }
 }

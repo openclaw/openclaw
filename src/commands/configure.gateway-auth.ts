@@ -38,9 +38,9 @@ async function resolveProviderChoiceModelPrompt(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<ProviderChoiceModelPrompt | undefined> {
-  const { resolvePluginProviders, resolveProviderPluginChoice } =
+  const { resolveAuthChoicePluginProviders, resolveProviderPluginChoice } =
     await import("../plugins/provider-auth-choice.runtime.js");
-  const providers = resolvePluginProviders({
+  const providers = await resolveAuthChoicePluginProviders({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,

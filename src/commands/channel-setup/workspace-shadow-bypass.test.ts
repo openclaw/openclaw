@@ -2,6 +2,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
+import { prepareTestCommandPluginMetadata } from "../test-runtime-config-helpers.js";
 
 const listChannelPluginCatalogEntries = vi.hoisted(() => vi.fn((_opts?: unknown): unknown[] => []));
 const listChatChannels = vi.hoisted(() => vi.fn((): unknown[] => []));
@@ -48,7 +49,7 @@ vi.mock("../../plugins/loader.js", () => ({
 
 import { resolveChannelSetupEntries } from "./discovery.js";
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
   loadPluginManifestRegistryCore.mockReturnValue({ plugins: [], diagnostics: [] });
   loadPluginRegistrySnapshot.mockReturnValue({
@@ -69,6 +70,7 @@ beforeEach(() => {
   }));
   listPluginContributionIds.mockReturnValue([]);
   listChatChannels.mockReturnValue([]);
+  await prepareTestCommandPluginMetadata();
 });
 
 function createCatalogEntry(

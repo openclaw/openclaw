@@ -14,7 +14,7 @@ import {
   resolveMemoryDreamingPluginConfig,
   resolveMemoryDreamingPluginId,
 } from "../memory-host-sdk/dreaming.js";
-import { readBundledDiscoveryMode } from "./bundled-discovery-state.js";
+import { readBundledDiscoveryModeNative } from "./bundled-discovery-state.native.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "./channel-presence-policy.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
 import {
@@ -46,7 +46,7 @@ export function readStartupBundledDiscoveryMode(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): "compat" | "allowlist" | undefined {
-  const stateMode = readBundledDiscoveryMode({ env });
+  const stateMode = readBundledDiscoveryModeNative({ env });
   if (stateMode) {
     return stateMode;
   }

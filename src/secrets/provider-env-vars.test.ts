@@ -1,5 +1,6 @@
 /** Tests provider env-var candidate and auth evidence lookup. */
 import { describe, expect, it } from "vitest";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import {
   getProviderEnvVarsCore,
   listKnownProviderAuthEnvVarNamesCore,
@@ -8,7 +9,8 @@ import {
 } from "./provider-env-vars.js";
 
 describe("provider env vars", () => {
-  it.each(["GITHUB_TOKEN"])("audits %s without activating a provider", (name) => {
+  it.each(["GITHUB_TOKEN"])("audits %s without activating a provider", async (name) => {
+    await prepareBundledDiscoveryMode();
     expect(listKnownSecretEnvVarNames()).toContain(name);
     expect(listKnownProviderAuthEnvVarNamesCore()).not.toContain(name);
     expect(getProviderEnvVarsCore("github-copilot")).not.toContain(name);
@@ -29,7 +31,8 @@ describe("provider env vars", () => {
     expect(env.OPENCLAW_API_KEY).toBe("keep-me");
   });
 
-  it("ignores prototype-chain keys when resolving provider env vars", () => {
+  it("ignores prototype-chain keys when resolving provider env vars", async () => {
+    await prepareBundledDiscoveryMode();
     expect(getProviderEnvVarsCore("__proto__")).toStrictEqual([]);
     expect(getProviderEnvVarsCore("constructor")).toStrictEqual([]);
     expect(getProviderEnvVarsCore("openai")).toEqual(["CODEX_API_KEY", "OPENAI_API_KEY"]);

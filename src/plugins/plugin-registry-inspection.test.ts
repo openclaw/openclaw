@@ -7,6 +7,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import type { PluginCandidate } from "./discovery.js";
+import { preparePluginMetadataMachineStateAsync } from "./installed-plugin-index-record-state.js";
 import {
   refreshPersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndex,
@@ -144,12 +145,15 @@ describe("plugin registry inspection", () => {
     const stateDir = makeTempDir();
     const pluginDir = makeTempDir();
     const candidate = createCandidate(pluginDir);
+    const env = hermeticEnv();
     await writePersistedInstalledPluginIndex(createEmptyIndex(stateDir), { stateDir });
+    const activateMetadata = await preparePluginMetadataMachineStateAsync({ stateDir, env });
+    activateMetadata();
 
     const result = loadPluginRegistrySnapshotWithMetadata({
       stateDir,
       candidates: [candidate],
-      env: hermeticEnv(),
+      env,
       preferPersisted: false,
     });
 
@@ -225,6 +229,8 @@ describe("plugin registry inspection", () => {
     fs.writeFileSync(builtSource, "export default { register() {} };\n", "utf8");
     fs.rmSync(sourceCandidate.source);
     const builtCandidate = { ...sourceCandidate, source: builtSource };
+    const activateMetadata = await preparePluginMetadataMachineStateAsync({ stateDir, env });
+    activateMetadata();
 
     const snapshot = loadPluginRegistrySnapshotWithMetadata({
       stateDir,
@@ -415,6 +421,8 @@ describe("plugin registry inspection", () => {
       config,
       env,
     });
+    const activateMetadata = await preparePluginMetadataMachineStateAsync({ stateDir, env });
+    activateMetadata();
 
     const listSelection = loadPluginRegistrySnapshotWithMetadata({
       stateDir,

@@ -17,7 +17,8 @@ import { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js"
 import { readConfigFileSnapshot } from "../config/config.js";
 import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import {
   activateSecretsRuntimeSnapshotWithSource,
   clearSecretsRuntimeSnapshot,
@@ -111,6 +112,7 @@ beforeEach(async () => {
     },
   };
   await fs.writeFile(configPath, JSON.stringify(config));
+  await preparePluginMetadataMachineStateAsync({ env: process.env });
   await storeKey(key);
   await activate();
 });
@@ -396,7 +398,7 @@ it.each([
         modelBaseUrl: "https://provider.example/v1",
         agentDir: params.agentDir,
         env: {},
-        metadataSnapshot: resolvePluginMetadataSnapshot({
+        metadataSnapshot: await resolvePluginMetadataSnapshotAsync({
           config: params.config,
           workspaceDir: params.workspaceDir,
           env: process.env,

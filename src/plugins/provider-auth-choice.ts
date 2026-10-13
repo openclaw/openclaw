@@ -18,6 +18,7 @@ import { t } from "../wizard/i18n/index.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { enablePluginWithCapabilityConsent } from "./enable.js";
+import { preparePluginMetadataMachineStateAsync } from "./installed-plugin-index-record-state.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import {
@@ -255,7 +256,7 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
   const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
   const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.config, agentId);
   const {
-    resolvePluginProviders,
+    resolveAuthChoicePluginProviders,
     resolvePluginSetupProvider,
     resolveProviderPluginChoice,
     runProviderModelSelectedHook,
@@ -263,6 +264,7 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
   // Import the reviewed generation while locked; authentication may outlive the lease.
   const prepared = await withPluginLifecycleLease({ env: params.env }, async () =>
     withPluginCache(initialCache, async () => {
+      await preparePluginMetadataMachineStateAsync({ env: params.env });
       let nextConfig = params.config;
       let pendingPluginInstalls: Record<string, PluginInstallRecord> | undefined;
       let enabledConfig = params.config;
@@ -330,10 +332,10 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
         enabledConfig = enableResult.config;
       }
 
-      const resolveScopedRuntimeProviders = (
+      const resolveScopedRuntimeProviders = async (
         config: OpenClawConfig,
         preparedInstallRecords?: Record<string, PluginInstallRecord>,
-      ): ProviderPlugin[] => {
+      ): Promise<ProviderPlugin[]> => {
         const request = {
           config,
           workspaceDir,
@@ -344,8 +346,8 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
         };
         return withPluginCache(cache, () =>
           preparedInstallRecords
-            ? resolvePluginProviders(request, preparedInstallRecords)
-            : resolvePluginProviders(request),
+            ? resolveAuthChoicePluginProviders(request, preparedInstallRecords)
+            : resolveAuthChoicePluginProviders(request),
         );
       };
 
@@ -360,10 +362,10 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
         : undefined;
       let providers = setupProvider
         ? [withProviderPluginId(setupProvider, manifestAuthChoice!.pluginId)]
-        : resolveScopedRuntimeProviders(enabledConfig);
+        : await resolveScopedRuntimeProviders(enabledConfig);
       let resolved = resolveChoice(providers, enabledConfig);
       if (!resolved && setupProvider) {
-        providers = resolveScopedRuntimeProviders(enabledConfig);
+        providers = await resolveScopedRuntimeProviders(enabledConfig);
         resolved = resolveChoice(providers, enabledConfig);
       }
       if (!resolved && installCatalogEntry) {
@@ -398,7 +400,7 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
         }
         // Installer facts need a fresh view without replacing the Gateway's inventory.
         cache = installedCache;
-        providers = resolveScopedRuntimeProviders(nextConfig, pendingPluginInstalls);
+        providers = await resolveScopedRuntimeProviders(nextConfig, pendingPluginInstalls);
         resolved = withPluginCache(cache, () => resolveChoice(providers, nextConfig));
       }
       if (!resolved) {

@@ -17,6 +17,11 @@ import { resolveManagedSecretRefRuntimeProviderAuth } from "../agents/model-auth
 import { resolveDirectProviderCredentialMode } from "../agents/model-auth-runtime-shared.js";
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  getCurrentPluginMetadataSnapshot,
+  withPluginMetadataSnapshotScope,
+} from "./current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "./plugin-metadata-snapshot.js";
 import { warnPluginSdkDeprecation } from "./sdk-deprecation.js";
 
 type ProviderAuthProfileLookup = {
@@ -59,6 +64,25 @@ export function createProviderAuthAvailability(
     loadAuthProfileStoreForSecretsRuntime,
     loadAuthProfileStoreWithoutExternalProfiles,
   } = authStore;
+
+  async function withProviderAuthMetadata<T>(
+    config: OpenClawConfig | undefined,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const context = { config };
+    if (
+      getCurrentPluginMetadataSnapshot({
+        ...context,
+        allowWorkspaceScopedSnapshot: true,
+        allowSynchronousPolicyRead: false,
+        requireDefaultDiscoveryContext: !config,
+      })
+    ) {
+      return operation();
+    }
+    const snapshot = await resolvePluginMetadataSnapshotAsync(context);
+    return withPluginMetadataSnapshotScope(snapshot, operation, context);
+  }
 
   /**
    * Checks whether a provider has usable config/env auth or matching local auth profiles.
@@ -443,11 +467,19 @@ export function createProviderAuthAvailability(
 
   return {
     isProviderApiKeyConfigured,
-    isProviderApiKeyConfiguredAsync,
+    isProviderApiKeyConfiguredAsync: (
+      params: Parameters<typeof isProviderApiKeyConfiguredAsync>[0],
+    ) => withProviderAuthMetadata(params.cfg, () => isProviderApiKeyConfiguredAsync(params)),
     listUsableProviderAuthProfileIds,
-    listUsableProviderAuthProfileIdsAsync,
+    listUsableProviderAuthProfileIdsAsync: (
+      params: Parameters<typeof listUsableProviderAuthProfileIdsAsync>[0],
+    ) => withProviderAuthMetadata(params.cfg, () => listUsableProviderAuthProfileIdsAsync(params)),
     isProviderAuthProfileConfigured,
-    isProviderAuthProfileConfiguredAsync,
-    resolveProviderAuthProfileApiKey,
+    isProviderAuthProfileConfiguredAsync: (
+      params: Parameters<typeof isProviderAuthProfileConfiguredAsync>[0],
+    ) => withProviderAuthMetadata(params.cfg, () => isProviderAuthProfileConfiguredAsync(params)),
+    resolveProviderAuthProfileApiKey: (
+      params: Parameters<typeof resolveProviderAuthProfileApiKey>[0],
+    ) => withProviderAuthMetadata(params.cfg, () => resolveProviderAuthProfileApiKey(params)),
   };
 }

@@ -8,7 +8,7 @@ import { stripVTControlCharacters } from "node:util";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginNodeHostCommandIo } from "openclaw/plugin-sdk/node-host";
 import { killProcessTree } from "openclaw/plugin-sdk/process-runtime";
-import { sanitizeEnvVars } from "openclaw/plugin-sdk/sandbox";
+import { sanitizeEnvVarsAsync } from "openclaw/plugin-sdk/sandbox";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolvePreferredOpenClawTmpDir,
@@ -234,10 +234,12 @@ export async function runCodexNodeExecServer(params: {
     }
     // The exec-server needs platform/locale basics, never provider, forge,
     // cloud, SSH-agent, XDG, or runtime-injection state from its node host.
-    const baseEnv = sanitizeEnvVars(process.env, {
-      strictMode: true,
-      customAllowedPatterns: [NODE_EXEC_SERVER_PLATFORM_ENVIRONMENT],
-    }).allowed;
+    const baseEnv = (
+      await sanitizeEnvVarsAsync(process.env, {
+        strictMode: true,
+        customAllowedPatterns: [NODE_EXEC_SERVER_PLATFORM_ENVIRONMENT],
+      })
+    ).allowed;
     if (io.signal.aborted) {
       throw nodeExecServerAbortError(io.signal);
     }

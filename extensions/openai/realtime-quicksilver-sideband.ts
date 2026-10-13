@@ -114,11 +114,17 @@ export async function connectOpenAIQuicksilverSideband(
 ) {
   let lastError: unknown = new Error("GPT-Live sideband connection failed");
   for (let attempt = 0; attempt < SIDEBAND_CONNECT_ATTEMPTS; attempt += 1) {
+    const headers = await openAIQuicksilverAuthHeaders(
+      params.auth,
+      params.requestIds,
+      runtime,
+      params.url,
+    );
     if (params.signal.aborted) {
       throw params.signal.reason;
     }
     const socket = params.createSocket(params.url, {
-      headers: openAIQuicksilverAuthHeaders(params.auth, params.requestIds, runtime, params.url),
+      headers,
       maxPayload: SIDEBAND_MAX_PAYLOAD_BYTES,
     });
     const bufferedFrames: OpenAIQuicksilverBufferedFrame[] = [];

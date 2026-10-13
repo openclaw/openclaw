@@ -12,10 +12,11 @@ const providerState = vi.hoisted(() => ({
   provider: undefined as SpeechProviderPlugin | undefined,
 }));
 
-vi.mock("./provider-registry.js", async () => {
+vi.mock("./provider-registry.js", async (importOriginal) => {
   const { createSpeechProviderRegistry, normalizeSpeechProviderId } =
     await import("./provider-registry-core.js");
   return {
+    ...(await importOriginal<typeof import("./provider-registry.js")>()),
     ...createSpeechProviderRegistry({
       getProvider: () => providerState.provider,
       listProviders: () => (providerState.provider ? [providerState.provider] : []),

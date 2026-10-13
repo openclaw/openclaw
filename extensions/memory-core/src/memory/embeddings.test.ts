@@ -18,6 +18,19 @@ const mockEmbeddingRegistry = vi.hoisted(() => ({
   acquireLocalService: vi.fn(async () => undefined),
 }));
 
+function lookupFixtureEmbeddingAdapter(id: string, config?: OpenClawConfig) {
+  const memoryAdapter = mockEmbeddingRegistry.adapters.find((adapter) => adapter.id === id);
+  if (memoryAdapter) {
+    return memoryAdapter;
+  }
+  mockEmbeddingRegistry.genericLookupConfigs.push(config);
+  const genericAdapter = mockEmbeddingRegistry.genericAdapters.find((adapter) => adapter.id === id);
+  if (!genericAdapter) {
+    return undefined;
+  }
+  return genericAdapter;
+}
+
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("openclaw/plugin-sdk/memory-core-host-engine-embeddings")
@@ -25,20 +38,8 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importO
   createLocalEmbeddingProvider: async () => {
     throw new Error("local embedding provider is not used by these tests");
   },
-  getMemoryEmbeddingProvider: (id: string, config?: OpenClawConfig) => {
-    const memoryAdapter = mockEmbeddingRegistry.adapters.find((adapter) => adapter.id === id);
-    if (memoryAdapter) {
-      return memoryAdapter;
-    }
-    mockEmbeddingRegistry.genericLookupConfigs.push(config);
-    const genericAdapter = mockEmbeddingRegistry.genericAdapters.find(
-      (adapter) => adapter.id === id,
-    );
-    if (!genericAdapter) {
-      return undefined;
-    }
-    return genericAdapter;
-  },
+  getMemoryEmbeddingProviderAsync: async (id: string, config?: OpenClawConfig) =>
+    lookupFixtureEmbeddingAdapter(id, config),
 }));
 
 const missingBedrockCredentialsError = new Error(
@@ -134,13 +135,15 @@ describe("createEmbeddingProvider", () => {
       }),
     });
     const options = { ...createOptions("dynamic"), model: " dynamic/embed-v1 " };
-    expect(resolveEmbeddingProviderIndexIdentity(options)).toEqual({
+    expect(await resolveEmbeddingProviderIndexIdentity(options)).toEqual({
       provider: { id: "dynamic", model: "embed-v1" },
       cacheKeyData: undefined,
       aliases: undefined,
     });
     expect((await createEmbeddingProvider(options)).provider?.model).toBe("embed-v1");
-    expect(resolveEmbeddingProviderIndexIdentity({ ...options, model: "" })?.provider).toEqual({
+    expect(
+      (await resolveEmbeddingProviderIndexIdentity({ ...options, model: "" }))?.provider,
+    ).toEqual({
       id: "dynamic",
       model: "",
     });
@@ -320,7 +323,7 @@ describe("createEmbeddingProvider", () => {
 
     // The configured model names the primary provider. Both fallback entry points must
     // agree on what the fallback is asked to serve.
-    const runtimeActivationModel = resolveEmbeddingProviderFallbackModel(
+    const runtimeActivationModel = await resolveEmbeddingProviderFallbackModel(
       "ollama",
       primaryModel,
       options.config,
@@ -495,7 +498,7 @@ describe("createEmbeddingProvider", () => {
     );
   });
 
-  it("uses config-scoped defaults for cold identity and fallback model resolution", () => {
+  it("uses config-scoped defaults for cold identity and fallback model resolution", async () => {
     registerGenericEmbeddingProvider({
       id: "openai-compatible",
       defaultModel: "generic-default",
@@ -505,14 +508,14 @@ describe("createEmbeddingProvider", () => {
     });
     const options = createOptions("openai-compatible");
 
-    const model = resolveEmbeddingProviderFallbackModel(
+    const model = await resolveEmbeddingProviderFallbackModel(
       "openai-compatible",
       "source-model",
       options.config,
     );
 
     expect(model).toBe("generic-default");
-    expect(resolveEmbeddingProviderIndexIdentity(options)?.provider).toEqual({
+    expect((await resolveEmbeddingProviderIndexIdentity(options))?.provider).toEqual({
       id: "openai-compatible",
       model: "generic-default",
     });

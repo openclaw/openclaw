@@ -1,4 +1,8 @@
 import path from "node:path";
+import {
+  getPreparedBundledDiscoveryMode,
+  publishBundledDiscoveryMode,
+} from "../plugins/bundled-discovery-state.js";
 import type { PluginCandidate } from "../plugins/discovery.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -33,6 +37,13 @@ export function makeBundledChannelCandidate(params: {
 export function resetPluginAutoEnableTestState(): void {
   clearPluginMetadataLifecycleCaches();
   cleanupTrackedTempDirs(tempDirs);
+}
+
+export function preparePluginAutoEnableTestDiscovery(env: NodeJS.ProcessEnv = process.env): void {
+  // Synthetic manifests default to legacy discovery without loading machine state.
+  if (!getPreparedBundledDiscoveryMode(env)) {
+    publishBundledDiscoveryMode(undefined, env);
+  }
 }
 
 export function makeTempDir(): string {
@@ -101,10 +112,13 @@ export function makeRegistry(
 
 export function createPluginMetadataSnapshot(params: {
   config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   manifestRegistry: PluginManifestRegistry;
   workspaceDir?: string;
 }): PluginMetadataSnapshot {
-  const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
+  const env = params.env ?? process.env;
+  preparePluginAutoEnableTestDiscovery(env);
+  const policyHash = resolveInstalledPluginIndexPolicyHash(params.config, env);
   const index: PluginMetadataSnapshot["index"] = {
     version: 1,
     hostContractVersion: "test",

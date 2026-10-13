@@ -1,5 +1,6 @@
 import { inspectModelReference } from "../commands/models/model-reference-validation.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { digestClawValue } from "./digest.js";
 import type {
   ClawAddCapabilityChange,
@@ -53,11 +54,11 @@ export function clawAgentCapabilityChange(
   });
 }
 
-export function clawAgentConfigurationNotices(
+export async function clawAgentConfigurationNotices(
   agent: ClawOpenClawProfile["agent"],
   config: OpenClawConfig,
   agentIds: ReadonlySet<string>,
-): ClawDiagnostic[] {
+): Promise<ClawDiagnostic[]> {
   const notices: ClawDiagnostic[] = [];
   const notice = (code: string, path: string, message: string) => {
     notices.push({
@@ -78,10 +79,14 @@ export function clawAgentConfigurationNotices(
     }
   }
   const refs = agent.model ? [agent.model.primary, ...(agent.model.fallbacks ?? [])] : [];
+  const metadataSnapshot = refs.length
+    ? await resolvePluginMetadataSnapshotAsync({ config })
+    : undefined;
   for (const [index, ref] of refs.entries()) {
     const slash = ref.indexOf("/");
     const inspection = inspectModelReference({
       cfg: config,
+      metadataSnapshot,
       ref: { provider: ref.slice(0, slash), model: ref.slice(slash + 1) },
     });
     if (inspection.status !== "known") {

@@ -453,7 +453,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       this.responseInterrupted = false;
       this.resetToolCallOwnership();
     }
-    const ai = createGoogleGenAI({
+    const ai = await createGoogleGenAI({
       apiKey: this.config.apiKey,
       httpOptions: {
         apiVersion: this.config.apiVersion ?? GOOGLE_REALTIME_DEFAULT_API_VERSION,
@@ -461,6 +461,9 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     });
 
     try {
+      if (this.connectionOwner !== attempt) {
+        return;
+      }
       const session = await ai.live.connect({
         model: this.model,
         config: {
@@ -1207,7 +1210,7 @@ async function createGoogleRealtimeBrowserSession(
   if (expiresAtMs === undefined || !expireTime || !newSessionExpireTime) {
     throw new Error("Google realtime browser session expiry is outside the supported Date range");
   }
-  const ai = createGoogleGenAI({
+  const ai = await createGoogleGenAI({
     apiKey,
     httpOptions: {
       apiVersion: GOOGLE_REALTIME_BROWSER_API_VERSION,

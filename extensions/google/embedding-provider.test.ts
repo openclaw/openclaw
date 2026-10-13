@@ -1,7 +1,14 @@
 // Google tests cover embedding provider plugin behavior.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  useBundledProviderPolicyArtifactsForTest,
+  useProviderCatalogMetadata,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
+useBundledProviderPolicyArtifactsForTest(["google"]);
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importOriginal) => {
   const actual =

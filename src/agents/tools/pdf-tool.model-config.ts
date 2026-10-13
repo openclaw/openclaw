@@ -1,8 +1,8 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   providerSupportsNativePdfDocument,
-  resolveAutoMediaKeyProviders,
-  resolveDefaultMediaModel,
+  resolveAutoMediaKeyProvidersCore as resolveAutoMediaKeyProviders,
+  resolveDefaultMediaModelCore as resolveDefaultMediaModel,
   resolveDocumentMediaModel,
 } from "../../media-understanding/defaults.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";

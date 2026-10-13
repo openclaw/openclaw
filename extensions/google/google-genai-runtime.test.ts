@@ -1,5 +1,8 @@
+import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 // Google tests cover GenAI SDK runtime wiring.
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 const { googleGenAIMock } = vi.hoisted(() => ({
   googleGenAIMock: vi.fn(function GoogleGenAI(this: { options?: unknown }, options: unknown) {
@@ -18,8 +21,8 @@ afterEach(() => {
 });
 
 describe("createGoogleGenAI", () => {
-  it("adds the documented Gemini API partner client header", () => {
-    createGoogleGenAI({
+  it("adds the documented Gemini API partner client header", async () => {
+    await createGoogleGenAI({
       apiKey: "google-key",
       httpOptions: {
         headers: {

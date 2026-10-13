@@ -3,6 +3,7 @@ import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
 import { summarizeCompactionHistory } from "./compaction.js";
+import { attachPreparedProviderModelFixture } from "./provider-request.test-support.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { ExtensionContext } from "./sessions/index.js";
 
@@ -54,7 +55,7 @@ describe("compaction retry backoff over real HTTP", () => {
       if (!address || typeof address === "string") {
         throw new Error("Compaction loopback server did not expose a TCP port");
       }
-      const model = {
+      const model = attachPreparedProviderModelFixture({
         id: "loopback-compaction-model",
         name: "Loopback compaction model",
         api: "openai-completions",
@@ -65,7 +66,7 @@ describe("compaction retry backoff over real HTTP", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200_000,
         maxTokens: 8_192,
-      } satisfies NonNullable<ExtensionContext["model"]>;
+      } satisfies NonNullable<ExtensionContext["model"]>);
 
       const messages: AgentMessage[] = [
         makeUserMessage("Keep this original conversation and opaque ID 5cf86ba9 unchanged.", 1),

@@ -2,6 +2,11 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
 import { writeSessionStore } from "../test-helpers.js";
@@ -104,7 +109,9 @@ describe("worker environment service", () => {
     expect(support.testState.bootstrapWorker).toHaveBeenCalledTimes(2);
   });
 
-  it("projects bounded bootstrap detail through sessions.describe after failed dispatch", async () => {
+  it("projects bounded bootstrap detail through sessions.describe after failed dispatch", async ({
+    onTestFinished,
+  }) => {
     // Assembled at runtime so review-bundle secret scanners do not flag a key-shaped literal.
     const secret = [
       String.fromCharCode(115, 107),
@@ -127,6 +134,15 @@ describe("worker environment service", () => {
       environments: workerService,
     });
 
+    const previousConfig = getRuntimeConfigSnapshot();
+    onTestFinished(() => {
+      if (previousConfig) {
+        setRuntimeConfigSnapshot(previousConfig);
+      } else {
+        clearRuntimeConfigSnapshot();
+      }
+    });
+    setRuntimeConfigSnapshot(support.testState.config);
     const dispatchFailure = dispatch.dispatch({
       sessionId: "session-bootstrap-failure",
       sessionKey: "agent:main:session-bootstrap-failure",

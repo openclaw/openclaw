@@ -1,6 +1,9 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  resolvePluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";
 import { iteratePluginRootContributions } from "../plugins/plugin-root-contributions.js";
 
 type PluginHookDirEntry = {
@@ -12,16 +15,19 @@ type PluginHookDirEntry = {
 export function resolvePluginHookDirs(params: {
   workspaceDir: string | undefined;
   config?: OpenClawConfig;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): PluginHookDirEntry[] {
   const workspaceDir = (params.workspaceDir ?? "").trim();
   if (!workspaceDir) {
     return [];
   }
-  const metadataSnapshot = resolvePluginMetadataSnapshot({
-    workspaceDir,
-    config: params.config,
-    env: process.env,
-  });
+  const metadataSnapshot =
+    params.metadataSnapshot ??
+    resolvePluginMetadataSnapshot({
+      workspaceDir,
+      config: params.config,
+      env: process.env,
+    });
   const registry = metadataSnapshot.manifestRegistry;
   if (registry.plugins.length === 0) {
     return [];

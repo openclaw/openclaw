@@ -1,3 +1,4 @@
+import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   type OpenClawConfig,
@@ -10,7 +11,13 @@ import { DEEPINFRA_DEFAULT_MODEL_REF, DEEPINFRA_MODEL_CATALOG } from "./provider
 
 const { resolveEnvApiKey } = providerAuth;
 
+useProviderCatalogMetadata(new URL(".", import.meta.url));
+
 const emptyCfg: OpenClawConfig = {};
+
+function resolveDeepInfraEnvApiKey() {
+  return resolveEnvApiKey("deepinfra");
+}
 
 describe("DeepInfra provider config", () => {
   describe("applyDeepInfraConfig", () => {
@@ -53,14 +60,14 @@ describe("DeepInfra provider config", () => {
 
     it("resolves DEEPINFRA_API_KEY from env", () => {
       vi.stubEnv("DEEPINFRA_API_KEY", "test-deepinfra-key");
-      const result = resolveEnvApiKey("deepinfra");
+      const result = resolveDeepInfraEnvApiKey();
       expect(result?.apiKey).toBe("test-deepinfra-key");
       expect(result?.source.endsWith("DEEPINFRA_API_KEY")).toBe(true);
     });
 
     it("returns null when DEEPINFRA_API_KEY is not set", () => {
       vi.stubEnv("DEEPINFRA_API_KEY", undefined);
-      expect(resolveEnvApiKey("deepinfra")).toBeNull();
+      expect(resolveDeepInfraEnvApiKey()).toBeNull();
     });
   });
 });

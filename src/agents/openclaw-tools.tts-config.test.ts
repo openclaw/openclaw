@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
+import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createOpenClawTools, createOpenClawToolsAsync } from "./openclaw-tools.js";
+import { createOpenClawToolsAsync } from "./openclaw-tools.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import type { MediaGenerateToolOptions } from "./tools/media-generate-background.js";
@@ -53,7 +54,11 @@ vi.mock("./tools/video-generate-tool.js", () => ({ createVideoGenerateTool: mock
 vi.mock("../tts/tts.js", () => ({ textToSpeech: mocks.textToSpeech }));
 
 function createTools(options: OpenClawToolsOptions) {
-  return createOpenClawTools({ disableMessageTool: true, disablePluginTools: true, ...options });
+  return createOpenClawToolsAsync({
+    disableMessageTool: true,
+    disablePluginTools: true,
+    ...options,
+  });
 }
 
 const mediaConfig = {
@@ -76,16 +81,18 @@ describe("createOpenClawTools context wiring", () => {
   afterEach(() => clearRuntimeConfigSnapshot());
 
   it("passes the session agent and active account configuration into TTS", async () => {
-    const config = {
+    const config = captureRuntimeConfig({
       agents: { entries: { reader: {}, main: {} } },
       channels: { feishu: { accounts: { "feishu-main": { tts: { provider: "microsoft" } } } } },
-    } satisfies OpenClawConfig;
-    const tool = createTools({
-      config,
-      agentSessionKey: "agent:reader:feishu:chat:123",
-      agentChannel: "feishu",
-      agentAccountId: "feishu-main",
-    }).find((candidate) => candidate.name === "tts");
+    } satisfies OpenClawConfig);
+    const tool = (
+      await createTools({
+        config,
+        agentSessionKey: "agent:reader:feishu:chat:123",
+        agentChannel: "feishu",
+        agentAccountId: "feishu-main",
+      })
+    ).find((candidate) => candidate.name === "tts");
     expect(tool).toBeDefined();
     await tool?.execute("call-1", { text: "hello from reader" });
     expect(mocks.textToSpeech).toHaveBeenCalledWith(
@@ -99,8 +106,8 @@ describe("createOpenClawTools context wiring", () => {
     expect(mocks.textToSpeech.mock.calls[0]?.[0].cfg).toBe(config);
   });
 
-  it("uses the delivery account when no separate transcript authority exists", () => {
-    createTools({
+  it("uses the delivery account when no separate transcript authority exists", async () => {
+    await createTools({
       agentChannel: "discord",
       agentAccountId: "delivery",
       requesterSenderId: "requester",
@@ -117,21 +124,21 @@ describe("createOpenClawTools context wiring", () => {
     );
   });
 
-  it("hides transcripts when caller-channel provenance is unavailable", () => {
+  it("hides transcripts when caller-channel provenance is unavailable", async () => {
     const caller = {
       agentChannel: "discord",
       agentAccountId: "delivery",
       gatewayCallerAccountId: "creator",
       requesterSenderId: "requester",
     };
-    createTools({ ...caller, gatewayCallerChannel: null });
+    await createTools({ ...caller, gatewayCallerChannel: null });
     expect(mocks.transcripts).not.toHaveBeenCalled();
-    createTools({ ...caller, gatewayCallerLocal: true });
+    await createTools({ ...caller, gatewayCallerLocal: true });
     expect(mocks.transcripts).not.toHaveBeenCalled();
   });
 
-  it("keeps transcripts channel-less for explicit local scheduled provenance", () => {
-    createTools({
+  it("keeps transcripts channel-less for explicit local scheduled provenance", async () => {
+    await createTools({
       agentChannel: "discord",
       agentAccountId: "delivery",
       gatewayCallerAccountId: "creator",
@@ -180,9 +187,9 @@ describe("createOpenClawTools context wiring", () => {
     },
   );
 
-  it("passes preserved channel delivery context into cron", () => {
+  it("passes preserved channel delivery context into cron", async () => {
     const sessionKey = "agent:main:matrix:channel:!abcdef1234567890:example.org";
-    createTools({
+    await createTools({
       agentSessionKey: sessionKey,
       agentChannel: "matrix",
       agentAccountId: "bot-a",
@@ -203,8 +210,8 @@ describe("createOpenClawTools context wiring", () => {
     );
   });
 
-  it("passes self-remove scope into cron", () => {
-    createTools({
+  it("passes self-remove scope into cron", async () => {
+    await createTools({
       agentSessionKey: "agent:main:cron:job-current",
       cronSelfRemoveOnlyJobId: "job-current",
     });

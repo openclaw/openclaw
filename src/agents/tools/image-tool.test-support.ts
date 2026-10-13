@@ -2,8 +2,8 @@ import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as defaults from "../../media-understanding/defaults.js";
 import type {
-  resolveAutoMediaKeyProviders,
-  resolveDefaultMediaModel,
+  resolveAutoMediaKeyProvidersCore as resolveAutoMediaKeyProviders,
+  resolveDefaultMediaModelCore as resolveDefaultMediaModel,
 } from "../../media-understanding/defaults.js";
 import * as descriptions from "../../media-understanding/image-runtime.js";
 import * as registry from "../../media-understanding/provider-registry.js";
@@ -123,13 +123,13 @@ function setProviderDepsForTest(overrides?: Partial<ImageToolProviderDeps>): voi
   }
   if (overrides.resolveAutoMediaKeyProviders) {
     const spy = vi
-      .spyOn(defaults, "resolveAutoMediaKeyProviders")
+      .spyOn(defaults, "resolveAutoMediaKeyProvidersCore")
       .mockImplementation(overrides.resolveAutoMediaKeyProviders);
     restoreSpies.push(() => spy.mockRestore());
   }
   if (overrides.resolveDefaultMediaModel) {
     const spy = vi
-      .spyOn(defaults, "resolveDefaultMediaModel")
+      .spyOn(defaults, "resolveDefaultMediaModelCore")
       .mockImplementation(overrides.resolveDefaultMediaModel);
     restoreSpies.push(() => spy.mockRestore());
   }
@@ -156,6 +156,25 @@ function setProviderDepsForTest(overrides?: Partial<ImageToolProviderDeps>): voi
           : original(params),
       );
     restoreSpies.push(() => spy.mockRestore());
+    const acquiredSpy = vi
+      .spyOn(registry, "acquireMediaUnderstandingRegistry")
+      .mockImplementation(async (params) => {
+        const { createMediaProviderAcquisition } =
+          await import("../../media-understanding/runner.test-mocks.js");
+        const provider = params.providerId
+          ? resolve({ providerId: params.providerId, cfg: params.cfg })
+          : undefined;
+        const providers = provider ? [provider] : [];
+        return {
+          ...createMediaProviderAcquisition(providers),
+          registry: registry.buildMediaUnderstandingRegistry(
+            params.overrides,
+            params.cfg,
+            providers,
+          ),
+        };
+      });
+    restoreSpies.push(() => acquiredSpy.mockRestore());
   }
   if (overrides.loadImageWebMediaRuntime) {
     const load = overrides.loadImageWebMediaRuntime;

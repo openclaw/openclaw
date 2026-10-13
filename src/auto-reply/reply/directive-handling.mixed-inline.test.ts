@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import {
   onSessionLifecycleEvent,
   type SessionLifecycleEvent,
@@ -105,7 +106,9 @@ describe("mixed inline directives", () => {
   let lifecycleEvents: SessionLifecycleEvent[];
   let unsubscribeLifecycle: () => void;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    const activateDiscovery = await prepareBundledDiscoveryMode();
+    activateDiscovery();
     lifecycleEvents = [];
     unsubscribeLifecycle = onSessionLifecycleEvent((event) => lifecycleEvents.push(event));
     vi.clearAllMocks();

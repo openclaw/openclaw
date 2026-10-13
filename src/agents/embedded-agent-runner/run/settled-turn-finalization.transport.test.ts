@@ -26,6 +26,7 @@ import {
   readVisibleSessionTranscriptMessageEntries,
 } from "../../../plugin-sdk/session-transcript-runtime.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import { attachPreparedProviderModelFixture } from "../../provider-request.test-support.js";
 import { createResolvedEmbeddedRunnerModel } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { prepareTerminalWithSettledTurnFinalization } from "./settled-turn-finalization.js";
 import {
@@ -189,14 +190,14 @@ it.each(["HTTP", "WebSocket", "terminated"])("finalizes after %s failure", async
     const resolved = createResolvedEmbeddedRunnerModel("loopback-provider", "test-model", {
       baseUrl: "http://127.0.0.1:" + address.port + "/v1",
     });
-    const model: Model = {
+    const model = attachPreparedProviderModelFixture({
       ...resolved.model,
       api: websocket ? "openai-chatgpt-responses" : "openai-responses",
       provider: websocket ? "openai" : "loopback-provider",
       input: ["text"],
       contextWindow: 8192,
       maxTokens: 256,
-    };
+    } satisfies Model);
     const target = {
       agentId: "main",
       sessionId: "session-settled",
@@ -222,7 +223,11 @@ it.each(["HTTP", "WebSocket", "terminated"])("finalizes after %s failure", async
       ? (requestModel, context, options) =>
           streamOpenAICodexResponses(
             // Responses-specific compat settings do not belong to the ChatGPT API.
-            { ...requestModel, api: "openai-chatgpt-responses", compat: undefined },
+            attachPreparedProviderModelFixture({
+              ...requestModel,
+              api: "openai-chatgpt-responses",
+              compat: undefined,
+            }),
             context,
             { ...options, transport: "websocket" },
           )

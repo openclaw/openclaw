@@ -33,7 +33,7 @@ import { runProviderPluginAuthMethodUnpersisted } from "../../plugins/provider-a
 import { persistProviderAuthProfilesAfterLogin } from "../../plugins/provider-auth-persistence.js";
 import type { ProviderAuthContext } from "../../plugins/provider-authentication.types.js";
 import { applyPrimaryModel } from "../../plugins/provider-model-primary.js";
-import { resolvePluginProvidersCore } from "../../plugins/providers.runtime.js";
+import { resolvePluginProvidersCoreAsync } from "../../plugins/providers.runtime.js";
 import {
   resolvePluginSetupProviderCore,
   resolvePluginSetupRegistry,
@@ -211,7 +211,7 @@ async function resolveModelsAuthContext(params?: {
     ? normalizeManualAuthProvider(requestedProvider)
     : undefined;
   // Auth setup also runs inside the Gateway; discovery must not replace its live registry.
-  const providers = resolvePluginProvidersCore({
+  const providers = await resolvePluginProvidersCoreAsync({
     config,
     workspaceDir,
     mode: "setup",

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { preparePluginMetadataMachineStateAsync } from "../../src/plugins/installed-plugin-index-record-state.js";
 import { loadInstalledPluginIndex } from "../../src/plugins/installed-plugin-index.js";
 import { createInstalledPluginOwnershipResolver } from "../../src/plugins/installed-plugin-package-ownership.js";
 import { closeOpenClawStateDatabaseByPath } from "../../src/state/openclaw-state-db-cache.js";
@@ -179,6 +180,7 @@ describe("plugin update unchanged Docker E2E", () => {
 
         const database = openOpenClawStateDatabase({ env });
         closeOpenClawStateDatabaseByPath(database.path);
+        await preparePluginMetadataMachineStateAsync({ env, stateDir });
         const liveIndex = loadInstalledPluginIndex({
           config,
           env,

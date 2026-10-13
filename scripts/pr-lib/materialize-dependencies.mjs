@@ -20,6 +20,13 @@ const markdownManifest = existsSync(markdownManifestPath)
 const markdownDependencies = markdownManifest
   ? ["mdast-util-from-markdown", "mdast-util-gfm-table", "micromark-extension-gfm-table"]
   : [];
+const aiManifestPath = join(dirname(manifestPath), "packages/ai/package.json");
+const aiManifest = existsSync(aiManifestPath)
+  ? JSON.parse(readFileSync(aiManifestPath, "utf8"))
+  : undefined;
+const aiDependencies = aiManifest
+  ? ["@anthropic-ai/sdk", "@google/genai", "@mistralai/mistralai", "openai"]
+  : [];
 // Pre-#149585 anchors contain no package manifest and need only these tooling pins.
 const dependencies = [
   "tsx",
@@ -43,6 +50,7 @@ const dependencies = [
         "json5",
         "kysely",
         ...markdownDependencies,
+        ...aiDependencies,
         "p-map",
         "partial-json",
         "semver",
@@ -61,7 +69,9 @@ const dependencies = [
   const present = lstatSync(link, { throwIfNoEntry: false });
   const workspace = markdownDependencies.includes(dependency)
     ? "packages/markdown-core"
-    : undefined;
+    : aiDependencies.includes(dependency)
+      ? "packages/ai"
+      : undefined;
   const installedPath = present
     ? link
     : join(
@@ -73,7 +83,8 @@ const dependencies = [
     if (!statSync(target).isDirectory()) {
       throw new Error("not a package directory");
     }
-    const dependencyManifest = workspace ? markdownManifest : manifest;
+    const dependencyManifest =
+      workspace === "packages/ai" ? aiManifest : workspace ? markdownManifest : manifest;
     const expectedVersion =
       dependencyManifest?.dependencies?.[dependency] ??
       dependencyManifest?.devDependencies?.[dependency];

@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as imageGenerationRuntime from "../../image-generation/runtime.js";
 import * as mediaStore from "../../media/store.js";
-import { createOpenClawTools } from "../openclaw-tools.js";
+import { createOpenClawToolsAsync } from "../openclaw-tools.js";
 import { createImageGenerateTool } from "./image-generate-tool.js";
 import * as mediaGenerationToolProviders from "./media-generation-tool-providers.js";
 import * as pdfNativeProviders from "./pdf-native-providers.js";
@@ -39,7 +39,10 @@ const ONE_PIXEL_PNG = Buffer.from(
   "base64",
 );
 
-function requireTool(tools: ReturnType<typeof createOpenClawTools>, name: "view_image" | "pdf") {
+function requireTool(
+  tools: Awaited<ReturnType<typeof createOpenClawToolsAsync>>,
+  name: "view_image" | "pdf",
+) {
   const tool = tools.find((candidate) => candidate.name === name);
   expect(tool, `${name} tool registration`).toBeDefined();
   if (!tool) {
@@ -80,7 +83,7 @@ describe.runIf(process.platform === "win32")("host-local media tool file URLs", 
             defaults: { pdfModel: { primary: "anthropic/claude-opus-4-6" } },
           },
         } as OpenClawConfig;
-        const tools = createOpenClawTools({
+        const tools = await createOpenClawToolsAsync({
           agentDir,
           workspaceDir,
           config,

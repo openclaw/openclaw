@@ -26,6 +26,7 @@ import {
 import { resolveStateDir } from "../config/paths.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { listAgentModelsJsonPaths } from "../secrets/storage-scan.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
@@ -309,6 +310,7 @@ export async function maybeMigrateModelCatalogCredentials(params: {
   const childStores = catalogs
     .filter((catalog) => catalog.agentDir !== mainAgentDir)
     .map((catalog) => catalog.localStore);
+  await prepareBundledDiscoveryMode();
   const configCredentials = collectCredentials(
     params.cfg.models?.providers,
     mainStore,

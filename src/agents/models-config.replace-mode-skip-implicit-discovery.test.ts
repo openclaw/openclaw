@@ -1,11 +1,17 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { planModelsJsonForTest } from "./models-config.plan.test-support.js";
 import * as providers from "./models-config.providers.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+beforeEach(async () => {
+  await preparePluginMetadataMachineStateAsync({});
+  await preparePluginMetadataMachineStateAsync({ env: {} });
+});
 
 function createExplicitProvider(): ProviderConfig {
   return {

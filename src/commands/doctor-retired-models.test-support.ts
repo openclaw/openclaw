@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -148,6 +149,7 @@ export async function createRetiredModelFixture(auth: "oauth" | "api-key" = "oau
     auth: { order: { openai: [auth === "oauth" ? "chatgpt" : "platform"] } },
     models: { providers: { openai: { baseUrl: "https://api.openai.com/v1", models: [] } } },
   };
+  await prepareBundledDiscoveryMode(state.env);
   return { state, cfg };
 }
 

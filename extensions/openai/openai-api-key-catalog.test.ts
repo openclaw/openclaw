@@ -1,3 +1,4 @@
+import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIProvider } from "./openai-provider.js";
@@ -45,6 +46,8 @@ async function runCatalog(
     fetch.mockRestore();
   }
 }
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 describe("OpenAI API-key catalog", () => {
   beforeEach(() => {

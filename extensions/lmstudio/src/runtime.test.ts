@@ -1,6 +1,7 @@
 // Lmstudio tests cover runtime plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { preparePluginTestRuntimeMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -51,8 +52,9 @@ function buildLmstudioConfig(overrides?: {
 }
 
 describe("lmstudio-runtime", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     resolveApiKeyForProviderMock.mockReset();
+    await preparePluginTestRuntimeMetadata();
   });
 
   it("throws when runtime auth resolves to blank and no configured key exists", async () => {

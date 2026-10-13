@@ -9,6 +9,15 @@ import { readQaScenarioById } from "../../scenario-catalog.js";
 import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "../../suite-runtime-flow.js";
 import { createWhatsAppQaScenarioEnvironment } from "./scenario-environment.js";
 
+vi.mock("openclaw/plugin-sdk/model-ref-parse", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/model-ref-parse")>();
+  const resolver = await actual.prepareModelRefResolver({ manifestPlugins: [] });
+  return {
+    ...actual,
+    prepareModelRefResolver: async () => resolver,
+  };
+});
+
 vi.mock("../../suite-runtime-gateway.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../suite-runtime-gateway.js")>()),
   waitForConfigRestartSettle: async () => {},

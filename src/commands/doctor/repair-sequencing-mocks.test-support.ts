@@ -25,7 +25,7 @@ const hoistedMocks = vi.hoisted(() => ({
   repairMissingConfiguredPluginInstalls: vi.fn(),
   repairStaleAgentModelRefs: vi.fn(),
   resolveConfigWidePluginManifestRegistry: vi.fn(),
-  resolveConfigWidePluginMetadataSnapshot: vi.fn(),
+  resolveConfigWidePluginMetadataSnapshotAsync: vi.fn(),
   resolveAuthProfileOrder: vi.fn(),
   resolveProviderInstallCatalogEntries: vi.fn(),
   resolveProfileUnusableUntilForDisplay: vi.fn(),
@@ -36,9 +36,11 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
   materializePluginAutoEnableCandidates: hoistedMocks.materializePluginAutoEnableCandidates,
 }));
 
+// mock-isolation: Repair ordering uses explicit metadata fixtures without plugin discovery.
 vi.mock("../../config/io.plugin-metadata.js", () => ({
   resolveConfigWidePluginManifestRegistry: hoistedMocks.resolveConfigWidePluginManifestRegistry,
-  resolveConfigWidePluginMetadataSnapshot: hoistedMocks.resolveConfigWidePluginMetadataSnapshot,
+  resolveConfigWidePluginMetadataSnapshotAsync:
+    hoistedMocks.resolveConfigWidePluginMetadataSnapshotAsync,
 }));
 
 vi.mock("../doctor-plugin-host-links.js", () => ({
@@ -47,6 +49,11 @@ vi.mock("../doctor-plugin-host-links.js", () => ({
 
 vi.mock("../doctor-plugin-registry.js", () => ({
   maybeRepairStaleManagedNpmBundledPlugins: hoistedMocks.maybeRepairStaleManagedNpmBundledPlugins,
+}));
+
+// mock-isolation: Repair sequencing supplies its own metadata and must not read machine discovery state.
+vi.mock("../../plugins/bundled-discovery-state.js", () => ({
+  prepareBundledDiscoveryMode: async () => () => {},
 }));
 
 vi.mock("../../state/user-profiles-tailscale-migration.js", () => ({

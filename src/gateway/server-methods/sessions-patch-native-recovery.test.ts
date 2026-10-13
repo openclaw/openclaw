@@ -3,20 +3,12 @@ import type { SessionsPatchParams } from "../../../packages/gateway-protocol/src
 import type { prepareModelSelectionRuntime } from "../../auto-reply/reply/model-runtime-normalization.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { prepareSessionPatchRuntimeSelection as prepareRuntimeSelection } from "./sessions-patch-model-selection.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
+import { prepareSessionPatchRuntimeSelection as prepareRuntimeSelectionOwner } from "./sessions-patch-model-selection.js";
 
 const releaseSelections: Array<() => void> = [];
 afterEach(() => releaseSelections.splice(0).forEach((release) => release()));
-
-async function prepareSessionPatchRuntimeSelection(
-  params: Parameters<typeof prepareRuntimeSelection>[0],
-) {
-  const result = await prepareRuntimeSelection(params);
-  if (result.ok && result.release) {
-    releaseSelections.push(result.release);
-  }
-  return result;
-}
 
 const preparation = vi.hoisted(() => {
   const validate = vi.fn((): string | undefined => undefined);
@@ -59,8 +51,23 @@ const original: SessionEntry = {
   modelOverride: "model",
 };
 const cfg: OpenClawConfig = { agents: { defaults: { sandbox: { mode: "all" } } } };
+async function prepareRuntimeSelection(params: Parameters<typeof prepareRuntimeSelectionOwner>[0]) {
+  const metadata = await resolvePluginMetadataSnapshotAsync({ config: params.cfg });
+  return withPluginMetadataSnapshotScope(
+    metadata,
+    async () => {
+      const result = await prepareRuntimeSelectionOwner(params);
+      if (result.ok && result.release) {
+        releaseSelections.push(result.release);
+      }
+      return result;
+    },
+    { config: params.cfg },
+  );
+}
+
 function prepare(entry: SessionEntry, callerCanConsent = true, config = cfg) {
-  return prepareSessionPatchRuntimeSelection({
+  return prepareRuntimeSelection({
     cfg: config,
     agentId: "main",
     patch: { key, model },
@@ -194,7 +201,7 @@ it.each([
     agentRuntimeOverride: "native-fixture",
   };
   const entry: SessionEntry = { ...expectedEntry, ...testCase.entry };
-  const result = await prepareSessionPatchRuntimeSelection({
+  const result = await prepareRuntimeSelection({
     cfg,
     agentId: "main",
     patch: { key, model: `${model}@fixture:selected`, ...testCase.patch },
@@ -246,7 +253,7 @@ it.each([false, true])(
       ...original,
       ...(mandatory ? { sandbox: "required" as const } : {}),
     };
-    const result = await prepareSessionPatchRuntimeSelection({
+    const result = await prepareRuntimeSelection({
       cfg,
       agentId: "main",
       patch: { key, model },

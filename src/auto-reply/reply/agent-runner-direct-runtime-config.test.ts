@@ -26,7 +26,11 @@ import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
-import { createTestFollowupRun, withTestModelContextTokens } from "./agent-runner.test-fixtures.js";
+import {
+  createTestFollowupRun,
+  runTestReplyAgent as runReplyAgent,
+  withTestModelContextTokens,
+} from "./agent-runner.test-fixtures.js";
 import type { QueueSettings } from "./queue.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
@@ -122,8 +126,6 @@ vi.mock("./queue.js", async () => {
     enqueueFollowupRun: (...args: unknown[]) => enqueueFollowupRunMock(...args),
   };
 });
-
-const { runReplyAgent } = await import("./agent-runner-run.js");
 
 function createTelegramSessionCtx(): TemplateContext {
   return {

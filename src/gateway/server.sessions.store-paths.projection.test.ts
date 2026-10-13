@@ -9,7 +9,7 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import { withOpenClawAgentDatabaseWrite } from "../state/openclaw-agent-db-write.js";
 import * as agentDatabasePaths from "../state/openclaw-agent-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
+import { loadGatewayTestConfigAsync } from "./test-helpers.config-runtime.js";
 import { testState } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -43,13 +43,13 @@ test("automatic list and search projection reuse conventional state-directory pr
           entries: Object.fromEntries(agentIds.map((id) => [id, {}])),
         };
         const { setRuntimeConfigSnapshot } = await getGatewayConfigModule();
-        const { resolvePluginMetadataSnapshot } =
+        const { resolvePluginMetadataSnapshotAsync } =
           await import("../plugins/plugin-metadata-snapshot.js");
         const { withPluginMetadataSnapshotScope } =
           await import("../plugins/current-plugin-metadata-snapshot.js");
-        const config = loadGatewayTestConfig();
+        const config = await loadGatewayTestConfigAsync();
         setRuntimeConfigSnapshot(config);
-        const metadata = resolvePluginMetadataSnapshot({ config, allowCurrent: false });
+        const metadata = await resolvePluginMetadataSnapshotAsync({ config, allowCurrent: false });
         // Normal Gateway requests inherit the immutable metadata prepared at startup.
         await withPluginMetadataSnapshotScope(
           metadata,
@@ -144,7 +144,7 @@ test("configured-only multi-store target preparation is reused across distinct l
     const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json");
     testState.sessionConfig = { store: storeTemplate };
     testState.agentsConfig = { entries: Object.fromEntries(agentIds.map((id) => [id, {}])) };
-    (await getGatewayConfigModule()).setRuntimeConfigSnapshot(loadGatewayTestConfig());
+    (await getGatewayConfigModule()).setRuntimeConfigSnapshot(await loadGatewayTestConfigAsync());
     for (const agentId of agentIds) {
       const storePath = storeTemplate.replace("{agentId}", agentId);
       // Seed list metadata without running unrelated lifecycle deletion workers.

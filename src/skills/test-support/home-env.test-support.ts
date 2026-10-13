@@ -1,6 +1,7 @@
 // Home environment test support isolates HOME-style paths for skill tests.
 import os from "node:os";
 import { vi } from "vitest";
+import { preparePluginAutoEnableTestDiscovery } from "../../config/plugin-auto-enable.test-helpers.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 
 /** Process home env snapshot used by skill loader tests. */
@@ -23,6 +24,7 @@ export function setMockSkillsHomeEnv(fakeHome: string): SkillsHomeEnvSnapshot {
   deleteTestEnvValue("OPENCLAW_STATE_DIR");
   deleteTestEnvValue("USERPROFILE");
   vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+  preparePluginAutoEnableTestDiscovery();
   return snapshot;
 }
 

@@ -9,8 +9,10 @@ import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { projectSessionActivitySummary } from "./session-activity-summary-state.js";
 import { readRecentSessionUsageFromTranscriptAsync } from "./session-transcript-usage.js";
@@ -29,6 +31,7 @@ import type { WorkerSessionPlacementRecord } from "./worker-environments/placeme
 
 // Frozen from 7b47d7a65a17e7a49d943795a5b112ae4adcfe3c; updated only for additive Ultra choices.
 // SHA256 pins JSON.stringify wire bytes, including serialized property order.
+const projectionMetadata = createPluginMetadataSnapshotFixture();
 const START = Date.UTC(2026, 8, 15);
 const TIMES = [START + 29_999, START + 30_000, START + 7_200_001] as const;
 const GOLDEN_HASHES: Record<string, string | readonly [string, string, string]> = {
@@ -453,13 +456,19 @@ test("preserves complete base rows across time and caller presentation fixtures"
         includeDerivedTitles: fixture.transcript,
         includeLastMessage: fixture.transcript,
       };
-      const { inputs, presentation } = readSessionRowInputs(rowParams);
+      const { inputs, presentation } = withPluginRuntimeGenerationScope(
+        { metadataSnapshot: projectionMetadata },
+        () => readSessionRowInputs(rowParams),
+      );
       const clock = vi.spyOn(Date, "now").mockImplementation(() => {
         throw new Error("Materialization must not read the clock");
       });
       let materialized: ReturnType<typeof materializeSessionRow>;
       try {
-        materialized = materializeSessionRow(inputs);
+        materialized = withPluginRuntimeGenerationScope(
+          { metadataSnapshot: projectionMetadata },
+          () => materializeSessionRow(inputs),
+        );
       } finally {
         clock.mockRestore();
       }

@@ -75,7 +75,7 @@ async function runMemoryRecallHealth(
     const agentMessage = (message: string) =>
       formatMemoryDoctorAgentMessage(scope.agentId, labelAgents, message);
     const report = (message: string) => note(agentMessage(message), "Memory search");
-    const backend = resolveActiveMemoryBackendConfig({ cfg, agentId: scope.agentId });
+    const backend = await resolveActiveMemoryBackendConfig({ cfg, agentId: scope.agentId });
     if (backend?.backend === "provider-runtime") {
       report(`Not applicable: ${backend.providerId} uses the provider runtime; see its health.`);
       continue;

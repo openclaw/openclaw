@@ -3,7 +3,7 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
   type ProviderAuthAliasLookupParams,
-  resolveProviderIdForAuth,
+  resolvePreparedProviderIdForAuth as resolveProviderIdForAuth,
 } from "../provider-auth-aliases.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";
 

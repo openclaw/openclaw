@@ -34,7 +34,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
-import { createOpenClawTools } from "../openclaw-tools.js";
+import { createOpenClawToolsAsync } from "../openclaw-tools.js";
 import {
   readFollowupRequest,
   SessionFollowupCompletion,
@@ -421,27 +421,29 @@ describe("sessions_send dispatch admission", () => {
         .spyOn(sessionsSendFollowup, "prepareSessionsSendFollowup")
         .mockResolvedValue(undefined);
       try {
-        const tool = createOpenClawTools({
-          agentSessionKey: sourceKey,
-          sessionId: "requester-session",
-          agentChannel: "telegram",
-          agentAccountId: accountId,
-          agentTo: "original-recipient",
-          agentThreadId: threadId,
-          ...(name === "current source over agent delivery fallback"
-            ? {
-                agentTo: "stale-recipient",
-                agentThreadId: 99,
-                currentMessagingTarget: "original-recipient",
-                currentChannelId: "native-channel-id",
-                currentThreadTs: "42",
-              }
-            : {}),
-          config,
-          disableMessageTool: true,
-          disablePluginTools: true,
-          wrapBeforeToolCallHook: false,
-        }).find((candidate) => candidate.name === "sessions_send");
+        const tool = (
+          await createOpenClawToolsAsync({
+            agentSessionKey: sourceKey,
+            sessionId: "requester-session",
+            agentChannel: "telegram",
+            agentAccountId: accountId,
+            agentTo: "original-recipient",
+            agentThreadId: threadId,
+            ...(name === "current source over agent delivery fallback"
+              ? {
+                  agentTo: "stale-recipient",
+                  agentThreadId: 99,
+                  currentMessagingTarget: "original-recipient",
+                  currentChannelId: "native-channel-id",
+                  currentThreadTs: "42",
+                }
+              : {}),
+            config,
+            disableMessageTool: true,
+            disablePluginTools: true,
+            wrapBeforeToolCallHook: false,
+          })
+        ).find((candidate) => candidate.name === "sessions_send");
         expect(tool).toBeDefined();
         const result = await tool!.execute("send-routed-task", {
           sessionKey: targetSessionKey,
@@ -526,17 +528,19 @@ describe("sessions_send dispatch admission", () => {
       .spyOn(sessionsSendDelivery, "callSessionsSendGateway")
       .mockImplementation(callGateway);
     try {
-      const tool = createOpenClawTools({
-        agentSessionKey: sessionKey,
-        sessionId: entry.sessionId,
-        agentChannel: originalRoute.channel,
-        agentAccountId: originalRoute.accountId,
-        currentMessagingTarget: originalRoute.to,
-        config,
-        disableMessageTool: true,
-        disablePluginTools: true,
-        wrapBeforeToolCallHook: false,
-      }).find((candidate) => candidate.name === "sessions_send");
+      const tool = (
+        await createOpenClawToolsAsync({
+          agentSessionKey: sessionKey,
+          sessionId: entry.sessionId,
+          agentChannel: originalRoute.channel,
+          agentAccountId: originalRoute.accountId,
+          currentMessagingTarget: originalRoute.to,
+          config,
+          disableMessageTool: true,
+          disablePluginTools: true,
+          wrapBeforeToolCallHook: false,
+        })
+      ).find((candidate) => candidate.name === "sessions_send");
       expect(tool).toBeDefined();
       const result = await tool!.execute("self-followup", {
         sessionKey,

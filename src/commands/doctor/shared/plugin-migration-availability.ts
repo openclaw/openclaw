@@ -1,6 +1,6 @@
 import { cloneEnvWithPlatformSemantics } from "../../../config/config-env-vars.js";
 import { resolveDeferredPluginMigrationConfigPaths } from "../../../config/deferred-plugin-migration-config.js";
-import { resolveConfigWidePluginMetadataSnapshot } from "../../../config/io.plugin-metadata.js";
+import { resolveConfigWidePluginMetadataSnapshotAsync } from "../../../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import type { DeferredPluginMigration } from "../../../infra/deferred-plugin-migrations.js";
@@ -12,7 +12,6 @@ import { createBlockedPluginDiagnosticLookup } from "../../../plugins/discovery-
 import { resolvePluginDoctorContractArtifact } from "../../../plugins/doctor-contract-artifact.js";
 import { createInstalledPluginIndexScopeLookup } from "../../../plugins/installed-plugin-index-scope-lookup.js";
 import { resolveInstalledPluginIndexStateDatabaseOptions } from "../../../plugins/installed-plugin-index-store-path.js";
-import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import { passesManifestOwnerBasePolicy } from "../../../plugins/manifest-owner-policy.js";
 import { isTrustedOfficialCatalogLookupDuplicate } from "../../../plugins/official-external-install-records.js";
 import {
@@ -21,6 +20,7 @@ import {
 } from "../../../plugins/official-external-plugin-catalog.js";
 import { isPayloadMissing } from "../../../plugins/payload-verification.js";
 import { createPluginCache, withPluginCache } from "../../../plugins/plugin-cache.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../../plugins/plugin-metadata-snapshot.js";
 import {
   isArtifactPreservingStateRead,
   withOpenClawStateDatabaseReadSnapshot,
@@ -65,13 +65,13 @@ export async function inspectPluginMigrationAvailability(params: {
     withPluginCache(createPluginCache(), async () => {
       const metadata =
         params.installRecords !== undefined
-          ? resolveConfigWidePluginMetadataSnapshot({
+          ? await resolveConfigWidePluginMetadataSnapshotAsync({
               config: params.cfg,
               env,
               installRecords: params.installRecords,
               allowCurrent: false,
             })
-          : loadManifestMetadataSnapshot({ config: params.cfg, env });
+          : await resolvePluginMetadataSnapshotAsync({ config: params.cfg, env });
       return withPluginMetadataSnapshotScope(
         metadata,
         async () => {

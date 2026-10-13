@@ -5,14 +5,15 @@ import type {
   DocumentExtractionResult,
   PluginDocumentExtractorEntry,
 } from "../plugins/document-extractor-types.js";
-import type { resolvePluginDocumentExtractors } from "../plugins/document-extractors.runtime.js";
+import type { resolvePluginDocumentExtractorsAsync } from "../plugins/document-extractors.runtime.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 
-const { resolvePluginDocumentExtractorsMock } = vi.hoisted(() => ({
-  resolvePluginDocumentExtractorsMock: vi.fn<typeof resolvePluginDocumentExtractors>(),
+const { resolvePluginDocumentExtractorsAsyncMock } = vi.hoisted(() => ({
+  resolvePluginDocumentExtractorsAsyncMock: vi.fn<typeof resolvePluginDocumentExtractorsAsync>(),
 }));
+// mock-isolation: Document dispatch tests supply extractor fixtures without loading plugin artifacts.
 vi.mock("../plugins/document-extractors.runtime.js", () => ({
-  resolvePluginDocumentExtractors: resolvePluginDocumentExtractorsMock,
+  resolvePluginDocumentExtractorsAsync: resolvePluginDocumentExtractorsAsyncMock,
 }));
 
 import { extractDocumentContent } from "./document-extractors.runtime.js";
@@ -128,7 +129,7 @@ const metadataCases: MetadataCase[] = [
 
 describe("extractDocumentContent", () => {
   beforeEach(() => {
-    resolvePluginDocumentExtractorsMock.mockReset();
+    resolvePluginDocumentExtractorsAsyncMock.mockReset();
   });
 
   it.each(metadataCases)("validates metadata: $name", async (row) => {
@@ -139,7 +140,7 @@ describe("extractDocumentContent", () => {
     };
     const text = row.text ?? "pdf text";
     const extract = vi.fn().mockResolvedValue({ text, images: [], metadata });
-    resolvePluginDocumentExtractorsMock.mockReturnValue([extractor(extract)]);
+    resolvePluginDocumentExtractorsAsyncMock.mockResolvedValue([extractor(extract)]);
     const publicRequest = {
       ...request,
       maxPages: row.maxPages ?? 1,
@@ -159,7 +160,7 @@ describe("extractDocumentContent", () => {
 
   it("surfaces matching extractor failures instead of reporting disablement", async () => {
     const cause = new Error("password required");
-    resolvePluginDocumentExtractorsMock.mockReturnValue([
+    resolvePluginDocumentExtractorsAsyncMock.mockResolvedValue([
       extractor(vi.fn().mockRejectedValue(cause)),
     ]);
     const result = extractDocumentContent(request);
@@ -180,7 +181,7 @@ describe("extractDocumentContent", () => {
       throw reason;
     });
     const second = vi.fn();
-    resolvePluginDocumentExtractorsMock.mockReturnValue(
+    resolvePluginDocumentExtractorsAsyncMock.mockResolvedValue(
       [first, second].map((extract, index) => extractor(extract, `pdf-${index}`)),
     );
     await expect(
@@ -194,13 +195,13 @@ describe("extractDocumentContent", () => {
     const oldExtract = vi.fn().mockResolvedValue({ text: "retired", images: [] });
     const newExtract = vi.fn().mockResolvedValue({ text: "replacement", images: [] });
     const input = { ...request, config: {} };
-    resolvePluginDocumentExtractorsMock
-      .mockReturnValueOnce([extractor(oldExtract)])
-      .mockReturnValueOnce([extractor(newExtract)]);
+    resolvePluginDocumentExtractorsAsyncMock
+      .mockResolvedValueOnce([extractor(oldExtract)])
+      .mockResolvedValueOnce([extractor(newExtract)]);
     await expect(extractDocumentContent(input)).resolves.toMatchObject({ text: "retired" });
     clearPluginMetadataLifecycleCaches();
     await expect(extractDocumentContent(input)).resolves.toMatchObject({ text: "replacement" });
-    expect(resolvePluginDocumentExtractorsMock).toHaveBeenCalledTimes(2);
+    expect(resolvePluginDocumentExtractorsAsyncMock).toHaveBeenCalledTimes(2);
     expect(oldExtract).toHaveBeenCalledOnce();
     expect(newExtract).toHaveBeenCalledOnce();
   });
@@ -236,7 +237,7 @@ describe("extractDocumentContent", () => {
         input.onImageExtractionError?.(imageError);
         return { text: "pdf text", images };
       });
-      resolvePluginDocumentExtractorsMock.mockReturnValue([extractor(extract)]);
+      resolvePluginDocumentExtractorsAsyncMock.mockResolvedValue([extractor(extract)]);
       const result = await extractPdfContent({
         ...request,
         buffer,
@@ -246,8 +247,8 @@ describe("extractDocumentContent", () => {
         config,
         onImageExtractionError: callback ? onImageExtractionError : undefined,
       });
-      expect(resolvePluginDocumentExtractorsMock).toHaveBeenCalledOnce();
-      expect(resolvePluginDocumentExtractorsMock.mock.calls[0]?.[0]?.config).toBe(config);
+      expect(resolvePluginDocumentExtractorsAsyncMock).toHaveBeenCalledOnce();
+      expect(resolvePluginDocumentExtractorsAsyncMock.mock.calls[0]?.[0]?.config).toBe(config);
       expect(extract).toHaveBeenCalledOnce();
       expect(result).toStrictEqual({ text: "pdf text", images });
       expect(result.images).toBe(images);

@@ -7,6 +7,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  getCurrentPluginMetadataSnapshot,
+  withPluginMetadataSnapshotScope,
+} from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
+import {
   buildProviderMissingAuthMessageWithPlugin,
   resolveProviderDeprecatedAuthProfileIds,
   shouldDeferProviderSyntheticProfileAuthWithPlugin,
@@ -59,15 +64,15 @@ function assertAuthProfileNotRetired(params: {
   );
 }
 
-function shouldDeferSyntheticProfileAuth(params: {
+async function shouldDeferSyntheticProfileAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   resolvedApiKey: string | undefined;
   modelApi?: string;
-}): boolean {
+}): Promise<boolean> {
   const providerConfig = resolveMergedModelProviderConfig(params.cfg, params.provider);
   return (
-    shouldDeferProviderSyntheticProfileAuthWithPlugin({
+    (await shouldDeferProviderSyntheticProfileAuthWithPlugin({
       provider: params.provider,
       config: params.cfg,
       modelApi: params.modelApi,
@@ -77,7 +82,7 @@ function shouldDeferSyntheticProfileAuth(params: {
         providerConfig,
         resolvedApiKey: params.resolvedApiKey,
       },
-    }) === true
+    })) === true
   );
 }
 
@@ -218,6 +223,29 @@ export async function resolveApiKeyForProviderCore(input: {
   secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth> {
   input.signal?.throwIfAborted();
+  const context = { config: input.cfg, workspaceDir: input.workspaceDir };
+  if (
+    getCurrentPluginMetadataSnapshot({
+      ...context,
+      allowWorkspaceScopedSnapshot: true,
+      allowSynchronousPolicyRead: false,
+      requireDefaultDiscoveryContext: !input.cfg,
+    })
+  ) {
+    return resolvePreparedApiKeyForProvider(input);
+  }
+  const snapshot = await resolvePluginMetadataSnapshotAsync(context);
+  return withPluginMetadataSnapshotScope(
+    snapshot,
+    () => resolvePreparedApiKeyForProvider(input),
+    context,
+  );
+}
+
+async function resolvePreparedApiKeyForProvider(
+  input: Parameters<typeof resolveApiKeyForProviderCore>[0],
+): Promise<ResolvedProviderAuth> {
+  input.signal?.throwIfAborted();
   const modelAuthConfig = resolveModelProviderAuthConfig({
     provider: input.provider,
     config: input.cfg,
@@ -332,12 +360,12 @@ export async function resolveApiKeyForProviderCore(input: {
     // profileId, so we cannot assume explicit === user-locked.
     if (
       !params.lockedProfile &&
-      shouldDeferSyntheticProfileAuth({
+      (await shouldDeferSyntheticProfileAuth({
         cfg,
         provider,
         resolvedApiKey: resolved.apiKey,
         modelApi: params.modelApi,
-      })
+      }))
     ) {
       return resolveApiKeyForProviderCore({
         ...params,
@@ -540,7 +568,7 @@ export async function resolveApiKeyForProviderCore(input: {
           continue;
         }
         if (
-          shouldDeferSyntheticProfileAuth({
+          await shouldDeferSyntheticProfileAuth({
             cfg,
             provider,
             resolvedApiKey: resolved.apiKey,

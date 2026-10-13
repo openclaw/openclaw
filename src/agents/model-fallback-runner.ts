@@ -64,7 +64,7 @@ import {
   shouldDiscardDeferredSessionSuspension,
   throwFallbackFailureSummary,
 } from "./model-fallback-attempt.js";
-import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
+import { resolveModelCandidateChainAsync } from "./model-fallback-candidates.js";
 import {
   markProbeAttempt,
   resolveCooldownDecision,
@@ -155,12 +155,7 @@ async function runWithModelFallbackInternal<T>(
   params: RunWithModelFallbackParams<T>,
   deferredSuspension: DeferredSessionSuspensionState,
 ): Promise<ModelFallbackRunResult<T>> {
-  const operatorAuthority = params.operatorAuthority;
-  if (operatorAuthority) {
-    assertAdmittedRunOperatorAuthority(operatorAuthority);
-    operatorAuthority.assertCurrent();
-  }
-  const plannedCandidates = resolveModelCandidateChain({
+  const plannedCandidates = await resolveModelCandidateChainAsync({
     cfg: params.cfg,
     agentId: params.agentId,
     provider: params.provider,
@@ -169,6 +164,11 @@ async function runWithModelFallbackInternal<T>(
     requestedRouteResolution: params.requestedRouteResolution,
     manifestPlugins: params.manifestPlugins,
   });
+  const operatorAuthority = params.operatorAuthority;
+  if (operatorAuthority) {
+    assertAdmittedRunOperatorAuthority(operatorAuthority);
+    operatorAuthority.assertCurrent();
+  }
   const operatorModelPolicy = operatorAuthority?.modelPolicy;
   const candidates = operatorModelPolicy
     ? plannedCandidates.filter(operatorModelPolicy.allows)
@@ -557,6 +557,7 @@ async function runWithModelFallbackInternal<T>(
           continue;
         }
         const nextRuntime = resolveModelFallbackCandidateAgentRuntime({
+          metadataSnapshot: candidateHarnessAuth.metadataSnapshot,
           cfg: params.cfg,
           agentId: params.agentId,
           sessionKey: params.sessionKey,

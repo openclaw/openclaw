@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import * as runtimeConfig from "../../config/config.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import * as nativeTranscriptAnchor from "../../config/sessions/session-accessor.sqlite-transcript-anchor.js";
 import * as transcriptAnchor from "../../config/sessions/session-transcript-anchor-read.js";
@@ -189,16 +190,65 @@ describe("agent end side effects", () => {
     },
   );
 
-  it.each(["scheduling", "anchor read"])(
+  it("prepares omitted config through the async owner and preserves skill usage", async () => {
+    await withOpenClawTestState({ label: "agent-end-cold-config" }, async (state) => {
+      await state.writeConfig({
+        plugins: { enabled: false },
+        skills: { workshop: { autonomous: { mode: "auto" } } },
+      });
+      recordRunSkillUsage({
+        runId: "cold-config-run",
+        name: "release-runbook",
+        source: "workspace",
+        activation: "read",
+      });
+      await awaitAgentEndSideEffects({
+        skillExperienceReviewSource,
+        event: { messages: [], success: true },
+        ctx: {
+          runId: "cold-config-run",
+          workspaceDir: state.workspaceDir,
+          foregroundPromptContext: {
+            agentId: "main",
+            agentDir: state.agentDir("main"),
+            workspaceDir: state.workspaceDir,
+            sandboxSessionKey: "agent:main:main",
+            trigger: "user",
+          },
+        },
+      });
+      expect(mockExperienceReview).toHaveBeenCalledOnce();
+      expect(
+        mockExperienceReview.mock.calls[0]?.[0].config.skills?.workshop?.autonomous?.mode,
+      ).toBe("auto");
+      expect(mockExperienceReview.mock.calls[0]?.[0].usedSkills).toEqual([
+        { name: "release-runbook", source: "workspace", activation: "read" },
+      ]);
+      expect(mockAwaitAgentEndHook).toHaveBeenCalledOnce();
+    });
+  });
+
+  it.each(["scheduling", "anchor read", "config read"])(
     "still runs agent_end hooks when %s fails",
     async (phase) => {
-      const fail =
-        phase === "scheduling"
-          ? mockExperienceReview
-          : vi.mocked(transcriptAnchor.readActiveTranscriptEntryAnchorAsync);
-      fail.mockImplementationOnce(() => {
-        throw new Error(`${phase} failed`);
-      });
+      if (phase === "config read") {
+        vi.spyOn(runtimeConfig, "captureRuntimeConfigAsyncReader").mockReturnValueOnce(
+          Object.assign(
+            async () => {
+              throw new Error("config read failed");
+            },
+            { assertCurrent: () => {} },
+          ),
+        );
+      } else {
+        const fail =
+          phase === "scheduling"
+            ? mockExperienceReview
+            : vi.mocked(transcriptAnchor.readActiveTranscriptEntryAnchorAsync);
+        fail.mockImplementationOnce(() => {
+          throw new Error(`${phase} failed`);
+        });
+      }
 
       await awaitAgentEndSideEffects({
         skillExperienceReviewSource,
@@ -209,7 +259,7 @@ describe("agent end side effects", () => {
         ctx: {
           runId: "run-1",
           workspaceDir: "/workspace",
-          config: {},
+          ...(phase === "config read" ? {} : { config: {} }),
           foregroundPromptContext: {
             agentId: "main",
             agentDir: "/agent",

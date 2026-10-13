@@ -6,6 +6,7 @@ import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { applyLegacyDoctorMigrations } from "../commands/doctor/shared/legacy-config-compat.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
@@ -136,6 +137,7 @@ describe("channel ownership startup", () => {
         agents: { list: [{ id: authored }, { id: sibling }] },
         channels: { discord: { enabled: true } },
       };
+      await preparePluginMetadataMachineStateAsync({});
       const repaired = applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw });
       await start(repaired.next as OpenClawConfig);
       expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default).toMatchObject({

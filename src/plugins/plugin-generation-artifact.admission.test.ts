@@ -484,7 +484,7 @@ it.each(["npm", "clawhub"] as const)(
             fs.readFileSync(installedPath, "utf8"),
           );
         }
-        const { loadPluginRegistryHandle } = await import("./loader.js");
+        const { loadPluginRegistryHandleAsync } = await import("./loader.js");
         const { resolvePluginMetadataSnapshotAsync } =
           await import("./plugin-metadata-snapshot.js");
         const config = {
@@ -499,9 +499,9 @@ it.each(["npm", "clawhub"] as const)(
           cache: ReturnType<typeof createPluginCache>,
           index: InstalledPluginIndex,
         ) =>
-          observer.measure(() =>
+          observer.measureAsync(() =>
             withPluginCache(cache, () =>
-              loadPluginRegistryHandle({
+              loadPluginRegistryHandleAsync({
                 config,
                 installRecords: index.installRecords,
                 onlyPluginIds: ["fixture"],
@@ -532,7 +532,7 @@ it.each(["npm", "clawhub"] as const)(
         ).toBe(fs.realpathSync(hosts[0]!));
 
         // Real discovery keeps the manifest and executable-entry hardlink policy intact.
-        expect(loadRuntime(freshCache, persisted).value.plugins).toContainEqual(
+        expect((await loadRuntime(freshCache, persisted)).value.plugins).toContainEqual(
           expect.objectContaining({ id: "fixture", status: "loaded", source: fixture.entry }),
         );
         for (const artifact of artifacts.splice(0)) {
@@ -549,7 +549,7 @@ it.each(["npm", "clawhub"] as const)(
               env: state.env,
               stateDir: state.stateDir,
             });
-            return loadPluginRegistryHandle({
+            return loadPluginRegistryHandleAsync({
               config,
               manifestRegistry: snapshot.manifestRegistry,
               installRecords: snapshot.index.installRecords,

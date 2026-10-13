@@ -1,6 +1,7 @@
 // Registry contract tests cover plugin contract registry contents and lookup behavior.
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { describe, expect, it } from "vitest";
+import { preparePluginMetadataMachineState } from "../installed-plugin-index-record-state.js";
 import { loadPluginManifestRegistryCore } from "../manifest-registry.js";
 import { resolveManifestContractPluginIds } from "../plugin-registry.js";
 import { BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS } from "./inventory/bundled-capability-metadata.js";
@@ -163,6 +164,8 @@ describe("plugin contract registry", () => {
   });
 
   it("covers every bundled web fetch plugin from the shared resolver", () => {
+    // Runtime state resets between tests; this fixture explicitly admits native metadata once.
+    preparePluginMetadataMachineState({});
     const bundledWebFetchPluginIds = resolveManifestContractPluginIds({
       contract: "webFetchProviders",
       origin: "bundled",
@@ -178,6 +181,7 @@ describe("plugin contract registry", () => {
   });
 
   it("covers every bundled web search plugin from the shared resolver", () => {
+    preparePluginMetadataMachineState({});
     const snapshotPluginIds = new Set(
       BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.map((entry) => entry.pluginId),
     );

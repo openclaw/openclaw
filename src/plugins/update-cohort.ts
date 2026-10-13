@@ -7,6 +7,7 @@ import {
   attachPluginInstallOwnerMigrations,
   resolvePluginInstallOwnerMigrations,
 } from "./install-transaction.js";
+import { preparePluginMetadataMachineStateAsync } from "./installed-plugin-index-record-state.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import {
@@ -68,18 +69,21 @@ async function convergePluginReleaseCohortWithLease(
 ): Promise<PluginCohortConvergenceResult> {
   const operatorManaged: PluginUpdateOutcome[] = [];
   const operatorManagedIds = new Set<string>();
-  const loadFreshIndex = (config: OpenClawConfig) =>
-    withPluginCache(createPluginCache(), () =>
-      loadInstalledPluginIndex({
+  const loadFreshIndex = async (config: OpenClawConfig) => {
+    await using cache = createPluginCache();
+    return await withPluginCache(cache, async () => {
+      await preparePluginMetadataMachineStateAsync({ env: params.env });
+      return loadInstalledPluginIndex({
         config,
         installRecords: config.plugins?.installs ?? {},
         workspaceDir: params.workspaceDir,
         env: params.env,
-      }),
-    );
+      });
+    });
+  };
   // Resolve explicit source selection before channel sync can replace its shadowed record.
   if (params.config.plugins?.load?.paths?.length) {
-    const index = loadFreshIndex(params.config);
+    const index = await loadFreshIndex(params.config);
     const resolver = createInstalledPluginOwnershipResolver(index, params.env);
     for (const plugin of index.plugins) {
       if (plugin.origin !== "config") {
@@ -155,7 +159,7 @@ async function convergePluginReleaseCohortWithLease(
     installOwners = installOwners.filter((id) => !sourceBundledIds.has(id));
   }
   // Without prior package owners there is no retired child policy to reconcile.
-  const beforeIndex = installOwners.length ? loadFreshIndex(config) : undefined;
+  const beforeIndex = installOwners.length ? await loadFreshIndex(config) : undefined;
   const packageUpdateSnapshot = beforeIndex
     ? capturePluginPackageUpdateSnapshot({
         index: beforeIndex,
@@ -220,7 +224,7 @@ async function convergePluginReleaseCohortWithLease(
   if (beforeIndex && packageUpdateSnapshot) {
     // Reinstall can restore the same path. Reconciliation needs new filesystem facts,
     // including formerly missing files, without retiring a retained runtime generation.
-    const afterIndex = loadFreshIndex(config);
+    const afterIndex = await loadFreshIndex(config);
     const reconciled = reconcilePluginPackageUpdateConfig({
       config,
       beforeIndex,

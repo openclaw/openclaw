@@ -5,7 +5,10 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
-import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "../plugins/loader.js";
+import {
+  acquirePluginRegistryForInspection,
+  loadPluginRegistryHandleAsync,
+} from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   makePluginLoaderTempDir,
@@ -327,7 +330,9 @@ describe("async speech preparation resources", () => {
       const fixture = createPreparationFixture();
       await fixture.runTest(async () => {
         const registry =
-          mode === "active" ? loadPluginRegistryHandle({ config: fixture.cfg }) : undefined;
+          mode === "active"
+            ? await loadPluginRegistryHandleAsync({ config: fixture.cfg })
+            : undefined;
         for (let index = 0; index < 4; index++) {
           const result = await withPluginRuntimeRegistryScope(registry, fixture.prepare);
           expect(result.directives.hasDirective).toBe(true);

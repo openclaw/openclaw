@@ -6,7 +6,17 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
-import { collectDoctorPreviewNotes } from "./preview-warnings.js";
+import { preparePluginMetadataMachineStateAsync } from "../../../plugins/installed-plugin-index-record-state.js";
+import { collectDoctorPreviewNotes as collectDoctorPreviewNotesUnprepared } from "./preview-warnings.js";
+
+async function collectDoctorPreviewNotes(
+  params: Parameters<typeof collectDoctorPreviewNotesUnprepared>[0],
+) {
+  if (params.env) {
+    await preparePluginMetadataMachineStateAsync({ env: params.env });
+  }
+  return collectDoctorPreviewNotesUnprepared(params);
+}
 
 async function collectDoctorPreviewWarnings(
   params: Parameters<typeof collectDoctorPreviewNotes>[0],
@@ -376,7 +386,8 @@ function expectWarningsContaining(warnings: string[], texts: string[]): void {
 }
 
 describe("doctor preview warnings", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await preparePluginMetadataMachineStateAsync({});
     manifestState.plugins = [manifest("discord")];
     manifestState.diagnostics = [];
     staleOAuthShadowState.warnings = [];

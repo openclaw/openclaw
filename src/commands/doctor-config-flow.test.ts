@@ -8,8 +8,12 @@ import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import { writeChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
 import type { PluginCapabilityConsentHandler } from "../plugins/capability-consent.js";
 import { buildPluginCapabilityConsentReview } from "../plugins/capability-summary.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { listPluginDoctorLegacyConfigRules } from "../plugins/doctor-contract-registry.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  resolvePluginMetadataSnapshotAsync,
+  type PluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { noteDoctorConfigPreflightIssues } from "./doctor-config-analysis.js";
@@ -165,6 +169,7 @@ vi.mock("./doctor/shared/preview-warnings.js", () => ({
   }),
 }));
 
+// mock-isolation: Doctor preflight reads the synthetic snapshot instead of operator config and storage.
 vi.mock("./doctor-config-preflight.js", async () => {
   const { hashConfigRaw } = await import("../config/io.read-helpers.js");
   const { findDoctorLegacyConfigIssues } = await import("./doctor/shared/legacy-config-issues.js");
@@ -175,7 +180,13 @@ vi.mock("./doctor-config-preflight.js", async () => {
       const config = structuredClone(input.config);
       const raw = input.exists ? JSON.stringify(parsed) : null;
       const legacyIssues =
-        input.preflightMode === "fast" ? [] : findDoctorLegacyConfigIssues(parsed, parsed);
+        input.preflightMode === "fast"
+          ? []
+          : withPluginMetadataSnapshotScope(
+              await resolvePluginMetadataSnapshotAsync({ config: parsed, env: process.env }),
+              () => findDoctorLegacyConfigIssues(parsed, parsed),
+              { config: parsed, env: process.env },
+            );
       return {
         snapshot: {
           exists: input.exists,

@@ -17,10 +17,10 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
-import { loadPluginRegistryHandle } from "../plugins/loader.js";
+import { loadPluginRegistryHandleAsync } from "../plugins/loader.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { getPluginInstance, type PluginInstanceHandle } from "../plugins/plugin-instance-scope.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
@@ -69,9 +69,12 @@ it.for(["plain", "shared"] as const)(
       };
       const instances: PluginInstanceHandle[] = [];
       const loadGeneration = () =>
-        withPluginCache(createPluginCache(), () => {
-          const metadataSnapshot = resolvePluginMetadataSnapshot({ config, workspaceDir });
-          const pluginRegistry = loadPluginRegistryHandle({
+        withPluginCache(createPluginCache(), async () => {
+          const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+            config,
+            workspaceDir,
+          });
+          const pluginRegistry = await loadPluginRegistryHandleAsync({
             config,
             workspaceDir,
             manifestRegistry: metadataSnapshot.manifestRegistry,
@@ -188,13 +191,13 @@ it.for(["plain", "shared"] as const)(
               captured.push(call);
             },
           });
-          const original = loadGeneration();
+          const original = await loadGeneration();
           setActivePluginRegistry(original.pluginRegistry);
           initializeGlobalHookRunner(original.pluginRegistry);
           await withPluginRuntimeGenerationScope(original, () => ensureMcpLoopbackServer());
           await callTool("before");
 
-          const replacement = loadGeneration();
+          const replacement = await loadGeneration();
           setActivePluginRegistry(replacement.pluginRegistry);
           initializeGlobalHookRunner(replacement.pluginRegistry);
           await original.instance.dispose();

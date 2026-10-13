@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { loadOpenClawPluginCliRegistry, loadOpenClawPlugins } from "./loader.js";
+import { loadOpenClawPluginCliRegistry, loadOpenClawPluginsAsync } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   EMPTY_PLUGIN_SCHEMA,
@@ -208,7 +208,7 @@ module.exports = { id: "packaged-cli-metadata", register() {} };`,
     expect(registry.plugins.find((entry) => entry.id === id)?.status).toBe("loaded");
   });
 
-  it("can force channel runtime entries for CLI registration when setup entries exist", () => {
+  it("can force channel runtime entries for CLI registration when setup entries exist", async () => {
     useNoBundledPlugins();
     const pluginDir = makePluginLoaderTempDir();
     const modeMarker = path.join(pluginDir, "registration-mode.txt");
@@ -255,7 +255,7 @@ module.exports = defineChannelPluginEntry({
       "utf-8",
     );
 
-    const registry = loadOpenClawPlugins({
+    const registry = await loadOpenClawPluginsAsync({
       activate: false,
       cache: false,
       channelPluginLoadIntent: "full",
@@ -366,7 +366,7 @@ module.exports = defineChannelPluginEntry({
     };
 
     const metadataRegistry = await loadOpenClawPluginCliRegistry({ cache: false, config });
-    const fullRegistry = loadOpenClawPlugins({ cache: false, config });
+    const fullRegistry = await loadOpenClawPluginsAsync({ cache: false, config });
     for (const registry of [metadataRegistry, fullRegistry]) {
       expect(registry.cliRegistrars[0]?.commands).toEqual(["machine-output-cli", "additional-cli"]);
       expect(

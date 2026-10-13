@@ -6,6 +6,7 @@ import { normalizeProviderId } from "../../agents/model-selection.js";
 import { resolveCompatibleAgentRuntimeForProvider } from "../../agents/session-runtime-compat.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 
 type ModelRuntimeDirectiveResolution =
   | { kind: "unchanged" }
@@ -18,6 +19,7 @@ export function resolveModelRuntimeDirective(params: {
   rawRuntime?: string;
   provider: string;
   cfg: OpenClawConfig;
+  metadataSnapshot?: PluginMetadataSnapshot | null;
   sessionEntry?: Pick<SessionEntry, "agentRuntimeOverride">;
 }): ModelRuntimeDirectiveResolution {
   const requestedRuntime = params.rawRuntime?.trim();
@@ -36,6 +38,7 @@ export function resolveModelRuntimeDirective(params: {
     provider,
     runtime,
     cfg: params.cfg,
+    metadataSnapshot: params.metadataSnapshot,
   });
   if (compatibleRuntime) {
     return requestedRuntime ? { kind: "set", runtime: compatibleRuntime } : { kind: "unchanged" };

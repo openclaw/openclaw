@@ -7,6 +7,7 @@ import { resolveConfiguredAgentDatabaseCandidatePaths } from "../../config/sessi
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { preflightOpenClawDatabaseSchemaContexts } from "../../state/openclaw-database-preflight-contexts.js";
 import {
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
@@ -123,6 +124,7 @@ export async function captureTargetDatabaseSchemaContext(
     // never reuse of the old source's plan or refusal merely because it changed.
     const { planLegacyConfigForUpdateChannel } =
       await import("../../commands/doctor/legacy-config-repair.js");
+    await prepareBundledDiscoveryMode(inspectionEnv);
     legacyConfigPlan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
   }
   if (

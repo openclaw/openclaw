@@ -9,6 +9,8 @@ import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
@@ -66,7 +68,11 @@ async function withDemandFixture(
   }) => Promise<void>,
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    setRuntimeConfigSnapshot({});
+    const config = {};
+    setRuntimeConfigSnapshot(config);
+    const metadata = await resolvePluginMetadataSnapshotAsync({ config, allowCurrent: false });
+    const withMetadata = <T>(operation: () => T) =>
+      withPluginMetadataSnapshotScope(metadata, operation, { config });
     const sessionRuntime =
       await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
     dispatchTestMocks.resolveTarget.mockImplementation(
@@ -204,15 +210,17 @@ async function withDemandFixture(
         },
       );
       const respond = vi.fn();
-      await withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
-        getSessionDispatchHandler()({
-          req: { type: "req", id: `dispatch:${sessionId}`, method: "sessions.dispatch" },
-          params: { key, ...(deviceId ? { deviceId } : { autoDevice: true }) },
-          respond,
-          context,
-          client,
-          isWebchatConnect: () => false,
-        }),
+      await withMetadata(() =>
+        withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
+          getSessionDispatchHandler()({
+            req: { type: "req", id: `dispatch:${sessionId}`, method: "sessions.dispatch" },
+            params: { key, ...(deviceId ? { deviceId } : { autoDevice: true }) },
+            respond,
+            context,
+            client,
+            isWebchatConnect: () => false,
+          }),
+        ),
       );
       expect(respond).toHaveBeenCalledWith(
         true,
@@ -228,22 +236,24 @@ async function withDemandFixture(
     };
     const send = async (sessionId: string) => {
       const respond = vi.fn();
-      await withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
-        expectDefined(
-          sessionMessagingHandlers["sessions.send"],
-          "sessions.send",
-        )({
-          req: { type: "req", id: `send:${sessionId}`, method: "sessions.send" },
-          params: {
-            key: sessionKey(sessionId),
-            message: "Run the node workload",
-            idempotencyKey: `run:${sessionId}`,
-          },
-          respond,
-          context,
-          client,
-          isWebchatConnect: () => false,
-        }),
+      await withMetadata(() =>
+        withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
+          expectDefined(
+            sessionMessagingHandlers["sessions.send"],
+            "sessions.send",
+          )({
+            req: { type: "req", id: `send:${sessionId}`, method: "sessions.send" },
+            params: {
+              key: sessionKey(sessionId),
+              message: "Run the node workload",
+              idempotencyKey: `run:${sessionId}`,
+            },
+            respond,
+            context,
+            client,
+            isWebchatConnect: () => false,
+          }),
+        ),
       );
       expect(respond).toHaveBeenCalledWith(
         true,

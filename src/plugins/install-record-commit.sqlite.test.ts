@@ -10,6 +10,7 @@ import { replaceConfigFile, type OpenClawConfig } from "../config/config.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { prepareBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import { resolvePluginCapabilityConsent } from "./capability-consent.js";
 import { computeDeclaredSurfaceHash } from "./capability-summary.js";
@@ -335,7 +336,9 @@ describe("plugin install record commit rollback", () => {
           installPath: "/tmp/original",
         },
       });
-      expect(persisted?.policyHash).toBe(resolveInstalledPluginIndexPolicyHash({}));
+      const activateDiscovery = await prepareBundledDiscoveryMode(state.env);
+      activateDiscovery();
+      expect(persisted?.policyHash).toBe(resolveInstalledPluginIndexPolicyHash({}, state.env));
     });
     // A timed-out body can still be unwinding its async finally. Keep child-close
     // and state cleanup owned by the runner before it starts the next test.

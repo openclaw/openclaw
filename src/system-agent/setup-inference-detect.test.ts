@@ -3,6 +3,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { InferenceBackendCandidate } from "../commands/onboard-inference-ambient.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import type { ProviderAppGuidedSetupCandidate, ProviderPlugin } from "../plugins/types.js";
 import type { DetectSetupInferenceDeps, SetupInferenceDetection } from "./setup-inference-core.js";
@@ -98,7 +99,8 @@ function detectWithProvider(
   );
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await preparePluginMetadataMachineStateAsync({});
   vi.useFakeTimers();
   fixture.loadAuthProfileStore.mockReturnValue({
     version: 1,

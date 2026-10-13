@@ -34,7 +34,7 @@ import { type ExecWorkdirResolution, resolveExecWorkdir } from "./bash-tools.exe
 import { buildSandboxEnv, coerceEnv } from "./bash-tools.shared.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
-import { sanitizeEnvVars } from "./sandbox/sanitize-env-vars.js";
+import { sanitizeEnvVarsAsync } from "./sandbox/sanitize-env-vars.js";
 import { isSubagentEnvelopeSession } from "./subagents/spawn/subagent-capabilities.js";
 import { ToolInputError } from "./tools/common.js";
 
@@ -378,7 +378,7 @@ export function createExecRequestPreparation(params: {
   };
 }
 
-export function resolvePreparedExecEnvironment(params: {
+export async function resolvePreparedExecEnvironment(params: {
   execParams: ExecToolArgs;
   host: ExecHost;
   sandbox?: BashSandboxConfig;
@@ -395,11 +395,11 @@ export function resolvePreparedExecEnvironment(params: {
   managedLocalIdentity?: boolean;
   localProcessEnv?: Readonly<Record<string, string>>;
   warnings: string[];
-}): {
+}): Promise<{
   env: Record<string, string>;
   requestedEnv?: Record<string, string>;
   executionContext?: SystemRunExecutionContext;
-} {
+}> {
   if (params.localProcessEnv && params.host !== "gateway") {
     throw new Error(LOCAL_INSTALLATION_TARGET_UNSUPPORTED);
   }
@@ -431,7 +431,7 @@ export function resolvePreparedExecEnvironment(params: {
     rejectedStoreKeys.add(OPENCLAW_CLI_ENV_VAR);
   }
   if (params.host === "sandbox" && storeEnv) {
-    const sandboxStoreEnvResult = sanitizeEnvVars(storeEnv);
+    const sandboxStoreEnvResult = await sanitizeEnvVarsAsync(storeEnv);
     storeEnv = sandboxStoreEnvResult.allowed;
     for (const key of sandboxStoreEnvResult.blocked) {
       rejectedStoreKeys.add(key);

@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { commitMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-store.js";
 import {
   markRestartAbortedMainSessions,
@@ -26,6 +26,7 @@ import {
   hasLiveAgentRunContext,
   registerAgentRunContext,
 } from "../infra/agent-run-registry.js";
+import { preparePluginTestRuntimeMetadata } from "../plugin-sdk/plugin-test-runtime.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import {
@@ -49,8 +50,12 @@ let storePath: string;
 
 beforeAll(async () => {
   state = await createOpenClawTestState({ label: "restart-drain-session-settlement" });
-  setRuntimeConfigSnapshot(cfg, cfg);
   storePath = state.statePath("agents", "main", "sessions", "sessions.json");
+});
+
+beforeEach(async () => {
+  await preparePluginTestRuntimeMetadata(cfg);
+  setRuntimeConfigSnapshot(cfg, cfg);
 });
 
 afterAll(async () => {

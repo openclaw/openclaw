@@ -5,14 +5,20 @@ import {
   normalizeOptionalString,
 } from "../../packages/normalization-core/src/string-coerce.js";
 import type { OpenClawConfig, ResolvedTtsPersona, TtsProvider } from "../config/types.js";
+import { buildCapabilityProviderIndex } from "../plugins/provider-registry-shared.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
-import { compareSpeechProviderOrder } from "./provider-registry-core.js";
+import {
+  compareSpeechProviderOrder,
+  createSpeechProviderRegistry,
+} from "./provider-registry-core.js";
 import {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
   listSpeechProviders,
+  listSpeechProvidersAsync,
   normalizeSpeechProviderId,
+  withSpeechProviderRegistry,
 } from "./provider-registry.js";
 import type { SpeechProviderConfig } from "./provider-types.js";
 import { withSpeakerSelectionCompat } from "./speaker.js";
@@ -98,9 +104,7 @@ function canonicalizeSpeechProviderIdFromInventory(
     return canonicalizeSpeechProviderId(providerId, cfg);
   }
   const inventoryProvider = findInventoryProvider(providers, normalized);
-  // A prepared inventory can omit voice-model-only providers. Preserve the
-  // registry's public alias contract on misses instead of exposing an alias.
-  return inventoryProvider?.id ?? canonicalizeSpeechProviderId(providerId, cfg) ?? normalized;
+  return inventoryProvider?.id ?? normalized;
 }
 
 function findInventoryProvider(providers: readonly SpeechProviderPlugin[], providerId: string) {
@@ -286,12 +290,40 @@ function resolveLazyProviderConfig(
   return next;
 }
 
+/** @deprecated Use getResolvedSpeechProviderConfigAsync, or pass a prepared registry. */
 export function getResolvedSpeechProviderConfig(
   config: ResolvedTtsConfig,
   providerId: string,
   cfg?: OpenClawConfig,
+  registry: TtsProviderRegistry = defaultProviderRegistry,
 ): SpeechProviderConfig {
-  return resolveSpeechProviderConfig(config, providerId, cfg, defaultProviderRegistry);
+  if (registry === defaultProviderRegistry) {
+    warnPluginSdkDeprecation({
+      family: "tts-config-sync",
+      method: "getResolvedSpeechProviderConfig",
+      replacement: "getResolvedSpeechProviderConfigAsync",
+      compatibility: "The synchronous API requires an already prepared and loaded speech registry.",
+    });
+  }
+  return resolveSpeechProviderConfig(config, providerId, cfg, registry);
+}
+
+export async function getResolvedSpeechProviderConfigAsync(
+  config: ResolvedTtsConfig,
+  providerId: string,
+  cfg?: OpenClawConfig,
+): Promise<SpeechProviderConfig> {
+  const providers = await listSpeechProvidersAsync(cfg ?? config.sourceConfig);
+  const byId = buildCapabilityProviderIndex(providers, "aliases");
+  return resolveSpeechProviderConfig(
+    config,
+    providerId,
+    cfg,
+    createSpeechProviderRegistry({
+      getProvider: (id) => byId.get(id),
+      listProviders: () => providers,
+    }),
+  );
 }
 
 function resolveSpeechProviderConfig(
@@ -391,9 +423,14 @@ export function resolveTtsProvider(
 export async function resolveTtsProviderAsync(
   config: ResolvedTtsConfig,
   prefsPath: string,
-  registry: TtsProviderRegistry = defaultProviderRegistry,
+  registry?: TtsProviderRegistry,
   prefs = readPrefs(prefsPath),
 ): Promise<TtsProvider> {
+  if (!registry) {
+    return await withSpeechProviderRegistry(config.sourceConfig, (prepared) =>
+      resolveTtsProviderAsync(config, prefsPath, prepared, prefs),
+    );
+  }
   const preferred = resolvePreferredTtsProvider(config, prefsPath, registry, prefs);
   if (preferred) {
     return preferred;
@@ -425,8 +462,7 @@ export function resolvePreparedTtsProvider(params: {
   }
   if (params.preference?.source === "persona") {
     const preferredProvider = params.preference.provider;
-    const inventoryProvider = findInventoryProvider(params.providers, preferredProvider);
-    const personaProvider = inventoryProvider ?? getSpeechProvider(preferredProvider, effectiveCfg);
+    const personaProvider = findInventoryProvider(params.providers, preferredProvider);
     if (personaProvider) {
       return personaProvider.id;
     }
@@ -451,11 +487,20 @@ export function resolvePreparedTtsProvider(params: {
   return params.config.provider;
 }
 
+/** @deprecated Use resolveTtsProviderOrderAsync, or pass a prepared provider inventory. */
 export function resolveTtsProviderOrder(
   primary: TtsProvider,
   cfg?: OpenClawConfig,
   providers?: readonly SpeechProviderPlugin[],
 ): TtsProvider[] {
+  if (!providers) {
+    warnPluginSdkDeprecation({
+      family: "tts-order-sync",
+      method: "resolveTtsProviderOrder",
+      replacement: "resolveTtsProviderOrderAsync",
+      compatibility: "The synchronous API requires an already prepared and loaded speech registry.",
+    });
+  }
   const effectiveCfg = cfg ? resolveTtsRuntimeConfig(cfg) : undefined;
   const normalizedPrimary =
     canonicalizeSpeechProviderIdFromInventory(primary, effectiveCfg, providers) ?? primary;
@@ -470,6 +515,15 @@ export function resolveTtsProviderOrder(
     ordered.add(provider.id);
   }
   return [...ordered];
+}
+
+export async function resolveTtsProviderOrderAsync(
+  primary: TtsProvider,
+  cfg?: OpenClawConfig,
+): Promise<TtsProvider[]> {
+  return await withSpeechProviderRegistry(cfg, (registry) =>
+    resolveTtsProviderOrder(primary, cfg, registry.listSpeechProviders()),
+  );
 }
 
 export function resolveTtsProviderCandidates(
@@ -499,7 +553,7 @@ export function resolvePrimaryTtsProviderCandidate(
   });
 }
 
-/** @deprecated Use isTtsProviderConfiguredAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use isTtsProviderConfiguredAsync. Removed in a later stable release. */
 export function isTtsProviderConfigured(
   config: ResolvedTtsConfig,
   provider: TtsProvider | SpeechProviderPlugin,
@@ -561,8 +615,19 @@ export async function isTtsProviderConfiguredAsync(
   config: ResolvedTtsConfig,
   provider: TtsProvider | SpeechProviderPlugin,
   cfg?: OpenClawConfig,
+  registry?: TtsProviderRegistry,
 ): Promise<boolean> {
-  return await isSpeechProviderConfiguredAsync(config, provider, cfg, defaultProviderRegistry);
+  if (registry || typeof provider !== "string") {
+    return await isSpeechProviderConfiguredAsync(
+      config,
+      provider,
+      cfg,
+      registry ?? defaultProviderRegistry,
+    );
+  }
+  return await withSpeechProviderRegistry(cfg ?? config.sourceConfig, (prepared) =>
+    isSpeechProviderConfiguredAsync(config, provider, cfg, prepared),
+  );
 }
 
 async function isSpeechProviderConfiguredAsync(

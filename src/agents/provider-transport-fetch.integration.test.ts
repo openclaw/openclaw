@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { redactSensitiveText } from "../logging/redact.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
+import { attachProviderRequestFactsFixture } from "./provider-request.test-support.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 
 describe("guarded model fetch secret sentinel integration", () => {
@@ -27,12 +28,12 @@ describe("guarded model fetch secret sentinel integration", () => {
     try {
       const port = (server.address() as AddressInfo).port;
       const baseUrl = `http://127.0.0.1:${port}/v1`;
-      const model = {
+      const model = attachProviderRequestFactsFixture({
         id: "integration-model",
         provider: "sentinel-integration",
         api: "openai-responses",
         baseUrl,
-      } as unknown as Model<"openai-responses">;
+      } as unknown as Model<"openai-responses">);
       const secret = "integration-provider-secret";
       const sentinel = mintSecretSentinel(secret, { label: "model-auth:integration" });
 

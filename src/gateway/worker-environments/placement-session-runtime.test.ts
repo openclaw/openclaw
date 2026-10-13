@@ -5,6 +5,7 @@ import { registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { preparePluginMetadataMachineStateAsync } from "../../plugins/installed-plugin-index-record-state.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   getActivePluginRegistry,
@@ -36,9 +37,10 @@ async function preparePatchError(
 const originalPluginRegistry = getActivePluginRegistry();
 
 describe("worker placement runtime capabilities", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     clearRuntimeAuthProfileStoreSnapshots();
     setActivePluginRegistry(createEmptyPluginRegistry(), "placement-runtime-test", "default");
+    await preparePluginMetadataMachineStateAsync({});
   });
 
   afterEach(() => {
@@ -301,9 +303,10 @@ describe("worker placement runtime capabilities", () => {
 });
 
 describe("worker placement runtime capability projection", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     clearRuntimeAuthProfileStoreSnapshots();
     setActivePluginRegistry(createEmptyPluginRegistry(), "placement-runtime-test", "default");
+    await preparePluginMetadataMachineStateAsync({});
   });
 
   afterEach(() => {

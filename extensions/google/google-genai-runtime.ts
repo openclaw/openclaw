@@ -1,9 +1,9 @@
 import { GoogleGenAI, type GoogleGenAIOptions } from "@google/genai";
-import { resolveGoogleApiClientHeaders } from "./google-api-client-header.js";
+import { resolveGoogleApiClientHeadersAsync } from "./google-api-client-header.js";
 
 export type GoogleGenAIClient = InstanceType<typeof GoogleGenAI>;
 
-export function createGoogleGenAI(options: GoogleGenAIOptions): GoogleGenAIClient {
+export async function createGoogleGenAI(options: GoogleGenAIOptions): Promise<GoogleGenAIClient> {
   const httpOptions = options.httpOptions ?? {};
   return new GoogleGenAI({
     ...options,
@@ -11,9 +11,9 @@ export function createGoogleGenAI(options: GoogleGenAIOptions): GoogleGenAIClien
       ...httpOptions,
       headers: {
         ...httpOptions.headers,
-        ...resolveGoogleApiClientHeaders({
+        ...(await resolveGoogleApiClientHeadersAsync({
           baseUrl: typeof httpOptions.baseUrl === "string" ? httpOptions.baseUrl : undefined,
-        }),
+        })),
       },
     },
   });

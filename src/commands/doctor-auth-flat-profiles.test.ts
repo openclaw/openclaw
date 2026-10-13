@@ -18,8 +18,8 @@ import {
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
 import {
-  loadAuthProfileStoreWithoutExternalProfiles,
-  saveAuthProfileStore,
+  loadAuthProfileStoreWithoutExternalProfilesAsync,
+  saveAuthProfileStoreAsync,
 } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
@@ -34,6 +34,7 @@ import {
   detectSharedAuthStoreMigration,
   migrateSharedAuthStore,
 } from "../infra/state-migrations.shared-auth-store.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -92,6 +93,7 @@ async function makeTestState(): Promise<OpenClawTestState> {
     },
   });
   states.push(state);
+  await preparePluginMetadataMachineStateAsync({ env: state.env });
   return state;
 }
 
@@ -507,7 +509,7 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
       ["empty", credential],
     ] as const) {
       expect(
-        loadAuthProfileStoreWithoutExternalProfiles(state.agentDir(agentId)).profiles[
+        (await loadAuthProfileStoreWithoutExternalProfilesAsync(state.agentDir(agentId))).profiles[
           "openai:default"
         ],
       ).toEqual(expected);
@@ -589,6 +591,7 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     expect(loaded?.order?.openai).toBeUndefined();
     expect(loaded?.lastGood?.openai).toBeUndefined();
     expect(loaded?.usageStats?.["openai:alpha"]).toBeUndefined();
+    await preparePluginMetadataMachineStateAsync({ env: state.env });
     expect(resolveAuthProfileOrder({ cfg, store: loaded!, provider: "openai" })).toEqual([
       "openai:default",
     ]);
@@ -1059,7 +1062,7 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
 
     for (const entry of cases) {
       const state = await makeTestState();
-      saveAuthProfileStore(
+      await saveAuthProfileStoreAsync(
         createAuthProfileStoreFixture({
           "openai:default": entry.existing,
         }),
@@ -1098,7 +1101,7 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
 describe("legacy flat profiles through the canonical auth migration owner", () => {
   it("preserves existing SQLite auth profiles when migrating a legacy flat store", async () => {
     const state = await makeTestState();
-    saveAuthProfileStore(
+    await saveAuthProfileStoreAsync(
       createAuthProfileStoreFixture({
         "anthropic:default": {
           type: "oauth",

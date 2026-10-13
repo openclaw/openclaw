@@ -328,6 +328,13 @@ private cache is disposed before the lease is released. These best-effort scans
 do not freeze the filesystem: artifacts created or retired after inspection
 remain for a later cleanup attempt. Scheduling and deletion criteria are unchanged.
 
+Discovery policy is a prepared machine-state fact. Async metadata and runtime
+owners load it before deriving manifests, activation, or provider availability;
+those synchronous derivations never open SQLite on a cache miss. The fact cache
+keeps state roots separate, and an artifact-preserving inspection uses policy
+from its own captured database snapshot. Boot and offline CLI/Doctor work have
+an explicit native preparation path rather than a runtime fallback.
+
 Each captured generation links the selected host `openclaw` package so Workers
 and child processes started from its modules can resolve the host SDK. This link
 does not depend on the main thread's module hooks and is recreated during recovery.

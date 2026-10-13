@@ -1,15 +1,18 @@
 import type { OpenClawConfig, TtsConfig } from "../config/types.js";
 import { mergeDeep } from "../infra/deep-merge.js";
-import {
-  resolvePluginCapabilityProvider,
-  resolvePluginCapabilityProviders,
-} from "../plugins/capability-provider-runtime.js";
+import { resolvePluginCapabilityProvidersAsync } from "../plugins/capability-provider-runtime.js";
 import { createLegacyPluginSdkProviderProjection } from "../plugins/legacy-sdk-provider-projection.js";
 import { getLegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
+import { buildCapabilityProviderIndex } from "../plugins/provider-registry-shared.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { parseTtsDirectives } from "./directives.js";
 import { createSpeechProviderRegistry } from "./provider-registry-core.js";
-import { canonicalizeSpeechProviderId, getSpeechProvider } from "./provider-registry.js";
+import {
+  canonicalizeSpeechProviderId,
+  getSpeechProvider,
+  listSpeechProvidersAsync,
+  type SpeechProviderRegistry,
+} from "./provider-registry.js";
 import type { TtsDirectiveOverrides, TtsDirectiveParseResult } from "./provider-types.js";
 import { resolveTtsProvider, resolveTtsProviderAsync } from "./tts-provider-resolution.js";
 import {
@@ -39,18 +42,21 @@ export async function prepareTtsRequest(params: {
       projection.adopt();
       return project;
     };
-    const registry = createSpeechProviderRegistry({
-      getProvider: (providerId, cfg) =>
-        resolvePluginCapabilityProvider({ key: "speechProviders", providerId, cfg }, retain),
-      listProviders: (cfg) =>
-        resolvePluginCapabilityProviders({ key: "speechProviders", cfg }, retain),
-    });
     const cfg = params.override
       ? {
           ...params.cfg,
           tts: mergeDeep(params.cfg.tts ?? {}, params.override) as TtsConfig,
         }
       : params.cfg;
+    const providers = await resolvePluginCapabilityProvidersAsync(
+      { key: "speechProviders", cfg },
+      retain,
+    );
+    const byId = buildCapabilityProviderIndex(providers, "aliases");
+    const registry = createSpeechProviderRegistry({
+      getProvider: (providerId) => byId.get(providerId),
+      listProviders: () => providers,
+    });
     const config = resolveTtsConfig(cfg);
     const directives = parseTtsDirectives(params.text, config.modelOverrides, {
       cfg,
@@ -117,15 +123,22 @@ export async function resolveExplicitTtsOverridesAsync(
   const prepared = prepareExplicitTtsOverrides(params);
   const { cfg, providerInput, modelId, voiceId, config } = prepared;
   const prefsPath = params.prefsPath ?? (await resolveTtsPrefsPathAsync(config));
+  const providers = await listSpeechProvidersAsync(cfg);
+  const byId = buildCapabilityProviderIndex(providers, "aliases");
+  const registry = createSpeechProviderRegistry({
+    getProvider: (providerId) => byId.get(providerId),
+    listProviders: () => providers,
+  });
   const selectedProvider =
-    canonicalizeSpeechProviderId(providerInput, cfg) ??
-    (modelId || voiceId ? await resolveTtsProviderAsync(config, prefsPath) : undefined);
-  return resolveExplicitTtsOverridesForProvider(prepared, selectedProvider);
+    registry.canonicalizeSpeechProviderId(providerInput) ??
+    (modelId || voiceId ? await resolveTtsProviderAsync(config, prefsPath, registry) : undefined);
+  return resolveExplicitTtsOverridesForProvider(prepared, selectedProvider, registry);
 }
 
 function resolveExplicitTtsOverridesForProvider(
   { cfg, providerInput, modelId, voiceId }: ReturnType<typeof prepareExplicitTtsOverrides>,
   selectedProvider: string | undefined,
+  registry: Pick<SpeechProviderRegistry, "getSpeechProvider"> = { getSpeechProvider },
 ): TtsDirectiveOverrides {
   if (providerInput && !selectedProvider) {
     throw new Error(`Unknown TTS provider "${providerInput}".`);
@@ -139,7 +152,7 @@ function resolveExplicitTtsOverridesForProvider(
     throw new Error("TTS model or voice overrides require a resolved provider.");
   }
 
-  const provider = getSpeechProvider(selectedProvider, cfg);
+  const provider = registry.getSpeechProvider(selectedProvider, cfg);
   if (!provider) {
     throw new Error(`speech provider ${selectedProvider} is not registered`);
   }

@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { resolveAttemptTranscriptPolicy } from "./attempt-history.js";
 
 const resolveProviderRuntimePluginMock = vi.hoisted(() => vi.fn());
 
 // Keep provider discovery out of this adapter test.
-vi.mock("../../../plugins/provider-hook-runtime.js", () => ({
+vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../plugins/provider-hook-runtime.js")>()),
   resolveProviderRuntimePlugin: resolveProviderRuntimePluginMock,
   resolveProviderRuntimePluginHandle: vi.fn(),
   clearProviderRuntimePluginCacheForTest: vi.fn(),
@@ -52,6 +55,33 @@ describe("resolveAttemptTranscriptPolicy", () => {
       }),
     ).toBe(plannedPolicy);
     expect(resolvePolicy).toHaveBeenCalledWith(runtimePlanModelContext);
+  });
+
+  it("uses the selected model's captured provider policy without rediscovery", () => {
+    const buildReplayPolicy = vi.fn(() => ({ dropThinkingBlocks: true }));
+    const model = attachModelProviderRuntimePluginHandle(
+      makeProviderModelFixture({
+        id: "selected-model",
+        provider: "selected-provider",
+        api: "test-api",
+        baseUrl: "https://example.test",
+      }),
+      {
+        provider: "selected-provider",
+        modelId: "selected-model",
+        plugin: { id: "selected-provider", label: "Selected", auth: [], buildReplayPolicy },
+      },
+    );
+    const policy = resolveAttemptTranscriptPolicy({
+      config: {},
+      provider: model.provider,
+      modelId: model.id,
+      runtimePlanModelContext: { model, modelApi: model.api },
+    });
+
+    expect(policy.dropThinkingBlocks).toBe(true);
+    expect(buildReplayPolicy).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ model }));
+    expect(resolveProviderRuntimePluginMock).not.toHaveBeenCalled();
   });
 
   it("keeps the legacy provider transcript fallback when no RuntimePlan is available", () => {

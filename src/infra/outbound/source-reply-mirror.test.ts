@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { preparePluginMetadataMachineStateAsync } from "../../plugins/installed-plugin-index-record-state.js";
 import {
   beginTerminalSourceReplyDelivery,
   isDeliveredCurrentSourceReply,
@@ -93,7 +94,8 @@ function installTelegramTopicPlugin() {
   });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await preparePluginMetadataMachineStateAsync({});
   receiptMocks.cancel.mockReset();
   receiptMocks.complete.mockReset();
   channelPluginMocks.getChannelPlugin.mockReset();

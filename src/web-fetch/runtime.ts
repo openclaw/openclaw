@@ -2,6 +2,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose } from "../globals.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js";
 import { getActivePluginRegistryVersion } from "../plugins/runtime.js";
 import type {
@@ -9,8 +10,8 @@ import type {
   WebFetchProviderToolDefinition,
 } from "../plugins/types.js";
 import {
-  resolvePluginWebFetchProviders,
-  resolveRuntimeWebFetchProviders,
+  resolvePluginWebFetchProvidersAsync,
+  resolveRuntimeWebFetchProvidersAsync,
 } from "../plugins/web-fetch-providers.runtime.js";
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebFetchMetadata } from "../secrets/runtime-web-tools.types.js";
@@ -68,10 +69,11 @@ export function isWebFetchProviderConfigured(params: {
   return hasEntryCredential(params.provider, params.config);
 }
 
-export function listWebFetchProviders(params?: {
+export async function listWebFetchProviders(params?: {
   config?: OpenClawConfig;
-}): PluginWebFetchProviderEntry[] {
-  return resolvePluginWebFetchProviders({
+}): Promise<PluginWebFetchProviderEntry[]> {
+  await prepareBundledDiscoveryMode();
+  return resolvePluginWebFetchProvidersAsync({
     config: params?.config,
   });
 }
@@ -104,9 +106,9 @@ function resolveAutoWebFetchProviderId(params: {
   return "";
 }
 
-function resolveWebFetchProvidersForOptions(
+async function resolveWebFetchProvidersForOptions(
   options?: ResolveWebFetchDefinitionParams,
-): PluginWebFetchProviderEntry[] {
+): Promise<PluginWebFetchProviderEntry[]> {
   const config = options?.config;
   const cacheKey = config
     ? JSON.stringify([
@@ -121,18 +123,18 @@ function resolveWebFetchProvidersForOptions(
     return cached.providers;
   }
   const providers = sortPluginEntriesForAutoDetect(
-    options?.sandboxed
-      ? resolvePluginWebFetchProviders({
+    await (options?.sandboxed
+      ? resolvePluginWebFetchProvidersAsync({
           config: options?.config,
           sandboxed: true,
         })
       : options?.preferRuntimeProviders
-        ? resolveRuntimeWebFetchProviders({
+        ? resolveRuntimeWebFetchProvidersAsync({
             config: options?.config,
           })
-        : resolvePluginWebFetchProviders({
+        : resolvePluginWebFetchProvidersAsync({
             config: options?.config,
-          }),
+          })),
   );
   if (config && providers.length > 0) {
     webFetchProviderCache.set(config, { cacheKey, configFingerprint, providers });
@@ -140,16 +142,17 @@ function resolveWebFetchProvidersForOptions(
   return providers;
 }
 
-export function resolveWebFetchDefinition(
+export async function resolveWebFetchDefinition(
   options?: ResolveWebFetchDefinitionParams,
-): WebFetchDefinitionResolution {
+): Promise<WebFetchDefinitionResolution> {
   const fetch = resolveWebProviderConfig(options?.config, "fetch") as WebFetchConfig;
   if (fetch?.enabled === false) {
     return null;
   }
+  await prepareBundledDiscoveryMode();
   const runtimeWebFetch =
     options?.runtimeWebFetch ?? getActiveRuntimeWebToolsMetadataFromState()?.fetch;
-  const providers = resolveWebFetchProvidersForOptions(options);
+  const providers = await resolveWebFetchProvidersForOptions(options);
   if (providers.length === 0) {
     return null;
   }

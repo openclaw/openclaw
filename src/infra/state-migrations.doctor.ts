@@ -25,6 +25,7 @@ import {
   resolveConfiguredAgentDatabaseTargets,
 } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import {
   collectRelevantDoctorPluginIds,
   listPluginDoctorSessionStoreAgentIds,
@@ -254,13 +255,21 @@ export async function detectLegacyStateMigrations(params: {
   const sessionsTargetStorePath = path.join(sessionsTargetDir, "sessions.json");
   const pluginConfig = params.pluginDoctorConfig ?? params.cfg;
   const pluginPlanningEnabled = params.pluginPlanning !== "deferred";
+  const pluginIds = collectRelevantDoctorPluginIds(pluginConfig);
+  if (
+    params.pluginSessionStoreAgentIds === undefined &&
+    pluginPlanningEnabled &&
+    pluginIds.length > 0
+  ) {
+    await prepareBundledDiscoveryMode(env);
+  }
   const pluginSessionStoreAgentIds =
     params.pluginSessionStoreAgentIds ??
     (pluginPlanningEnabled
       ? listPluginDoctorSessionStoreAgentIds({
           config: pluginConfig,
           env,
-          pluginIds: collectRelevantDoctorPluginIds(pluginConfig),
+          pluginIds,
         })
       : []);
   const currentSessionStoreOwnership =
@@ -2328,6 +2337,9 @@ async function executeLegacyStateMigrations(
       if (pluginStateMigrationInventory.resolutionFailure) {
         pluginPreparation.refusal = pluginStateMigrationInventory.resolutionFailure;
         return { changes: [], warnings: [pluginPreparation.refusal.message] };
+      }
+      if (configuredPluginIds.length > 0 || params.legacySessionSurfaces === undefined) {
+        await prepareBundledDiscoveryMode(env);
       }
       pluginSessionStoreAgentIds = listPluginDoctorSessionStoreAgentIds({
         config: pluginDoctorConfig,

@@ -92,8 +92,9 @@ vi.mock("../../agents/model-auth.js", () => ({
       ? { apiKey: "ollama-local", source: "models.json (local marker)" }
       : null,
 }));
+// mock-isolation: Probe targets use fixture aliases without loading installed provider metadata.
 vi.mock("../../agents/provider-auth-aliases.js", () => ({
-  resolveProviderIdForAuth: (provider: string) =>
+  resolvePreparedProviderIdForAuth: (provider: string) =>
     provider === "byteplus-plan" ? "byteplus" : provider,
 }));
 vi.mock("../../agents/model-selection.js", () => {

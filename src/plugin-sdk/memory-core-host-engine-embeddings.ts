@@ -58,7 +58,10 @@ export type {
   ProviderBatchOutputLine,
   RemoteEmbeddingClient,
 } from "../../packages/memory-host-sdk/src/engine-embeddings.js";
-export { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
+export {
+  getMemoryEmbeddingProvider,
+  getMemoryEmbeddingProviderAsync,
+} from "../plugins/memory-embedding-provider-runtime.js";
 export { registerRuntimeAuthProfileStoreMutationListener } from "../agents/auth-profiles/runtime-snapshots.js";
 export type {
   MemoryEmbeddingBatchChunk,

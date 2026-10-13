@@ -146,7 +146,7 @@ export const transcriptsHandlers: GatewayRequestHandlers = {
 };
 
 function providerNames(config: OpenClawConfig) {
-  const names = new Map<string, string | undefined>();
+  const names = new Map<string, Promise<string | undefined>>();
   return (providerId: string) => {
     if (!names.has(providerId)) {
       names.set(
@@ -155,7 +155,7 @@ function providerNames(config: OpenClawConfig) {
           config,
           stateDir: resolveStateDir(),
           logger: console,
-        })?.name,
+        }).then((provider) => provider?.name),
       );
     }
     return names.get(providerId);

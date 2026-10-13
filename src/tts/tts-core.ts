@@ -1,6 +1,7 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
+import type { ModelManifestNormalizationContext } from "../agents/model-ref-shared.js";
 import {
   buildModelAliasIndex,
   resolveDefaultModelForAgent,
@@ -8,7 +9,6 @@ import {
 } from "../agents/model-selection.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { sanitizeAssistantVisibleText } from "../shared/text/assistant-visible-text.js";
 import type { ResolvedTtsConfig } from "./tts-types.js";
@@ -62,7 +62,7 @@ type SummarizeResult = {
 function resolveSummaryModelSelection(
   cfg: OpenClawConfig,
   config: ResolvedTtsConfig,
-  manifestPlugins?: PluginMetadataSnapshot,
+  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"],
 ) {
   const defaultRef = resolveDefaultModelForAgent({ cfg, manifestPlugins });
   const override = normalizeOptionalString(config.summaryModel);

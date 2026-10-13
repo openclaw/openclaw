@@ -1,11 +1,27 @@
 import { describe, expect, it } from "vitest";
 import { resolveMemorySearchConfig } from "../../../agents/memory-search.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../../agents/workspace-default.js";
+import { coerceConfig } from "../../../config/io.read-helpers.js";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import { validateConfigObjectRaw } from "../../../config/validation.js";
-import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
-import { migrateLegacyConfig } from "./legacy-config-migrate.js";
+import { applyLegacyDoctorMigrations as applyLegacyDoctorMigrationsUnprepared } from "./legacy-config-compat.js";
+import { migrateLegacyConfig as migrateLegacyConfigUnprepared } from "./legacy-config-migrate.js";
+import { withDoctorPluginMetadataForTest } from "./plugin-metadata.test-support.js";
+
+function applyLegacyDoctorMigrations(
+  ...args: Parameters<typeof applyLegacyDoctorMigrationsUnprepared>
+) {
+  return withDoctorPluginMetadataForTest(coerceConfig(args[0]), () =>
+    applyLegacyDoctorMigrationsUnprepared(...args),
+  );
+}
+
+function migrateLegacyConfig(...args: Parameters<typeof migrateLegacyConfigUnprepared>) {
+  return withDoctorPluginMetadataForTest(coerceConfig(args[0]), () =>
+    migrateLegacyConfigUnprepared(...args),
+  );
+}
 
 describe("legacy config migration end to end", () => {
   it.each([

@@ -21,7 +21,7 @@ import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveConfiguredThinkingDefault } from "../agents/model-thinking-default.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-routing.js";
 import { resolveSandboxRuntimeStatusAsync } from "../agents/sandbox.js";
-import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
+import { resolveSessionRuntimeOverrideForProviderAsync } from "../agents/session-runtime-compat.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -41,6 +41,7 @@ import {
   loadProviderUsageSummary,
   resolveUsageProviderId,
 } from "../infra/provider-usage.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { resolveActiveProviderThinkingProfile } from "../plugins/provider-thinking-active.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
@@ -124,7 +125,7 @@ async function resolveStatusHarnessId(params: {
   sessionEntry?: SessionEntry;
 }): Promise<string | undefined> {
   try {
-    const sessionRuntime = resolveSessionRuntimeOverrideForProvider({
+    const sessionRuntime = await resolveSessionRuntimeOverrideForProviderAsync({
       provider: params.provider,
       entry: params.sessionEntry,
       cfg: params.cfg,
@@ -200,6 +201,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
 export async function buildStatusReplyParts(
   params: BuildStatusTextParams,
 ): Promise<StatusMessageParts> {
+  await preparePluginMetadataMachineStateAsync({});
   const {
     cfg,
     sessionEntry,

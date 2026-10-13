@@ -36,6 +36,7 @@ import {
   type UpdateAdmissionVerdict,
 } from "../../infra/update-run-schema.js";
 import { redactSupportDiagnosticLine } from "../../logging/diagnostic-support-redaction.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import {
   isTrustedForDurableStores,
   resolvePluginDoctorStateMigrationRecords,
@@ -183,10 +184,11 @@ async function inspectUpdateAdmission(
             nextAction: retired.nextAction,
           });
         }
-        const legacyConfigPlan =
-          !snapshot.valid && snapshot.legacyIssues.length
-            ? planLegacyConfigForUpdateChannel(snapshot, writeOptions)
-            : undefined;
+        let legacyConfigPlan: ReturnType<typeof planLegacyConfigForUpdateChannel>;
+        if (!snapshot.valid && snapshot.legacyIssues.length) {
+          await prepareBundledDiscoveryMode(env);
+          legacyConfigPlan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
+        }
         databaseContext = await captureTargetDatabaseSchemaContext(env, { legacyConfigPlan });
         if (legacyConfigPlan) {
           warnings.push(legacyConfigWarning);

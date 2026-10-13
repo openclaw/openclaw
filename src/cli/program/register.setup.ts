@@ -75,7 +75,7 @@ function addSystemAgentOptions(command: Command): Command {
 }
 
 /** Register the canonical `setup` command and its hidden retired-name alias. */
-export function registerSetupCommand(program: Command): void {
+export async function registerSetupCommand(program: Command): Promise<void> {
   const command = program
     .command("setup")
     .description("Chat with OpenClaw; onboard when setup is incomplete")
@@ -111,7 +111,7 @@ export function registerSetupCommand(program: Command): void {
     .option("--non-interactive", "Run onboarding without prompts", false);
   registerOnboardFlowOptions(command);
 
-  registerOnboardAuthOptions(command);
+  await registerOnboardAuthOptions(command);
   registerOnboardGatewayOptions(command);
   registerOnboardRuntimeOptions(command, "setup");
   registerOnboardRemoteOptions(command);

@@ -48,6 +48,7 @@ const activeRegistryMocks = vi.hoisted(() => ({
 // Only the load entry points are intercepted. The registry-resolution bindings
 // stay wired to their real owners so a consumer that crosses them observes
 // production behavior instead of a double that no production path reaches.
+// mock-isolation: Optional-tool tests use synthetic loader results while retaining real active-registry and cache-key helpers.
 vi.mock("./loader.js", async () => {
   const [activeRuntimeRegistry, loaderCache] = await Promise.all([
     import("./active-runtime-registry.js"),
@@ -57,6 +58,8 @@ vi.mock("./loader.js", async () => {
   return {
     loadOpenClawPlugins: loadPluginRegistryHandle,
     loadPluginRegistryHandle,
+    loadPluginRegistryHandleAsync: async (params: unknown) => loadOpenClawPluginsMock(params),
+    loadOpenClawPluginsAsync: async (params: unknown) => loadOpenClawPluginsMock(params),
     resolveCompatibleRuntimePluginRegistry:
       activeRuntimeRegistry.resolveCompatibleRuntimePluginRegistry,
     resolvePluginRegistryLoadCacheKey: loaderCache.resolvePluginRegistryLoadCacheKey,
@@ -93,6 +96,7 @@ vi.mock("./runtime/load-context.resolve.js", async (importOriginal) => {
 });
 
 let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
+let resolvePluginToolsSteps: typeof import("./tools.js").resolvePluginToolsSteps;
 let ensureStandalonePluginToolRegistryLoaded: typeof import("./tools.js").ensureStandalonePluginToolRegistryLoaded;
 let buildPluginToolMetadataKey: typeof import("./tool-metadata.js").buildPluginToolMetadataKey;
 let getPluginToolMeta: typeof import("./tool-metadata.js").getPluginToolMeta;
@@ -269,6 +273,16 @@ function requireConsoleMessage(spy: { mock: { calls: unknown[][] } }, index = 0)
   return call[0];
 }
 
+async function resolvePluginToolsAsync(params: Parameters<typeof resolvePluginTools>[0]) {
+  const steps = resolvePluginToolsSteps(params);
+  let step = steps.next();
+  while (!step.done) {
+    await step.value;
+    step = steps.next();
+  }
+  return step.value;
+}
+
 function resolveOptionalDemoTools(toolAllowlist?: readonly string[]) {
   return resolvePluginTools(createResolveToolsParams({ toolAllowlist }));
 }
@@ -429,7 +443,8 @@ function expectSingleDiagnosticMessage(
 
 describe("resolvePluginTools optional tools", () => {
   beforeAll(async () => {
-    ({ ensureStandalonePluginToolRegistryLoaded, resolvePluginTools } = await import("./tools.js"));
+    ({ ensureStandalonePluginToolRegistryLoaded, resolvePluginTools, resolvePluginToolsSteps } =
+      await import("./tools.js"));
     ({ buildPluginToolMetadataKey, getPluginToolMeta } = await import("./tool-metadata.js"));
     ({ getActivePluginRegistry, resetPluginRuntimeStateForTest, setActivePluginRegistry } =
       await import("./runtime.js"));
@@ -742,7 +757,7 @@ describe("resolvePluginTools optional tools", () => {
 
   it.each(["configured", "missing", "capability-overlay"] as const)(
     "resolves named-account tool signals: %s",
-    (mode) => {
+    async (mode) => {
       const context = createContext();
       const overlay = mode === "capability-overlay";
       const pluginId = overlay ? "account-demo" : "feishu";
@@ -801,7 +816,7 @@ describe("resolvePluginTools optional tools", () => {
       loadOpenClawPluginsMock.mockReturnValue(
         createToolRegistry([createNamedToolEntry(pluginId, toolName, { factory })]),
       );
-      const tools = resolvePluginTools(
+      const tools = await resolvePluginToolsAsync(
         createResolveToolsParams({
           context: { ...context, config },
           env: {},
@@ -935,7 +950,7 @@ describe("resolvePluginTools optional tools", () => {
         ...createResolveToolsParams({ toolAllowlist: ["retained_tool"] }),
         runtimeRegistry: retainedRegistry as never,
       });
-      const tools = resolvePluginTools({
+      const tools = await resolvePluginToolsAsync({
         ...createResolveToolsParams({ toolAllowlist: ["retained_tool", "new_tool"] }),
         runtimeRegistry: retainedRegistry as never,
       });
@@ -982,7 +997,9 @@ describe("resolvePluginTools optional tools", () => {
       loadOpenClawPluginsMock.mockReturnValue(mode === "standalone" ? empty : other);
       try {
         if (mode === "standalone") {
-          expect(ensureStandalonePluginToolRegistryLoaded(createResolveToolsParams())).toBe(empty);
+          expect(await ensureStandalonePluginToolRegistryLoaded(createResolveToolsParams())).toBe(
+            empty,
+          );
           expect(
             resolvePluginTools({
               ...createResolveToolsParams(),
@@ -1142,7 +1159,7 @@ describe("resolvePluginTools optional tools", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
-  it("auto-loads cold registry for path-based config-origin plugins without pre-warming (#76598)", () => {
+  it("auto-loads cold registry for path-based config-origin plugins without pre-warming (#76598)", async () => {
     const context = {
       ...createContext(),
       config: {
@@ -1169,7 +1186,7 @@ describe("resolvePluginTools optional tools", () => {
     // No ensureStandalonePluginToolRegistryLoaded pre-call and no pinned channel registry —
     // resolvePluginTools must trigger standalone load itself when the registry is cold.
     // This is the regression path from PR #76004 where path-based plugin tools disappeared.
-    const tools = resolvePluginTools(
+    const tools = await resolvePluginToolsAsync(
       createResolveToolsParams({
         context,
         toolAllowlist: ["optional_tool"],
@@ -1203,13 +1220,13 @@ describe("resolvePluginTools optional tools", () => {
       });
       loadOpenClawPluginsMock.mockReturnValue(full);
       try {
-        const cold = resolvePluginTools(createResolveToolsParams());
+        const cold = await resolvePluginToolsAsync(createResolveToolsParams());
         expect(getPluginToolMeta(cold[0]!)).toMatchObject({ pluginId: "z-first" });
         loadOpenClawPluginsMock.mockClear();
         if (binding === "active") {
           setActivePluginRegistry(partial as never, "partial", "gateway-bindable", "/tmp");
         }
-        const warm = resolvePluginTools({
+        const warm = await resolvePluginToolsAsync({
           ...createResolveToolsParams(),
           ...(binding === "supplied" ? { runtimeRegistry: partial as never } : {}),
         });
@@ -2262,8 +2279,8 @@ describe("resolvePluginTools optional tools", () => {
         toolAllowlist: ["cached_lifecycle_tool"],
         allowGatewaySubagentBinding: true,
       });
-      const first = resolvePluginTools(params);
-      const [tool] = resolvePluginTools(params);
+      const first = await resolvePluginToolsAsync(params);
+      const [tool] = await resolvePluginToolsAsync(params);
       expectResolvedToolNames(first, ["cached_lifecycle_tool"]);
       expect(tool?.name).toBe("cached_lifecycle_tool");
       expect(factory).toHaveBeenCalledTimes(2);

@@ -43,7 +43,7 @@ describe("doctor auth hints", () => {
     mocks.note.mockClear();
   });
 
-  it("reports ambient GITHUB_TOKEN activation only once", () => {
+  it("reports ambient GITHUB_TOKEN activation only once", async () => {
     const { key, cfg } = {
       key: "GITHUB_TOKEN",
       cfg: { plugins: { entries: { "github-copilot": { enabled: true } } } },
@@ -53,8 +53,8 @@ describe("doctor auth hints", () => {
       OPENCLAW_STATE_DIR: tempDirs.make("openclaw-doctor-copilot-"),
       [key]: "github-test-token",
     };
-    noteCopilotAmbientToken(cfg, env);
-    noteCopilotAmbientToken(cfg, env);
+    await noteCopilotAmbientToken(cfg, env);
+    await noteCopilotAmbientToken(cfg, env);
     expect(mocks.note).toHaveBeenCalledExactlyOnceWith(
       "GitHub Copilot is no longer enabled by GH_TOKEN/GITHUB_TOKEN. To use Copilot, run `openclaw models auth login --provider github-copilot` or set COPILOT_GITHUB_TOKEN.",
       "GitHub Copilot",
@@ -64,13 +64,13 @@ describe("doctor auth hints", () => {
   it.each([
     { models: { providers: { "github-copilot": {} } } },
     { auth: { profiles: { work: { provider: "github-copilot", mode: "token" } } } },
-  ])("does not consume the notice for explicit Copilot auth", (config) => {
+  ])("does not consume the notice for explicit Copilot auth", async (config) => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-doctor-copilot-") };
-    noteCopilotAmbientToken(doctorFixtureConfig(config), {
+    await noteCopilotAmbientToken(doctorFixtureConfig(config), {
       ...env,
       GH_TOKEN: "github-test-token",
     });
-    noteCopilotAmbientToken(
+    await noteCopilotAmbientToken(
       {},
       {
         ...env,
@@ -79,11 +79,11 @@ describe("doctor auth hints", () => {
       },
     );
     expect(mocks.note).not.toHaveBeenCalled();
-    noteCopilotAmbientToken({}, { ...env, GH_TOKEN: "github-test-token" });
+    await noteCopilotAmbientToken({}, { ...env, GH_TOKEN: "github-test-token" });
     expect(mocks.note).toHaveBeenCalledOnce();
   });
 
-  it("suppresses the notice for a stored shared Copilot profile", () => {
+  it("suppresses the notice for a stored shared Copilot profile", async () => {
     const env = {
       OPENCLAW_STATE_DIR: tempDirs.make("openclaw-doctor-copilot-"),
       GH_TOKEN: "github-test-token",
@@ -99,7 +99,7 @@ describe("doctor auth hints", () => {
       },
       agentDir,
     );
-    noteCopilotAmbientToken(cfg, env);
+    await noteCopilotAmbientToken(cfg, env);
     expect(mocks.note).not.toHaveBeenCalled();
   });
 

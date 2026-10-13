@@ -14,6 +14,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { prepareBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import {
   getCurrentPluginMetadataSnapshot,
   setGatewayPluginMetadataSnapshot,
@@ -35,7 +36,7 @@ import {
 } from "./installed-plugin-index.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
-import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "./plugin-metadata-snapshot.js";
 import * as metadataWorker from "./plugin-metadata-state-worker.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -208,7 +209,12 @@ describe("installed plugin index persistence", () => {
         config,
         env,
       });
-      const boot = loadPluginMetadataSnapshot({ index, config, env, allowCurrent: false });
+      const boot = await resolvePluginMetadataSnapshotAsync({
+        index,
+        config,
+        env,
+        allowCurrent: false,
+      });
       setGatewayPluginMetadataSnapshot(boot, { config, env });
       expect(getCurrentPluginMetadataSnapshot({ config, env })).toBe(boot);
       const next = { ...index, plugins: [] };
@@ -349,6 +355,7 @@ describe("installed plugin index persistence", () => {
       { demo: { source: "npm", spec: "demo@1.0.0", installPath: pluginDir } },
       { stateDir, candidates: [candidate], config, env },
     );
+    await prepareBundledDiscoveryMode(env);
     const result = loadPluginRegistrySnapshotWithMetadata({
       stateDir,
       candidates: [candidate],
@@ -358,7 +365,7 @@ describe("installed plugin index persistence", () => {
 
     expect(result.source).toBe("persisted");
     expect(result.diagnostics).toStrictEqual([]);
-    expect(result.snapshot.policyHash).toBe(resolveInstalledPluginIndexPolicyHash(config));
+    expect(result.snapshot.policyHash).toBe(resolveInstalledPluginIndexPolicyHash(config, env));
     expectPluginFields(result.snapshot, "demo", { enabled: false });
   });
 
@@ -483,6 +490,7 @@ describe("installed plugin index persistence", () => {
     };
     await writePersistedInstalledPluginIndex(legacy, { stateDir });
 
+    await prepareBundledDiscoveryMode(env);
     const inspection = loadPluginRegistrySnapshotWithMetadata({
       stateDir,
       candidates: [candidate],

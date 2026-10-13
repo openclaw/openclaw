@@ -10,7 +10,10 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
-import { setGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import {
+  setGatewayPluginMetadataSnapshot,
+  withPluginMetadataSnapshotScope,
+} from "../../plugins/current-plugin-metadata-snapshot.js";
 import { retainGatewayPluginMetadata } from "../../plugins/plugin-metadata-lifecycle.js";
 import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import * as sessionLifecycle from "../../sessions/session-lifecycle-admission.js";
@@ -198,6 +201,14 @@ it.each([
   });
 });
 
+async function prepareSessionWithMetadata(params: Parameters<typeof prepareChatSendSession>[0]) {
+  const config = params.context.getRuntimeConfig();
+  const metadata = await resolvePluginMetadataSnapshotAsync({ config });
+  return withPluginMetadataSnapshotScope(metadata, () => prepareChatSendSession(params), {
+    config,
+  });
+}
+
 it.each(["ordinary", "fresh header", "stale header"] as const)(
   "uses current worker-prepared admission settings and freshness without host SQL (%s)",
   async (freshness) => {
@@ -240,7 +251,7 @@ it.each(["ordinary", "fresh header", "stale header"] as const)(
         throw new Error(request.error);
       }
       const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-      const prepared = await prepareChatSendSession({
+      const prepared = await prepareSessionWithMetadata({
         isDirectExternalUser: restartSafe,
         request: request.value,
         client: null,
@@ -326,7 +337,7 @@ it("releases rejected upload reservations so corrected input can reuse its key",
       if (!blocked.ok) {
         throw new Error("fixture attachment normalization failed");
       }
-      const prepared = await prepareChatSendSession({
+      const prepared = await prepareSessionWithMetadata({
         request: blocked.value,
         client: null,
         context,
@@ -360,7 +371,7 @@ it("releases rejected upload reservations so corrected input can reuse its key",
       if (!corrected.ok) {
         throw new Error("fixture corrected normalization failed");
       }
-      const next = await prepareChatSendSession({
+      const next = await prepareSessionWithMetadata({
         request: corrected.value,
         client: null,
         context,
@@ -415,7 +426,7 @@ it.each(["known-source", "new-terminal", "new-receipt"] as const)(
         throw new Error(request.error);
       }
       const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-      const prepared = await prepareChatSendSession({
+      const prepared = await prepareSessionWithMetadata({
         request: request.value,
         client: null,
         context,
@@ -534,7 +545,7 @@ it.each([
       getRuntimeConfig: () => cfg,
       workerSessionPlacementService: change === "unavailable reader" ? { getMany } : placements,
     });
-    const prepared = await prepareChatSendSession({
+    const prepared = await prepareSessionWithMetadata({
       request: request.value,
       client: null,
       context,

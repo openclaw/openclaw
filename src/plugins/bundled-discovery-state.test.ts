@@ -5,8 +5,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   clearBundledDiscoveryModeMemo,
+  prepareBundledDiscoveryMode,
   readBundledDiscoveryModeMemoized,
 } from "./bundled-discovery-state.js";
 import { removeBundledDiscoveryStateRoot } from "./bundled-discovery.test-support.js";
@@ -24,13 +26,16 @@ describe("readBundledDiscoveryModeMemoized", () => {
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     try {
       clearBundledDiscoveryModeMemo();
-      // Pre-migration read caches the absent mode.
+      expect(() => readBundledDiscoveryModeMemoized()).toThrow("not prepared");
+      // Pre-migration preparation caches the absent mode.
+      await prepareBundledDiscoveryMode();
       expect(readBundledDiscoveryModeMemoized()).toBeUndefined();
       writeConfigMachineState("plugins.bundledDiscovery", "compat");
       // Regression for the doctor same-process staleness: the memo must not
       // outlive the write, or index rebuilds keep strict-gate decisions.
       expect(readBundledDiscoveryModeMemoized()).toBeUndefined();
       clearBundledDiscoveryModeMemo();
+      await prepareBundledDiscoveryMode();
       expect(readBundledDiscoveryModeMemoized()).toBe("compat");
     } finally {
       envSnapshot.restore();
@@ -53,13 +58,23 @@ describe("readBundledDiscoveryModeMemoized", () => {
       setTestEnvValue("OPENCLAW_STATE_DIR", compatRoot);
       writeConfigMachineState("plugins.bundledDiscovery", "compat");
       clearBundledDiscoveryModeMemo();
+      await prepareBundledDiscoveryMode();
       expect(readBundledDiscoveryModeMemoized()).toBe("compat");
 
       setTestEnvValue("OPENCLAW_STATE_DIR", plainRoot);
+      await prepareBundledDiscoveryMode();
       expect(readBundledDiscoveryModeMemoized()).toBeUndefined();
 
-      setTestEnvValue("OPENCLAW_STATE_DIR", compatRoot);
-      expect(readBundledDiscoveryModeMemoized()).toBe("compat");
+      const sql = observeMainThreadSql();
+      try {
+        setTestEnvValue("OPENCLAW_STATE_DIR", compatRoot);
+        expect(readBundledDiscoveryModeMemoized()).toBe("compat");
+        setTestEnvValue("OPENCLAW_STATE_DIR", plainRoot);
+        expect(readBundledDiscoveryModeMemoized()).toBeUndefined();
+        sql.expectIdle();
+      } finally {
+        sql.restore();
+      }
     } finally {
       envSnapshot.restore();
       await removeBundledDiscoveryStateRoot(compatRoot);
@@ -87,6 +102,8 @@ describe("readBundledDiscoveryModeMemoized", () => {
       clearBundledDiscoveryModeMemo();
 
       const callerEnv = { ...process.env, OPENCLAW_STATE_DIR: compatRoot };
+      await prepareBundledDiscoveryMode(callerEnv);
+      await prepareBundledDiscoveryMode();
       expect(readBundledDiscoveryModeMemoized(callerEnv)).toBe("compat");
       expect(readBundledDiscoveryModeMemoized()).toBeUndefined();
       // Alternating scopes stay correct: the memo re-keys per resolved root.

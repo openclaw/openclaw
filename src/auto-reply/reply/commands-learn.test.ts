@@ -2,6 +2,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { preparePluginMetadataMachineStateAsync } from "../../plugins/installed-plugin-index-record-state.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { DEFAULT_LEARN_REQUEST } from "../../skills/workshop/learn-prompt.js";
 import { WorkshopReviewNotFoundError } from "../../skills/workshop/review-undo.js";
 import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
@@ -80,6 +83,18 @@ function buildLearnParams(
   } as unknown as HandleCommandsParams;
 }
 
+function dispatchLearn(params: HandleCommandsParams) {
+  return withPluginMetadataSnapshotScope(
+    createPluginMetadataSnapshotFixture(),
+    () => handleLearnCommand(params, true),
+    { config: params.cfg, workspaceDir: params.workspaceDir },
+  );
+}
+
+beforeEach(async () => {
+  await preparePluginMetadataMachineStateAsync({});
+});
+
 afterEach(() => cliBackendsTesting.resetDepsForTest());
 
 describe("learn command", () => {
@@ -101,7 +116,7 @@ describe("learn command", () => {
       params.agentId = agentId;
       params.sessionKey = "global";
 
-      const result = await handleLearnCommand(params, true);
+      const result = await dispatchLearn(params);
 
       expect(result?.shouldContinue).toBe(shouldContinue);
       if (shouldContinue) {
@@ -134,7 +149,7 @@ describe("learn command", () => {
       });
       params.ctx.RuntimePolicySessionKey = "agent:isolated:webchat:test";
 
-      const result = await handleLearnCommand(params, true);
+      const result = await dispatchLearn(params);
 
       expect(result?.shouldContinue).toBe(shouldContinue);
       if (shouldContinue) {
@@ -150,7 +165,7 @@ describe("learn command", () => {
       tools: { toolsBySender: { "*": { deny: ["skill_workshop"] } } },
     });
 
-    const result = await handleLearnCommand(params, true);
+    const result = await dispatchLearn(params);
 
     expect(result?.shouldContinue).toBe(true);
   });
@@ -161,7 +176,7 @@ describe("learn command", () => {
     });
     params.command.senderIsOwner = false;
 
-    const result = await handleLearnCommand(params, true);
+    const result = await dispatchLearn(params);
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
@@ -171,7 +186,7 @@ describe("learn command", () => {
     const params = buildLearnParams("/learn");
     params.opts = { toolsAllow: [] };
 
-    const result = await handleLearnCommand(params, true);
+    const result = await dispatchLearn(params);
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
@@ -200,7 +215,7 @@ describe("learn command", () => {
       },
     });
 
-    const result = await handleLearnCommand(params, true);
+    const result = await dispatchLearn(params);
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
@@ -211,7 +226,7 @@ describe("learn command", () => {
     const undo = (configure?: (params: HandleCommandsParams) => void) => {
       const params = buildLearnParams(`/learn undo ${reviewId.toUpperCase()}`);
       configure?.(params);
-      return handleLearnCommand(params, true);
+      return dispatchLearn(params);
     };
 
     beforeEach(() => {
@@ -254,7 +269,7 @@ describe("learn command", () => {
     it("keeps any other undo text a learn request", async () => {
       const params = buildLearnParams("/learn undo the deploy notes");
 
-      const result = await handleLearnCommand(params, true);
+      const result = await dispatchLearn(params);
 
       expect(result).toEqual({ shouldContinue: true });
       expect(params.ctx.BodyForAgent).toContain("undo the deploy notes");

@@ -2,10 +2,10 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { resolveModelRefFromString } from "openclaw/plugin-sdk/agent-runtime";
 import { formatErrorMessage as formatQaErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-host-core";
+import { prepareModelRefResolver } from "openclaw/plugin-sdk/model-ref-parse";
 import { buildAgentSessionKey, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolPayload as extractQaToolPayload } from "openclaw/plugin-sdk/tool-payload";
@@ -175,7 +175,9 @@ type QaSuiteScenarioFlowApiParams = QaSuiteScenarioDepsParams & {
 };
 
 function createQaSuiteScenarioDeps(
-  params: QaSuiteScenarioDepsParams,
+  params: QaSuiteScenarioDepsParams & {
+    modelRefResolver: Awaited<ReturnType<typeof prepareModelRefResolver>>;
+  },
   webOpenPage: ReturnType<typeof webRuntime.createQaWebPageOpener>,
 ) {
   const waitForAccountOutboundMessage: typeof suiteRuntimeTransport.waitForOutboundMessage = (
@@ -248,7 +250,7 @@ function createQaSuiteScenarioDeps(
     normalizeModelRef: (raw: string) => {
       const split = splitQaModelRef(raw);
       return split
-        ? (resolveModelRefFromString({
+        ? (params.modelRefResolver.resolveModelRefFromString({
             cfg: params.env.cfg,
             raw,
             defaultProvider: split.provider,
@@ -260,7 +262,10 @@ function createQaSuiteScenarioDeps(
 }
 
 function createQaSuiteScenarioFlowApi(
-  params: QaSuiteScenarioFlowApiParams & { signal: AbortSignal },
+  params: QaSuiteScenarioFlowApiParams & {
+    signal: AbortSignal;
+    modelRefResolver: Awaited<ReturnType<typeof prepareModelRefResolver>>;
+  },
 ) {
   const createWebPageOpener = (signal?: AbortSignal) => {
     const open = webRuntime.createQaWebPageOpener(params.env.webSessionIds, signal);
@@ -399,8 +404,14 @@ export async function runQaSuiteScenarioDefinition(params: QaSuiteScenarioFlowAp
     params.env.transport.whenUnhealthy,
   );
   try {
+    const modelRefResolver = await prepareModelRefResolver({
+      config: params.env.cfg,
+      env: params.env.gateway.runtimeEnv,
+      workspaceDir: params.env.gateway.workspaceDir,
+    });
     const { api, cleanupApi } = createQaSuiteScenarioFlowApi({
       ...params,
+      modelRefResolver,
       signal: deadline.signal,
       runScenario: createQaSuiteScenarioStepRunner(
         params.env,

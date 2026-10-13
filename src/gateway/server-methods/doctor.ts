@@ -352,7 +352,7 @@ export const createDoctorHandlers = (
       return;
     }
     const { cfg, agentId, requestedAgentId } = resolved;
-    const backend = resolveActiveMemoryBackendConfig({ cfg, agentId });
+    const backend = await resolveActiveMemoryBackendConfig({ cfg, agentId });
     if (backend?.backend === "provider-runtime") {
       await respondProviderMemoryStatus({
         cfg,

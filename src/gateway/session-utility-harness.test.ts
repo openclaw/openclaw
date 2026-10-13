@@ -12,6 +12,7 @@ import {
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { prewarmSessionHistoryWorker } from "../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -47,6 +48,7 @@ describe("utility completion with an unavailable implicit harness", () => {
 
   beforeEach(async () => {
     state = await createOpenClawTestState({ scenario: "minimal" });
+    await preparePluginMetadataMachineStateAsync({});
     config = {
       agents: {
         defaults: { utilityModel: "openai/gpt-5.4-mini", workspace: state.workspaceDir },

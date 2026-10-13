@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({ resolveProviderRuntimePlugin: vi.fn() }));
 
 // mock-isolation: Keep plugin registry discovery outside the credential exchange boundary.
 vi.mock("./provider-hook-runtime.js", () => ({
-  resolveProviderRuntimePlugin: mocks.resolveProviderRuntimePlugin,
+  resolveProviderRuntimePluginAsync: async () => mocks.resolveProviderRuntimePlugin(),
 }));
 
 // mock-isolation: Load only the real auth owner while exercising the unchanged lazy runtime facade.

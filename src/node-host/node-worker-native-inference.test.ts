@@ -8,7 +8,7 @@ import { assertNativeInferenceAssignment } from "../worker/native-inference-star
 import { nodeWorkerLaunchSecrets } from "./node-worker-child-secrets.js";
 import {
   projectNodeWorkerNativeInference,
-  snapshotNodeWorkerNativeInference,
+  snapshotNodeWorkerNativeInferenceAsync,
 } from "./node-worker-native-inference.js";
 import {
   TEST_WORKER_ENDPOINT,
@@ -60,24 +60,24 @@ function descriptor(workspace: string, modelId = "model-1") {
 }
 
 describe("node worker inference config projection", () => {
-  it("uses the canonical custom-provider API default", () => {
+  it("uses the canonical custom-provider API default", async () => {
     const workspace = tempDirs.make("node-native-default-api-");
     const defaulted = config([model("model-1")]);
     delete defaulted.models!.providers!["provider-1"]!.api;
-    const snapshot = snapshotNodeWorkerNativeInference(defaulted, {})!;
+    const snapshot = (await snapshotNodeWorkerNativeInferenceAsync(defaulted, {}))!;
     const startup = projectNodeWorkerNativeInference(snapshot, descriptor(workspace));
     expect(startup.config.models[0]?.api).toBe("openai-completions");
   });
 
-  it("accepts an empty provider header map", () => {
+  it("accepts an empty provider header map", async () => {
     const source = config([model("model-1")]);
     source.models!.providers!["provider-1"]!.headers = {};
-    expect(snapshotNodeWorkerNativeInference(source, {})).toBeDefined();
+    expect(await snapshotNodeWorkerNativeInferenceAsync(source, {})).toBeDefined();
   });
 
-  it("rejects a selected model that is absent from the node config", () => {
+  it("rejects a selected model that is absent from the node config", async () => {
     const workspace = tempDirs.make("node-native-missing-model-");
-    const snapshot = snapshotNodeWorkerNativeInference(config(), {})!;
+    const snapshot = (await snapshotNodeWorkerNativeInferenceAsync(config(), {}))!;
     expect(() =>
       projectNodeWorkerNativeInference(snapshot, descriptor(workspace, "missing")),
     ).toThrow(
@@ -85,46 +85,46 @@ describe("node worker inference config projection", () => {
     );
   });
 
-  it("captures credentials and header bytes for child diagnostics", () => {
-    const snapshot = snapshotNodeWorkerNativeInference(config(), {})!;
+  it("captures credentials and header bytes for child diagnostics", async () => {
+    const snapshot = (await snapshotNodeWorkerNativeInferenceAsync(config(), {}))!;
     const assignment = descriptor(tempDirs.make("node-native-secrets-"));
     expect(new Set(nodeWorkerLaunchSecrets(assignment, snapshot))).toEqual(
       new Set([assignment.admission.credential, credential, providerHeader, modelHeader]),
     );
   });
 
-  it("ignores providers without usable credentials or worker-compatible models", () => {
+  it("ignores providers without usable credentials or worker-compatible models", async () => {
     const missingCredential = config();
     delete missingCredential.models!.providers!["provider-1"]!.apiKey;
-    expect(snapshotNodeWorkerNativeInference(missingCredential, {})).toBeUndefined();
+    expect(await snapshotNodeWorkerNativeInferenceAsync(missingCredential, {})).toBeUndefined();
 
     const unsupported = config();
     unsupported.models!.providers!["provider-1"]!.models = [
       { ...model("audio-model"), input: ["audio" as never] },
     ];
-    expect(snapshotNodeWorkerNativeInference(unsupported, {})).toBeUndefined();
+    expect(await snapshotNodeWorkerNativeInferenceAsync(unsupported, {})).toBeUndefined();
 
     const ambientAzure = config();
     ambientAzure.models!.providers!["provider-1"]!.api = "azure-openai-responses";
-    expect(snapshotNodeWorkerNativeInference(ambientAzure, {})).toBeUndefined();
+    expect(await snapshotNodeWorkerNativeInferenceAsync(ambientAzure, {})).toBeUndefined();
 
     const ambientVertex = config();
     ambientVertex.models!.providers!["provider-1"]!.api = "google-vertex";
     ambientVertex.models!.providers!["provider-1"]!.apiKey = "gcp-vertex-credentials";
-    expect(snapshotNodeWorkerNativeInference(ambientVertex, {})).toBeUndefined();
+    expect(await snapshotNodeWorkerNativeInferenceAsync(ambientVertex, {})).toBeUndefined();
   });
 
-  it("does not advertise worker-local inference on Windows", () => {
-    expect(snapshotNodeWorkerNativeInference(config(), {}, "win32")).toBeUndefined();
+  it("does not advertise worker-local inference on Windows", async () => {
+    expect(await snapshotNodeWorkerNativeInferenceAsync(config(), {}, "win32")).toBeUndefined();
   });
 
-  it("canonicalizes the exact assigned workspace instead of granting a parent tree", () => {
+  it("canonicalizes the exact assigned workspace instead of granting a parent tree", async () => {
     const root = tempDirs.make("node-native-workspace-");
     const workspace = path.join(root, "workspace");
     fs.mkdirSync(workspace);
     const link = path.join(root, "workspace-link");
     fs.symlinkSync(workspace, link, "junction");
-    const snapshot = snapshotNodeWorkerNativeInference(config(), {})!;
+    const snapshot = (await snapshotNodeWorkerNativeInferenceAsync(config(), {}))!;
     const assignment = descriptor(link);
     const startup = projectNodeWorkerNativeInference(snapshot, assignment);
     expect(startup.config.workspace).toBe(fs.realpathSync(workspace));

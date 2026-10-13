@@ -29,6 +29,7 @@ import {
 import { createPluginSessionOwnershipReads } from "./registry-runtime-session-reads.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRegistry } from "./registry-types.js";
+import { getPluginRuntimeLoadContext } from "./runtime/load-context.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 type PluginSessionRuntime = PluginRuntime["agent"]["session"];
@@ -480,6 +481,7 @@ export function createPluginSessionOwnership(
         provider,
         entry,
         cfg,
+        metadataSnapshot: getPluginRuntimeLoadContext(resolveRegistry())?.metadataSnapshot,
       }),
     };
   };

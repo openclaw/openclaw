@@ -22,6 +22,7 @@ import {
   createEmptyPluginRegistry,
   disposePluginRegistryInstances,
   getActivePluginRegistry,
+  preparePluginTestRuntimeMetadata,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
@@ -706,6 +707,7 @@ export function setupRunAttemptTestHooks(
     }
     setRuntimeConfigSnapshot(createHarnessConfig());
     await context.codexAttemptRuntime.start();
+    await preparePluginTestRuntimeMetadata();
     // createParams models an ordinary durable session; seeded native bindings
     // must have the same authoritative core owner as a real resumed conversation.
     if (options.sessionOwner !== null) {

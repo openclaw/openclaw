@@ -1,4 +1,4 @@
-import { loadDotEnv } from "../infra/dotenv.js";
+import { loadDotEnv, loadDotEnvAsync } from "../infra/dotenv.js";
 import {
   createConfigRuntimeEnvBase,
   getPublishedConfigRuntimeEnvState,
@@ -11,6 +11,12 @@ export function maybeLoadDotEnvForConfig(env: NodeJS.ProcessEnv): void {
   // Injected env objects are test/diagnostic sandboxes and must stay isolated.
   if (env === process.env) {
     loadDotEnv({ quiet: true });
+  }
+}
+
+export async function maybeLoadDotEnvForConfigAsync(env: NodeJS.ProcessEnv): Promise<void> {
+  if (env === process.env) {
+    await loadDotEnvAsync({ env, quiet: true });
   }
 }
 

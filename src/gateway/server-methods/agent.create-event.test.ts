@@ -11,6 +11,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { preparePluginMetadataMachineStateAsync } from "../../plugins/installed-plugin-index-record-state.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
@@ -121,6 +122,7 @@ describe("agent handler session create events", () => {
     configMocks.storePath = storePath;
     configMocks.workspaceDir = tempDir;
     setRuntimeConfigSnapshot(configMocks.getRuntimeConfig());
+    await preparePluginMetadataMachineStateAsync({});
     configMocks.getRuntimeConfig.mockClear();
     agentIngressMocks.agentCommandFromIngress.mockClear();
     agentIngressMocks.agentCommandFromIngress.mockResolvedValue({ ok: true });

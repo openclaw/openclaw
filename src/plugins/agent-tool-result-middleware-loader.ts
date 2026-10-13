@@ -5,7 +5,7 @@ import type {
   AgentToolResultMiddlewareRuntime,
 } from "./agent-tool-result-middleware-types.js";
 import { listAgentToolResultMiddlewares } from "./agent-tool-result-middleware.js";
-import { loadPluginRegistryHandle } from "./loader.js";
+import { loadPluginRegistryHandleAsync } from "./loader.js";
 import type { PluginAgentToolResultMiddlewareOwner, PluginRegistry } from "./registry-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
 
@@ -55,7 +55,7 @@ export async function loadAgentToolResultMiddlewaresForRuntime(params: {
     const runtimeRegistry =
       loadedRegistry && missingPluginIds.every((pluginId) => loadedPluginIds.has(pluginId))
         ? loadedRegistry
-        : loadPluginRegistryHandle({
+        : await loadPluginRegistryHandleAsync({
             config: (await import("../config/config.js")).getRuntimeConfig(),
             onlyPluginIds: missingPluginIds,
             manifestRegistry: {

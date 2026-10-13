@@ -11,7 +11,7 @@ import {
   findPersistedAuthProfileCredential,
   hasAnyAuthProfileStoreSource,
   hasLocalAuthProfileStoreSource,
-  loadAuthProfileStoreForRuntime,
+  loadAuthProfileStoreForRuntimeAsync,
   resolveApiKeyForProfile,
 } from "../agents/auth-profiles.js";
 import { formatAuthDoctorHint } from "../agents/auth-profiles/doctor.js";
@@ -36,6 +36,7 @@ import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { updateConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { isRecord } from "../utils.js";
@@ -54,7 +55,10 @@ const DOCTOR_REAUTH_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
 };
 
 /** Explain the retired ambient-token activation once per state directory. */
-export function noteCopilotAmbientToken(cfg: OpenClawConfig, env = process.env): void {
+export async function noteCopilotAmbientToken(
+  cfg: OpenClawConfig,
+  env = process.env,
+): Promise<void> {
   if (
     !(env.GH_TOKEN?.trim() || env.GITHUB_TOKEN?.trim()) ||
     env.COPILOT_GITHUB_TOKEN?.trim() ||
@@ -68,7 +72,7 @@ export function noteCopilotAmbientToken(cfg: OpenClawConfig, env = process.env):
   }
   const agentDirs = [undefined, ...listAgentIds(cfg).map((id) => resolveAgentDir(cfg, id, env))];
   for (const agentDir of agentDirs) {
-    const store = loadAuthProfileStoreForRuntime(
+    const store = await loadAuthProfileStoreForRuntimeAsync(
       agentDir,
       { readOnly: true, allowKeychainPrompt: false },
       env,
@@ -313,7 +317,7 @@ function isAuthProfileHealthIssue(profile: AuthHealthSummary["profiles"][number]
   );
 }
 
-function loadAuthProfileHealth(params: {
+async function loadAuthProfileHealth(params: {
   cfg: OpenClawConfig;
   target: AuthProfileHealthTarget;
   allowKeychainPrompt: boolean;
@@ -321,7 +325,8 @@ function loadAuthProfileHealth(params: {
 }) {
   // Same-store inheritance keeps local cooldowns and CLI overlays. Credential health follows
   // canonical OAuth ownership, so stale local copies cannot refresh shared credentials twice.
-  const store = loadAuthProfileStoreForRuntime(params.target.agentDir, {
+  await preparePluginMetadataMachineStateAsync({});
+  const store = await loadAuthProfileStoreForRuntimeAsync(params.target.agentDir, {
     inheritedAuthDir: params.target.agentDir,
     allowKeychainPrompt: params.allowKeychainPrompt,
     readOnly: params.readOnly,
@@ -358,7 +363,7 @@ export async function collectAuthProfileHealthFindings(params: {
   const findings: HealthFinding[] = [];
   const labelStores = activeTargets.length > 1;
   for (const target of activeTargets) {
-    const { store, summary } = loadAuthProfileHealth({
+    const { store, summary } = await loadAuthProfileHealth({
       cfg: params.cfg,
       allowKeychainPrompt: params.allowKeychainPrompt ?? false,
       readOnly: true,
@@ -418,7 +423,7 @@ async function noteAuthProfileHealthForTarget(params: {
   target: AuthProfileHealthTarget;
   labelStores: boolean;
 }): Promise<string[]> {
-  let { store, summary } = loadAuthProfileHealth(params);
+  let { store, summary } = await loadAuthProfileHealth(params);
   const noteTitle = (title: string) =>
     params.labelStores ? `${title} (${params.target.label})` : title;
   const unusable = collectAuthProfileCooldowns(store).map(
@@ -468,7 +473,7 @@ async function noteAuthProfileHealthForTarget(params: {
     if (errors.length > 0) {
       note(errors.join("\n"), noteTitle("OAuth refresh errors"));
     }
-    ({ store, summary } = loadAuthProfileHealth({ ...params, allowKeychainPrompt: false }));
+    ({ store, summary } = await loadAuthProfileHealth({ ...params, allowKeychainPrompt: false }));
     issues = summary.profiles.filter(isAuthProfileHealthIssue);
   }
 

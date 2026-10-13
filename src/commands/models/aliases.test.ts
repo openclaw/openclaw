@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { tryResolveConfiguredAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import type { OpenClawConfig, TransformConfigFileParams } from "../../config/config.js";
 import { stampConfigWriteMetadata } from "../../config/io.meta.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
   modelsAliasesAddCommand,
@@ -39,9 +42,19 @@ vi.mock("./load-config.js", () => ({
   loadModelsConfig: (...args: unknown[]) => mocks.loadModelsConfig(...args),
 }));
 
-// Real provider activation is covered by model-selection.runtime.test.ts.
+// mock-isolation: Real provider activation is covered by model-selection.runtime.test.ts.
 vi.mock("./model-selection.runtime.js", () => ({
-  withModelCommandProviderRuntime: (_params: unknown, run: () => unknown) => run(),
+  withModelCommandProviderRuntime: async (
+    params: { runtimeConfig: OpenClawConfig },
+    run: () => unknown,
+  ) => {
+    const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+      config: params.runtimeConfig,
+      env: process.env,
+      workspaceDir: tryResolveConfiguredAgentWorkspaceDir(params.runtimeConfig, process.env),
+    });
+    return withPluginRuntimeGenerationScope({ metadataSnapshot }, run);
+  },
 }));
 
 function makeRuntime(): RuntimeEnv & { logs: string[] } {

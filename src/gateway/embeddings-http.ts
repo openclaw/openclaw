@@ -6,13 +6,16 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { resolveAgentDir } from "../agents/agent-scope.js";
-import { resolveMemorySearchConfig } from "../agents/memory-search.js";
+import { resolveMemorySearchConfigAsync } from "../agents/memory-search.js";
 import { createConfiguredProviderLocalServiceAcquirer } from "../agents/provider-local-service.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
-import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
+import {
+  getMemoryEmbeddingProvider,
+  getMemoryEmbeddingProviderAsync,
+} from "../plugins/memory-embedding-provider-runtime.js";
 import type { MemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
 import {
   acquireEmbeddingProviderLease,
@@ -54,7 +57,7 @@ const MAX_EMBEDDING_INPUTS = 128;
 const MAX_EMBEDDING_INPUT_CHARS = 8_192;
 const MAX_EMBEDDING_TOTAL_CHARS = 65_536;
 type MemorySearchEmbeddingConfig = Pick<
-  NonNullable<ReturnType<typeof resolveMemorySearchConfig>>,
+  NonNullable<Awaited<ReturnType<typeof resolveMemorySearchConfigAsync>>>,
   "local" | "remote" | "inputType" | "queryInputType" | "documentInputType"
 >;
 
@@ -100,7 +103,7 @@ async function createConfiguredEmbeddingProvider(params: {
 }): Promise<MemoryEmbeddingProvider> {
   const acquireLocalService = createConfiguredProviderLocalServiceAcquirer(() => params.cfg);
   const providerId = params.provider;
-  const adapter = getMemoryEmbeddingProvider(providerId, params.cfg);
+  const adapter = await getMemoryEmbeddingProviderAsync(providerId, params.cfg);
   if (!adapter) {
     throw new Error(`Unknown memory embedding provider: ${providerId}`);
   }
@@ -130,11 +133,11 @@ async function createConfiguredEmbeddingProvider(params: {
 
 // Request model overrides are constrained to the configured memory provider so
 // a gateway client cannot select an arbitrary embedding provider by model name.
-function resolveEmbeddingsTarget(params: {
+async function resolveEmbeddingsTarget(params: {
   requestModel: string;
   configuredProvider: string;
   cfg: OpenClawConfig;
-}): { provider: string; model: string } | { errorMessage: string } {
+}): Promise<{ provider: string; model: string } | { errorMessage: string }> {
   const configuredProvider = params.configuredProvider;
   const raw = params.requestModel.trim();
   const slash = raw.indexOf("/");
@@ -144,7 +147,7 @@ function resolveEmbeddingsTarget(params: {
 
   const provider = normalizeLowercaseStringOrEmpty(raw.slice(0, slash));
   // Unrecognized prefixes belong to the model ID, for example `library/bge-m3`.
-  if (!getMemoryEmbeddingProvider(provider, params.cfg)) {
+  if (!(await getMemoryEmbeddingProviderAsync(provider, params.cfg))) {
     return { provider: configuredProvider, model: raw };
   }
   const model = raw.slice(slash + 1).trim();
@@ -223,13 +226,13 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     throw err;
   }
   const agentDir = resolveAgentDir(cfg, agentId);
-  const memorySearch = resolveMemorySearchConfig(cfg, agentId);
+  const memorySearch = await resolveMemorySearchConfigAsync(cfg, agentId);
   const configuredProvider = memorySearch?.provider ?? "openai";
   const overrideModel =
     normalizeOptionalString(getHeader(req, "x-openclaw-model")) ||
     normalizeOptionalString(memorySearch?.model) ||
     "";
-  const target = resolveEmbeddingsTarget({
+  const target = await resolveEmbeddingsTarget({
     requestModel: overrideModel,
     configuredProvider,
     cfg,
@@ -239,7 +242,8 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     return true;
   }
   const providerScopeKey = JSON.stringify([agentId, target.provider]);
-  const requestedProviderNeedsCleanup = isLocalEmbeddingProvider(cfg, target.provider);
+  const requestedProviderNeedsCleanup =
+    (await getMemoryEmbeddingProviderAsync(target.provider, cfg))?.transport === "local";
   if (req.socket.destroyed || res.destroyed || res.socket?.destroyed) {
     return true;
   }

@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.types.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
@@ -280,7 +281,8 @@ describe("bundled static model catalog snapshot cache", () => {
     expect(manifestMocks.loadPluginManifest).not.toHaveBeenCalled();
   });
 
-  it("refreshes a retained no-snapshot resolver at the plugin metadata lifecycle boundary", () => {
+  it("refreshes a retained no-snapshot resolver at the plugin metadata lifecycle boundary", async () => {
+    await prepareBundledDiscoveryMode();
     const env = { HOME: "/custom-home" };
     const firstPlugin = createMistralManifestPlugin();
     setManifestPlugins([firstPlugin]);
@@ -296,6 +298,7 @@ describe("bundled static model catalog snapshot cache", () => {
     expect(resolveModel(mistralLookup)?.id).toBe("mistral-medium-3-5");
     expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-next" })).toBeUndefined();
     clearPluginMetadataLifecycleCaches();
+    await prepareBundledDiscoveryMode();
 
     expect(resolveModel(mistralLookup)).toBeUndefined();
     expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-next" })?.name).toBe(

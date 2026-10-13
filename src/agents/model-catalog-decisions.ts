@@ -53,7 +53,7 @@ import {
 } from "./openai-model-routes.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
-import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+import { resolvePreparedProviderIdForAuth as resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 export type ModelCatalogDecisionParams = {
   cfg: OpenClawConfig;

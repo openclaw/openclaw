@@ -9,6 +9,7 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import { resetLogger } from "../../logging/logger.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
+import { attachModelProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import { createOpenClawReadTool } from "../agent-tools.read.js";
@@ -66,13 +67,17 @@ describe("AgentSession tool source fidelity", () => {
       expect(readControlText).toBe(fileContent);
       const tool = readTool;
 
-      const model: Model = {
+      const baseModel: Model = {
         ...testModel,
         api,
         provider: api === "anthropic-messages" ? "anthropic" : "openai",
         id: api === "anthropic-messages" ? "claude-sonnet-4-6" : "gpt-4.1",
         baseUrl: "https://router.invalid",
       };
+      const model = attachModelProviderRuntimePluginHandle(baseModel, {
+        provider: baseModel.provider,
+        modelId: baseModel.id,
+      });
       const settingsManager = SettingsManager.inMemory({
         compaction: { enabled: false },
         retry: { enabled: false },
@@ -118,7 +123,7 @@ describe("AgentSession tool source fidelity", () => {
             ),
           ),
         )
-        .mockImplementation((_activeModel, context, options) => {
+        .mockImplementation((activeModel, context, options) => {
           liveContext = context;
           const capture = async (payload: unknown, requestModel: Model) => {
             const replacement = await options?.onPayload?.(payload, requestModel);
@@ -126,12 +131,12 @@ describe("AgentSession tool source fidelity", () => {
             throw new Error("synthetic probe stops before any network operation");
           };
           return api === "anthropic-messages"
-            ? streamAnthropic(model as Model<"anthropic-messages">, context, {
+            ? streamAnthropic(activeModel as Model<"anthropic-messages">, context, {
                 ...options,
                 apiKey: "synthetic-probe-auth",
                 onPayload: capture,
               })
-            : streamOpenAIResponses(model as Model<"openai-responses">, context, {
+            : streamOpenAIResponses(activeModel as Model<"openai-responses">, context, {
                 ...options,
                 apiKey: "synthetic-probe-auth",
                 onPayload: capture,

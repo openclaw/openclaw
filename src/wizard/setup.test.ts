@@ -55,9 +55,9 @@ const resolveProviderPluginChoice = vi.hoisted(() =>
   vi.fn<ResolveProviderPluginChoice>(() => null),
 );
 const resolvePluginProviders = vi.hoisted(() =>
-  vi.fn<typeof import("../plugins/provider-auth-choice.runtime.js").resolvePluginProviders>(
-    () => [],
-  ),
+  vi.fn<
+    typeof import("../plugins/provider-auth-choice.runtime.js").resolveAuthChoicePluginProviders
+  >(async () => []),
 );
 const warnIfModelConfigLooksOff = vi.hoisted(() => vi.fn(async () => {}));
 
@@ -270,9 +270,10 @@ vi.mock("../plugins/setup-registry.js", () => ({
   }),
 }));
 
+// mock-isolation: Wizard orchestration controls provider choices while credential persistence is exercised separately.
 vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
   resolveProviderPluginChoice,
-  resolvePluginProviders,
+  resolveAuthChoicePluginProviders: resolvePluginProviders,
 }));
 
 vi.mock("../flows/model-picker.js", () => ({ promptDefaultModel }));
@@ -481,7 +482,7 @@ describe("runSetupWizard", () => {
     probeGatewayReachable.mockReset().mockResolvedValue({ ok: false });
     resolveProviderOnboardAuthFlags.mockReset().mockReturnValue([]);
     resolveProviderPluginChoice.mockReset().mockReturnValue(null);
-    resolvePluginProviders.mockReset().mockReturnValue([]);
+    resolvePluginProviders.mockReset().mockResolvedValue([]);
     promptDefaultModel.mockReset().mockResolvedValue({});
     warnIfModelConfigLooksOff.mockReset().mockResolvedValue(undefined);
     buildPluginCompatibilitySnapshotNotices.mockReset().mockReturnValue([]);
@@ -919,7 +920,7 @@ describe("runSetupWizard", () => {
   });
 
   it("infers an API-key flag while preserving an existing default model", async () => {
-    resolvePluginProviders.mockReturnValueOnce([
+    resolvePluginProviders.mockResolvedValueOnce([
       { id: "", label: "Empty", auth: [] },
       { id: "demo-provider", label: "Demo", auth: [], wizard: { setup: {} } },
     ]);

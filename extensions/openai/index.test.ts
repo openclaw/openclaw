@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createCapturedPluginRegistration,
   requireRegisteredProvider,
+  useProviderCatalogMetadata,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -100,6 +101,8 @@ function expectNoBeforePromptBuildHook(on: unknown): void {
   const hasBeforePromptBuild = mockCalls(on).some((call) => call[0] === "before_prompt_build");
   expect(hasBeforePromptBuild).toBe(false);
 }
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 describe("openai plugin", () => {
   beforeEach(() => {

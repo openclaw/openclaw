@@ -11,6 +11,7 @@ import type {
 import { isOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
+import type { ProviderAuthAliasLookupParams } from "./provider-auth-aliases.js";
 import type { ApiKeyCredential, AuthStorageData } from "./sessions/auth-storage.js";
 
 type AgentOAuthCredential = {
@@ -27,6 +28,7 @@ export type AgentCredentialMap = Record<string, AgentCredential>;
 type ResolveAgentCredentialMapOptions = {
   includeSecretRefPlaceholders?: boolean;
   config?: OpenClawConfig;
+  metadataSnapshot?: ProviderAuthAliasLookupParams["metadataSnapshot"];
 };
 
 const AGENT_SECRET_REF_CONFIGURED_MARKER = "openclaw-secret-ref-configured";
@@ -137,6 +139,7 @@ export function resolveAgentCredentialMapFromStore(
       cfg: options?.config,
       store,
       provider,
+      authAliasLookupParams: { metadataSnapshot: options?.metadataSnapshot },
       ...(options?.includeSecretRefPlaceholders === true ? { readinessMode: "read-only" } : {}),
     });
     for (const profileId of profileIds) {

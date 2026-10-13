@@ -26,7 +26,14 @@ const authStoreMocks = vi.hoisted(() => {
     routeResolutions: new Map(),
     store: { version: 1, profiles: {} },
   };
-  const ensureAuthProfileStoreAsync = vi.fn(async () => state.store);
+  const loadFixtureStore = async () => {
+    // Preserve metadata preparation owned by the real external-auth overlay.
+    const { resolvePluginMetadataSnapshotAsync } =
+      await import("../../plugins/plugin-metadata-snapshot.js");
+    await resolvePluginMetadataSnapshotAsync({ config: {} });
+    return state.store;
+  };
+  const ensureAuthProfileStoreAsync = vi.fn(loadFixtureStore);
   const hasAnyAuthProfileStoreSourceAsync = vi.fn(() => state.hasSource);
   const isProfileInCooldown = vi.fn((_store: AuthProfileStore, _profileId: string) => false);
   const resolveProviderModelRoutes = vi.fn(
@@ -43,7 +50,7 @@ const authStoreMocks = vi.hoisted(() => {
       state.hasSource = false;
       state.routeResolutions.clear();
       state.store = { version: 1, profiles: {} };
-      ensureAuthProfileStoreAsync.mockReset().mockImplementation(async () => state.store);
+      ensureAuthProfileStoreAsync.mockReset().mockImplementation(loadFixtureStore);
       hasAnyAuthProfileStoreSourceAsync.mockReset().mockImplementation(() => state.hasSource);
       isProfileInCooldown
         .mockReset()

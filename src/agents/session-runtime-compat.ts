@@ -7,10 +7,9 @@ import type { CliSessionBinding, SessionEntry } from "../config/sessions.js";
 import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import {
-  isManifestPluginAvailableForControlPlane,
-  loadManifestMetadataSnapshot,
-} from "../plugins/manifest-contract-eligibility.js";
+import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { resolveSessionPinnedHarnessId } from "../sessions/agent-harness-session-key.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
 import { getRegisteredAgentHarness } from "./harness/registry.js";
@@ -51,11 +50,12 @@ export function resolvePersistedSessionRuntimeId(
   }
   return normalizeOptionalAgentRuntimeId(entry?.agentHarnessId);
 }
-/** Resolves a runtime id only when it can serve the selected provider. */
+/** Resolves against supplied/current prepared metadata; cold callers use the async entry point. */
 export function resolveCompatibleAgentRuntimeForProvider(params: {
   provider?: string | null;
   runtime?: string | null;
   cfg?: OpenClawConfig;
+  metadataSnapshot?: PluginMetadataSnapshot | null;
 }): string | undefined {
   const runtime = normalizeOptionalAgentRuntimeId(params.runtime);
   if (!runtime || isDefaultAgentRuntimeId(runtime)) {
@@ -71,9 +71,19 @@ export function resolveCompatibleAgentRuntimeForProvider(params: {
   if (getRegisteredAgentHarness(runtime)) {
     return runtime;
   }
+  if (params.metadataSnapshot === null) {
+    return isCliRuntimeAliasForProvider({ provider, runtime, metadataSnapshot: null })
+      ? runtime
+      : undefined;
+  }
   const snapshot =
-    getCurrentPluginMetadataSnapshot({ config: params.cfg, allowWorkspaceScopedSnapshot: true }) ??
-    loadManifestMetadataSnapshot({ config: params.cfg });
+    params.metadataSnapshot ??
+    getCurrentPluginMetadataSnapshot({ config: params.cfg, allowWorkspaceScopedSnapshot: true });
+  if (!snapshot) {
+    throw new Error(
+      "Session runtime metadata is not prepared; await resolveCompatibleAgentRuntimeForProviderAsync first.",
+    );
+  }
   if (
     snapshot.plugins.some(
       (plugin) =>
@@ -83,13 +93,21 @@ export function resolveCompatibleAgentRuntimeForProvider(params: {
   ) {
     return runtime;
   }
-  return isCliRuntimeAliasForProvider({ provider, runtime, cfg: params.cfg }) ? runtime : undefined;
+  return isCliRuntimeAliasForProvider({
+    provider,
+    runtime,
+    cfg: params.cfg,
+    metadataSnapshot: snapshot,
+  })
+    ? runtime
+    : undefined;
 }
 /** Resolves a persisted runtime override only when it can serve the selected provider. */
 export function resolveSessionRuntimeOverrideForProvider(params: {
   provider?: string | null;
   entry?: SessionRuntimeCompatEntry;
   cfg?: OpenClawConfig;
+  metadataSnapshot?: PluginMetadataSnapshot | null;
 }): string | undefined {
   const lockedHarness = resolveSessionPinnedHarnessId(params.entry);
   if (lockedHarness && !isDefaultAgentRuntimeId(lockedHarness)) {
@@ -104,6 +122,7 @@ export function resolveSessionRuntimeOverrideForProvider(params: {
     provider: params.provider,
     runtime: params.entry?.agentRuntimeOverride,
     cfg: params.cfg,
+    metadataSnapshot: params.metadataSnapshot,
   });
 }
 
@@ -112,6 +131,7 @@ export function resolveManualCompactionCliTarget(params: {
   provider?: string | null;
   entry?: ManualCompactionRuntimeEntry;
   cfg?: OpenClawConfig;
+  metadataSnapshot?: PluginMetadataSnapshot | null;
 }): ManualCompactionCliTarget {
   const runtimeOverride = normalizeOptionalAgentRuntimeId(params.entry?.agentRuntimeOverride);
   const runtimeConfig =
@@ -127,6 +147,7 @@ export function resolveManualCompactionCliTarget(params: {
     // Setup discovery is only relevant when this runtime owns a native transcript.
     // Model-picker overrides without a binding must stay on the generic compaction path.
     cfg: runtimeConfig,
+    metadataSnapshot: params.metadataSnapshot,
   });
   const persistedRuntime =
     params.entry?.modelSelectionLocked === true
@@ -138,6 +159,7 @@ export function resolveManualCompactionCliTarget(params: {
               provider: params.provider,
               runtime: historicalRuntime,
               cfg: historicalRuntimeConfig,
+              metadataSnapshot: params.metadataSnapshot,
             })));
   if (persistedRuntime) {
     const cliSessionBinding = getCliSessionBinding(params.entry, persistedRuntime);
@@ -160,6 +182,7 @@ export function resolveManualCompactionCliTarget(params: {
       provider: params.provider,
       runtime,
       cfg: params.cfg,
+      metadataSnapshot: params.metadataSnapshot,
     });
     const binding = compatibleRuntime
       ? getCliSessionBinding(params.entry, compatibleRuntime)
@@ -175,4 +198,69 @@ export function resolveManualCompactionCliTarget(params: {
     cliSessionBinding: compatibleBinding.binding,
     cliSessionId: compatibleBinding.binding.sessionId,
   };
+}
+
+function needsRuntimeMetadata(runtimeId: string | null | undefined): boolean {
+  const runtime = normalizeOptionalAgentRuntimeId(runtimeId);
+  return Boolean(
+    runtime &&
+    !isDefaultAgentRuntimeId(runtime) &&
+    runtime !== "openclaw" &&
+    runtime !== "codex" &&
+    !getRegisteredAgentHarness(runtime),
+  );
+}
+
+export async function resolveCompatibleAgentRuntimeForProviderAsync(
+  params: Parameters<typeof resolveCompatibleAgentRuntimeForProvider>[0],
+): Promise<string | undefined> {
+  if (params.metadataSnapshot === null || !needsRuntimeMetadata(params.runtime)) {
+    return resolveCompatibleAgentRuntimeForProvider(params);
+  }
+  const metadataSnapshot =
+    params.metadataSnapshot ??
+    (await resolvePluginMetadataSnapshotAsync({
+      config: params.cfg,
+      allowWorkspaceScopedCurrent: true,
+    }));
+  return resolveCompatibleAgentRuntimeForProvider({ ...params, metadataSnapshot });
+}
+
+export async function resolveSessionRuntimeOverrideForProviderAsync(
+  params: Parameters<typeof resolveSessionRuntimeOverrideForProvider>[0],
+): Promise<string | undefined> {
+  const lockedHarness = resolveSessionPinnedHarnessId(params.entry);
+  if (lockedHarness && !isDefaultAgentRuntimeId(lockedHarness)) {
+    return lockedHarness;
+  }
+  return resolveCompatibleAgentRuntimeForProviderAsync({
+    provider: params.provider,
+    runtime: params.entry?.agentRuntimeOverride,
+    cfg: params.cfg,
+    metadataSnapshot: params.metadataSnapshot,
+  });
+}
+
+export async function resolveManualCompactionCliTargetAsync(
+  params: Parameters<typeof resolveManualCompactionCliTarget>[0],
+): Promise<ManualCompactionCliTarget> {
+  if (params.entry?.modelSelectionLocked && resolvePersistedSessionRuntimeId(params.entry)) {
+    return resolveManualCompactionCliTarget(params);
+  }
+  const runtimes = [
+    params.entry?.agentRuntimeOverride,
+    params.entry?.agentHarnessId,
+    ...Object.keys(params.entry?.cliSessionBindings ?? {}),
+    ...Object.keys(params.entry?.cliSessionIds ?? {}),
+  ];
+  if (params.metadataSnapshot === null || !runtimes.some(needsRuntimeMetadata)) {
+    return resolveManualCompactionCliTarget(params);
+  }
+  const metadataSnapshot =
+    params.metadataSnapshot ??
+    (await resolvePluginMetadataSnapshotAsync({
+      config: params.cfg,
+      allowWorkspaceScopedCurrent: true,
+    }));
+  return resolveManualCompactionCliTarget({ ...params, metadataSnapshot });
 }

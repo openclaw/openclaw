@@ -5,9 +5,12 @@ import {
 } from "@openclaw/ai/transports";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { AssistantMessage, Context, Model } from "openclaw/plugin-sdk/llm";
+import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { wrapXaiProviderStream } from "./stream.js";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 const sdkState = vi.hoisted(() => ({
   clients: [] as Array<Record<string, unknown>>,

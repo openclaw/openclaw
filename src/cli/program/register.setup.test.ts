@@ -52,7 +52,7 @@ const {
 } = mocks;
 async function runCli(args: string[]) {
   const program = new Command();
-  registerSetupCommand(program);
+  await registerSetupCommand(program);
   await program.parseAsync(["setup", ...args], { from: "user" });
 }
 

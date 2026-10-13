@@ -30,6 +30,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { attachPreparedProviderModelFixture } from "../provider-request.test-support.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import {
   buildEmbeddedRunnerAssistant,
@@ -270,11 +271,11 @@ describe("embedded retry transcript ownership", () => {
       const callerOwned = suppliedManager || sessionPersistence === "detached";
       const callerManager = suppliedManager ? SessionManager.inMemory(workspaceDir) : undefined;
       const toolCalls = ["call_1", "call_2"];
-      const model = {
+      const model = attachPreparedProviderModelFixture({
         ...createResolvedEmbeddedRunnerModel("openai", "gpt-5.6-luna").model,
         api: "openai-responses" as const,
         input: ["text" as const],
-      };
+      });
       const config = createEmbeddedAgentRunnerOpenAiConfig([model.id]);
       setRuntimeConfigSnapshot(config);
       const fetchMock = vi

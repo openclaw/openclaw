@@ -102,6 +102,11 @@ export async function minimaxUnderstandImage(params: {
     modelBaseUrl: params.modelBaseUrl,
     provider: params.provider,
   });
+  const { resolvePluginMetadataSnapshotAsync } =
+    await import("../plugins/plugin-metadata-snapshot.js");
+  const { owners } = await resolvePluginMetadataSnapshotAsync({
+    allowWorkspaceScopedCurrent: true,
+  });
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy, trustConfiguredBaseUrlOrigin } =
     resolveProviderHttpRequestConfigWithOriginTrust({
       baseUrl: configuredHost,
@@ -114,6 +119,7 @@ export async function minimaxUnderstandImage(params: {
       },
       request: params.request,
       provider: params.provider ?? "minimax",
+      providerMetadataOwners: owners,
       capability: "image",
       transport: "media-understanding",
     });

@@ -7,7 +7,7 @@ import { isPluginRegistryLoadInFlight } from "../plugins/loader-cache.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   EMPTY_PLUGIN_SCHEMA,
-  loadOpenClawPlugins,
+  loadOpenClawPluginsForTest,
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
   writePlugin,
@@ -92,7 +92,7 @@ describe("provider OAuth refresh lifecycle", () => {
             entries: { [plugin.id]: { enabled: true } },
           },
         } satisfies OpenClawConfig;
-        const loadOptions: NonNullable<Parameters<typeof loadOpenClawPlugins>[0]> = {
+        const loadOptions: NonNullable<Parameters<typeof loadOpenClawPluginsForTest>[0]> = {
           cache: false,
           workspaceDir: plugin.dir,
           config,
@@ -107,7 +107,7 @@ describe("provider OAuth refresh lifecycle", () => {
             profileId: PROFILE_ID,
           });
         });
-        loadOpenClawPlugins({
+        loadOpenClawPluginsForTest({
           ...loadOptions,
           logger: { info: startAuthDuringRegister, warn: vi.fn(), error: vi.fn() },
         });

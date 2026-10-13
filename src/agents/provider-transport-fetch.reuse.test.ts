@@ -10,6 +10,7 @@ import { createOpenAIResponsesAssistantOutput } from "../../packages/ai/src/tran
 import { processResponsesStream } from "../../packages/ai/src/transports/openai-responses-stream-internal.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { attachPreparedProviderModelFixture } from "./provider-request.test-support.js";
 import { closeProviderTransportDispatcherPool } from "./provider-transport-dispatcher-pool.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 
@@ -55,7 +56,10 @@ describe("Responses trailing HTTP body", () => {
           );
         },
         async (baseUrl) => {
-          const localModel = { ...model, baseUrl: `${baseUrl}/v1` };
+          const localModel = attachPreparedProviderModelFixture({
+            ...model,
+            baseUrl: `${baseUrl}/v1`,
+          });
           const client = new OpenAI({
             apiKey: "fixture-key",
             baseURL: localModel.baseUrl,

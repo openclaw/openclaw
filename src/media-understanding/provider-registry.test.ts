@@ -69,7 +69,7 @@ describe("media-understanding provider registry", () => {
         },
       },
     } as never;
-    const registry = buildMediaUnderstandingRegistry(undefined, cfg);
+    const registry = buildMediaUnderstandingRegistry(undefined, cfg, []);
     const glmProvider = requireMediaProvider(registry, "glm");
     const textOnlyProvider = getMediaUnderstandingProvider("textOnly", registry);
 

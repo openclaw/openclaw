@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 
 vi.mock("../version.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../version.js")>();
@@ -31,6 +32,11 @@ const displayParams: Partial<Parameters<typeof buildStatusMessage>[0]> = {
   queue: { mode: "steer", depth: 0 },
   modelAuth: "api-key",
 };
+
+beforeEach(async () => {
+  // Direct renderer fixtures prepare the same machine facts as buildStatusReplyParts.
+  await preparePluginMetadataMachineStateAsync({});
+});
 
 afterEach(() => {
   cliBackendsTesting.resetDepsForTest();

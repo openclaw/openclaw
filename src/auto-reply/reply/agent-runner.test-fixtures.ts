@@ -26,6 +26,28 @@ type FollowupRunFixture = Pick<FollowupRun, "prompt" | "summaryLine" | "enqueued
     };
   };
 
+/** Direct runner fixtures supply the metadata scope normally owned by reply dispatch. */
+export async function withAgentRunnerTestMetadata<T>(
+  params: { config: OpenClawConfig; workspaceDir?: string },
+  run: () => Promise<T>,
+): Promise<T> {
+  const { resolvePluginMetadataSnapshotAsync } =
+    await import("../../plugins/plugin-metadata-snapshot.js");
+  const metadata = await resolvePluginMetadataSnapshotAsync(params);
+  const { withPluginMetadataSnapshotScope } =
+    await import("../../plugins/current-plugin-metadata-snapshot.js");
+  return withPluginMetadataSnapshotScope(metadata, run, params);
+}
+
+export async function runTestReplyAgent(
+  params: Parameters<typeof import("./agent-runner-run.js").runReplyAgent>[0],
+) {
+  return withAgentRunnerTestMetadata(params.followupRun.run, async () => {
+    const { runReplyAgent } = await import("./agent-runner-run.js");
+    return runReplyAgent(params);
+  });
+}
+
 export function isModelRuntimeContextCarrier(message: { role: string; content: unknown }): boolean {
   // OpenAI runtime notices use developer or user messages according to provider support.
   const text =

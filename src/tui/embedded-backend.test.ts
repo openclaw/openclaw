@@ -199,8 +199,9 @@ vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
     params.agentId ?? /^agent:([^:]+):/.exec(params.sessionKey ?? "")?.[1] ?? "main",
 }));
 
+// mock-isolation: Backend fixtures control prepared registry loading without initializing real plugins.
 vi.mock("../agents/runtime-plugins.js", () => ({
-  loadAgentRuntimePluginRegistryHandle: (...args: unknown[]) =>
+  loadAgentRuntimePluginRegistryHandle: async (...args: unknown[]) =>
     loadAgentRuntimePluginRegistryHandleMock(...args),
 }));
 
@@ -1424,7 +1425,7 @@ describe("EmbeddedTuiBackend", () => {
 
   it.each([false, true])("loads history despite runtime plugin failure=%s", async (fails) => {
     if (fails) {
-      loadAgentRuntimePluginRegistryHandleMock.mockImplementationOnce(() => {
+      loadAgentRuntimePluginRegistryHandleMock.mockImplementationOnce(async () => {
         throw new Error("runtime unavailable");
       });
     }
@@ -2681,6 +2682,8 @@ describe("EmbeddedTuiBackend", () => {
           canonicalKey: "global",
           cfg: expect.anything(),
           entry,
+          metadataSnapshot:
+            projectSessionsPatchEntryMock.mock.calls.at(-1)?.[0].runtimeMetadataSnapshot,
           preparedAcpMeta: null,
           storePath: target.storePath,
           targetAgentId: owner,

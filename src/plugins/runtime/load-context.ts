@@ -93,6 +93,7 @@ export function setPluginRuntimeLoadContext(
       config: context.rawConfig,
       env: context.env,
       workspaceDir: context.workspaceDir,
+      policyHash: context.metadataSnapshot?.policyHash,
     }),
   };
   bindPluginRuntimeLoadContextState(registry, bound);

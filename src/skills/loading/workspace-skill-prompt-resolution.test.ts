@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readCodeModeSkill, resolveCodeModeSkills } from "../../agents/code-mode-skills.js";
+import { preparePluginAutoEnableTestDiscovery } from "../../config/plugin-auto-enable.test-helpers.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
@@ -247,6 +248,7 @@ describe("resolveSkillsPrompt", () => {
       name: "healthy-skill",
       description: "Captured healthy",
     });
+    preparePluginAutoEnableTestDiscovery();
     const snapshot = await buildSkillSnapshot(workspaceDir);
     await writeSkill({
       dir: path.join(workspaceDir, "skills", "healthy-skill"),

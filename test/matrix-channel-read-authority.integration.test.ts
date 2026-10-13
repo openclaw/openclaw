@@ -26,7 +26,9 @@ import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../src/infra/agent-run-registry.js";
+import { withPluginMetadataSnapshotScope } from "../src/plugins/current-plugin-metadata-snapshot.js";
 import { getPluginInstance } from "../src/plugins/plugin-instance-scope.js";
+import { resolvePluginMetadataSnapshotAsync } from "../src/plugins/plugin-metadata-snapshot.js";
 import { createPluginRegistry } from "../src/plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
 import { createPluginRuntime } from "../src/plugins/runtime/index.js";
@@ -383,7 +385,12 @@ describe("Matrix member info CLI", () => {
       registerMessageDiscordAdminCommands(command, {
         ...createMessageCliHelpers("matrix"),
         runMessageAction: async (action, opts) => {
-          await messageCommand({ ...opts, action }, createDefaultDeps(), runtime);
+          const metadata = await resolvePluginMetadataSnapshotAsync({ config: fixture.cfg });
+          await withPluginMetadataSnapshotScope(
+            metadata,
+            () => messageCommand({ ...opts, action }, createDefaultDeps(), runtime),
+            { config: fixture.cfg },
+          );
         },
       });
 

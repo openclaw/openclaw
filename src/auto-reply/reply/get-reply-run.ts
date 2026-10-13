@@ -21,7 +21,7 @@ export async function runPreparedReply(
   };
 
   const dispatchRuntime = getPreparedReplyDispatchRuntime();
-  if (!dispatchRuntime) {
+  if (!dispatchRuntime && context.useFastReplyRuntime) {
     return execute();
   }
 
@@ -29,9 +29,9 @@ export async function runPreparedReply(
     await import("../../agents/prepared-model-runtime.js");
   await using lease = await acquireAgentRunPreparedModelRuntime(
     {
-      config: dispatchRuntime.config,
-      agentId: dispatchRuntime.agentId,
-      agentDir: dispatchRuntime.agentDir,
+      config: dispatchRuntime?.config ?? params.cfg,
+      agentId: dispatchRuntime?.agentId ?? params.agentId,
+      agentDir: dispatchRuntime?.agentDir ?? params.agentDir,
       allowGatewaySubagentBinding: true,
       workspaceDir: context.workspaceDir,
       runtimePluginSelections: [
@@ -44,7 +44,7 @@ export async function runPreparedReply(
     },
     {
       catalogMode: "static",
-      pluginGeneration: dispatchRuntime.pluginGeneration,
+      pluginGeneration: dispatchRuntime?.pluginGeneration,
       abortSignal: params.opts?.abortSignal,
     },
   );

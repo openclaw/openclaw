@@ -1,6 +1,7 @@
 /** Tests agent compaction settings and small-context auto-compaction guards. */
 import { describe, expect, it, vi } from "vitest";
 import { shouldCompact } from "../../packages/agent-core/src/harness/compaction/compaction.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import {
   applyAgentAutoCompactionGuard,
   applyAgentCompactionSettingsFromConfig,
@@ -301,7 +302,8 @@ describe("isSilentOverflowProneModel", () => {
     expect(isSilentOverflowProneModel({ provider: "z-ai", modelId: "glm-5.1" })).toBe(true);
   });
 
-  it("flags a direct api.z.ai baseUrl via endpointClass", () => {
+  it("flags a direct api.z.ai baseUrl via endpointClass", async () => {
+    await resolvePluginMetadataSnapshotAsync({ config: {} });
     expect(
       isSilentOverflowProneModel({
         provider: "openai",

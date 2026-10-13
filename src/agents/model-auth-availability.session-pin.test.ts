@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { LEGACY_OAUTH_REF_PROVIDER } from "./auth-profiles/legacy-oauth-ref.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { createModelAuthAvailabilityResolver } from "./model-auth-availability.js";
@@ -10,6 +11,10 @@ import {
   routeResolverFactory,
 } from "./model-auth-availability.test-support.js";
 import { prepareAgentRuntimeAuth } from "./runtime-plan/prepare-auth.js";
+
+beforeEach(async () => {
+  await Promise.all([prepareBundledDiscoveryMode(), prepareBundledDiscoveryMode({})]);
+});
 
 describe.each(["acme", "openai"])("%s session account readiness", (provider) => {
   it.each(["api-key", "oauth"] as const)(

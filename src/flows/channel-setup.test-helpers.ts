@@ -199,9 +199,14 @@ export function createChannelSetupMocks() {
       ensureChannelSetupPluginInstalled: (
         params: Parameters<EnsureChannelSetupPluginInstalled>[0],
       ) => ensureChannelSetupPluginInstalled(params),
-      loadChannelSetupPluginRegistrySnapshotForChannel: (
+      loadChannelSetupPluginRegistrySnapshotForChannel: async (
         params: Parameters<LoadChannelSetupPluginRegistrySnapshotForChannel>[0],
-      ) => loadChannelSetupPluginRegistrySnapshotForChannel(params),
+      ) => {
+        const { preparePluginMetadataMachineStateAsync } =
+          await import("../plugins/installed-plugin-index-record-state.js");
+        await preparePluginMetadataMachineStateAsync({ env: process.env });
+        return loadChannelSetupPluginRegistrySnapshotForChannel(params);
+      },
     }),
     registry: () => ({
       resolveChannelSetupWizardAdapterForPlugin: (plugin?: { setupWizard?: unknown }) =>

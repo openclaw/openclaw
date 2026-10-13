@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
 import { diffGatewayReloadPaths } from "../../gateway/config-diff.js";
@@ -24,6 +25,8 @@ import {
 } from "../../infra/agent-run-registry.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import { readVisibleSessionTranscriptMessageEntries } from "../../plugin-sdk/session-transcript-runtime.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore as createDeferred } from "../../shared/deferred.js";
@@ -46,6 +49,12 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
       const config: OpenClawConfig = {
         session: { store: path.join(state.sessionsDir(), "sessions.json") },
       };
+      setRuntimeConfigSnapshot(config);
+      const metadata = createPluginMetadataSnapshotFixture({ plugins: [{ id: "acpx" }] });
+      const runAttempt = (input: Parameters<typeof runAgentHarnessAttempt>[0]) =>
+        withPluginMetadataSnapshotScope(metadata, () => runAgentHarnessAttempt(input), {
+          trustConfigIdentity: true,
+        });
       const disabledConfig: OpenClawConfig = {
         ...config,
         plugins: { entries: { acpx: { config: { nativeAgents: { qwen: false } } } } },
@@ -93,7 +102,7 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
         });
         const abort = new AbortController();
         attempt.input.abortSignal = AbortSignal.any([test.signal, abort.signal]);
-        const run = fixture.track(runAgentHarnessAttempt(attempt.input));
+        const run = fixture.track(runAttempt(attempt.input));
         try {
           const approvalId = await Promise.race([
             entered.promise,
@@ -170,7 +179,7 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
             attempt.close();
             const next = await attemptFor(state, disabledConfig, "qwen", "full");
             try {
-              await expect(runAgentHarnessAttempt(next.input)).rejects.toThrow("disabled");
+              await expect(runAttempt(next.input)).rejects.toThrow("disabled");
               expect(await readVisibleSessionTranscriptMessageEntries(attempt.target)).toEqual(
                 transcript,
               );

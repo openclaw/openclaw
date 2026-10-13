@@ -4,11 +4,11 @@ import {
   inspectPluginInstallRecordMap,
   type PluginInstallRecordMapState,
 } from "../config/plugin-install-record-map.js";
+import { prepareBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import {
-  prepareBundledDiscoveryMode,
-  readBundledDiscoveryMode,
-  readBundledDiscoveryModeMemoized,
-} from "./bundled-discovery-state.js";
+  prepareBundledDiscoveryModeNative,
+  readBundledDiscoveryModeNative,
+} from "./bundled-discovery-state.native.js";
 import {
   INSTALLED_PLUGIN_INDEX_STATE_KEY,
   readPluginMetadataStateRowSync,
@@ -67,7 +67,7 @@ export function getPersistedInstalledPluginIndexCacheEntry(
 /** Prepare missing policy and inventory facts without replacing their lifecycle owners. */
 export function preparePluginMetadataMachineState(options: InstalledPluginIndexStoreOptions): void {
   const env = options.env ?? process.env;
-  readBundledDiscoveryModeMemoized(env, options, (databasePath) => {
+  prepareBundledDiscoveryModeNative(env, options, (databasePath) => {
     const key = path.resolve(resolveInstalledPluginIndexStorePath(options));
     const current = getPluginCache().persistedInstalledIndex.get(key);
     if (
@@ -75,7 +75,7 @@ export function preparePluginMetadataMachineState(options: InstalledPluginIndexS
       options.filePath?.endsWith(".json") ||
       (current && "value" in current)
     ) {
-      return readBundledDiscoveryMode({ env }, options);
+      return readBundledDiscoveryModeNative({ env }, options);
     }
     const rows = readPluginMetadataStateRowsSync(
       ["plugins.bundledDiscovery", INSTALLED_PLUGIN_INDEX_STATE_KEY],
@@ -124,7 +124,6 @@ export async function preparePluginMetadataMachineStateAsync(
       : undefined,
   );
   activateDiscovery();
-  installed.assertCurrent();
   return () => {
     activateDiscovery();
     installed.assertCurrent();

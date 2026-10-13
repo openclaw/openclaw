@@ -1,4 +1,5 @@
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import "./oauth-common-mocks.test-support.js";
 import { resolveApiKeyForProfile } from "./oauth.js";
@@ -20,6 +21,10 @@ vi.mock("./oauth-manager.js", () => ({
 vi.mock("./store-runtime.js", () => ({
   loadAuthProfileStoreForRuntimeAsync: authMocks.loadAuthProfileStoreForRuntimeAsync,
 }));
+
+beforeEach(async () => {
+  await prepareBundledDiscoveryMode();
+});
 
 it.each(["primary", "legacy fallback"])(
   "%s resolution does not return credentials when cancellation wins the race",

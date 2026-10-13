@@ -3,6 +3,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { preparePluginAutoEnableTestDiscovery } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -341,6 +342,7 @@ describe("runGatewayPostReadyStartupMaintenance", () => {
 
 describe("prepareGatewayPluginBootstrap startup plugins", () => {
   beforeEach(() => {
+    preparePluginAutoEnableTestDiscovery();
     getActivePluginRegistry.mockReset();
     setActivePluginRegistry.mockClear();
     applyPluginAutoEnable.mockClear();

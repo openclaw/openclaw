@@ -7,6 +7,7 @@ import { withSessionActor } from "../config/sessions/session-actor-scope.js";
 import { buildRestartRecoveryExpectedState } from "../config/sessions/session-transcript-turn-state.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
@@ -28,6 +29,7 @@ describe("live model switch worker persistence", () => {
       const storePath = path.join(sessionDirs.make(), "sessions.json");
       const scope = { storePath, sessionKey: "agent:main:model-switch" };
       const cfg = { session: { store: storePath } };
+      const metadataSnapshot = createPluginMetadataSnapshotFixture();
       const initial = {
         sessionId: "model-switch",
         updatedAt: 1,
@@ -42,6 +44,7 @@ describe("live model switch worker persistence", () => {
         if (operation === "clear") {
           await clearLiveModelSwitchPending({
             cfg,
+            metadataSnapshot,
             sessionKey: scope.sessionKey,
             agentId: "main",
             defaultProvider: "openai",
@@ -57,6 +60,7 @@ describe("live model switch worker persistence", () => {
             const snapshot = actor.snapshot(authority) ?? (await actor.read(authority));
             const reducer = prepareLiveModelSwitchAfterRun({
               cfg,
+              metadataSnapshot,
               sessionKey: scope.sessionKey,
               agentId: "main",
               providerUsed: "openai",
@@ -136,6 +140,7 @@ describe("live model switch worker persistence", () => {
           await shouldSwitchToLiveModel({
             ...scope,
             cfg,
+            metadataSnapshot,
             agentId: "main",
             defaultProvider: "openai",
             defaultModel: "gpt-5.4",
@@ -172,6 +177,7 @@ describe("live model switch worker persistence", () => {
     };
     const reducer = prepareLiveModelSwitchAfterRun({
       cfg,
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
       sessionKey: scope.sessionKey,
       entry: initial,
       providerUsed: "openai",

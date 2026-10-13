@@ -1,3 +1,4 @@
+import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
@@ -9,6 +10,8 @@ import {
   stubVydraApiKey,
 } from "./provider-test-helpers.js";
 import { buildVydraVideoGenerationProvider } from "./video-generation-provider.js";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 function fetchCall(fetchMock: ReturnType<typeof vi.fn>, index: number) {
   const call = fetchMock.mock.calls[index];

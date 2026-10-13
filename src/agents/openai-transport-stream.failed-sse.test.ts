@@ -7,6 +7,7 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { isRetryableAssistantError, isTerminalAssistantError } from "../llm/utils/retry.js";
 import { makeResponsesModel } from "./openai-transport-stream.test-harness.js";
+import { attachPreparedProviderModelFixture } from "./provider-request.test-support.js";
 
 const responsesTransports = [
   {
@@ -152,7 +153,7 @@ describe("failed Responses loopback SSE", () => {
       });
 
       try {
-        const model = {
+        const model = attachPreparedProviderModelFixture({
           id: "gpt-5.6-luna",
           name: "GPT-5.6 Luna",
           api: transport.api,
@@ -163,7 +164,7 @@ describe("failed Responses loopback SSE", () => {
           cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
           contextWindow: 128_000,
           maxTokens: 4_096,
-        } satisfies Model;
+        } satisfies Model);
 
         const stream = await transport.createStream()(
           model,
@@ -279,7 +280,7 @@ describe("incomplete Responses loopback SSE", () => {
       if (!address || typeof address === "string") {
         throw new Error("Missing loopback server address");
       }
-      const model = {
+      const model = attachPreparedProviderModelFixture({
         id: "gpt-5.6-luna",
         name: "GPT-5.6 Luna",
         api: transport.api,
@@ -290,7 +291,7 @@ describe("incomplete Responses loopback SSE", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 128_000,
         maxTokens: 4_096,
-      } satisfies Model;
+      } satisfies Model);
 
       const stream = await transport.createStream()(
         model,

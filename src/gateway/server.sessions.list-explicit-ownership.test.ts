@@ -22,6 +22,7 @@ import * as projectionRecords from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { sharingPolicyClient } from "./session-sharing.test-utils.js";
 import type { SessionsListResult } from "./session-utils.types.js";
+import { loadGatewayTestConfigAsync } from "./test-helpers.config-runtime.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -357,7 +358,8 @@ test("captured sentinel rows never substitute a later same-owner session after d
     replaceSessionEntrySync(first, { sessionId: "first-sentinel", updatedAt: 1 });
     replaceSessionEntrySync(second, { sessionId: "later-sentinel", updatedAt: 2 });
     testState.agentsConfig = { entries: { main: {} } };
-    const cfg = (await getGatewayConfigModule()).getRuntimeConfig();
+    const cfg = await loadGatewayTestConfigAsync();
+    (await getGatewayConfigModule()).setRuntimeConfigSnapshot(cfg);
     const projection = await createSessionRowProjection({ cfg });
     const client = sharingPolicyClient({ user: "viewer" });
     const options = { client, context: bindSessionRowProjection({}, () => projection) };

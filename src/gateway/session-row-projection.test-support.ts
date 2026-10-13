@@ -97,6 +97,7 @@ export function createSessionRowProjectionFixture(params: {
       key: fields.key,
       entry,
       preparedRepositoryWorkspace: null,
+      preparedModelMetadata: null,
       agentId,
       modelCatalog,
       rowContext,

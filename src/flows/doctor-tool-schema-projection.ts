@@ -7,6 +7,7 @@ import { buildReadableToolsByName } from "../agents/tools-effective-inventory-bu
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resolveProviderRuntimePluginHandleAsync } from "../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeGenerationRegistryScope } from "../plugins/runtime/generation-state.js";
@@ -53,7 +54,7 @@ function toolSchemaDiagnosticToFinding(params: {
   };
 }
 
-export function collectNormalizedToolSchemaFindings(params: {
+export async function collectNormalizedToolSchemaFindings(params: {
   agentId: string;
   tools: AnyAgentTool[];
   cfg: OpenClawConfig;
@@ -61,7 +62,7 @@ export function collectNormalizedToolSchemaFindings(params: {
   modelRef: { provider: string; model: string };
   model: ProviderRuntimeModel;
   normalizationFailureFinding: (error: unknown) => HealthFinding;
-}): readonly HealthFinding[] {
+}): Promise<readonly HealthFinding[]> {
   const preNormalizationFindings: HealthFinding[] = [];
   const rawToolInventory = buildReadableToolsByName(params.tools);
 
@@ -76,8 +77,16 @@ export function collectNormalizedToolSchemaFindings(params: {
 
   let normalizedTools: AnyAgentTool[];
   try {
+    const runtimeHandle = await resolveProviderRuntimePluginHandleAsync({
+      provider: params.modelRef.provider,
+      modelId: params.modelRef.model,
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+      env: process.env,
+    });
     normalizedTools = normalizeAgentRuntimeTools({
       tools: params.tools,
+      runtimeHandle,
       provider: params.modelRef.provider,
       config: params.cfg,
       workspaceDir: params.workspaceDir,
@@ -129,9 +138,9 @@ export async function collectAgentRuntimeToolSchemaFindings(
 ): Promise<readonly HealthFinding[]> {
   let tools: AnyAgentTool[];
   try {
-    const { createOpenClawCodingTools } = await import("../agents/agent-tools.js");
-    tools = withPluginRuntimeGenerationRegistryScope(params.toolRegistry, () =>
-      createOpenClawCodingTools({
+    const { createOpenClawCodingToolsAsync } = await import("../agents/agent-tools.js");
+    tools = await withPluginRuntimeGenerationRegistryScope(params.toolRegistry, () =>
+      createOpenClawCodingToolsAsync({
         agentId: params.agentId,
         agentDir: params.agentDir,
         conversationCapabilityProfile: params.capabilityProfile,

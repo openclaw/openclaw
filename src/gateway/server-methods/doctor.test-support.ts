@@ -20,9 +20,11 @@ const resolveMemorySearchConfig = vi.hoisted(() =>
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
 const getActiveMemoryProviderCore = vi.hoisted(() => vi.fn());
 const resolveActiveMemoryBackendConfig = vi.hoisted(() =>
-  vi.fn<() => { backend: "builtin" } | { backend: "provider-runtime"; providerId: string }>(() => ({
-    backend: "builtin",
-  })),
+  vi.fn<typeof import("../../plugins/memory-runtime.js").resolveActiveMemoryBackendConfig>(
+    async () => ({
+      backend: "builtin",
+    }),
+  ),
 );
 const captureGatewayOperatorRunAuthority = vi.hoisted(() => vi.fn());
 const getAgentWorkspaceAccess = vi.hoisted(() =>
@@ -44,7 +46,7 @@ vi.mock("../../agents/workspace-access.js", async (importOriginal) => ({
 
 beforeEach(() => {
   getAgentWorkspaceAccess.mockReset();
-  resolveActiveMemoryBackendConfig.mockReset().mockReturnValue({ backend: "builtin" });
+  resolveActiveMemoryBackendConfig.mockReset().mockResolvedValue({ backend: "builtin" });
   getActiveMemoryProviderCore.mockReset();
   captureGatewayOperatorRunAuthority.mockReset().mockResolvedValue({
     authority: { scopes: ["operator.read"], assertCurrent: vi.fn() },

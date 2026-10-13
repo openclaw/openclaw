@@ -36,8 +36,10 @@ vi.mock("../../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
 }));
 
-vi.mock("../loading/plugin-skills.js", () => ({
+vi.mock("../loading/plugin-skills.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../loading/plugin-skills.js")>()),
   resolvePluginSkillRoots: () => [],
+  resolvePluginSkillRootsFromMetadata: () => [],
 }));
 
 vi.mock("../loading/config.js", { spy: true });

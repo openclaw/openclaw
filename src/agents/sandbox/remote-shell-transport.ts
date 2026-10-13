@@ -16,7 +16,7 @@ import {
   shellEscape,
   ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT,
 } from "./remote-shell-command.js";
-import { sanitizeEnvVars } from "./sanitize-env-vars.js";
+import { sanitizeEnvVarsAsync } from "./sanitize-env-vars.js";
 
 export type RemoteShellCommandSpec = {
   argv: string[];
@@ -51,7 +51,10 @@ export type RemoteShellSandboxSession = {
   dispose(): Promise<void>;
 };
 export type RemoteShellSessionOptions = {
-  buildCommand(params: { remoteCommand: string; tty?: boolean }): RemoteShellCommandSpec;
+  buildCommand(params: {
+    remoteCommand: string;
+    tty?: boolean;
+  }): RemoteShellCommandSpec | Promise<RemoteShellCommandSpec>;
   assertCurrent?: () => void;
   dispose?: () => Promise<void>;
   formatFailure?: (stderr: string, exitCode: number) => string;
@@ -65,7 +68,8 @@ export function createRemoteShellSandboxSession(
     params: RemoteShellRunParams,
     checkCurrent = true,
   ): Promise<SandboxBackendCommandResult> => {
-    const command = options.buildCommand(params);
+    const prepared = options.buildCommand(params);
+    const command = prepared instanceof Promise ? await prepared : prepared;
     if (command.argv.length === 0) {
       throw new Error("Remote shell command argv is empty");
     }
@@ -86,7 +90,7 @@ export function createRemoteShellSandboxSession(
       });
     };
     // Released guards cannot retain foreign-writer authority across broker IPC.
-    // Keep the final check and native launch synchronous until the next SDK major.
+    // Keep the final check and native launch in the same synchronous frame.
     const result = await (checkCurrent && options.assertCurrent
       ? runWithSpawnBroker(undefined, launch)
       : launch());
@@ -178,10 +182,10 @@ async function prepareRemoteShellExec(
       stdin: script,
     });
     return {
-      ...options.buildCommand({
+      ...(await options.buildCommand({
         remoteCommand: buildRemoteCommand(["/bin/sh", remoteScript]),
         tty: params.tty,
-      }),
+      })),
       cleanup,
     };
   } catch (error) {
@@ -203,12 +207,12 @@ async function uploadDirectoryToRemoteCommand(
     params.remoteDir,
     params.remoteRootDir ?? params.remoteDir,
   ]);
-  const command = options.buildCommand({ remoteCommand });
+  const command = await options.buildCommand({ remoteCommand });
   const [executable, ...args] = command.argv;
   if (!executable) {
     throw new Error("Remote shell command argv is empty");
   }
-  const tarEnv = sanitizeEnvVars(process.env).allowed;
+  const tarEnv = (await sanitizeEnvVarsAsync(process.env)).allowed;
   options.assertCurrent?.();
   params.signal?.throwIfAborted();
   const tar: ChildProcess = spawn("tar", ["-C", params.localDir, "-cf", "-", "."], {

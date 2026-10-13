@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { AgentCredentialMap } from "./agent-auth-credentials.js";
 import {
   listProviderEnvAuthLookupKeys,
@@ -10,6 +11,7 @@ export type AgentDiscoveryAuthLookupOptions = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  metadataSnapshot?: PluginMetadataSnapshot;
 };
 
 /** Adds provider credentials resolvable from env/config without mutating existing credentials. */
@@ -22,6 +24,7 @@ export function addEnvBackedAgentCredentials(
     config: options.config,
     workspaceDir: options.workspaceDir,
     env,
+    metadataSnapshot: options.metadataSnapshot,
   };
   const lookupMaps = resolveProviderEnvAuthLookupMaps(lookupParams);
   const { aliasMap, envCandidateMap: candidateMap, authEvidenceMap } = lookupMaps;

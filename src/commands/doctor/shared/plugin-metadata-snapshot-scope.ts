@@ -1,5 +1,6 @@
 import { resolveConfigWidePluginManifestRegistry } from "../../../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { prepareBundledDiscoveryModeNative } from "../../../plugins/bundled-discovery-state.native.js";
 import {
   withPluginMetadataSnapshotScope,
   type PluginMetadataSnapshotScopeRunner,
@@ -122,6 +123,7 @@ export function createDoctorPluginMetadataSnapshotScope(params: {
     refreshBaseSnapshot();
     return withDeferredPluginDoctorMigrations(params.getDeferredPluginIds?.() ?? [], () =>
       withPluginCache(cache, () => {
+        prepareBundledDiscoveryModeNative(env);
         const snapshot = resolveSnapshot(scope.config, scope.workspaceDir);
         return withPluginMetadataSnapshotScope(snapshot, operation, {
           config: scope.config,

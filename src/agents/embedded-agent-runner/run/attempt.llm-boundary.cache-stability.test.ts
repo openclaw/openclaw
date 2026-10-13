@@ -17,6 +17,8 @@ import {
 import { loadTranscriptEvents } from "../../../config/sessions/session-accessor.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import type { Model, UserMessage } from "../../../llm/types.js";
+import { preparePluginMetadataMachineStateAsync } from "../../../plugins/installed-plugin-index-record-state.js";
+import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import {
   buildLateMediaAttachedProjection,
   createUserTurnTranscriptRecorder,
@@ -37,6 +39,7 @@ import {
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
   relocateCurrentRuntimeContextCarrierToTail,
 } from "../../internal-runtime-context.js";
+import { attachProviderRequestFactsFixture } from "../../provider-request.test-support.js";
 import { Agent, type AgentMessage } from "../../runtime/index.js";
 import {
   createAssistant,
@@ -78,18 +81,21 @@ const answer = makeAgentAssistantMessage({
   content: [{ type: "text", text: "I understand." }],
   timestamp: TS + 1,
 });
-const model = {
-  id: "gpt-5.5",
-  name: "GPT-5.5",
-  api: "openai-completions",
-  provider: "openai",
-  baseUrl: "https://api.openai.com/v1",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
-  maxTokens: 4096,
-} satisfies Model<"openai-completions">;
+const model = attachModelProviderRuntimePluginHandle(
+  {
+    id: "gpt-5.5",
+    name: "GPT-5.5",
+    api: "openai-completions",
+    provider: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 4096,
+  } satisfies Model<"openai-completions">,
+  { provider: "openai", modelId: "gpt-5.5" },
+);
 const carrier = (content: string, timestamp = TS): AgentMessage => ({
   role: "custom",
   customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
@@ -144,17 +150,26 @@ async function capture(
   };
   const stream =
     api === "openai-completions"
-      ? streamOpenAICompletions({ ...model, api }, context, streamOptions)
-      : streamOpenAIResponses({ ...model, api }, context, streamOptions);
+      ? streamOpenAICompletions(
+          attachProviderRequestFactsFixture({ ...model, api }),
+          context,
+          streamOptions,
+        )
+      : streamOpenAIResponses(
+          attachProviderRequestFactsFixture({ ...model, api }),
+          context,
+          streamOptions,
+        );
   expect((await stream.result()).stopReason).toBe("error");
   return expectDefined(captured, "captured provider payload");
 }
 
 describe("prompt-cache boundary regressions", () => {
   let env: ReturnType<typeof captureEnv>;
-  beforeEach(() => {
+  beforeEach(async () => {
     env = captureEnv(["OPENCLAW_PROMPT_CACHE_ASSERT"]);
     setTestEnvValue("OPENCLAW_PROMPT_CACHE_ASSERT", "1");
+    await preparePluginMetadataMachineStateAsync({});
   });
   afterEach(() => {
     clearRuntimeConfigSnapshot();
@@ -221,7 +236,7 @@ describe("prompt-cache boundary regressions", () => {
               requests.push(request.payload);
             } else {
               const result = await createOpenAIResponsesTransportStreamFn()(
-                { ...model, api, reasoning: true },
+                attachProviderRequestFactsFixture({ ...model, api, reasoning: true }),
                 context,
                 {
                   apiKey: "fixture-transport-value",

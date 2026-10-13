@@ -112,7 +112,7 @@ describe("prepared reply dispatch runtime", () => {
       ],
       "static",
       {},
-      () => registry,
+      async () => registry,
       undefined,
       metadata,
     );
@@ -451,6 +451,10 @@ describe("prepared reply dispatch runtime", () => {
           captured = resources.use(scopePreparedModelRuntimeLease(lease));
         },
       }))!;
+      const refreshOptions = {
+        ...options,
+        pluginMetadataSnapshot: dispatch.pluginGeneration.pluginMetadataSnapshot,
+      };
       const started = createDeferred();
       const release = createDeferred();
       mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
@@ -462,7 +466,7 @@ describe("prepared reply dispatch runtime", () => {
       const firstScope = prepare(initialConfig, firstConfig);
       publishAuth(firstConfig);
       const first = refreshPreparedModelRuntimeSnapshots(firstConfig, {
-        ...options,
+        ...refreshOptions,
         ...firstScope.scope,
       });
       let second: Promise<void> | undefined;
@@ -477,7 +481,7 @@ describe("prepared reply dispatch runtime", () => {
           ...secondScope.scope,
         });
         second = refreshPreparedModelRuntimeSnapshots(latestConfig, {
-          ...options,
+          ...refreshOptions,
           ...secondScope.scope,
         });
         release.resolve();

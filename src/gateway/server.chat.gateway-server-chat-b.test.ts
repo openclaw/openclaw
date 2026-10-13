@@ -52,6 +52,7 @@ import { onDiagnosticEvent, type DiagnosticEventPayload } from "../infra/diagnos
 import { readPersistedMediaFacts } from "../media/media-facts.js";
 import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
 import { getMediaDir } from "../media/store.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
   getSessionWorkAdmissionRelease,
@@ -1651,6 +1652,7 @@ describe("gateway server chat", () => {
           };
           await state.writeConfig(config);
           setRuntimeConfigSnapshot({ ...config, session: { store: storePath } });
+          await prepareBundledDiscoveryMode();
           const pluginMetadataSnapshot = createGatewayPluginMetadataSnapshot(config);
           assertPluginMetadataSnapshotConsistency(pluginMetadataSnapshot);
           await withPluginMetadataSnapshotScope(

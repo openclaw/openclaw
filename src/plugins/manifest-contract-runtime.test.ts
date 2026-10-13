@@ -3,8 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadPluginMetadataSnapshot = vi.hoisted(() => vi.fn());
 
-vi.mock("./plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot,
+vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-metadata-snapshot.js")>()),
+  resolvePluginMetadataSnapshotAsync: (...args: unknown[]) => loadPluginMetadataSnapshot(...args),
 }));
 
 import { resolveManifestContractRuntimePluginResolution } from "./manifest-contract-runtime.js";
@@ -18,7 +19,7 @@ describe("resolveManifestContractRuntimePluginResolution", () => {
     });
   });
 
-  it("resolves contract plugins from the shared metadata snapshot", () => {
+  it("resolves contract plugins from the shared metadata snapshot", async () => {
     loadPluginMetadataSnapshot.mockReturnValue({
       index: {
         plugins: [
@@ -51,7 +52,7 @@ describe("resolveManifestContractRuntimePluginResolution", () => {
     });
 
     expect(
-      resolveManifestContractRuntimePluginResolution({
+      await resolveManifestContractRuntimePluginResolution({
         cfg: {},
         contract: "webSearchProviders",
         value: "search",

@@ -2,6 +2,9 @@ import "../../test-utils/prepare-compiled-subprocesses.js";
 import { createLlmRuntime, getAiTransportHost } from "@openclaw/ai";
 import type { Model } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
+import { installProviderRequestMetadataFixture } from "../provider-request.test-support.js";
+
+installProviderRequestMetadataFixture();
 
 describe("embedded stream transport host", () => {
   it("installs runtime transport ports before resolving an embedded stream", async () => {

@@ -176,19 +176,18 @@ export async function prepareWorkspaceBuildGroup(
     localResources.use(new PreparedModelRuntimeBuildResources(retainPreparedPluginRegistry));
   registryResources.retainGeneration(reusablePluginGeneration);
   // Borrowing spans the caller's construction; registry acquisition is selected independently.
-  const preparingRegistries = prepareWorkspacePluginRegistries(
-    input,
-    pluginMetadataSnapshot,
-    (registry) => registryResources.retainRegistry(registry),
-    loadInboundPluginRegistry,
-    preferBuiltPluginArtifacts,
-    reusablePluginGeneration,
-    options.getConfiguredHarnessRuntimes,
-    undefined,
-    options.loadRuntimeRegistry,
-  );
   const { inboundPluginRegistry, runtimePluginRegistry, primaryRegistry } =
-    preparingRegistries instanceof Promise ? await preparingRegistries : preparingRegistries;
+    await prepareWorkspacePluginRegistries(
+      input,
+      pluginMetadataSnapshot,
+      (registry) => registryResources.retainRegistry(registry),
+      loadInboundPluginRegistry,
+      preferBuiltPluginArtifacts,
+      reusablePluginGeneration,
+      options.getConfiguredHarnessRuntimes,
+      undefined,
+      options.loadRuntimeRegistry,
+    );
   const reuseRuntimeFacts =
     reusablePluginGeneration && runtimePluginRegistry === reusablePluginGeneration.pluginRegistry;
   const resources = primaryRegistry && getPluginRegistryInspectionResources(primaryRegistry);
@@ -326,6 +325,7 @@ export async function prepareWorkspaceBuildGroup(
     const ambientCredentialsStartedAt = performance.now();
     reportStage("ambient credentials");
     const ambientCredentials = await prepareAmbientAgentCredentialsForDiscovery({
+      metadataSnapshot: pluginMetadataSnapshot,
       signal: options.signal,
       config: input.config,
       env,
@@ -373,6 +373,7 @@ export async function prepareWorkspaceBuildGroup(
           () => options.assertCurrent?.(candidate),
           options.providerDiscoveryProviderIds,
           options.includeCredentialProviders,
+          pluginMetadataSnapshot,
         ),
       );
     }

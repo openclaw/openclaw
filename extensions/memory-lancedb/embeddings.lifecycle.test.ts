@@ -27,7 +27,8 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importO
     await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-embeddings")>();
   return {
     ...actual,
-    getMemoryEmbeddingProvider: providerMocks.getMemoryEmbeddingProvider,
+    getMemoryEmbeddingProviderAsync: async (...args: unknown[]) =>
+      providerMocks.getMemoryEmbeddingProvider(...args),
     registerRuntimeAuthProfileStoreMutationListener: (
       listener: Parameters<typeof actual.registerRuntimeAuthProfileStoreMutationListener>[0],
     ) => {

@@ -25,9 +25,12 @@ import { resolveProviderStreamFn } from "../../plugins/provider-runtime.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
+import { installProviderRequestMetadataFixture } from "../provider-request.test-support.js";
 import { wrapStreamFnWithProviderPromptState } from "./provider-prompt-state.js";
 import { streamWithIdleTimeout } from "./run/llm-idle-timeout.js";
 import { resolveEmbeddedAgentStream as resolveEmbeddedAgentStreamImpl } from "./stream-resolution.js";
+
+installProviderRequestMetadataFixture();
 
 const streamMocks = vi.hoisted(() => ({
   delegate: undefined as StreamFn | undefined,

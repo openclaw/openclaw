@@ -7,7 +7,7 @@ import {
   getLoadedRuntimePluginRegistry,
   registryContainsRuntimePluginIds,
 } from "./active-runtime-registry.js";
-import { loadBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
+import { loadBundledCapabilityRuntimeRegistryAsync } from "./bundled-capability-runtime.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import { isBundledProviderCompatContract } from "./bundled-provider-compat.js";
 import type { PluginCapabilityCatalog } from "./capability-catalog.types.js";
@@ -15,13 +15,13 @@ import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-s
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { createInstalledPluginEnabledPredicate } from "./installed-plugin-index.js";
 import { resolvePluginCapabilityCatalogContext } from "./loader-runtime-load.js";
-import { resolveRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
+import { loadPluginRegistryHandleAsync, type PluginLoadOptions } from "./loader.js";
 import {
   hasManifestContractValue,
   isManifestPluginAvailableForControlPlane,
   isManifestPluginOwnerAllowedByControlPlanePolicy,
-  loadManifestContractSnapshot,
 } from "./manifest-contract-eligibility.js";
+import { resolvePluginMetadataSnapshotAsync } from "./plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { findCapabilityProviderEntry } from "./provider-registry-shared.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -95,10 +95,17 @@ function prepareCapabilityPluginResolution(params: {
 }) {
   const snapshot =
     params.pluginMetadataSnapshot ??
-    loadManifestContractSnapshot({
+    getCurrentPluginMetadataSnapshot({
+      allowSynchronousPolicyRead: false,
       config: params.cfg,
-      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      workspaceDir: params.workspaceDir,
+      allowWorkspaceScopedSnapshot: true,
     });
+  if (!snapshot) {
+    throw new Error(
+      "Capability metadata is not prepared; await async capability resolution first.",
+    );
+  }
   const isEnabled = createInstalledPluginEnabledPredicate(snapshot.index.plugins, params.cfg);
   let normalizedConfig: NormalizedPluginsConfig | undefined;
   return function resolve(
@@ -175,21 +182,10 @@ function createCapabilityProviderLoadOptions(params: {
 
 function resolveCapabilityLoadContext(
   registry: PluginRegistry | undefined,
-  cfg: OpenClawConfig | undefined,
 ): PluginRuntimeLoadContext | undefined {
   const context = getPluginRuntimeLoadContext(registry);
-  if (!context?.metadataSnapshot || context.env !== process.env) {
-    return undefined;
-  }
-  // Validate the caller's original policy before speech compatibility derives an enabled config.
-  // A retained request must not borrow facts from a replaced or differently scoped generation.
-  return getCurrentPluginMetadataSnapshot({
-    config: cfg,
-    workspaceDir: context.workspaceDir,
-    ...(cfg === undefined ? { requireDefaultDiscoveryContext: true } : {}),
-  }) === context.metadataSnapshot
-    ? context
-    : undefined;
+  // The selected registry owns its captured discovery facts for the request lifetime.
+  return context?.metadataSnapshot ? context : undefined;
 }
 
 function mergeCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>(
@@ -408,20 +404,24 @@ function prepareCapabilityProviderLoad<K extends CapabilityProviderRegistryKey>(
 function loadCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>(
   load: ReturnType<typeof prepareCapabilityProviderLoad<K>>,
 ): PluginRegistry[K] {
-  const registry = load.loadedRegistry ?? resolveRuntimePluginRegistry(load.resolveLoadOptions());
-  const { entries, pluginIds } = load.fallback(registry);
-  if (pluginIds.length === 0) {
-    return entries;
+  if (load.loadOptions.onlyPluginIds?.length === 0) {
+    return [];
   }
-  const captured = load.filterAllowedEntries(
-    loadBundledCapabilityRuntimeRegistry({
-      ...load.loadOptions,
-      pluginIds,
-    }),
-  );
-  return entries.length > 0 ? mergeCapabilityProviderEntries(entries, captured) : captured;
+  if (!load.loadedRegistry) {
+    throw new Error(
+      "Capability providers are not prepared; await async capability resolution first.",
+    );
+  }
+  const { entries, pluginIds } = load.fallback(load.loadedRegistry);
+  if (pluginIds.length > 0) {
+    throw new Error(
+      "Bundled capability providers are not prepared; await async capability resolution first.",
+    );
+  }
+  return entries;
 }
 
+/** @deprecated Await resolvePluginCapabilityProviderAsync for cold discovery. */
 export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegistryKey>(
   params: { key: K; providerId: string; cfg?: OpenClawConfig },
   onSelectedRegistry?: SelectedCapabilityRegistry<K>,
@@ -435,6 +435,7 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
 export function preparePluginCapabilityProviderLookup<K extends CapabilityProviderRegistryKey>(
   params: { key: K; providerId: string; cfg?: OpenClawConfig },
   onSelectedRegistry?: SelectedCapabilityRegistry<K>,
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "plugins">,
 ) {
   if (shouldSkipCapabilityResolution(params)) {
     return { load: undefined, resolve: (_entries: PluginRegistry[K]) => undefined };
@@ -453,7 +454,7 @@ export function preparePluginCapabilityProviderLookup<K extends CapabilityProvid
           }
         : undefined;
     });
-  const selectProvider = (entries: PluginRegistry[K]) => {
+  const selectProvider = (entries: PluginRegistry[K]): CapabilityProviderFor<K> | undefined => {
     const provider = findCapabilityProviderEntry<PluginRegistry[K][number]>(
       entries,
       params.providerId,
@@ -470,10 +471,10 @@ export function preparePluginCapabilityProviderLookup<K extends CapabilityProvid
     return { load: undefined, resolve: (_entries: PluginRegistry[K]) => activeProvider };
   }
 
-  const loadContext = resolveCapabilityLoadContext(activeRegistry, params.cfg);
+  const loadContext = resolveCapabilityLoadContext(activeRegistry);
   const resolvePluginIds = prepareCapabilityPluginResolution({
     cfg: params.cfg,
-    pluginMetadataSnapshot: loadContext?.metadataSnapshot,
+    pluginMetadataSnapshot: loadContext?.metadataSnapshot ?? pluginMetadataSnapshot,
   });
   let pluginIds = resolvePluginIds(params.key, params.providerId);
   if (pluginIds.runtimePluginIds.length === 0) {
@@ -511,6 +512,7 @@ export function preparePluginCapabilityProviderResolution<K extends CapabilityPr
     additionalProviderIds?: readonly string[];
   },
   onSelectedRegistry?: SelectedCapabilityRegistry<K>,
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "plugins">,
 ) {
   if (shouldSkipCapabilityResolution(params)) {
     return {
@@ -550,10 +552,10 @@ export function preparePluginCapabilityProviderResolution<K extends CapabilityPr
     requestedProviders && shouldScopeCapabilityLoadToRequestedProviders(params.key)
       ? requestedProviders
       : undefined;
-  const loadContext = resolveCapabilityLoadContext(activeRegistry, params.cfg);
+  const loadContext = resolveCapabilityLoadContext(activeRegistry);
   const resolvePluginIds = prepareCapabilityPluginResolution({
     cfg: params.cfg,
-    pluginMetadataSnapshot: loadContext?.metadataSnapshot,
+    pluginMetadataSnapshot: loadContext?.metadataSnapshot ?? pluginMetadataSnapshot,
   });
   const requestedPluginIds = requestedProviderLoadScope
     ? resolvePluginIds(params.key, undefined, requestedProviderLoadScope)
@@ -601,6 +603,7 @@ export function preparePluginCapabilityProviderResolution<K extends CapabilityPr
   };
 }
 
+/** @deprecated Await resolvePluginCapabilityProvidersAsync for cold discovery. */
 export function resolvePluginCapabilityProviders<K extends CapabilityProviderRegistryKey>(
   params: { key: K; cfg?: OpenClawConfig; additionalProviderIds?: readonly string[] },
   onSelectedRegistry?: SelectedCapabilityRegistry<K>,
@@ -660,4 +663,87 @@ export function prepareMediaCapabilityProviders(params: {
     videoGenerationProviders: providers("videoGenerationProviders"),
     musicGenerationProviders: providers("musicGenerationProviders"),
   });
+}
+
+async function prepareCapabilityMetadata(params: { cfg?: OpenClawConfig }) {
+  const registry =
+    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getLoadedRuntimePluginRegistry();
+  const context = resolveCapabilityLoadContext(registry);
+  return (
+    context?.metadataSnapshot ?? (await resolvePluginMetadataSnapshotAsync({ config: params.cfg }))
+  );
+}
+
+/** Prepares the existing lookup from worker-owned metadata without selecting a second owner. */
+export async function preparePluginCapabilityProviderLookupAsync<
+  K extends CapabilityProviderRegistryKey,
+>(
+  params: Parameters<typeof preparePluginCapabilityProviderLookup<K>>[0],
+  onSelectedRegistry?: SelectedCapabilityRegistry<K>,
+) {
+  const snapshot = shouldSkipCapabilityResolution(params)
+    ? undefined
+    : await prepareCapabilityMetadata(params);
+  return preparePluginCapabilityProviderLookup(params, onSelectedRegistry, snapshot);
+}
+
+/** Prepares the existing catalog resolution from worker-owned metadata. */
+export async function preparePluginCapabilityProviderResolutionAsync<
+  K extends CapabilityProviderRegistryKey,
+>(
+  params: Parameters<typeof preparePluginCapabilityProviderResolution<K>>[0],
+  onSelectedRegistry?: SelectedCapabilityRegistry<K>,
+) {
+  const snapshot = shouldSkipCapabilityResolution(params)
+    ? undefined
+    : await prepareCapabilityMetadata(params);
+  return preparePluginCapabilityProviderResolution(params, onSelectedRegistry, snapshot);
+}
+
+async function loadCapabilityProviderEntriesAsync<K extends CapabilityProviderRegistryKey>(
+  load: ReturnType<typeof prepareCapabilityProviderLoad<K>>,
+): Promise<PluginRegistry[K]> {
+  if (load.loadOptions.onlyPluginIds?.length === 0) {
+    return [];
+  }
+  const registry =
+    load.loadedRegistry ?? (await loadPluginRegistryHandleAsync(load.resolveLoadOptions()));
+  const { entries, pluginIds } = load.fallback(registry);
+  if (pluginIds.length === 0) {
+    return entries;
+  }
+  const captured = load.filterAllowedEntries(
+    await loadBundledCapabilityRuntimeRegistryAsync({
+      ...load.loadOptions,
+      pluginIds,
+    }),
+  );
+  return entries.length > 0 ? mergeCapabilityProviderEntries(entries, captured) : captured;
+}
+
+/** Resolves one capability through worker-prepared metadata and async registry loading. */
+export async function resolvePluginCapabilityProviderAsync<K extends CapabilityProviderRegistryKey>(
+  params: Parameters<typeof preparePluginCapabilityProviderLookup<K>>[0],
+  onSelectedRegistry?: SelectedCapabilityRegistry<K>,
+): Promise<CapabilityProviderFor<K> | undefined> {
+  const resolution = await preparePluginCapabilityProviderLookupAsync(params, onSelectedRegistry);
+  return resolution.resolve(
+    resolution.load ? await loadCapabilityProviderEntriesAsync(resolution.prepareLoad()) : [],
+  );
+}
+
+/** Resolves a capability catalog while preserving each selected registry's projector. */
+export async function resolvePluginCapabilityProvidersAsync<
+  K extends CapabilityProviderRegistryKey,
+>(
+  params: Parameters<typeof preparePluginCapabilityProviderResolution<K>>[0],
+  onSelectedRegistry?: SelectedCapabilityRegistry<K>,
+): Promise<CapabilityProviderFor<K>[]> {
+  const resolution = await preparePluginCapabilityProviderResolutionAsync(
+    params,
+    onSelectedRegistry,
+  );
+  return resolution.resolve(
+    resolution.load ? await loadCapabilityProviderEntriesAsync(resolution.prepareLoad()) : [],
+  );
 }

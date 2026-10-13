@@ -1,16 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { detectAvailableSetupProviderIds } from "./provider-setup-availability.js";
 
-const loadManifestMetadataSnapshot = vi.hoisted(() => vi.fn());
+const resolvePluginMetadataSnapshotAsync = vi.hoisted(() => vi.fn());
 const resolveManifestProviderAuthChoices = vi.hoisted(() => vi.fn());
 const enablePluginInConfig = vi.hoisted(() => vi.fn());
 const enablePluginWithCapabilityConsent = vi.hoisted(() => vi.fn());
-const resolvePluginProvidersCore = vi.hoisted(() => vi.fn());
+const resolvePluginProvidersCoreAsync = vi.hoisted(() => vi.fn());
 const debug = vi.hoisted(() => vi.fn());
 
 // mock-isolation: The fixture supplies the inventory instead of discovering installed plugins.
-vi.mock("./manifest-contract-eligibility.js", () => ({
-  loadManifestMetadataSnapshot,
+vi.mock("./plugin-metadata-snapshot.js", () => ({
+  resolvePluginMetadataSnapshotAsync,
 }));
 
 vi.mock("./provider-auth-choices.js", () => ({
@@ -22,8 +22,9 @@ vi.mock("./enable.js", () => ({
   enablePluginWithCapabilityConsent,
 }));
 
+// mock-isolation: The fixture supplies setup providers without loading plugin instances.
 vi.mock("./providers.runtime.js", () => ({
-  resolvePluginProvidersCore,
+  resolvePluginProvidersCoreAsync,
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
@@ -60,17 +61,17 @@ describe("detectAvailableSetupProviderIds", () => {
       pluginId: "ollama",
       reason: "Plugin requires capability consent.",
     });
-    resolvePluginProvidersCore.mockReturnValue([]);
+    resolvePluginProvidersCoreAsync.mockResolvedValue([]);
 
     await expect(detectAvailableSetupProviderIds({ config })).resolves.toEqual(new Set());
 
-    expect(resolvePluginProvidersCore).not.toHaveBeenCalled();
+    expect(resolvePluginProvidersCoreAsync).not.toHaveBeenCalled();
     expect(config.plugins.entries.ollama.enabled).toBe(false);
   });
 
   it("returns the provider id when its read-only availability probe succeeds", async () => {
     const detectAvailability = vi.fn(async () => true);
-    resolvePluginProvidersCore.mockReturnValue([
+    resolvePluginProvidersCoreAsync.mockResolvedValue([
       {
         pluginId: "ollama",
         id: "ollama",
@@ -90,16 +91,16 @@ describe("detectAvailableSetupProviderIds", () => {
 
   it("loads providers from the inventory that selected their choices", async () => {
     const metadataSnapshot = { manifestRegistry: { plugins: [] } };
-    loadManifestMetadataSnapshot.mockReturnValue(metadataSnapshot);
-    resolvePluginProvidersCore.mockReturnValue([]);
+    resolvePluginMetadataSnapshotAsync.mockResolvedValue(metadataSnapshot);
+    resolvePluginProvidersCoreAsync.mockResolvedValue([]);
 
     await detectAvailableSetupProviderIds({ config: {}, workspaceDir: "/workspace" });
 
-    expect(loadManifestMetadataSnapshot).toHaveBeenCalledOnce();
+    expect(resolvePluginMetadataSnapshotAsync).toHaveBeenCalledOnce();
     expect(resolveManifestProviderAuthChoices).toHaveBeenCalledWith(
       expect.objectContaining({ metadataSnapshot, workspaceDir: "/workspace" }),
     );
-    expect(resolvePluginProvidersCore).toHaveBeenCalledWith(
+    expect(resolvePluginProvidersCoreAsync).toHaveBeenCalledWith(
       expect.objectContaining({
         mode: "setup",
         onlyPluginIds: ["ollama"],
@@ -110,7 +111,7 @@ describe("detectAvailableSetupProviderIds", () => {
   });
 
   it("treats failed availability probes as an intentional non-match", async () => {
-    resolvePluginProvidersCore.mockReturnValue([
+    resolvePluginProvidersCoreAsync.mockResolvedValue([
       {
         pluginId: "ollama",
         id: "ollama",

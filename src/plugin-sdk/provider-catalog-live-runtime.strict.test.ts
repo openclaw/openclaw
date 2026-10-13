@@ -360,8 +360,12 @@ describe("strict catalog acquisition", () => {
   describe("projection cache isolation", () => {
     it("separates concurrent strict and advisory calls", async () => {
       const held = createDeferredCore();
+      const requestsStarted = createDeferredCore();
       const release = vi.fn(async () => {});
       fetchGuard.mockImplementation(async ({ url }) => {
+        if (fetchGuard.mock.calls.length === 2) {
+          requestsStarted.resolve();
+        }
         await held.promise;
         return { response: Response.json({ data: [] }), finalUrl: url, release };
       });
@@ -373,6 +377,7 @@ describe("strict catalog acquisition", () => {
         });
       const first = acquire("strict");
       const second = acquire("advisory");
+      await Promise.race([requestsStarted.promise, first, second]);
       const startedRequests = fetchGuard.mock.calls.length;
       held.resolve();
       await expect(first).resolves.toMatchObject({

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import type {
   PluginOrigin,
   PluginWebFetchProviderEntry,
@@ -561,7 +562,7 @@ async function prepareConfigCoverageSnapshot(params: {
   });
 
   if (!params.skipConfigCollectors) {
-    collectConfigAssignments({
+    await collectConfigAssignments({
       config: resolvedConfig,
       context,
       loadablePluginOrigins: params.loadablePluginOrigins,
@@ -584,6 +585,7 @@ async function prepareConfigCoverageSnapshot(params: {
   }
 
   if (params.includeRuntimeWebTools) {
+    await prepareBundledDiscoveryMode(params.env);
     await resolveRuntimeWebTools({
       sourceConfig,
       resolvedConfig,

@@ -42,7 +42,9 @@ export async function ensureNodeHostPluginRegistry(params: {
   onlyPluginIds?: string[];
   logger?: PluginLogger;
 }): Promise<void> {
-  const registry = (await loadPluginRegistryLoaderModule()).loadPluginRegistryHandle({
+  const registry = await (
+    await loadPluginRegistryLoaderModule()
+  ).loadPluginRegistryHandleAsync({
     config: params.config,
     activationSourceConfig: params.config,
     env: params.env,

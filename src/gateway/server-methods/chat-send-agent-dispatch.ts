@@ -7,7 +7,7 @@ import {
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { classifyAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { resolveWebchatPromptCacheKey } from "../../agents/embedded-agent-runner/run/session-boundary-prompt-cache-key.js";
-import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { resolvePreparedProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { dispatchInboundMessageWithProjectedDispatcher } from "../../auto-reply/dispatch.js";
 import type {
@@ -453,7 +453,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                   updateChatRunProvider(context.chatAbortControllers, {
                     runId: clientRunId,
                     providerId: modelSelection.provider,
-                    authProviderId: resolveProviderIdForAuth(modelSelection.provider, {
+                    authProviderId: resolvePreparedProviderIdForAuth(modelSelection.provider, {
                       config: cfg,
                     }),
                   });

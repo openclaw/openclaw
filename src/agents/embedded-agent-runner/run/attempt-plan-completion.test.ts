@@ -5,14 +5,15 @@ import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import type { Context, Model } from "../../../llm/types.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { createMockPluginRegistry } from "../../../plugins/hooks.test-helpers.js";
-import { createOpenClawCodingToolsInternal } from "../../agent-tools.js";
+import { createOpenClawCodingToolsInternalAsync } from "../../agent-tools.js";
+import { attachPreparedProviderModelFixture } from "../../provider-request.test-support.js";
 import {
   createAssistant,
   createAssistantResultStream,
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
-  testModel,
+  testModel as rawTestModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import * as gatewayTool from "../../tools/in-process-gateway.js";
 import { createProgressCardTool } from "../../tools/progress-card-tool.js";
@@ -20,6 +21,8 @@ import { clearActiveEmbeddedRun } from "../runs.js";
 import { prepareCatalogExecutor } from "./attempt-stream-prepare.test-support.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
 import { mergeAttemptToolMediaPayloads } from "./tool-media-payloads.js";
+
+const testModel = attachPreparedProviderModelFixture(rawTestModel);
 
 registerAgentSessionLoopTestLifecycle();
 const streams: ReturnType<typeof prepareCatalogExecutor>[] = [];
@@ -49,17 +52,19 @@ it.each([
     using gatewayCall = vi
       .spyOn(gatewayTool, "callInProcessGatewayTool")
       .mockResolvedValue(committed);
-    const progress = createOpenClawCodingToolsInternal({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      config: {
-        plugins: { enabled: false },
-        tools: { allow: ["progress_card"], toolSearch: false },
-      },
-      onProgressCardPlanSaved: (unfinished) => {
-        completionCheck.unfinishedPlan = unfinished;
-      },
-    }).find((tool) => tool.name === "progress_card");
+    const progress = (
+      await createOpenClawCodingToolsInternalAsync({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        config: {
+          plugins: { enabled: false },
+          tools: { allow: ["progress_card"], toolSearch: false },
+        },
+        onProgressCardPlanSaved: (unfinished) => {
+          completionCheck.unfinishedPlan = unfinished;
+        },
+      })
+    ).find((tool) => tool.name === "progress_card");
     if (!progress) {
       throw new Error("The registered progress-card tool is missing");
     }

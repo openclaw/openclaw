@@ -47,7 +47,7 @@ export {
   runSshSandboxCommand,
   shellEscape,
 } from "./sandbox/ssh.js";
-export { sanitizeEnvVars } from "./sandbox/sanitize-env-vars.js";
+export { sanitizeEnvVars, sanitizeEnvVarsAsync } from "./sandbox/sanitize-env-vars.js";
 export { createRemoteShellSandboxFsBridge } from "./sandbox/remote-fs-bridge.js";
 export { createWritableRenameTargetResolver } from "./sandbox/fs-bridge-rename-targets.js";
 export type {

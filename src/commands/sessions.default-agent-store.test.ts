@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
@@ -23,8 +24,10 @@ vi.mock("../config/config.js", async () => {
     loadConfig: loadConfigMock,
     captureRuntimeConfigAsyncReader:
       (...args: Parameters<typeof loadConfigMock>) =>
-      async () =>
-        loadConfigMock(...args),
+      async () => {
+        await preparePluginMetadataMachineStateAsync({});
+        return loadConfigMock(...args);
+      },
   };
 });
 

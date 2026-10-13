@@ -43,7 +43,8 @@ const {
   resolveManifestProviderAuthChoices,
   resolveProviderOnboardAuthFlags,
 } = await import("./provider-auth-choices.js");
-const { resolveProviderIdForAuth } = await import("../agents/provider-auth-aliases.js");
+const { resolvePreparedProviderIdForAuth: resolveProviderIdForAuth } =
+  await import("../agents/provider-auth-aliases.js");
 const { clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js");
 
 const openaiChoiceMetadata = {

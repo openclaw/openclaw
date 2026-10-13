@@ -1,18 +1,20 @@
 /** Resolves external auth overlays through metadata and synchronous provider hooks. */
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
-import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type {
   ProviderExternalAuthProfile,
   ProviderExternalAuthProfileResolver,
+  ProviderExternalAuthProfileResolverPreparation,
 } from "./provider-external-auth.types.js";
 import type { createProviderHookRuntime } from "./provider-hook-runtime-core.js";
-import { resolveExternalAuthProfileProviderPluginIds } from "./providers.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
 
 export function createProviderExternalAuthResolver(
-  hooks: Pick<ReturnType<typeof createProviderHookRuntime>, "resolveProviderPluginsForHooks">,
+  hooks: Pick<
+    ReturnType<typeof createProviderHookRuntime>,
+    "resolveProviderPluginsForHooks" | "resolveProviderPluginsForHooksAsync"
+  >,
 ) {
-  const { resolveProviderPluginsForHooks } = hooks;
+  const { resolveProviderPluginsForHooks, resolveProviderPluginsForHooksAsync } = hooks;
 
   function resolveExternalAuthProfilesWithPlugins(
     params: Parameters<ProviderExternalAuthProfileResolver>[0],
@@ -20,27 +22,25 @@ export function createProviderExternalAuthResolver(
     const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
     const env = params.env ?? process.env;
     const config = params.config ?? {};
-    const currentMetadataSnapshot = getCurrentPluginMetadataSnapshot({
-      env,
-      ...(params.config ? { config } : { requireDefaultDiscoveryContext: true }),
-      ...(workspaceDir ? { workspaceDir } : { allowWorkspaceScopedSnapshot: true }),
-    });
-    const { manifestRegistry } =
-      currentMetadataSnapshot ?? resolvePluginMetadataSnapshot({ config, workspaceDir, env });
+    const currentMetadataSnapshot =
+      params.pluginMetadataSnapshot ??
+      getCurrentPluginMetadataSnapshot({
+        env,
+        ...(params.config ? { config } : { requireDefaultDiscoveryContext: true }),
+        ...(workspaceDir ? { workspaceDir } : { allowWorkspaceScopedSnapshot: true }),
+      });
+    if (!currentMetadataSnapshot) {
+      throw new Error(
+        "External auth metadata is not prepared; await provider runtime preparation before reading profiles.",
+      );
+    }
+    const { manifestRegistry } = currentMetadataSnapshot;
     // A lifecycle-owned manifest is authoritative: no external-auth contracts means
     // no provider registry discovery or runtime activation is needed for this overlay.
-    if (
-      currentMetadataSnapshot &&
-      !manifestRegistry.plugins.some((plugin) => plugin.contracts?.externalAuthProviders?.length)
-    ) {
-      return [];
-    }
-    const externalAuthPluginIds = resolveExternalAuthProfileProviderPluginIds({
-      config: params.config,
-      workspaceDir,
-      env,
-      manifestRegistry,
-    });
+    const externalAuthPluginIds = manifestRegistry.plugins
+      .filter((plugin) => (plugin.contracts?.externalAuthProviders?.length ?? 0) > 0)
+      .map((plugin) => plugin.id)
+      .toSorted((left, right) => left.localeCompare(right));
     if (externalAuthPluginIds.length === 0) {
       return [];
     }
@@ -50,11 +50,36 @@ export function createProviderExternalAuthResolver(
       workspaceDir,
       env,
       onlyPluginIds: externalAuthPluginIds,
+      pluginMetadataSnapshot: currentMetadataSnapshot,
     })) {
       matches.push(...(plugin.resolveExternalAuthProfiles?.(params.context) ?? []));
     }
     return matches;
   }
 
-  return { resolveExternalAuthProfilesWithPlugins };
+  async function prepareExternalAuthProfilesWithPlugins(
+    params: Parameters<ProviderExternalAuthProfileResolverPreparation>[0],
+  ): ReturnType<ProviderExternalAuthProfileResolverPreparation> {
+    const snapshot = params.pluginMetadataSnapshot;
+    const workspaceDir = params.workspaceDir ?? snapshot.workspaceDir;
+    const env = params.env ?? process.env;
+    const onlyPluginIds = snapshot.manifestRegistry.plugins
+      .filter((plugin) => (plugin.contracts?.externalAuthProviders?.length ?? 0) > 0)
+      .map((plugin) => plugin.id)
+      .toSorted((left, right) => left.localeCompare(right));
+    if (onlyPluginIds.length === 0) {
+      return () => [];
+    }
+    const plugins = await resolveProviderPluginsForHooksAsync({
+      ...params,
+      workspaceDir,
+      env,
+      onlyPluginIds,
+      pluginMetadataSnapshot: snapshot,
+    });
+    return (context) =>
+      plugins.flatMap((plugin) => plugin.resolveExternalAuthProfiles?.(context) ?? []);
+  }
+
+  return { resolveExternalAuthProfilesWithPlugins, prepareExternalAuthProfilesWithPlugins };
 }

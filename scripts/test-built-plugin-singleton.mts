@@ -29,6 +29,7 @@ async function runBuiltPluginSingletonSmoke(signal: AbortSignal) {
     getPluginModuleLoaderStats,
     loadOpenClawPlugins,
     matchPluginCommand,
+    preparePluginMetadataMachineStateAsync,
     resolvePluginRuntimeLoadContext,
     setPluginRuntimeLoadContext,
     withPluginRuntimeGenerationScope,
@@ -150,6 +151,9 @@ async function runBuiltPluginSingletonSmoke(signal: AbortSignal) {
     );
 
     clearPluginCommands();
+
+    await preparePluginMetadataMachineStateAsync({ env: smokeEnv });
+    signal.throwIfAborted();
 
     const smsStatsBefore = getPluginModuleLoaderStats();
     // Prepared runtimes carry this context into late, plugin-scoped loads. Prove that the load-options
@@ -279,11 +283,14 @@ async function runBuiltPluginSingletonSmoke(signal: AbortSignal) {
       diagnostics: [],
     };
     const artifactMetadataSnapshot = createPluginMetadataSnapshotFixture(artifactManifestRegistry);
+    const artifactEnv = { ...smokeEnv, OPENCLAW_STATE_DIR: path.join(tempRoot, "artifact-state") };
+    await preparePluginMetadataMachineStateAsync({ env: artifactEnv });
+    signal.throwIfAborted();
     for (const toolDiscovery of [false, true]) {
       for (const preferBuiltPluginArtifacts of [undefined, false]) {
         const values = {
           config: artifactConfig,
-          env: { ...smokeEnv, OPENCLAW_STATE_DIR: path.join(tempRoot, "artifact-state") },
+          env: artifactEnv,
           manifestRegistry: artifactManifestRegistry,
           installRecords: {},
           preferBuiltPluginArtifacts,
@@ -333,7 +340,7 @@ async function runBuiltPluginSingletonSmoke(signal: AbortSignal) {
     ].entries()) {
       const options = {
         config: artifactConfig,
-        env: { ...smokeEnv, OPENCLAW_STATE_DIR: path.join(tempRoot, "artifact-state") },
+        env: artifactEnv,
         workspaceDir: path.join(tempRoot, `cache-order-${orderIndex}`),
         manifestRegistry: {
           ...artifactManifestRegistry,

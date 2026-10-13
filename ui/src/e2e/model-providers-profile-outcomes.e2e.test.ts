@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import { buildAuthHealthSummary } from "../../../src/agents/auth-health.js";
+import { preparePluginMetadataMachineStateAsync } from "../../../src/plugins/installed-plugin-index-record-state.js";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -12,6 +13,7 @@ const NOW = Date.now();
 
 suite.define(() => {
   it("explains saved account health separately from catalog availability", async () => {
+    await preparePluginMetadataMachineStateAsync({});
     const health = buildAuthHealthSummary({
       store: {
         version: 1,

@@ -51,7 +51,7 @@ import { getApiKeyForModelCore, type ResolvedProviderAuth } from "../agents/mode
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { resolveBuiltInModelSuppressionFromManifest } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
-import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
+import { resolvePreparedProviderIdForAuth as resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import {
   appendLiveModelCandidates,
   applyLiveProviderPluginDiscoveryCompat,
@@ -6656,22 +6656,27 @@ describeLive("gateway live (dev agent, profile keys)", () => {
               })
             : useSmall
               ? all.filter((m) => isWantedSmallGatewayLiveModel({ model: m, targetMatcher }))
-              : all.filter(
-                  (m) =>
-                    !shouldExcludeProviderFromDefaultHighSignalLiveSweep({
-                      provider: m.provider,
-                      useExplicitModels: useExplicit,
-                      providerFilter: PROVIDERS,
-                      config: cfg,
-                      env: process.env,
-                    }) &&
-                    isHighSignalLiveModelRef({
-                      provider: m.provider,
-                      id: m.id,
-                      config: cfg,
-                      workspaceDir,
-                    }),
-                );
+              : (
+                  await Promise.all(
+                    all.map(async (m) =>
+                      !shouldExcludeProviderFromDefaultHighSignalLiveSweep({
+                        provider: m.provider,
+                        useExplicitModels: useExplicit,
+                        providerFilter: PROVIDERS,
+                        config: cfg,
+                        env: process.env,
+                      }) &&
+                      (await isHighSignalLiveModelRef({
+                        provider: m.provider,
+                        id: m.id,
+                        config: cfg,
+                        workspaceDir,
+                      }))
+                        ? m
+                        : undefined,
+                    ),
+                  )
+                ).filter((m) => m !== undefined);
         logProgress(`[all-models] wanted=${wanted.length} total=${all.length}`);
         assertGatewayLiveSelectedSomeModels({
           allowProviderDriftSkip: useModern || useSmall,

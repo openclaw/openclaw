@@ -7,7 +7,7 @@ import {
   resolveExplicitAuthOrderSelection,
   setAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
-import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { resolvePreparedProviderIdForAuth as resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { refreshModelAuthStateAfterMutation } from "../model-auth-refresh.js";
 import { readPreparedCatalog } from "../server-model-catalog-auth.js";

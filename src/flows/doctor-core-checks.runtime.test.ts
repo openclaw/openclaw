@@ -10,7 +10,7 @@ import type { HealthFinding } from "./health-checks.js";
 
 const mocks = vi.hoisted(() => ({
   createBundleMcpToolRuntime: vi.fn(),
-  createOpenClawCodingTools: vi.fn(),
+  createOpenClawCodingToolsAsync: vi.fn(),
   disposeBundleRuntime: vi.fn(),
   loadModelCatalog: vi.fn(async (): Promise<Array<Record<string, unknown>>> => []),
   normalizeProviderToolSchemasWithPlugin: vi.fn(),
@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => ({
   resolveNodeRuntimeInfo:
     vi.fn<typeof import("../daemon/runtime-paths.js").resolveNodeRuntimeInfo>(),
   resolveGatewayService: vi.fn(() => ({ label: "openclaw-gateway" })),
-  resolvePluginProvidersCore: vi.fn((): Array<Record<string, unknown>> => []),
+  resolvePluginProvidersCoreAsync: vi.fn(async (): Promise<Array<Record<string, unknown>>> => []),
   resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-5.5" })),
 }));
 
@@ -48,8 +48,9 @@ vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
   createBundleMcpToolRuntime: mocks.createBundleMcpToolRuntime,
 }));
 
+// mock-isolation: Doctor schema checks supply fixture tools without initializing provider runtimes.
 vi.mock("../agents/agent-tools.js", () => ({
-  createOpenClawCodingTools: mocks.createOpenClawCodingTools,
+  createOpenClawCodingToolsAsync: mocks.createOpenClawCodingToolsAsync,
 }));
 
 vi.mock("../gateway/call.js", () => ({
@@ -83,8 +84,9 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   normalizeProviderToolSchemasWithPlugin: mocks.normalizeProviderToolSchemasWithPlugin,
 }));
 
+// mock-isolation: Doctor catalog checks use fixture providers without loading the host registry.
 vi.mock("../plugins/providers.runtime.js", () => ({
-  resolvePluginProvidersCore: mocks.resolvePluginProvidersCore,
+  resolvePluginProvidersCoreAsync: mocks.resolvePluginProvidersCoreAsync,
 }));
 
 const { collectGatewayDaemonFindings, collectProviderCatalogProjectionFindings } =
@@ -138,7 +140,7 @@ function expectSchemaError(findings: readonly HealthFinding[], expected: Partial
 
 describe("doctor runtime tool schema checks", () => {
   beforeEach(() => {
-    mocks.createOpenClawCodingTools.mockReset().mockReturnValue([]);
+    mocks.createOpenClawCodingToolsAsync.mockReset().mockReturnValue([]);
     mocks.createBundleMcpToolRuntime.mockReset().mockReturnValue({
       tools: [],
       dispose: mocks.disposeBundleRuntime,
@@ -148,7 +150,7 @@ describe("doctor runtime tool schema checks", () => {
     mocks.normalizeProviderToolSchemasWithPlugin
       .mockReset()
       .mockImplementation(({ context }) => context.tools);
-    mocks.resolvePluginProvidersCore.mockReset().mockReturnValue([]);
+    mocks.resolvePluginProvidersCoreAsync.mockReset().mockResolvedValue([]);
     mocks.resolveDefaultModelForAgent.mockClear();
   });
 
@@ -199,7 +201,7 @@ describe("doctor runtime tool schema checks", () => {
         },
       });
       expect(mocks.createBundleMcpToolRuntime).not.toHaveBeenCalled();
-      expect(mocks.createOpenClawCodingTools).toHaveBeenCalledTimes(2);
+      expect(mocks.createOpenClawCodingToolsAsync).toHaveBeenCalledTimes(2);
       expect(findings).toEqual(
         ["local", "remote"].map((serverName) =>
           expect.objectContaining({
@@ -230,7 +232,7 @@ describe("doctor runtime tool schema checks", () => {
         compat: { supportsTools: true },
       },
     ]);
-    mocks.createOpenClawCodingTools.mockReturnValueOnce([
+    mocks.createOpenClawCodingToolsAsync.mockReturnValueOnce([
       tool("healthy", { type: "object", properties: {} }),
     ]);
     await collectRuntimeToolSchemaFindings({});
@@ -277,7 +279,7 @@ describe("doctor runtime tool schema checks", () => {
   });
 
   it("inspects non-default agents with read-only model catalogs", async () => {
-    mocks.createOpenClawCodingTools.mockImplementation((options) =>
+    mocks.createOpenClawCodingToolsAsync.mockImplementation((options) =>
       options?.agentId === "worker"
         ? [tool("fuzzplugin_move_angles", { type: "array", items: { type: "number" } })]
         : [tool("healthy", { type: "object", properties: {} })],
@@ -299,7 +301,7 @@ describe("doctor runtime tool schema checks", () => {
       },
     );
     for (const [index, agentId] of ["main", "worker"].entries()) {
-      expect(mocks.createOpenClawCodingTools).toHaveBeenCalledWith(
+      expect(mocks.createOpenClawCodingToolsAsync).toHaveBeenCalledWith(
         expect.objectContaining({ agentId }),
       );
       expect(mocks.loadModelCatalog).toHaveBeenNthCalledWith(
@@ -317,7 +319,7 @@ describe("doctor runtime tool schema checks", () => {
   });
 
   it("skips ACP-only agents", async () => {
-    mocks.createOpenClawCodingTools.mockImplementation((options) =>
+    mocks.createOpenClawCodingToolsAsync.mockImplementation((options) =>
       options?.agentId === "acp-worker"
         ? [tool("fuzzplugin_move_angles", { type: "array", items: { type: "number" } })]
         : [tool("healthy", { type: "object", properties: {} })],
@@ -332,7 +334,7 @@ describe("doctor runtime tool schema checks", () => {
         },
       }),
     ).resolves.toEqual([]);
-    expect(mocks.createOpenClawCodingTools).toHaveBeenCalledExactlyOnceWith(
+    expect(mocks.createOpenClawCodingToolsAsync).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ agentId: "main" }),
     );
     expect(mocks.createBundleMcpToolRuntime).toHaveBeenCalledExactlyOnceWith(
@@ -479,7 +481,7 @@ describe("doctor runtime tool schema checks", () => {
     async ({ phase, toolName, path, message }) => {
       const error = new Error(`fuzzplugin ${phase} failed`);
       if (phase === "load") {
-        mocks.createOpenClawCodingTools.mockImplementationOnce(() => {
+        mocks.createOpenClawCodingToolsAsync.mockImplementationOnce(() => {
           throw error;
         });
       } else {
@@ -489,7 +491,7 @@ describe("doctor runtime tool schema checks", () => {
             dispose: mocks.disposeBundleRuntime,
           });
         } else {
-          mocks.createOpenClawCodingTools.mockReturnValueOnce([
+          mocks.createOpenClawCodingToolsAsync.mockReturnValueOnce([
             tool(toolName, { type: "object", properties: {} }),
           ]);
         }
@@ -873,7 +875,7 @@ describe("doctor gateway runtime checks", () => {
 });
 
 function mockProviderCatalog(staticCatalog: Record<string, unknown>) {
-  mocks.resolvePluginProvidersCore.mockReturnValueOnce([
+  mocks.resolvePluginProvidersCoreAsync.mockResolvedValueOnce([
     { id: "mockplugin", pluginId: "mockplugin", label: "Mock", auth: [], staticCatalog },
   ]);
 }
@@ -896,7 +898,7 @@ function expectCatalogFinding(
 
 describe("doctor provider catalog projection checks", () => {
   beforeEach(() => {
-    mocks.resolvePluginProvidersCore.mockReset().mockReturnValue([]);
+    mocks.resolvePluginProvidersCoreAsync.mockReset().mockResolvedValue([]);
   });
 
   it.each([

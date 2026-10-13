@@ -163,7 +163,9 @@ describe("model route compatibility", () => {
         configuredRuntimeModels,
         metadataSnapshot,
       ),
-      inlineProviderModels: buildInlineProviderModels(config.models?.providers ?? {}),
+      inlineProviderModels: buildInlineProviderModels(config.models?.providers ?? {}, {
+        providerMetadataOwners: metadataSnapshot.owners,
+      }),
       createStores: () => stores,
     };
     const resolved = await resolveModelAsync(providerId, id, undefined, config, {

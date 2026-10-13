@@ -4,7 +4,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearBundledDiscoveryModeMemo } from "../plugins/bundled-discovery-state.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import {
   createColdPluginFixture,
   isColdPluginRuntimeLoaded,
@@ -26,7 +26,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 describe("provider auth prepared manifest snapshot", () => {
   it.each(["compat", "allowlist"] as const)(
     "uses the explicit profile's %s policy for auth evidence and setup fallback",
-    (mode) => {
+    async (mode) => {
       const root = tempDirs.make("provider-auth-profile-");
       const bundled = path.join(root, "bundled");
       const rootDir = path.join(bundled, "profile-provider");
@@ -73,7 +73,7 @@ describe("provider auth prepared manifest snapshot", () => {
       );
       clearBundledDiscoveryModeMemo();
       const config: OpenClawConfig = { plugins: { allow: ["unrelated-owner"] } };
-      const metadataSnapshot = loadPluginMetadataSnapshot({
+      const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
         config,
         env,
         allowCurrent: false,

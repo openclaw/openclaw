@@ -12,7 +12,7 @@ import {
 } from "./current-plugin-metadata-snapshot.js";
 import { selectCurrentPluginMetadataCache } from "./current-plugin-metadata-state.js";
 import { createHookRunner } from "./hooks.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { loadOpenClawPluginsAsync } from "./loader.js";
 import {
   makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
@@ -26,7 +26,7 @@ import {
   withPluginCache,
 } from "./plugin-cache.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
-import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "./plugin-metadata-snapshot.js";
 import { capturePluginRuntimeRecovery } from "./plugin-runtime-artifact-binding.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { bindPluginRegistryGatewayOwner } from "./registry-lifecycle.js";
@@ -120,8 +120,8 @@ it.each(["installed", "bundled-mjs"] as const)(
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: bundled ? undefined : "1",
         },
         async () => {
-          const metadata = withPluginCache(publishedCache, () =>
-            loadPluginMetadataSnapshot({ config, workspaceDir: root }),
+          const metadata = await withPluginCache(publishedCache, () =>
+            resolvePluginMetadataSnapshotAsync({ config, workspaceDir: root, allowCurrent: false }),
           );
           bindPluginMetadataSnapshotCache(metadata, publishedCache);
           const options = {
@@ -134,7 +134,9 @@ it.each(["installed", "bundled-mjs"] as const)(
             runtimeSideEffects: true,
             throwOnLoadError: true,
           };
-          const previous = withPluginCache(publishedCache, () => loadOpenClawPlugins(options));
+          const previous = await withPluginCache(publishedCache, () =>
+            loadOpenClawPluginsAsync(options),
+          );
           registries.push(previous);
           const oldRecord = previous.plugins.find((record) => record.id === id)!;
           expect(oldRecord.origin).toBe(bundled ? "bundled" : "config");
@@ -146,8 +148,8 @@ it.each(["installed", "bundled-mjs"] as const)(
           const recovery = capturePluginRuntimeRecovery(oldRecord)!;
           try {
             await disposePluginRegistryInstances(previous);
-            const candidate = withPluginCache(operationCache, () =>
-              loadOpenClawPlugins({
+            const candidate = await withPluginCache(operationCache, () =>
+              loadOpenClawPluginsAsync({
                 ...options,
                 config: {
                   plugins: {
@@ -174,7 +176,7 @@ it.each(["installed", "bundled-mjs"] as const)(
               fs.rmSync(plugin.dir, { recursive: true });
             }
             await withPluginCache(operationCache, async () => {
-              const restored = loadOpenClawPlugins({
+              const restored = await loadOpenClawPluginsAsync({
                 ...options,
                 previousRegistry: previous,
                 moduleRecoveries: new Map([[id, recovery]]),
@@ -208,7 +210,7 @@ it.each(["installed", "bundled-mjs"] as const)(
 
               const loadInbound = createPreparedInboundRegistryLoader();
               for (let pass = 0; pass < 2; pass++) {
-                const inbound = withPluginRuntimeRegistryScope(restored, () =>
+                const inbound = await withPluginRuntimeRegistryScope(restored, () =>
                   loadInbound(
                     { config, workspaceDir: root, allowGatewaySubagentBinding: true },
                     metadata,
@@ -282,13 +284,13 @@ it("joins a failed candidate's declared stop hook before recovering the previous
       { port: 0, config, getCron: () => undefined },
     );
   try {
-    const old = loadOpenClawPlugins(options);
+    const old = await loadOpenClawPluginsAsync(options);
     registries.push(old);
     recovery = capturePluginRuntimeRecovery(old.plugins[0]!);
     const manifestRegistry = getPluginRuntimeLoadContext(old)!.manifestRegistry;
     await stop(old);
     await disposePluginRegistryInstances(old);
-    const candidate = loadOpenClawPlugins({
+    const candidate = await loadOpenClawPluginsAsync({
       ...options,
       config: {
         plugins: {
@@ -323,7 +325,7 @@ it("joins a failed candidate's declared stop hook before recovering the previous
     await retirement;
     expect(fs.existsSync(lock)).toBe(false);
 
-    const restored = loadOpenClawPlugins({
+    const restored = await loadOpenClawPluginsAsync({
       ...options,
       manifestRegistry,
       previousRegistry: old,
@@ -356,7 +358,7 @@ it("preserves the registration error and disposes resources when cleanup prepara
   });
   let registry: PluginRegistry | undefined;
   try {
-    registry = loadOpenClawPlugins({
+    registry = await loadOpenClawPluginsAsync({
       config: {
         plugins: { allow: [plugin.id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
       },

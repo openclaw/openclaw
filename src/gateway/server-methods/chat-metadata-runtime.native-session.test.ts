@@ -6,6 +6,8 @@ import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import * as sessionWorkerReader from "../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -19,11 +21,17 @@ import {
   projectSessionModelCatalog,
 } from "./chat-metadata-session-projection.js";
 
+async function prepareMetadataScope(config: OpenClawConfig) {
+  const metadata = await resolvePluginMetadataSnapshotAsync({ config, allowCurrent: false });
+  return <T>(read: () => T) => withPluginMetadataSnapshotScope(metadata, read, { config });
+}
+
 describe("gateway chat metadata native session ownership", () => {
-  test("projects only ambient worker-owned auth failures as available", () => {
+  test("projects only ambient worker-owned auth failures as available", async () => {
     const config = {
       agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
     } satisfies OpenClawConfig;
+    const withMetadata = await prepareMetadataScope(config);
     const models = [
       {
         provider: "openai",
@@ -42,53 +50,60 @@ describe("gateway chat metadata native session ownership", () => {
     ] satisfies ModelChoice[];
     const scope = { agentId: "main", workerInference: "worker" as const };
 
-    expect(projectSessionModelCatalog(scope, models, config, undefined)).toEqual([
-      { provider: "openai", id: "gpt-5.6-sol", name: "Sol" },
-      models[1],
-    ]);
     expect(
-      projectSessionModelCatalog(
-        scope,
-        [{ ...models[0]!, unavailableReason: "cooldown", unavailableUntil: 123 }],
-        config,
-        undefined,
+      withMetadata(() => projectSessionModelCatalog(scope, models, config, undefined)),
+    ).toEqual([{ provider: "openai", id: "gpt-5.6-sol", name: "Sol" }, models[1]]);
+    expect(
+      withMetadata(() =>
+        projectSessionModelCatalog(
+          scope,
+          [{ ...models[0]!, unavailableReason: "cooldown", unavailableUntil: 123 }],
+          config,
+          undefined,
+        ),
       ),
     ).toEqual([{ ...models[0]!, unavailableReason: "cooldown", unavailableUntil: 123 }]);
     expect(
-      projectSessionModelCatalog(
-        { ...scope, sessionEntry: { modelOverride: "gpt-5.6-luna" } },
-        models,
-        config,
-        undefined,
+      withMetadata(() =>
+        projectSessionModelCatalog(
+          { ...scope, sessionEntry: { modelOverride: "gpt-5.6-luna" } },
+          models,
+          config,
+          undefined,
+        ),
       ),
     ).toEqual(models);
     expect(
-      projectSessionModelCatalog(
-        {
-          ...scope,
-          sessionEntry: {
-            authProfileOverride: "openai:personal",
-            authProfileOverrideSource: "user",
-          },
-        },
-        models,
-        config,
-        undefined,
-      ),
-    ).toEqual(models);
-    for (const authProfileOverrideSource of [undefined, "user-link"] as const) {
-      expect(
+      withMetadata(() =>
         projectSessionModelCatalog(
           {
             ...scope,
             sessionEntry: {
               authProfileOverride: "openai:personal",
-              ...(authProfileOverrideSource ? { authProfileOverrideSource } : {}),
+              authProfileOverrideSource: "user",
             },
           },
           models,
           config,
           undefined,
+        ),
+      ),
+    ).toEqual(models);
+    for (const authProfileOverrideSource of [undefined, "user-link"] as const) {
+      expect(
+        withMetadata(() =>
+          projectSessionModelCatalog(
+            {
+              ...scope,
+              sessionEntry: {
+                authProfileOverride: "openai:personal",
+                ...(authProfileOverrideSource ? { authProfileOverrideSource } : {}),
+              },
+            },
+            models,
+            config,
+            undefined,
+          ),
         ),
       ).toEqual(models);
     }
@@ -107,6 +122,7 @@ describe("gateway chat metadata native session ownership", () => {
           entries: { main: {} },
         },
       };
+      const withMetadata = await prepareMetadataScope(config);
       const harness = createChatMetadataHarness(config, { useDefaultProjection: true });
       const registry = createEmptyPluginRegistry();
       registry.agentHarnesses.push({
@@ -144,42 +160,55 @@ describe("gateway chat metadata native session ownership", () => {
       const host = { ...provider, agentRuntimeOverride: "openclaw" };
       const otherProvider = { providerOverride: "unrelated", agentRuntimeOverride: "copilot" };
       try {
-        await harness.runtime.refresh();
+        await withMetadata(() => harness.runtime.refresh());
         await expect(
+          withMetadata(() =>
+            harness.runtime.readStartup({
+              agentId: "main",
+              sessionEntry: native,
+              readPolicy: "ready",
+            }),
+          ),
+        ).resolves.toBeUndefined();
+        const nativeStartup = await withMetadata(() =>
           harness.runtime.readStartup({
             agentId: "main",
             sessionEntry: native,
-            readPolicy: "ready",
           }),
-        ).resolves.toBeUndefined();
-        const nativeStartup = await harness.runtime.readStartup({
-          agentId: "main",
-          sessionEntry: native,
-        });
+        );
         expect(nativeStartup?.metadata?.models?.[0]?.agentRuntime?.id).toBe("copilot");
-        const hostStartup = await harness.runtime.readStartup({
-          agentId: "main",
-          sessionEntry: host,
-        });
+        const hostStartup = await withMetadata(() =>
+          harness.runtime.readStartup({
+            agentId: "main",
+            sessionEntry: host,
+          }),
+        );
         expect(hostStartup?.metadata?.models?.[0]?.agentRuntime?.id).toBe("openclaw");
-        const otherStartup = await harness.runtime.readStartup({
-          agentId: "main",
-          sessionEntry: otherProvider,
-        });
+        const otherStartup = await withMetadata(() =>
+          harness.runtime.readStartup({
+            agentId: "main",
+            sessionEntry: otherProvider,
+          }),
+        );
         expect(otherStartup?.metadata?.models?.[0]?.agentRuntime?.id).toBe("openclaw");
         await expect(
-          harness.runtime.readStartup({
-            agentId: "main",
-            sessionEntry: native,
-            readPolicy: "ready",
-          }),
+          withMetadata(() =>
+            harness.runtime.readStartup({
+              agentId: "main",
+              sessionEntry: native,
+              readPolicy: "ready",
+            }),
+          ),
         ).resolves.toEqual({
           sessionModelCatalog: nativeStartup?.sessionModelCatalog,
           defaultModelCatalog: nativeStartup?.defaultModelCatalog,
         });
         expect(
-          (await harness.runtime.read({ agentId: "main", sessionEntry: native })).models?.[0]
-            ?.agentRuntime?.id,
+          (
+            await withMetadata(() =>
+              harness.runtime.read({ agentId: "main", sessionEntry: native }),
+            )
+          ).models?.[0]?.agentRuntime?.id,
         ).toBe("copilot");
       } finally {
         await harness.runtime.stop();
@@ -194,6 +223,7 @@ describe("gateway chat metadata native session ownership", () => {
         entries: { main: {} },
       },
     } satisfies OpenClawConfig;
+    const withMetadata = await prepareMetadataScope(config);
     const harness = createChatMetadataHarness(config);
     const hostModels = [
       {
@@ -255,14 +285,16 @@ describe("gateway chat metadata native session ownership", () => {
     });
     setActivePluginRegistry(registry);
     onTestFinished(resetPluginRuntimeStateForTest);
-    await harness.runtime.refresh();
-    const neutral = await harness.runtime.read({ agentId: "main" });
+    await withMetadata(() => harness.runtime.refresh());
+    const neutral = await withMetadata(() => harness.runtime.read({ agentId: "main" }));
     expect(neutral.models).toEqual(hostModels);
 
-    const pending = await harness.runtime.read(request);
+    const pending = await withMetadata(() => harness.runtime.read(request));
     const acpRead = vi.spyOn(acpMetadata, "readAcpSessionMetaForEntries");
     try {
-      expect(await harness.runtime.read({ ...request, includeModels: false })).toEqual({
+      expect(
+        await withMetadata(() => harness.runtime.read({ ...request, includeModels: false })),
+      ).toEqual({
         commands: [{ name: "command-1-1" }],
         swarmEnabled: true,
         revision: expect.any(String),
@@ -276,8 +308,12 @@ describe("gateway chat metadata native session ownership", () => {
       { id: "gpt-5.6-sol", name: "Sol", provider: "openai" },
       hostModels[1],
     ]);
-    expect((await harness.runtime.readStartup(request))?.metadata).toEqual(pending);
-    const history = await harness.runtime.readStartup({ ...request, readPolicy: "ready" });
+    expect((await withMetadata(() => harness.runtime.readStartup(request)))?.metadata).toEqual(
+      pending,
+    );
+    const history = await withMetadata(() =>
+      harness.runtime.readStartup({ ...request, readPolicy: "ready" }),
+    );
     expect(history).not.toHaveProperty("metadata");
     expect(history?.sessionModelCatalog).toBe(hostModels);
 
@@ -288,30 +324,32 @@ describe("gateway chat metadata native session ownership", () => {
     };
     sessionEntry.model = "gpt-5.6-luna";
     sessionEntry.modelProvider = "openai";
-    const materialized = await harness.runtime.read(request);
+    const materialized = await withMetadata(() => harness.runtime.read(request));
     expect(materialized.models).toEqual([
       hostModels[0],
       { id: "gpt-5.6-luna", name: "Luna", provider: "openai" },
     ]);
-    expect((await harness.runtime.readStartup(request))?.metadata).toEqual(materialized);
-    expect(await harness.runtime.read({ agentId: "main" })).toEqual(neutral);
+    expect((await withMetadata(() => harness.runtime.readStartup(request)))?.metadata).toEqual(
+      materialized,
+    );
+    expect(await withMetadata(() => harness.runtime.read({ agentId: "main" }))).toEqual(neutral);
     expect(hostModels[0]).toHaveProperty("available", false);
     expect(hostModels[1]).toHaveProperty("unavailableUntil", 123_456);
 
     // The same pin can retain native model ownership while requiring host auth.
     ownership = { ...ownership, auth: "host" };
-    expect((await harness.runtime.read(request)).models).toEqual(hostModels);
+    expect((await withMetadata(() => harness.runtime.read(request))).models).toEqual(hostModels);
     ownership = { ...ownership, auth: "native" };
     sessionEntry.pluginOwnerId = "test-native";
-    expect((await harness.runtime.read(request)).models).toEqual(hostModels);
+    expect((await withMetadata(() => harness.runtime.read(request))).models).toEqual(hostModels);
     delete sessionEntry.pluginOwnerId;
     boundSessionId = "replacement-session";
-    expect((await harness.runtime.read(request)).models).toEqual(hostModels);
+    expect((await withMetadata(() => harness.runtime.read(request))).models).toEqual(hostModels);
     boundSessionId = sessionEntry.sessionId;
     ownership = undefined;
-    expect((await harness.runtime.read(request)).models).toEqual(hostModels);
+    expect((await withMetadata(() => harness.runtime.read(request))).models).toEqual(hostModels);
     setActivePluginRegistry(createEmptyPluginRegistry());
-    expect((await harness.runtime.read(request)).models).toEqual(hostModels);
+    expect((await withMetadata(() => harness.runtime.read(request))).models).toEqual(hostModels);
   });
 
   test.each([
@@ -326,6 +364,7 @@ describe("gateway chat metadata native session ownership", () => {
         },
         session: { store: state.path("alternate", "sessions.json") },
       } satisfies OpenClawConfig;
+      const withMetadata = await prepareMetadataScope(config);
       const harness = createChatMetadataHarness(config);
       const hostModels = [
         {
@@ -378,7 +417,7 @@ describe("gateway chat metadata native session ownership", () => {
       try {
         setActivePluginRegistry(registry);
         await sessionAccessor.replaceSessionEntry(target, entry);
-        await harness.runtime.refresh();
+        await withMetadata(() => harness.runtime.refresh());
         harness.buildProjection.mockImplementationOnce(async () => {
           entered.resolve();
           await release.promise;
@@ -386,11 +425,13 @@ describe("gateway chat metadata native session ownership", () => {
         });
         const readSpy = vi.spyOn(sessionWorkerReader, "readSessionEntryReadOnlyInWorker");
         restoreReadSpy = () => readSpy.mockRestore();
-        pending = harness.runtime.read({
-          agentId: target.agentId,
-          sessionKey: target.sessionKey,
-          sessionEntry: entry,
-        });
+        pending = withMetadata(() =>
+          harness.runtime.read({
+            agentId: target.agentId,
+            sessionKey: target.sessionKey,
+            sessionEntry: entry,
+          }),
+        );
         await entered.promise;
         expect(readSpy).not.toHaveBeenCalled();
         await sessionAccessor.patchSessionEntryCore(target, () =>

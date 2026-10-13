@@ -182,9 +182,10 @@ vi.mock("../../../context-engine/init.js", () => ({ ensureContextEnginesInitiali
 vi.mock("../../../context-engine/registry.js", () => ({
   resolveContextEngine: vi.fn(async () => noopContextEngine),
 }));
+// mock-isolation: Steering restart fixtures supply empty registries without starting plugin discovery.
 vi.mock("../../runtime-plugins.js", async () => {
   const { createEmptyPluginRegistry } = await import("../../../plugins/registry-empty.js");
-  return { loadAgentRuntimePluginRegistryHandle: vi.fn(() => createEmptyPluginRegistry()) };
+  return { loadAgentRuntimePluginRegistryHandle: vi.fn(async () => createEmptyPluginRegistry()) };
 });
 
 vi.mock("../../../plugins/hook-runner-global.js", () => ({

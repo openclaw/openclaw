@@ -61,7 +61,8 @@ export async function prepareModelChoice(params: {
   const { projectProviderModelRouteConfig } = await loadProviderModelRoute();
   const { validatePreparedRuntimeModel } = await loadRuntimeModelMaterializer();
   const { resolveModelCandidateChain } = await loadModelFallbackCandidates();
-  const { resolveProviderIdForAuth } = await loadProviderAuthAliases();
+  const { resolvePreparedProviderIdForAuth: resolveProviderIdForAuth } =
+    await loadProviderAuthAliases();
   const { withPluginRuntimeGenerationScope } = await loadPluginGenerationScope();
   return await withPreparedModelCatalogOwner(
     {

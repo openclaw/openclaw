@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -42,6 +43,7 @@ describe("CronService silent failure alerts", { concurrent: false }, () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-silent-failure-" },
       async (state) => {
+        await preparePluginMetadataMachineStateAsync({});
         const cfg = {
           agents: { defaults: { model: `${modelRef.provider}/${modelRef.model}` } },
         };

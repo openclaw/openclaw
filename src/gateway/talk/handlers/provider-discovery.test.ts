@@ -1,11 +1,12 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { preparePluginMetadataMachineStateAsync } from "../../../plugins/installed-plugin-index-record-state.js";
 import {
   cleanupPluginLoaderFixturesForTest,
-  loadOpenClawPlugins,
+  loadOpenClawPluginsForTest,
   resetPluginLoaderTestStateForTest,
 } from "../../../plugins/loader.test-fixtures.js";
 import { createVoiceProviderFixture } from "../../../talk/provider-discovery.test-fixtures.js";
-import { listRealtimeVoiceProviders } from "../../../talk/provider-registry.js";
+import { listRealtimeVoiceProvidersAsync } from "../../../talk/provider-registry.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { callGatewayHandler } from "../../server-methods/skills.test-helpers.js";
 import { talkHandlers } from "./index.js";
@@ -18,7 +19,8 @@ describe("Talk catalog provider discovery", () => {
     const { cfg, env } = createVoiceProviderFixture();
     cfg.talk = { realtime: { providers: { "configured-voice": { ready: true } } } };
     await withEnvAsync(env, async () => {
-      const registry = loadOpenClawPlugins({ config: cfg, onlyPluginIds: ["active-voice"] });
+      await preparePluginMetadataMachineStateAsync({ env });
+      const registry = loadOpenClawPluginsForTest({ config: cfg, onlyPluginIds: ["active-voice"] });
       const result = await callGatewayHandler(
         talkHandlers,
         "talk.catalog",
@@ -42,7 +44,7 @@ describe("Talk catalog provider discovery", () => {
           },
         },
       });
-      expect(listRealtimeVoiceProviders(cfg).map((provider) => provider.id)).toEqual([
+      expect((await listRealtimeVoiceProvidersAsync(cfg)).map((provider) => provider.id)).toEqual([
         "active-voice",
         "configured-voice",
       ]);

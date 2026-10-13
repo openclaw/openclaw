@@ -10,6 +10,13 @@ import {
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/web-provider-types.js";
+// mock-isolation: Provider fixtures supply metadata without opening shared machine state.
+vi.mock("../plugins/installed-plugin-index-record-state.js", () => ({
+  preparePluginMetadataMachineStateAsync: async () => () => {},
+  getPersistedInstalledPluginIndexCacheEntry: () => ({ state: { status: "missing" } }),
+  inspectPersistedInstalledPluginIndexInstallRecordsSync: () => ({ status: "missing" }),
+}));
+
 // mock-isolation: Use fixed discovery policy without opening machine state for provider fixtures.
 vi.mock("../plugins/bundled-discovery-state.js", () => ({
   prepareBundledDiscoveryMode: async () => () => {},
@@ -60,9 +67,12 @@ vi.mock("../plugins/plugin-registry-contributions.js", () => ({
   resolveManifestContractOwnerPluginId: resolveManifestContractOwnerPluginIdMock,
 }));
 
+// mock-isolation: Search execution fixtures supply synthetic providers without loading installed plugins.
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
+  resolvePluginWebSearchProvidersAsync: resolvePluginWebSearchProvidersMock,
   resolveRuntimeWebSearchProviders: resolveRuntimeWebSearchProvidersMock,
+  resolveRuntimeWebSearchProvidersAsync: resolveRuntimeWebSearchProvidersMock,
 }));
 
 function createCustomSearchTool() {

@@ -13,6 +13,8 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import * as transcriptRuntime from "../../plugin-sdk/session-transcript-runtime.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -60,7 +62,8 @@ async function withCatalog(
   const fixture = await createCatalog(restricted);
   try {
     await state.writeConfig(fixture.config);
-    await run(fixture);
+    const metadata = await resolvePluginMetadataSnapshotAsync({ config: fixture.config });
+    await withPluginMetadataSnapshotScope(metadata, () => run(fixture), { config: fixture.config });
   } finally {
     vi.restoreAllMocks();
     fixture.projection.dispose();

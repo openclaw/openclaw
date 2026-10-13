@@ -10,12 +10,12 @@ import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   resolveApiKeyForProfile,
   replaceRuntimeAuthProfileStoreSnapshots,
-  setAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
 import * as authProfiles from "../../agents/auth-profiles.js";
 import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persisted.js";
 import { upsertAuthProfileWithLockOrThrow } from "../../agents/auth-profiles/profiles.js";
 import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
+import { writePersistedAuthProfileStateRaw } from "../../agents/auth-profiles/sqlite.js";
 import * as authStoreRuntime from "../../agents/auth-profiles/store-runtime.js";
 import type { ApiKeyCredential, AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
@@ -269,11 +269,10 @@ describe("shared API-key editing and removal", () => {
       await seedKey(profileId, "old-key", owner, metadata);
       if (owner) {
         await seedKey("sample:backup", "kept-backup", owner);
-        await setAuthProfileOrder({
-          agentDir: agentDir(owner),
-          provider: "sample",
-          order: [profileId, "sample:backup"],
-        });
+        writePersistedAuthProfileStateRaw(
+          { version: 1, order: { sample: [profileId, "sample:backup"] } },
+          agentDir(owner),
+        );
       }
       const ownerDir = owner ? agentDir(owner) : undefined;
       const stored = loadPersistedAuthProfileStore(ownerDir)!;

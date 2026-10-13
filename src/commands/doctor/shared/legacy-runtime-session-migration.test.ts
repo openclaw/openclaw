@@ -9,6 +9,7 @@ import { resolveSqliteTargetFromSessionStorePath } from "../../../config/session
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { recordDeferredPluginMigrations } from "../../../infra/deferred-plugin-migrations.js";
 import { readDeferredPluginSessionImport } from "../../../infra/deferred-plugin-session-sources.js";
+import { preparePluginMetadataMachineStateAsync } from "../../../plugins/installed-plugin-index-record-state.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -34,6 +35,7 @@ describe("legacy runtime session model migration", () => {
       });
       states.push(state);
       state.applyEnv();
+      await preparePluginMetadataMachineStateAsync({ env: state.env });
       const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(state, "default");
       const sessionKey = "agent:main:kept";
       const store = JSON.parse(fs.readFileSync(storePath, "utf8"));
@@ -88,6 +90,7 @@ describe("legacy runtime session model migration", () => {
     });
     states.push(state);
     state.applyEnv();
+    await preparePluginMetadataMachineStateAsync({ env: state.env });
     const cfg: OpenClawConfig = {
       plugins: { enabled: false },
       agents: { entries: { main: {} }, defaults: { model: "openai/current-model" } },
@@ -143,6 +146,7 @@ describe("legacy runtime session model migration", () => {
     });
     states.push(state);
     state.applyEnv();
+    await preparePluginMetadataMachineStateAsync({ env: state.env });
     const cfg: OpenClawConfig = {
       plugins: { enabled: false },
       agents: { entries: { main: {} }, defaults: { model: "openai/current-model" } },

@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import {
   makeEmptyPluginMetadataOwners,
   setCurrentPluginMetadataSnapshot,
@@ -96,10 +97,11 @@ function useBundledPluginDirOverrideForTest(dir: string): void {
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = dir;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
   delete process.env.OPENCLAW_STATE_DIR;
+  await prepareBundledDiscoveryMode();
 });
 
 afterEach(() => {
@@ -157,6 +159,7 @@ describe("plugin-sdk facade runtime", () => {
     expect(await readSurfaces()).toEqual(["fixture-1", "fixture-1", 1]);
 
     clearPluginMetadataLifecycleCaches();
+    await prepareBundledDiscoveryMode();
     testing.setFacadeActivationCheckRuntimeForTest(facadeActivationRuntime);
 
     expect(await readSurfaces()).toEqual(["fixture-2", "fixture-2", 2]);

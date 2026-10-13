@@ -18,7 +18,7 @@ import {
   findNormalizedProviderValue,
   parseModelRef,
 } from "../../agents/model-selection-normalize.js";
-import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { resolvePreparedProviderIdForAuth as resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import {
   prepareSessionCapabilityRead,
   withPreparedSessionCapabilityRead,

@@ -19,10 +19,10 @@ export async function tryOutputSetupOnboardConfigureHelp(argv: string[]): Promis
   const [command] = getCommandPathWithRootOptions(argv, 1);
   if (command === "setup") {
     const { registerSetupCommand } = await import("./program/register.setup.js");
-    registerSetupCommand(program);
+    await registerSetupCommand(program);
   } else if (command === "onboard") {
     const { registerOnboardCommand } = await import("./program/register.onboard.js");
-    registerOnboardCommand(program);
+    await registerOnboardCommand(program);
   } else {
     const { registerConfigureCommand } = await import("./program/register.configure.js");
     registerConfigureCommand(program);

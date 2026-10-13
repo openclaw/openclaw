@@ -1,10 +1,11 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { preparePluginMetadataMachineStateAsync } from "../../plugins/installed-plugin-index-record-state.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { buildConfiguredFallbackModel } from "./model.configured-fallback.js";
 import { applyConfiguredProviderOverrides } from "./model.configured-overrides.js";
@@ -18,6 +19,9 @@ import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-sup
 import { makeModel } from "./model.test-harness.js";
 
 afterEach(clearRuntimeConfigSnapshot);
+beforeEach(async () => {
+  await preparePluginMetadataMachineStateAsync({});
+});
 
 describe("captured configured pricing policies", () => {
   it("uses captured pricing aliases once with a cloned config", () => {

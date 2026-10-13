@@ -8,7 +8,7 @@ import {
   createRemoteShellSandboxSession,
   type RemoteShellSandboxSession,
 } from "./remote-shell-transport.js";
-import { sanitizeEnvVars } from "./sanitize-env-vars.js";
+import { sanitizeEnvVarsAsync } from "./sanitize-env-vars.js";
 import type { SandboxSshConfig } from "./types.js";
 
 export type SshSandboxSettings = Omit<SandboxSshConfig, "target" | "workspaceRoot"> & {
@@ -137,7 +137,7 @@ export async function disposeSshSandboxSession(session: SshSandboxSession): Prom
 
 function commandSession(session: SshSandboxSession): RemoteShellSandboxSession {
   return createRemoteShellSandboxSession({
-    buildCommand: ({ remoteCommand, tty }) => ({
+    buildCommand: async ({ remoteCommand, tty }) => ({
       argv: [
         session.command,
         "-F",
@@ -146,7 +146,7 @@ function commandSession(session: SshSandboxSession): RemoteShellSandboxSession {
         session.host,
         remoteCommand,
       ],
-      env: sanitizeEnvVars(process.env).allowed,
+      env: (await sanitizeEnvVarsAsync(process.env)).allowed,
     }),
     assertCurrent: session.assertCurrent,
     formatFailure: buildSshFailureMessage,

@@ -643,6 +643,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     const result = resolveEmbeddedCompactionTarget({
       ...openAiTarget,
       config: compactionConfig(override, models),
+      manifestPlugins: [],
       authProfileId: "openai:default",
     });
     expect(result.provider).toBe(provider);

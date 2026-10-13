@@ -38,6 +38,7 @@ import {
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
@@ -588,6 +589,11 @@ async function executeAgentTurnOutcome(
   };
   const lifecycleGeneration = captureAgentRunLifecycleGeneration(runId);
   try {
+    await resolvePluginMetadataSnapshotAsync({
+      config: resolveQueuedReplyRuntimeConfig(executionParams.followupRun.run.config),
+      workspaceDir: executionParams.followupRun.run.workspaceDir,
+      allowWorkspaceScopedCurrent: true,
+    });
     const internal = await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
       try {
         const admittedRunContext: { current?: AdmittedRunContext } = {};

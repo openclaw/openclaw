@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -116,6 +117,11 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
   materializationListeners: new Set<
     (event: { agentDir?: string; affectsInheritedStores: boolean }) => void
   >(),
+}));
+
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
+  getCurrentPluginMetadataSnapshot: () => preparedModelRuntimeMocks.pluginMetadataSnapshot,
 }));
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
@@ -418,9 +424,10 @@ vi.mock("./models-config.providers.implicit.js", () => ({
     preparedModelRuntimeMocks.prepareStaticCatalog(...args),
 }));
 
+// mock-isolation: Runtime preparation acquires only the fixture registry, never the host registry.
 vi.mock("./runtime-plugins.js", () => ({
   acquireAgentRuntimePluginRegistry: async (...args: unknown[]) => {
-    const registry = preparedModelRuntimeMocks.loadAgentRuntimePluginRegistryHandle(...args);
+    const registry = await preparedModelRuntimeMocks.loadAgentRuntimePluginRegistryHandle(...args);
     return { registry, primaryRegistry: registry };
   },
   loadAgentRuntimePluginRegistryHandle: (...args: unknown[]) =>
@@ -502,6 +509,7 @@ export function getPreparedModelRuntimeTestApi(): PreparedModelRuntimeTestApi {
 export async function resetPreparedModelRuntimeHarness(state: OpenClawTestState): Promise<void> {
   await import("./prepared-model-runtime.js");
   await getPreparedModelRuntimeTestApi().resetPreparedModelRuntimeSnapshotsForTest();
+  await preparePluginMetadataMachineStateAsync({});
   agentScopeMocks.resolveAgentDir
     .mockReset()
     .mockImplementation(

@@ -52,8 +52,10 @@ vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) =
   loadInstalledPluginIndexInstallRecords: mocks.loadInstalledPluginIndexInstallRecords,
   writePersistedInstalledPluginIndexInstallRecordsWithLease: mocks.writeInstallRecords,
 }));
+// mock-isolation: Installation repair uses the fixture inventory, independent of host plugin state.
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   resolvePluginMetadataSnapshot: mocks.metadata,
+  resolvePluginMetadataSnapshotAsync: async (...args: unknown[]) => mocks.metadata(...args),
 }));
 vi.mock("./onboarding-plugin-install.js", () => ({
   ensureOnboardingPluginInstalled: mocks.ensureOnboardingPluginInstalled,

@@ -35,6 +35,7 @@ import {
   collectCodexRouteWarnings as collectCodexRouteWarningsUnderTest,
   maybeRepairCodexRoutes as maybeRepairCodexRoutesUnderTest,
 } from "./codex-route-warnings.js";
+import { withDoctorPluginMetadataForTest } from "./plugin-metadata.test-support.js";
 
 const DISABLED_CODEX_PLUGIN_CONFIG = { entries: { codex: { enabled: false } } };
 const MODEL_CATALOG_METADATA = {
@@ -58,18 +59,22 @@ function collectCodexRouteWarnings(
   cfg: OpenClawConfigWithLegacyRoster,
   options: CodexRouteWarningOptions = {},
 ): string[] {
-  return collectCodexRouteWarningsUnderTest({ cfg, ...options });
+  return withDoctorPluginMetadataForTest(
+    cfg,
+    () => collectCodexRouteWarningsUnderTest({ cfg, ...options }),
+    options.env,
+  );
 }
 
 function maybeRepairCodexRoutes(
   cfg: OpenClawConfigWithLegacyRoster,
   options: CodexRouteRepairOptions = {},
 ) {
-  return maybeRepairCodexRoutesUnderTest({
+  return withDoctorPluginMetadataForTest(
     cfg,
-    shouldRepair: true,
-    ...options,
-  });
+    () => maybeRepairCodexRoutesUnderTest({ cfg, shouldRepair: true, ...options }),
+    options.env,
+  );
 }
 
 function repairDefaultAgent(

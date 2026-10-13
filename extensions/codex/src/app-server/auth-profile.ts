@@ -8,7 +8,7 @@ import {
   ensureAuthProfileStoreAsync,
   resolveAuthProfileOrder,
 } from "openclaw/plugin-sdk/provider-auth";
-import { resolveProviderIdForAuth } from "openclaw/plugin-sdk/provider-auth-aliases";
+import { resolveProviderIdForAuthAsync } from "openclaw/plugin-sdk/provider-auth-aliases";
 import {
   createCodexAuthProfileSelection,
   type CodexAppServerAuthProfileLookup,
@@ -82,7 +82,7 @@ export async function isCodexAppServerNativeAuthProfile(
     const provider = credential.provider?.trim();
     return Boolean(
       provider &&
-      resolveProviderIdForAuth(provider, { config: lookup.config }) ===
+      (await resolveProviderIdForAuthAsync(provider, { config: lookup.config })) ===
         CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER,
     );
   } catch (error) {

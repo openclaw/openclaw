@@ -1,6 +1,7 @@
 import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
+import { prepareBundledDiscoveryModeNative } from "../plugins/bundled-discovery-state.native.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import { ensureApiKeyFromEnvOrPrompt } from "../plugins/provider-auth-input.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -183,6 +184,7 @@ export async function promptCustomApiConfig(params: {
   verification?: "immediate" | "deferred";
 }): Promise<CustomApiResult> {
   const { prompter, runtime, config } = params;
+  prepareBundledDiscoveryModeNative();
   const manifestPlugins = loadManifestMetadataSnapshot({
     config,
     workspaceDir: params.target?.workspaceDir,

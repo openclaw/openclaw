@@ -31,10 +31,10 @@ const redactSystemAgentConfigPath: typeof redactSystemAgentConfigPathImpl = (...
 const redactSystemAgentConfig: typeof redactSystemAgentConfigImpl = (...args) =>
   pluginMetadata!.run(() => redactSystemAgentConfigImpl(...args));
 
-beforeEach(() => {
+beforeEach(async () => {
   const config = {};
   setRuntimeConfigSnapshot(config, config);
-  pluginMetadata = createSystemAgentPluginMetadataTestSnapshot(config);
+  pluginMetadata = await createSystemAgentPluginMetadataTestSnapshot(config);
 });
 
 afterEach(() => {

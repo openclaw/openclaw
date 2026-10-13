@@ -539,8 +539,8 @@ async function resolveBundledWebProviders(params: {
   const providers = await loadRuntimeWebToolsFallbackProviders();
   const resolve =
     params.kind === "search"
-      ? providers.resolvePluginWebSearchProviders
-      : providers.resolvePluginWebFetchProviders;
+      ? providers.resolvePluginWebSearchProvidersAsync
+      : providers.resolvePluginWebFetchProvidersAsync;
   return resolve({
     config: params.sourceConfig,
     env,

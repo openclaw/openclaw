@@ -12,11 +12,11 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
 import { withBundledPluginEnablementCompat } from "../../plugins/bundled-compat.js";
+import { resolveProviderRuntimePluginAsync } from "../../plugins/provider-hook-runtime.js";
 import type {
   prepareProviderDynamicModel,
   runProviderDynamicModel,
 } from "../../plugins/provider-runtime.js";
-import { resolveProviderModernModelRef } from "../../plugins/provider-runtime.js";
 import { resolveOwningPluginIdsForProviderRef } from "../../plugins/providers.js";
 import type { ProviderResolveDynamicModelContext } from "../../plugins/types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -24,7 +24,7 @@ import { liveProvidersShareOwningPlugin } from "../live-provider-owner.js";
 
 type ModelRef = { provider?: string | null; id?: string | null };
 type LiveModelPolicyRef = ModelRef &
-  Pick<Parameters<typeof resolveProviderModernModelRef>[0], "config" | "workspaceDir" | "env">;
+  Pick<Parameters<typeof resolveProviderRuntimePluginAsync>[0], "config" | "workspaceDir" | "env">;
 
 const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "anthropic/claude-opus-5-5",
@@ -116,30 +116,29 @@ export function isSmallLiveModelRef(ref: ModelRef): boolean {
   return key !== undefined && smallPriorityIndex.has(key);
 }
 
-export function isModernModelRef(ref: LiveModelPolicyRef): boolean {
+export async function isModernModelRef(ref: LiveModelPolicyRef): Promise<boolean> {
   const provider = normalizeProviderId(ref.provider ?? "");
   const modelId = normalizeLowercaseStringOrEmpty(ref.id);
+  if (!provider || !modelId) {
+    return false;
+  }
   // Live fixtures enable plugins in their scoped config; ambient Vitest defaults disable them.
-  return Boolean(
-    provider &&
-    modelId &&
-    resolveProviderModernModelRef({
-      provider,
-      config: ref.config,
-      workspaceDir: ref.workspaceDir,
-      env: ref.env,
-      context: { provider, modelId },
-    }) === true,
-  );
+  const plugin = await resolveProviderRuntimePluginAsync({
+    provider,
+    config: ref.config,
+    workspaceDir: ref.workspaceDir,
+    env: ref.env,
+  });
+  return plugin?.isModernModelRef?.({ provider, modelId }) === true;
 }
 
-export function isHighSignalLiveModelRef(ref: LiveModelPolicyRef): boolean {
+export async function isHighSignalLiveModelRef(ref: LiveModelPolicyRef): Promise<boolean> {
   const provider = normalizeProviderId(ref.provider ?? "");
   const id = normalizeLowercaseStringOrEmpty(ref.id);
   const modelName = id.split("/").pop() ?? "";
   const geminiVersion = id.match(/(?:^|\/)gemini-(\d+)(?:[.-]|$)/);
   if (
-    !isModernModelRef(ref) ||
+    !(await isModernModelRef(ref)) ||
     !id ||
     (geminiVersion && Number.parseInt(geminiVersion[1] ?? "0", 10) < 3) ||
     /(?:^|-)latest(?:-|$)/.test(modelName) ||

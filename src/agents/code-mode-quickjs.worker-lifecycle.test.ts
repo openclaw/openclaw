@@ -49,7 +49,7 @@ describe("QuickJS host lifecycle and output", () => {
       // in the same graph as the worker URL spy that observes its CPU activity.
       const resolveExecutor = vi
         .spyOn(executorPlugins, "resolvePluginCodeModeExecutor")
-        .mockReturnValue(codeModeExecutor);
+        .mockResolvedValue(codeModeExecutor);
       onTestFinished(() => resolveExecutor.mockRestore());
       const h = createCodeModeHarness({ codeMode: { executor: "quickjs" } });
       onTestFinished(() => clearToolSearchCatalog(h.ctx));

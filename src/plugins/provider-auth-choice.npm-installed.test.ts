@@ -10,6 +10,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { withEnvAsync } from "../test-utils/env.js";
 import type { WizardSelectParams } from "../wizard/prompts.js";
 import { installPluginFromArchive, installPluginFromNpmSpec } from "./install.js";
+import { preparePluginMetadataMachineStateAsync } from "./installed-plugin-index-record-state.js";
 import { buildNpmResolutionInstallFields } from "./installs.js";
 import {
   clearPluginLoaderCache,
@@ -157,6 +158,7 @@ it.each([
           { config, workspaceDir },
         );
         clearPluginLoaderCache();
+        await preparePluginMetadataMachineStateAsync({ env: process.env });
         const report = buildPluginRegistrySnapshotReport({ config, workspaceDir });
         expect(report.plugins.find((plugin) => plugin.id === pluginId)).toMatchObject({
           enabled: true,

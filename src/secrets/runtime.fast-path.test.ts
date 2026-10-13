@@ -180,7 +180,8 @@ describe("secrets runtime fast path", () => {
     const { prepareSecretsRuntimeSnapshot } = await import("./runtime.js");
     const { collectConfigAssignments } = await import("./runtime-config-collectors.js");
     const { resolveRuntimeWebTools } = await import("./runtime-web-tools.js");
-    const { loadPluginMetadataSnapshot } = await import("../plugins/plugin-metadata-snapshot.js");
+    const { resolvePluginMetadataSnapshotAsync } =
+      await import("../plugins/plugin-metadata-snapshot.js");
     const { setCurrentPluginMetadataSnapshot } =
       await import("../plugins/current-plugin-metadata.test-support.js");
     const { listAgentWorkspaceDirs } = await import("../agents/workspace-dirs.js");
@@ -199,7 +200,7 @@ describe("secrets runtime fast path", () => {
       },
     });
     const workspaceDir = listAgentWorkspaceDirs(config, process.env)[0];
-    const pluginMetadataSnapshot = loadPluginMetadataSnapshot({
+    const pluginMetadataSnapshot = await resolvePluginMetadataSnapshotAsync({
       config,
       env: process.env,
       workspaceDir,

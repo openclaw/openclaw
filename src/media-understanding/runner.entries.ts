@@ -704,7 +704,7 @@ export async function runProviderEntry(params: {
     });
     const model =
       entry.model?.trim() ||
-      (await import("./defaults.js")).resolveDefaultMediaModel({
+      (await import("./defaults.js")).resolveDefaultMediaModelCore({
         cfg,
         providerId,
         capability: "audio",
@@ -791,7 +791,7 @@ export async function runProviderEntry(params: {
   });
   const model =
     entry.model?.trim() ||
-    (await import("./defaults.js")).resolveDefaultMediaModel({
+    (await import("./defaults.js")).resolveDefaultMediaModelCore({
       cfg,
       providerId,
       capability: "video",

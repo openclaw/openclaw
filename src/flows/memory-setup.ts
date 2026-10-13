@@ -106,18 +106,20 @@ export async function runMemorySetupFlow(
   let previousProvider: string;
   try {
     const [
-      { loadManifestContractSnapshot, listAvailableManifestContractValues },
+      { listAvailableManifestContractValues },
+      { resolvePluginMetadataSnapshotAsync },
       { resolveConfiguredGenericEmbeddingProviderId },
       { resolveMemorySearchProviderId },
     ] = await Promise.all([
       import("../plugins/manifest-contract-eligibility.js"),
+      import("../plugins/plugin-metadata-snapshot.js"),
       import("../plugins/embedding-provider-config.js"),
       import("../agents/memory-search.js"),
     ]);
     previousProvider = resolveMemorySearchProviderId(config.memory?.search?.provider);
     const ids = new Set<string>(["openai-compatible"]);
     if (config.plugins?.enabled !== false) {
-      const snapshot = loadManifestContractSnapshot({ config });
+      const snapshot = await resolvePluginMetadataSnapshotAsync({ config });
       for (const id of listAvailableManifestContractValues({
         snapshot,
         contract: "embeddingProviders",
@@ -166,8 +168,8 @@ export async function runMemorySetupFlow(
   });
   let adapter: EmbeddingProviderAdapter | undefined;
   try {
-    const { getEmbeddingProvider } = await import("../plugins/embedding-provider-runtime.js");
-    adapter = getEmbeddingProvider(selected, config);
+    const { getEmbeddingProviderAsync } = await import("../plugins/embedding-provider-runtime.js");
+    adapter = await getEmbeddingProviderAsync(selected, config);
   } catch {
     await prompter.note(
       "The selected embedding provider could not be loaded. Check plugin configuration and try again.",
@@ -269,11 +271,11 @@ export async function runMemorySetupFlow(
   };
   const candidateConfig = { ...config, memory: { ...config.memory, search: candidateSearch } };
   try {
-    const { resolveMemorySearchConfig } = await import("../agents/memory-search.js");
+    const { resolveMemorySearchConfigAsync } = await import("../agents/memory-search.js");
     // Validate shared defaults without letting a per-agent override mask incompatibility.
-    resolveMemorySearchConfig({ ...candidateConfig, agents: undefined }, "main");
+    await resolveMemorySearchConfigAsync({ ...candidateConfig, agents: undefined }, "main");
     for (const agentId of Object.keys(config.agents?.entries ?? {})) {
-      resolveMemorySearchConfig(candidateConfig, agentId);
+      await resolveMemorySearchConfigAsync(candidateConfig, agentId);
     }
   } catch {
     await prompter.note(

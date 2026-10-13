@@ -2,6 +2,7 @@ import path from "node:path";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { resolveBundledHooksDir } from "./bundled-dir.js";
 import {
@@ -19,6 +20,7 @@ export type HookSourceFact = HookPolicyEntry & { rootId: string; filePath: strin
 type HookCandidate = HookSourceFact & { entry?: DiscoveredHookEntry };
 type HookDiscoveryOptions = {
   config?: OpenClawConfig;
+  metadataSnapshot?: PluginMetadataSnapshot;
   managedHooksDir?: string;
   bundledHooksDir?: string;
 };
@@ -35,14 +37,16 @@ function resolveHookDiscoveryRoots(
       includeRoot: true,
     })),
     ...(bundledHooksDir ? [{ dir: bundledHooksDir, source: "openclaw-bundled" as const }] : []),
-    ...resolvePluginHookDirs({ workspaceDir, config: opts?.config }).map(
-      ({ dir, pluginId, rootDir }) => ({
-        dir,
-        pluginId,
-        rootDir,
-        source: "openclaw-plugin" as const,
-      }),
-    ),
+    ...resolvePluginHookDirs({
+      workspaceDir,
+      config: opts?.config,
+      metadataSnapshot: opts?.metadataSnapshot,
+    }).map(({ dir, pluginId, rootDir }) => ({
+      dir,
+      pluginId,
+      rootDir,
+      source: "openclaw-plugin" as const,
+    })),
     { dir: opts?.managedHooksDir ?? path.join(CONFIG_DIR, "hooks"), source: "openclaw-managed" },
     { dir: path.join(workspaceDir, "hooks"), source: "openclaw-workspace" },
   ];

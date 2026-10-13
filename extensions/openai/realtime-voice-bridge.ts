@@ -206,9 +206,10 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
     return this.transport.isConnected();
   }
 
-  private resolveConnectionParams():
-    | { url: string; headers: Record<string, string> }
-    | Promise<{ url: string; headers: Record<string, string> }> {
+  private async resolveConnectionParams(): Promise<{
+    url: string;
+    headers: Record<string, string>;
+  }> {
     const cfg = this.config;
     const model = cfg.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
     if (cfg.azureEndpoint && cfg.azureDeployment) {
@@ -222,7 +223,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
       )}`;
       return {
         url,
-        headers: resolveOpenAIRealtimeRequestHeaders(
+        headers: await resolveOpenAIRealtimeRequestHeaders(
           this.runtime,
           url,
           { "api-key": apiKey },
@@ -265,10 +266,10 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
     return this.resolveApiKeyConnectionParams(auth, model);
   }
 
-  private resolveApiKeyConnectionParams(
+  private async resolveApiKeyConnectionParams(
     apiKey: string,
     model: string,
-  ): { url: string; headers: Record<string, string> } {
+  ): Promise<{ url: string; headers: Record<string, string> }> {
     const cfg = this.config;
     let url: string;
     if (cfg.baseUrl) {
@@ -294,7 +295,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
     }
     return {
       url,
-      headers: resolveOpenAIRealtimeRequestHeaders(
+      headers: await resolveOpenAIRealtimeRequestHeaders(
         this.runtime,
         url,
         { Authorization: `Bearer ${apiKey}` },

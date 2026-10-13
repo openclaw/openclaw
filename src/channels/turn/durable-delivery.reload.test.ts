@@ -13,6 +13,7 @@ import {
   loadPendingDeliveries,
 } from "../../infra/outbound/delivery-queue.test-helpers.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { bindPluginRegistryGatewayOwner } from "../../plugins/registry-lifecycle.js";
 import {
@@ -46,6 +47,7 @@ vi.mock("../../utils/sleep.js", async (importOriginal) => ({
 const cfg: OpenClawConfig = { channels: { telegram: { enabled: true } } };
 
 async function replacementFixture(options?: { newChannel?: boolean; sameGeneration?: boolean }) {
+  await prepareBundledDiscoveryMode({});
   const retired = new PluginInstance("discord");
   const old = createTestRegistry([
     {
@@ -527,6 +529,7 @@ describe("Telegram final sender after registry replacement", () => {
       vi.stubEnv("TELEGRAM_BOT_TOKEN", http.token);
       vi.stubEnv("TELEGRAM_TEST_RELOAD_TOKEN", http.token);
       try {
+        await prepareBundledDiscoveryMode({});
         await withPluginRuntimeRegistryScope(old, () =>
           http.dispatchProgressTurn(
             async () => {

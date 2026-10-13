@@ -18,6 +18,7 @@ import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { resetPreparedGatewayModelCatalogForTest } from "../agents/prepared-model-runtime.test-support.js";
 import {
   getRuntimeConfig,
+  getRuntimeConfigSnapshot,
   parseConfigJson5,
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
@@ -59,7 +60,10 @@ import { gatewayFixtureLifetime } from "./gateway-fixture-lifetime.test-support.
 import type { GatewayServerOptions } from "./server.js";
 import { disposeSessionReadContexts } from "./session-read-contexts.test-support.js";
 import { invalidateSessionSharingSnapshot } from "./session-sharing-snapshot-cache.js";
-import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
+import {
+  loadGatewayTestConfigAsync,
+  readGatewayTestConfig,
+} from "./test-helpers.config-runtime.js";
 import { GATEWAY_TEST_ENV_KEYS } from "./test-helpers.env.js";
 import { getGatewayTestPort, canRetryPort, startClaimedGateway } from "./test-helpers.listener.js";
 import { resetTestPluginRegistry } from "./test-helpers.plugin-registry.js";
@@ -115,13 +119,19 @@ function hasUnsyncedGatewayTestSessionConfig(): boolean {
   );
 }
 
-function publishGatewayTestConfig(
-  config: OpenClawConfig = loadGatewayTestConfig(),
-): OpenClawConfig {
-  // Publish the caller's complete snapshot or the current fixture composition.
-  // Keep overrides runtime-only; real and mocked IO must agree before an await.
-  setRuntimeConfigSnapshot(config);
-  return config;
+async function publishGatewayTestConfig(config?: OpenClawConfig): Promise<OpenClawConfig> {
+  const fixture = config ?? readGatewayTestConfig();
+  setRuntimeConfigSnapshot(fixture);
+  if (config) {
+    return config;
+  }
+  const prepared = await loadGatewayTestConfigAsync(fixture);
+  const current = getRuntimeConfigSnapshot();
+  if (current && current !== fixture) {
+    return current;
+  }
+  setRuntimeConfigSnapshot(prepared);
+  return prepared;
 }
 
 async function persistTestSessionConfig(): Promise<void> {
@@ -186,7 +196,7 @@ async function persistTestSessionConfig(): Promise<void> {
     // Suite servers may still read config from pending session-change callbacks.
     await writeJsonAtomic(configPath, config, { durable: false, trailingNewline: true });
   }
-  publishGatewayTestConfig();
+  await publishGatewayTestConfig();
   lastSyncedSessionStorePath = testState.sessionStorePath;
   lastSyncedSessionConfigJson = JSON.stringify(testState.sessionConfig);
 }
@@ -497,7 +507,7 @@ export async function prepareGatewayReplyRuntimeForTest(options?: {
   if (process.env.OPENCLAW_TEST_MINIMAL_GATEWAY !== "1") {
     return;
   }
-  const config = publishGatewayTestConfig(options?.config);
+  const config = await publishGatewayTestConfig(options?.config);
   if (!options?.force && gatewayReplyRuntimePrepared) {
     const [
       { listAgentIds },
@@ -1242,7 +1252,7 @@ export async function rpcReq<T extends Record<string, unknown>>(
   timeoutMs?: number,
 ) {
   // Config publication leaves in-flight session writers owned by the Gateway.
-  publishGatewayTestConfig();
+  await publishGatewayTestConfig();
   if (hasUnsyncedGatewayTestSessionConfig()) {
     await persistTestSessionConfig();
   }

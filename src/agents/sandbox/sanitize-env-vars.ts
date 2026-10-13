@@ -7,6 +7,12 @@
 import { isDeepStrictEqual } from "node:util";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { isInstalledPluginEnabled } from "../../plugins/installed-plugin-index.js";
+import { loadLegacyPluginMetadataSnapshotRuntime } from "../../plugins/plugin-metadata-snapshot-required.js";
+import {
+  resolvePluginMetadataSnapshotAsync,
+  type PluginMetadataSnapshot,
+} from "../../plugins/plugin-metadata-snapshot.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { listKnownSecretEnvVarNames } from "../../secrets/provider-env-vars.js";
 import { SECRET_ENV_NAME_RE } from "../../secrets/secret-env-name.js";
 import { SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH } from "./config-hash.js";
@@ -43,11 +49,11 @@ type EnvSanitizationOptions = {
 
 const MAX_ENV_VAR_VALUE_BYTES = 32768;
 
-export function resolveDockerEnvPolicyEpoch(
+export async function resolveDockerEnvPolicyEpoch(
   env: Record<string, string | undefined> | undefined,
-): string | undefined {
+): Promise<string | undefined> {
   const explicitEnv = env ?? {};
-  const previousAllowed = sanitizeEnvVars(explicitEnv).allowed;
+  const previousAllowed = (await sanitizeEnvVarsAsync(explicitEnv)).allowed;
   const currentAllowed = sanitizeExplicitSandboxEnvVars(explicitEnv).allowed;
   return isDeepStrictEqual(previousAllowed, currentAllowed)
     ? undefined
@@ -72,40 +78,73 @@ function matchesAnyPattern(value: string, patterns: readonly RegExp[]): boolean 
   return patterns.some((pattern) => pattern.test(value));
 }
 
-/** Sanitizes inherited environment variables for automatic sandbox propagation. */
+/** @deprecated Await sanitizeEnvVarsAsync; removed in a later release after stable deprecation. */
 export function sanitizeEnvVars(
   envVars: Record<string, string | undefined>,
   options: EnvSanitizationOptions = {},
 ): EnvVarSanitizationResult {
-  const blockedPatterns = [...BLOCKED_ENV_VAR_PATTERNS, ...(options.customBlockedPatterns ?? [])];
-  const allowedPatterns = [...ALLOWED_ENV_VAR_PATTERNS, ...(options.customAllowedPatterns ?? [])];
-  // Credential metadata belongs to the host; the candidate container environment
-  // must not redirect discovery to another state directory or plugin inventory.
-  const metadataSnapshot = getCurrentPluginMetadataSnapshot({
+  warnPluginSdkDeprecation({
+    family: "sandbox-env-sync",
+    method: "sanitizeEnvVars",
+    replacement: "sanitizeEnvVarsAsync",
+    compatibility: "The synchronous helper retains cold native metadata discovery.",
+  });
+  const snapshot =
+    getCurrentSandboxEnvMetadataSnapshot() ??
+    loadLegacyPluginMetadataSnapshotRuntime({ config: {}, preferPersisted: false });
+  return createSandboxEnvSanitizer(snapshot)(envVars, options);
+}
+
+function getCurrentSandboxEnvMetadataSnapshot() {
+  const snapshot = getCurrentPluginMetadataSnapshot({
     allowScopedSnapshot: true,
     allowWorkspaceScopedSnapshot: true,
+    allowSynchronousPolicyRead: false,
   });
-  const activeMetadataSnapshot = metadataSnapshot
+  return snapshot
     ? {
-        ...metadataSnapshot,
-        plugins: metadataSnapshot.plugins.filter((plugin) =>
-          isInstalledPluginEnabled(metadataSnapshot.index, plugin.id),
+        ...snapshot,
+        plugins: snapshot.plugins.filter((plugin) =>
+          isInstalledPluginEnabled(snapshot.index, plugin.id),
         ),
       }
     : undefined;
-  const knownSecretNames = new Set(
-    listKnownSecretEnvVarNames({ metadataSnapshot: activeMetadataSnapshot }).map((name) =>
-      name.trim().toUpperCase(),
-    ),
-  );
+}
 
-  return sanitizeSandboxEnvValues(
-    envVars,
-    (key) =>
-      knownSecretNames.has(key.toUpperCase()) ||
-      matchesAnyPattern(key, blockedPatterns) ||
-      (Boolean(options.strictMode) && !matchesAnyPattern(key, allowedPatterns)),
+/** Prepares host credential metadata without reading from the candidate environment. */
+export async function prepareSandboxEnvSanitizer() {
+  const snapshot =
+    getCurrentSandboxEnvMetadataSnapshot() ??
+    (await resolvePluginMetadataSnapshotAsync({ config: {}, preferPersisted: false }));
+  return createSandboxEnvSanitizer(snapshot);
+}
+
+/** Sanitizes inherited environment variables after worker-owned metadata preparation. */
+export async function sanitizeEnvVarsAsync(
+  envVars: Record<string, string | undefined>,
+  options: EnvSanitizationOptions = {},
+): Promise<EnvVarSanitizationResult> {
+  return (await prepareSandboxEnvSanitizer())(envVars, options);
+}
+
+function createSandboxEnvSanitizer(metadataSnapshot: PluginMetadataSnapshot) {
+  const knownSecretNames = new Set(
+    listKnownSecretEnvVarNames({ metadataSnapshot }).map((name) => name.trim().toUpperCase()),
   );
+  return (
+    envVars: Record<string, string | undefined>,
+    options: EnvSanitizationOptions = {},
+  ): EnvVarSanitizationResult => {
+    const blockedPatterns = [...BLOCKED_ENV_VAR_PATTERNS, ...(options.customBlockedPatterns ?? [])];
+    const allowedPatterns = [...ALLOWED_ENV_VAR_PATTERNS, ...(options.customAllowedPatterns ?? [])];
+    return sanitizeSandboxEnvValues(
+      envVars,
+      (key) =>
+        knownSecretNames.has(key.toUpperCase()) ||
+        matchesAnyPattern(key, blockedPatterns) ||
+        (Boolean(options.strictMode) && !matchesAnyPattern(key, allowedPatterns)),
+    );
+  };
 }
 
 /** Sanitizes env vars explicitly requested by config, preserving names but still validating values. */

@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { connectUserModelAccount } from "../../state/user-model-accounts.js";
 import * as profileReader from "../../state/user-profile-list.js";
@@ -121,15 +123,21 @@ async function prepare(
       return connIds;
     },
   };
-  await sessionTitleHandlers[method]!({
-    req: { type: "req", id: "draft-title", method, params },
-    params,
-    respond,
-    context: context as GatewayRequestContext,
-    client,
-    signal: controls.signal,
-    isWebchatConnect: () => false,
-  });
+  const metadata = await resolvePluginMetadataSnapshotAsync({ config });
+  await withPluginMetadataSnapshotScope(
+    metadata,
+    () =>
+      sessionTitleHandlers[method]!({
+        req: { type: "req", id: "draft-title", method, params },
+        params,
+        respond,
+        context: context as GatewayRequestContext,
+        client,
+        signal: controls.signal,
+        isWebchatConnect: () => false,
+      }),
+    { config },
+  );
   return respond;
 }
 

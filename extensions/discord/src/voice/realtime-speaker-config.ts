@@ -5,7 +5,7 @@ import {
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   buildRealtimeVoiceSessionInstructions,
-  canonicalizeRealtimeVoiceProviderId,
+  canonicalizeRealtimeVoiceProviderIdAsync,
   projectInternalRealtimeVoicePublicConfig,
   resolveConfiguredRealtimeVoiceProviderAsync,
   resolveRealtimeVoiceBargeIn,
@@ -31,7 +31,7 @@ export async function prepareDiscordRealtimeProvider(params: {
   const configuredProviderId = realtimeConfig?.provider?.trim();
   if (configuredProviderId) {
     const ownerProviderIds = new Set([configuredProviderId]);
-    const canonicalProviderId = canonicalizeRealtimeVoiceProviderId(
+    const canonicalProviderId = await canonicalizeRealtimeVoiceProviderIdAsync(
       configuredProviderId,
       params.cfg,
     );

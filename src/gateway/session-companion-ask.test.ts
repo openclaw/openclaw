@@ -12,6 +12,7 @@ import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as attachmentProcessor from "../media/attachment-processor.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { sessionCompanionHandlers } from "./session-companion-rpc.js";
@@ -279,10 +280,13 @@ describe("session companion embedded invocation", () => {
   it.each(["catalog-only", "dynamic-discovery"])(
     "uses the already prepared image model for %s without an extra resolution",
     async (route) => {
+      const cfg: OpenClawConfig = { plugins: { entries: { mistral: { enabled: true } } } };
+      const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({ config: cfg });
       const model = resolveBundledStaticCatalogModel({
         provider: "mistral",
         modelId: "mistral-medium-3-5",
-        cfg: { plugins: { entries: { mistral: { enabled: true } } } },
+        cfg,
+        metadataSnapshot,
         includeRuntimeDiscovery: true,
       });
       expect(model?.input).toContain("image");

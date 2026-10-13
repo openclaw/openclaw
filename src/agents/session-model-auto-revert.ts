@@ -13,6 +13,12 @@ import {
   type AgentPatchedSessionModelFallback,
 } from "../config/sessions/session-model-fallback.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  getCurrentPluginMetadataSnapshot,
+  withPluginMetadataSnapshotScope,
+} from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { rethrowIncognitoSessionError } from "../state/incognito-session-error.js";
 import { resolveFailoverReasonFromError } from "./failover-error.js";
 import type { FailoverReason } from "./failover/signal.js";
@@ -40,6 +46,7 @@ async function reconcileAgentPatchedSessionModel(params: {
   outcome: SessionModelRunOutcome;
   expectedMarkerTs?: number;
   validatedFallback?: AgentPatchedSessionModelFallback;
+  metadataSnapshot: PluginMetadataSnapshot;
   assertCurrent?: () => void;
 }): Promise<void> {
   const reason = params.outcome.success
@@ -51,60 +58,65 @@ async function reconcileAgentPatchedSessionModel(params: {
 
   let note: string | undefined;
   let sessionId: string | undefined;
-  const reconciledEntry = await patchSessionEntryCore(
-    {
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-    },
-    (entry) => {
-      params.assertCurrent?.();
-      const marker = entry.modelFallback;
-      if (marker?.source !== "agent-patch") {
-        return null;
-      }
-      if (params.expectedMarkerTs !== undefined && marker.ts !== params.expectedMarkerTs) {
-        if (
-          params.outcome.success &&
-          params.validatedFallback &&
-          marker.ts > params.expectedMarkerTs &&
-          params.expectedMarkerTs > (marker.lastValidatedPatchTs ?? -1)
-        ) {
+  const reconciledEntry = await withPluginMetadataSnapshotScope(
+    params.metadataSnapshot,
+    () =>
+      patchSessionEntryCore(
+        {
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          storePath: params.storePath,
+        },
+        (entry) => {
+          params.assertCurrent?.();
+          const marker = entry.modelFallback;
+          if (marker?.source !== "agent-patch") {
+            return null;
+          }
+          if (params.expectedMarkerTs !== undefined && marker.ts !== params.expectedMarkerTs) {
+            if (
+              params.outcome.success &&
+              params.validatedFallback &&
+              marker.ts > params.expectedMarkerTs &&
+              params.expectedMarkerTs > (marker.lastValidatedPatchTs ?? -1)
+            ) {
+              return {
+                modelFallback: {
+                  ...params.validatedFallback,
+                  ts: marker.ts,
+                  lastValidatedPatchTs: params.expectedMarkerTs,
+                },
+              };
+            }
+            return null;
+          }
+          sessionId = entry.sessionId;
+          if (params.outcome.success) {
+            return { modelFallback: undefined };
+          }
+          const failed = resolveSessionModelRef(params.cfg, entry, params.agentId);
+          note = `System note: model ${failed.provider}/${failed.model} failed; reverted to ${marker.prevProvider}/${marker.prevModel}.`;
           return {
-            modelFallback: {
-              ...params.validatedFallback,
-              ts: marker.ts,
-              lastValidatedPatchTs: params.expectedMarkerTs,
-            },
+            model: marker.prevModel,
+            modelProvider: marker.prevProvider,
+            modelOverride: marker.prevModelOverride,
+            providerOverride: marker.prevProviderOverride,
+            modelOverrideSource: marker.prevModelOverrideSource,
+            modelOverrideRouteResolution: marker.prevModelOverrideRouteResolution,
+            modelOverrideFallbackOriginProvider: marker.prevModelOverrideFallbackOriginProvider,
+            modelOverrideFallbackOriginModel: marker.prevModelOverrideFallbackOriginModel,
+            authProfileOverride: marker.prevAuthProfileOverride,
+            authProfileOverrideSource: marker.prevAuthProfileOverrideSource,
+            authProfileOverrideCompactionCount: marker.prevAuthProfileOverrideCompactionCount,
+            contextWindow: marker.prevContextWindow,
+            thinkingLevel: marker.prevThinkingLevel,
+            modelFallback: undefined,
+            liveModelSwitchPending: undefined,
           };
-        }
-        return null;
-      }
-      sessionId = entry.sessionId;
-      if (params.outcome.success) {
-        return { modelFallback: undefined };
-      }
-      const failed = resolveSessionModelRef(params.cfg, entry, params.agentId);
-      note = `System note: model ${failed.provider}/${failed.model} failed; reverted to ${marker.prevProvider}/${marker.prevModel}.`;
-      return {
-        model: marker.prevModel,
-        modelProvider: marker.prevProvider,
-        modelOverride: marker.prevModelOverride,
-        providerOverride: marker.prevProviderOverride,
-        modelOverrideSource: marker.prevModelOverrideSource,
-        modelOverrideRouteResolution: marker.prevModelOverrideRouteResolution,
-        modelOverrideFallbackOriginProvider: marker.prevModelOverrideFallbackOriginProvider,
-        modelOverrideFallbackOriginModel: marker.prevModelOverrideFallbackOriginModel,
-        authProfileOverride: marker.prevAuthProfileOverride,
-        authProfileOverrideSource: marker.prevAuthProfileOverrideSource,
-        authProfileOverrideCompactionCount: marker.prevAuthProfileOverrideCompactionCount,
-        contextWindow: marker.prevContextWindow,
-        thinkingLevel: marker.prevThinkingLevel,
-        modelFallback: undefined,
-        liveModelSwitchPending: undefined,
-      };
-    },
-    { assertCommitAllowed: params.assertCurrent },
+        },
+        { assertCommitAllowed: params.assertCurrent },
+      ),
+    { config: params.cfg },
   );
   if (note && sessionId) {
     try {
@@ -155,8 +167,13 @@ export async function createAgentPatchedSessionModelRunGuard(params: {
     sessionKey: params.sessionKey,
     storePath: binding?.actor.path ?? params.storePath,
   };
-  let markerTs: number | undefined;
-  let validatedFallback: AgentPatchedSessionModelFallback | undefined;
+  let preparedPatch:
+    | {
+        ts: number;
+        metadataSnapshot: PluginMetadataSnapshot;
+        validatedFallback: AgentPatchedSessionModelFallback;
+      }
+    | undefined;
   if (params.sessionKey) {
     params.assertReadCurrent?.();
     try {
@@ -167,28 +184,45 @@ export async function createAgentPatchedSessionModelRunGuard(params: {
       });
       params.assertReadCurrent?.();
       const marker = entry?.modelFallback;
-      markerTs = marker?.source === "agent-patch" ? marker.ts : undefined;
-      if (entry && markerTs !== undefined) {
-        const current = resolveSessionModelRef(params.cfg, entry, params.agentId);
-        validatedFallback = createAgentPatchedSessionModelFallback({
-          model: current.model,
-          provider: current.provider,
-          entry,
-          ts: markerTs,
-        });
+      if (entry && marker?.source === "agent-patch") {
+        const metadataSnapshot =
+          getCurrentPluginMetadataSnapshot({
+            config: params.cfg,
+            allowWorkspaceScopedSnapshot: true,
+            allowSynchronousPolicyRead: false,
+          }) ??
+          (await resolvePluginMetadataSnapshotAsync({
+            config: params.cfg,
+            allowWorkspaceScopedCurrent: true,
+          }));
+        const current = withPluginMetadataSnapshotScope(
+          metadataSnapshot,
+          () => resolveSessionModelRef(params.cfg, entry, params.agentId),
+          { config: params.cfg },
+        );
+        preparedPatch = {
+          ts: marker.ts,
+          metadataSnapshot,
+          validatedFallback: createAgentPatchedSessionModelFallback({
+            model: current.model,
+            provider: current.provider,
+            entry,
+            ts: marker.ts,
+          }),
+        };
       }
     } catch (error) {
       rethrowIncognitoSessionError(error);
       claim?.assertCurrent();
       params.assertReadCurrent?.();
-      markerTs = undefined;
+      preparedPatch = undefined;
     }
   }
   let failure: { error?: unknown; reason?: FailoverReason } = {};
   let reconciled = false;
   const captureFailure = (error: unknown, reason?: string) => {
     // Only the patch captured when this guard was created can be reconciled.
-    if (markerTs === undefined) {
+    if (!preparedPatch) {
       return false;
     }
     const classifiedReason = reason
@@ -206,7 +240,8 @@ export async function createAgentPatchedSessionModelRunGuard(params: {
     return attempt ? captureFailure(new Error(attempt.error), attempt.reason) : undefined;
   };
   const reconcile = async (success: boolean) => {
-    if (reconciled || !target.sessionKey || markerTs === undefined) {
+    const patch = preparedPatch;
+    if (reconciled || !target.sessionKey || !patch) {
       return;
     }
     reconciled = true;
@@ -219,8 +254,9 @@ export async function createAgentPatchedSessionModelRunGuard(params: {
           sessionKey,
           storePath: target.storePath,
           assertCurrent: claim?.assertCurrent,
-          expectedMarkerTs: markerTs,
-          ...(validatedFallback ? { validatedFallback } : {}),
+          expectedMarkerTs: patch.ts,
+          validatedFallback: patch.validatedFallback,
+          metadataSnapshot: patch.metadataSnapshot,
           outcome: success ? { success: true } : { success: false, ...failure },
         });
       claim?.assertCurrent();

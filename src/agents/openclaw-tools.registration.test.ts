@@ -6,9 +6,9 @@ import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import * as userProfileList from "../state/user-profile-list.native.js";
+import * as userProfileList from "../state/user-profile-list.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
+import { createOpenClawCodingToolsAsync } from "./agent-tools.js";
 import { createCodeModeTools } from "./code-mode.js";
 import { resolveCoreToolFactoryFamily } from "./core-tool-factory-descriptors.js";
 import {
@@ -16,7 +16,7 @@ import {
   runWithCronCreatorAuthorityCapability,
 } from "./cron-creator-authority-context.js";
 import { createLazyExecTool } from "./lazy-exec-tool.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { createOpenClawToolsAsync } from "./openclaw-tools.js";
 import {
   shouldIncludePrimarySessionToolForOpenClawTools,
   shouldIncludeProgressCardToolForOpenClawTools,
@@ -25,11 +25,13 @@ import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-se
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import * as inProcessGateway from "./tools/in-process-gateway.js";
 
+// mock-isolation: Core tool registration must not depend on installed plugin registries.
 vi.mock("./openclaw-plugin-tools.js", () => ({
   resolveOpenClawPluginToolsForOptions: () => [],
+  resolveOpenClawPluginToolsForOptionsAsync: async () => [],
 }));
 
-type CreateOpenClawToolsOptions = NonNullable<Parameters<typeof createOpenClawTools>[0]>;
+type CreateOpenClawToolsOptions = NonNullable<Parameters<typeof createOpenClawToolsAsync>[0]>;
 beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => clearRuntimeConfigSnapshot());
 
@@ -40,14 +42,14 @@ function withDefaultRoster(config: OpenClawConfig | undefined): OpenClawConfig {
   };
 }
 
-function toolNames(tools: ReturnType<typeof createOpenClawTools>): string[] {
+function toolNames(tools: Awaited<ReturnType<typeof createOpenClawToolsAsync>>): string[] {
   return tools.map((tool) => tool.name);
 }
 
-function createFastToolNames(options: CreateOpenClawToolsOptions): string[] {
+async function createFastToolNames(options: CreateOpenClawToolsOptions): Promise<string[]> {
   // Disable unrelated dynamic surfaces so registration assertions stay deterministic.
   return toolNames(
-    createTestOpenClawTools({
+    await createTestOpenClawTools({
       disableMessageTool: true,
       disablePluginTools: true,
       wrapBeforeToolCallHook: false,
@@ -56,17 +58,17 @@ function createFastToolNames(options: CreateOpenClawToolsOptions): string[] {
   );
 }
 
-function createTestOpenClawTools(options: CreateOpenClawToolsOptions = {}) {
-  return createOpenClawTools({
+async function createTestOpenClawTools(options: CreateOpenClawToolsOptions = {}) {
+  return await createOpenClawToolsAsync({
     ...options,
     config: withDefaultRoster(options.config),
   });
 }
 
 function expectToolNamed(
-  tools: ReturnType<typeof createOpenClawTools>,
+  tools: Awaited<ReturnType<typeof createOpenClawToolsAsync>>,
   name: string,
-): ReturnType<typeof createOpenClawTools>[number] {
+): Awaited<ReturnType<typeof createOpenClawToolsAsync>>[number] {
   const tool = tools.find((candidate) => candidate.name === name);
   if (!tool) {
     throw new Error(`Expected tool ${name} to be registered`);
@@ -74,12 +76,12 @@ function expectToolNamed(
   return tool;
 }
 
-it("keeps top-level tool argument names distinct from the required schema keyword", () => {
+it("keeps top-level tool argument names distinct from the required schema keyword", async () => {
   const config: OpenClawConfig = {
     agents: { entries: { main: {} } },
     tools: { swarm: true },
   };
-  const directTools = createOpenClawCodingTools({
+  const directTools = await createOpenClawCodingToolsAsync({
     config,
     sessionKey: "agent:main:main",
     wrapBeforeToolCallHook: false,
@@ -119,11 +121,11 @@ describe("openclaw-tools progress_card gating", () => {
 
   it.each([false, true])(
     "gates personal instructions on multiple people (%s) without general filesystem access",
-    (multipleProfiles) => {
+    async (multipleProfiles) => {
       const identityCount = vi
-        .spyOn(userProfileList, "hasMultipleSessionSharingIdentitiesNative")
+        .spyOn(userProfileList, "hasMultipleSessionSharingIdentities")
         .mockReturnValue(multipleProfiles);
-      const tools = createOpenClawCodingTools({
+      const tools = await createOpenClawCodingToolsAsync({
         sessionKey: "agent:main:dashboard:project",
         runSessionKey: "agent:main:dashboard:project",
         cwd: "/project/worktree",
@@ -140,7 +142,7 @@ describe("openclaw-tools progress_card gating", () => {
       expect(toolNames(tools)).not.toContain("exec");
       expect(resolveCoreToolFactoryFamily("personal_instructions")).toBe("openclaw");
       setEmbeddedMode(true);
-      expect(createFastToolNames({ agentSessionKey: "agent:main:main" })).not.toContain(
+      expect(await createFastToolNames({ agentSessionKey: "agent:main:main" })).not.toContain(
         "personal_instructions",
       );
       identityCount.mockRestore();
@@ -165,7 +167,7 @@ describe("openclaw-tools progress_card gating", () => {
     // ask_user must not depend on the TUI embedded-host flag; normal gateway
     // runs are the primary consumer.
     expect(
-      createFastToolNames({
+      await createFastToolNames({
         runSessionKey: "agent:main:non-embedded",
       }),
     ).toEqual(expect.arrayContaining(["ask_user", "secrets"]));
@@ -179,15 +181,15 @@ describe("openclaw-tools progress_card gating", () => {
       ),
     ).not.toContain("ask_user");
     expect(
-      createFastToolNames({
+      await createFastToolNames({
         runSessionKey: "agent:main:run",
       }),
     ).toContain("ask_user");
   });
 
-  it("keeps message tool in embedded message-tool-only completions", () => {
+  it("keeps message tool in embedded message-tool-only completions", async () => {
     setEmbeddedMode(true);
-    const tools = createTestOpenClawTools({
+    const tools = await createTestOpenClawTools({
       disablePluginTools: true,
       wrapBeforeToolCallHook: false,
       sourceReplyDeliveryMode: "message_tool_only",
@@ -196,19 +198,19 @@ describe("openclaw-tools progress_card gating", () => {
     expect(toolNames(tools)).toContain("message");
   });
 
-  it("exposes delegation only to regular unsandboxed gateway agents", () => {
-    const regular = createFastToolNames({
+  it("exposes delegation only to regular unsandboxed gateway agents", async () => {
+    const regular = await createFastToolNames({
       agentSessionKey: "agent:main:main",
     });
-    const sandboxed = createFastToolNames({
+    const sandboxed = await createFastToolNames({
       agentSessionKey: "agent:main:main",
       sandboxed: true,
     });
-    const system = createFastToolNames({
+    const system = await createFastToolNames({
       agentSessionKey: "agent:openclaw:main",
     });
     setEmbeddedMode(true);
-    const embedded = createFastToolNames({
+    const embedded = await createFastToolNames({
       agentSessionKey: "agent:main:main",
     });
 
@@ -218,15 +220,15 @@ describe("openclaw-tools progress_card gating", () => {
     expect(embedded).not.toContain("openclaw");
   });
 
-  it("registers transcripts for an active local operator with an explicit global opt-out", () => {
+  it("registers transcripts for an active local operator with an explicit global opt-out", async () => {
     const capability = createCronCreatorAuthorityCapability("run-local", { kind: "local" })!;
-    const { defaultTools, disabledTools } = runWithCronCreatorAuthorityCapability(
+    const { defaultTools, disabledTools } = await runWithCronCreatorAuthorityCapability(
       capability,
-      () => ({
-        defaultTools: createFastToolNames({
+      async () => ({
+        defaultTools: await createFastToolNames({
           runId: "run-local",
         }),
-        disabledTools: createFastToolNames({
+        disabledTools: await createFastToolNames({
           config: { transcripts: { enabled: false } } as OpenClawConfig,
           runId: "run-local",
         }),
@@ -237,16 +239,16 @@ describe("openclaw-tools progress_card gating", () => {
     expect(disabledTools).not.toContain("transcripts");
   });
 
-  it("registers task suggestions only for sessions with an actionable gateway sink", () => {
-    const withoutSession = createFastToolNames({
+  it("registers task suggestions only for sessions with an actionable gateway sink", async () => {
+    const withoutSession = await createFastToolNames({
       cwd: "/repo",
       taskSuggestionDeliveryMode: "gateway",
     });
-    const withoutSink = createFastToolNames({
+    const withoutSink = await createFastToolNames({
       agentSessionKey: "agent:main:main",
       cwd: "/repo",
     });
-    const withSink = createFastToolNames({
+    const withSink = await createFastToolNames({
       agentSessionKey: "agent:main:main",
       cwd: "/repo",
       taskSuggestionDeliveryMode: "gateway",
@@ -259,19 +261,19 @@ describe("openclaw-tools progress_card gating", () => {
     expect(withSink).toEqual(expect.arrayContaining(["suggest_task", "dismiss_task"]));
   });
 
-  it("keeps explicitly allowed message tool in embedded completions", () => {
+  it("keeps explicitly allowed message tool in embedded completions", async () => {
     setEmbeddedMode(true);
-    const fromRuntimeAllowlist = createTestOpenClawTools({
+    const fromRuntimeAllowlist = await createTestOpenClawTools({
       disablePluginTools: true,
       pluginToolAllowlist: ["message"],
       wrapBeforeToolCallHook: false,
     });
-    const fromGlobalAlsoAllow = createTestOpenClawTools({
+    const fromGlobalAlsoAllow = await createTestOpenClawTools({
       config: { tools: { profile: "minimal", alsoAllow: ["message"] } } as OpenClawConfig,
       disablePluginTools: true,
       wrapBeforeToolCallHook: false,
     });
-    const denied = createTestOpenClawTools({
+    const denied = await createTestOpenClawTools({
       disablePluginTools: true,
       pluginToolAllowlist: ["message"],
       pluginToolDenylist: ["message"],
@@ -341,7 +343,7 @@ describe("gateway client capability tool filtering", () => {
     registerPresenters(widgetPresenter({ present }));
 
     try {
-      const tools = createOpenClawTools({
+      const tools = await createOpenClawToolsAsync({
         agentChannel: "discord",
         agentAccountId: "configured",
         nativeChannelId: "channel-1",
@@ -368,28 +370,35 @@ describe("gateway client capability tool filtering", () => {
     }
   });
 
-  it("hides current-channel widgets when no presenter matches the trusted run facts", () => {
+  it("hides current-channel widgets when no presenter matches the trusted run facts", async () => {
     registerPresenters(widgetPresenter());
 
     try {
       expect(
         hasTool(
-          createOpenClawTools({ agentChannel: "discord", agentAccountId: "unconfigured" }),
+          await createOpenClawToolsAsync({
+            agentChannel: "discord",
+            agentAccountId: "unconfigured",
+          }),
           "show_widget",
         ),
       ).toBe(false);
-      expect(hasTool(createOpenClawTools({ agentChannel: "slack" }), "show_widget")).toBe(false);
+      expect(
+        hasTool(await createOpenClawToolsAsync({ agentChannel: "slack" }), "show_widget"),
+      ).toBe(false);
     } finally {
       resetPluginRuntimeStateForTest();
     }
   });
 
-  it("fails closed when current-channel presenter matching is ambiguous", () => {
+  it("fails closed when current-channel presenter matching is ambiguous", async () => {
     const match: WidgetPresenter["match"] = (context) => context.messageChannel === "discord";
     registerPresenters(widgetPresenter({ match }), widgetPresenter({ match }));
 
     try {
-      expect(hasTool(createOpenClawTools({ agentChannel: "discord" }), "show_widget")).toBe(false);
+      expect(
+        hasTool(await createOpenClawToolsAsync({ agentChannel: "discord" }), "show_widget"),
+      ).toBe(false);
     } finally {
       resetPluginRuntimeStateForTest();
     }
@@ -405,7 +414,7 @@ describe("gateway client capability tool filtering", () => {
         return { ok: true } as never;
       });
     try {
-      const tools = createOpenClawCodingTools({
+      const tools = await createOpenClawCodingToolsAsync({
         config: withDefaultRoster(undefined),
         sessionKey: "agent:main:main",
         clientCaps: ["ui-commands"],
@@ -421,43 +430,52 @@ describe("gateway client capability tool filtering", () => {
     }
   });
 
-  it("exposes GitHub publication only from a prepared session capability", () => {
-    expect(hasTool(createOpenClawTools(), "github_publish")).toBe(false);
-    expect(hasTool(createOpenClawTools(), "github_identity_status")).toBe(false);
+  it("exposes GitHub publication only from a prepared session capability", async () => {
+    expect(hasTool(await createOpenClawToolsAsync(), "github_publish")).toBe(false);
+    expect(hasTool(await createOpenClawToolsAsync(), "github_identity_status")).toBe(false);
     expect(
-      hasTool(createOpenClawTools({ githubPublicationAvailable: false }), "github_publish"),
+      hasTool(
+        await createOpenClawToolsAsync({ githubPublicationAvailable: false }),
+        "github_publish",
+      ),
     ).toBe(false);
     expect(
-      hasTool(createOpenClawTools({ githubPublicationAvailable: false }), "github_identity_status"),
+      hasTool(
+        await createOpenClawToolsAsync({ githubPublicationAvailable: false }),
+        "github_identity_status",
+      ),
     ).toBe(true);
     expect(
-      hasTool(createOpenClawTools({ githubPublicationAvailable: true }), "github_publish"),
+      hasTool(
+        await createOpenClawToolsAsync({ githubPublicationAvailable: true }),
+        "github_publish",
+      ),
     ).toBe(true);
   });
 
-  it("omits host UI runtime tools for sandboxed agents", () => {
-    expect(hasTool(createOpenClawTools({ agentSessionKey: "agent:main:main" }), "terminal")).toBe(
-      true,
-    );
-    expect(hasTool(createOpenClawTools({ agentSessionKey: "agent:main:main" }), "portal")).toBe(
-      true,
-    );
+  it("omits host UI runtime tools for sandboxed agents", async () => {
+    expect(
+      hasTool(await createOpenClawToolsAsync({ agentSessionKey: "agent:main:main" }), "terminal"),
+    ).toBe(true);
+    expect(
+      hasTool(await createOpenClawToolsAsync({ agentSessionKey: "agent:main:main" }), "portal"),
+    ).toBe(true);
     expect(
       hasTool(
-        createOpenClawTools({ agentSessionKey: "agent:main:main", sandboxed: true }),
+        await createOpenClawToolsAsync({ agentSessionKey: "agent:main:main", sandboxed: true }),
         "terminal",
       ),
     ).toBe(false);
     expect(
       hasTool(
-        createOpenClawTools({ agentSessionKey: "agent:main:main", sandboxed: true }),
+        await createOpenClawToolsAsync({ agentSessionKey: "agent:main:main", sandboxed: true }),
         "portal",
       ),
     ).toBe(false);
   });
 
-  it("does not let tools.allow resurrect a gated tool for a channel run", () => {
-    const tools = createOpenClawCodingTools({
+  it("does not let tools.allow resurrect a gated tool for a channel run", async () => {
+    const tools = await createOpenClawCodingToolsAsync({
       messageProvider: "telegram",
       disableMessageTool: true,
       config: { tools: { allow: ["show_widget"] } },
@@ -473,7 +491,7 @@ describe("gateway client capability tool filtering", () => {
     expect(hasTool(tools, "show_widget")).toBe(false);
   });
 
-  it("does not add the core widget tool to plugin-only construction plans", () => {
+  it("does not add the core widget tool to plugin-only construction plans", async () => {
     const plan = {
       includeBaseCodingTools: false,
       includeShellTools: false,
@@ -484,13 +502,16 @@ describe("gateway client capability tool filtering", () => {
 
     expect(
       hasTool(
-        createOpenClawCodingTools({ messageProvider: "telegram", toolConstructionPlan: plan }),
+        await createOpenClawCodingToolsAsync({
+          messageProvider: "telegram",
+          toolConstructionPlan: plan,
+        }),
         "show_widget",
       ),
     ).toBe(false);
     expect(
       hasTool(
-        createOpenClawCodingTools({
+        await createOpenClawCodingToolsAsync({
           messageProvider: "webchat",
           clientCaps: ["inline-widgets"],
           toolConstructionPlan: plan,
@@ -500,7 +521,10 @@ describe("gateway client capability tool filtering", () => {
     ).toBe(false);
     expect(
       hasTool(
-        createOpenClawCodingTools({ messageProvider: "webchat", toolConstructionPlan: plan }),
+        await createOpenClawCodingToolsAsync({
+          messageProvider: "webchat",
+          toolConstructionPlan: plan,
+        }),
         "progress_card",
       ),
     ).toBe(false);

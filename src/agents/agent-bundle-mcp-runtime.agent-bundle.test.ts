@@ -7,6 +7,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadEnabledBundleMcpConfig } from "../plugins/bundle-mcp.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -163,6 +164,7 @@ it("discovers an installed Agent Plugins bundle and executes its real stdio tool
     },
     async () => {
       clearPluginMetadataLifecycleCaches();
+      await prepareBundledDiscoveryMode();
       const loaded = loadEnabledBundleMcpConfig({ workspaceDir, cfg });
       expect(loaded.diagnostics).toStrictEqual([]);
       const loadedServer = expectDefined(
@@ -231,6 +233,7 @@ it("discovers an installed Agent Plugins bundle and executes its real stdio tool
       const userDataPath = path.join(stateDir, "user-configured-data-file");
       await fs.writeFile(userDataPath, "user-owned path", "utf8");
       clearPluginMetadataLifecycleCaches();
+      await prepareBundledDiscoveryMode();
       const collisionRuntime = await getOrCreateSessionMcpRuntime({
         sessionId: "agent-bundle-boundary-collision",
         sessionKey: "agent:test:agent-bundle-boundary-collision",

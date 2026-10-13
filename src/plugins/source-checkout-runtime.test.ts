@@ -1,11 +1,11 @@
 /** Verifies source-checkout plugin runtime resolution and dependency diagnostics. */
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { loadOpenClawPlugins } from "./loader.js";
+import { loadOpenClawPluginsAsync } from "./loader.js";
 
 describe("source checkout bundled plugin runtime", () => {
-  it("loads enabled bundled plugins from source checkout", () => {
-    const registry = loadOpenClawPlugins({
+  it("loads enabled bundled plugins from source checkout", async () => {
+    const registry = await loadOpenClawPluginsAsync({
       cache: false,
       onlyPluginIds: ["tokenjuice"],
       config: {

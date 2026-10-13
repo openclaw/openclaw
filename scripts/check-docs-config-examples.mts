@@ -2,8 +2,11 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { auditDocsConfigExamples } from "../src/config/docs-config-examples.js";
+import { resolveRepoBundledPluginEnv } from "../src/config/repo-bundled-plugin-env.js";
+import { prepareBundledDiscoveryMode } from "../src/plugins/bundled-discovery-state.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+await prepareBundledDiscoveryMode(resolveRepoBundledPluginEnv(path.join(repoRoot, "extensions")));
 const result = auditDocsConfigExamples({ repoRoot });
 
 console.log(`docs_config_files_scanned=${result.stats.filesScanned}`);

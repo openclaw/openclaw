@@ -16,11 +16,8 @@ import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import { initSessionState } from "../auto-reply/reply/session.js";
 import { getReplySystemEventContext } from "../auto-reply/reply/system-event-session-key.js";
-import type { OpenClawConfig } from "../config/config.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
+import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
+import { loadPinnedRuntimeConfigAsync } from "../config/runtime-snapshot.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 import {
@@ -98,7 +95,8 @@ async function withProjectionScenario(
       messages: { visibleReplies: "message_tool" },
       session: { store: storePath },
     };
-    setRuntimeConfigSnapshot(cfg);
+    clearRuntimeConfigSnapshot();
+    await loadPinnedRuntimeConfigAsync(async () => ({ config: cfg }));
     const sessionKey = options.sessionKey ?? resolveMainSessionKey(cfg);
     const sessionId = "publication-boundary-session";
     await seedSessionStore(storePath, sessionKey, {

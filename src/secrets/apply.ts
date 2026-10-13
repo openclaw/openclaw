@@ -12,13 +12,14 @@ import {
   loadPersistedSharedAuthProfileStore,
 } from "../agents/auth-profiles/persisted.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
-import { saveAuthProfileStoreIfPersistenceSnapshotMatches } from "../agents/auth-profiles/store-runtime.js";
+import { saveAuthProfileStoreIfPersistenceSnapshotMatchesAsync } from "../agents/auth-profiles/store-runtime.js";
 import {
   captureAuthProfileStorePersistenceSnapshot,
   restoreAuthProfileStorePersistenceSnapshot,
 } from "../agents/auth-profiles/store.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { replaceConfigFile, resolveStateDir, type OpenClawConfig } from "../config/config.js";
+import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
 import { coerceSecretRef, type SecretProviderConfig } from "../config/types.secrets.js";
 import { normalizePluginConfigId } from "../plugins/plugin-config-trust.js";
 import { resolveUserPath } from "../utils.js";
@@ -281,7 +282,9 @@ async function projectPlanState(params: {
     enabled: options.scrubAuthProfilesForProviderTargets,
   });
 
-  const envRawByPath = scrubEnvFiles({
+  const envRawByPath = await scrubEnvFiles({
+    config: nextConfig,
+    env: params.env,
     configPath,
     stateDir,
     scrubbedValues: targetMutations.scrubbedValues,
@@ -547,18 +550,29 @@ function applySecretRefTargetMutation(
   return setPathCreateStrict(root, resolved.pathTokens, target.ref);
 }
 
-function scrubEnvFiles(params: {
+async function scrubEnvFiles(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
   configPath: string;
   stateDir: string;
   scrubbedValues: Set<string>;
   changedFiles: Set<string>;
   enabled: boolean;
-}): Map<string, string> {
+}): Promise<Map<string, string>> {
   const envRawByPath = new Map<string, string>();
   if (!params.enabled || params.scrubbedValues.size === 0) {
     return envRawByPath;
   }
-  const knownSecretEnvVars = new Set(listKnownSecretEnvVarNames());
+  const knownSecretEnvVars = new Set(
+    listKnownSecretEnvVarNames({
+      config: params.config,
+      env: params.env,
+      metadataSnapshot: await resolveConfigWidePluginMetadataSnapshotAsync({
+        config: params.config,
+        env: params.env,
+      }),
+    }),
+  );
   for (const envPath of listSecretsDotEnvPaths({
     configPath: params.configPath,
     stateDir: params.stateDir,
@@ -756,7 +770,7 @@ export async function runSecretsApply(params: {
         if (!snapshot) {
           throw new Error(`missing captured auth profile store for ${pathname}`);
         }
-        const committed = saveAuthProfileStoreIfPersistenceSnapshotMatches({
+        const committed = await saveAuthProfileStoreIfPersistenceSnapshotMatchesAsync({
           store,
           snapshot: snapshot.persistence,
           agentDir: target.kind === "agent" ? target.agentDir : undefined,

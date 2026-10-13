@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createPluginMetadataSnapshot,
   makeRegistry,
 } from "../config/plugin-auto-enable.test-helpers.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -11,6 +12,10 @@ import {
   setPluginRuntimeLoadContext,
 } from "../plugins/runtime/load-context.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
+
+beforeEach(async () => {
+  await prepareBundledDiscoveryMode();
+});
 
 describe("prepared model runtime plugin metadata ownership", () => {
   afterEach(() => {
@@ -26,7 +31,7 @@ describe("prepared model runtime plugin metadata ownership", () => {
         },
       },
     };
-    const env = { OPENCLAW_ACTIVATION_TEST: "initial" };
+    const env = { ...process.env, OPENCLAW_ACTIVATION_TEST: "initial" };
     const workspaceDir = "/tmp/prepared-activation-workspace";
     const metadataSnapshot = createPluginMetadataSnapshot({
       config,

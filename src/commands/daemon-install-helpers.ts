@@ -38,6 +38,7 @@ import {
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
 } from "../infra/host-env-security.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   isPluginIntegrationSecretProviderConfig,
@@ -152,8 +153,8 @@ type ExecSecretRefPassEnvSource = {
   warningTitle: "Config SecretRef" | "Auth profile" | "Plugin config SecretRef";
 };
 
-function* configSecretRefsForService(config: OpenClawConfig) {
-  for (const target of discoverConfigSecretTargets(config)) {
+function* configSecretRefsForService(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
+  for (const target of discoverConfigSecretTargets(config, { env })) {
     if (!target.entry.includeInPlan) {
       continue;
     }
@@ -191,7 +192,7 @@ function collectConfigSecretRefServiceEnvSources(params: {
     env: params.env as NodeJS.ProcessEnv,
     defaults: params.config.secrets?.defaults,
   });
-  for (const { target, ref } of configSecretRefsForService(params.config)) {
+  for (const { target, ref } of configSecretRefsForService(params.config, params.env)) {
     if (ref.source !== "env") {
       continue;
     }
@@ -246,7 +247,7 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
   let manifestRegistry: Pick<PluginManifestRegistry, "plugins"> | undefined;
   const sources: ExecSecretRefPassEnvSource[] = [];
   if (params.configContainsSecretRef) {
-    for (const { ref } of configSecretRefsForService(params.config)) {
+    for (const { ref } of configSecretRefsForService(params.config, params.env)) {
       if (ref.source === "exec") {
         sources.push({ ref, warningTitle: "Config SecretRef" });
       }
@@ -563,6 +564,8 @@ export async function buildGatewayInstallPlan(params: {
     GatewayServiceEnvironmentValueSource | undefined
   >;
 }): Promise<GatewayInstallPlan> {
+  const activateMetadata = await preparePluginMetadataMachineStateAsync({ env: params.env });
+  activateMetadata();
   const platform = params.platform ?? process.platform;
   const wrapperInput = params.wrapperPath ?? params.env[OPENCLAW_WRAPPER_ENV_KEY];
   const generatedWrapperPath =

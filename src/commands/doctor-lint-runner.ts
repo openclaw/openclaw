@@ -69,6 +69,7 @@ import {
   writeJsonResult,
   type DoctorLintExecution,
 } from "./doctor-lint-output.js";
+import { withDoctorLintStateEnv } from "./doctor-lint-state-env.js";
 import { isPostCoreConvergencePass, isUpdateDoctorLintPass } from "./doctor/shared/update-phase.js";
 
 type DoctorLintStateView = {
@@ -84,7 +85,7 @@ type DoctorLintStateView = {
   ) => Promise<T>;
 };
 
-type DoctorLintStateRunner = <T>(run: () => Promise<T>) => Promise<T>;
+type DoctorLintStateRunner = <T>(run: (env: NodeJS.ProcessEnv) => Promise<T>) => Promise<T>;
 
 const RUNTIME_TOOL_SCHEMA_CHECK_ID = "core/doctor/runtime-tool-schemas";
 const PROJECT_CLONE_SHAPE_CHECK_ID = "core/doctor/project-clone-shape";
@@ -430,10 +431,12 @@ async function executeDoctorLint(
     ? registeredExtensionChecks
     : listExtensionHealthChecksForDoctor(coreChecks, availabilityFindings);
   const runWithPrivateStateSnapshot: DoctorLintStateRunner = async (run) =>
-    await stateView.runWithPluginStateSnapshot(async () => await run());
+    await stateView.runWithPluginStateSnapshot(async (env) => await run(env));
   // Update readiness keeps every declared check private until restart.
   const runWithSourceState: DoctorLintStateRunner = async (run) =>
-    opts.updateReadiness ? run() : withDoctorLintStateEnv(sourceEnv, run);
+    opts.updateReadiness
+      ? run(stateView.pluginMetadataEnv)
+      : withDoctorLintStateEnv(sourceEnv, () => run(sourceEnv));
   const coreCtx = {
     ...ctx,
     env: opts.updateReadiness ? stateView.pluginMetadataEnv : sourceEnv,
@@ -669,32 +672,6 @@ function recordSnapshotCleanupWarning(warnings: HealthFinding[]): void {
   });
 }
 
-async function withDoctorLintStateEnv<T>(
-  env: NodeJS.ProcessEnv,
-  run: () => Promise<T>,
-): Promise<T> {
-  const stateDir = resolveStateDir(env);
-  const overrides = {
-    OPENCLAW_CONFIG_PATH: resolveConfigPath(env, stateDir),
-    OPENCLAW_STATE_DIR: stateDir,
-  };
-  const previous = Object.keys(overrides).map((key) => [key, process.env[key]] as const);
-  // Doctor checks run serially. Scope ambient auth/global-store owners together,
-  // restoring the enclosing private view even when a detector throws.
-  Object.assign(process.env, overrides);
-  try {
-    return await run();
-  } finally {
-    for (const [key, value] of previous) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
-}
-
 function withCoreLintContext(
   check: HealthCheck,
   ctx: DoctorHealthCheckContext & {
@@ -707,14 +684,14 @@ function withCoreLintContext(
   return {
     ...check,
     detect(_ctx, scope) {
-      const detect = async () => [
-        ...(await check.detect(ctx, scope)),
+      const detect = async (env = ctx.env) => [
+        ...(await check.detect({ ...ctx, env }, scope)),
         ...availabilityFindings.filter((finding) => finding.checkId === check.id),
       ];
       const inspectPrivate = async (run: typeof detect) => {
         let completed: HealthFinding[] | undefined;
         try {
-          return await ctx.runWithPrivateStateSnapshot(async () => (completed = await run()));
+          return await ctx.runWithPrivateStateSnapshot(async (env) => (completed = await run(env)));
         } catch (error) {
           if (!completed?.length || !(error instanceof DoctorLintStateSnapshotError)) {
             throw error;
@@ -726,8 +703,11 @@ function withCoreLintContext(
         // Discovery needs source-profile eligibility; generated links use the private install roots.
         return inspectPrivate(() => ctx.runWithSourceState(detect));
       }
-      if (check.id === RUNTIME_TOOL_SCHEMA_CHECK_ID || check.id === PROJECT_CLONE_SHAPE_CHECK_ID) {
+      if (check.id === RUNTIME_TOOL_SCHEMA_CHECK_ID) {
         return inspectPrivate(detect);
+      }
+      if (check.id === PROJECT_CLONE_SHAPE_CHECK_ID) {
+        return inspectPrivate(() => detect());
       }
       // Auth health uses read-only loaders but needs uncopied agent stores and source paths.
       return check.id === AUTH_PROFILE_CHECK_ID ? ctx.runWithSourceState(detect) : detect();

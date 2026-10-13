@@ -160,7 +160,7 @@ it.each([
       expect(execConfig.pathPrepend?.[0]).toBe(path.join(stateDir, "tmp", "agent-cli"));
 
       const warnings: string[] = [];
-      resolvePreparedExecEnvironment({
+      await resolvePreparedExecEnvironment({
         execParams: { command: "openclaw --version" },
         host: "node",
         defaultPathPrepend: execConfig.pathPrepend ?? [],

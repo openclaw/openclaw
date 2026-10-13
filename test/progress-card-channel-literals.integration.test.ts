@@ -6,7 +6,7 @@ import {
 } from "../extensions/telegram/test-api.js";
 import { markdownToIR } from "../packages/markdown-core/src/ir.js";
 import { createSubscribedSessionHarness } from "../src/agents/embedded-agent-subscribe.e2e-harness.js";
-import { createOpenClawTools } from "../src/agents/openclaw-tools.js";
+import { createOpenClawToolsAsync } from "../src/agents/openclaw-tools.js";
 import type { InProcessGatewayCaller } from "../src/agents/tools/in-process-gateway.js";
 import { createChannelProgressDraftCompositor } from "../src/channels/progress-draft-compositor.js";
 import { normalizeAgentPlanSteps } from "../src/channels/streaming.js";
@@ -51,10 +51,12 @@ async function runRegisteredCard(
   gatewayCall.mockResolvedValue({
     card: { sessionKey: "agent:main:literal-test", revision: 1, updatedAt: 1, markdown },
   });
-  const tool = createOpenClawTools({
-    agentSessionKey: "agent:main:literal-test",
-    config: { tools: { allow: ["progress_card"] } },
-  }).find((entry) => entry.name === "progress_card");
+  const tool = (
+    await createOpenClawToolsAsync({
+      agentSessionKey: "agent:main:literal-test",
+      config: { tools: { allow: ["progress_card"] } },
+    })
+  ).find((entry) => entry.name === "progress_card");
   expect(tool).toBeDefined();
   if (!tool) {
     throw new Error("progress_card is not registered");

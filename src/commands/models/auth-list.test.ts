@@ -6,6 +6,7 @@ import {
   createAuthProfileStoreFixture,
 } from "../../agents/auth-profiles/credential-fixtures.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import type { OutputRuntimeEnv } from "../../runtime.js";
 import { modelsAuthListCommand } from "./auth-list.js";
 
@@ -33,8 +34,13 @@ vi.mock("../../agents/auth-profiles.js", () => ({
   resolveAuthStatePathForDisplay: mocks.resolveAuthStatePathForDisplay,
 }));
 
-vi.mock("./load-config.js", () => ({
-  loadModelsConfig: mocks.loadModelsConfig,
+vi.mock("./load-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./load-config.js")>()),
+  loadModelsConfig: async (...args: unknown[]) => {
+    const config = await mocks.loadModelsConfig(...args);
+    await resolvePluginMetadataSnapshotAsync({ config, env: process.env });
+    return config;
+  },
 }));
 
 vi.mock("./shared.js", () => ({

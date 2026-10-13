@@ -1,5 +1,6 @@
 import path from "node:path";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "openclaw/plugin-sdk/model-session-runtime";
+import { preparePluginTestRuntimeMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   getSessionEntry,
   resolveStorePath,
@@ -104,10 +105,11 @@ vi.mock("./app-server/shared-client.js", async (importOriginal) => ({
 }));
 
 describe("codex conversation controls", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     resetCodexTestBindingStore();
     tempDir = sessionDirs.make();
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
+    await preparePluginTestRuntimeMetadata();
     sharedClientMocks.getSharedCodexAppServerClient.mockReset();
     sharedClientMocks.releaseLeasedSharedCodexAppServerClient.mockReset();
   });

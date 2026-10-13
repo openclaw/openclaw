@@ -121,7 +121,7 @@ beforeEach(() => {
   remote.createSession.mockImplementation((options: RemoteShellSessionOptions) => ({
     runCommand: async (command: { remoteCommand: string; tty?: boolean }) => {
       options.assertCurrent?.();
-      remote.commands.push(options.buildCommand(command));
+      remote.commands.push(await options.buildCommand(command));
       return { stdout: Buffer.from("remote-ok"), stderr: Buffer.alloc(0), code: 0 };
     },
   }));

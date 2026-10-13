@@ -115,7 +115,7 @@ it.for(["none", "alerts-disabled", "visible"] as const)(
         setActivePluginRegistry(registry);
         const runtimeRegistry = vi
           .spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandle")
-          .mockReturnValue(registry);
+          .mockResolvedValue(registry);
         const sendHeartbeat = vi
           .fn()
           .mockResolvedValue({ messageId: "periodic-send", chatId: destination });
@@ -331,7 +331,7 @@ it.for(completionRoutingCases)(
         setActivePluginRegistry(registry);
         const runtimeRegistry = vi
           .spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandle")
-          .mockReturnValue(registry);
+          .mockResolvedValue(registry);
         const send = vi
           .spyOn(routedReplies, "routeReply")
           .mockResolvedValue({ ok: true, delivered: true, messageId: "completion" });

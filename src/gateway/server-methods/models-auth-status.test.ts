@@ -15,7 +15,8 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import type { UsageSummary } from "../../infra/provider-usage.types.js";
-import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { NON_ENV_SECRETREF_MARKER } from "../../secrets/provider-credential-values.js";
 import { resolveProviderAuthLookupMaps } from "../../secrets/provider-env-vars.js";
@@ -159,10 +160,16 @@ const handler = expectDefined(
   modelsAuthStatusHandlers["models.authStatus"],
   'modelsAuthStatusHandlers["models.authStatus"] test invariant',
 );
-const logoutHandler = expectDefined(
+const rawLogoutHandler = expectDefined(
   modelsAuthStatusHandlers["models.authLogout"],
   'modelsAuthStatusHandlers["models.authLogout"] test invariant',
 );
+async function logoutHandler(options: GatewayRequestHandlerOptions) {
+  const config = options.context.getRuntimeConfig();
+  const metadata = await resolvePluginMetadataSnapshotAsync({ config });
+  return withPluginMetadataSnapshotScope(metadata, () => rawLogoutHandler(options), { config });
+}
+
 const setApiKeyHandler = expectDefined(
   modelsAuthStatusHandlers["models.authSetApiKey"],
   'modelsAuthStatusHandlers["models.authSetApiKey"] test invariant',
@@ -346,9 +353,14 @@ async function warmOAuthUsage() {
   });
 }
 
-function resetAuthStatusMocks(): void {
+async function resetAuthStatusMocks(): Promise<void> {
+  const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+    config: {},
+    env: {},
+    preferPersisted: false,
+  });
   for (const envVarNames of Object.values(
-    resolveProviderAuthLookupMaps({ env: {} }).envCandidateMap,
+    resolveProviderAuthLookupMaps({ env: {}, metadataSnapshot }).envCandidateMap,
   )) {
     for (const envVarName of envVarNames) {
       vi.stubEnv(envVarName, "");
@@ -689,7 +701,7 @@ describe("models.authStatus", () => {
 
   it("uses the published metadata owner for provider env auth and aliases", async () => {
     const cfg = {};
-    const policyHash = resolveInstalledPluginIndexPolicyHash(cfg);
+    const { policyHash } = await resolvePluginMetadataSnapshotAsync({ config: cfg });
     const snapshot = createPluginMetadataSnapshotFixture({
       plugins: [
         {

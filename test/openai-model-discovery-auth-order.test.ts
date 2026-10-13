@@ -21,6 +21,7 @@ import { prepareModelCatalogPublication } from "../src/agents/prepared-model-run
 import type { ModelProviderConfig } from "../src/config/types.models.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { createTestPluginApi } from "../src/plugin-sdk/plugin-test-api.js";
+import { preparePluginMetadataMachineStateAsync } from "../src/plugins/installed-plugin-index-record-state.js";
 import type { ProviderCatalogOutcome } from "../src/plugins/provider-catalog.types.js";
 import * as providerDiscovery from "../src/plugins/provider-discovery.js";
 import * as providerRuntime from "../src/plugins/provider-runtime.runtime.js";
@@ -37,11 +38,32 @@ const discovery = vi.hoisted(() => ({
   providers: new Array<ProviderPlugin>(),
 }));
 
-vi.mock("../src/plugins/provider-discovery.runtime.js", () => ({
-  resolvePluginDiscoveryProvidersRuntime: () => discovery.providers,
-}));
+vi.mock("../src/plugins/provider-discovery.runtime.js", async (importOriginal) => {
+  const { resolvePluginMetadataSnapshotAsync } =
+    await import("../src/plugins/plugin-metadata-snapshot.js");
+  return {
+    ...(await importOriginal<typeof import("../src/plugins/provider-discovery.runtime.js")>()),
+    resolvePluginDiscoveryProvidersRuntime: () => discovery.providers,
+    resolvePluginDiscoveryProvidersRuntimeAsync: async (
+      params: Parameters<
+        typeof import("../src/plugins/provider-discovery.runtime.js").resolvePluginDiscoveryProvidersRuntimeAsync
+      >[0],
+    ) => {
+      // Preserve the async loader's metadata preparation for downstream auth callbacks.
+      if (!params.pluginMetadataSnapshot) {
+        await resolvePluginMetadataSnapshotAsync({
+          config: params.config ?? {},
+          env: params.env ?? process.env,
+          ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+          allowWorkspaceScopedCurrent: true,
+        });
+      }
+      return discovery.providers;
+    },
+  };
+});
 
-vi.mock("../src/plugins/provider-hook-runtime.js", async () => {
+vi.mock("../src/plugins/provider-hook-runtime.js", async (importOriginal) => {
   const { createProviderHookRuntime } =
     await import("../src/plugins/provider-hook-runtime-core.js");
   const { matchesProviderPluginRef } = await import("../src/plugins/provider-registry-shared.js");
@@ -56,7 +78,7 @@ vi.mock("../src/plugins/provider-hook-runtime.js", async () => {
           params.providerRefs.some((ref) => matchesProviderPluginRef(provider, ref))),
     );
   // Discovery and runtime hooks use the same fixture providers; no plugin loading is under test.
-  return createProviderHookRuntime({
+  const resolver: Parameters<typeof createProviderHookRuntime>[0] = {
     isPluginProvidersLoadInFlight: () => false,
     resolvePluginProviderRegistryCore: (params) => {
       const providers = selectProviders(params);
@@ -81,7 +103,16 @@ vi.mock("../src/plugins/provider-hook-runtime.js", async () => {
       }
       return providers.map((provider) => Object.assign({}, provider, { pluginId: provider.id }));
     },
-  });
+    resolvePluginProviderRegistryCoreAsync: async (params) =>
+      resolver.resolvePluginProviderRegistryCore(params),
+    resolvePluginProvidersCoreAsync: async (params, onSelectedRegistry) =>
+      resolver.resolvePluginProvidersCore(params, onSelectedRegistry),
+    resolveLegacyPluginProvidersCore: (params) => resolver.resolvePluginProvidersCore(params),
+  };
+  return {
+    ...(await importOriginal<typeof import("../src/plugins/provider-hook-runtime.js")>()),
+    ...createProviderHookRuntime(resolver),
+  };
 });
 
 function createCatalogProviderRegistry(providers = discovery.providers) {
@@ -104,11 +135,15 @@ describe("Provider model discovery auth preparation", () => {
 
   beforeEach(async () => {
     state = await createOpenClawTestState({ prefix: "catalog-auth-order-", agentEnv: "main" });
+    await preparePluginMetadataMachineStateAsync({ env: {} });
     agentDir = state.agentDir();
     discovery.providers = [buildOpenAIProvider()];
     // These fixtures supply refreshable providers and mock their refresh operation.
     // Keep capability discovery at the same boundary instead of loading the full runtime.
-    vi.spyOn(providerRuntime, "resolveProviderOAuthRefreshCapabilityWithPlugin").mockResolvedValue({
+    vi.spyOn(
+      providerRuntime,
+      "resolveProviderOAuthRefreshCapabilityWithLazyRuntime",
+    ).mockResolvedValue({
       status: "available",
     });
   });
@@ -317,11 +352,11 @@ describe("Provider model discovery auth preparation", () => {
       });
 
       expect(
-        providerRuntime.resolveProviderOAuthRefreshCapabilityWithPlugin,
+        providerRuntime.resolveProviderOAuthRefreshCapabilityWithLazyRuntime,
       ).toHaveBeenCalledOnce();
-      expect(providerRuntime.resolveProviderOAuthRefreshCapabilityWithPlugin).toHaveBeenCalledWith(
-        expect.objectContaining({ provider: providerId }),
-      );
+      expect(
+        providerRuntime.resolveProviderOAuthRefreshCapabilityWithLazyRuntime,
+      ).toHaveBeenCalledWith(expect.objectContaining({ provider: providerId }));
       expect(refresh).toHaveBeenCalledOnce();
       expect(refresh).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -435,7 +470,7 @@ describe("Provider model discovery auth preparation", () => {
           },
         }),
       );
-      vi.mocked(providerRuntime.resolveProviderOAuthRefreshCapabilityWithPlugin).mockRestore();
+      vi.mocked(providerRuntime.resolveProviderOAuthRefreshCapabilityWithLazyRuntime).mockRestore();
       const profileId = "radius:oauth";
       const keyProfileId = "radius:key";
       const store = createExpiredOauthStore({
@@ -904,6 +939,7 @@ describe("provider catalog late-result finalization", () => {
 
   beforeEach(async () => {
     state = await createOpenClawTestState({ prefix: "catalog-late-result-", agentEnv: "main" });
+    await preparePluginMetadataMachineStateAsync({ env: {} });
     store = {
       version: 1,
       profiles: {
@@ -918,7 +954,10 @@ describe("provider catalog late-result finalization", () => {
     };
     await state.writeAuthProfiles(store);
     vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(undefined);
-    vi.spyOn(providerRuntime, "resolveProviderOAuthRefreshCapabilityWithPlugin").mockResolvedValue({
+    vi.spyOn(
+      providerRuntime,
+      "resolveProviderOAuthRefreshCapabilityWithLazyRuntime",
+    ).mockResolvedValue({
       status: "available",
     });
     vi.spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin").mockRejectedValue(

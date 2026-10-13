@@ -18,6 +18,7 @@ import { clearPluginCommands } from "./command-registry-state.js";
 import { getPluginCommandSpecs } from "./command-specs.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import { getGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
+import { preparePluginMetadataMachineState } from "./installed-plugin-index-record-state.js";
 // Imported by loader.test.ts to keep its mocked suite in one Vitest module graph.
 import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import {
@@ -25,8 +26,8 @@ import {
   resolvePluginInteractiveRegistrationsMatch,
 } from "./interactive-registry.js";
 import { resolvePluginRegistryLoadCacheKey } from "./loader-cache.js";
-import { loadOpenClawPlugins, resolveRuntimePluginRegistry } from "./loader.js";
 import {
+  loadOpenClawPluginsForTest,
   EMPTY_PLUGIN_SCHEMA,
   makePluginLoaderTempDir,
   type PluginLoadConfig,
@@ -173,7 +174,7 @@ describe("loadOpenClawPlugins", () => {
 
     // Case 3: config.env.vars participates in the same effective env as config IO.
     const configEnvRegistry = withEnv({ ENV_CONFIG_PROBE_SECRET: undefined }, () =>
-      loadOpenClawPlugins({
+      loadOpenClawPluginsForTest({
         cache: false,
         workspaceDir: plugin.dir,
         config: {
@@ -232,7 +233,7 @@ describe("loadOpenClawPlugins", () => {
     });
     const { details, startupTrace } = createStartupTraceRecorder();
 
-    loadOpenClawPlugins({
+    loadOpenClawPluginsForTest({
       cache: false,
       config: {
         plugins: {
@@ -386,7 +387,7 @@ describe("loadOpenClawPlugins", () => {
     const manifestRegistry = loadPluginManifestRegistryCore({ config });
     fs.rmSync(path.join(plugin.dir, "openclaw.plugin.json"));
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadOpenClawPluginsForTest({
       cache: false,
       config,
       manifestRegistry,
@@ -408,11 +409,12 @@ describe("loadOpenClawPlugins", () => {
         allow: [plugin.id],
       },
     };
+    preparePluginMetadataMachineState({ env: process.env });
     const metadataSnapshot = loadPluginMetadataSnapshot({ config, env: process.env });
     setCurrentPluginMetadataSnapshot(metadataSnapshot, { config, env: process.env });
     fs.rmSync(path.join(plugin.dir, "openclaw.plugin.json"));
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadOpenClawPluginsForTest({
       cache: false,
       config,
       onlyPluginIds: [plugin.id],
@@ -437,10 +439,11 @@ describe("loadOpenClawPlugins", () => {
         allow: [snapshotPlugin.id, sourcePlugin.id],
       },
     };
+    preparePluginMetadataMachineState({ env: process.env });
     const metadataSnapshot = loadPluginMetadataSnapshot({ config, env: process.env });
     setCurrentPluginMetadataSnapshot(metadataSnapshot, { config, env: process.env });
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadOpenClawPluginsForTest({
       activate: false,
       cache: false,
       config,
@@ -478,7 +481,7 @@ describe("loadOpenClawPlugins", () => {
     });
 
     const registry = withEnv({ OPENCLAW_STATE_DIR: stateDir }, () =>
-      loadOpenClawPlugins({
+      loadOpenClawPluginsForTest({
         cache: false,
         config: {
           plugins: {
@@ -506,7 +509,7 @@ describe("loadOpenClawPlugins", () => {
     });
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadOpenClawPluginsForTest({
       cache: false,
       config: {
         plugins: {
@@ -597,7 +600,7 @@ describe("loadOpenClawPlugins", () => {
     );
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadOpenClawPluginsForTest({
       cache: false,
       config: {
         plugins: {
@@ -648,7 +651,7 @@ describe("loadOpenClawPlugins", () => {
     fs.writeFileSync(alpha, `module.exports = { id: "alpha", register() {} };`, "utf-8");
     fs.writeFileSync(beta, `module.exports = { id: "beta", register() {} };`, "utf-8");
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadOpenClawPluginsForTest({
       cache: false,
       config: {
         plugins: {
@@ -677,7 +680,7 @@ describe("loadOpenClawPlugins", () => {
           },
         },
       } satisfies PluginLoadConfig,
-      assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+      assert: (registry: ReturnType<typeof loadOpenClawPluginsForTest>) => {
         expectTelegramLoaded(registry);
       },
     },
@@ -693,7 +696,7 @@ describe("loadOpenClawPlugins", () => {
           enabled: true,
         },
       } satisfies PluginLoadConfig,
-      assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+      assert: (registry: ReturnType<typeof loadOpenClawPluginsForTest>) => {
         expectTelegramLoaded(registry);
       },
     },
@@ -709,7 +712,7 @@ describe("loadOpenClawPlugins", () => {
           allow: ["browser"],
         },
       } satisfies PluginLoadConfig,
-      assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+      assert: (registry: ReturnType<typeof loadOpenClawPluginsForTest>) => {
         const telegram = registry.plugins.find((entry) => entry.id === "telegram");
         expect(telegram?.status).toBe("loaded");
         expect(telegram?.error).toBeUndefined();
@@ -730,7 +733,7 @@ describe("loadOpenClawPlugins", () => {
           },
         },
       } satisfies PluginLoadConfig,
-      assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+      assert: (registry: ReturnType<typeof loadOpenClawPluginsForTest>) => {
         const telegram = registry.plugins.find((entry) => entry.id === "telegram");
         expect(telegram?.status).toBe("disabled");
         expect(telegram?.error).toBe("disabled in config");
@@ -750,7 +753,7 @@ describe("loadOpenClawPlugins", () => {
           },
         },
       } satisfies PluginLoadConfig,
-      assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+      assert: (registry: ReturnType<typeof loadOpenClawPluginsForTest>) => {
         const telegram = registry.plugins.find((entry) => entry.id === "telegram");
         expect(telegram?.status).toBe("disabled");
         expect(telegram?.error).toBe("channel disabled in config");
@@ -761,7 +764,7 @@ describe("loadOpenClawPlugins", () => {
     "handles bundled telegram plugin enablement and override rules: $name",
     ({ config, assert }) => {
       setupBundledTelegramPlugin();
-      const registry = loadOpenClawPlugins({
+      const registry = loadOpenClawPluginsForTest({
         cache: false,
         workspaceDir: cachedBundledTelegramDir,
         config,
@@ -790,7 +793,7 @@ describe("loadOpenClawPlugins", () => {
       });
       writePluginMetadata({ dir, id: "openclaw-demo", channels: ["demo"] });
       const registry = withEnv({ OPENCLAW_BUNDLED_PLUGINS_DIR: dir }, () =>
-        loadOpenClawPlugins({
+        loadOpenClawPluginsForTest({
           cache: false,
           workspaceDir: dir,
           config: {
@@ -817,12 +820,13 @@ describe("loadOpenClawPlugins", () => {
         enabled: true,
       },
     } satisfies PluginLoadConfig;
+    preparePluginMetadataMachineState({ env: {} });
     const autoEnabled = applyPluginAutoEnable({
       config: rawConfig,
       env: {},
     });
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadOpenClawPluginsForTest({
       cache: false,
       workspaceDir: cachedBundledTelegramDir,
       config: autoEnabled.config,
@@ -849,12 +853,13 @@ describe("loadOpenClawPlugins", () => {
         allow: ["browser"],
       },
     } satisfies PluginLoadConfig;
+    preparePluginMetadataMachineState({ env: {} });
     const autoEnabled = applyPluginAutoEnable({
       config: rawConfig,
       env: {},
     });
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadOpenClawPluginsForTest({
       cache: false,
       workspaceDir: cachedBundledTelegramDir,
       config: autoEnabled.config,
@@ -885,7 +890,7 @@ describe("loadOpenClawPlugins", () => {
       },
     } satisfies PluginLoadConfig;
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadOpenClawPluginsForTest({
       cache: false,
       workspaceDir: cachedBundledTelegramDir,
       config: {
@@ -926,7 +931,7 @@ describe("loadOpenClawPlugins", () => {
       },
     } satisfies PluginLoadConfig;
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadOpenClawPluginsForTest({
       cache: false,
       workspaceDir: bundledDir,
       config,
@@ -1180,7 +1185,7 @@ describe("loadOpenClawPlugins", () => {
   module.exports = { id: "skipped-scoped-only", register() { throw new Error("skipped plugin should not load"); } };`,
         });
 
-        const registry = loadOpenClawPlugins({
+        const registry = loadOpenClawPluginsForTest({
           cache: false,
           config: {
             plugins: {
@@ -1322,7 +1327,7 @@ describe("loadOpenClawPlugins", () => {
               },
             },
           },
-        } satisfies Parameters<typeof loadOpenClawPlugins>[0];
+        } satisfies Parameters<typeof loadOpenClawPluginsForTest>[0];
         writePlugin({
           id: "reentrant-snapshot",
           dir: pluginDir,
@@ -1338,8 +1343,8 @@ describe("loadOpenClawPlugins", () => {
         const cacheKey = resolvePluginRegistryLoadCacheKey(nestedOptions);
         expect(cacheKey).toMatch(/^[a-f0-9]{64}$/);
         expect(cacheKey).not.toContain(pluginConfigSentinel);
-        const reenter = vi.fn(() => loadOpenClawPlugins(nestedOptions));
-        const registry = loadOpenClawPlugins({
+        const reenter = vi.fn(() => loadOpenClawPluginsForTest(nestedOptions));
+        const registry = loadOpenClawPluginsForTest({
           ...nestedOptions,
           logger: { info: reenter, warn: vi.fn(), error: vi.fn() },
         });
@@ -1358,42 +1363,6 @@ describe("loadOpenClawPlugins", () => {
         expect(record?.error).toContain(cacheKey);
         expect(record?.error).not.toContain(pluginConfigSentinel);
         expect(record?.failurePhase).toBe("register");
-      },
-    },
-    {
-      label: "lets resolveRuntimePluginRegistry short-circuit during same snapshot load",
-      run: () => {
-        useNoBundledPlugins();
-        const pluginDir = makePluginLoaderTempDir();
-        const pluginFile = path.join(pluginDir, "runtime-registry-reentry.cjs");
-        const nestedOptions = {
-          cache: false,
-          activate: false,
-          workspaceDir: pluginDir,
-          config: {
-            plugins: {
-              load: { paths: [pluginFile] },
-              allow: ["runtime-registry-reentry"],
-            },
-          },
-        } satisfies Parameters<typeof loadOpenClawPlugins>[0];
-        writePlugin({
-          id: "runtime-registry-reentry",
-          dir: pluginDir,
-          filename: "runtime-registry-reentry.cjs",
-          registration: `api.logger.info("resolve");`,
-        });
-
-        const resolve = vi.fn(() => resolveRuntimePluginRegistry(nestedOptions));
-        const registry = loadOpenClawPlugins({
-          ...nestedOptions,
-          logger: { info: resolve, warn: vi.fn(), error: vi.fn() },
-        });
-
-        expect(resolve).toHaveBeenCalledExactlyOnceWith("resolve");
-        expect(resolve).toHaveReturnedWith(undefined);
-        const record = registry.plugins.find((entry) => entry.id === "runtime-registry-reentry");
-        expect(record?.status).toBe("loaded");
       },
     },
     {
@@ -1419,12 +1388,12 @@ describe("loadOpenClawPlugins", () => {
           },
         };
 
-        const full = loadOpenClawPlugins(options);
-        const scoped = loadOpenClawPlugins({
+        const full = loadOpenClawPluginsForTest(options);
+        const scoped = loadOpenClawPluginsForTest({
           ...options,
           onlyPluginIds: ["allowed-cache-scope"],
         });
-        const scopedAgain = loadOpenClawPlugins({
+        const scopedAgain = loadOpenClawPluginsForTest({
           ...options,
           onlyPluginIds: ["allowed-cache-scope"],
         });
@@ -1591,7 +1560,7 @@ describe("loadOpenClawPlugins", () => {
     });
     expect(listRegisteredAgentHarnessIdsForTest()).toEqual(["codex"]);
 
-    loadOpenClawPlugins({
+    loadOpenClawPluginsForTest({
       cache: false,
       workspaceDir: makePluginLoaderTempDir(),
       config: {
@@ -1654,7 +1623,7 @@ describe("loadOpenClawPlugins", () => {
       onlyPluginIds: ["reload-rollback"],
     };
 
-    const activeRegistry = loadOpenClawPlugins(loadOptions);
+    const activeRegistry = loadOpenClawPluginsForTest(loadOptions);
     const expectRegistrationsIntact = async () => {
       expect(getActivePluginRegistry()).toBe(activeRegistry);
       expect(getRegisteredAgentHarness("codex")).toBeDefined();
@@ -1678,7 +1647,7 @@ describe("loadOpenClawPlugins", () => {
       });
 
     try {
-      expect(() => loadOpenClawPlugins(loadOptions)).toThrow("corrupt plugin manifest");
+      expect(() => loadOpenClawPluginsForTest(loadOptions)).toThrow("corrupt plugin manifest");
       await expectRegistrationsIntact();
     } finally {
       manifestSpy.mockRestore();
@@ -1693,7 +1662,7 @@ describe("loadOpenClawPlugins", () => {
       };`,
     });
     expect(() =>
-      loadOpenClawPlugins({
+      loadOpenClawPluginsForTest({
         ...loadOptions,
         throwOnLoadError: true,
         config: {
@@ -1748,7 +1717,7 @@ describe("loadOpenClawPlugins", () => {
       },
       onlyPluginIds: ["context-engine-reload"],
     };
-    const activeRegistry = loadOpenClawPlugins(baseOptions);
+    const activeRegistry = loadOpenClawPluginsForTest(baseOptions);
     const activeRegistration = getContextEngineRegistration("reload-engine");
 
     const failingPlugin = writePlugin({
@@ -1758,7 +1727,7 @@ describe("loadOpenClawPlugins", () => {
       throw new Error("context engine reload failed");`,
     });
     expect(() =>
-      loadOpenClawPlugins({
+      loadOpenClawPluginsForTest({
         ...baseOptions,
         workspaceDir: failingPlugin.dir,
         config: {
@@ -1857,8 +1826,8 @@ describe("loadOpenClawPlugins", () => {
       onlyPluginIds: ["internal-hook-reload"],
     };
 
-    loadOpenClawPlugins(loadOptions);
-    loadOpenClawPlugins(loadOptions);
+    loadOpenClawPluginsForTest(loadOptions);
+    loadOpenClawPluginsForTest(loadOptions);
 
     const event = createInternalHookEvent("gateway", "startup", "gateway:startup");
     await triggerInternalHook(event);
@@ -1893,7 +1862,7 @@ describe("loadOpenClawPlugins", () => {
       await triggerInternalHook(activeEvent);
       expect(activeEvent.messages).toEqual(["legacy-hook-fired"]);
 
-      loadOpenClawPlugins({
+      loadOpenClawPluginsForTest({
         cache: false,
         workspaceDir: plugin.dir,
         config: {

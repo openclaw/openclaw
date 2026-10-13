@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import * as pluginInstall from "../plugins/install.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import { markRetainedManagedNpmInstall } from "../plugins/managed-npm-retention.js";
@@ -701,10 +702,12 @@ describe("maybeRepairPluginRegistryState", () => {
     });
     await writePersistedInstalledPluginIndex(initialIndex, { stateDir });
 
+    const env = hermeticEnv();
+    await prepareBundledDiscoveryMode(env);
     const result = maybeRepairStaleManagedNpmBundledPlugins({
       stateDir,
       candidates: [],
-      env: hermeticEnv(),
+      env,
       config: {
         plugins: {
           allow: ["external-demo"],

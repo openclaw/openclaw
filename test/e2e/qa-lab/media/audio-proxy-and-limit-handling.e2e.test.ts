@@ -17,8 +17,17 @@ import type { OpenClawConfig } from "../../../../src/config/types.js";
 import { applyMediaUnderstanding } from "../../../../src/media-understanding/apply.js";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
 
+// mock-isolation: Explicit media fixtures supply providers without loading installed capabilities.
 vi.mock("../../../../src/plugins/capability-provider-runtime.js", () => ({
   resolvePluginCapabilityProviders: () => [],
+  preparePluginCapabilityProviderResolutionAsync: async () => ({
+    load: undefined,
+    resolve: () => [],
+  }),
+  preparePluginCapabilityProviderLookupAsync: async () => ({
+    load: undefined,
+    resolve: () => undefined,
+  }),
 }));
 
 type RequestObservation = {

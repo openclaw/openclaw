@@ -133,7 +133,7 @@ describe("memory-core generic embedding provider contract", () => {
     expect(registry.registry.embeddingProviders.map((entry) => entry.provider.id)).toEqual([
       "virtual-generic",
     ]);
-    expect(resolveEmbeddingProviderIndexIdentity(createOptions(config))).toEqual({
+    expect(await resolveEmbeddingProviderIndexIdentity(createOptions(config))).toEqual({
       provider: { id: "virtual-generic", model: "virtual-model" },
       cacheKeyData: {
         provider: "virtual-generic",

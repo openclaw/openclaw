@@ -51,7 +51,7 @@ function laneRunParams() {
     model: "claude-opus-4-8",
     timeoutMs: 5_000,
     runId: "run-cli-dispatch-lane-test",
-    config: {},
+    config: { agents: { entries: { main: { workspace: join(tempRoot, "workspace") } } } },
     cliBackendDispatch: "subscription-auth" as const,
   };
 }

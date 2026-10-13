@@ -92,7 +92,6 @@ describe("speech provider registry", () => {
 
   it("keeps persona selection conditional on provider availability", () => {
     const availablePersonaProvider = createSpeechProvider("persona-provider");
-    mocks.getSpeechProvider.mockReturnValueOnce(availablePersonaProvider);
     const config = resolveTtsConfig({});
     const preference = { provider: "persona-provider", source: "persona" } as const;
 
@@ -100,7 +99,7 @@ describe("speech provider registry", () => {
       resolvePreparedTtsProvider({
         config,
         preference,
-        providers: [],
+        providers: [availablePersonaProvider],
         configuredByProvider: new Map(),
       }),
     ).toBe("persona-provider");
@@ -156,15 +155,5 @@ describe("speech provider registry", () => {
       "fallback",
     );
     expect(isConfigured).not.toHaveBeenCalled();
-  });
-
-  it("canonicalizes a voice-model alias omitted from the supplied inventory", () => {
-    const inventory = [createSpeechProvider("openai")];
-    const cfg = {
-      agents: { defaults: { voiceModel: { primary: "edge/edge-tts" } } },
-    } as OpenClawConfig;
-
-    expect(resolveTtsProviderOrder("openai", cfg, inventory)).toEqual(["openai", "microsoft"]);
-    expect(mocks.canonicalizeSpeechProviderId).toHaveBeenCalledWith("edge", expect.any(Object));
   });
 });

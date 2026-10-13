@@ -687,6 +687,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     const bridge = createGoogleLiveBridge({ onReady, onError });
 
     const cancelledConnect = bridge.connect();
+    await Promise.resolve();
     const staleCallbacks = lastConnectParams().callbacks;
     staleCallbacks.onopen();
     staleCallbacks.onmessage({ setupComplete: {} });
@@ -1008,6 +1009,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       },
     });
     const connect = bridge.connect();
+    await Promise.resolve();
     activate();
     pendingSession.resolve(connectedSession);
 

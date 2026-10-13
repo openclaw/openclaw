@@ -11,7 +11,12 @@ import {
   isMemoryMultimodalEnabled,
   normalizeMemoryMultimodalSettings,
 } from "../memory-host-sdk/multimodal.js";
-import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
+import {
+  getMemoryEmbeddingProvider,
+  getMemoryEmbeddingProviderAsync,
+} from "../plugins/memory-embedding-provider-runtime.js";
+import type { MemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 import { runtimeMemorySecretOwnerId } from "../secrets/runtime-memory-secret-owner.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -132,7 +137,12 @@ export function resolveMemorySearchIndexConfig(cfg: OpenClawConfig, agentId: str
   };
 }
 
-function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
+function produceMemorySearchConfig(
+  cfg: OpenClawConfig,
+  agentId: string,
+  resolveProvider: (id: string) => MemoryEmbeddingProviderAdapter | undefined = (id) =>
+    getConfiguredMemoryEmbeddingProvider(id, cfg),
+) {
   const indexConfig = resolveMemorySearchIndexConfig(cfg, agentId);
   if (!indexConfig) {
     return null;
@@ -140,13 +150,13 @@ function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
   const defaults = cfg.memory?.search;
   const overrides = resolveAgentConfig(cfg, agentId)?.memory?.search;
   const provider = resolveMemorySearchProviderId(overrides?.provider ?? defaults?.provider);
-  const primaryAdapter = getConfiguredMemoryEmbeddingProvider(provider, cfg);
+  const primaryAdapter = resolveProvider(provider);
   const defaultRemote = defaults?.remote;
   const overrideRemote = overrides?.remote;
   const fallback = overrides?.fallback ?? defaults?.fallback ?? "none";
   const fallbackAdapter =
     normalizeProviderId(provider) !== "none" && fallback && fallback !== "none"
-      ? getConfiguredMemoryEmbeddingProvider(fallback, cfg)
+      ? resolveProvider(fallback)
       : undefined;
   const hasRemoteConfig = [overrideRemote, defaultRemote].some(
     (remote) => remote?.baseUrl || remote?.apiKey || remote?.headers,
@@ -232,11 +242,44 @@ function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
   return resolved;
 }
 
+/** @deprecated Prepared registries only; await resolveMemorySearchConfigAsync for cold providers. */
 export function resolveMemorySearchConfig(
   cfg: OpenClawConfig,
   agentId: string,
 ): ResolvedMemorySearchConfig | null {
+  warnPluginSdkDeprecation({
+    family: "memory-config-sync",
+    method: "resolveMemorySearchConfig",
+    replacement: "resolveMemorySearchConfigAsync",
+    compatibility: "The synchronous API requires an already prepared embedding registry.",
+  });
   return produceMemorySearchConfig(cfg, agentId);
+}
+
+/** Prepares provider facts before applying the synchronous memory configuration rules. */
+export async function resolveMemorySearchConfigAsync(
+  cfg: OpenClawConfig,
+  agentId: string,
+): Promise<ResolvedMemorySearchConfig | null> {
+  const defaults = cfg.memory?.search;
+  const overrides = resolveAgentConfig(cfg, agentId)?.memory?.search;
+  if (!(overrides?.enabled ?? defaults?.enabled ?? true)) {
+    return null;
+  }
+  const provider = resolveMemorySearchProviderId(overrides?.provider ?? defaults?.provider);
+  const fallback = overrides?.fallback ?? defaults?.fallback ?? "none";
+  const ids =
+    normalizeProviderId(provider) === "none"
+      ? []
+      : [provider, ...(fallback !== "none" ? [fallback] : [])];
+  const providers = new Map(
+    await Promise.all(
+      [...new Set(ids)].map(
+        async (id) => [id, await getMemoryEmbeddingProviderAsync(id, cfg)] as const,
+      ),
+    ),
+  );
+  return produceMemorySearchConfig(cfg, agentId, (id) => providers.get(id));
 }
 
 function resolveSyncConfig() {

@@ -1,5 +1,6 @@
 // Plugin control-plane cold-import tests guard setup and plugin metadata paths against runtime-heavy imports.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import {
@@ -81,11 +82,12 @@ describe("command control-plane plugin discovery", () => {
     },
   );
 
-  it("resolves channel setup metadata without importing plugin runtime", () => {
+  it("resolves channel setup metadata without importing plugin runtime", async () => {
     const plugin = createColdPluginFixture({ rootDir: makeTempDir() });
     const workspaceDir = makeTempDir();
     const cfg = createColdPluginConfig(plugin.rootDir, plugin.pluginId);
     const env = createColdPluginHermeticEnv(workspaceDir);
+    await preparePluginMetadataMachineStateAsync({ env });
 
     expect(
       listManifestInstalledChannelIds({
@@ -97,11 +99,12 @@ describe("command control-plane plugin discovery", () => {
     expect(isColdPluginRuntimeLoaded(plugin)).toBe(false);
   });
 
-  it("builds onboarding auth choices from manifest metadata without importing plugin runtime", () => {
+  it("builds onboarding auth choices from manifest metadata without importing plugin runtime", async () => {
     const plugin = createColdPluginFixture({ rootDir: makeTempDir() });
     const workspaceDir = makeTempDir();
     const cfg = createColdPluginConfig(plugin.rootDir, plugin.pluginId);
     const env = createColdPluginHermeticEnv(workspaceDir);
+    await preparePluginMetadataMachineStateAsync({ env });
 
     const authChoice = buildAuthChoiceGroups({
       includeSkip: false,

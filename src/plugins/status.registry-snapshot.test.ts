@@ -5,6 +5,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { buildPluginCapabilitySummary, computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
+import { preparePluginMetadataMachineStateAsync } from "./installed-plugin-index-record-state.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
@@ -14,7 +15,7 @@ import { refreshPluginRegistry } from "./plugin-registry-refresh.js";
 import {
   withPluginDiagnosticsReport,
   buildPluginRegistrySnapshotReport,
-  buildPluginSnapshotReport,
+  buildPluginSnapshotReportAsync,
 } from "./status.js";
 import {
   createColdPluginConfig,
@@ -31,7 +32,7 @@ function makeTempDir() {
   return makeTrackedTempDir("openclaw-plugin-status", tempDirs);
 }
 
-function createStatusEnv(disableBundled = true) {
+async function createStatusEnv(disableBundled = true) {
   const rootDir = fs.realpathSync(makeTempDir());
   const stateDir = path.join(rootDir, "state");
   const env = {
@@ -39,6 +40,7 @@ function createStatusEnv(disableBundled = true) {
     ...(disableBundled ? { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } : {}),
     OPENCLAW_STATE_DIR: stateDir,
   };
+  await preparePluginMetadataMachineStateAsync({ env });
   return { rootDir, stateDir, env };
 }
 
@@ -48,8 +50,8 @@ function createPluginAt(root: string, pluginId: string) {
   return createColdPluginFixture({ rootDir, pluginId });
 }
 
-function createWorkspaceFixture() {
-  const params = createStatusEnv();
+async function createWorkspaceFixture() {
+  const params = await createStatusEnv();
   const mainWorkspace = path.join(params.rootDir, "main-workspace");
   const gadgetWorkspace = path.join(params.rootDir, "gadget-workspace");
   const global = createPluginAt(params.stateDir, "global-plugin");
@@ -79,10 +81,10 @@ afterEach(() => {
 
 describe("buildPluginRegistrySnapshotReport", () => {
   it("reports shared-only inventory when an explicit roster has no system owner", async () => {
-    const { config, env, mainWorkspace, global } = createWorkspaceFixture();
+    const { config, env, mainWorkspace, global } = await createWorkspaceFixture();
     const scoped = loadPluginMetadataSnapshot({ config, env, workspaceDir: mainWorkspace });
     setCurrentPluginMetadataSnapshot(scoped, { config, env, workspaceDir: mainWorkspace });
-    const assertReport = (report: ReturnType<typeof buildPluginSnapshotReport>) => {
+    const assertReport = (report: Awaited<ReturnType<typeof buildPluginSnapshotReportAsync>>) => {
       expect(report.workspaceDir).toBeUndefined();
       expect(report.plugins.map((plugin) => plugin.id)).toEqual([global.pluginId]);
       expect(report.diagnostics).toContainEqual(
@@ -93,12 +95,12 @@ describe("buildPluginRegistrySnapshotReport", () => {
       );
     };
     assertReport(buildPluginRegistrySnapshotReport({ config, env }));
-    assertReport(buildPluginSnapshotReport({ config, env }));
+    assertReport(await buildPluginSnapshotReportAsync({ config, env }));
     await withPluginDiagnosticsReport({ config, env }, assertReport);
   });
 
   it("self-heals a shared-only registry after a system owner is configured", async () => {
-    const workspace = createWorkspaceFixture();
+    const workspace = await createWorkspaceFixture();
     const { config, env, stateDir, mainWorkspace, global, main, gadget } = workspace;
 
     const partial = await refreshPluginRegistry({
@@ -135,6 +137,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
       );
     }
 
+    await preparePluginMetadataMachineStateAsync({ env });
     const explicitMainReport = buildPluginRegistrySnapshotReport({
       config: ownedConfig,
       env,
@@ -155,7 +158,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
   ] as const)(
     "projects capability-consent diagnostics for $consent acceptance",
     async ({ consent, warns }) => {
-      const { stateDir, env } = createStatusEnv();
+      const { stateDir, env } = await createStatusEnv();
       const fixture = createPluginAt(stateDir, "consent-demo");
       const config = {
         plugins: { entries: { [fixture.pluginId]: { enabled: true } } },
@@ -179,9 +182,13 @@ describe("buildPluginRegistrySnapshotReport", () => {
         installRecords: { [fixture.pluginId]: installRecord },
       });
       await writePersistedInstalledPluginIndex(index, { stateDir });
+      await preparePluginMetadataMachineStateAsync({ env });
 
-      for (const buildReport of [buildPluginRegistrySnapshotReport, buildPluginSnapshotReport]) {
-        const diagnostics = buildReport({ config, env }).diagnostics.filter(
+      for (const buildReport of [
+        buildPluginRegistrySnapshotReport,
+        buildPluginSnapshotReportAsync,
+      ]) {
+        const diagnostics = (await buildReport({ config, env })).diagnostics.filter(
           (diagnostic) =>
             diagnostic.pluginId === fixture.pluginId &&
             diagnostic.message.includes("requires capability consent"),
@@ -200,7 +207,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
   );
 
   it("keeps recovered managed npm plugins visible when the persisted registry is stale", async () => {
-    const { stateDir, env } = createStatusEnv();
+    const { stateDir, env } = await createStatusEnv();
     const config = { plugins: { entries: { whatsapp: { enabled: true } } } };
     const whatsappDir = writeManagedNpmPlugin({
       stateDir,
@@ -212,6 +219,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
     const staleIndex = loadInstalledPluginIndex({ config, env, installRecords: {} });
     expect(staleIndex.plugins.map((plugin) => plugin.pluginId)).not.toContain("whatsapp");
     await writePersistedInstalledPluginIndex(staleIndex, { stateDir });
+    await preparePluginMetadataMachineStateAsync({ env });
 
     const report = buildPluginRegistrySnapshotReport({ config, env });
 
@@ -228,7 +236,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
   });
 
   it("reuses prepared list metadata with a persisted registry and omitted workspace", async () => {
-    const { rootDir: tempRoot, stateDir, env } = createStatusEnv(false);
+    const { rootDir: tempRoot, stateDir, env } = await createStatusEnv(false);
     const workspaceDir = undefined;
     const fixture = createColdPluginFixture({
       rootDir: tempRoot,
@@ -263,6 +271,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
     };
     const index = loadInstalledPluginIndex({ config, env, workspaceDir });
     await writePersistedInstalledPluginIndex(index, { stateDir });
+    await preparePluginMetadataMachineStateAsync({ env });
     const open = vi.spyOn(fs, "openSync");
     const report = buildPluginRegistrySnapshotReport({ config, env, workspaceDir });
     const manifestOpens = open.mock.calls.filter(
@@ -295,8 +304,8 @@ describe("buildPluginRegistrySnapshotReport", () => {
 
   it.each([false, true])(
     "reuses current metadata without a recorded source (diagnostics: %s)",
-    (hasDiagnostics) => {
-      const { rootDir, env } = createStatusEnv(false);
+    async (hasDiagnostics) => {
+      const { rootDir, env } = await createStatusEnv(false);
       const fixture = createColdPluginFixture({
         rootDir,
         pluginId: "current-demo",
@@ -334,7 +343,8 @@ describe("buildPluginRegistrySnapshotReport", () => {
     },
   );
 
-  it("reports package dependency install state without importing plugin runtime", () => {
+  it("reports package dependency install state without importing plugin runtime", async () => {
+    await preparePluginMetadataMachineStateAsync({});
     const rootDir = makeTempDir();
     const fixture = createColdPluginFixture({
       rootDir,
@@ -384,7 +394,8 @@ describe("buildPluginRegistrySnapshotReport", () => {
     expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
   });
 
-  it("keeps disabled plugins with missing required dependencies diagnostic-free", () => {
+  it("keeps disabled plugins with missing required dependencies diagnostic-free", async () => {
+    await preparePluginMetadataMachineStateAsync({});
     const fixture = createColdPluginFixture({
       rootDir: makeTempDir(),
       pluginId: "disabled-dependency-demo",

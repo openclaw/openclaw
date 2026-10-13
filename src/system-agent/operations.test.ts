@@ -239,7 +239,7 @@ describe("system agent operations", () => {
     const config = { plugins: { entries: { codex: { enabled: true } } } };
     mockConfig.setConfig(config);
     setRuntimeConfigSnapshot(config, config);
-    const metadata = createSystemAgentPluginMetadataTestSnapshot(config);
+    const metadata = await createSystemAgentPluginMetadataTestSnapshot(config);
     try {
       await metadata.run(() =>
         executeSystemAgentOperation(
@@ -276,7 +276,7 @@ describe("system agent operations", () => {
     };
     mockConfig.setConfig(config);
     setRuntimeConfigSnapshot(config, config);
-    const pluginMetadata = createSystemAgentPluginMetadataTestSnapshot(config);
+    const pluginMetadata = await createSystemAgentPluginMetadataTestSnapshot(config);
     try {
       await pluginMetadata.run(async () => {
         const output = await readConfigOutput(

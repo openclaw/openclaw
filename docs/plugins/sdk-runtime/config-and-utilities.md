@@ -269,15 +269,17 @@ major version. Session rows expose the saved request as `thinkingLevel`.
 `sessions.patch` returns that preference in `entry.thinkingLevel` and the
 execution level in `resolved.thinkingLevel`.
 
-Use `applyModelOverrideWithAuthProfileCompatibility(...)` only as the direct
+Await `applyModelOverrideWithAuthProfileCompatibilityAsync(...)` only as the direct
 persistence fallback when a channel callback cannot enter the full live-session
 transaction and already owns an atomic canonical session-entry patch. Pass the
 active config, resolved agent directory, entry, effective provider before the
 change, and validated selection. The helper mutates that entry only: it keeps a
 pinned auth profile when its recorded credential provider or configured alias is
 compatible, clears an incompatible pin, and enforces the model-selection lock.
-The caller still owns model allowlist validation, atomic persistence,
-`markLiveSwitchPending`, and any post-commit effects. Prefer
+The deprecated synchronous `applyModelOverrideWithAuthProfileCompatibility(...)`
+remains available for existing plugins and will be removed in a later release
+after stable deprecation. The caller still owns model allowlist validation,
+atomic persistence, `markLiveSwitchPending`, and any post-commit effects. Prefer
 `applySessionModelSelection(...)` whenever the full transaction is available.
 
 Model-picker actions carry only bounded snapshot and catalog tokens. Channel

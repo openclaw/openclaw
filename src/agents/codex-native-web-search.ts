@@ -1,5 +1,6 @@
 /** Reports whether native search matters for the configured agent model. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import {
   hasAvailableCodexAuth,
   isCodexNativeSearchEligibleModel,
@@ -20,9 +21,14 @@ export async function isCodexNativeWebSearchRelevant(params: {
     return true;
   }
 
+  const manifestPlugins = await resolvePluginMetadataSnapshotAsync({
+    config: params.config,
+    allowWorkspaceScopedCurrent: true,
+  });
   const defaultModel = resolveDefaultModelForAgent({
     cfg: params.config,
     agentId: params.agentId,
+    manifestPlugins,
   });
   const configuredProvider = params.config.models?.providers?.[defaultModel.provider];
   const configuredModelApi = configuredProvider?.models?.find(

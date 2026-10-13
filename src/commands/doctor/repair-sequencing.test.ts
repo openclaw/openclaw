@@ -35,7 +35,7 @@ describe("doctor repair sequencing", () => {
     mocks.isInstalledPluginEnabled.mockReturnValue(false);
     mocks.loadInstalledPluginIndex.mockReturnValue({ plugins: [] });
     mocks.loadPluginMetadataSnapshot.mockReturnValue(createPluginMetadataSnapshotFixture());
-    mocks.resolveConfigWidePluginMetadataSnapshot.mockReturnValue(
+    mocks.resolveConfigWidePluginMetadataSnapshotAsync.mockResolvedValue(
       createPluginMetadataSnapshotFixture(),
     );
     mocks.maybeRepairGroupAllowFromFallback.mockImplementation((cfg: OpenClawConfig) => ({

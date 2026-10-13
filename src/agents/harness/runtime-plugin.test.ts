@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createPluginMetadataSnapshot,
   makeRegistry,
+  preparePluginAutoEnableTestDiscovery,
 } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatForLog } from "../../gateway/ws-log.js";
@@ -110,6 +111,8 @@ vi.mock("../../plugins/activation-planner.js", () => ({
 
 describe("harness runtime plugins", () => {
   beforeEach(() => {
+    preparePluginAutoEnableTestDiscovery();
+    preparePluginAutoEnableTestDiscovery({});
     mocks.resolveActivatableProviderOwnerPluginIds.mockReset().mockReturnValue([]);
     mocks.resolveBundledProviderCompatPluginIds.mockReset().mockReturnValue([]);
     mocks.resolveOwningPluginIdsForProvider.mockReset().mockReturnValue(undefined);

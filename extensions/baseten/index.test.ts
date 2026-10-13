@@ -12,6 +12,7 @@ import {
   registerSingleProviderPlugin,
   resolveProviderPluginChoice,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { prepareModelProviderRequestRouteFacts } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig, OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
@@ -35,13 +36,13 @@ async function captureRegisteredPayloads(params: {
   if (!catalogModel) {
     throw new Error(`Baseten catalog did not provide ${params.modelId}`);
   }
-  const model: Model = {
+  const model: Model = await prepareModelProviderRequestRouteFacts({
     ...catalogModel,
     input: catalogModel.input.filter((kind) => kind === "text" || kind === "image"),
     provider: provider.id,
     api: "openai-completions",
     baseUrl: catalog.baseUrl,
-  };
+  });
   const captured: ReturnType<typeof buildOpenAICompletionsParams>[] = [];
   const wrapped = provider.wrapStreamFn?.({
     provider: provider.id,

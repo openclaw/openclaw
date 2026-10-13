@@ -22,8 +22,8 @@ import {
   clearPluginRegistryLoadCache,
   loadAndActivateRootPluginRegistry,
   loadOpenClawPluginCliRegistry,
-  loadOpenClawPlugins,
-  loadPluginRegistryHandle,
+  loadOpenClawPluginsAsync,
+  loadPluginRegistryHandleAsync,
 } from "./loader.js";
 import {
   makePluginLoaderTempDir,
@@ -81,11 +81,12 @@ it("keeps host config/state/system/model policy ownership across broad runtime l
       });
       const provider = api.runtime.modelAuth.resolveProviderIdForAuth(" Fixture ", { metadataSnapshot: { plugins: [] } });
       const system = api.runtime.system;
-      system.enqueueSystemEvent("registration", { sessionKey: "prepared-runtime-system" });
-      system.requestHeartbeat({ source: "other", intent: "immediate", reason: "registration", coalesceMs: 0 });
       const asyncStore = api.runtime.state.openKeyedStore({ namespace: "registration", maxEntries: 2 });
       fs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify({ entries, selection, runtimePolicy, provider, config: api.runtime.config.current() }));
-      api.registerCli(({ program }) => program.command("state-proof").action(async () => {
+      api.registerCli(({ program }) => {
+      system.enqueueSystemEvent("registration", { sessionKey: "prepared-runtime-system" });
+      system.requestHeartbeat({ source: "other", intent: "immediate", reason: "registration", coalesceMs: 0 });
+      program.command("state-proof").action(async () => {
         const runtime = runtimeStore.getRuntime();
         sync.register("before", { value: "retained" });
         const chunks = runtime.channel.text.chunkText("channel runtime works", 100);
@@ -94,7 +95,8 @@ it("keeps host config/state/system/model policy ownership across broad runtime l
         runtime.system.requestHeartbeat({ source: "other", intent: "immediate", reason: "materialized", coalesceMs: 0 });
         const row = await asyncStore.lookup("before");
         fs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify({ chunks, version, row }));
-      }), { commands: ["state-proof"] });
+      });
+      }, { commands: ["state-proof"] });
     } };`;
   const plugin = writePlugin({
     id: "state-cli",
@@ -167,7 +169,7 @@ it("keeps host config/state/system/model policy ownership across broad runtime l
         );
         expect(fs.existsSync(observed)).toBe(false);
         expect(resolveRuntime).not.toHaveBeenCalled();
-        const registry = loadPluginRegistryHandle({
+        const registry = await loadPluginRegistryHandleAsync({
           config,
           cache: false,
           pluginSdkResolution: "src",
@@ -198,12 +200,6 @@ it("keeps host config/state/system/model policy ownership across broad runtime l
         const system = runtime.system;
         expect(system.requestHeartbeat).toBe(requestHeartbeat);
         expect(system.runCommandWithTimeout).toBe(runCommandWithTimeout);
-        expect(drainSystemEvents("agent:main:prepared-runtime-system")).toEqual(["registration"]);
-        await vi.waitFor(() =>
-          expect(heartbeat).toHaveBeenCalledWith(
-            expect.objectContaining({ reason: "registration" }),
-          ),
-        );
         const command = await system.runCommandWithTimeout(
           [process.execPath, "-e", 'process.stdout.write("system-ready")'],
           { timeoutMs: 1_000, killProcessTree: true },
@@ -250,6 +246,12 @@ it("keeps host config/state/system/model policy ownership across broad runtime l
           logger: { info() {}, warn() {}, error() {} },
         });
         expect(resolveRuntime).not.toHaveBeenCalled();
+        expect(drainSystemEvents("agent:main:prepared-runtime-system")).toEqual(["registration"]);
+        await vi.waitFor(() =>
+          expect(heartbeat).toHaveBeenCalledWith(
+            expect.objectContaining({ reason: "registration" }),
+          ),
+        );
         fullRuntime = await import("./runtime/index.js");
         await program.parseAsync(["state-proof"], { from: "user" });
         expect(JSON.parse(fs.readFileSync(observed, "utf8"))).toEqual({
@@ -396,7 +398,7 @@ it("keeps host config/state/system/model policy ownership across broad runtime l
   );
 });
 
-it("reuses discovered registrations through prepared load options until invalidated", () => {
+it("reuses discovered registrations through prepared load options until invalidated", async () => {
   useNoBundledPlugins();
   const plugin = writePlugin({
     id: "prepared-cache",
@@ -411,7 +413,7 @@ it("reuses discovered registrations through prepared load options until invalida
       },
     },
   };
-  const first = loadPluginRegistryHandle(options);
+  const first = await loadPluginRegistryHandleAsync(options);
   expect(first.plugins).toContainEqual(
     expect.objectContaining({ id: plugin.id, status: "loaded" }),
   );
@@ -420,16 +422,18 @@ it("reuses discovered registrations through prepared load options until invalida
     throw new Error("Expected loader-owned context");
   }
   const prepared = buildPluginRuntimeLoadOptions(context);
-  expect(loadPluginRegistryHandle({ ...prepared, throwOnLoadError: true })).toBe(first);
-  expect(loadPluginRegistryHandle({ ...prepared, cache: false })).not.toBe(first);
+  expect(await loadPluginRegistryHandleAsync({ ...prepared, throwOnLoadError: true })).toBe(first);
+  expect(await loadPluginRegistryHandleAsync({ ...prepared, cache: false })).not.toBe(first);
   expect(
-    loadPluginRegistryHandle({
-      ...prepared,
-      config: { ...options.config, plugins: { ...options.config.plugins, enabled: false } },
-    }).plugins,
+    (
+      await loadPluginRegistryHandleAsync({
+        ...prepared,
+        config: { ...options.config, plugins: { ...options.config.plugins, enabled: false } },
+      })
+    ).plugins,
   ).toContainEqual(expect.objectContaining({ id: plugin.id, status: "disabled" }));
   clearPluginRegistryLoadCache();
-  const refreshed = loadPluginRegistryHandle(prepared);
+  const refreshed = await loadPluginRegistryHandleAsync(prepared);
   expect(refreshed).not.toBe(first);
   expect(refreshed.plugins).toContainEqual(
     expect.objectContaining({ id: plugin.id, status: "loaded" }),
@@ -439,7 +443,11 @@ it("reuses discovered registrations through prepared load options until invalida
 describe("cached plugin load failures", () => {
   it.each([
     { name: "active root registry", load: loadAndActivateRootPluginRegistry, activates: true },
-    { name: "non-activating registry handle", load: loadPluginRegistryHandle, activates: false },
+    {
+      name: "non-activating registry handle",
+      load: loadPluginRegistryHandleAsync,
+      activates: false,
+    },
   ])("enforces strict errors for a cached $name before activation", async ({ load, activates }) => {
     useNoBundledPlugins();
     const plugin = writePlugin({
@@ -472,7 +480,7 @@ describe("cached plugin load failures", () => {
     expect(getActivePluginRegistry()).toBe(activates ? cached : active);
   });
 
-  it("reports only newly failed replacements while retaining the complete diagnostic registry", () => {
+  it("reports only newly failed replacements while retaining the complete diagnostic registry", async () => {
     useNoBundledPlugins();
     const broken = writePlugin({
       id: "startup-broken",
@@ -492,7 +500,7 @@ describe("cached plugin load failures", () => {
       },
       cache: false,
     };
-    const previous = loadPluginRegistryHandle(options);
+    const previous = await loadPluginRegistryHandleAsync(options);
     const retained = previous.plugins.find((entry) => entry.id === broken.id);
     expect(retained).toMatchObject({ status: "error" });
     expect(previous.plugins.find((entry) => entry.id === healthy.id)).toMatchObject({
@@ -501,7 +509,7 @@ describe("cached plugin load failures", () => {
     fs.writeFileSync(healthy.file, 'throw new Error("new replacement failure");');
     let failure: unknown;
     try {
-      loadPluginRegistryHandle({
+      await loadPluginRegistryHandleAsync({
         ...options,
         previousRegistry: previous,
         replacePluginIds: [healthy.id],
@@ -524,7 +532,7 @@ describe("cached plugin load failures", () => {
     expect(failure.registry.diagnostics).toEqual(expect.arrayContaining(previous.diagnostics));
   });
 
-  it("does not reject an unrelated replacement for a re-evaluated startup quarantine", () => {
+  it("does not reject an unrelated replacement for a re-evaluated startup quarantine", async () => {
     useNoBundledPlugins();
     const broken = writePlugin({
       id: "startup-quarantined",
@@ -557,11 +565,11 @@ describe("cached plugin load failures", () => {
         },
       },
     ]);
-    const previous = loadPluginRegistryHandle(options);
+    const previous = await loadPluginRegistryHandleAsync(options);
     const previousError = previous.plugins.find((entry) => entry.id === broken.id)?.error;
     expect(previousError).toContain("missing-openclaw-peer-link");
 
-    const replacement = loadPluginRegistryHandle({
+    const replacement = await loadPluginRegistryHandleAsync({
       ...options,
       config: {
         plugins: {
@@ -580,14 +588,14 @@ describe("cached plugin load failures", () => {
     expect(replacement.plugins.find((entry) => entry.id === healthy.id)).toMatchObject({
       status: "loaded",
     });
-    expect(() =>
-      loadPluginRegistryHandle({
+    await expect(
+      loadPluginRegistryHandleAsync({
         ...options,
         previousRegistry: previous,
         replacePluginIds: [broken.id],
         throwOnLoadError: true,
       }),
-    ).toThrow(PluginLoadFailureError);
+    ).rejects.toThrow(PluginLoadFailureError);
   });
 });
 
@@ -668,30 +676,30 @@ describe("clearPluginRegistryLoadCache", () => {
           },
         },
       };
-      const resolveTool = (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+      const resolveTool = (registry: Awaited<ReturnType<typeof loadOpenClawPluginsAsync>>) => {
         const tool = registry.tools[0]!.factory({ config: options.config });
         if (!tool || Array.isArray(tool)) {
           throw new Error("expected one lifetime probe tool");
         }
         return tool;
       };
-      const read = async (registry: ReturnType<typeof loadOpenClawPlugins>) =>
+      const read = async (registry: Awaited<ReturnType<typeof loadOpenClawPluginsAsync>>) =>
         await resolveTool(registry).execute("probe", {});
-      const original = loadOpenClawPlugins(options);
+      const original = await loadOpenClawPluginsAsync(options);
       const retainedTool = resolveTool(original);
       const originalKey = resolvePluginLoadCacheContext(options).cacheKey;
-      expect(loadOpenClawPlugins(options)).toBe(original);
+      expect(await loadOpenClawPluginsAsync(options)).toBe(original);
       expect(await read(original)).toMatchObject({ content: [{ text: "live" }] });
 
       if (retirement === "clear") {
         await clearActivePluginRegistry();
       } else {
         const replacementOptions = { ...options, workspaceDir: makePluginLoaderTempDir() };
-        const replacement = loadOpenClawPlugins(replacementOptions);
+        const replacement = await loadOpenClawPluginsAsync(replacementOptions);
         expect(replacement).not.toBe(original);
         expect(await read(replacement)).toMatchObject({ content: [{ text: "live" }] });
         await vi.waitFor(() => expect(cleanup).toHaveBeenCalledTimes(1));
-        expect(loadOpenClawPlugins(replacementOptions)).toBe(replacement);
+        expect(await loadOpenClawPluginsAsync(replacementOptions)).toBe(replacement);
         expect(
           getPluginLoaderCacheState().get(
             resolvePluginLoadCacheContext(replacementOptions).cacheKey,
@@ -703,10 +711,10 @@ describe("clearPluginRegistryLoadCache", () => {
       expect(cleanup).toHaveBeenCalledTimes(1);
       await expect(read(original)).rejects.toThrow(/reloaded or disabled/);
       expect(() => retainedTool.execute("probe", {})).toThrow(/reloaded or disabled/);
-      const reloaded = loadOpenClawPlugins(options);
+      const reloaded = await loadOpenClawPluginsAsync(options);
       expect(await read(reloaded)).toMatchObject({ content: [{ text: "live" }] });
       expect(reloaded).not.toBe(original);
-      expect(loadOpenClawPlugins(options)).toBe(reloaded);
+      expect(await loadOpenClawPluginsAsync(options)).toBe(reloaded);
     },
   );
 });

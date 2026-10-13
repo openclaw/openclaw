@@ -257,12 +257,14 @@ export async function writeQaSessionTranscript(
     ...process.env,
     OPENCLAW_STATE_DIR: path.join(env.gateway.tempRoot, "state"),
   };
+  const storePath = resolveStorePath(undefined, { agentId: "qa", env: sessionEnv });
   // The real transcript readers need the same authored config as the isolated writer.
   setRuntimeConfigSnapshot(env.cfg);
   await upsertSessionEntry({
     agentId: "qa",
     env: sessionEnv,
     sessionKey,
+    storePath,
     entry: { sessionId, updatedAt: Date.now() },
   });
   for (const message of messages) {
@@ -271,6 +273,7 @@ export async function writeQaSessionTranscript(
       env: sessionEnv,
       sessionId,
       sessionKey,
+      storePath,
       message,
     });
   }

@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
-import { createOpenClawCodingTools } from "../agents/agent-tools.js";
+import { createOpenClawCodingToolsAsync } from "../agents/agent-tools.js";
 import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
@@ -78,7 +78,7 @@ describe("guest session rename through the agent catalog", () => {
             senderIsOwner: false,
             messageProvider: "webchat",
           };
-          const tools = createOpenClawCodingTools(options);
+          const tools = await createOpenClawCodingToolsAsync(options);
           const tool = tools.find((candidate) => candidate.name === "sessions");
           expect(tool, "guest catalog includes the permitted session operation").toBeDefined();
           if (!tool) {
@@ -133,7 +133,7 @@ describe("guest session rename through the agent catalog", () => {
           }
           expect(loadSessionEntry(scope)?.label).toBe("Research plan");
           expect(loadSessionEntry({ agentId: "main", sessionKey: TARGET })?.label).toBeUndefined();
-          const denied = createOpenClawCodingTools({
+          const denied = await createOpenClawCodingToolsAsync({
             ...options,
             config: { ...options.config, tools: { ...options.config.tools, deny: ["sessions"] } },
           });
@@ -264,10 +264,10 @@ describe("guest session rename through the agent catalog", () => {
                 sandboxToolPolicy: sandboxConfig.tools,
               });
               const catalogs = [
-                ["native", createOpenClawCodingTools(nativeOptions)],
+                ["native", await createOpenClawCodingToolsAsync(nativeOptions)],
                 [
                   "prepared native",
-                  createOpenClawCodingTools({
+                  await createOpenClawCodingToolsAsync({
                     ...nativeOptions,
                     conversationCapabilityProfile: preparedProfile,
                   }),
@@ -332,8 +332,9 @@ describe("guest session rename through the agent catalog", () => {
                 ).toBeUndefined();
               }
               if (name === "default") {
-                const absent = (tools: ReturnType<typeof createOpenClawCodingTools>) =>
-                  expect(tools.some((tool) => tool.name === "sessions")).toBe(false);
+                const absent = (
+                  tools: Awaited<ReturnType<typeof createOpenClawCodingToolsAsync>>,
+                ) => expect(tools.some((tool) => tool.name === "sessions")).toBe(false);
                 absent(
                   (
                     await resolveGatewayScopedTools({
@@ -343,9 +344,11 @@ describe("guest session rename through the agent catalog", () => {
                     })
                   ).tools,
                 );
-                absent(createOpenClawCodingTools({ ...nativeOptions, senderIsOwner: true }));
                 absent(
-                  createOpenClawCodingTools({
+                  await createOpenClawCodingToolsAsync({ ...nativeOptions, senderIsOwner: true }),
+                );
+                absent(
+                  await createOpenClawCodingToolsAsync({
                     ...nativeOptions,
                     conversationCapabilityProfile: defaultsWithoutAdmission,
                   }),
@@ -357,7 +360,7 @@ describe("guest session rename through the agent catalog", () => {
                 const narrowed: SandboxToolPolicy = { ...sandboxConfig.tools, allow: ["read"] };
                 for (const tools of [unmarked, narrowed]) {
                   absent(
-                    createOpenClawCodingTools({
+                    await createOpenClawCodingToolsAsync({
                       ...nativeOptions,
                       sandbox: { ...nativeOptions.sandbox, tools },
                     }),

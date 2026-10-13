@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { discoverModelsFromCapturedSources } from "./agent-model-discovery.js";
 import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "./plugin-model-catalog.js";
@@ -21,6 +22,10 @@ const pluginCatalogs = [
 ];
 const deferredMetadata = createPluginMetadataSnapshotFixture({
   plugins: [{ id: "catalog-owner", providers: ["fixture"], activation: { onStartup: false } }],
+});
+
+beforeAll(async () => {
+  await prepareBundledDiscoveryMode();
 });
 
 function readCatalog(authStorage: AuthStorage, modelsJsonContents: string | null = null) {

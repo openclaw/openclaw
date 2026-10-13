@@ -111,11 +111,11 @@ export function normalizeAgentRuntimeTools<
   // Projection owns this fresh array, so normalizers can mutate it without changing raw input.
   const normalizableTools = normalizableToolProjection.tools;
   const planNormalized = params.runtimePlan?.tools.normalize(normalizableTools, planContext);
-  // Empty fallback input cannot gain provider-specific schema changes. Avoid loading a provider
-  // runtime just to return the same empty list; runtime plans still receive their normal callback.
+  // Empty input or a missing provider cannot gain provider-specific schema changes.
+  // Runtime plans still receive their normal callback.
   const normalized =
     planNormalized ??
-    (normalizableTools.length === 0
+    (normalizableTools.length === 0 || !params.provider.trim()
       ? normalizableTools
       : normalizeProviderToolSchemas({
           tools: normalizableTools,

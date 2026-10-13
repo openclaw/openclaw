@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   createTranscription: vi.fn<(request: RealtimeTranscriptionSessionCreateRequest) => void>(),
 }));
 vi.mock("./response-generator.js", () => ({ generateVoiceResponse: mocks.generate }));
+// mock-isolation: Webhook lifecycle cases supply synthetic transcription sessions without loading provider plugins.
 vi.mock("./realtime-transcription.runtime.js", () => {
   const provider = {
     id: "test-transcription",
@@ -38,8 +39,8 @@ vi.mock("./realtime-transcription.runtime.js", () => {
     },
   };
   return {
-    getRealtimeTranscriptionProvider: () => provider,
-    listRealtimeTranscriptionProviders: () => [provider],
+    getRealtimeTranscriptionProviderAsync: () => provider,
+    listRealtimeTranscriptionProvidersAsync: () => [provider],
   };
 });
 

@@ -31,6 +31,7 @@ import {
   recordAgentRunModel,
   registerAgentRunContext,
 } from "../infra/agent-run-registry.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import {
   activateSecretsRuntimeSnapshotState,
   clearSecretsRuntimeSnapshotState,
@@ -59,6 +60,7 @@ afterEach(() => vi.restoreAllMocks());
 
 it("reuses descendants after parent progress while keeping inherited models current", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await prepareBundledDiscoveryMode();
     vi.spyOn(Date, "now").mockReturnValue(100);
     const cfg = {
       agents: {
@@ -269,6 +271,7 @@ it("reuses descendants after parent progress while keeping inherited models curr
 
 it("refreshes profile display fields on selected live and archived rows without rereading entries", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await prepareBundledDiscoveryMode();
     const cfg = { agents: { entries: { main: {} } } };
     const owner = ensureProfileForEmail("owner@example.com");
     const participant = ensureProfileForEmail("participant@example.com");
@@ -374,6 +377,7 @@ it("refreshes profile display fields on selected live and archived rows without 
 
 it("reuses row identities across lists until their entry, profile, or config changes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await prepareBundledDiscoveryMode();
     const cfg = {
       agents: {
         entries: { main: { identity: { name: "Original agent" } } },
@@ -453,6 +457,7 @@ it.each(["source rewrite", "resolved snapshot"] as const)(
   "keeps projected rows clean for an equivalent config %s",
   async (publication) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await prepareBundledDiscoveryMode();
       const cfg = { agents: { entries: { main: {} } } };
       for (let index = 0; index < 4; index++) {
         replaceSessionEntrySync(

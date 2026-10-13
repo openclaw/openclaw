@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { useProviderCatalogMetadata } from "../../plugin-sdk/test-helpers/provider-catalog.js";
+import { useBundledProviderPolicyArtifactsForTest } from "../../plugin-sdk/test-helpers/provider-policy-artifacts.test-support.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import {
@@ -9,6 +11,9 @@ import {
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { createModelAuthAvailabilityResolver } from "../model-auth-availability.js";
 import { prepareAgentRuntimeAuth } from "./prepare-auth.js";
+
+useProviderCatalogMetadata(new URL("../../../extensions/openai/", import.meta.url));
+useBundledProviderPolicyArtifactsForTest(["openai"]);
 
 function authStore(apiKeyProfile: string, oauthProfile: string): AuthProfileStore {
   return {

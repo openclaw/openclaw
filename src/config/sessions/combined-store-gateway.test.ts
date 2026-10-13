@@ -12,6 +12,7 @@ import { listProjectedSessions } from "../../gateway/session-utils-list.js";
 import { createGatewaySessionEntryReader } from "../../gateway/session-utils-store-lineage.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { preparePluginMetadataMachineStateAsync } from "../../plugins/installed-plugin-index-record-state.js";
 import {
   inspectAgentDatabaseAdmission,
   readAgentDatabaseAdmissionRefusal,
@@ -40,6 +41,7 @@ async function withResidentRows(
   cfg: OpenClawConfig,
   run: (projection: SessionRowProjection) => Promise<void>,
 ) {
+  await preparePluginMetadataMachineStateAsync({});
   const projection = await createSessionRowProjection({ cfg });
   try {
     await run(projection);

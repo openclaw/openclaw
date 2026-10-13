@@ -3,8 +3,14 @@ import {
   resolveDefaultModelForAgent,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
 import { resolveCodexCatalogCreateSession } from "./session-catalog-create.js";
+
+useProviderCatalogMetadata(
+  new URL("../", import.meta.url),
+  new URL("../../openai/", import.meta.url),
+);
 
 const modelConfig = { resolveAllowedModelRef, resolveDefaultModelForAgent };
 

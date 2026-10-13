@@ -199,21 +199,6 @@ export function resolveEnabledProviderPluginIds(params: ProviderRegistryLoadPara
   });
 }
 
-export function resolveExternalAuthProfileProviderPluginIds(params: {
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-  manifestRegistry?: PluginManifestRegistry;
-}): string[] {
-  return resolveManifestRegistry({
-    ...params,
-    registry: loadProviderRegistrySnapshot(params),
-  })
-    .plugins.filter((plugin) => (plugin.contracts?.externalAuthProviders?.length ?? 0) > 0)
-    .map((plugin) => plugin.id)
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
 export function resolveDiscoveredProviderPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;

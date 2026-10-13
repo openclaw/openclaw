@@ -2,6 +2,7 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { prepareModelProviderRequestRouteFacts } from "openclaw/plugin-sdk/provider-http";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
@@ -34,10 +35,10 @@ function requireCohereModel(modelId = COHERE_COMMAND_A_PLUS_MODEL_ID): Model<"op
   } as Model<"openai-completions">;
 }
 
-function captureCoherePayload(
+async function captureCoherePayload(
   context: Context,
   settings?: { modelId?: string; reasoning?: string },
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
   let captured: Record<string, unknown> | undefined;
   const baseStreamFn: StreamFn = (model, streamContext, streamOptions) => {
     const payload = buildOpenAICompletionsParams(
@@ -49,7 +50,7 @@ function captureCoherePayload(
     return {} as ReturnType<StreamFn>;
   };
 
-  const model = requireCohereModel(settings?.modelId);
+  const model = await prepareModelProviderRequestRouteFacts(requireCohereModel(settings?.modelId));
   const wrappedStreamFn = wrapCohereProviderStream({
     provider: "cohere",
     modelId: model.id,
@@ -59,7 +60,7 @@ function captureCoherePayload(
   if (!wrappedStreamFn) {
     throw new Error("Cohere wrapper did not return a stream function");
   }
-  void wrappedStreamFn(model, context, {
+  await wrappedStreamFn(model, context, {
     onPayload: (payload) => {
       captured = payload as Record<string, unknown>;
     },
@@ -107,8 +108,8 @@ describe("Cohere provider plugin", () => {
     ]);
   });
 
-  it("uses Cohere's OpenAI-compatible completions payload fields", () => {
-    const params = captureCoherePayload({
+  it("uses Cohere's OpenAI-compatible completions payload fields", async () => {
+    const params = await captureCoherePayload({
       systemPrompt: "system",
       messages: [],
       tools: [
@@ -133,16 +134,16 @@ describe("Cohere provider plugin", () => {
     );
   });
 
-  it("maps Command A+ and Command A Reasoning to Cohere's supported reasoning efforts", () => {
+  it("maps Command A+ and Command A Reasoning to Cohere's supported reasoning efforts", async () => {
     const context = { messages: [] } as Context;
 
     for (const modelId of [COHERE_COMMAND_A_PLUS_MODEL_ID, COHERE_COMMAND_A_REASONING_MODEL_ID]) {
-      expect(captureCoherePayload(context, { modelId, reasoning: "off" }).reasoning_effort).toBe(
-        "none",
-      );
-      expect(captureCoherePayload(context, { modelId, reasoning: "medium" }).reasoning_effort).toBe(
-        "high",
-      );
+      expect(
+        (await captureCoherePayload(context, { modelId, reasoning: "off" })).reasoning_effort,
+      ).toBe("none");
+      expect(
+        (await captureCoherePayload(context, { modelId, reasoning: "medium" })).reasoning_effort,
+      ).toBe("high");
     }
   });
 

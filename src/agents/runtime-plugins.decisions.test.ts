@@ -10,8 +10,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { inspectDecisionProviders } from "../decisions/runtime.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
-import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
 
@@ -89,12 +89,13 @@ it("lets a separate credential-free plugin invoke the prepared Gateway decision 
       },
     },
   };
+  const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+    config: source,
+    workspaceDir: state.workspaceDir,
+  });
   const activated = applyPluginAutoEnable({
     config: source,
-    manifestRegistry: loadPluginManifestRegistryCore({
-      config: source,
-      workspaceDir: state.workspaceDir,
-    }),
+    manifestRegistry: metadataSnapshot.manifestRegistry,
   });
   expect(activated.autoEnabledReasons.fixture).toEqual(["fixture decision provider selected"]);
   const runtime: OpenClawConfig = structuredClone(activated.config);
@@ -107,10 +108,10 @@ it("lets a separate credential-free plugin invoke the prepared Gateway decision 
     workspaceDir: state.workspaceDir,
     cache: false,
   });
-  let scoped: ReturnType<typeof loadAgentRuntimePluginRegistryHandle> | undefined;
+  let scoped: Awaited<ReturnType<typeof loadAgentRuntimePluginRegistryHandle>> | undefined;
   try {
     expect(root.plugins.find((plugin) => plugin.id === "fixture")?.status).toBe("loaded");
-    scoped = loadAgentRuntimePluginRegistryHandle({
+    scoped = await loadAgentRuntimePluginRegistryHandle({
       config: captureRuntimeConfig(runtime),
       workspaceDir: state.workspaceDir,
       allowGatewaySubagentBinding: true,

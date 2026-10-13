@@ -26,12 +26,13 @@ const mocks = vi.hoisted(() => {
     mime: "image/png",
     size: 12,
   }));
+  const buildProviderRegistry = vi.fn(() => new Map());
   return {
-    buildProviderRegistry: vi.fn(() => new Map()),
+    buildProviderRegistry,
     createMediaAttachmentCache: vi.fn(() => ({ cleanup, getBuffer })),
     normalizeMediaAttachments: vi.fn<() => MediaAttachment[]>(() => []),
     normalizeMediaProviderId: vi.fn((provider: string) => provider.trim().toLowerCase()),
-    buildMediaUnderstandingRegistry: vi.fn(() => new Map()),
+    buildMediaUnderstandingRegistry: buildProviderRegistry,
     getMediaUnderstandingProvider: vi.fn(),
     describeImageWithModel: vi.fn(async () => ({ text: "generic image ok", model: "vision" })),
     convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
@@ -55,7 +56,15 @@ vi.mock("./runner.js", () => ({
   runCapability: mocks.runCapability,
 }));
 
-vi.mock("./provider-registry.js", () => ({
+// mock-isolation: Media execution fixtures own their provider registry and release handles without plugin discovery.
+vi.mock("./provider-registry.js", async () => ({
+  acquireMediaUnderstandingRegistry: async () => {
+    const { createMediaProviderAcquisition } = await import("./runner.test-mocks.js");
+    return {
+      ...createMediaProviderAcquisition([]),
+      registry: mocks.buildProviderRegistry(),
+    };
+  },
   normalizeMediaProviderId: mocks.normalizeMediaProviderId,
   buildMediaUnderstandingRegistry: mocks.buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider: mocks.getMediaUnderstandingProvider,

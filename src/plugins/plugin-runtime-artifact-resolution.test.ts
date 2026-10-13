@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { withEnv } from "../test-utils/env.js";
-import { clearPluginRegistryLoadCache, loadOpenClawPlugins } from "./loader.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { clearPluginRegistryLoadCache, loadOpenClawPluginsAsync } from "./loader.js";
 import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
 import { fingerprintPluginRuntimeArtifact } from "./plugin-runtime-artifact-identity.js";
 import {
@@ -16,7 +16,7 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { getActivePluginChannelRegistry } from "./runtime.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import { setPluginRuntimeLoadContext } from "./runtime/load-context.js";
-import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
+import { resolvePluginRuntimeLoadContextAsync } from "./runtime/load-context.resolve.js";
 
 const tempDirs: string[] = [];
 
@@ -88,17 +88,17 @@ afterEach(() => {
 describe("resolvePluginRuntimeArtifact", () => {
   it.each(["disabled", "metadata-only"])(
     "does not inspect built runtime files for %s plugins",
-    (mode) => {
+    async (mode) => {
       const fixture = createBundledPluginFixture();
       const open = vi.spyOn(fs, "openSync");
-      const registry = withEnv(
+      const registry = await withEnvAsync(
         {
           OPENCLAW_BUNDLED_PLUGINS_DIR: path.dirname(fixture.rootDir),
           OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
         },
         () =>
-          loadOpenClawPlugins({
+          loadOpenClawPluginsAsync({
             cache: false,
             config: {
               plugins: {
@@ -130,7 +130,7 @@ describe("resolvePluginRuntimeArtifact", () => {
     { layout: "root-bundled", preferBuiltPluginArtifacts: true },
   ])(
     "exposes and fingerprints the selected $layout runtime entry",
-    ({ layout, preferBuiltPluginArtifacts }) => {
+    async ({ layout, preferBuiltPluginArtifacts }) => {
       const fixture = createBundledPluginFixture();
       const entry = !preferBuiltPluginArtifacts
         ? fixture.source
@@ -148,13 +148,13 @@ describe("resolvePluginRuntimeArtifact", () => {
           }
         };`,
       );
-      withEnv(
+      await withEnvAsync(
         {
           OPENCLAW_BUNDLED_PLUGINS_DIR: path.dirname(fixture.rootDir),
           OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
         },
-        () => {
+        async () => {
           const config = {
             plugins: { allow: ["fixture"], entries: { fixture: { enabled: true } } },
           };
@@ -162,12 +162,12 @@ describe("resolvePluginRuntimeArtifact", () => {
           const stagingRegistry = createEmptyPluginRegistry();
           setPluginRuntimeLoadContext(
             stagingRegistry,
-            resolvePluginRuntimeLoadContext({ config, preferBuiltPluginArtifacts }),
+            await resolvePluginRuntimeLoadContextAsync({ config, preferBuiltPluginArtifacts }),
           );
           const before = withPluginRuntimeRegistryScope(stagingRegistry, () =>
             fingerprintPluginRuntimeArtifact(record),
           );
-          const registry = loadOpenClawPlugins({
+          const registry = await loadOpenClawPluginsAsync({
             cache: false,
             config,
             onlyPluginIds: ["fixture"],
@@ -417,7 +417,7 @@ describe("resolvePluginRuntimeArtifact", () => {
     expect(builtResolution.source).toBe(fixture.builtSource);
   });
 
-  it("resolves replacement artifacts independently while pinned consumers keep their registry", () => {
+  it("resolves replacement artifacts independently while pinned consumers keep their registry", async () => {
     const fixture = createBundledPluginFixture();
     const config = {
       plugins: {
@@ -426,20 +426,20 @@ describe("resolvePluginRuntimeArtifact", () => {
       },
     };
 
-    const [first, second] = withEnv(
+    const [first, second] = await withEnvAsync(
       {
         OPENCLAW_BUNDLED_PLUGINS_DIR: path.dirname(fixture.rootDir),
         OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
       },
-      () => {
-        const sourceRegistry = loadOpenClawPlugins({
+      async () => {
+        const sourceRegistry = await loadOpenClawPluginsAsync({
           cache: false,
           config,
           onlyPluginIds: ["fixture"],
           preferBuiltPluginArtifacts: false,
         });
-        const builtPreferredRegistry = loadOpenClawPlugins({
+        const builtPreferredRegistry = await loadOpenClawPluginsAsync({
           cache: false,
           config,
           onlyPluginIds: ["fixture"],
@@ -476,14 +476,14 @@ describe("resolvePluginRuntimeArtifact", () => {
         configSchema: { type: "object", additionalProperties: false, properties: {} },
       }),
     );
-    withEnv(
+    await withEnvAsync(
       {
         OPENCLAW_BUNDLED_PLUGINS_DIR: path.dirname(fixture.rootDir),
         OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
         OPENCLAW_STATE_DIR: path.join(packageRoot, "state"),
       },
-      () => {
+      async () => {
         const workspaceDir = path.join(packageRoot, "workspace");
         const config: OpenClawConfig = {
           agents: {
@@ -514,11 +514,11 @@ describe("resolvePluginRuntimeArtifact", () => {
         const stagingRegistry = createEmptyPluginRegistry();
         setPluginRuntimeLoadContext(
           stagingRegistry,
-          resolvePluginRuntimeLoadContext({ config, preferBuiltPluginArtifacts: true }),
+          await resolvePluginRuntimeLoadContextAsync({ config, preferBuiltPluginArtifacts: true }),
         );
         const before = withPluginRuntimeRegistryScope(stagingRegistry, capture);
         expect(before.ownerPluginIds).toEqual(["fixture"]);
-        const registry = loadOpenClawPlugins({
+        const registry = await loadOpenClawPluginsAsync({
           cache: false,
           config,
           onlyPluginIds: ["fixture"],

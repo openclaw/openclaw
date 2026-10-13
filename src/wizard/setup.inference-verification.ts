@@ -18,6 +18,7 @@ import { materializeRuntimeConfig } from "../config/materialize.js";
 import { applyMergePatch, createMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withConsoleSubsystemsSuppressed } from "../logging/console.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   resolveSystemAgentConfiguredRouteFromConfig,
@@ -120,8 +121,15 @@ export async function offerLiveModelVerification(params: {
   verified: boolean;
   modelRef?: string;
 }> {
-  const requiresCandidateVerification = (config: OpenClawConfig) => {
-    const provider = resolveDefaultModelForAgent({ cfg: config }).provider;
+  const requiresCandidateVerification = async (config: OpenClawConfig) => {
+    const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+      config,
+      allowWorkspaceScopedCurrent: true,
+    });
+    const provider = resolveDefaultModelForAgent({
+      cfg: config,
+      manifestPlugins: metadataSnapshot,
+    }).provider;
     return (
       params.opts.nonInteractive !== true &&
       config.models?.providers?.[provider]?.localService !== undefined
@@ -145,7 +153,7 @@ export async function offerLiveModelVerification(params: {
   let required =
     params.required ||
     (params.initialCandidate !== undefined &&
-      requiresCandidateVerification(params.initialCandidate.config));
+      (await requiresCandidateVerification(params.initialCandidate.config)));
   if (!required && !replacesCredential) {
     const shouldTest = await params.prompter.confirm({
       message: t("wizard.setup.testAiAccess"),
@@ -172,9 +180,22 @@ export async function offerLiveModelVerification(params: {
           await import("../system-agent/setup-inference-credentials.js");
         const { projectSetupInferenceConfig } =
           await import("../system-agent/setup-model-selection.js");
-        const model = resolveDefaultModelForAgent({ cfg: config, agentId });
+        const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+          config,
+          allowWorkspaceScopedCurrent: true,
+        });
+        const model = resolveDefaultModelForAgent({
+          cfg: config,
+          agentId,
+          manifestPlugins: metadataSnapshot,
+        });
         const modelRef = `${model.provider}/${model.model}`;
-        const profile = selectSetupCredential(candidate.authProfiles, modelRef, config);
+        const profile = selectSetupCredential(
+          candidate.authProfiles,
+          modelRef,
+          config,
+          metadataSnapshot,
+        );
         if (!profile) {
           throw new Error(`The selected provider did not return credentials for ${modelRef}.`);
         }
@@ -397,6 +418,6 @@ export async function offerLiveModelVerification(params: {
       ...(params.stateDir ? { stateDir: params.stateDir } : {}),
     });
     shouldPersistCandidate = true;
-    required ||= requiresCandidateVerification(candidate.config);
+    required ||= await requiresCandidateVerification(candidate.config);
   }
 }

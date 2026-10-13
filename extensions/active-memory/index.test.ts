@@ -3602,11 +3602,13 @@ describe("active-memory plugin", () => {
       timeoutMs: 25,
       logging: true,
     };
+    const lookupStarted = createDeferred<void>();
     let resolveLookup: ((value: undefined) => void) | undefined;
     vi.spyOn(api.runtime.state, "openKeyedStore").mockReturnValue({
       lookup: () =>
         new Promise<undefined>((resolve) => {
           resolveLookup = resolve;
+          lookupStarted.resolve();
         }),
     });
     plugin.register(api as unknown as OpenClawPluginApi);
@@ -3617,6 +3619,7 @@ describe("active-memory plugin", () => {
         sessionKey: "agent:main:stalled-toggle",
       },
     );
+    await lookupStarted.promise;
     await vi.advanceTimersByTimeAsync(1_525);
 
     await expect(resultPromise).resolves.toBeUndefined();
@@ -3645,14 +3648,20 @@ describe("active-memory plugin", () => {
       timeoutMs: 25,
       logging: true,
     };
+    const lookupStarted = createDeferred<void>();
+    const recallStarted = createDeferred<void>();
     vi.spyOn(api.runtime.state, "openKeyedStore").mockReturnValue({
       lookup: async () =>
         await new Promise<undefined>((resolve) => {
           setTimeout(() => resolve(undefined), 1_490);
+          lookupStarted.resolve();
         }),
     });
     plugin.register(api as unknown as OpenClawPluginApi);
-    runEmbeddedAgent.mockImplementationOnce(() => new Promise<never>(() => {}));
+    runEmbeddedAgent.mockImplementationOnce(() => {
+      recallStarted.resolve();
+      return new Promise<never>(() => {});
+    });
 
     const resultPromise = runPromptBuild(
       { prompt: "what food do i usually order? delayed recall start" },
@@ -3660,18 +3669,15 @@ describe("active-memory plugin", () => {
         sessionKey: "agent:main:delayed-recall-start",
       },
     );
+    await lookupStarted.promise;
     await vi.advanceTimersByTimeAsync(1_490);
+    await recallStarted.promise;
     const hasStartedRecall = () =>
       vi
         .mocked(api.logger.info)
         .mock.calls.some((call: unknown[]) =>
           String(call[0]).includes("session=agent:main:delayed-recall-start"),
         );
-    for (let attempt = 0; attempt < 20 && !hasStartedRecall(); attempt += 1) {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-    }
     expect(hasStartedRecall()).toBe(true);
     await vi.advanceTimersByTimeAsync(25);
     await vi.advanceTimersByTimeAsync(1_499);

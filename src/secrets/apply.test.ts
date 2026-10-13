@@ -21,19 +21,18 @@ import {
   writePersistedAuthProfileStateRaw,
 } from "../agents/auth-profiles/sqlite.js";
 import {
-  loadAuthProfileStoreWithoutExternalProfiles,
-  saveAuthProfileStore,
+  loadAuthProfileStoreWithoutExternalProfilesAsync,
+  saveAuthProfileStoreAsync,
 } from "../agents/auth-profiles/store-runtime.js";
 import { getRuntimeAuthProfileStoreSnapshot } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
   createApplyFixture,
   createOpenAiProviderConfig,
@@ -208,8 +207,9 @@ describe("secrets apply", () => {
     clearSecretsRuntimeSnapshot();
     vi.restoreAllMocks();
     clearRuntimeAuthProfileStoreSnapshots();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     vi.unstubAllEnvs();
     await fs.rm(fixture.rootDir, { recursive: true, force: true });
   });
@@ -353,7 +353,7 @@ describe("secrets apply", () => {
     const ambientMainDir = path.join(ambientStateDir, "agents", "main", "agent");
     const ambientOpsDir = path.join(ambientStateDir, "agents", "ops", "agent");
     vi.stubEnv("OPENCLAW_STATE_DIR", ambientStateDir);
-    saveAuthProfileStore(
+    await saveAuthProfileStoreAsync(
       createAuthProfileStoreFixture({
         "openai:ambient-shared": {
           type: "api_key",
@@ -364,7 +364,7 @@ describe("secrets apply", () => {
       ambientMainDir,
       { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
-    saveAuthProfileStore(
+    await saveAuthProfileStoreAsync(
       createAuthProfileStoreFixture({
         "openai:ambient-ops": {
           type: "api_key",
@@ -528,7 +528,7 @@ describe("secrets apply", () => {
     await writeJsonFile(resolveAuthProfileDatabasePath(agentDir), local);
     await writeJsonFile(fixture.configPath, { agents: { entries: { ops: { agentDir } } } });
     replaceRuntimeAuthProfileStoreSnapshots([
-      { agentDir, store: loadAuthProfileStoreWithoutExternalProfiles(agentDir) },
+      { agentDir, store: await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir) },
     ]);
     expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles["openai:inherited"]).toEqual(
       shared.profiles["openai:inherited"],
@@ -595,7 +595,7 @@ describe("secrets apply", () => {
     replaceRuntimeAuthProfileStoreSnapshots([
       {
         agentDir: fixture.agentDir,
-        store: loadAuthProfileStoreWithoutExternalProfiles(fixture.agentDir),
+        store: await loadAuthProfileStoreWithoutExternalProfilesAsync(fixture.agentDir),
       },
     ]);
     const publicationFailure = failNextRuntimeAuthSnapshotPublication();
@@ -716,7 +716,7 @@ describe("secrets apply", () => {
         },
         order: { openai: ["openai:default"] },
       };
-      saveAuthProfileStore(initialStore, firstAgentDir, { syncExternalCli: false });
+      await saveAuthProfileStoreAsync(initialStore, firstAgentDir, { syncExternalCli: false });
       replaceRuntimeAuthProfileStoreSnapshots([{ agentDir: firstAgentDir, store: initialStore }]);
       const secondDatabase = openOpenClawAgentDatabase({
         agentId: "second",
@@ -1126,7 +1126,9 @@ describe("secrets apply", () => {
       expect(nextClawdbotEnv).toContain("UNRELATED=legacy");
     } finally {
       clearSecretsRuntimeSnapshot();
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
+      await closeStateDatabaseForTest();
       await fs.rm(homeDir, { recursive: true, force: true });
     }
   });

@@ -37,7 +37,7 @@ import {
   consumePreExecutionBlockedToolCall,
   wrapToolWithBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
-import { createOpenClawTools } from "../openclaw-tools.js";
+import { createOpenClawToolsAsync } from "../openclaw-tools.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createMessageTool } from "./message-tool-execution.js";
 import { sanitizeMessageToolVisiblePayload } from "./message-tool-visible-content.js";
@@ -1731,7 +1731,7 @@ describe("message tool delivery mode schema", () => {
 describe("message tool agent routing", () => {
   it.each<{
     name: string;
-    options: Parameters<typeof createOpenClawTools>[0];
+    options: Parameters<typeof createOpenClawToolsAsync>[0];
     action: Record<string, unknown>;
     expected: Record<string, unknown>;
   }>([
@@ -1770,9 +1770,9 @@ describe("message tool agent routing", () => {
       to: typeof action.target === "string" ? action.target : "channel:C123",
     });
     registerPlugins(createChannelPlugin({ id: "slack", actions: ["send"] }));
-    const tool = createOpenClawTools({ config: {}, agentChannel: "slack", ...options }).find(
-      (candidate) => candidate.name === "message",
-    );
+    const tool = (
+      await createOpenClawToolsAsync({ config: {}, agentChannel: "slack", ...options })
+    ).find((candidate) => candidate.name === "message");
     if (!tool) {
       throw new Error("message tool not found");
     }
@@ -1780,10 +1780,12 @@ describe("message tool agent routing", () => {
     expect(firstRunMessageActionInput()?.toolContext).toMatchObject(expected);
   });
 
-  it("keeps the tool definition stable through createOpenClawTools", () => {
-    const tools = (["automatic", "message_tool_only"] as const).map((sourceReplyDeliveryMode) =>
-      createOpenClawTools({ config: {}, sourceReplyDeliveryMode }).find(
-        (candidate) => candidate.name === "message",
+  it("keeps the tool definition stable through createOpenClawToolsAsync", async () => {
+    const tools = await Promise.all(
+      (["automatic", "message_tool_only"] as const).map(async (sourceReplyDeliveryMode) =>
+        (await createOpenClawToolsAsync({ config: {}, sourceReplyDeliveryMode })).find(
+          (candidate) => candidate.name === "message",
+        ),
       ),
     );
     expect(tools[0]).toBeDefined();

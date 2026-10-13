@@ -4,6 +4,7 @@ import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 
 // Source scheduling fixtures do not acquire embedding-provider generations.
 export abstract class MemorySyncTestHarness extends MemoryManagerSyncOps {
+  protected readonly configuredIndexIdentity = undefined;
   protected readonly runInBackgroundContext = runInMemoryTestBackgroundContext;
   protected beginSyncProviderGeneration(): void {}
   protected endSyncProviderGeneration(): void {}

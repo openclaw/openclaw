@@ -134,8 +134,8 @@ async function createVerifiedSession(config: OpenClawConfig) {
   };
 }
 
-beforeAll(() => {
-  pluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot();
+beforeAll(async () => {
+  pluginMetadataSnapshot = await createSystemAgentPluginMetadataTestSnapshot();
 });
 
 beforeEach(() => {

@@ -161,6 +161,14 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
   loadPluginMetadataSnapshot: (config: unknown) => mockLoadPluginMetadataSnapshot(config),
   resolvePluginMetadataSnapshot: (params: { config?: unknown }) =>
     mockLoadPluginMetadataSnapshot(params.config),
+  resolvePluginMetadataSnapshotAsync: async (params: {
+    config?: unknown;
+    env?: NodeJS.ProcessEnv;
+  }) => {
+    const { prepareBundledDiscoveryMode } = await import("../plugins/bundled-discovery-state.js");
+    await prepareBundledDiscoveryMode(params.env);
+    return mockLoadPluginMetadataSnapshot(params.config);
+  },
 }));
 
 vi.mock("../plugins/bundled-plugin-metadata.js", () => ({

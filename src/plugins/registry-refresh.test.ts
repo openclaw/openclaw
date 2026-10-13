@@ -11,7 +11,7 @@ import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index
 import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { retainGatewayPluginMetadata } from "./plugin-metadata-lifecycle.js";
-import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "./plugin-metadata-snapshot.js";
 import {
   invalidatePluginRuntimeDiscoveryAfterConfigMutation,
   refreshPluginRegistryAfterConfigMutation,
@@ -185,7 +185,11 @@ describe("plugin registry refresh config ownership", () => {
         const currentRecords = { fixture: { source: "archive" as const, version: "2.0.0" } };
         await state.writeConfig(config);
         await seedInstalledPluginIndex(priorRecords, { config, env: state.env });
-        const boot = loadPluginMetadataSnapshot({ config, env: state.env, allowCurrent: false });
+        const boot = await resolvePluginMetadataSnapshotAsync({
+          config,
+          env: state.env,
+          allowCurrent: false,
+        });
         const owner = retainGatewayPluginMetadata(createTestGatewayScheduler());
         const warn = vi.fn();
         const readCommittedIndex = (): unknown => {

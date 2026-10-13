@@ -11,6 +11,9 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -91,21 +94,31 @@ type NativeSlashFastReplyDefaultKey =
   | "model"
   | "workspaceDir";
 
-function runTestNativeSlashFastReply(
+async function runTestNativeSlashFastReply(
   overrides: Omit<NativeSlashFastReplyParams, NativeSlashFastReplyDefaultKey> &
     Partial<Pick<NativeSlashFastReplyParams, NativeSlashFastReplyDefaultKey>>,
 ) {
-  return maybeResolveNativeSlashCommandFastReply({
-    agentDir: "/tmp/agent",
-    agentCfg: undefined,
-    defaultProvider: "openai",
-    defaultModel: "gpt-5.5",
-    aliasIndex: { byKey: new Map(), byAlias: new Map() },
-    provider: "openai",
-    model: "gpt-5.5",
-    workspaceDir: "/tmp/workspace",
-    ...overrides,
-  });
+  await prepareBundledDiscoveryMode();
+  return withPluginMetadataSnapshotScope(
+    createPluginMetadataSnapshotFixture(),
+    () =>
+      maybeResolveNativeSlashCommandFastReply({
+        agentDir: "/tmp/agent",
+        agentCfg: undefined,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        aliasIndex: { byKey: new Map(), byAlias: new Map() },
+        provider: "openai",
+        model: "gpt-5.5",
+        workspaceDir: "/tmp/workspace",
+        ...overrides,
+      }),
+    {
+      config: overrides.cfg,
+      workspaceDir: overrides.workspaceDir ?? "/tmp/workspace",
+      trustConfigIdentity: true,
+    },
+  );
 }
 
 function buildNativeCommandCtx(body: string, overrides: Parameters<typeof buildTestCtx>[0] = {}) {

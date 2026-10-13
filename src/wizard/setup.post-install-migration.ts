@@ -46,7 +46,7 @@ async function resolveCandidates(params: {
     if (!provider.detect) {
       continue;
     }
-    const ownership = resolveManifestContractRuntimePluginResolution({
+    const ownership = await resolveManifestContractRuntimePluginResolution({
       cfg: params.config,
       contract: "migrationProviders",
       value: provider.id,

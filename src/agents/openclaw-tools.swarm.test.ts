@@ -1,13 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { createOpenClawCodingToolsAsync } from "./agent-tools.js";
+import { createOpenClawToolsAsync } from "./openclaw-tools.js";
 
-vi.mock("./openclaw-plugin-tools.js", () => ({ resolveOpenClawPluginToolsForOptions: () => [] }));
-function createSwarmTools(options: NonNullable<Parameters<typeof createOpenClawTools>[0]>) {
+// mock-isolation: Swarm tool assembly excludes real plugin registration and activation.
+vi.mock("./openclaw-plugin-tools.js", () => ({
+  resolveOpenClawPluginToolsForOptions: () => [],
+  resolveOpenClawPluginToolsForOptionsAsync: async () => [],
+}));
+function createSwarmTools(options: NonNullable<Parameters<typeof createOpenClawToolsAsync>[0]>) {
   const config = options.config ?? {};
-  return createOpenClawTools({
+  return createOpenClawToolsAsync({
     disableMessageTool: true,
     disablePluginTools: true,
     wrapBeforeToolCallHook: false,
@@ -15,22 +19,26 @@ function createSwarmTools(options: NonNullable<Parameters<typeof createOpenClawT
     config: { ...config, agents: config.agents ?? { entries: { main: {} } } },
   });
 }
-function collectorTools(options: NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>) {
-  return createOpenClawCodingTools({
-    sessionKey: "agent:worker:main",
-    runId: "collector-run",
-    swarmCollector: true,
-    config: { agents: { entries: { main: {} } }, tools: { swarm: true } },
-    ...options,
-  }).map((tool) => tool.name);
+async function collectorTools(
+  options: NonNullable<Parameters<typeof createOpenClawCodingToolsAsync>[0]>,
+) {
+  return (
+    await createOpenClawCodingToolsAsync({
+      sessionKey: "agent:worker:main",
+      runId: "collector-run",
+      swarmCollector: true,
+      config: { agents: { entries: { main: {} } }, tools: { swarm: true } },
+      ...options,
+    })
+  ).map((tool) => tool.name);
 }
 
 describe("Swarm registration", () => {
   it.each([
     { profile: "coding", wait: true },
     { profile: "messaging", wait: false },
-  ] as const)("keeps default Swarm within the $profile tool profile", ({ profile, wait }) => {
-    const tools = createOpenClawCodingTools({
+  ] as const)("keeps default Swarm within the $profile tool profile", async ({ profile, wait }) => {
+    const tools = await createOpenClawCodingToolsAsync({
       sessionKey: "agent:main:main",
       config: { agents: { entries: { main: {} } }, tools: { profile } },
     });
@@ -49,10 +57,10 @@ describe("Swarm registration", () => {
     }
   });
 
-  it("uses the effective requester override for the agents_wait gate", () => {
+  it("uses the effective requester override for the agents_wait gate", async () => {
     const base = { agentSessionKey: "agent:worker:main", requesterAgentIdOverride: "worker" };
     for (const enabled of [true, false]) {
-      const tools = createSwarmTools({
+      const tools = await createSwarmTools({
         ...base,
         config: {
           tools: { swarm: !enabled },
@@ -63,12 +71,12 @@ describe("Swarm registration", () => {
     }
   });
 
-  it("advertises sessions_spawn from agents_wait only when spawn is available", () => {
+  it("advertises sessions_spawn from agents_wait only when spawn is available", async () => {
     setEmbeddedMode(true);
     try {
       for (const available of [false, true]) {
         const tools = applyToolAvailabilityDescriptions(
-          createSwarmTools({
+          await createSwarmTools({
             agentSessionKey: "agent:main:main",
             allowGatewaySubagentBinding: available,
             config: { tools: { swarm: true } },
@@ -84,8 +92,8 @@ describe("Swarm registration", () => {
     }
   });
 
-  it("retains structured output through restrictive collector tool policy", () => {
-    const names = collectorTools({
+  it("retains structured output through restrictive collector tool policy", async () => {
+    const names = await collectorTools({
       sessionKey: "agent:worker:subagent:child",
       config: {
         agents: { entries: { main: {} } },
@@ -98,8 +106,8 @@ describe("Swarm registration", () => {
     expect(names).not.toContain("exec");
   });
 
-  it("withholds requester interaction and schema output from a text collector", () => {
-    const names = collectorTools({});
+  it("withholds requester interaction and schema output from a text collector", async () => {
+    const names = await collectorTools({});
     for (const name of [
       "message",
       "ask_user",
@@ -111,16 +119,18 @@ describe("Swarm registration", () => {
     }
   });
 
-  it("omits the message tool for collector runs by invariant", () => {
-    const names = createOpenClawCodingTools({
-      sessionKey: "agent:worker:subagent:child",
-      runId: "collector-run",
-      config: {
-        agents: { entries: { main: {} } },
-        tools: { swarm: true },
-      },
-      swarmCollector: true,
-    }).map((tool) => tool.name);
+  it("omits the message tool for collector runs by invariant", async () => {
+    const names = (
+      await createOpenClawCodingToolsAsync({
+        sessionKey: "agent:worker:subagent:child",
+        runId: "collector-run",
+        config: {
+          agents: { entries: { main: {} } },
+          tools: { swarm: true },
+        },
+        swarmCollector: true,
+      })
+    ).map((tool) => tool.name);
 
     expect(names).not.toContain("message");
   });

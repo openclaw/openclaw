@@ -893,7 +893,7 @@ describe("channelsAddCommand", () => {
     );
     const config = fixture.config;
     await using bootCache = createPluginCache({ kind: "process" });
-    const bootSnapshot = fixture.readMetadata();
+    const bootSnapshot = await fixture.readMetadataAsync();
     bindPluginMetadataSnapshotCache(bootSnapshot, bootCache);
     const bootInstance = new PluginInstance("gateway-boot");
     bootCache.instances.add(bootInstance);
@@ -958,6 +958,7 @@ describe("channelsAddCommand", () => {
         fixture.installPolicy();
         events.push("installed");
       });
+      await fixture.readMetadataAsync();
       return { cfg, installed: true, status: "installed", pluginId: "signal" };
     });
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockImplementationOnce(async () => {
@@ -973,7 +974,7 @@ describe("channelsAddCommand", () => {
     try {
       await using commandCache = createPluginCache();
       await withPluginCache(commandCache, async () => {
-        const beforeInstall = fixture.readMetadata();
+        const beforeInstall = await fixture.readMetadataAsync();
         await withPluginMetadataSnapshotScope(
           beforeInstall,
           () =>

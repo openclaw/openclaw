@@ -188,16 +188,25 @@ export async function collectRuntimeToolSchemaFindings(
   sourceConfig: OpenClawConfig,
   options: DoctorToolSchemaOptions = {},
 ): Promise<readonly HealthFinding[]> {
-  const [
-    { captureRuntimeConfig },
-    { prepareDoctorToolSchemaFrames },
-    { collectAgentRuntimeToolSchemaFindings },
-  ] = await Promise.all([
+  const [{ captureRuntimeConfig }, { withPreparedToolConstruction }] = await Promise.all([
     import("../config/runtime-source-projection.js"),
-    import("./doctor-tool-schema-frames.js"),
-    import("./doctor-tool-schema-projection.js"),
+    import("../agents/tool-construction-preparation.js"),
   ]);
   const cfg = captureRuntimeConfig(sourceConfig);
+  return withPreparedToolConstruction(cfg, { env: options.env }, ({ config: preparedConfig }) =>
+    collectPreparedRuntimeToolSchemaFindings(preparedConfig ?? cfg, options),
+  );
+}
+
+async function collectPreparedRuntimeToolSchemaFindings(
+  cfg: OpenClawConfig,
+  options: DoctorToolSchemaOptions,
+): Promise<readonly HealthFinding[]> {
+  const [{ prepareDoctorToolSchemaFrames }, { collectAgentRuntimeToolSchemaFindings }] =
+    await Promise.all([
+      import("./doctor-tool-schema-frames.js"),
+      import("./doctor-tool-schema-projection.js"),
+    ]);
   const env = options.env ?? process.env;
   const runWithPluginMetadataSnapshot =
     options.runWithPluginMetadataSnapshot ??

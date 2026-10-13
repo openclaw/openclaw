@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, onTestFinished } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished } from "vitest";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { runPluginRegisterSyncInRegistry } from "../plugins/loader-module-runtime.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
@@ -87,6 +88,9 @@ function fixture(evaluate: DecisionProviderV1["evaluate"] = async () => answer) 
   return { root: builder.registry, target, view, record, run };
 }
 
+beforeEach(async () => {
+  await preparePluginMetadataMachineStateAsync({});
+});
 afterEach(() => resetPluginRuntimeStateForTest());
 
 describe("prepared decision provider ownership", () => {

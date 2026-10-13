@@ -110,8 +110,9 @@ vi.mock("../config/config.js", () => ({
   resolveGatewayPort: () => 18_789,
 }));
 
+// mock-isolation: CLI preflight uses fixture auth validators without discovering or running installed providers.
 vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
-  resolvePluginProviders: mocks.resolvePluginProviders,
+  resolveAuthChoicePluginProviders: mocks.resolvePluginProviders,
 }));
 
 vi.mock("../wizard/setup.migration-snapshot.js", () => ({

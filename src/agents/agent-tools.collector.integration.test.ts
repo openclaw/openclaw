@@ -4,7 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
+import { createOpenClawCodingToolsAsync } from "./agent-tools.js";
 import { applyEmbeddedAttemptToolsAllow } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { buildEmbeddedAttemptToolRunContext } from "./embedded-agent-runner/run/attempt-tool-run-context.js";
 import { configureMockSubagentRegistryPersistence } from "./subagent-test-fixtures.test-helpers.js";
@@ -54,7 +54,7 @@ it.each([{ toolsAllow: undefined }, { toolsAllow: [] }])(
       swarmCollector: true,
       swarmOutputSchema: schema,
     });
-    const constructedTools = createOpenClawCodingTools({
+    const constructedTools = await createOpenClawCodingToolsAsync({
       ...context,
       config,
       agentId: "main",

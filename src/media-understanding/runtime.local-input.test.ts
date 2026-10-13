@@ -13,8 +13,10 @@ vi.mock("./runner.js", async () => {
   };
 });
 
+// mock-isolation: Local path validation must not start provider registry acquisition.
 vi.mock("./provider-registry.js", () => ({
   buildMediaUnderstandingRegistry: vi.fn(),
+  acquireMediaUnderstandingRegistry: vi.fn(),
   getMediaUnderstandingProvider: vi.fn(),
   normalizeMediaProviderId: vi.fn(),
 }));

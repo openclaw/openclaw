@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../plugin-sdk/file-lock.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import "./oauth-external-auth-passthrough.test-support.js";
 import { getOAuthProviderRuntimeMocks } from "./oauth-common-mocks.test-support.js";
 import { isOAuthRefreshFence, isPendingOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import {
@@ -44,6 +46,7 @@ it.each(["peer fence", "owner commit"] as const)(
     await withOpenClawTestState(
       { scenario: "minimal", label: "oauth-uncertain-settlement" },
       async (state) => {
+        await prepareBundledDiscoveryMode();
         const [candidates, oauthStore, { SqliteWorkerError }, { resolveApiKeyForProfile }] =
           await Promise.all([
             import("./candidate-stores.js"),

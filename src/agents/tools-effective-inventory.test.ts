@@ -295,7 +295,11 @@ describe("resolveEffectiveToolInventory", () => {
       ],
     });
 
-    const result = await resolveEffectiveToolInventory({ cfg: {} });
+    const result = await resolveEffectiveToolInventory({
+      cfg: {},
+      modelProvider: "openai",
+      modelApi: null,
+    });
 
     expect(result.groups[0]?.tools[0]).toEqual({
       id: "docs_lookup",

@@ -1,7 +1,7 @@
 // Memory status collection for status scans.
 // Runtime memory dependencies stay lazy so status paths without memory avoid loading the search manager.
 
-import { resolveMemorySearchConfig } from "../agents/memory-search.js";
+import { resolveMemorySearchConfigAsync } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import type { MemoryPluginStatus } from "../status/memory-plugin.js";
@@ -29,7 +29,7 @@ export async function resolveStatusMemoryStatusSnapshot(params: {
     cfg: params.cfg,
     agentStatus: params.agentStatus,
     memoryPlugin: params.memoryPlugin,
-    resolveMemoryConfig: resolveMemorySearchConfig,
+    resolveMemoryConfig: resolveMemorySearchConfigAsync,
     getMemorySearchManager,
     getMemoryProvider,
     isMemoryProviderNative,

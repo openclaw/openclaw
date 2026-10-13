@@ -17,6 +17,7 @@ import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { pathMayExistSync } from "../infra/path-existence.js";
 import { withClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
 import { shortenHomePath } from "../utils.js";
+import { prepareBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import {
   selectInstallMutationWriteOptions,
   type ConfigSnapshotForInstallPersist,
@@ -45,13 +46,10 @@ import {
   refreshManagedPluginMetadata,
 } from "./management-service.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
-import {
-  tracePluginLifecyclePhase,
-  tracePluginLifecyclePhaseAsync,
-} from "./plugin-lifecycle-trace.js";
+import { tracePluginLifecyclePhaseAsync } from "./plugin-lifecycle-trace.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
 import { withPluginSourceCleanup } from "./source-cleanup.js";
-import { buildPluginSnapshotReport } from "./status.js";
+import { buildPluginSnapshotReportAsync } from "./status.js";
 import { collectClawPluginUninstallWarnings } from "./uninstall-claw-references.js";
 import {
   prepareConfigForDisabledPluginSet,
@@ -128,6 +126,9 @@ export async function preparePluginUninstall(
   const config = withPluginInstallRecords(snapshot.config, installRecords);
   // CLI selection uses its status projection; management retains its broader metadata aliases.
   const metadata = cli ? undefined : await loadFreshManagedPluginMetadata(config, env);
+  if (cli) {
+    await prepareBundledDiscoveryMode(env);
+  }
   const index = metadata?.index ?? loadInstalledPluginIndex({ config, installRecords });
   const plugins = metadata
     ? metadata.index.plugins.map((record) => {
@@ -140,10 +141,12 @@ export async function preparePluginUninstall(
           channelIds: manifest?.channels,
         };
       })
-    : tracePluginLifecyclePhase(
-        "plugin registry snapshot",
-        () => buildPluginSnapshotReport({ config }),
-        { command: "uninstall" },
+    : (
+        await tracePluginLifecyclePhaseAsync(
+          "plugin registry snapshot",
+          () => buildPluginSnapshotReportAsync({ config }),
+          { command: "uninstall" },
+        )
       ).plugins;
   const requestedId = metadata
     ? metadata.normalizePluginId(params.pluginId.trim())

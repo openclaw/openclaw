@@ -528,7 +528,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`]);
     const genericHash = await computeTestSandboxHash({
       docker: cfg.docker,
-      dockerEnvPolicyEpoch: harness.resolveDockerEnvPolicyEpoch(cfg.docker.env),
+      dockerEnvPolicyEpoch: await harness.resolveDockerEnvPolicyEpoch(cfg.docker.env),
       workspaceAccess: cfg.workspaceAccess,
       workspaceDir,
       agentWorkspaceDir: workspaceDir,

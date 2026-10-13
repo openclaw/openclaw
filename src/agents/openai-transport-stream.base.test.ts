@@ -13,6 +13,7 @@ import {
   expectRecordFields,
 } from "./openai-transport-stream.test-harness.js";
 import { testing } from "./openai-transport-stream.test-support.js";
+import { attachPreparedProviderModelFixture } from "./provider-request.test-support.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 describe("openai transport stream", () => {
@@ -373,10 +374,10 @@ describe("openai transport stream", () => {
     "preserves Azure routing and prepared headers for $baseUrl",
     async ({ baseUrl, azureApiVersion }) => {
       const previousApiVersion = process.env.AZURE_OPENAI_API_VERSION;
-      const model = {
+      const model = attachPreparedProviderModelFixture({
         ...createAzureResponsesModel(),
         baseUrl,
-      };
+      });
       const requests: Request[] = [];
       const fetchOwner = vi
         .spyOn(getAiTransportHost(), "buildModelFetch")

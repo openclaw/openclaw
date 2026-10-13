@@ -175,6 +175,29 @@ export type AuthProfileStore = AuthProfileSecretsStore &
     runtimeExternalProfileIdsAuthoritative?: boolean;
   };
 
+export type SaveAuthProfileStoreOptions = {
+  filterExternalAuthProfiles?: boolean;
+  preserveOrderProfileIds?: Iterable<string>;
+  preserveStateProfileIds?: Iterable<string>;
+  pruneOrderProfileIds?: Iterable<string>;
+  sharedStoreWrite?: boolean;
+  syncExternalCli?: boolean;
+};
+
+export type AuthProfileStoreUpdater = (params: {
+  agentDir?: string;
+  profileId?: string;
+  sharedStoreWrite?: boolean;
+  stateDir?: string;
+  saveOptions?: SaveAuthProfileStoreOptions;
+  assertCurrent?: () => void;
+  updater: (
+    store: AuthProfileStore,
+    owner?: PreparedAuthProfileStoreOwner,
+    sharedStore?: AuthProfileStore | null,
+  ) => boolean;
+}) => Promise<AuthProfileStore | null>;
+
 /** Physical origin of a canonical credential selected into a session read view. */
 export type AuthProfileCredentialSource = {
   readonly databasePath: string;

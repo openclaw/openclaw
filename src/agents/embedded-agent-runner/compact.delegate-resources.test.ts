@@ -28,7 +28,10 @@ import {
   withPluginCache,
 } from "../../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
-import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import {
+  resolvePluginMetadataSnapshot,
+  resolvePluginMetadataSnapshotAsync,
+} from "../../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { createColdPluginFixture } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
@@ -114,7 +117,7 @@ vi.mock("../prepared-model-runtime.js", async (importOriginal) => {
       }
       let standalone: Awaited<ReturnType<typeof actual.activateStandalonePreparedModelRuntime>>;
       if (current.mode === "raw") {
-        const metadataSnapshot = resolvePluginMetadataSnapshot({
+        const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
           config: input.config,
           env: input.env,
           workspaceDir: input.workspaceDir,
@@ -610,8 +613,11 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                 if (mode.startsWith("reload")) {
                   const publication = { gatewayLifecycle: true, catalogMode: "static" as const };
                   const previousCache = createPluginCache();
-                  const previousMetadata = withPluginCache(previousCache, () =>
-                    resolvePluginMetadataSnapshot({ config, workspaceDir: state.workspaceDir }),
+                  const previousMetadata = await withPluginCache(previousCache, () =>
+                    resolvePluginMetadataSnapshotAsync({
+                      config,
+                      workspaceDir: state.workspaceDir,
+                    }),
                   );
                   setGatewayPluginMetadataSnapshot(previousMetadata, {
                     config,
@@ -633,8 +639,8 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                     messages: { responsePrefix: "replacement" },
                   };
                   replacementCache = createPluginCache();
-                  replacementMetadata = withPluginCache(replacementCache, () =>
-                    resolvePluginMetadataSnapshot({
+                  replacementMetadata = await withPluginCache(replacementCache, () =>
+                    resolvePluginMetadataSnapshotAsync({
                       config: replacementConfig,
                       workspaceDir: state.workspaceDir,
                     }),

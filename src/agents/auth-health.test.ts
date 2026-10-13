@@ -22,8 +22,9 @@ vi.mock("./cli-credentials.js", () => ({
   readCodexCliCredentialsCached: readCodexCliCredentialsCachedMock,
   readMiniMaxCliCredentialsCached: () => null,
 }));
+// mock-isolation: Auth health uses controlled alias facts instead of host plugin metadata.
 vi.mock("./provider-auth-aliases.js", () => ({
-  resolveProviderIdForAuth: resolveProviderIdForAuthMock,
+  resolvePreparedProviderIdForAuth: resolveProviderIdForAuthMock,
 }));
 
 import {

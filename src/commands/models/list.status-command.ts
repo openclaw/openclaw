@@ -54,7 +54,7 @@ import { createModelVisibilityPolicy } from "../../agents/model-visibility-polic
 import { resolveModelCatalogIdentityKey } from "../../agents/openai-model-routes.js";
 import { OPENAI_PROVIDER_ID } from "../../agents/openai-routing.js";
 import { loadPreparedModelCatalogSnapshot } from "../../agents/prepared-model-catalog.js";
-import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { resolvePreparedProviderIdForAuth as resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { readUtilityModelSetting } from "../../agents/utility-model-setting.js";
 import { resolveUtilityModelRefForAgent } from "../../agents/utility-model.js";
 import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
@@ -67,6 +67,7 @@ import { parseModelPolicyWildcardRef } from "../../config/model-policy-ref.js";
 import { resolveMergedModelProviderConfig } from "../../config/model-provider-config.js";
 import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
 import type { ProviderModelRouteCandidate } from "../../plugin-sdk/provider-model-types.js";
+import { prepareBundledDiscoveryModeNative } from "../../plugins/bundled-discovery-state.native.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { ProviderSyntheticAuthResult } from "../../plugins/provider-external-auth.types.js";
@@ -246,6 +247,7 @@ export async function modelsStatusCommand(
     runtime,
     skipPluginValidation: opts.probe !== true,
   });
+  prepareBundledDiscoveryModeNative();
   for (const warning of await readModelCatalogWarnings(cfg, opts.agent?.trim())) {
     runtime.error(`${warning.message} ${warning.fixHint}`);
   }

@@ -125,6 +125,7 @@ function hasScopedProviderAuthAlias(
 export function collectDoctorConfigRepairPluginIds(
   raw: unknown,
   touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
+  env?: NodeJS.ProcessEnv,
 ): string[] {
   const config = asNullableRecord(raw);
   if (!config) {
@@ -137,6 +138,7 @@ export function collectDoctorConfigRepairPluginIds(
   );
   const registry = loadPluginManifestRegistryForPluginRegistry({
     config,
+    env,
     includeDisabled: true,
   });
   for (const plugin of registry.plugins) {

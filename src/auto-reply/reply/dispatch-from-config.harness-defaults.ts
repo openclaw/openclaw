@@ -233,6 +233,7 @@ async function resolveHarnessSourceVisibleRepliesDefault(params: {
         provider: candidate.provider,
         entry: params.entry,
         cfg: params.cfg,
+        metadataSnapshot,
       });
       const defaults = resolveAgentHarnessDeliveryDefaults({
         provider: candidate.provider,

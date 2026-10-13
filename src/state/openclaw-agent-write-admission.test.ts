@@ -228,23 +228,26 @@ it.each(["ok", "error"] as const)(
       releaseFollower.resolve();
       expect(await next).toBe(value);
       expect(order).toEqual(["holder", "follower"]);
-      expect(warnings).toEqual([
-        [
-          {
-            operation: "direct",
-            outcome,
-            pid: process.pid,
-            threadId,
-            isMainThread,
-            reentrant: false,
-            elapsedMs: 1_600,
-            queueWaitMs: 0,
-            writerExecutionMs: 1_600,
-            completionDelayMs: 0,
-          },
-          "slow agent database reservation",
-        ],
-      ]);
+      // The observer may settle before or after the follower advances the clock.
+      expect(
+        [0, 25].map((completionDelayMs) => [
+          [
+            {
+              operation: "direct",
+              outcome,
+              pid: process.pid,
+              threadId,
+              isMainThread,
+              reentrant: false,
+              elapsedMs: 1_600 + completionDelayMs,
+              queueWaitMs: 0,
+              writerExecutionMs: 1_600,
+              completionDelayMs,
+            },
+            "slow agent database reservation",
+          ],
+        ]),
+      ).toContainEqual(warnings);
       expect(JSON.stringify(warnings)).not.toContain("synthetic-private");
       expect(JSON.stringify(warnings)).not.toContain(options.path);
     } finally {

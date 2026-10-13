@@ -17,9 +17,10 @@ import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import { privateFileStore } from "../infra/private-file-store.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import {
-  resolvePluginMetadataSnapshot,
+  resolvePluginMetadataSnapshotAsync,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
@@ -184,7 +185,7 @@ async function prepareModelsConfigContext(
   config?: OpenClawConfig,
   agentDirOverride?: string,
   options: EnsureOpenClawModelsJsonOptions = {},
-): Promise<PreparedModelsConfigContext> {
+): Promise<PreparedModelsConfigContext & { runWithMetadata: <T>(run: () => T) => T }> {
   let ambientEnv = process.env;
   let capturedOptions = options;
   let resolved: ReturnType<typeof resolveModelsConfigInput>;
@@ -221,16 +222,27 @@ async function prepareModelsConfigContext(
   const fingerprintEnv = createConfigRuntimeEnv(cfg, capturedOptions.env ?? {});
   const env = capturedOptions.env ? fingerprintEnv : createConfigRuntimeEnv(cfg, ambientEnv);
   const providerScopedDiscovery = Boolean(capturedOptions.providerDiscoveryProviderIds?.length);
-  const pluginMetadataSnapshot =
-    capturedOptions.pluginMetadataSnapshot ??
-    resolvePluginMetadataSnapshot({
+  let pluginMetadataSnapshot = capturedOptions.pluginMetadataSnapshot;
+  let runWithMetadata = <T>(run: () => T): T => run();
+  if (!pluginMetadataSnapshot) {
+    const snapshot = await resolvePluginMetadataSnapshotAsync({
       config: cfg,
       env,
       ...(workspaceDir ? { workspaceDir } : {}),
       ...(providerScopedDiscovery ? { preferPersisted: false } : {}),
     });
+    pluginMetadataSnapshot = snapshot;
+    runWithMetadata = (run) =>
+      withPluginMetadataSnapshotScope(snapshot, run, {
+        config: cfg,
+        compatibleConfigs: [resolved.discoveryAuthConfig, resolved.sourceConfigForSecrets],
+        env,
+        workspaceDir,
+      });
+  }
   return {
     cfg,
+    runWithMetadata,
     discoveryAuthConfig: resolved.discoveryAuthConfig,
     // Native readiness belongs to the captured auth inputs, not the catalog's env clone.
     discoveryAuthEnv: capturedOptions.env ?? ambientEnv,
@@ -269,13 +281,15 @@ export async function ensureOpenClawModelsJson(
   const pending = MODELS_JSON_STATE.writeQueue.enqueue(targetPath, async () => {
     const existingModelsFile = await readExistingModelsFile(targetPath);
     const authSnapshot = await capturePluginModelCatalogAuth(agentDir, context.env);
-    const plan = await withPluginModelCatalogAuthObservations(authSnapshot, async () =>
-      planOpenClawModelsJson({
-        context,
-        existingRaw: existingModelsFile.raw,
-        existingParsed: existingModelsFile.parsed,
-        pluginCatalogs: await loadPersistedPluginModelCatalogs(agentDir, undefined, context.env),
-      }),
+    const plan = await context.runWithMetadata(() =>
+      withPluginModelCatalogAuthObservations(authSnapshot, async () =>
+        planOpenClawModelsJson({
+          context,
+          existingRaw: existingModelsFile.raw,
+          existingParsed: existingModelsFile.parsed,
+          pluginCatalogs: await loadPersistedPluginModelCatalogs(agentDir, undefined, context.env),
+        }),
+      ),
     );
 
     let wroteRoot = false;
@@ -337,13 +351,15 @@ export async function planOpenClawModelsJsonSource(
     undefined,
     context.env,
   );
-  const plan = await planOpenClawModelsJson({
-    context,
-    ...(authStore ? { authStore } : {}),
-    existingRaw: existingModelsFile.raw,
-    existingParsed: existingModelsFile.parsed,
-    pluginCatalogs: existingPluginCatalogs,
-  });
+  const plan = await context.runWithMetadata(() =>
+    planOpenClawModelsJson({
+      context,
+      ...(authStore ? { authStore } : {}),
+      existingRaw: existingModelsFile.raw,
+      existingParsed: existingModelsFile.parsed,
+      pluginCatalogs: existingPluginCatalogs,
+    }),
+  );
   return {
     agentDir,
     modelsJsonContents: plan.action === "write" ? plan.contents : existingModelsFile.raw || null,

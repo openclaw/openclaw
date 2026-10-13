@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../model-catalog.types.js";
 import { mergePreparedNativeCatalog } from "../prepared-model-runtime.catalog-publication.js";
@@ -96,6 +97,44 @@ function registryWithCatalog(loadModelCatalog: () => Promise<readonly never[]>) 
 }
 
 describe("agent harness model catalog", () => {
+  it("normalizes configured refs with the prepared generation's custom aliases", async () => {
+    const pluginMetadataSnapshot = createEmptyPluginMetadataSnapshot();
+    pluginMetadataSnapshot.owners.modelIdNormalizationPolicies = new Map([
+      ["fixture", { aliases: { short: "canonical" } }],
+    ]);
+    const registry = createEmptyPluginRegistry();
+    let configuredRefs: readonly { provider: string; model: string }[] | undefined;
+    registry.agentHarnesses.push({
+      pluginId: "codex",
+      source: "test",
+      harness: {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true }),
+        runAttempt: vi.fn(),
+        loadModelCatalog: async ({ configuredModelRefs }) => {
+          configuredRefs = configuredModelRefs;
+          return [];
+        },
+      },
+    });
+
+    await augmentPreparedModelCatalogWithAgentHarness({
+      input: {
+        config: { agents: { defaults: { model: "fixture/short" } } },
+        agentId: "main",
+        agentDir: "/tmp/alias-agent",
+        workspaceDir: "/tmp/alias-workspace",
+      },
+      nativeSelection: { provider: "fixture", modelId: "canonical", runtime: "codex" },
+      snapshot: { entries: [], routeVariants: [] },
+      pluginRegistry: registry,
+      pluginMetadataSnapshot,
+    });
+
+    expect(configuredRefs).toEqual([{ provider: "fixture", model: "canonical" }]);
+  });
+
   it.each([
     { baseRuntime: "openclaw", agentRuntime: undefined, observedRuntime: undefined },
     { baseRuntime: "native-one", agentRuntime: undefined, observedRuntime: "native-one" },
@@ -153,6 +192,7 @@ describe("agent harness model catalog", () => {
         agentRuntime,
         snapshot: initial,
         pluginRegistry: registry,
+        manifestPlugins: [],
       });
       expect(loadOne).toHaveBeenCalledTimes(observedRuntime === "native-one" ? 1 : 0);
       expect(loadTwo).toHaveBeenCalledTimes(observedRuntime === "native-two" ? 1 : 0);
@@ -214,6 +254,7 @@ describe("agent harness model catalog", () => {
       },
       snapshot: initial,
       pluginRegistry: registry,
+      pluginMetadataSnapshot: createEmptyPluginMetadataSnapshot(),
       onError,
       onDiscoveryCompleted,
     });
@@ -301,6 +342,7 @@ describe("agent harness model catalog", () => {
           workspaceDir: "/tmp/picker-workspace",
         },
         pluginRegistry: registry,
+        pluginMetadataSnapshot: createEmptyPluginMetadataSnapshot(),
         onDiscoveryStarted,
         onDiscoveryCompleted,
         ...(providerScoped
@@ -377,6 +419,7 @@ describe("agent harness model catalog", () => {
       snapshot: { entries: [], routeVariants: [] },
       preparedSnapshot: snapshot,
       pluginRegistry: registryWithCatalog(async () => [native, host] as never),
+      manifestPlugins: [],
     });
     expect(result.entries[0]).toEqual(native);
     expect(result.routeVariants[0]).toEqual(native);
@@ -436,6 +479,7 @@ describe("agent harness model catalog", () => {
       defaultModel: "openai/gpt-5.6-sol",
       snapshot,
       pluginRegistry: registryWithCatalog(loadModelCatalog as never),
+      manifestPlugins: [],
     });
 
     expect(result.entries.map((entry) => entry.id)).toEqual([

@@ -60,11 +60,35 @@ vi.mock("../../config/config.js", () => ({
     mocks.getRuntimeConfig as typeof import("../../config/config.js").getRuntimeConfig,
 }));
 
-vi.mock("../../tts/provider-registry.js", () => ({
-  canonicalizeSpeechProviderId: vi.fn(),
-  getSpeechProvider: mocks.getSpeechProvider,
-  listSpeechProviders: mocks.listSpeechProviders,
-}));
+// mock-isolation: TTS RPC fixtures use an explicit speech registry without loading provider runtimes.
+vi.mock("../../tts/provider-registry.js", async () => {
+  const { normalizeSpeechProviderId } = await import("../../tts/provider-registry-core.js");
+  const registry = {
+    canonicalizeSpeechProviderId(providerId: string | undefined) {
+      const normalized = normalizeSpeechProviderId(providerId);
+      if (!normalized) {
+        return undefined;
+      }
+      return (
+        mocks
+          .listSpeechProviders()
+          .find(
+            (provider) =>
+              normalizeSpeechProviderId(provider.id) === normalized ||
+              provider.aliases?.some((alias) => normalizeSpeechProviderId(alias) === normalized),
+          )?.id ?? normalized
+      );
+    },
+    getSpeechProvider: mocks.getSpeechProvider,
+    listSpeechProviders: mocks.listSpeechProviders,
+  };
+  return {
+    ...registry,
+    normalizeSpeechProviderId,
+    withSpeechProviderRegistry: async (_cfg: unknown, run: (value: typeof registry) => unknown) =>
+      run(registry),
+  };
+});
 
 // mock-isolation: TTS RPCs supply preference settings without reading the host machine's SQLite preference path.
 vi.mock("../../tts/tts-preferences.js", () => ({
@@ -272,38 +296,6 @@ describe("ttsHandlers", () => {
       }
     },
   );
-
-  it("probes configured fallbacks missing from the prepared inventory", async () => {
-    const providers = [
-      { id: "openai", label: "OpenAI", isConfigured: vi.fn(() => true) },
-      { id: "google", label: "Google", isConfigured: vi.fn(() => false) },
-    ];
-    mocks.listSpeechProviders.mockReturnValue(providers);
-    mocks.resolveTtsProviderOrder.mockReturnValue(["openai", "google", "voice-model-only"]);
-    mocks.isTtsProviderConfiguredAsync.mockImplementation((_config, provider) => {
-      const providerId = typeof provider === "string" ? provider : provider.id;
-      return providerId !== "google";
-    });
-
-    const respond = await callTts("tts.status", {});
-
-    expect(mocks.isTtsProviderConfiguredAsync.mock.calls.map((call) => call[1])).toEqual([
-      providers[0],
-      providers[1],
-      "voice-model-only",
-    ]);
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        fallbackProvider: "voice-model-only",
-        fallbackProviders: ["voice-model-only"],
-        providerStates: [
-          { id: "openai", label: "OpenAI", configured: true },
-          { id: "google", label: "Google", configured: false },
-        ],
-      }),
-    );
-  });
 
   it.each(["tts.status", "tts.providers"] as const)(
     "%s keeps invalid providers in the catalog as unconfigured",

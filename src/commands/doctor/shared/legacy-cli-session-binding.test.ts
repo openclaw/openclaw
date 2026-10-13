@@ -7,6 +7,7 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import type { CliSessionBinding, SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { prepareBundledDiscoveryMode } from "../../../plugins/bundled-discovery-state.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -44,6 +45,7 @@ describe("legacy CLI session binding migration", () => {
     });
     const before = loadSessionEntryReadOnly(scope);
 
+    await prepareBundledDiscoveryMode(state.env);
     await maybeRepairCodexSessionRoutes({ cfg, env: state.env, shouldRepair: false });
     expect(loadSessionEntryReadOnly(scope)).toEqual(before);
     await maybeRepairCodexSessionRoutes({ cfg, env: state.env, shouldRepair: true });
@@ -111,6 +113,7 @@ describe("legacy CLI session binding migration", () => {
       cliSessionIds: { "claude-cli": "Map-Conversation", "other-cli": "Other-Map-ID" },
     });
 
+    await prepareBundledDiscoveryMode(state.env);
     const repaired = await maybeRepairCodexSessionRoutes({
       cfg,
       env: state.env,
@@ -173,6 +176,7 @@ describe("legacy CLI session binding migration", () => {
     const before = Object.fromEntries(
       Object.keys(rows).map((key) => [key, loadSessionEntryReadOnly(scope(key))]),
     );
+    await prepareBundledDiscoveryMode(state.env);
     const preview = await maybeRepairCodexSessionRoutes({
       cfg,
       env: state.env,

@@ -115,8 +115,8 @@ const resolveSystemAgentVerifiedInferenceRoute: typeof resolveSystemAgentVerifie
     pluginMetadataSnapshot!.run(() => resolveSystemAgentVerifiedInferenceRouteImpl(...args));
 let restoreCliBackendFixture: (() => void) | undefined;
 
-beforeAll(() => {
-  pluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot(config());
+beforeAll(async () => {
+  pluginMetadataSnapshot = await createSystemAgentPluginMetadataTestSnapshot(config());
   restoreCliBackendFixture = installSystemAgentClaudeCliBackendTestFixture();
 });
 

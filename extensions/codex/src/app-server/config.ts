@@ -31,6 +31,7 @@ export {
 export { readCodexRequirementsToml } from "./config-requirements.js";
 export {
   codexSandboxPolicyForTurn,
+  prepareCodexAppServerConfig,
   resolveCodexAppServerHomeScope,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexAppServerStartOptionsForAgent,

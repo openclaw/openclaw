@@ -5,8 +5,8 @@ import { finalizePluginMetadataSnapshot } from "../plugins/plugin-metadata-snaps
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   providerSupportsNativePdfDocument,
-  resolveAutoMediaKeyProviders,
-  resolveDefaultMediaModel,
+  resolveAutoMediaKeyProvidersCore as resolveAutoMediaKeyProviders,
+  resolveDefaultMediaModelCore as resolveDefaultMediaModel,
   resolveDocumentMediaModel,
 } from "./defaults.js";
 

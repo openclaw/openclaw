@@ -1,9 +1,10 @@
 // Covers dangerous config flag detection and reporting.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { collectEnabledInsecureOrDangerousFlagsFromContracts } from "./dangerous-config-flags-core.js";
 import { collectEnabledInsecureOrDangerousFlags } from "./dangerous-config-flags.js";
 
@@ -26,6 +27,9 @@ function writeDangerousWorkspacePlugin(workspaceDir: string) {
 
 describe("collectEnabledInsecureOrDangerousFlags", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  beforeEach(async () => {
+    await preparePluginMetadataMachineStateAsync({});
+  });
 
   it("keeps plugin contract checks enabled for a malformed roster", () => {
     const inheritedWorkspaceDir = tempDirs.make("openclaw-dangerous-inherited-workspace-");

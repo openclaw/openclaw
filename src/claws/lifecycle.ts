@@ -589,7 +589,7 @@ export async function buildClawAddPlan(params: {
     `${left.kind}:${left.id}:${left.path}`.localeCompare(`${right.kind}:${right.id}:${right.path}`),
   );
 
-  const notices = clawAgentConfigurationNotices(
+  const notices = await clawAgentConfigurationNotices(
     openClawAgentSettings,
     context.config ?? {},
     new Set([...existingAgentIds, finalId]),

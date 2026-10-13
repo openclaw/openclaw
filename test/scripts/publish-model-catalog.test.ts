@@ -23,6 +23,7 @@ import {
   summarizeModelCatalogBundle,
 } from "../../scripts/publish-model-catalog.mts";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import { prepareModelPricingContext } from "../../src/model-catalog/pricing.js";
 import { prepareRemoteModelCatalogStartupSnapshot } from "../../src/model-catalog/remote-overlay.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../../src/model-catalog/remote-overlay.test-support.js";
 import {
@@ -103,6 +104,7 @@ async function publishedPricingParams(bundle: RemoteModelCatalogBundle, provider
     plugins: { allow: [provider], entries: { [provider]: { enabled: true } } },
   };
   await prepareRemoteModelCatalogStartupSnapshot();
+  await prepareModelPricingContext(config);
   return { config, agentDir, provider };
 }
 

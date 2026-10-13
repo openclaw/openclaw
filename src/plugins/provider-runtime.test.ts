@@ -31,8 +31,6 @@ type ResolveCatalogHookProviderPluginIds =
   typeof import("./providers.js").resolveCatalogHookProviderPluginIds;
 type ResolveUsageHookProviderPluginContracts =
   typeof import("./providers.js").resolveUsageHookProviderPluginContracts;
-type ResolveExternalAuthProfileProviderPluginIds =
-  typeof import("./providers.js").resolveExternalAuthProfileProviderPluginIds;
 type ResolveOwningPluginIdsForProvider =
   typeof import("./providers.js").resolveOwningPluginIdsForProvider;
 type ResolveBundledProviderPolicySurface =
@@ -50,8 +48,6 @@ const resolveCatalogHookProviderPluginIdsMock = vi.fn<ResolveCatalogHookProvider
 const resolveUsageHookProviderPluginContractsMock = vi.fn<ResolveUsageHookProviderPluginContracts>(
   (_params) => [],
 );
-const resolveExternalAuthProfileProviderPluginIdsMock =
-  vi.fn<ResolveExternalAuthProfileProviderPluginIds>((_params) => [] as string[]);
 const resolveOwningPluginIdsForProviderMock = vi.fn<ResolveOwningPluginIdsForProvider>(
   (_params) => undefined,
 );
@@ -242,15 +238,32 @@ function registerLoadedProviders(providers: ProviderPlugin[]) {
   setActivePluginRegistry(registry);
 }
 
-function expectResolvedValues(
+function withExternalAuthProviders<T>(providers: ProviderPlugin[], run: () => T): T {
+  const metadataSnapshot = createPluginMetadataSnapshotFixture({
+    plugins: providers.map((provider) => ({
+      id: provider.pluginId ?? provider.id,
+      providers: [provider.id],
+      contracts: { externalAuthProviders: [provider.id] },
+    })),
+  });
+  const pluginRegistry = createEmptyPluginRegistry();
+  pluginRegistry.providers = providers.map((provider) => ({
+    pluginId: provider.pluginId ?? provider.id,
+    provider,
+    source: "test",
+  }));
+  return withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, run);
+}
+
+async function expectResolvedValues(
   cases: ReadonlyArray<{
     actual: () => unknown;
     expected: unknown;
   }>,
 ) {
-  cases.forEach(({ actual, expected }) => {
-    expect(actual()).toEqual(expected);
-  });
+  for (const { actual, expected } of cases) {
+    expect(await actual()).toEqual(expected);
+  }
 }
 
 async function expectResolvedMatches(
@@ -282,8 +295,6 @@ describe("provider-runtime", () => {
         resolveCatalogHookProviderPluginIdsMock(params as never),
       resolveUsageHookProviderPluginContracts: (params: unknown) =>
         resolveUsageHookProviderPluginContractsMock(params as never),
-      resolveExternalAuthProfileProviderPluginIds: (params: unknown) =>
-        resolveExternalAuthProfileProviderPluginIdsMock(params as never),
       resolveOwningPluginIdsForProvider: (params: unknown) =>
         resolveOwningPluginIdsForProviderMock(params as never),
       resolveOwningPluginIdsForProviderRef: (params: unknown) =>
@@ -295,8 +306,9 @@ describe("provider-runtime", () => {
     }));
     vi.doMock("./providers.runtime.js", async (importOriginal) => {
       const actual = await importOriginal<typeof import("./providers.runtime.js")>();
+      const { nativePluginBindings } = await import("./loader-runtime-load.js");
       const resolveRegistry = (params: Parameters<ResolvePluginProviders>[0]) => {
-        const loaded = actual.resolvePluginProviderRegistryCore({
+        const loaded = nativePluginBindings.providerRegistry.resolvePluginProviderRegistryCore({
           ...params,
           registryScope: "loaded",
         });
@@ -337,10 +349,22 @@ describe("provider-runtime", () => {
           isPluginProvidersLoadInFlightMock(params),
       };
     });
+    // mock-isolation: Exercise real hook logic against fixture registries, without native bindings.
     vi.doMock("./provider-hook-runtime.js", async () => {
       const { createProviderHookRuntime } = await import("./provider-hook-runtime-core.js");
-      const providers = await import("./providers.runtime.js");
-      return createProviderHookRuntime(providers);
+      const providers = await vi.importMock<
+        typeof import("./providers.runtime.js") & {
+          resolvePluginProviderRegistryCore: typeof import("./loader-runtime-load.js").nativePluginBindings.providerRegistry.resolvePluginProviderRegistryCore;
+        }
+      >("./providers.runtime.js");
+      return createProviderHookRuntime({
+        ...providers,
+        resolveLegacyPluginProvidersCore: (params) => providers.resolvePluginProvidersCore(params),
+        resolvePluginProviderRegistryCoreAsync: async (params) =>
+          providers.resolvePluginProviderRegistryCore(params),
+        resolvePluginProvidersCoreAsync: async (params, onSelectedRegistry) =>
+          providers.resolvePluginProvidersCore(params, onSelectedRegistry),
+      });
     });
     vi.doMock("./provider-external-auth.js", async () => {
       const { createProviderExternalAuthResolver } =
@@ -415,8 +439,6 @@ describe("provider-runtime", () => {
     resolveCatalogHookProviderPluginIdsMock.mockReturnValue([]);
     resolveUsageHookProviderPluginContractsMock.mockReset();
     resolveUsageHookProviderPluginContractsMock.mockReturnValue([]);
-    resolveExternalAuthProfileProviderPluginIdsMock.mockReset();
-    resolveExternalAuthProfileProviderPluginIdsMock.mockReturnValue([]);
     resolveOwningPluginIdsForProviderMock.mockReset();
     resolveOwningPluginIdsForProviderMock.mockReturnValue(undefined);
     resolveBundledProviderPolicySurfaceMock.mockReset();
@@ -1144,20 +1166,21 @@ describe("provider-runtime", () => {
 
   it("skips provider runtime loading when no plugin declares external auth hooks", () => {
     expect(
-      resolveExternalAuthProfilesWithPlugins({
-        env: process.env,
-        context: {
+      withExternalAuthProviders([], () =>
+        resolveExternalAuthProfilesWithPlugins({
           env: process.env,
-          store: { version: 1, profiles: {} },
-        },
-      }),
+          context: {
+            env: process.env,
+            store: { version: 1, profiles: {} },
+          },
+        }),
+      ),
     ).toStrictEqual([]);
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 
   it("resolves declared external auth plugins with different provider ids", () => {
-    resolveExternalAuthProfileProviderPluginIdsMock.mockReturnValue(["demo-plugin"]);
-    resolvePluginProvidersMock.mockReturnValue([
+    const providers: ProviderPlugin[] = [
       {
         id: "demo-provider",
         pluginId: "demo-plugin",
@@ -1176,15 +1199,17 @@ describe("provider-runtime", () => {
           },
         ],
       },
-    ]);
+    ];
 
-    const [profile] = resolveExternalAuthProfilesWithPlugins({
-      env: process.env,
-      context: {
+    const [profile] = withExternalAuthProviders(providers, () =>
+      resolveExternalAuthProfilesWithPlugins({
         env: process.env,
-        store: { version: 1, profiles: {} },
-      },
-    });
+        context: {
+          env: process.env,
+          store: { version: 1, profiles: {} },
+        },
+      }),
+    );
     expect(profile?.profileId).toBe("demo-provider:external");
   });
 
@@ -1938,7 +1963,6 @@ describe("provider-runtime", () => {
     resolveUsageHookProviderPluginContractsMock.mockReturnValue([
       { pluginId: "demo", providerIds: ["demo"] },
     ]);
-    resolveExternalAuthProfileProviderPluginIdsMock.mockReturnValue(["demo"]);
     const prepareDynamicModel = vi.fn(async () => MODEL);
     const createStreamFn = vi.fn(() => vi.fn());
     const sanitizeReplayHistoryAsync = vi.fn(
@@ -1988,7 +2012,7 @@ describe("provider-runtime", () => {
       displayName: "Demo",
       windows: [{ label: "Day", usedPercent: 25 }],
     }));
-    resolvePluginProvidersMock.mockImplementation((_params: unknown) => {
+    const createProviders = (): ProviderPlugin[] => {
       return [
         createDemoProvider({
           normalizeTransport: ({ api, baseUrl }) => ({
@@ -2052,7 +2076,8 @@ describe("provider-runtime", () => {
           }),
         } as ProviderPlugin,
       ];
-    });
+    };
+    resolvePluginProvidersMock.mockImplementation(createProviders);
 
     expect(listProviderUsagePluginDescriptors({ env: process.env })).toEqual([
       { provider: "demo", displayName: "demo" },
@@ -2283,7 +2308,7 @@ describe("provider-runtime", () => {
       }),
     ).resolves.toEqual("Repair demo:default");
 
-    expectResolvedValues([
+    await expectResolvedValues([
       {
         actual: () =>
           resolveProviderCacheTtlEligibility({
@@ -2348,13 +2373,15 @@ describe("provider-runtime", () => {
       },
     ]);
 
-    const [externalProfile] = resolveExternalAuthProfilesWithPlugins({
-      env: process.env,
-      context: {
+    const [externalProfile] = withExternalAuthProviders([createProviders()[0]!], () =>
+      resolveExternalAuthProfilesWithPlugins({
         env: process.env,
-        store: { version: 1, profiles: {} },
-      },
-    });
+        context: {
+          env: process.env,
+          store: { version: 1, profiles: {} },
+        },
+      }),
+    );
     expectRecordFields(requireRecord(externalProfile, "external auth profile"), {
       persistence: "runtime-only",
       profileId: "demo:managed",

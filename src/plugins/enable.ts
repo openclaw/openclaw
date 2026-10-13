@@ -111,8 +111,8 @@ export async function enablePluginWithCapabilityConsent(
       if (Object.keys(records).length === 0) {
         return result;
       }
-      const { resolvePluginMetadataSnapshot } = await import("./plugin-metadata-snapshot.js");
-      const metadata = resolvePluginMetadataSnapshot({
+      const { resolvePluginMetadataSnapshotAsync } = await import("./plugin-metadata-snapshot.js");
+      const metadata = await resolvePluginMetadataSnapshotAsync({
         config: cfg,
         env: options.env,
         workspaceDir: options.workspaceDir,

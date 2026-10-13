@@ -68,6 +68,7 @@ export function createSessionRowProjectionBackfill(params: {
             selectedProvider: row.materialized.source.selectedModel.provider,
             selectedModel: row.materialized.source.selectedModel.model,
             config: row.materialized.source.cfg,
+            metadataSnapshot: row.materialized.source.modelMetadata,
           },
         });
         await params.ready();

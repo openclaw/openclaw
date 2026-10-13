@@ -98,7 +98,7 @@ it.each([false, true])(
         const binding = await (async () => {
           await using cache = createPluginCache();
           return await withPluginCache(cache, async () => {
-            const registry = loadAgentRuntimePluginRegistryHandle({
+            const registry = await loadAgentRuntimePluginRegistryHandle({
               basePluginIds: [],
               config,
               workspaceDir: state.workspaceDir,

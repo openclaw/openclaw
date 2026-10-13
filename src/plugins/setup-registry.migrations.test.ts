@@ -2,20 +2,21 @@
 import path from "node:path";
 import { describe, expect, test } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import { runPluginSetupConfigMigrations } from "./setup-registry.js";
 
-function runMigration(config: OpenClawConfig) {
-  return runPluginSetupConfigMigrations({
-    env: {
-      ...process.env,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
-    },
-    config,
-  });
+async function runMigration(config: OpenClawConfig) {
+  const env = {
+    ...process.env,
+    OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
+  };
+  const activateDiscovery = await prepareBundledDiscoveryMode(env);
+  activateDiscovery();
+  return runPluginSetupConfigMigrations({ env, config });
 }
 
 describe("bundled setup config migrations", () => {
-  test("preserves Voice Call canonical settings and converges through the bundled registry", () => {
+  test("preserves Voice Call canonical settings and converges through the bundled registry", async () => {
     const current = {
       apiKey: { source: "env", provider: "default", id: "SYNTHETIC_VOICE_KEY" },
       model: "synthetic-current-model",
@@ -43,7 +44,7 @@ describe("bundled setup config migrations", () => {
       },
     } satisfies OpenClawConfig;
     const before = structuredClone(config);
-    const result = runMigration(config);
+    const result = await runMigration(config);
 
     expect(result.config.plugins?.entries?.["voice-call"]).toEqual({
       enabled: false,
@@ -55,6 +56,6 @@ describe("bundled setup config migrations", () => {
     expect(result.changes).toHaveLength(4);
     expect(result.changes.every((change) => change.includes("(kept "))).toBe(true);
     expect(config).toEqual(before);
-    expect(runMigration(result.config)).toEqual({ config: result.config, changes: [] });
+    expect(await runMigration(result.config)).toEqual({ config: result.config, changes: [] });
   });
 });

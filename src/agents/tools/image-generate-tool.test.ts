@@ -20,6 +20,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ImageGenerationProvider } from "../../image-generation/types.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import {
   defineMediaGenerationCancellationTests,
   defineMediaGenerationDuplicateTests,
@@ -446,7 +447,7 @@ describe("createImageGenerateTool", () => {
     ({ createImageGenerateTool } = await import("./image-generate-tool.js"));
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     // These fixtures cover routing and limits; the native suite proves actual resource ownership.
     vi.spyOn(
       mediaGenerationToolProviders,
@@ -481,6 +482,7 @@ describe("createImageGenerateTool", () => {
     mediaActivityMocks.listOperations.mockReturnValue(undefined);
     resetRecentMediaGenerationDuplicateGuardsForTests();
     resetGeneratedMediaTaskActivityForTests();
+    await prepareBundledDiscoveryMode(process.env);
   });
 
   afterEach(() => {

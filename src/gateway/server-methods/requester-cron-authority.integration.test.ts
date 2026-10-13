@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   getAdmittedRunDelegatedAuthority,
@@ -26,6 +26,7 @@ import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { preparePluginMetadataMachineStateAsync } from "../../plugins/installed-plugin-index-record-state.js";
 import {
   bindGatewayContextResolver,
   clearGatewayContextResolver,
@@ -58,6 +59,10 @@ vi.mock("../../agents/node-exec-availability.js", () => ({
 }));
 
 installRequesterCronAuthorityTestHooks();
+
+beforeEach(async () => {
+  await preparePluginMetadataMachineStateAsync({});
+});
 
 async function withSuccessor<T>(admin: boolean | "channel-owner", run: RequesterRun<T>) {
   const originalRunId = "original-requester";

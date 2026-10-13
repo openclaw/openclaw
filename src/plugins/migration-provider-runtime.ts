@@ -22,11 +22,11 @@ type MigrationProviderPluginResolution = {
   publicPlugins: MigrationProviderArtifactPlugin[];
 };
 
-function resolveMigrationProviderPluginResolution(params: {
+async function resolveMigrationProviderPluginResolution(params: {
   cfg?: OpenClawConfig;
   providerId?: string;
-}): MigrationProviderPluginResolution {
-  const resolution = resolveManifestContractRuntimePluginResolution({
+}): Promise<MigrationProviderPluginResolution> {
+  const resolution = await resolveManifestContractRuntimePluginResolution({
     cfg: params.cfg,
     contract: "migrationProviders",
     ...(params.providerId ? { value: params.providerId } : {}),
@@ -140,7 +140,7 @@ export async function withPluginMigrationProviders<T>(
       ) {
         return await consume(mergeMigrationProviders(activeRegistry));
       }
-      const resolution = resolveMigrationProviderPluginResolution({ ...params, cfg: config });
+      const resolution = await resolveMigrationProviderPluginResolution({ ...params, cfg: config });
       if (params.providerId) {
         const providers = resolveMigrationProviderPublicArtifacts({
           plugins: resolution.publicPlugins,

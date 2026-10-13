@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { coerceToFailoverError } from "../../src/agents/failover-error.js";
+import { preparePluginMetadataMachineStateAsync } from "../../src/plugins/installed-plugin-index-record-state.js";
 import { loadPluginRegistryHandle } from "../../src/plugins/loader.js";
 import { getPluginModuleLoaderStats } from "../../src/plugins/plugin-module-loader-cache.js";
 import { getActivePluginRegistry } from "../../src/plugins/runtime.js";
@@ -13,6 +14,7 @@ const classify = () =>
   );
 assert.equal(classify(), null, "error handling must not discover a provider");
 const started = performance.now();
+await preparePluginMetadataMachineStateAsync({});
 const registry = loadPluginRegistryHandle({
   config: { plugins: { entries: { anthropic: { enabled: true } } } },
   onlyPluginIds: ["anthropic"],

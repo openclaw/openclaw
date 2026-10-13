@@ -1,4 +1,4 @@
-import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "../prepared-model-catalog-owner.js";
 import { createCatalogFixture } from "../prepared-model-catalog-worker.test-support.js";
 import { startSerializedSnapshotBuildBatch } from "../prepared-model-runtime.build.js";
@@ -54,7 +54,7 @@ export function createStaticCatalogSnapshotFixture(params: {
     };
     retireAfterTest(supersede);
     const loadedMetadataSnapshot = options?.metadataWorkspace
-      ? loadPluginMetadataSnapshot({
+      ? await resolvePluginMetadataSnapshotAsync({
           config:
             options.metadataWorkspace === "activation"
               ? { ...config, plugins: { ...config.plugins, entries: {} } }

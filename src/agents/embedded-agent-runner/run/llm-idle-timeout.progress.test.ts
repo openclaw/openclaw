@@ -15,11 +15,12 @@ import {
 } from "../../../../packages/ai/src/transports/openai-completions.test-support.js";
 import { classifyFailoverSignalCore } from "../../failover/classify-core.js";
 import { shouldRetryFailoverSignal } from "../../failover/retry-evidence.js";
+import { attachPreparedProviderModelFixture } from "../../provider-request.test-support.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { resolveEmbeddedAgentStream } from "../stream-resolution.js";
 import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
 
-const model = makeCompletionsModel({ reasoning: false });
+const model = attachPreparedProviderModelFixture(makeCompletionsModel({ reasoning: false }));
 const idleMs = 100;
 
 async function openStream(scope: "creation-and-gaps" | "creation-only" = "creation-and-gaps") {

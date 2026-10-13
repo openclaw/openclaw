@@ -10,6 +10,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { writeJsonTarget } from "../infra/json-file.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import type { BundledPluginSource } from "../plugins/bundled-sources.js";
 import {
   clearLoadInstalledPluginIndexInstallRecordsCache,
@@ -366,6 +367,7 @@ export async function detectPluginRegistryHealthIssues(
   params: PluginRegistryDoctorRepairParams,
 ): Promise<PluginRegistryHealthIssue[]> {
   const preflight = preflightPluginRegistryDoctorMigration(params);
+  await prepareBundledDiscoveryMode(params.env);
   const issues: PluginRegistryHealthIssue[] = [];
   if (preflight.action === "migrate") {
     issues.push({
@@ -547,6 +549,7 @@ async function inspectOrRepairPluginRegistryState(
   // Earlier Doctor stages can commit install-record repairs inside another metadata scope.
   // This refresh owns the next write, so it must start from the durable ledger.
   clearLoadInstalledPluginIndexInstallRecordsCache();
+  await prepareBundledDiscoveryMode(params.env);
 
   const staleManagedNpmBundledPluginRepair = maybeRepairStaleManagedNpmBundledPlugins(params);
   const removedStaleLocalBundledPluginIds =

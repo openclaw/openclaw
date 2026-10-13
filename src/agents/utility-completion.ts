@@ -1,5 +1,7 @@
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { formatAgentRuntimeName } from "../status/agent-runtime-label.js";
+import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 import {
   resolveIsolatedCompletionRuntime,
   resolveIsolatedCompletionProvider,
@@ -54,7 +56,14 @@ function resolveUtilityCompletionForAgent(
 export async function prepareUtilityCompletionForAgent(
   params: Parameters<typeof resolveUtilityCompletionForAgent>[0],
 ) {
-  const prepared = resolveUtilityCompletionForAgent(params);
+  const manifestPlugins =
+    params.manifestPlugins ??
+    (await resolvePluginMetadataSnapshotAsync({
+      config: params.cfg,
+      workspaceDir: resolveAgentWorkspaceDir(params.cfg, params.agentId),
+      allowWorkspaceScopedCurrent: true,
+    }));
+  const prepared = resolveUtilityCompletionForAgent({ ...params, manifestPlugins });
   if (
     prepared.agentHarnessRuntimeOverride &&
     prepared.agentHarnessRuntimeOverride !== "claude-cli" &&

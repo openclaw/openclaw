@@ -4,6 +4,8 @@ import { registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   getActivePluginRegistry,
@@ -24,7 +26,7 @@ import {
   dispatchTestSessionKey as sessionKey,
   getDispatchTestMocks,
   getSessionDispatchHandler,
-  invokeSessionDispatch as invoke,
+  invokeSessionDispatch,
   invokeSessionMove,
   invokeSessionReclaim,
   makeDispatchTestContext as makeContext,
@@ -36,6 +38,19 @@ import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const mocks = getDispatchTestMocks();
 const originalPluginRegistry = getActivePluginRegistry();
+
+async function withDispatchMetadata<T>(
+  context: GatewayRequestContext,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const config = context.getRuntimeConfig();
+  const metadata = await resolvePluginMetadataSnapshotAsync({ config, allowCurrent: false });
+  return withPluginMetadataSnapshotScope(metadata, operation, { config });
+}
+
+function invoke(...args: Parameters<typeof invokeSessionDispatch>) {
+  return withDispatchMetadata(args[0], () => invokeSessionDispatch(...args));
+}
 
 function useWorktreeSession(
   entry: Partial<NonNullable<Parameters<typeof targetWithEntry>[0]>> = {},
@@ -631,29 +646,31 @@ describe("sessions.dispatch", () => {
       const controller = new AbortController();
       const request = async (scope: "operator.write" | "operator.admin") => {
         const respond = vi.fn();
-        await handleGatewayRequest({
-          signal: controller.signal,
-          req: {
-            type: "req",
-            id: `configured-default-${scope}`,
-            method: "sessions.dispatch",
-            params: { key: sessionKey },
-          },
-          respond,
-          client: {
-            connId: `conn-${scope}`,
-            connect: {
-              role: "operator",
-              scopes: [scope],
-              client: { id: "test", version: "1", platform: "test", mode: "test" },
-              minProtocol: 1,
-              maxProtocol: 1,
+        await withDispatchMetadata(context, () =>
+          handleGatewayRequest({
+            signal: controller.signal,
+            req: {
+              type: "req",
+              id: `configured-default-${scope}`,
+              method: "sessions.dispatch",
+              params: { key: sessionKey },
             },
-          } as Parameters<typeof handleGatewayRequest>[0]["client"],
-          isWebchatConnect: () => false,
-          context,
-          extraHandlers: { "sessions.dispatch": getSessionDispatchHandler() },
-        });
+            respond,
+            client: {
+              connId: `conn-${scope}`,
+              connect: {
+                role: "operator",
+                scopes: [scope],
+                client: { id: "test", version: "1", platform: "test", mode: "test" },
+                minProtocol: 1,
+                maxProtocol: 1,
+              },
+            } as Parameters<typeof handleGatewayRequest>[0]["client"],
+            isWebchatConnect: () => false,
+            context,
+            extraHandlers: { "sessions.dispatch": getSessionDispatchHandler() },
+          }),
+        );
         return respond;
       };
 

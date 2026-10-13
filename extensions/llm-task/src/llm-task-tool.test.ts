@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createLlmTaskTool } from "./llm-task-tool.js";
 
+vi.mock("openclaw/plugin-sdk/model-ref-parse", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/model-ref-parse")>();
+  const resolver = await actual.prepareModelRefResolver({ manifestPlugins: [] });
+  return { ...actual, prepareModelRefResolver: async () => resolver };
+});
+
 type LlmTaskApi = Parameters<typeof createLlmTaskTool>[0];
 type Complete = LlmTaskApi["runtime"]["llm"]["complete"];
 
@@ -172,6 +178,21 @@ describe("llm-task tool (json-only)", () => {
       model: "anthropic/claude-4-sonnet",
     });
     expect(call.model).toBe("anthropic/claude-4-sonnet");
+  });
+
+  it("resolves configured aliases with the prepared model metadata", async () => {
+    const api = fakeApi({
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5" },
+            models: { "example/remote-model": { alias: "chosen" } },
+          },
+        },
+      },
+    });
+    const call = await executeIsolatedCompletion({ prompt: "x", model: "chosen" }, api);
+    expect(call.model).toBe("example/remote-model");
   });
 
   it("throws on invalid thinking level", async () => {

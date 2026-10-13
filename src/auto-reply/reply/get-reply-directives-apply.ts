@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_MESSAGE,
@@ -357,10 +358,18 @@ export async function applyInlineDirectiveOverrides(params: {
       }
       const modelSelection = modelResolution.modelSelection;
       if (modelSelection) {
+        const metadataSnapshot =
+          cfg.plugins?.enabled === false
+            ? null
+            : await resolvePluginMetadataSnapshotAsync({
+                config: cfg,
+                allowWorkspaceScopedCurrent: true,
+              });
         const runtime = resolveModelRuntimeDirective({
           rawRuntime: directives.rawModelRuntime,
           provider: modelSelection.provider,
           cfg,
+          metadataSnapshot,
           sessionEntry,
         });
         if (runtime.kind === "invalid") {

@@ -1,7 +1,8 @@
 import { assert, describe, expect, it, vi } from "vitest";
 import type { ImageGenerationProvider } from "../../image-generation/types.js";
 import * as mediaGenerationRegistry from "../../media-generation/registry.js";
-import { withEnv } from "../../test-utils/env.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   createApiKeyCredential,
@@ -36,6 +37,7 @@ describe("image generation credential availability", () => {
         .mockImplementation(async (_config, run) => await run([provider]));
       try {
         prepareSharedAuthStoreOwnershipForNative(state.env);
+        await prepareBundledDiscoveryMode(process.env);
         setRuntimeAuthProfileStoreSnapshot(createAuthProfileStoreFixture({}), agentDir);
         const authProfileStoreSource = await hasAnyAuthProfileStoreSourceAsync(agentDir);
         expect(authProfileStoreSource).toBe(false);
@@ -94,8 +96,9 @@ describe("image generation credential availability", () => {
     { authFlow: "chatgpt-token-sharing", extraCredential: "oauth", pinned: true, available: false },
   ] as const)(
     "exposes image generation for $authFlow only with supported auth ($extraCredential, pinned=$pinned)",
-    ({ authFlow, extraCredential, pinned, available }) => {
-      withEnv({ OPENAI_API_KEY: undefined, OPENAI_API_KEYS: undefined }, () => {
+    async ({ authFlow, extraCredential, pinned, available }) => {
+      await withEnvAsync({ OPENAI_API_KEY: undefined, OPENAI_API_KEYS: undefined }, async () => {
+        await prepareBundledDiscoveryMode(process.env);
         const oauth = createOAuthRefreshCredential({ expires: Date.now() + 3_600_000 });
         const tool = createImageGenerateTool({
           config: {

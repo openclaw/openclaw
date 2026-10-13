@@ -12,7 +12,7 @@ import {
 } from "../plugins/hook-runner-global.js";
 import {
   cleanupPluginLoaderFixturesForTest,
-  loadOpenClawPlugins,
+  loadOpenClawPluginsForTest,
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
   writePlugin,
@@ -108,7 +108,7 @@ module.exports = {
 };
 `,
   });
-  const registry = loadOpenClawPlugins({
+  const registry = loadOpenClawPluginsForTest({
     cache: false,
     config: {
       plugins: {

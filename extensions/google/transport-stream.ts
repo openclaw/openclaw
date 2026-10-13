@@ -19,7 +19,8 @@ import {
 import {
   createProviderHttpError,
   providerOperationRetryConfig,
-  resolveProviderRequestHeaders,
+  getModelProviderRequestRouteFacts,
+  resolveProviderRequestHeadersAsync,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   buildAssistantMessage,
@@ -532,17 +533,18 @@ function serializeGoogleRequest(
   return body;
 }
 
-function buildGoogleHeaders(
+async function buildGoogleHeaders(
   model: GoogleTransportModel,
   apiKey: string | undefined,
   optionHeaders: Record<string, string> | undefined,
-): Record<string, string> {
+): Promise<Record<string, string>> {
   const authHeaders = apiKey ? parseGeminiAuth(apiKey).headers : undefined;
   return (
-    resolveProviderRequestHeaders({
+    (await resolveProviderRequestHeadersAsync({
       provider: model.provider,
       api: normalizeGoogleTransportRouteApi(model.api),
       baseUrl: model.baseUrl,
+      providerMetadataOwners: getModelProviderRequestRouteFacts(model)?.providerMetadataOwners,
       capability: "llm",
       transport: "stream",
       defaultHeaders: mergeTransportHeaders(
@@ -555,7 +557,7 @@ function buildGoogleHeaders(
       ),
       callerHeaders: optionHeaders,
       precedence: "caller-wins",
-    }) ?? {
+    })) ?? {
       "Content-Type": "application/json",
       accept: "text/event-stream",
     }
@@ -1000,7 +1002,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
           const requestHeaders =
             kind === "google-vertex"
               ? await buildGoogleVertexHeaders(model, apiKeyForRequest, options?.headers, fetchImpl)
-              : buildGoogleHeaders(model, apiKeyForRequest, options?.headers);
+              : await buildGoogleHeaders(model, apiKeyForRequest, options?.headers);
           return await openGoogleSseChunks({
             kind,
             model,

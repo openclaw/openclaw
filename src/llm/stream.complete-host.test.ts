@@ -7,7 +7,9 @@ import type {
   SimpleStreamOptions,
 } from "@openclaw/llm-core";
 import { describe, expect, it, vi } from "vitest";
+import { attachModelProviderRequestRouteFacts } from "../agents/provider-request-config.js";
 import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
+import { makeEmptyPluginMetadataOwners } from "../plugins/current-plugin-metadata.test-support.js";
 import { attachModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import { bindModelLlmRuntime } from "./model-runtime-binding.js";
 import { complete, completeSimple } from "./stream.js";
@@ -58,7 +60,18 @@ function createCompletionRuntime(
     stream: providerStream,
     streamSimple: providerStream,
   });
-  return { model: bindModelLlmRuntime(model, runtime), runtime, message, providerStream };
+  return {
+    model: bindModelLlmRuntime(
+      attachModelProviderRuntimePluginHandle(
+        attachModelProviderRequestRouteFacts(model, makeEmptyPluginMetadataOwners()),
+        { provider: model.provider, modelId: model.id, plugin: undefined },
+      ),
+      runtime,
+    ),
+    runtime,
+    message,
+    providerStream,
+  };
 }
 
 describe("LLM completion transport host", () => {

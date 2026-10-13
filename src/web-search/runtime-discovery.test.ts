@@ -4,6 +4,11 @@ import { listWebSearchProvidersAsync } from "./runtime.js";
 
 const discovery = vi.hoisted(() => ({ prepare: vi.fn(), providers: vi.fn(() => []) }));
 
+// mock-isolation: Provider fixtures supply metadata without opening shared machine state.
+vi.mock("../plugins/installed-plugin-index-record-state.js", () => ({
+  preparePluginMetadataMachineStateAsync: async () => () => {},
+}));
+
 // mock-isolation: Control discovery preparation ordering without opening machine state.
 vi.mock("../plugins/bundled-discovery-state.js", () => ({
   prepareBundledDiscoveryMode: discovery.prepare,
@@ -12,7 +17,9 @@ vi.mock("../plugins/bundled-discovery-state.js", () => ({
 // mock-isolation: Discovery ordering uses fixture providers without initializing the plugin loader.
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: discovery.providers,
+  resolvePluginWebSearchProvidersAsync: discovery.providers,
   resolveRuntimeWebSearchProviders: discovery.providers,
+  resolveRuntimeWebSearchProvidersAsync: discovery.providers,
 }));
 
 it("prepares persisted discovery policy before selecting runtime providers", async () => {

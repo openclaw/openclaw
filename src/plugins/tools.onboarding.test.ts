@@ -1,6 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import { applyLocalSetupWorkspaceConfig } from "../commands/onboard-config.js";
+import { prepareBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import { runPluginRegisterSyncInRegistry } from "./loader-module-runtime.js";
@@ -21,6 +22,7 @@ it.each([
 ])(
   "selects optional tools after local onboarding while honoring deny=$deny",
   async ({ deny, expected }) => {
+    await prepareBundledDiscoveryMode();
     const workspaceDir = "/tmp";
     const config = applyLocalSetupWorkspaceConfig(
       {

@@ -14,7 +14,10 @@ import { registerContextEngineInRegistry } from "../context-engine/registry.js";
 import { getModelLlmRuntime } from "../llm/model-runtime-binding.js";
 import * as llmStream from "../llm/stream.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
-import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "../plugins/loader.js";
+import {
+  acquirePluginRegistryForInspection,
+  loadPluginRegistryHandleAsync,
+} from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   makePluginLoaderTempDir,
@@ -474,7 +477,7 @@ it("leaves a raw supplied registry with its caller", async () => {
   try {
     await fixture.environment(async () => {
       useNoBundledPlugins();
-      const raw = loadPluginRegistryHandle({ config: fixture.config });
+      const raw = await loadPluginRegistryHandleAsync({ config: fixture.config });
       setActivePluginRegistry(raw);
       const lease = await acquireFixtureRuntime(fixture, "image-model");
       try {

@@ -4,7 +4,10 @@
 import type { IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 
+const modelOverrideMetadata = createPluginMetadataSnapshotFixture();
 const loadConfigMock = vi.fn();
 const loadGatewayModelCatalogMock = vi.fn();
 
@@ -77,30 +80,36 @@ describe("resolveOpenAiCompatModelOverride", () => {
     ]);
 
     await expect(
-      resolveOpenAiCompatModelOverride({
-        req: createReq({ "x-openclaw-model": "Reader" }),
-        agentId: "main",
-        model: "openclaw",
-      }),
+      withPluginRuntimeGenerationScope({ metadataSnapshot: modelOverrideMetadata }, () =>
+        resolveOpenAiCompatModelOverride({
+          req: createReq({ "x-openclaw-model": "Reader" }),
+          agentId: "main",
+          model: "openclaw",
+        }),
+      ),
     ).resolves.toEqual({
       errorMessage: "Model 'custom/team/Reader' is not allowed for agent 'main'.",
     });
     await expect(
-      resolveOpenAiCompatModelOverride({
-        req: createReq({ "x-openclaw-model": "custom/team/Reader" }),
-        agentId: "main",
-        model: "openclaw",
-      }),
+      withPluginRuntimeGenerationScope({ metadataSnapshot: modelOverrideMetadata }, () =>
+        resolveOpenAiCompatModelOverride({
+          req: createReq({ "x-openclaw-model": "custom/team/Reader" }),
+          agentId: "main",
+          model: "openclaw",
+        }),
+      ),
     ).resolves.toEqual({ modelOverride: "custom/team/Reader" });
   });
 
   it("rejects CLI model overrides outside the configured allowlist", async () => {
     await expect(
-      resolveOpenAiCompatModelOverride({
-        req: createReq({ "x-openclaw-model": "claude-cli/opus" }),
-        agentId: "main",
-        model: "openclaw",
-      }),
+      withPluginRuntimeGenerationScope({ metadataSnapshot: modelOverrideMetadata }, () =>
+        resolveOpenAiCompatModelOverride({
+          req: createReq({ "x-openclaw-model": "claude-cli/opus" }),
+          agentId: "main",
+          model: "openclaw",
+        }),
+      ),
     ).resolves.toEqual({
       errorMessage: "Model 'claude-cli/opus' is not allowed for agent 'main'.",
     });

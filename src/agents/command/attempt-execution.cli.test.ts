@@ -33,6 +33,7 @@ import {
 } from "../../gateway/mcp-http.runtime.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
@@ -96,7 +97,11 @@ type RestrictedCompletion = {
 const runAgentAttempt = (params: RunAgentAttemptOverrides) => {
   const prepared = makeRunAgentAttemptParams(params);
   setRuntimeConfigSnapshot(prepared.cfg);
-  return runAgentAttemptImpl(prepared);
+  return runAgentAttemptImpl({
+    ...prepared,
+    metadataSnapshot:
+      prepared.metadataSnapshot ?? createPluginMetadataSnapshotFixture({ plugins: [] }),
+  });
 };
 
 const runCliAgentMock = vi.hoisted(() => vi.fn());

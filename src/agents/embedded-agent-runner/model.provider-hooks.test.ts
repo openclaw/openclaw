@@ -1,8 +1,9 @@
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
+import { preparePluginMetadataMachineStateAsync } from "../../plugins/installed-plugin-index-record-state.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { resolveAgentToolSurfacePlan } from "../tool-surface-plan.js";
 import { normalizeResolvedModel, resolveRuntimeHooks } from "./model.provider-hooks.js";
@@ -46,8 +47,9 @@ function toolSearchEnabled(resolvedModel: Model, config: OpenClawConfig = {}): b
 }
 
 describe("resolved model Tool Search policy", () => {
-  beforeAll(() => {
+  beforeEach(async () => {
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
+    await preparePluginMetadataMachineStateAsync({});
     setCurrentPluginMetadataSnapshot(createPluginMetadataSnapshotFixture());
   });
   afterAll(() => {

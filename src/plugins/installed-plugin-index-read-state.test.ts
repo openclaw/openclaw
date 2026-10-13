@@ -9,6 +9,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { prepareBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-state.js";
 import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "./installed-plugin-index-records.js";
 import { refreshPersistedInstalledPluginIndexWithLeaseSync } from "./installed-plugin-index-store-write.js";
@@ -153,6 +154,7 @@ describe("installed plugin index read state", () => {
         .soft(readPersistedIndexRow(filePath))
         .toEqual({ value_json: valueJson, updated_at_ms: 123 });
       readSpy.mockRestore();
+      await prepareBundledDiscoveryMode(params.env);
       refresh();
       expect((await readPersistedInstalledPluginIndex({ stateDir }))?.installRecords).toEqual(
         installRecords,

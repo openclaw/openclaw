@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState } from "../../config/config.js";
 import {
   resolveProviderFollowupFallbackRoute,
+  resolveProviderRuntimePlugin,
   resolveProviderRuntimePluginHandle,
   type ProviderRuntimePluginHandle,
 } from "../../plugins/provider-hook-runtime.js";
@@ -14,7 +15,7 @@ const resolveProviderIdForAuth = vi.hoisted(() => vi.fn((provider: string) => pr
 
 vi.mock("../provider-auth-aliases.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../provider-auth-aliases.js")>()),
-  resolveProviderIdForAuth,
+  resolvePreparedProviderIdForAuth: resolveProviderIdForAuth,
 }));
 
 vi.mock("../../plugins/provider-hook-runtime.js", () => ({
@@ -288,6 +289,54 @@ describe("AgentRuntimePlan", () => {
 
     const followupCall = latestFollowupRouteCall();
     expect(followupCall.runtimeHandle).toBe(suppliedHandle);
+  });
+
+  it("keeps transcript policy within its prepared provider handle", () => {
+    const config = {};
+    const buildPlan = (preserveSignatures: boolean) => {
+      const providerRuntimeHandle = {
+        provider: "fixture-provider",
+        modelId: "fixture-model",
+        prepared: true,
+        plugin: {
+          id: "fixture-provider",
+          label: "Fixture",
+          auth: [],
+          buildReplayPolicy: () => ({ preserveSignatures }),
+        },
+      } satisfies ProviderRuntimePluginHandle & { modelId: string; prepared: true };
+      return buildAgentRuntimePlan({
+        config,
+        provider: "fixture-provider",
+        modelId: "fixture-model",
+        providerRuntimeHandle,
+      });
+    };
+    const first = buildPlan(true);
+    expect(first.transcript.policy.preserveSignatures).toBe(true);
+    const replacement = buildPlan(false);
+    expect(replacement.transcript.policy.preserveSignatures).toBe(false);
+    expect(first.transcript.resolvePolicy().preserveSignatures).toBe(true);
+  });
+
+  it("keeps the prepared unowned transcript policy without rediscovery", () => {
+    vi.mocked(resolveProviderRuntimePlugin).mockClear();
+    const providerRuntimeHandle = {
+      provider: "custom-openai",
+      modelId: "fixture-model",
+      prepared: true,
+      plugin: undefined,
+    } satisfies ProviderRuntimePluginHandle & { modelId: string; prepared: true };
+    const plan = buildAgentRuntimePlan({
+      config: {},
+      provider: "custom-openai",
+      modelId: "fixture-model",
+      modelApi: "openai-completions",
+      providerRuntimeHandle,
+    });
+
+    expect(plan.transcript.policy.sanitizeToolCallIds).toBe(true);
+    expect(resolveProviderRuntimePlugin).not.toHaveBeenCalled();
   });
 
   it("threads prepared tool metadata without discovery", () => {

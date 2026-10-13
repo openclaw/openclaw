@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
+import { preparePluginAutoEnableTestDiscovery } from "../config/plugin-auto-enable.test-helpers.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import {
   formatAgentModelStartupDetails,
@@ -100,6 +101,7 @@ describe("gateway startup log", () => {
   );
 
   beforeEach(() => {
+    preparePluginAutoEnableTestDiscovery();
     modelMocks.resolveThinkingDefault.mockClear();
     modelMocks.resolveThinkingDefault.mockReturnValue("medium");
   });

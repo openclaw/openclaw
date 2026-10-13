@@ -405,7 +405,7 @@ describe("transcript setup metadata boundary", () => {
         const discover = vi.spyOn(discovery, "discoverOpenClawPlugins").mockImplementation(() => {
           throw new Error("status must not discover plugins");
         });
-        const resolve = vi.spyOn(loader, "resolveRuntimePluginRegistry").mockImplementation(() => {
+        const resolve = vi.spyOn(loader, "loadPluginRegistryHandleAsync").mockImplementation(() => {
           throw new Error("status must not resolve runtime");
         });
         const read = vi.spyOn(fs, "readFileSync");
@@ -431,7 +431,7 @@ describe("transcript setup metadata boundary", () => {
       };
       try {
         const before = await readStatus();
-        const scoped = loader.loadPluginRegistryHandle({
+        const scoped = await loader.loadPluginRegistryHandleAsync({
           config: cfg,
           env: state.env,
           onlyPluginIds: [pluginId],

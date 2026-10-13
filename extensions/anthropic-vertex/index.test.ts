@@ -1,5 +1,8 @@
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
-import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  registerSingleProviderPlugin,
+  useProviderCatalogMetadata,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { hasAnthropicVertexAvailableAuthMock } = vi.hoisted(() => ({
@@ -16,6 +19,8 @@ vi.mock("./region.js", async (importOriginal) => {
 
 import anthropicVertexPlugin from "./index.js";
 import { buildAnthropicVertexProvider } from "./provider-catalog.js";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url), new URL("../google/", import.meta.url));
 
 function staleModel(
   id: string,

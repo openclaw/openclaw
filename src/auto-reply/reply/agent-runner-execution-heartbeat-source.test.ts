@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { extractMessagingToolSourceReplyPayload } from "../../agents/embedded-agent-messaging-extraction.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import { createOpenClawToolsAsync } from "../../agents/openclaw-tools.js";
+import type { AnyAgentTool } from "../../agents/tools/common.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import {
@@ -45,11 +46,7 @@ describe.each(["cli", "embedded"] as const)("heartbeat %s source delivery", (run
         }),
       );
       const runAgent = isCli ? state.runCliAgentMock : state.runEmbeddedAgentMock;
-      let sourceReply:
-        | Awaited<
-            ReturnType<Awaited<ReturnType<typeof createOpenClawToolsAsync>>[number]["execute"]>
-          >
-        | undefined;
+      let sourceReply: Awaited<ReturnType<AnyAgentTool["execute"]>> | undefined;
       let sendError: unknown;
       runAgent.mockImplementationOnce(async (runParams: RunEmbeddedAgentInternalParams) => {
         // Exercise the actual runner policy and tool factory while the run owns delivery.

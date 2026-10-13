@@ -1,11 +1,16 @@
 import { streamSimpleAnthropic } from "@openclaw/ai/internal/anthropic";
 import { streamSimpleOpenAICompletions } from "@openclaw/ai/internal/openai";
 import { clampThinkingLevel, type Context, type Model } from "openclaw/plugin-sdk/llm";
-import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  registerSingleProviderPlugin,
+  useProviderCatalogMetadata,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 describe("kimi provider plugin", () => {
   it("normalizes legacy Kimi Code ids to the stable API model id", async () => {

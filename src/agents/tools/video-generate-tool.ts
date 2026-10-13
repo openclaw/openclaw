@@ -13,7 +13,7 @@ import { listRuntimeVideoGenerationProviders } from "../../video-generation/runt
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { buildMediaGenerationRequestKey } from "../media-generation-task-status-shared.js";
 import { getCustomProviderApiKey } from "../model-auth.js";
-import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { resolvePreparedProviderIdForAuth as resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { ToolInputError, readToolStringParam, type AnyAgentTool } from "./common.js";
 import {
   hasSnapshotCapabilityProviderAvailability,

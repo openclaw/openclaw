@@ -43,13 +43,13 @@ export async function guardRunWorkspaceOwnership(
       throw new Error("embedded-run fixture requested an unowned workspace");
     }
   };
-  const loadMetadata = metadata.loadPluginMetadataSnapshot;
+  const resolveMetadata = metadata.resolvePluginMetadataSnapshotAsync;
   const resolveRepository = repository.resolveSystemPromptRepoRoot;
   const metadataSpy = vi
-    .spyOn(metadata, "loadPluginMetadataSnapshot")
+    .spyOn(metadata, "resolvePluginMetadataSnapshotAsync")
     .mockImplementation((params) => {
       check(params?.workspaceDir);
-      return loadMetadata(params);
+      return resolveMetadata(params);
     });
   const repositorySpy = vi
     .spyOn(repository, "resolveSystemPromptRepoRoot")

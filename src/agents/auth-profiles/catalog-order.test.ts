@@ -10,19 +10,21 @@ import {
 } from "./credential-fixtures.test-support.js";
 import type { AuthProfileStore } from "./types.js";
 
+// mock-isolation: Catalog ordering uses a fixed alias owner, independent of installed plugins.
 vi.mock("../provider-auth-aliases.js", () => ({
   resolveProviderAuthAliasMap: () => ({ "proof-alias": "openai" }),
-  resolveProviderIdForAuth: (provider: string) => {
+  resolvePreparedProviderIdForAuth: (provider: string) => {
     const normalized = provider.trim().toLowerCase();
     return normalized === "proof-alias" ? "openai" : normalized;
   },
 }));
 
-vi.mock("../model-auth-env-vars.js", () => ({
+vi.mock("../model-auth-env-vars.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../model-auth-env-vars.js")>()),
   listKnownProviderEnvApiKeyNames: () => [],
   resolveProviderEnvAuthLookupMaps: () => ({
     aliasMap: { "proof-alias": "openai" },
-    envCandidateMap: { openai: ["OPENAI_API_KEY"] },
+    envCandidateMap: { openai: ["OPENAI_API_KEY"], "minimax-portal": [] },
     authEvidenceMap: {},
   }),
 }));

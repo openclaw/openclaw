@@ -32,6 +32,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as workerStores from "../infra/sqlite-worker-store.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import {
   persistProviderAuthProfileBatch,
   stageProviderAuthProfileBatch,
@@ -60,7 +61,10 @@ import { executeSystemAgentOperation } from "../system-agent/operations-execute.
 import { createSystemAgentTestRuntime } from "../system-agent/system-agent.runtime.test-support.js";
 import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { readAgentProvenance } from "../test-utils/agent-provenance.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import {
   installWorkspacePreparationPause,
   prepareRecoveryHolds,
@@ -826,14 +830,17 @@ it.each(["commit", "rollback", "close-failure"] as const)(
 );
 
 describe("agent roster persistence", () => {
-  async function addWorkerToConfig(config: unknown): Promise<OpenClawConfig> {
+  async function addWorkerToConfig(
+    config: unknown,
+    prepareConfig?: (state: OpenClawTestState) => Promise<unknown>,
+  ): Promise<OpenClawConfig> {
     const state = await createOpenClawTestState({
       layout: "state-only",
       scenario: "empty",
       label: "agent-roster-write",
     });
     try {
-      await state.writeConfig(config);
+      await state.writeConfig(prepareConfig ? await prepareConfig(state) : config);
       const result = await createAgent({ name: "Worker", workspace: state.path("worker") });
       expect(result).toMatchObject({
         status: "created",
@@ -866,12 +873,15 @@ describe("agent roster persistence", () => {
         ],
       },
     };
-    const migrated = migrateLegacyConfig(legacy, { sourceConfigBeforeMigrations: legacy });
-    expect(migrated.config).not.toBeNull();
-    if (!migrated.config) {
-      throw new Error("Doctor did not migrate the legacy roster");
-    }
-    const persisted = await addWorkerToConfig(migrated.config);
+    const persisted = await addWorkerToConfig(legacy, async (state) => {
+      await preparePluginMetadataMachineStateAsync({ env: state.env });
+      const migrated = migrateLegacyConfig(legacy, { sourceConfigBeforeMigrations: legacy });
+      expect(migrated.config).not.toBeNull();
+      if (!migrated.config) {
+        throw new Error("Doctor did not migrate the legacy roster");
+      }
+      return migrated.config;
+    });
 
     expect(persisted.agents).not.toHaveProperty("list");
     expect(persisted.agents?.entries?.main).toMatchObject({ workspace: expect.any(String) });

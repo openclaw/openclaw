@@ -1,6 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
-import { sanitizeEnvVars } from "openclaw/plugin-sdk/sandbox";
+import { sanitizeEnvVarsAsync } from "openclaw/plugin-sdk/sandbox";
 import { formatErrorMessage, redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -123,7 +123,7 @@ export async function startCodexNodeExecServerRelay(params: {
         if (rejection) {
           await sendCodexExecServerFrame(socket, rejection);
         } else {
-          await channel.send(sanitizeCodexExecServerRequest(frame, request));
+          await channel.send(await sanitizeCodexExecServerRequest(frame, request));
         }
         if (!closed) {
           socket.resume();
@@ -464,27 +464,30 @@ function createCredentialedCodexNodeHttpRejection(request: Record<string, unknow
   );
 }
 
-function sanitizeCodexExecServerRequest(frame: Buffer, request: Record<string, unknown>): Buffer {
+async function sanitizeCodexExecServerRequest(
+  frame: Buffer,
+  request: Record<string, unknown>,
+): Promise<Buffer> {
   if (request.method !== "process/start") {
     return frame;
   }
   if (!isRecord(request.params)) {
     throw new Error("Codex process/start params must be an object.");
   }
-  sanitizeCodexExecServerEnvironment(request.params, "env");
+  await sanitizeCodexExecServerEnvironment(request.params, "env");
   if (request.params.envPolicy !== undefined) {
     if (!isRecord(request.params.envPolicy)) {
       throw new Error("Codex process/start envPolicy must be an object.");
     }
-    sanitizeCodexExecServerEnvironment(request.params.envPolicy, "set");
+    await sanitizeCodexExecServerEnvironment(request.params.envPolicy, "set");
   }
   return normalizeCodexExecServerFrame(Buffer.from(JSON.stringify(request)));
 }
 
-function sanitizeCodexExecServerEnvironment(
+async function sanitizeCodexExecServerEnvironment(
   record: Record<string, unknown>,
   key: "env" | "set",
-): void {
+): Promise<void> {
   const environment = record[key];
   if (environment === undefined) {
     return;
@@ -503,5 +506,5 @@ function sanitizeCodexExecServerEnvironment(
     }
     values[name] = value;
   }
-  record[key] = sanitizeEnvVars(values).allowed;
+  record[key] = (await sanitizeEnvVarsAsync(values)).allowed;
 }

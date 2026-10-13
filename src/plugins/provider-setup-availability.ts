@@ -4,16 +4,19 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { enablePluginInConfig, enablePluginWithCapabilityConsent } from "./enable.js";
-import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import { resolvePluginMetadataSnapshotAsync } from "./plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import {
   type ProviderAuthChoiceMetadata,
   resolveManifestProviderAuthChoices,
 } from "./provider-auth-choices.js";
 import type { ProviderAppGuidedSetupContext } from "./provider-authentication.types.js";
-import { resolvePluginProvidersCore } from "./providers.runtime.js";
+import {
+  type resolvePluginProvidersCore,
+  resolvePluginProvidersCoreAsync,
+} from "./providers.runtime.js";
 import type { ProviderPlugin } from "./types.js";
 
 const log = createSubsystemLogger("plugins/provider-setup-availability");
@@ -32,7 +35,9 @@ export async function probeSetupProviderChoices<T>(
      */
     metadataSnapshot?: PluginMetadataSnapshot;
     enablePluginInConfig?: typeof enablePluginInConfig;
-    resolvePluginProviders?: typeof resolvePluginProvidersCore;
+    resolvePluginProviders?:
+      | typeof resolvePluginProvidersCore
+      | typeof resolvePluginProvidersCoreAsync;
   },
   probe: (
     choice: ProviderAuthChoiceMetadata,
@@ -62,7 +67,7 @@ export async function probeSetupProviderChoices<T>(
         }
       }
       const providers = choices.length
-        ? (params.resolvePluginProviders ?? resolvePluginProvidersCore)({
+        ? await (params.resolvePluginProviders ?? resolvePluginProvidersCoreAsync)({
             config,
             workspaceDir: params.workspaceDir,
             env,
@@ -107,7 +112,11 @@ export async function detectAvailableSetupProviderIds(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<ReadonlySet<string>> {
   const env = params.env ?? process.env;
-  const metadataSnapshot = loadManifestMetadataSnapshot({ ...params, env });
+  const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+    ...params,
+    env,
+    allowWorkspaceScopedCurrent: params.workspaceDir === undefined,
+  });
   const choices = resolveManifestProviderAuthChoices({
     ...params,
     env,

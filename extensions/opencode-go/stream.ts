@@ -1,5 +1,8 @@
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
-import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
+import {
+  getModelProviderRequestRouteFacts,
+  resolveProviderRequestHeadersAsync,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   createDeepSeekV4OpenAICompatibleThinkingWrapper,
   createOpenAICompatibleCompletionsThinkingOffWrapper,
@@ -14,10 +17,10 @@ import { createOpencodeGoStalledStreamWrapper } from "./stream-termination.js";
 
 function createOpencodeGoAttributionWrapper(
   baseStreamFn: NonNullable<ProviderWrapStreamFnContext["streamFn"]>,
-  sourceApi?: ProviderWrapStreamFnContext["sourceApi"],
+  ctx: ProviderWrapStreamFnContext,
 ): NonNullable<ProviderWrapStreamFnContext["streamFn"]> {
-  return (model, context, options) => {
-    const api = sourceApi ?? model.api;
+  return async (model, context, options) => {
+    const api = ctx.sourceApi ?? model.api;
     // OpenAI transports already consume the central policy; Anthropic does not.
     // Keep this narrow so each request resolves attribution exactly once.
     if (model.provider !== "opencode-go" || api !== "anthropic-messages") {
@@ -25,15 +28,19 @@ function createOpencodeGoAttributionWrapper(
     }
     return baseStreamFn(model, context, {
       ...options,
-      headers: resolveProviderRequestHeaders({
-        provider: model.provider,
-        api,
-        baseUrl: model.baseUrl,
-        capability: "llm",
-        transport: "stream",
-        callerHeaders: options?.headers,
-        precedence: "defaults-win",
-      }),
+      headers: await resolveProviderRequestHeadersAsync(
+        {
+          provider: model.provider,
+          api,
+          baseUrl: model.baseUrl,
+          providerMetadataOwners: getModelProviderRequestRouteFacts(model)?.providerMetadataOwners,
+          capability: "llm",
+          transport: "stream",
+          callerHeaders: options?.headers,
+          precedence: "defaults-win",
+        },
+        { config: ctx.config, workspaceDir: ctx.workspaceDir },
+      ),
     });
   };
 }
@@ -90,7 +97,7 @@ export function createOpencodeGoWireWrapper(
         : payloadStreamFn(model, context, options),
     thinkingLevel,
   );
-  return createOpencodeGoAttributionWrapper(deepSeek, ctx.sourceApi);
+  return createOpencodeGoAttributionWrapper(deepSeek, ctx);
 }
 
 export function createOpencodeGoWrapper(

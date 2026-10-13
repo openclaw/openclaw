@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { settleReplyDispatcher } from "../dispatch-dispatcher.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { emptyConfig, transcriptMocks } from "./dispatch-from-config.shared.test-harness.js";
@@ -22,6 +23,7 @@ beforeAll(globalBeforeAll0);
 beforeEach(describe0BeforeEach0);
 
 it("delivers a continuing mixed directive ack as a status block without losing metadata", async () => {
+  await resolvePluginMetadataSnapshotAsync({ config: {} });
   const typing = createTypingController();
   const ctx = buildTestCtx({ Body: "keep going", CommandBody: "keep going" });
   const onBlockReply = vi.fn(async () => {});

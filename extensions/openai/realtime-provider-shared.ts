@@ -46,20 +46,20 @@ type OpenAIRealtimeClientSecretRequest = {
   authRejectedMessage?: string;
 };
 
-export function resolveOpenAIRealtimeRequestHeaders(
-  { resolveProviderRequestHeaders }: OpenAIRealtimeHost,
+export async function resolveOpenAIRealtimeRequestHeaders(
+  { resolveProviderRequestHeadersAsync }: OpenAIRealtimeHost,
   baseUrl: string,
   defaultHeaders: Record<string, string> = {},
   transport: "http" | "websocket" = "http",
-): Record<string, string> {
+): Promise<Record<string, string>> {
   return (
-    resolveProviderRequestHeaders({
+    (await resolveProviderRequestHeadersAsync({
       provider: "openai",
       baseUrl,
       capability: "audio",
       transport,
       defaultHeaders,
-    }) ?? defaultHeaders
+    })) ?? defaultHeaders
   );
 }
 
@@ -74,7 +74,7 @@ export async function createOpenAIRealtimeClientSecret(
     url,
     init: {
       method: "POST",
-      headers: resolveOpenAIRealtimeRequestHeaders(runtime, url, {
+      headers: await resolveOpenAIRealtimeRequestHeaders(runtime, url, {
         Authorization: `Bearer ${params.authToken}`,
         "Content-Type": "application/json",
       }),

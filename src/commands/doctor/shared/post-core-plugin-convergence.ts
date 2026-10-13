@@ -7,6 +7,7 @@ import {
   filterRecordsToActive,
   runActivePluginPayloadSmokeCheck,
 } from "../../../plugins/active-payload-verification.js";
+import { prepareBundledDiscoveryMode } from "../../../plugins/bundled-discovery-state.js";
 import type { PluginCapabilityConsentHandler } from "../../../plugins/capability-consent.js";
 import {
   resolveDefaultPluginExtensionsDir,
@@ -209,6 +210,7 @@ async function runPostCorePluginConvergenceWithLease(
   params: Parameters<typeof runPostCorePluginConvergence>[0],
 ): Promise<PostCoreConvergenceResult> {
   const env = resolvePostCoreConvergenceEnv(params.env, params.compatibilityHostVersion);
+  await prepareBundledDiscoveryMode(env);
   // Retire obsolete managed shadows before relinking or smoke-checking them. A package that
   // became bundled with the new core must not survive into the next startup's contract graph.
   params.beforePersistentEffect?.();

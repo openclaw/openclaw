@@ -98,7 +98,7 @@ import type { AgentRuntimeAuthPlan } from "./runtime-plan/types.js";
 import { resolveSandboxContext } from "./sandbox/context.js";
 import { resolveSessionModelRef } from "./session-model-ref.js";
 import { prepareSessionPlacementSandbox } from "./session-placement-admission.js";
-import { resolveSessionRuntimeOverrideForProvider } from "./session-runtime-compat.js";
+import { resolveSessionRuntimeOverrideForProviderAsync } from "./session-runtime-compat.js";
 import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { sanitizeImageBlocks } from "./tool-images.js";
@@ -664,7 +664,7 @@ export async function runBtwSideQuestion(
         : undefined;
       const agentHarnessRuntimeOverride = agentHarnessId
         ? undefined
-        : resolveSessionRuntimeOverrideForProvider({
+        : await resolveSessionRuntimeOverrideForProviderAsync({
             provider,
             entry: params.sessionEntry,
             cfg: params.cfg,

@@ -77,7 +77,7 @@ it.each([
   const entered = createDeferred();
   const resume = createDeferred();
   let paused = false;
-  let metadata: ReturnType<typeof createSystemAgentPluginMetadataTestSnapshot> | undefined;
+  let metadata: Awaited<ReturnType<typeof createSystemAgentPluginMetadataTestSnapshot>> | undefined;
   let completion: Promise<unknown> | undefined;
   const { runtime, lines } = createSystemAgentTestRuntime();
   const workspace = state.workspaceDir;
@@ -110,7 +110,9 @@ it.each([
   };
   try {
     await state.writeConfig(config);
-    metadata = createSystemAgentPluginMetadataTestSnapshot((await readConfigFileSnapshot()).config);
+    metadata = await createSystemAgentPluginMetadataTestSnapshot(
+      (await readConfigFileSnapshot()).config,
+    );
     const beforeRaw = await fs.readFile(state.configPath, "utf8");
     if (phase === "config") {
       preparation.gateway = pause;

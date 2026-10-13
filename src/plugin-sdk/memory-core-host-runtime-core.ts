@@ -19,6 +19,7 @@ export {
 export { resolveSessionAgentIds } from "./agent-scope-runtime.js";
 export {
   resolveMemorySearchConfig,
+  resolveMemorySearchConfigAsync,
   resolveMemorySearchIndexConfig,
 } from "../agents/memory-search.js";
 export { resolveMemoryDreamingPluginConfig } from "../memory-host-sdk/dreaming.js";

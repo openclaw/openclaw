@@ -25,6 +25,8 @@ export function collectAuditModelRefs(cfg: OpenClawConfig): AuditModelRef[] {
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
     allowPluginNormalization: false,
+    allowManifestNormalization: false,
+    manifestPlugins: [],
   });
   const out: AuditModelRef[] = [];
   const add = (value: unknown, source: string) => {
@@ -43,6 +45,8 @@ export function collectAuditModelRefs(cfg: OpenClawConfig): AuditModelRef[] {
       defaultProvider: DEFAULT_PROVIDER,
       aliasIndex,
       allowPluginNormalization: false,
+      allowManifestNormalization: false,
+      manifestPlugins: [],
     })?.ref;
     out.push({ id: resolved ? modelKey(resolved.provider, resolved.model) : raw, source });
   };

@@ -1,13 +1,16 @@
 /** Native composition entry for ordinary, restricted, and cold provider-hook loading. */
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { createExternalAuthRuntime } from "../agents/auth-profiles/external-auth.js";
+import { withLegacyExternalAuthPreparation } from "../agents/auth-profiles/external-auth.native.js";
 import { createAuthProfileStoreRuntime } from "../agents/auth-profiles/store.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import { resolveAllowedModelRefCore } from "../agents/model-selection-resolve.js";
-import { resolveCompatibleRuntimePluginRegistry } from "./active-runtime-registry.js";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { createPluginCapabilityCatalogContext } from "./capability-catalog-context.js";
-import { isPluginRegistryLoadInFlight } from "./loader-cache.js";
+import { preparePluginMetadataMachineStateAsync } from "./installed-plugin-index-record-state.js";
+import { isPluginRegistryCacheEnabled, isPluginRegistryLoadInFlight } from "./loader-cache.js";
+import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
 import {
   loadOpenClawPluginsCore,
   loadOpenClawPluginsSteps,
@@ -37,29 +40,29 @@ import type { PluginRuntime } from "./runtime/types.js";
 
 // Construction only binds callbacks. No profile reads, plugin loads, or network work occur here.
 // Hoisted entry functions let cold auth discovery re-enter this same binding without a module cycle.
-export function resolveRuntimePluginRegistry(
-  options?: PluginLoadOptions,
-): PluginRegistry | undefined {
-  const activeRegistry = resolveCompatibleRuntimePluginRegistry(options);
-  if (activeRegistry) {
-    return activeRegistry;
-  }
-  // Runtime helpers must not recurse while this exact snapshot is registering.
-  return isPluginRegistryLoadInFlight(options)
-    ? undefined
-    : loadOpenClawPlugins({ ...options, activate: false });
-}
 const providerRegistry = Object.freeze(
   createProviderRegistryResolver({
-    loadOpenClawPlugins,
-    resolveRuntimePluginRegistry,
+    loadOpenClawPluginsAsync,
     isPluginRegistryLoadInFlight,
   }),
 );
 const providerHooks = Object.freeze(createProviderHookRuntime(providerRegistry));
 const externalProfiles = Object.freeze(createProviderExternalAuthResolver(providerHooks));
+const legacyExternalProfiles = createProviderExternalAuthResolver({
+  resolveProviderPluginsForHooks: (params) =>
+    providerRegistry.resolveLegacyPluginProvidersCore(
+      { ...params, activate: false, skipIfLoadInFlight: true },
+      loadOpenClawPlugins,
+    ),
+  resolveProviderPluginsForHooksAsync: providerHooks.resolveProviderPluginsForHooksAsync,
+});
 const externalAuth = Object.freeze(
-  createExternalAuthRuntime(externalProfiles.resolveExternalAuthProfilesWithPlugins),
+  withLegacyExternalAuthPreparation(
+    createExternalAuthRuntime(
+      legacyExternalProfiles.resolveExternalAuthProfilesWithPlugins,
+      externalProfiles.prepareExternalAuthProfilesWithPlugins,
+    ),
+  ),
 );
 const authStore = Object.freeze(createAuthProfileStoreRuntime(externalAuth));
 const authAvailability = Object.freeze(createProviderAuthAvailability(authStore));
@@ -111,23 +114,45 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 export async function loadOpenClawPluginsAsync(
   options: PluginLoadOptions = {},
 ): Promise<PluginRegistry> {
-  const steps = loadOpenClawPluginsSteps(options, loaderBindings);
-  let step = steps.next();
-  while (!step.done) {
-    await nextTurn();
-    step = steps.next();
+  const preparedOptions = {
+    ...options,
+    env: cloneEnvWithPlatformSemantics(options.env ?? process.env),
+  };
+  await preparePluginMetadataMachineStateAsync({ env: preparedOptions.env });
+  const load = async () => {
+    const steps = loadOpenClawPluginsSteps(preparedOptions, loaderBindings);
+    let step = steps.next();
+    while (!step.done) {
+      await nextTurn();
+      step = steps.next();
+    }
+    return step.value;
+  };
+  if (
+    preparedOptions.previousRegistry ||
+    preparedOptions.borrowRegistry ||
+    preparedOptions.moduleRecoveries ||
+    !isPluginRegistryCacheEnabled(preparedOptions)
+  ) {
+    return await load();
   }
-  return step.value;
+  const context = resolvePluginLoadCacheContext(preparedOptions);
+  return await context.cacheState.loadAsync(context.cacheKey, load);
 }
 
 /** Publishes synchronously, then joins every accepted health write before returning to its host. */
 export async function loadAndActivateRootPluginRegistry(
   options: PluginLoadOptions = {},
 ): Promise<PluginRegistry> {
+  const preparedOptions = {
+    ...options,
+    env: cloneEnvWithPlatformSemantics(options.env ?? process.env),
+  };
+  await preparePluginMetadataMachineStateAsync({ env: preparedOptions.env });
   const cleanup: Promise<void>[] = [];
   try {
     return loadOpenClawPluginsCore(
-      { ...options, activate: true },
+      { ...preparedOptions, activate: true },
       loaderBindings,
       undefined,
       undefined,
@@ -142,18 +167,23 @@ export async function loadAndActivateRootPluginRegistry(
 export async function acquirePluginRegistryForInspection(
   options: Omit<PluginLoadOptions, "activate" | "cache"> = {},
 ): Promise<{ registry: PluginRegistry; release: () => Promise<void> }> {
-  return acquireRegistryResources((resources) =>
-    loadOpenClawPluginsCore(
-      { ...options, activate: false, cache: false },
+  const preparedOptions = {
+    ...options,
+    env: cloneEnvWithPlatformSemantics(options.env ?? process.env),
+  };
+  return acquireRegistryResources(async (resources) => {
+    await preparePluginMetadataMachineStateAsync({ env: preparedOptions.env });
+    return loadOpenClawPluginsCore(
+      { ...preparedOptions, activate: false, cache: false },
       loaderBindings,
       undefined,
       resources,
-    ),
-  );
+    );
+  });
 }
 
 async function acquireRegistryResources(
-  load: (resources: PluginRegistryInspectionResources) => PluginRegistry,
+  load: (resources: PluginRegistryInspectionResources) => PluginRegistry | Promise<PluginRegistry>,
 ): Promise<{ registry: PluginRegistry; release: () => Promise<void> }> {
   const cache = createPluginCache();
   const resources = new PluginRegistryInspectionResources(async (registry, rollbackInstances) => {
@@ -196,7 +226,7 @@ async function acquireRegistryResources(
   });
   try {
     inheritPluginNativeAdmissions(getPluginCache(), cache);
-    const registry = withPluginCache(cache, () => load(resources));
+    const registry = await withPluginCache(cache, () => load(resources));
     return { registry, release: () => resources.release() };
   } catch (error) {
     try {
@@ -229,9 +259,14 @@ export function acquirePluginRegistryWithInternalOverrides(
   options: PluginLoadOptions & { cache: false; activate: false },
   overrides: ScopedRuntimeOverrides,
 ): Promise<{ registry: PluginRegistry; release: () => Promise<void> }> {
-  return acquireRegistryResources((resources) =>
-    loadRegistryWithInternalOverrides(options, overrides, resources),
-  );
+  const preparedOptions = {
+    ...options,
+    env: cloneEnvWithPlatformSemantics(options.env ?? process.env),
+  };
+  return acquireRegistryResources(async (resources) => {
+    await preparePluginMetadataMachineStateAsync({ env: preparedOptions.env });
+    return loadRegistryWithInternalOverrides(preparedOptions, overrides, resources);
+  });
 }
 
 function loadRegistryWithInternalOverrides(

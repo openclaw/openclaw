@@ -11,6 +11,7 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { isPluginProvidersLoadInFlight } from "../plugins/providers.runtime.js";
 import {
   getActivePluginRegistryWorkspaceDirFromState,
@@ -150,6 +151,19 @@ export function resolveImageFallbackCandidates(
     addRaw(raw, "configured-fallback");
   }
   return candidates;
+}
+
+export async function resolveModelCandidateChainAsync(
+  params: ModelCandidateChainParams,
+): Promise<ModelFallbackCandidate[]> {
+  const manifestPlugins =
+    params.manifestPlugins ??
+    (await resolvePluginMetadataSnapshotAsync({
+      config: params.cfg,
+      workspaceDir: getActivePluginRegistryWorkspaceDirFromState(),
+      allowWorkspaceScopedCurrent: true,
+    }));
+  return resolveModelCandidateChain({ ...params, manifestPlugins });
 }
 
 export function resolveModelCandidateChain(

@@ -1,5 +1,6 @@
 // Google tests cover image generation provider plugin behavior.
 import type { ImageGenerationRequest } from "openclaw/plugin-sdk/image-generation";
+import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth";
 import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
@@ -7,6 +8,8 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-sha
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGoogleImageGenerationProvider } from "./image-generation-provider.js";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 function generateImage(overrides: Partial<ImageGenerationRequest> = {}) {
   return buildGoogleImageGenerationProvider().generateImage({

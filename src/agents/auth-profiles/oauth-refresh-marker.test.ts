@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { preparePluginMetadataMachineStateAsync } from "../../plugins/installed-plugin-index-record-state.js";
 import {
   resolveAgentCredentialMapFromStore,
   resolveUsableAgentCredentialModes,
@@ -16,7 +17,7 @@ import { createOAuthRefreshFence, createFailedOAuthRefreshFence } from "./oauth-
 describe("OAuth refresh marker isolation", () => {
   it.each(["pending", "failed"] as const)(
     "never exposes a %s fence as configured runtime or catalog auth",
-    (state) => {
+    async (state) => {
       const profileId = "openai:default";
       const pending = createOAuthRefreshFence({
         profileId,
@@ -40,7 +41,8 @@ describe("OAuth refresh marker isolation", () => {
       expect(resolveAgentCredentialMapFromStore(store)).toEqual({});
       expect(resolveUsableAgentCredentialModes({ openai: fence })).toEqual({});
 
-      const env = { OPENAI_API_KEY: "fallback-api-key" };
+      const env = { ...process.env, OPENAI_API_KEY: "fallback-api-key" };
+      await preparePluginMetadataMachineStateAsync({ env });
       const prepared = createProviderApiKeyResolverFromPreparedCredentials(env, {
         openai: fence,
       })("openai");

@@ -10,7 +10,7 @@ import {
   resolveRemoteShellRuntimePaths as resolveSshRuntimePaths,
 } from "./remote-shell-backend.js";
 import type { RemoteShellSandboxSession } from "./remote-shell-transport.js";
-import { sanitizeEnvVars } from "./sanitize-env-vars.js";
+import { sanitizeEnvVarsAsync } from "./sanitize-env-vars.js";
 import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
 import { resolveSandboxAgentId } from "./shared.js";
 import {
@@ -123,7 +123,7 @@ async function createSshSandboxBackendInternal(
         uploadDirectory: (upload) => uploadDirectoryToSshTarget({ ...upload, session }),
         prepareExec: async (exec) => ({
           ...(await prepareSshSandboxExec({ ...exec, session })),
-          env: sanitizeEnvVars(process.env).allowed,
+          env: (await sanitizeEnvVarsAsync(process.env)).allowed,
         }),
         dispose: () => disposeSshSandboxSession(session),
       };

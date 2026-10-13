@@ -102,20 +102,21 @@ export async function prepareEmbeddedSkills(params: {
           {},
           params.assertCurrent ?? (() => {}),
         );
-    params.assertCurrent?.();
     // Preparation may yield to abort/revocation. Apply process-wide overrides only
     // once all filesystem work has settled and this caller can take custody.
     restoreSkillEnv =
       params.applySkillEnvironment === false
         ? () => {}
         : preparedSnapshot
-          ? applySkillEnvOverridesFromSnapshot({
+          ? await applySkillEnvOverridesFromSnapshot({
               snapshot: preparedSnapshot,
               config: params.attempt.config,
+              assertCurrent: params.assertCurrent,
             })
-          : applySkillEnvOverrides({
+          : await applySkillEnvOverrides({
               skills: skillEntries,
               config: params.attempt.config,
+              assertCurrent: params.assertCurrent,
             });
     const installedSkills = prepareInstalledSkillCatalog({
       snapshot: skillsSnapshot,

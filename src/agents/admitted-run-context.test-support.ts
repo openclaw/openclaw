@@ -71,6 +71,9 @@ export function wrapRunWithTestPreparedAdmission<P extends { runId: string; agen
     // Fixtures reset modules before loading runners; authority must use that same
     // module instance and remain owned until the complete runner call settles.
     const { prepareSystemAgentRunAdmission } = await import("./admitted-run-context.js");
+    const { preparePluginMetadataMachineStateAsync } =
+      await import("../plugins/installed-plugin-index-record-state.js");
+    await preparePluginMetadataMachineStateAsync({ env: process.env });
     const admission = prepareSystemAgentRunAdmission(
       {},
       params.runId,

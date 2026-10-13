@@ -1,7 +1,8 @@
 // Skill loading tests cover bundled, plugin, and workspace skill resolution.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { preparePluginAutoEnableTestDiscovery } from "../../config/plugin-auto-enable.test-helpers.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -34,8 +35,10 @@ import type { SkillEntry, SkillSnapshot } from "../types.js";
 import { shouldIncludeSkill } from "./config.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 
-vi.mock("./plugin-skills.js", () => ({
+vi.mock("./plugin-skills.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-skills.js")>()),
   resolvePluginSkillRoots: () => [],
+  resolvePluginSkillRootsFromMetadata: () => [],
 }));
 
 const fixtureSuite = createFixtureSuite("openclaw-skills-suite-");
@@ -52,11 +55,17 @@ const makeWorkspace = async () => await fixtureSuite.createCaseDir("workspace");
 const buildWorkspaceSkillsPrompt = async (
   workspaceDir: string,
   opts?: Parameters<typeof buildSkillSnapshot>[1],
-): Promise<string> => (await buildSkillSnapshot(workspaceDir, opts)).prompt;
+): Promise<string> => {
+  preparePluginAutoEnableTestDiscovery();
+  return (await buildSkillSnapshot(workspaceDir, opts)).prompt;
+};
 const apiKeyField = ["api", "Key"].join("");
 
 function withWorkspaceHome<T>(workspaceDir: string, cb: () => T): T {
-  return withPathResolutionEnv(workspaceDir, { PATH: "" }, () => cb());
+  return withPathResolutionEnv(workspaceDir, { PATH: "" }, () => {
+    preparePluginAutoEnableTestDiscovery();
+    return cb();
+  });
 }
 
 async function writePromptLimitSkills(workspaceDir: string) {
@@ -183,6 +192,10 @@ afterAll(async () => {
   await fixtureSuite.cleanup();
 });
 
+beforeEach(() => {
+  preparePluginAutoEnableTestDiscovery();
+});
+
 afterEach(() => {
   clearRuntimeConfigSnapshot();
   clearPluginMetadataLifecycleCaches();
@@ -287,6 +300,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       "utf-8",
     );
     clearPluginMetadataLifecycleCaches();
+    preparePluginAutoEnableTestDiscovery();
 
     const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
       ...resolveTestSkillDirs(workspaceDir),
@@ -393,8 +407,12 @@ describe("shouldIncludeSkill", () => {
   });
 });
 
+async function withClearedEnvAsync(keys: string[], run: () => Promise<void>): Promise<void> {
+  await withEnvAsync(Object.fromEntries(keys.map((key) => [key, undefined])), run);
+}
+
 describe("applySkillEnvOverrides", () => {
-  it("skips only the skill whose configured secret is unavailable", () => {
+  it("skips only the skill whose configured secret is unavailable", async () => {
     const unavailable = envSkillEntries("cold-skill", {
       primaryEnv: "COLD_SKILL_KEY",
       requires: { env: ["COLD_SKILL_KEY"] },
@@ -414,8 +432,8 @@ describe("applySkillEnvOverrides", () => {
       },
     ]);
 
-    withClearedEnv(["COLD_SKILL_KEY", "HEALTHY_SKILL_KEY"], () => {
-      const restore = applySkillEnvOverrides({
+    await withClearedEnvAsync(["COLD_SKILL_KEY", "HEALTHY_SKILL_KEY"], async () => {
+      const restore = await applySkillEnvOverrides({
         skills: [...unavailable, ...healthy],
         config: {
           skills: {
@@ -438,16 +456,16 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
-  it("keeps env keys tracked until all overlapping overrides restore", () => {
+  it("keeps env keys tracked until all overlapping overrides restore", async () => {
     const entries = envSkillEntries("env-skill", {
       primaryEnv: "ENV_KEY",
       requires: { env: ["ENV_KEY"] },
     });
 
-    withClearedEnv(["ENV_KEY"], () => {
+    await withClearedEnvAsync(["ENV_KEY"], async () => {
       const config = { skills: { entries: { "env-skill": { [apiKeyField]: "injected" } } } }; // pragma: allowlist secret
-      const restoreFirst = applySkillEnvOverrides({ skills: entries, config });
-      const restoreSecond = applySkillEnvOverrides({ skills: entries, config });
+      const restoreFirst = await applySkillEnvOverrides({ skills: entries, config });
+      const restoreSecond = await applySkillEnvOverrides({ skills: entries, config });
 
       try {
         expect(process.env.ENV_KEY).toBe("injected");
@@ -464,7 +482,7 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
-  it("skips disabled snapshot skills before resolving raw apiKey SecretRefs", () => {
+  it("skips disabled snapshot skills before resolving raw apiKey SecretRefs", async () => {
     const skillName = "env-skill";
     const snapshot = envSkillSnapshot(skillName, {
       primaryEnv: "ENV_KEY",
@@ -485,8 +503,8 @@ describe("applySkillEnvOverrides", () => {
       },
     };
 
-    withClearedEnv(["ENV_KEY", "GITHUB_PAT"], () => {
-      const restore = applySkillEnvOverridesFromSnapshot({
+    await withClearedEnvAsync(["ENV_KEY", "GITHUB_PAT"], async () => {
+      const restore = await applySkillEnvOverridesFromSnapshot({
         snapshot,
         config,
       });
@@ -502,7 +520,7 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
-  it("prefers the active runtime snapshot over raw SecretRef skill config", () => {
+  it("prefers the active runtime snapshot over raw SecretRef skill config", async () => {
     const skillName = "env-skill";
     const entries = envSkillEntries(skillName, {
       primaryEnv: "ENV_KEY",
@@ -512,8 +530,8 @@ describe("applySkillEnvOverrides", () => {
     const runtimeConfig = resolvedSkillApiKeyConfig(skillName, "resolved-key");
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
 
-    withClearedEnv(["ENV_KEY"], () => {
-      const restore = applySkillEnvOverrides({
+    await withClearedEnvAsync(["ENV_KEY"], async () => {
+      const restore = await applySkillEnvOverrides({
         skills: entries,
         config: sourceConfig,
       });
@@ -527,7 +545,7 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
-  it("prefers resolved caller skill config when the active runtime snapshot is still raw", () => {
+  it("prefers resolved caller skill config when the active runtime snapshot is still raw", async () => {
     const skillName = "env-skill";
     const entries = envSkillEntries(skillName, {
       primaryEnv: "ENV_KEY",
@@ -537,8 +555,8 @@ describe("applySkillEnvOverrides", () => {
     const callerConfig = resolvedSkillApiKeyConfig(skillName, "resolved-key");
     setRuntimeConfigSnapshot(sourceConfig, sourceConfig);
 
-    withClearedEnv(["ENV_KEY"], () => {
-      const restore = applySkillEnvOverrides({
+    await withClearedEnvAsync(["ENV_KEY"], async () => {
+      const restore = await applySkillEnvOverrides({
         skills: entries,
         config: callerConfig,
       });
@@ -552,15 +570,15 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
-  it("does not resolve raw skill apiKey refs when the host already provides primaryEnv", () => {
+  it("does not resolve raw skill apiKey refs when the host already provides primaryEnv", async () => {
     const entries = envSkillEntries("env-skill", {
       primaryEnv: "ENV_KEY",
       requires: { env: ["ENV_KEY"] },
     });
 
-    withClearedEnv(["ENV_KEY"], () => {
+    await withClearedEnvAsync(["ENV_KEY"], async () => {
       process.env.ENV_KEY = "host-key";
-      const restore = applySkillEnvOverrides({
+      const restore = await applySkillEnvOverrides({
         skills: entries,
         config: {
           skills: {
@@ -587,14 +605,14 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
-  it("blocks unsafe env overrides but allows declared secrets", () => {
+  it("blocks unsafe env overrides but allows declared secrets", async () => {
     const entries = envSkillEntries("unsafe-env-skill", {
       primaryEnv: "OPENAI_API_KEY",
       requires: { env: ["OPENAI_API_KEY", "NODE_OPTIONS"] },
     });
 
-    withClearedEnv(["OPENAI_API_KEY", "NODE_OPTIONS"], () => {
-      const restore = applySkillEnvOverrides({
+    await withClearedEnvAsync(["OPENAI_API_KEY", "NODE_OPTIONS"], async () => {
+      const restore = await applySkillEnvOverrides({
         skills: entries,
         config: {
           skills: {
@@ -621,7 +639,7 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
-  it("blocks dangerous host env overrides even when declared", () => {
+  it("blocks dangerous host env overrides even when declared", async () => {
     const entries = envSkillEntries("dangerous-env-skill", {
       requires: {
         env: [
@@ -635,7 +653,7 @@ describe("applySkillEnvOverrides", () => {
       },
     });
 
-    withClearedEnv(
+    await withClearedEnvAsync(
       [
         "BASH_ENV",
         "SHELL",
@@ -644,8 +662,8 @@ describe("applySkillEnvOverrides", () => {
         "NODE_REPL_HISTORY",
         "NODE_V8_COVERAGE",
       ],
-      () => {
-        const restore = applySkillEnvOverrides({
+      async () => {
+        const restore = await applySkillEnvOverrides({
           skills: entries,
           config: {
             skills: {
@@ -685,39 +703,42 @@ describe("applySkillEnvOverrides", () => {
     );
   });
 
-  it("blocks override-only host env overrides in skill config", () => {
+  it("blocks override-only host env overrides in skill config", async () => {
     const entries = envSkillEntries("override-env-skill", {
       requires: { env: ["HTTPS_PROXY", "NODE_TLS_REJECT_UNAUTHORIZED", "DOCKER_HOST"] },
     });
 
-    withClearedEnv(["HTTPS_PROXY", "NODE_TLS_REJECT_UNAUTHORIZED", "DOCKER_HOST"], () => {
-      const restore = applySkillEnvOverrides({
-        skills: entries,
-        config: {
-          skills: {
-            entries: {
-              "override-env-skill": {
-                env: {
-                  HTTPS_PROXY: "http://proxy.example.test:8080",
-                  NODE_TLS_REJECT_UNAUTHORIZED: "0",
-                  DOCKER_HOST: "tcp://docker.example.test:2376",
+    await withClearedEnvAsync(
+      ["HTTPS_PROXY", "NODE_TLS_REJECT_UNAUTHORIZED", "DOCKER_HOST"],
+      async () => {
+        const restore = await applySkillEnvOverrides({
+          skills: entries,
+          config: {
+            skills: {
+              entries: {
+                "override-env-skill": {
+                  env: {
+                    HTTPS_PROXY: "http://proxy.example.test:8080",
+                    NODE_TLS_REJECT_UNAUTHORIZED: "0",
+                    DOCKER_HOST: "tcp://docker.example.test:2376",
+                  },
                 },
               },
             },
           },
-        },
-      });
+        });
 
-      try {
-        expect(process.env.HTTPS_PROXY).toBeUndefined();
-        expect(process.env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
-        expect(process.env.DOCKER_HOST).toBeUndefined();
-      } finally {
-        restore();
-        expect(process.env.HTTPS_PROXY).toBeUndefined();
-        expect(process.env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
-        expect(process.env.DOCKER_HOST).toBeUndefined();
-      }
-    });
+        try {
+          expect(process.env.HTTPS_PROXY).toBeUndefined();
+          expect(process.env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
+          expect(process.env.DOCKER_HOST).toBeUndefined();
+        } finally {
+          restore();
+          expect(process.env.HTTPS_PROXY).toBeUndefined();
+          expect(process.env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
+          expect(process.env.DOCKER_HOST).toBeUndefined();
+        }
+      },
+    );
   });
 });

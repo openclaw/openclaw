@@ -417,6 +417,7 @@ export async function prepareCronRunContext(params: {
               provider: candidate.provider,
               entry: cronSession.sessionEntry,
               cfg: cfgWithAgentDefaults,
+              metadataSnapshot: modelOwner.metadataSnapshot,
             });
             return runtime
               ? { provider: candidate.provider, modelId: candidate.model, runtime, agentId }
@@ -593,6 +594,7 @@ export async function prepareCronRunContext(params: {
           provider,
           entry: cronSession.sessionEntry,
           cfg: admittedConfig,
+          metadataSnapshot: modelOwner.metadataSnapshot,
         }),
         authProfileId,
         authProfileIdSource: authSelection?.source,

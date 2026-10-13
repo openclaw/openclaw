@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveConfiguredAcpBindingSpecFromRecord } from "../../acp/persistent-bindings.types.js";
 import type { AgentAcpBinding } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { clearActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
@@ -14,7 +15,8 @@ const binding: AgentAcpBinding = {
   match: { channel: "discord", peer: { kind: "channel", id: "convo-1" } },
 };
 
-beforeEach(() => {
+beforeEach(async () => {
+  await prepareBundledDiscoveryMode();
   const registry = createEmptyPluginRegistry();
   registry.channels.push({
     pluginId: "binding-fixture",

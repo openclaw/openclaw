@@ -29,9 +29,10 @@ vi.mock("../server-recovery-runtime-context.js", async (importOriginal) => ({
 vi.mock("../../browser-lifecycle-cleanup.js", () => ({
   cleanupBrowserSessionsForLifecycleEnd: async () => {},
 }));
+// mock-isolation: Abort fixtures control session work independently of plugin runtime acquisition.
 vi.mock("../../agents/runtime-plugins.js", async () => {
   const { createEmptyPluginRegistry } = await import("../../plugins/registry-empty.js");
-  return { loadAgentRuntimePluginRegistryHandle: createEmptyPluginRegistry };
+  return { loadAgentRuntimePluginRegistryHandle: async () => createEmptyPluginRegistry() };
 });
 vi.mock("../../context-engine/registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../context-engine/registry.js")>()),

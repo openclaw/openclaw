@@ -1,7 +1,11 @@
 // Guards which configured transport routes may replace a catalog model's native route.
 import { describe, expect, it } from "vitest";
 import { makeEmptyPluginMetadataOwners } from "../../plugins/current-plugin-metadata.test-support.js";
-import { hasConfiguredModelRouteSupport } from "./model.configured-overrides.js";
+import {
+  hasConfiguredModelRouteSupport,
+  resolveConfiguredProviderDefaultApi,
+} from "./model.configured-overrides.js";
+import { resolveRuntimeHooks } from "./model.provider-hooks.js";
 
 const providerMetadataOwners = {
   ...makeEmptyPluginMetadataOwners(),
@@ -34,4 +38,23 @@ describe("hasConfiguredModelRouteSupport", () => {
     expect(supportsRoute("https://ai-gateway.vercel.sh")).toBe(true);
     expect(supportsRoute("https://proxy.example.com")).toBe(true);
   });
+});
+
+it("resolves a configured provider transport with the node's supplied environment", () => {
+  const env = { OPENCLAW_TEST_TRANSPORT: "native" };
+  const api = resolveConfiguredProviderDefaultApi({
+    provider: "node-fixture",
+    providerConfig: { baseUrl: "https://models.example/v1", models: [] },
+    env,
+    runtimeHooks: {
+      ...resolveRuntimeHooks({ skipProviderRuntimeHooks: true }),
+      normalizeProviderTransportWithPlugin: ({ env: lookupEnv }) => ({
+        api:
+          lookupEnv?.OPENCLAW_TEST_TRANSPORT === "native"
+            ? "anthropic-messages"
+            : "openai-completions",
+      }),
+    },
+  });
+  expect(api).toBe("anthropic-messages");
 });

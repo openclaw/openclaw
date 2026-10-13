@@ -7,6 +7,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runActivePluginPayloadSmokeCheck } from "./active-payload-verification.js";
+import { prepareBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
@@ -126,13 +127,14 @@ describe("plugin release cohort real synchronization", () => {
             }),
           ).toEqual({ checked: [], failures: [] });
         }
-        const selectedIndex = withPluginCache(createPluginCache(), () =>
-          loadInstalledPluginIndex({
+        const selectedIndex = await withPluginCache(createPluginCache(), async () => {
+          await prepareBundledDiscoveryMode(env);
+          return loadInstalledPluginIndex({
             config: result.config,
             installRecords: result.config.plugins?.installs ?? {},
             env,
-          }),
-        );
+          });
+        });
         const selected = selectedIndex.plugins.find((plugin) => plugin.pluginId === "llm-task");
         expect(selected?.rootDir).toBe(explicit ? linkedPath : bundledPath);
         if (explicit) {

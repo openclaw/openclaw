@@ -1,7 +1,9 @@
 // Plugin contract registry assembles bundled plugin fixtures for shared contract tests.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { loadBundledCapabilityRuntimeRegistry } from "../bundled-capability-runtime.js";
+import { prepareBundledCapabilityRuntime } from "../bundled-capability-runtime.js";
 import { discoverOpenClawPlugins } from "../discovery.js";
+import { preparePluginMetadataMachineState } from "../installed-plugin-index-record-state.js";
+import { loadOpenClawPluginsWithInternalOverrides } from "../loader-runtime-load.js";
 import { loadPluginManifestRegistryCore } from "../manifest-registry.js";
 import { resolveBundledExplicitProviderContractsFromPublicArtifacts } from "../provider-contract-public-artifacts.js";
 import type { ProviderPlugin, WebFetchProviderPlugin, WebSearchProviderPlugin } from "../types.js";
@@ -12,7 +14,7 @@ import {
 } from "./inventory/bundled-capability-metadata.js";
 import { normalizeContractStringValues } from "./shared.js";
 
-type BundledCapabilityRuntimeRegistry = ReturnType<typeof loadBundledCapabilityRuntimeRegistry>;
+type BundledCapabilityRuntimeRegistry = ReturnType<typeof loadOpenClawPluginsWithInternalOverrides>;
 type CapabilityContractEntry<T> = {
   pluginId: string;
   provider: T;
@@ -190,12 +192,15 @@ function loadScopedCapabilityRuntimeRegistryEntries<T>(params: {
   capabilityLabel: string;
   loadEntries: (registry: BundledCapabilityRuntimeRegistry) => T[];
 }): T[] {
+  // Contract-test fixture boot is native admission; runtime capability owners prepare asynchronously.
+  preparePluginMetadataMachineState({});
   const discovery = discoverOpenClawPlugins({});
-  const registry = loadBundledCapabilityRuntimeRegistry({
+  const { options, overrides } = prepareBundledCapabilityRuntime({
     pluginIds: [params.pluginId],
     pluginSdkResolution: "dist",
     discovery,
   });
+  const registry = loadOpenClawPluginsWithInternalOverrides(options, overrides);
   const entries = params.loadEntries(registry);
   if (entries.length > 0) {
     return entries;

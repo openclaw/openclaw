@@ -11,11 +11,13 @@ import { createOpenAIResponsesAssistantOutput } from "../../packages/ai/src/tran
 import { processResponsesStream } from "../../packages/ai/src/transports/openai-responses-stream-internal.js";
 import { buildGuardedModelFetch } from "../plugin-sdk/provider-transport-runtime.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { finalizeDebugProxyCaptureAsync } from "../proxy-capture/runtime.js";
 import { createDebugProxyCaptureReaderAsync } from "../proxy-capture/store-readonly.async.js";
 import { acquireDebugProxyCaptureStoreAsync } from "../proxy-capture/store.async.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
+import { attachModelProviderRequestRouteFacts } from "./provider-request-config.js";
 import { closeProviderTransportDispatcherPool } from "./provider-transport-dispatcher-pool.js";
 
 const model: Model<"openai-responses"> = {
@@ -108,7 +110,10 @@ describe("managed provider response capture", () => {
             }
           },
           async (baseUrl) => {
-            const localModel = { ...model, baseUrl: `${baseUrl}/v1` };
+            const localModel = attachModelProviderRequestRouteFacts(
+              { ...model, baseUrl: `${baseUrl}/v1` },
+              createPluginMetadataSnapshotFixture().owners,
+            );
             const response = await buildGuardedModelFetch(localModel, 20_000)(
               `${baseUrl}/v1/responses`,
               {

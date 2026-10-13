@@ -21,8 +21,8 @@ import {
   resetPluginLoaderTestStateForTest,
 } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { resolveProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
+import { resolveProviderRuntimePluginAsync } from "../plugins/provider-hook-runtime.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   capturePluginLifecycleAuthority,
@@ -395,8 +395,8 @@ async function selectPersistedModel(fixture: ReturnType<typeof createFixture>) {
   });
 }
 
-function pickerIds(fixture: ReturnType<typeof createFixture>) {
-  const snapshot = resolvePluginMetadataSnapshot({
+async function pickerIds(fixture: ReturnType<typeof createFixture>) {
+  const snapshot = await resolvePluginMetadataSnapshotAsync({
     config: fixture.config,
     workspaceDir: fixture.input.workspaceDir,
   });
@@ -610,7 +610,7 @@ describe("cold dynamic-model effective inventory", () => {
     await withColdFixture(async (fixture) => {
       const input = fixture.runtimeInput;
       const gate = await fixture.pausePreparation();
-      const metadata = resolvePluginMetadataSnapshot({
+      const metadata = await resolvePluginMetadataSnapshotAsync({
         config: fixture.config,
         workspaceDir: input.workspaceDir,
       });
@@ -618,7 +618,7 @@ describe("cold dynamic-model effective inventory", () => {
       expect(
         metadata.index.plugins.find((plugin) => plugin.pluginId === pluginId)?.syntheticAuthRefs,
       ).toEqual([provider]);
-      const rootRegistry = loadAgentRuntimePluginRegistryHandle({
+      const rootRegistry = await loadAgentRuntimePluginRegistryHandle({
         config: fixture.config,
         workspaceDir: input.workspaceDir,
         basePluginIds: [],
@@ -749,7 +749,7 @@ describe("cold dynamic-model effective inventory", () => {
   it("includes persisted provider-supported tools without full catalog preparation", async () => {
     await withColdFixture(async (fixture) => {
       await selectPersistedModel(fixture);
-      expect(pickerIds(fixture)).toEqual([curatedId]);
+      expect(await pickerIds(fixture)).toEqual([curatedId]);
       expect(isColdPluginRuntimeLoaded(fixture.selected)).toBe(false);
       const { respond, invoke } = await createInventoryInvocation(fixture);
       const fullCatalog = vi.spyOn(modelCatalog, "buildPreparedModelCatalogSnapshot");
@@ -768,7 +768,7 @@ describe("cold dynamic-model effective inventory", () => {
         expect(fixture.config.agents?.defaults?.model).toEqual({
           primary: "other/configured",
         });
-        expect(pickerIds(fixture)).toEqual([curatedId]);
+        expect(await pickerIds(fixture)).toEqual([curatedId]);
         expect(fixture.readNormalizations()).toEqual([
           {
             owners: 1,
@@ -897,7 +897,7 @@ describe("cold dynamic-model effective inventory", () => {
           expect(catalogResolved.model).toBeUndefined();
           expect(catalogResolved.error).toContain(`Unknown model: ${provider}/${pinnedId}`);
           expect(isColdPluginRuntimeLoaded(fixture.selected)).toBe(true);
-          expect(pickerIds(fixture)).toEqual([curatedId]);
+          expect(await pickerIds(fixture)).toEqual([curatedId]);
         } finally {
           await lease[Symbol.asyncDispose]();
         }
@@ -938,7 +938,7 @@ describe("cold dynamic-model effective inventory", () => {
           },
         });
         await withPluginRuntimeRegistryScope(registry, async () => {
-          expect(resolveProviderRuntimePlugin({ provider, config })).toBeUndefined();
+          expect(await resolveProviderRuntimePluginAsync({ provider, config })).toBeUndefined();
           const acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
             ...fixture.inventoryParams,
             cfg: config,

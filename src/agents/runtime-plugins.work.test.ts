@@ -8,9 +8,10 @@ import { acquireAgentRuntimePluginRegistry } from "./runtime-plugins.js";
 
 const loader = vi.hoisted(() => ({ acquire: vi.fn() }));
 
+// mock-isolation: Acquisition failure tests control loader settlement and cleanup without physical plugin resources.
 vi.mock("../plugins/loader.js", () => ({
   acquirePluginRegistryForInspection: loader.acquire,
-  loadPluginRegistryHandle: vi.fn(),
+  loadPluginRegistryHandleAsync: vi.fn(),
 }));
 vi.mock("../plugins/runtime.js", () => ({
   getActivePluginRegistry: () => null,

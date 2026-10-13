@@ -5,6 +5,7 @@ import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.j
 import { GatewayCredentialsRequiredError } from "../gateway/call.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { sessionsCleanupLargeLabelsEntrypoint } from "./sessions-cleanup-runtime.test-support.js";
 
@@ -22,8 +23,10 @@ vi.mock("../config/config.js", () => ({
   loadConfig: mocks.loadConfig,
   captureRuntimeConfigAsyncReader:
     (...args: Parameters<typeof mocks.loadConfig>) =>
-    async () =>
-      mocks.loadConfig(...args),
+    async () => {
+      await preparePluginMetadataMachineStateAsync({});
+      return mocks.loadConfig(...args);
+    },
 }));
 
 vi.mock("./sessions-cleanup.runtime.js", () => ({

@@ -4,6 +4,7 @@ import { readFile, rm } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { wrapExternalContent } from "../../security/external-content.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
@@ -48,6 +49,7 @@ describe("web_fetch provider fallback normalization", () => {
   });
 
   it("returns typed unavailability for only the isolated fetch provider", async () => {
+    await prepareBundledDiscoveryMode(process.env);
     setActiveDegradedSecretOwners([
       {
         ownerKind: "capability",
@@ -263,6 +265,7 @@ describe("web_fetch provider fallback normalization", () => {
   });
 
   it("late-binds provider fallback config and runtime metadata from the active runtime snapshot", async () => {
+    await prepareBundledDiscoveryMode(process.env);
     // Long-lived tool instances should observe the active runtime snapshot, not
     // stale construction-time provider metadata.
     global.fetch = withFetchPreconnect(
@@ -353,6 +356,7 @@ describe("web_fetch provider fallback normalization", () => {
   });
 
   it("scopes provider fallback cache entries by the late-bound provider", async () => {
+    await prepareBundledDiscoveryMode(process.env);
     // The same URL can be fetched by different providers with different auth
     // and extraction semantics, so provider id is part of the cache identity.
     global.fetch = withFetchPreconnect(

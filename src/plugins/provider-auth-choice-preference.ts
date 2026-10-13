@@ -1,6 +1,7 @@
 /** Resolves preferred provider auth choices from config and plugin metadata. */
 import { resolveLegacyOnboardAuthChoice } from "../commands/auth-choice-legacy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginMetadataMachineStateAsync } from "./installed-plugin-index-record-state.js";
 import { resolveManifestProviderAuthChoice } from "./provider-auth-choices.js";
 
 export async function resolvePreferredProviderForAuthChoice(params: {
@@ -10,6 +11,7 @@ export async function resolvePreferredProviderForAuthChoice(params: {
   env?: NodeJS.ProcessEnv;
   includeUntrustedWorkspacePlugins?: boolean;
 }): Promise<string | undefined> {
+  await preparePluginMetadataMachineStateAsync({ env: params.env });
   const choice =
     resolveLegacyOnboardAuthChoice(params.choice, { env: params.env }).authChoice ?? params.choice;
   const manifestResolved = resolveManifestProviderAuthChoice(choice, params);
@@ -17,9 +19,9 @@ export async function resolvePreferredProviderForAuthChoice(params: {
     return manifestResolved.providerId;
   }
 
-  const { resolveProviderPluginChoice, resolvePluginProviders } =
+  const { resolveProviderPluginChoice, resolveAuthChoicePluginProviders } =
     await import("./provider-auth-choice.runtime.js");
-  const providers = resolvePluginProviders({
+  const providers = await resolveAuthChoicePluginProviders({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,

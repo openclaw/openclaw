@@ -1,6 +1,7 @@
 // Shared fixtures for asserting payload mutations from extra-params wrappers.
 import type { Context, Model } from "../llm/types.js";
 import { applyExtraParamsToAgent } from "./embedded-agent-runner/extra-params.js";
+import { attachProviderRequestFactsFixture } from "./provider-request.test-support.js";
 import type { StreamFn } from "./runtime/index.js";
 
 export function runExtraParamsPayloadCase(params: {
@@ -21,6 +22,12 @@ export function runExtraParamsPayloadCase(params: {
   };
   const agent = { streamFn: baseStreamFn };
 
+  const model = attachProviderRequestFactsFixture({
+    api: "openai-completions",
+    provider: params.provider,
+    id: params.modelId,
+  } as Model<"openai-completions">);
+
   applyExtraParamsToAgent(
     agent,
     params.cfg as Parameters<typeof applyExtraParamsToAgent>[1],
@@ -28,13 +35,10 @@ export function runExtraParamsPayloadCase(params: {
     params.modelId,
     undefined,
     params.thinkingLevel,
+    undefined,
+    undefined,
+    model,
   );
-
-  const model = {
-    api: "openai-completions",
-    provider: params.provider,
-    id: params.modelId,
-  } as Model<"openai-completions">;
   const context: Context = { messages: [] };
   void agent.streamFn?.(model, context, {});
 

@@ -2,6 +2,8 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { inheritSessionCreationPolicy } from "../../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { withPluginMetadataSnapshotScope } from "../../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../../plugins/plugin-metadata-snapshot.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveAgentDir } from "../../agent-scope-config.js";
@@ -139,79 +141,88 @@ export async function resolveSubagentChildPlan(params: {
       "cwd override is not supported for sandboxed subagent runs; omit cwd or use the target agent workspace as cwd",
     );
   }
-  const targetAgentDir = resolveAgentDir(params.cfg, params.targetAgentId);
-  const requesterAgentConfig = resolveAgentConfig(params.cfg, params.requesterAgentId);
-  const targetAgentConfig = resolveAgentConfig(params.cfg, params.targetAgentId);
-  const requesterPreferences =
-    params.ctx.requesterThinkingLevel === undefined ||
-    (params.targetAgentId === params.requesterAgentId && !params.ctx.requesterModel)
-      ? resolveRequesterPreferences(params)
-      : undefined;
-  params.ctx.assertActive?.();
-  // The active turn owns inherited effort; saved preferences may already describe
-  // a later turn and cannot represent one-shot overrides.
-  const callerThinkingRaw =
-    params.ctx.requesterThinkingLevel ?? requesterPreferences?.thinkingLevel;
-  const modelPlan = await resolveSubagentModelAndThinkingPlan({
-    cfg: params.cfg,
-    targetAgentId: params.targetAgentId,
-    requesterAgentConfig,
-    targetAgentConfig,
-    modelOverride: params.request.model,
-    thinkingOverrideRaw: params.request.thinking,
-    callerThinkingRaw,
-    inheritedModel:
-      params.targetAgentId === params.requesterAgentId
-        ? (params.ctx.requesterModel ?? requesterPreferences?.model)
-        : undefined,
-    fastMode: params.request.fastMode,
+  const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+    config: params.cfg,
     workspaceDir: spawnedWorkspaceDir,
-    requiresTools: params.request.outputSchema !== undefined,
   });
-  params.ctx.assertActive?.();
-  if (modelPlan.status === "error") {
-    return {
-      ok: false as const,
-      result: {
-        status: "error",
-        error: modelPlan.error,
-        ...(params.request.outputSchema ? { childSessionKey } : {}),
-      } satisfies SpawnSubagentResult,
-    };
-  }
-  const { resolvedModel } = modelPlan;
-  if (params.swarmEnabled && params.request.fastMode === undefined) {
-    const fastMode = resolveRequesterFastMode({
-      ...params,
-      requesterModel: params.ctx.requesterModel,
-      childModel: resolvedModel,
-    });
-    if (fastMode !== undefined) {
-      modelPlan.initialSessionPatch.fastMode = fastMode;
-    }
-  }
-  const launchAuthorization: SubagentLaunchAuthorization | undefined = params.request.model?.trim()
-    ? { modelOverride: modelPlan.modelRef }
-    : undefined;
-  return {
-    ok: true as const,
-    resolved: {
-      spawnedCwd,
-      toolSpawnMetadata,
-      spawnedWorkspaceDir,
-      requesterOrigin,
-      childSessionOrigin,
-      incognito,
-      childSessionKey,
-      childRuntimeSandboxed,
-      creationPolicy,
-      targetAgentDir,
-      modelPlan,
-      launchAuthorization,
-      resolvedModelMetadata: {
-        resolvedModel,
-        resolvedProvider: modelPlan.modelRef.provider,
-      },
+  return withPluginMetadataSnapshotScope(
+    metadataSnapshot,
+    async () => {
+      const targetAgentDir = resolveAgentDir(params.cfg, params.targetAgentId);
+      const requesterAgentConfig = resolveAgentConfig(params.cfg, params.requesterAgentId);
+      const targetAgentConfig = resolveAgentConfig(params.cfg, params.targetAgentId);
+      const requesterPreferences =
+        params.ctx.requesterThinkingLevel === undefined ||
+        (params.targetAgentId === params.requesterAgentId && !params.ctx.requesterModel)
+          ? resolveRequesterPreferences(params)
+          : undefined;
+      params.ctx.assertActive?.();
+      // The active turn owns inherited effort; saved preferences may already describe
+      // a later turn and cannot represent one-shot overrides.
+      const callerThinkingRaw =
+        params.ctx.requesterThinkingLevel ?? requesterPreferences?.thinkingLevel;
+      const modelPlan = await resolveSubagentModelAndThinkingPlan({
+        cfg: params.cfg,
+        targetAgentId: params.targetAgentId,
+        requesterAgentConfig,
+        targetAgentConfig,
+        modelOverride: params.request.model,
+        thinkingOverrideRaw: params.request.thinking,
+        callerThinkingRaw,
+        inheritedModel:
+          params.targetAgentId === params.requesterAgentId
+            ? (params.ctx.requesterModel ?? requesterPreferences?.model)
+            : undefined,
+        fastMode: params.request.fastMode,
+        workspaceDir: spawnedWorkspaceDir,
+        requiresTools: params.request.outputSchema !== undefined,
+      });
+      params.ctx.assertActive?.();
+      if (modelPlan.status === "error") {
+        return {
+          ok: false as const,
+          result: {
+            status: "error",
+            error: modelPlan.error,
+            ...(params.request.outputSchema ? { childSessionKey } : {}),
+          } satisfies SpawnSubagentResult,
+        };
+      }
+      const { resolvedModel } = modelPlan;
+      if (params.swarmEnabled && params.request.fastMode === undefined) {
+        const fastMode = resolveRequesterFastMode({
+          ...params,
+          requesterModel: params.ctx.requesterModel,
+          childModel: resolvedModel,
+        });
+        if (fastMode !== undefined) {
+          modelPlan.initialSessionPatch.fastMode = fastMode;
+        }
+      }
+      const launchAuthorization: SubagentLaunchAuthorization | undefined =
+        params.request.model?.trim() ? { modelOverride: modelPlan.modelRef } : undefined;
+      return {
+        ok: true as const,
+        resolved: {
+          spawnedCwd,
+          toolSpawnMetadata,
+          spawnedWorkspaceDir,
+          requesterOrigin,
+          childSessionOrigin,
+          incognito,
+          childSessionKey,
+          childRuntimeSandboxed,
+          creationPolicy,
+          targetAgentDir,
+          modelPlan,
+          launchAuthorization,
+          resolvedModelMetadata: {
+            resolvedModel,
+            resolvedProvider: modelPlan.modelRef.provider,
+          },
+        },
+      };
     },
-  };
+    { config: params.cfg, workspaceDir: spawnedWorkspaceDir },
+  );
 }

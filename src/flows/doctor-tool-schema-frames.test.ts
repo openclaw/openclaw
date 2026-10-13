@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDoctorPluginMetadataSnapshotScope } from "../commands/doctor/shared/plugin-metadata-snapshot-scope.js";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -95,14 +96,14 @@ it.each([
           typeof import("../agents/embedded-agent-runner/model.js")
         >("../agents/embedded-agent-runner/model.js");
         const stores = real.createEmptyAgentDiscoveryStores();
-        const { resolveProviderRuntimePlugin } =
+        const { resolveLoadedProviderRuntimePlugin } =
           await import("../plugins/provider-hook-runtime.js");
         const event = `doctor-frame-registration:${state.root}`;
         const registrations = new Map<string, number>();
         const onRegistration = (provider: string, config: OpenClawConfig) => {
           registrations.set(provider, (registrations.get(provider) ?? 0) + 1);
           if (reenter) {
-            resolveProviderRuntimePlugin({
+            resolveLoadedProviderRuntimePlugin({
               provider,
               config,
               workspaceDir: state.path("workspace0"),
@@ -178,6 +179,7 @@ it.each([
         );
         await using cache = createPluginCache();
         await withPluginCache(cache, async () => {
+          await preparePluginMetadataMachineStateAsync({ env: state.env });
           const baseSnapshot = loadPluginMetadataSnapshot({ config: cfg, env: state.env });
           const scope = createDoctorPluginMetadataSnapshotScope({
             getBaseSnapshot: () => baseSnapshot,
@@ -262,7 +264,13 @@ it("records deferred model preparation and continues with a healthy agent", asyn
         },
       },
     };
-    const result = await prepareDoctorToolSchemaFrames(cfg, { mode: "doctor", env: state.env });
+    await preparePluginMetadataMachineStateAsync({ env: state.env });
+    await using scope = createDoctorPluginMetadataSnapshotScope({ env: state.env });
+    const result = await prepareDoctorToolSchemaFrames(cfg, {
+      mode: "doctor",
+      env: state.env,
+      runWithPluginMetadataSnapshot: scope.run,
+    });
     expect(result.findings).toEqual([
       expect.objectContaining({
         severity: "warning",

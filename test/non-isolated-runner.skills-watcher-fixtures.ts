@@ -18,10 +18,12 @@ it("starts real skills watchers and resets modules before returning", async () =
   const registries = [];
   for (const name of ["first", "second"]) {
     vi.resetModules();
+    const { prepareBundledDiscoveryMode } = await import(${sourcePath("plugins/bundled-discovery-state.ts")});
     const { ensureSkillsWatcher } = await import(${sourcePath("skills/runtime/refresh.ts")});
     const registry = await import(${sourcePath("skills/runtime/refresh-watch-registry.ts")});
     const workspaceDir = path.join(${workspaceRoot}, name);
     mkdirSync(path.join(workspaceDir, "skills"), { recursive: true });
+    await prepareBundledDiscoveryMode();
     ensureSkillsWatcher({ workspaceDir, config: {} });
     expect(registry.workspaceWatchOwners.size).toBe(1);
     expect(registry.pathWatchers.size).toBeGreaterThan(0);

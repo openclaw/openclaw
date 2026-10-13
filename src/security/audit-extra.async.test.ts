@@ -11,6 +11,7 @@ import {
   collectPluginsCodeSafetyFindings,
 } from "./audit.deep.runtime.js";
 
+// mock-isolation: Code safety scans use synthetic skill paths rather than the operator's skill registry.
 vi.mock("../skills/loading/workspace-skill-loader.js", () => {
   const loadWorkspaceSkills = (workspaceDir: string) => {
     const sep = workspaceDir.includes("\\") ? "\\" : "/";
@@ -30,6 +31,7 @@ vi.mock("../skills/loading/workspace-skill-loader.js", () => {
   };
   return {
     loadWorkspaceSkills,
+    prepareWorkspaceSkills: async (workspaceDir: string) => loadWorkspaceSkills(workspaceDir),
   };
 });
 

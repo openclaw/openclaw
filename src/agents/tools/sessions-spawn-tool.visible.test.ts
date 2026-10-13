@@ -16,6 +16,7 @@ import {
   supportedSpawnModelChoice,
 } from "../subagents/spawn/subagent-spawn.test-helpers.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import { withToolTestMetadata } from "./tool-metadata.test-support.js";
 
 const { hoisted } = await import("./sessions-spawn-tool.mocks.test-support.js");
 let createSessionsSpawnTool: typeof import("./sessions-spawn-tool.js").createSessionsSpawnTool;
@@ -71,11 +72,13 @@ describe("sessions_spawn visible work receipts", () => {
       registerRun: vi.fn(),
       countActiveRuns: () => 0,
     });
-    const result = await tool.execute("authorized-coding-handoff", {
-      task: "Implement and test the requested repository fix",
-      agentId: "worker",
-      visible: true,
-    });
+    const result = await withToolTestMetadata(config, () =>
+      tool.execute("authorized-coding-handoff", {
+        task: "Implement and test the requested repository fix",
+        agentId: "worker",
+        visible: true,
+      }),
+    );
     expect(result.details).toMatchObject({ status: "accepted" });
     expect(hoisted.inProcessCreationMock.mock.calls[0]?.[2]).toMatchObject({
       inheritedToolPolicy: {
@@ -128,26 +131,29 @@ describe("sessions_spawn visible work receipts", () => {
       runStarted: true,
       runId: "ordinary-child-run",
     });
+    const config = {
+      agents: {
+        defaults: { model: "mock-provider/primary" },
+        entries: { main: { subagents: { allowAgents: ["worker"] } }, worker: {} },
+      },
+    };
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
-      config: {
-        agents: {
-          defaults: { model: "mock-provider/primary" },
-          entries: { main: { subagents: { allowAgents: ["worker"] } }, worker: {} },
-        },
-      },
+      config,
       inheritedToolDenylist: ["exec"],
       registerRun: vi.fn(),
       countActiveRuns: () => 0,
     });
-    const result = await tool.execute("forged-delegation", {
-      task: "inspect",
-      agentId: "worker",
-      visible: true,
-      delegateToolsTo: ["worker"],
-      delegatedToolDenyFloor: { deny: [] },
-      delegatedToolPolicy: { requesterAgentId: "main", targetAgentId: "worker", deny: [] },
-    });
+    const result = await withToolTestMetadata(config, () =>
+      tool.execute("forged-delegation", {
+        task: "inspect",
+        agentId: "worker",
+        visible: true,
+        delegateToolsTo: ["worker"],
+        delegatedToolDenyFloor: { deny: [] },
+        delegatedToolPolicy: { requesterAgentId: "main", targetAgentId: "worker", deny: [] },
+      }),
+    );
     expect(result.details).toMatchObject({ status: "accepted" });
     const creation = hoisted.inProcessCreationMock.mock.calls[0]?.[2];
     expect(creation.inheritedToolPolicy).toMatchObject({ deny: ["exec"] });
@@ -169,15 +175,20 @@ describe("sessions_spawn visible work receipts", () => {
       publicRead: true,
       entry: { sessionId: "public-child", updatedAt: 1 },
     });
+    const config = {
+      agents: { defaults: { model: "mock-provider/primary" }, entries: { main: {} } },
+    };
     const tool = createSessionsSpawnTool({
       agentSessionKey: key,
-      config: { agents: { defaults: { model: "mock-provider/primary" }, entries: { main: {} } } },
+      config,
       registerRun: vi.fn(),
       countActiveRuns: () => 0,
     });
-    const result = await withGatewayToolCallerIdentity(
-      { agentId: "main", sessionKey: key, operationalRunInstance: run },
-      () => tool.execute("public-spawn", { task: "inspect", visible: true }),
+    const result = await withToolTestMetadata(config, () =>
+      withGatewayToolCallerIdentity(
+        { agentId: "main", sessionKey: key, operationalRunInstance: run },
+        () => tool.execute("public-spawn", { task: "inspect", visible: true }),
+      ),
     );
     expect(hoisted.inProcessCreationMock.mock.calls[0]?.[2]).toMatchObject({
       childSessionPublication: publication,
@@ -207,27 +218,30 @@ describe("sessions_spawn visible work receipts", () => {
       runStarted: true,
       runId: "quota-child-run",
     });
+    const config = {
+      session: { scope: "global" as const },
+      agents: {
+        defaults: {
+          model: "mock-provider/primary",
+          subagents: { maxChildrenPerAgent: 1 },
+        },
+        entries: { main: {}, other: {} },
+      },
+    };
     const tool = createSessionsSpawnTool({
       agentSessionKey: "global",
       requesterAgentIdOverride: "main",
-      config: {
-        session: { scope: "global" },
-        agents: {
-          defaults: {
-            model: "mock-provider/primary",
-            subagents: { maxChildrenPerAgent: 1 },
-          },
-          entries: { main: {}, other: {} },
-        },
-      },
+      config,
       registerRun: vi.fn(),
       countActiveRuns: (key, options) => countActiveRunsForSessionFromRuns(runs, key, options),
     });
 
-    const result = await tool.execute("visible-bare-key-quota", {
-      task: "inspect the repository",
-      visible: true,
-    });
+    const result = await withToolTestMetadata(config, () =>
+      tool.execute("visible-bare-key-quota", {
+        task: "inspect the repository",
+        visible: true,
+      }),
+    );
 
     expect(result.details).toMatchObject({ status: "accepted", runId: "quota-child-run" });
   });
@@ -242,18 +256,19 @@ describe("sessions_spawn visible work receipts", () => {
         runId: "run-visible-restricted",
       });
       const registerRun = vi.fn();
+      const config = {
+        agents: {
+          defaults: { model: "mock-provider/primary" },
+          entries: { main: { identity: { name: "Roboclaw" } } },
+        },
+        gateway: {
+          publicOrigin: "https://openclaw.example",
+          controlUi: { basePath: "/control" },
+        },
+      };
       const tool = createSessionsSpawnTool({
         agentSessionKey: "agent:main:main",
-        config: {
-          agents: {
-            defaults: { model: "mock-provider/primary" },
-            entries: { main: { identity: { name: "Roboclaw" } } },
-          },
-          gateway: {
-            publicOrigin: "https://openclaw.example",
-            controlUi: { basePath: "/control" },
-          },
-        },
+        config,
         inheritedToolPolicySource: source,
         inheritedToolAllowlist: ["read", "sessions_spawn"],
         inheritedToolDenylist: ["exec"],
@@ -261,11 +276,13 @@ describe("sessions_spawn visible work receipts", () => {
         countActiveRuns: () => 0,
       });
 
-      const result = await tool.execute("visible-restricted", {
-        task: "inspect",
-        label: "Track upstream fix",
-        visible: true,
-      });
+      const result = await withToolTestMetadata(config, () =>
+        tool.execute("visible-restricted", {
+          task: "inspect",
+          label: "Track upstream fix",
+          visible: true,
+        }),
+      );
 
       if (source === "sender") {
         expect(result.details).toMatchObject({

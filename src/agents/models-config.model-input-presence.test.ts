@@ -5,6 +5,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -146,6 +147,7 @@ describe("models config input presence", () => {
       ];
       const discovery = discoveryOptions(providerId, discovered);
       await withOpenClawTestState({ label: "catalog-authored-fields" }, async (state) => {
+        await preparePluginMetadataMachineStateAsync({ env: state.env });
         let existingRaw = "";
         let existingParsed: unknown = {};
         let pluginCatalogs: Array<{ pluginId: string; contents: string }> = [];
@@ -270,6 +272,7 @@ describe("models config input presence", () => {
         // Missing top-level runtime state makes this an independent supplied config.
         setRuntimeConfigSnapshot({ ...cfg, gateway: { mode: "local" } }, sourceConfigForSecrets);
         await withOpenClawTestState({ label: "independent-model-cost" }, async (state) => {
+          await preparePluginMetadataMachineStateAsync({ env: state.env });
           const plan = await planOpenClawModelsJsonSource(cfg, state.agentDir(), {
             ...options,
             env: state.env,
@@ -282,6 +285,8 @@ describe("models config input presence", () => {
         return;
       }
       setRuntimeConfigSnapshot(cfg, sourceConfigForSecrets);
+      await preparePluginMetadataMachineStateAsync({ env: {} });
+      await preparePluginMetadataMachineStateAsync({});
       const cloned = structuredClone(
         createPreparedModelCatalogWorkerInput({
           agentFacts: {

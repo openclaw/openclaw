@@ -33,7 +33,7 @@ import { createNodeInvokeProgressWriter } from "./node-invoke-progress.js";
 import { NodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
 import { resolveNodeWorkerContainerEngine } from "./node-worker-container-engine.js";
 import { NodeWorkerContainerContextMismatchError } from "./node-worker-container-lifecycle.js";
-import { snapshotNodeWorkerNativeInference } from "./node-worker-native-inference.js";
+import { snapshotNodeWorkerNativeInferenceAsync } from "./node-worker-native-inference.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 import {
@@ -206,7 +206,7 @@ export async function prepareNodeHostRuntime(params?: {
     workerRunsEnabled &&
     platform !== "win32" &&
     config.nodeHost?.workerRuns?.isolation !== "container"
-      ? snapshotNodeWorkerNativeInference(config, env, platform)
+      ? await snapshotNodeWorkerNativeInferenceAsync(config, env, platform)
       : undefined;
   const skills =
     commandAllowlist || config.nodeHost?.skills?.enabled === false ? null : scanNodeHostedSkills();

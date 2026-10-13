@@ -23,6 +23,7 @@ import type {
 } from "../../../src/plugin-sdk/agent-harness-runtime.js";
 import { normalizeAgentRuntimeTools } from "../../../src/plugin-sdk/agent-harness-runtime.js";
 import { createOpenClawCodingTools } from "../../../src/plugin-sdk/agent-harness.js";
+import { prepareBundledDiscoveryMode } from "../../../src/plugins/bundled-discovery-state.js";
 import type { PluginRegistry } from "../../../src/plugins/registry.js";
 import {
   getActivePluginRegistry,
@@ -213,7 +214,10 @@ async function loadScenarioChannelPluginFixture(
  * action discovery walks every loaded channel plugin, so registering more than
  * the scenario channel would change the generated message-tool schema bytes.
  */
-function withScenarioChannelRegistry<T>(fixture: ScenarioChannelPluginFixture, build: () => T): T {
+async function withScenarioChannelRegistry<T>(
+  fixture: ScenarioChannelPluginFixture,
+  build: () => T,
+): Promise<T> {
   const previousRegistry: PluginRegistry | null = getActivePluginRegistry();
   setActivePluginRegistry(
     createTestRegistry([
@@ -226,6 +230,7 @@ function withScenarioChannelRegistry<T>(fixture: ScenarioChannelPluginFixture, b
     ]),
   );
   try {
+    await prepareBundledDiscoveryMode();
     return build();
   } finally {
     if (previousRegistry) {

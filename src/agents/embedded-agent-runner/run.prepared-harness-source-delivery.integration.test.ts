@@ -336,9 +336,10 @@ describe("prepared harness source delivery", () => {
               if (!retainedHost) {
                 throw new Error("expected the selected harness host capability");
               }
-              const tts = retainedHost
-                .createToolSurface?.({ config: attemptParams.config })
-                .find((tool) => tool.name === "tts");
+              const tools = await retainedHost.createToolSurfaceAsync?.({
+                config: attemptParams.config,
+              });
+              const tts = tools?.find((tool) => tool.name === "tts");
               const toolResult = await tts?.execute?.("call-prepared-tts", { text: "Hello" });
               expect(toolResult).toBeDefined();
               expect(synthesis).toHaveBeenCalledOnce();

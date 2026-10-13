@@ -5,6 +5,8 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTestPluginApi } from "../plugin-sdk/plugin-test-api.js";
 import { clearLiveCatalogCacheForTests } from "../plugin-sdk/provider-catalog-shared.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { OpenClawPluginDefinition, ProviderPlugin } from "../plugins/types.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
@@ -21,9 +23,40 @@ import { planOpenClawModelsJson } from "./models-config.plan.js";
 import { encodePluginModelCatalogRelativePath } from "./plugin-model-catalog.js";
 
 const discovery = vi.hoisted(() => ({ providers: new Array<ProviderPlugin>() }));
-vi.mock("../plugins/provider-discovery.runtime.js", () => ({
-  resolvePluginDiscoveryProvidersRuntime: () => discovery.providers,
-}));
+// mock-isolation: Ollama catalog fixtures select their provider inventory without loading plugin runtimes.
+vi.mock("../plugins/provider-discovery.runtime.js", () => {
+  const runtime = {
+    resolvePluginDiscoveryProvidersRuntime: () => discovery.providers,
+  };
+  return {
+    ...runtime,
+    resolvePluginDiscoveryProvidersRuntimeAsync: async (
+      ...args: Parameters<typeof runtime.resolvePluginDiscoveryProvidersRuntime>
+    ) => runtime.resolvePluginDiscoveryProvidersRuntime(...args),
+  };
+});
+
+function planWithOllamaMetadata(params: Parameters<typeof planOpenClawModelsJson>[0]) {
+  const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: "ollama",
+        providers: discovery.providers.map(({ id }) => id),
+        syntheticAuthRefs: ["ollama"],
+        nonSecretAuthMarkers: ["ollama-local"],
+      },
+    ],
+  });
+  return withPluginMetadataSnapshotScope(
+    pluginMetadataSnapshot,
+    () =>
+      planOpenClawModelsJson({
+        ...params,
+        context: { ...params.context, pluginMetadataSnapshot },
+      }),
+    { config: params.context.cfg, env: params.context.env, trustConfigIdentity: true },
+  );
+}
 
 describe("registered Ollama catalog", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -66,6 +99,8 @@ describe("registered Ollama catalog", () => {
     async (owner, baseUrl, explicitModels, runtimeKey) => {
       const stateDir = tempDirs.make("ollama-catalog-ref-");
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir, OLLAMA_API_KEY: undefined }, async () => {
+        await preparePluginMetadataMachineStateAsync({ env: {} });
+        await preparePluginMetadataMachineStateAsync({});
         const agentDir = path.join(stateDir, "agent");
         const ref = { source: "store", provider: "default", id: "OLLAMA_DISCOVERY_KEY" } as const;
         const profile = {
@@ -123,7 +158,7 @@ describe("registered Ollama catalog", () => {
         });
         vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
         try {
-          const plan = await planOpenClawModelsJson({
+          const plan = await planWithOllamaMetadata({
             context: {
               cfg,
               discoveryAuthConfig,
@@ -131,9 +166,6 @@ describe("registered Ollama catalog", () => {
               agentDir,
               env: {},
               envFingerprint: {},
-              pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
-                plugins: [{ id: "ollama", providers: discovery.providers.map(({ id }) => id) }],
-              }),
             },
             authStore,
             existingRaw: "",
@@ -174,6 +206,8 @@ describe("registered Ollama catalog", () => {
   it("lists chat models pulled after setup, keeps setup model settings, and keeps setup models when listing fails", async () => {
     const stateDir = tempDirs.make("ollama-catalog-pull-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir, OLLAMA_API_KEY: undefined }, async () => {
+      await preparePluginMetadataMachineStateAsync({ env: {} });
+      await preparePluginMetadataMachineStateAsync({});
       const setupModel = {
         id: "qwen2.5:0.5b",
         name: "qwen2.5:0.5b",
@@ -212,7 +246,7 @@ describe("registered Ollama catalog", () => {
       });
       vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
       const listedModels = async () => {
-        const plan = await planOpenClawModelsJson({
+        const plan = await planWithOllamaMetadata({
           context: {
             cfg,
             discoveryAuthConfig: cfg,
@@ -220,9 +254,6 @@ describe("registered Ollama catalog", () => {
             agentDir: path.join(stateDir, "agent"),
             env: {},
             envFingerprint: {},
-            pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
-              plugins: [{ id: "ollama", providers: discovery.providers.map(({ id }) => id) }],
-            }),
           },
           authStore: { version: 1, profiles: {} },
           existingRaw: "",

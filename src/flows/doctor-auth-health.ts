@@ -100,5 +100,5 @@ export async function runAuthProfileDiagnostics(ctx: DoctorHealthFlowContext): P
   }
   noteLegacyCodexProviderOverride(ctx.cfg);
   noteSharedAuthStoreStatus(ctx.env);
-  noteCopilotAmbientToken(ctx.cfg, ctx.env);
+  await noteCopilotAmbientToken(ctx.cfg, ctx.env);
 }

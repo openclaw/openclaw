@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { buildQaTarget, qaChannelPlugin } from "@openclaw/qa-channel/api.js";
-import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
+import { createOpenClawCodingToolsAsync } from "openclaw/plugin-sdk/agent-harness";
 import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -83,7 +83,7 @@ describe("system-agent delegation scenario tool policy", () => {
     } = {},
   ) {
     const authority = authorizationFor(toolConfig, options.senderId, options.provider);
-    return createOpenClawCodingTools({
+    return createOpenClawCodingToolsAsync({
       config: toolConfig,
       agentId: "qa",
       sessionKey: "agent:qa:qa-channel:group:qa-system-agent-delegation",
@@ -97,36 +97,38 @@ describe("system-agent delegation scenario tool policy", () => {
     });
   }
 
-  it("grants the real delegate to the scenario's explicitly authorized sender", () => {
+  it("grants the real delegate to the scenario's explicitly authorized sender", async () => {
     expect(authorizationFor(baseline).senderIsOwner).toBe(false);
-    expect(toolsFor(baseline).map((tool) => tool.name)).not.toContain("openclaw");
+    expect((await toolsFor(baseline)).map((tool) => tool.name)).not.toContain("openclaw");
     expect(authorizationFor(config).senderIsOwner).toBe(true);
-    const tools = toolsFor(config);
+    const tools = await toolsFor(config);
     expect(tools.map((tool) => tool.name)).toContain("read");
     expect(tools.find((tool) => tool.name === "openclaw")?.catalogMode).toBe("direct-only");
     expect(config.tools).toEqual(baseline.tools);
     expect(baseline.agents?.entries?.qa?.tools).toEqual({ profile: "coding" });
   });
 
-  it("requires the explicit coding-profile grant even for the authorized sender", () => {
+  it("requires the explicit coding-profile grant even for the authorized sender", async () => {
     const ownerOnlyConfig = { ...baseline, commands: config.commands };
     expect(authorizationFor(ownerOnlyConfig).senderIsOwner).toBe(true);
-    expect(toolsFor(ownerOnlyConfig).map((tool) => tool.name)).not.toContain("openclaw");
+    expect((await toolsFor(ownerOnlyConfig)).map((tool) => tool.name)).not.toContain("openclaw");
   });
 
   it.each([
     { senderId: "bob", provider: "qa-channel" },
     { senderId: "alice", provider: "webchat" },
-  ])("does not grant ownership to $provider:$senderId", ({ senderId, provider }) => {
+  ])("does not grant ownership to $provider:$senderId", async ({ senderId, provider }) => {
     expect(authorizationFor(config, senderId, provider).senderIsOwner).toBe(false);
-    expect(toolsFor(config, { senderId, provider }).map((tool) => tool.name)).not.toContain(
+    expect((await toolsFor(config, { senderId, provider })).map((tool) => tool.name)).not.toContain(
       "openclaw",
     );
   });
 
-  it("does not bypass conversation-scoped tool policy", () => {
+  it("does not bypass conversation-scoped tool policy", async () => {
     expect(
-      toolsFor(config, { conversationToolPolicy: { deny: ["openclaw"] } }).map((tool) => tool.name),
+      (await toolsFor(config, { conversationToolPolicy: { deny: ["openclaw"] } })).map(
+        (tool) => tool.name,
+      ),
     ).not.toContain("openclaw");
   });
 

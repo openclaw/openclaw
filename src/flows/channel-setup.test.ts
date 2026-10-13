@@ -910,7 +910,7 @@ describe("setupChannels workspace shadow exclusion", () => {
         "external-chat",
       );
       const cfg = fixture.config;
-      const beforeInstall = fixture.readMetadata();
+      const beforeInstall = await fixture.readMetadataAsync();
       const resolveMetadata = vi
         .spyOn(pluginMetadata, "resolvePluginMetadataSnapshot")
         .mockImplementation(({ config, workspaceDir }) =>
@@ -977,6 +977,7 @@ describe("setupChannels workspace shadow exclusion", () => {
       ensureChannelSetupPluginInstalled.mockImplementationOnce(async () => {
         expect(hasPluginLifecycleLease()).toBe(true);
         fixture.installPolicy();
+        await fixture.readMetadataAsync();
         return {
           cfg,
           installed: true,
@@ -1009,7 +1010,7 @@ describe("setupChannels workspace shadow exclusion", () => {
           expect(next.channels?.["external-chat"]).toEqual({ accounts: { "Work Phone": account } });
           expect(statusAccounts.at(-1)).toEqual(account);
           expect(hooks).toHaveLength(1);
-          await withPluginMetadataSnapshotScope(fixture.readMetadata(next), () =>
+          await withPluginMetadataSnapshotScope(await fixture.readMetadataAsync(next), () =>
             expectDefined(hooks[0], "collected setup hook").run({
               cfg: next,
               runtime: createTestRuntime(),

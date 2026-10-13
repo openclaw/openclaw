@@ -53,7 +53,15 @@ export async function runWithImageModelFallback<T>(
     abortSignal?: AbortSignal;
   },
 ): Promise<ModelFallbackRunResult<T>> {
-  const candidates = resolveAllowedImageFallbackCandidates(params);
+  const { resolvePluginMetadataSnapshotAsync } =
+    await import("../plugins/plugin-metadata-snapshot.js");
+  const manifestPlugins =
+    params.manifestPlugins ??
+    (await resolvePluginMetadataSnapshotAsync({
+      config: params.cfg,
+      allowWorkspaceScopedCurrent: true,
+    }));
+  const candidates = resolveAllowedImageFallbackCandidates({ ...params, manifestPlugins });
   if (candidates.length === 0) {
     throw new Error(
       "No image model configured. Set agents.defaults.imageModel.primary or agents.defaults.imageModel.fallbacks.",

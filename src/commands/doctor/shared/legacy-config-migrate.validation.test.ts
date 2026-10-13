@@ -1,4 +1,5 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { preparePluginMetadataMachineStateAsync } from "../../../plugins/installed-plugin-index-record-state.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 import { prepareLegacyConfigMigrationRuntime } from "./legacy-config-migrate.test-support.js";
 
@@ -7,6 +8,9 @@ beforeAll(async () => {
   restoreMigrationRuntime = await prepareLegacyConfigMigrationRuntime();
 });
 afterAll(() => restoreMigrationRuntime?.());
+beforeEach(async () => {
+  await preparePluginMetadataMachineStateAsync({});
+});
 
 describe("legacy config migrate validation", () => {
   it("leaves retired keys unresolved while migrating supported config", () => {

@@ -173,7 +173,11 @@ export function resolveTranscriptPolicy(params: {
   directApiKey?: boolean;
 }): TranscriptPolicy {
   const provider = normalizeProviderId(params.provider ?? "");
-  const cacheConfig = !params.env || params.env === process.env ? params.config : undefined;
+  // Retained handles own their plugin policy; a global config cache can cross generations.
+  const cacheConfig =
+    !params.runtimeHandle && (!params.env || params.env === process.env)
+      ? params.config
+      : undefined;
   const cacheKey = cacheConfig
     ? JSON.stringify({
         provider,
@@ -204,9 +208,9 @@ export function resolveTranscriptPolicy(params: {
       return cached;
     }
   }
-  const runtimePlugin =
-    params.runtimeHandle?.plugin ??
-    (provider
+  const runtimePlugin = params.runtimeHandle
+    ? params.runtimeHandle.plugin
+    : provider
       ? resolveProviderRuntimePlugin({
           provider,
           modelId: params.modelId,
@@ -214,7 +218,7 @@ export function resolveTranscriptPolicy(params: {
           workspaceDir: params.workspaceDir,
           env: params.env,
         })
-      : undefined);
+      : undefined;
   const context = {
     config: params.config,
     workspaceDir: params.workspaceDir,

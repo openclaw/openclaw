@@ -31,8 +31,8 @@ const createSystemAgentVerifiedInferenceTestFixture: typeof createSystemAgentVer
       args[0],
     );
 
-beforeAll(() => {
-  pluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot();
+beforeAll(async () => {
+  pluginMetadataSnapshot = await createSystemAgentPluginMetadataTestSnapshot();
 });
 
 afterEach(() => {

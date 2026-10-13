@@ -10,7 +10,7 @@ import {
 test("doctor.memory.status reports native provider health without probing legacy embeddings", async () => {
   const close = vi.fn().mockResolvedValue(undefined);
   const health = vi.fn().mockResolvedValue({ status: "degraded", message: "warming" });
-  resolveActiveMemoryBackendConfig.mockReturnValue({
+  resolveActiveMemoryBackendConfig.mockResolvedValue({
     backend: "provider-runtime",
     providerId: "records",
   });

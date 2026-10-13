@@ -18,6 +18,7 @@ import {
   streamChunks,
 } from "./openai-transport-stream.test-harness.js";
 import { testing } from "./openai-transport-stream.test-support.js";
+import { attachPreparedProviderModelFixture } from "./provider-request.test-support.js";
 
 // Loaded hosted runners can delay the first real loopback request well beyond
 // the shared test timeout even when this file runs in its isolated project.
@@ -62,7 +63,7 @@ describe("openai transport stream", () => {
           throw new Error("Missing loopback server address");
         }
 
-        const model = {
+        const model = attachPreparedProviderModelFixture({
           id: "gpt-5.6-luna",
           name: "GPT-5.6 Luna",
           api: transport.api,
@@ -74,7 +75,7 @@ describe("openai transport stream", () => {
           contextWindow: 128_000,
           maxTokens: 4_096,
           requestTimeoutMs: 900_000,
-        } satisfies Model & { requestTimeoutMs: number };
+        } satisfies Model & { requestTimeoutMs: number });
 
         const stream = await transport.createStream()(
           model,

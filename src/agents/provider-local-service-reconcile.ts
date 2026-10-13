@@ -20,7 +20,12 @@ export function attachModelProviderLocalServiceReconciler<TModel extends object>
   model: TModel,
   reconcile: ProviderLocalServiceReconciler | undefined,
 ): TModel {
-  return { ...model, [MODEL_PROVIDER_LOCAL_SERVICE_RECONCILER_SYMBOL]: reconcile };
+  const descriptors = Object.getOwnPropertyDescriptors(model);
+  Reflect.deleteProperty(descriptors, MODEL_PROVIDER_LOCAL_SERVICE_RECONCILER_SYMBOL);
+  return Object.defineProperties(
+    { ...model, [MODEL_PROVIDER_LOCAL_SERVICE_RECONCILER_SYMBOL]: reconcile },
+    descriptors,
+  );
 }
 
 export function getModelProviderLocalServiceReconciler(

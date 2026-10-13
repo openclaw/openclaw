@@ -29,7 +29,10 @@ export function prepareModelPickerRuntimeChoices(params: {
   variants: readonly ModelCatalogEntry[];
   requestedRuntimes: readonly string[];
   baseEvaluation: ModelAuthAvailabilityEvaluation;
-  decisions: Pick<CatalogDecisions, "runtimeChoices" | "evaluateEntry" | "pluginRegistry">;
+  decisions: Pick<
+    CatalogDecisions,
+    "runtimeChoices" | "evaluateEntry" | "pluginRegistry" | "metadataSnapshot"
+  >;
   evaluateNative: CatalogDecisions["evaluateNative"];
   projectPublic: (
     entry: ModelCatalogEntry,
@@ -63,6 +66,7 @@ export function prepareModelPickerRuntimeChoices(params: {
           provider: entry.provider,
           runtime: runtimeId,
           cfg,
+          metadataSnapshot: decisions.metadataSnapshot,
         }) === runtimeId;
       const { entry: runtimeEntry, variants: runtimeVariants } = selectModelCatalogRuntimeEntry({
         entry,

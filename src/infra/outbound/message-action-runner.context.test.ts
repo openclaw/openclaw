@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { preparePluginMetadataMachineStateAsync } from "../../plugins/installed-plugin-index-record-state.js";
 import { runMessageAction } from "./message-action-runner.js";
 import {
   createMessageActionContextFixture,
@@ -8,7 +9,10 @@ import {
 const contextFixture = createMessageActionContextFixture();
 
 describe("runMessageAction context isolation", () => {
-  beforeEach(() => contextFixture.setup());
+  beforeEach(async () => {
+    contextFixture.setup();
+    await preparePluginMetadataMachineStateAsync({});
+  });
   afterEach(() => contextFixture.cleanup());
   it.each([
     { params: { channel: "C_TARGET" }, error: 'Unknown channel "c_target"' },

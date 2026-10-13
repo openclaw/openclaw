@@ -3,6 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -158,6 +159,8 @@ describe("outbound bootstrap lifetime", () => {
       ),
       empty: finalizePluginMetadataSnapshot(createPluginMetadataSnapshotFixture()),
     }));
+    const activateDiscovery = await prepareBundledDiscoveryMode();
+    activateDiscovery();
     const options = { config: fixture.config, trustConfigIdentity: true };
     await withPluginMetadataSnapshotScope(
       available,

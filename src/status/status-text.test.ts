@@ -5,6 +5,7 @@ import {
   seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { preparePluginAutoEnableTestDiscovery } from "../config/plugin-auto-enable.test-helpers.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -34,6 +35,8 @@ vi.mock("../infra/provider-usage.js", async (importOriginal) => {
     loadProviderUsageSummary: mocks.loadProviderUsageSummary,
   };
 });
+
+beforeEach(() => preparePluginAutoEnableTestDiscovery());
 
 type StatusTextParams = Parameters<typeof buildStatusText>[0];
 

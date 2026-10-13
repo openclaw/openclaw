@@ -87,7 +87,10 @@ vi.mock("../../../agents/bootstrap-files.js", () => ({
 vi.mock("../../../talk/provider-resolver.js", () => ({
   resolveConfiguredRealtimeVoiceProviderAsync: mocks.resolveProvider,
 }));
-vi.mock("../../../talk/provider-registry.js", () => ({ listRealtimeVoiceProviders: () => [] }));
+// mock-isolation: Consult fixtures own their provider inventory without installed discovery.
+vi.mock("../../../talk/provider-registry.js", () => ({
+  listRealtimeVoiceProvidersAsync: async () => [],
+}));
 
 let state: OpenClawTestState;
 let config: OpenClawConfig;

@@ -1,6 +1,7 @@
 import { qaLiveFrontierProvider } from "../../extensions/qa-lab/test-api.js";
 import { resolveProviderEnvAuthEvidence } from "../../src/agents/model-auth-env.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../src/plugins/plugin-metadata-snapshot.js";
 import { getProviderEnvVarsCore } from "../../src/secrets/provider-env-vars.js";
 
 export type MatrixProviderFailureCategory =
@@ -61,14 +62,20 @@ export function matrixModelConfig(model: string, thinking: string): OpenClawConf
 }
 
 /** Copy only this provider's owner-declared credential inputs into the isolated run. */
-export function matrixProviderEnv(
+export async function matrixProviderEnv(
   model: string,
   config: OpenClawConfig,
   baseEnv: NodeJS.ProcessEnv,
-): NodeJS.ProcessEnv {
+): Promise<NodeJS.ProcessEnv> {
   const provider = model.slice(0, model.indexOf("/"));
+  const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+    config,
+    env: baseEnv,
+    preferPersisted: false,
+  });
   const names = getProviderEnvVarsCore(provider, {
     config,
+    metadataSnapshot,
     env: baseEnv,
     includeUntrustedWorkspacePlugins: false,
   });
@@ -99,12 +106,12 @@ export function matrixProviderEnv(
   return env;
 }
 
-export function matrixProviderAuthSelection(
+export async function matrixProviderAuthSelection(
   model: string,
   baseEnv: NodeJS.ProcessEnv = process.env,
 ) {
   const provider = model.split("/")[0]!;
-  const env = matrixProviderEnv(
+  const env = await matrixProviderEnv(
     model,
     {
       plugins: { allow: [provider], entries: { [provider]: { enabled: true } } },

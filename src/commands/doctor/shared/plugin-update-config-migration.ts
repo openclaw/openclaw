@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { resolveConfigWidePluginMetadataSnapshot } from "../../../config/io.plugin-metadata.js";
+import { resolveConfigWidePluginMetadataSnapshotAsync } from "../../../config/io.plugin-metadata.js";
 import { findLegacyConfigRuleIssues } from "../../../config/legacy.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
@@ -37,12 +37,12 @@ export async function preparePluginUpdateConfigMigration(params: {
   params.assertCurrent();
   const selectedOwners = new Set(params.installOwners);
   const cache = createPluginCache();
-  const inspect = <T>(
+  const inspect = async <T>(
     config: OpenClawConfig,
-    run: (metadata: ReturnType<typeof resolveConfigWidePluginMetadataSnapshot>) => T,
+    run: (metadata: Awaited<ReturnType<typeof resolveConfigWidePluginMetadataSnapshotAsync>>) => T,
   ) =>
-    withPluginCache(cache, () => {
-      const metadata = resolveConfigWidePluginMetadataSnapshot({
+    withPluginCache(cache, async () => {
+      const metadata = await resolveConfigWidePluginMetadataSnapshotAsync({
         config,
         installRecords: params.installRecords,
         allowCurrent: false,
@@ -50,7 +50,7 @@ export async function preparePluginUpdateConfigMigration(params: {
       return withPluginMetadataSnapshotScope(metadata, () => run(metadata), { config });
     });
   try {
-    const prepared = inspect(params.config, (metadata) => {
+    const prepared = await inspect(params.config, (metadata) => {
       const selectedIds = new Set(params.installOwners);
       for (const plugin of metadata.plugins) {
         const installOwner = resolvePluginManifestInstallOwner(plugin);
@@ -122,7 +122,7 @@ export async function preparePluginUpdateConfigMigration(params: {
         params.assertCurrent();
         // Install owns enablement after normalization. Inspect state obligations against
         // that final policy; inactive owners retain their inputs without running state work.
-        const resolvedPluginIds = inspect(activationConfig, (metadata) => {
+        const resolvedPluginIds = await inspect(activationConfig, (metadata) => {
           const rules = listPluginDoctorLegacyConfigRules({
             config: activationConfig,
             pluginIds: [...selectedIds],

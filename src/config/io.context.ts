@@ -11,6 +11,7 @@ import {
 } from "../infra/shell-env.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-record-reader.js";
+import { preparePluginMetadataMachineState } from "../plugins/installed-plugin-index-record-state.js";
 import { getPluginMetadataSnapshotCache, withPluginCache } from "../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
@@ -57,6 +58,7 @@ import {
 import type { PreparedConfigValidationPluginMetadata } from "./validation.types.js";
 
 export type ConfigRecoveryCandidateTransform = (params: {
+  env: NodeJS.ProcessEnv;
   candidate: ConfigRecoveryCandidate;
   configPath: string;
   includeProvenance: NonNullable<ConfigFileSnapshot["includeProvenance"]>;
@@ -180,6 +182,8 @@ export function createConfigIoContext(
     let pending: Promise<PreparedConfigValidationPluginMetadata> | undefined;
     return {
       load: (config: OpenClawConfig) => {
+        // Synchronous config admission serves boot, offline commands and legacy SDK readers.
+        preparePluginMetadataMachineState({ env: params.env });
         snapshot ??= resolveConfigWidePluginMetadataSnapshot({
           config,
           env: params.env,
@@ -252,6 +256,7 @@ export function createConfigIoContext(
       const prepareValidation = (pending: readonly DeferredPluginMigration[]) => {
         const authoredCandidate = transformRecoveryCandidate
           ? transformRecoveryCandidate({
+              env: deps.env,
               candidate,
               configPath,
               includeProvenance,

@@ -15,7 +15,10 @@ import { createInstalledPluginIndexScopeLookup } from "../installed-plugin-index
 import { loadAndActivateRootPluginRegistry } from "../loader.js";
 import { hasNonEmptyPluginIdScope } from "../plugin-scope.js";
 import { buildPluginRuntimeLoadOptions } from "./load-context.js";
-import { resolvePluginRuntimeLoadContext } from "./load-context.resolve.js";
+import {
+  resolvePluginRuntimeLoadContext,
+  resolvePluginRuntimeLoadContextAsync,
+} from "./load-context.resolve.js";
 
 export type PluginRegistryScope =
   | "configured-channels"
@@ -89,7 +92,7 @@ export async function ensurePluginRegistryLoaded(options?: {
   persistedSandboxBackendIds?: readonly string[];
 }): Promise<void> {
   const scope = options?.scope ?? "all";
-  const context = resolvePluginRuntimeLoadContext({
+  const context = await resolvePluginRuntimeLoadContextAsync({
     ...options,
     config: options?.config ?? (await captureRuntimeConfigAsyncReader()()),
   });

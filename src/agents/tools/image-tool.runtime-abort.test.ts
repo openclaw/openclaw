@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as operatorInvocation from "../../gateway/operator-invocation-authority.js";
@@ -13,6 +13,7 @@ import type {
   ImagesDescriptionRequest,
   MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
@@ -64,6 +65,10 @@ function executeAbortImage(
 }
 
 describe("image tool run abort", () => {
+  beforeEach(async () => {
+    await prepareBundledDiscoveryMode(process.env);
+  });
+
   afterEach(() => {
     vi.unstubAllEnvs();
     testing.setProviderDepsForTest();

@@ -61,7 +61,7 @@ import {
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
 import { resolveOperatorModelDefault } from "../operator-model-policy.js";
-import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { resolvePreparedProviderIdForAuth as resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../session-runtime-compat.js";
 import {
   normalizeThinkingCatalogProviders,
@@ -401,6 +401,7 @@ export async function resolveEmbeddedModelSelection(params: {
     provider,
     entry: sessionEntryForAttempt,
     cfg: params.cfg,
+    metadataSnapshot: params.pluginsEnabled ? params.manifestMetadataSnapshot : null,
   });
   await ensureSelectedAgentHarnessPlugin({
     config: params.cfg,

@@ -2,7 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createOpenClawCodingTools } from "../agents/agent-tools.js";
+import { createOpenClawCodingToolsAsync } from "../agents/agent-tools.js";
 import {
   setActiveEmbeddedRun,
   clearActiveEmbeddedRun,
@@ -109,7 +109,7 @@ describe("scoped session archive tools", () => {
                 senderIsOwner: false,
               };
               for (const tools of [
-                createOpenClawCodingTools({ ...options, swarmCollector: true }),
+                await createOpenClawCodingToolsAsync({ ...options, swarmCollector: true }),
                 (await resolveGatewayScopedTools({ ...options, cfg, surface: "loopback" })).tools,
               ]) {
                 const tool = expectDefined(
@@ -150,7 +150,9 @@ describe("scoped session archive tools", () => {
         };
         const check = async () => {
           const assignment = expectDefined(
-            createOpenClawCodingTools(options).find((tool) => tool.name === "sessions"),
+            (await createOpenClawCodingToolsAsync(options)).find(
+              (tool) => tool.name === "sessions",
+            ),
             "assignment-only tool",
           );
           expect(assignment.parameters).toMatchObject({
@@ -251,13 +253,15 @@ describe("scoped session archive tools", () => {
               { authenticatedUserProfile: profile, scopes: ["operator.write"] },
               async () => {
                 const tool = expectDefined(
-                  createOpenClawCodingTools({
-                    config: cfg,
-                    agentId: "main",
-                    sessionKey: requesterKey,
-                    sessionId: "stop-requester-id",
-                    senderIsOwner: false,
-                  }).find((candidate) => candidate.name === "sessions"),
+                  (
+                    await createOpenClawCodingToolsAsync({
+                      config: cfg,
+                      agentId: "main",
+                      sessionKey: requesterKey,
+                      sessionId: "stop-requester-id",
+                      senderIsOwner: false,
+                    })
+                  ).find((candidate) => candidate.name === "sessions"),
                   "session controls",
                 );
                 const stop = withGatewayToolCallerIdentity(
@@ -344,13 +348,15 @@ describe("scoped session archive tools", () => {
             { authenticatedUserProfile: profile, scopes: ["operator.write"] },
             async () => {
               const tool = expectDefined(
-                createOpenClawCodingTools({
-                  config: cfg,
-                  agentId: "main",
-                  sessionKey: requesterKey,
-                  sessionId: "steer-requester-id",
-                  senderIsOwner: false,
-                }).find((candidate) => candidate.name === "sessions_send"),
+                (
+                  await createOpenClawCodingToolsAsync({
+                    config: cfg,
+                    agentId: "main",
+                    sessionKey: requesterKey,
+                    sessionId: "steer-requester-id",
+                    senderIsOwner: false,
+                  })
+                ).find((candidate) => candidate.name === "sessions_send"),
                 "session steering",
               );
               const result = await tool.execute("steer-ordinary", {
@@ -417,7 +423,7 @@ describe("scoped session archive tools", () => {
         identities: [sessionKey, sessionId],
         assertAllowed: () => {},
       });
-      let retained: ReturnType<typeof createOpenClawCodingTools>[number] | undefined;
+      let retained: Awaited<ReturnType<typeof createOpenClawCodingToolsAsync>>[number] | undefined;
       try {
         const result = await withPluginRuntimeGatewayRequestScope({ ...request, client }, () =>
           withOperatorToolGatewayAuthority(
@@ -430,7 +436,7 @@ describe("scoped session archive tools", () => {
                 sessionId,
                 senderIsOwner: false,
               };
-              const tools = createOpenClawCodingTools(options);
+              const tools = await createOpenClawCodingToolsAsync(options);
               const gatewayTools = (
                 await resolveGatewayScopedTools({
                   ...options,

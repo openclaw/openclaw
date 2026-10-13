@@ -55,13 +55,14 @@ import { normalizeSessionToolOverrides } from "../config/sessions/session-tool-o
 import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { applyModelOverrideWithAuthProfileCompatibility } from "../sessions/auth-profile-preservation.js";
+import { applyModelOverrideWithAuthProfileCompatibilityCore as applyModelOverrideWithAuthProfileCompatibility } from "../sessions/auth-profile-preservation.js";
 import {
   applyTraceOverride,
   applyVerboseOverride,
@@ -80,7 +81,9 @@ import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import type { UserModelAccountSelection } from "./model-account-authority.js";
 import { isSessionUnreadAckOnlyPatch } from "./server-methods/session-unread-ack.js";
 import {
+  prepareSessionPatchAuthProfileProvider,
   prepareSessionPatchModelSelection,
+  prepareSessionPatchRuntimeMetadata,
   resolveSessionPatchModelSelection,
 } from "./server-methods/sessions-patch-model-selection.js";
 import { resolveProtectedSessionVisibilityError } from "./server-methods/sessions-shared.js";
@@ -110,6 +113,7 @@ type SessionPatchProjectionParams = {
   preparedAgentRuntime?: string;
   archivedBy?: SessionEntry["archivedBy"];
   providerAuthMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
+  runtimeMetadataSnapshot?: PluginMetadataSnapshot | null;
   /** Exact harness owner authorized to project its new reserved session row. */
   authorizedAgentHarnessId?: string;
   personalModelSelection?: UserModelAccountSelection;
@@ -118,6 +122,7 @@ type SessionPatchProjectionParams = {
   preparedModelSelection?: ModelRef;
   /** Creation snapshots selected models, including the configured default. */
   pinModelSelection?: boolean;
+  preparedAuthProfileProvider?: { provider: string | undefined };
 };
 
 type SessionPatchProjectionResult =
@@ -133,7 +138,9 @@ type SessionPatchPreparation =
 
 /** Stop at the first actual catalog use without committing or acquiring runtime effects. */
 export async function prepareSessionsPatchEntry(
-  params: SessionPatchProjectionParams,
+  params: SessionPatchProjectionParams & {
+    preparedAuthProfileProvider: { provider: string | undefined };
+  },
 ): Promise<SessionPatchPreparation> {
   const invalidPatch = validateSessionPatchAdmission(params);
   if (invalidPatch) {
@@ -156,14 +163,19 @@ export async function prepareSessionsPatchEntry(
       })
     : undefined;
   const projection = projectSessionPatchSteps(params, acpMeta);
-  const first = projection.next();
+  const metadataSnapshot = params.runtimeMetadataSnapshot;
+  const first = metadataSnapshot
+    ? withPluginMetadataSnapshotScope(metadataSnapshot, () => projection.next())
+    : projection.next();
   if (first.done) {
     return { kind: "complete", result: first.value };
   }
   return {
     kind: "model-catalog",
     finish: (catalog) => {
-      const completed = projection.next(catalog);
+      const completed = metadataSnapshot
+        ? withPluginMetadataSnapshotScope(metadataSnapshot, () => projection.next(catalog))
+        : projection.next(catalog);
       if (!completed.done) {
         throw new Error("Session patch preparation requested the catalog more than once");
       }
@@ -177,7 +189,11 @@ export async function projectSessionsPatchEntry(
     loadGatewayModelCatalogSnapshot?: () => Promise<ModelCatalogSnapshot>;
   },
 ): Promise<SessionPatchProjectionResult> {
-  const preparation = await prepareSessionsPatchEntry(params);
+  const preparation = await prepareSessionsPatchEntry({
+    ...params,
+    runtimeMetadataSnapshot: await prepareSessionPatchRuntimeMetadata(params),
+    preparedAuthProfileProvider: await prepareSessionPatchAuthProfileProvider(params),
+  });
   if (preparation.kind === "complete") {
     return preparation.result;
   }
@@ -567,6 +583,7 @@ function* projectSessionPatchSteps(
       }
       const runtime = resolveModelRuntimeDirective({
         cfg,
+        metadataSnapshot: params.runtimeMetadataSnapshot,
         provider: selection.provider,
         rawRuntime: patch.agentRuntime ?? undefined,
         sessionEntry: next,
@@ -631,6 +648,7 @@ function* projectSessionPatchSteps(
         entry: next,
         currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
         selection,
+        recordedProvider: params.preparedAuthProfileProvider ?? { provider: undefined },
         explicitDefaultSelection: selection.isDefault,
         profileOverride: selection.profile,
         ...(params.providerAuthMetadataSnapshot

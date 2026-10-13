@@ -5,6 +5,7 @@ import { openRootFile } from "../infra/boundary-file-read.js";
 import { safeRealpathSync } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   type InternalHookSelection,
@@ -70,6 +71,7 @@ export async function prepareInternalHooks(
   const discovery = selection.configured
     ? prepareWorkspaceHookEntries(workspaceDir, {
         config: cfg,
+        metadataSnapshot: await resolvePluginMetadataSnapshotAsync({ config: cfg, workspaceDir }),
         managedHooksDir: opts?.managedHooksDir,
         bundledHooksDir: opts?.bundledHooksDir,
         ...(opts?.failureMode !== "best-effort"

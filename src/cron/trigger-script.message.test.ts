@@ -72,7 +72,7 @@ it.each(["captured", "legacy"] as const)(
     });
     const runtime = createCronScriptRuntimeFixture({
       config,
-      loadPluginRegistry: () => registry,
+      loadPluginRegistry: async () => registry,
       runHeadless: async ({ ctx }) => {
         const tools = new ToolSearchRuntime(ctx, resolveToolSearchConfig(config), {
           prepareInput: true,

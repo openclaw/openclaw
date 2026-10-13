@@ -20,7 +20,7 @@ import type { PluginMetadataSnapshotScopeRunner } from "./current-plugin-metadat
 import { createInstalledPluginEnabledPredicate } from "./installed-plugin-index.js";
 import {
   acquirePluginRegistryForInspection,
-  loadPluginRegistryHandle,
+  loadPluginRegistryHandleAsync,
   type PluginLoadOptions,
 } from "./loader.js";
 import {
@@ -264,19 +264,16 @@ function resolvePluginToolLoadState(params: {
   };
 }
 
-export function ensureStandalonePluginToolRegistryLoaded(params: {
+export async function ensureStandalonePluginToolRegistryLoaded(params: {
   context: OpenClawPluginToolContext;
   toolAllowlist?: string[];
   toolDenylist?: string[];
   allowGatewaySubagentBinding?: boolean;
   hasAuthForProvider?: (providerId: string) => boolean;
   env?: NodeJS.ProcessEnv;
-}): PluginRegistry | undefined {
+}): Promise<PluginRegistry | undefined> {
   const loadState = resolvePluginToolLoadState(params);
-  if (!loadState) {
-    return undefined;
-  }
-  return loadPluginRegistryHandle(loadState.loadOptions);
+  return loadState ? await loadPluginRegistryHandleAsync(loadState.loadOptions) : undefined;
 }
 
 type PluginToolResolutionParams = {
@@ -326,6 +323,8 @@ export async function acquirePluginToolInspectionRegistry(params: {
   scopes: readonly PluginToolInspectionScope[];
   runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
 }): Promise<{ registry?: PluginRegistry; release: () => Promise<void> }> {
+  const { prepareBundledDiscoveryMode } = await import("./bundled-discovery-state.js");
+  await prepareBundledDiscoveryMode(params.loadContext.env);
   const inventory = new Map(
     (params.loadContext.manifestRegistry?.plugins ?? []).map((plugin) => [plugin.id, plugin]),
   );
@@ -386,6 +385,8 @@ export type PluginToolRegistryAcquisition = {
 export async function acquireStandalonePluginToolRegistry(
   params: Omit<PluginToolResolutionParams, "runtimeRegistry" | "preparedRuntime">,
 ): Promise<PluginToolRegistryAcquisition> {
+  const { prepareBundledDiscoveryMode } = await import("./bundled-discovery-state.js");
+  await prepareBundledDiscoveryMode(params.env);
   const loadState = resolvePluginToolLoadState(params);
   if (!loadState || loadState.onlyPluginIds.length === 0) {
     return { resolveTools: () => [], release: async () => {} };
@@ -418,7 +419,9 @@ function resolvePluginToolsSynchronously(steps: Generator<Promise<void>, AnyAgen
   const step = steps.next();
   if (!step.done) {
     void step.value.catch(() => {});
-    throw new Error("Workspace preparation is pending; use asynchronous tool construction.");
+    throw new Error(
+      "Plugin or workspace preparation is pending; use asynchronous tool construction.",
+    );
   }
   return step.value;
 }
@@ -499,9 +502,12 @@ function* resolvePluginToolsFromRegistry(
       !samePluginToolSource(inspection?.manifests.get(pluginId), snapshot.byPluginId.get(pluginId)),
   );
   if (missingPluginIds.length > 0) {
-    const registry = loadPluginRegistryHandle({
+    let registry!: PluginRegistry;
+    yield loadPluginRegistryHandleAsync({
       ...loadState.loadOptions,
       onlyPluginIds: missingPluginIds,
+    }).then((loaded) => {
+      registry = loaded;
     });
     for (const pluginId of missingPluginIds) {
       toolOwners.set(pluginId, { registry, tools: [] });

@@ -139,40 +139,42 @@ const loadPluginMetadataSnapshot = vi.hoisted(() =>
   })),
 );
 
-vi.mock("../plugins/plugin-metadata-snapshot-required.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot-required.js")>()),
-  loadPluginMetadataSnapshotRuntime: loadPluginMetadataSnapshot,
-  getCurrentPluginMetadataSnapshotRequiredRuntime: (params?: {
-    allowScopedSnapshot?: boolean;
-    requireDefaultDiscoveryContext?: boolean;
-  }) =>
-    (providerMetadataState.pluginIdScoped && params?.allowScopedSnapshot !== true) ||
-    (params?.requireDefaultDiscoveryContext === true &&
-      !providerMetadataState.defaultDiscoveryCompatible)
-      ? undefined
-      : (providerMetadataState.snapshot ?? {
-          owners: {
-            providerEndpoints: providerEndpointPlugins.flatMap((manifest) =>
-              (manifest.providerEndpoints ?? []).map((endpoint) =>
-                Object.assign({}, endpoint, {
-                  hosts: endpoint.hosts ?? [],
-                  hostSuffixes: endpoint.hostSuffixes ?? [],
-                  baseUrls: (endpoint.baseUrls ?? []).map((baseUrl) =>
-                    baseUrl.toLowerCase().replace(/\/+$/, ""),
-                  ),
-                }),
+// mock-isolation: Attribution fixtures own the reader slot and must not register or read process metadata.
+vi.mock("../plugins/plugin-metadata-snapshot-readers.js", () => ({
+  registerPluginMetadataSnapshotReaders: () => {},
+  snapshotReaderSlot: {
+    loadPluginMetadataSnapshot,
+    getCurrentPluginMetadataSnapshot: (params?: {
+      allowScopedSnapshot?: boolean;
+      requireDefaultDiscoveryContext?: boolean;
+    }) =>
+      (providerMetadataState.pluginIdScoped && params?.allowScopedSnapshot !== true) ||
+      (params?.requireDefaultDiscoveryContext === true &&
+        !providerMetadataState.defaultDiscoveryCompatible)
+        ? undefined
+        : (providerMetadataState.snapshot ?? {
+            owners: {
+              providerEndpoints: providerEndpointPlugins.flatMap((manifest) =>
+                (manifest.providerEndpoints ?? []).map((endpoint) =>
+                  Object.assign({}, endpoint, {
+                    hosts: endpoint.hosts ?? [],
+                    hostSuffixes: endpoint.hostSuffixes ?? [],
+                    baseUrls: (endpoint.baseUrls ?? []).map((baseUrl) =>
+                      baseUrl.toLowerCase().replace(/\/+$/, ""),
+                    ),
+                  }),
+                ),
               ),
-            ),
-            providerRequests: new Map(
-              providerEndpointPlugins.flatMap((manifest) =>
-                Object.entries(manifest.providerRequest?.providers ?? {}),
+              providerRequests: new Map(
+                providerEndpointPlugins.flatMap((manifest) =>
+                  Object.entries(manifest.providerRequest?.providers ?? {}),
+                ),
               ),
-            ),
-          },
-        }),
+            },
+          }),
+  },
 }));
 
-import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   resolveProviderEndpoint,
@@ -233,30 +235,13 @@ describe("provider attribution", () => {
     );
   });
 
-  it("resolves fallback provider facts in each operation's metadata generation", () => {
+  it("requires preparation instead of loading cold provider facts synchronously", () => {
     providerMetadataState.pluginIdScoped = true;
     providerMetadataState.snapshot = undefined;
-    try {
-      for (const family of ["before-refresh", "after-refresh"]) {
-        loadPluginMetadataSnapshot.mockReturnValue({
-          owners: {
-            providerEndpoints: [],
-            providerRequests: new Map([["fallback-provider", { family }]]),
-          },
-        });
-        expect(
-          withPluginCache(
-            createPluginCache(),
-            () =>
-              resolveProviderRequestPolicy({ provider: "fallback-provider" }).knownProviderFamily,
-          ),
-        ).toBe(family);
-      }
-    } finally {
-      loadPluginMetadataSnapshot.mockReturnValue({
-        owners: { providerEndpoints: [], providerRequests: new Map() },
-      });
-    }
+    expect(() => resolveProviderRequestPolicy({ provider: "fallback-provider" })).toThrow(
+      "Provider request metadata is not prepared",
+    );
+    expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
   it("uses explicitly prepared provider facts without reading process metadata", () => {

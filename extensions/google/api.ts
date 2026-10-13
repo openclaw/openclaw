@@ -34,4 +34,7 @@ export {
 export { buildGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 export { buildGoogleProvider } from "./provider-registration.js";
 
-export { resolveGoogleGenerativeAiHttpRequestConfig } from "./http-request.js";
+export {
+  resolveGoogleGenerativeAiHttpRequestConfig,
+  resolveGoogleGenerativeAiHttpRequestConfigAsync,
+} from "./http-request.js";

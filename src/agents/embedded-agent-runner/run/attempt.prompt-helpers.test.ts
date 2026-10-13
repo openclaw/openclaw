@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
+import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
 import { addSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../../bash-process-registry.test-support.js";
@@ -206,25 +208,29 @@ describe("buildAfterTurnRuntimeContext", () => {
   });
 
   it("resolves compaction.model override in runtime context so all context engines use the correct model", () => {
-    const legacy = buildAfterTurnRuntimeContext({
-      attempt: runtimeAttempt({
-        trigger: "heartbeat",
-        inputProvenance: { kind: "external_user" },
-        sessionKey: "agent:main:session:abc",
-        authProfileId: "openai:p1",
-        config: {
-          agents: {
-            defaults: {
-              models: {
-                "openrouter/anthropic/claude-sonnet-4-5": { alias: "summary" },
+    const legacy = withPluginRuntimeGenerationScope(
+      { metadataSnapshot: createPluginMetadataSnapshotFixture() },
+      () =>
+        buildAfterTurnRuntimeContext({
+          attempt: runtimeAttempt({
+            trigger: "heartbeat",
+            inputProvenance: { kind: "external_user" },
+            sessionKey: "agent:main:session:abc",
+            authProfileId: "openai:p1",
+            config: {
+              agents: {
+                defaults: {
+                  models: {
+                    "openrouter/anthropic/claude-sonnet-4-5": { alias: "summary" },
+                  },
+                  compaction: { model: "summary" },
+                },
               },
-              compaction: { model: "summary" },
-            },
-          },
-        } as OpenClawConfig,
-      }),
-      ...runtimeDirectories,
-    });
+            } as OpenClawConfig,
+          }),
+          ...runtimeDirectories,
+        }),
+    );
 
     expect(legacy.provider).toBe("openrouter");
     expect(legacy.model).toBe("anthropic/claude-sonnet-4-5");

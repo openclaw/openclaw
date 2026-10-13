@@ -4,7 +4,10 @@ import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { ExpectedCliError } from "../../cli/failure-output.js";
 import type { OpenClawConfig, replaceConfigFile } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
-import { createTestConfigSnapshot } from "../test-runtime-config-helpers.js";
+import {
+  createTestConfigSnapshot,
+  prepareTestCommandPluginMetadata,
+} from "../test-runtime-config-helpers.js";
 import { channelsCapabilitiesCommand } from "./capabilities.js";
 
 const logs: string[] = [];
@@ -116,7 +119,7 @@ function buildPlugin(params: {
 }
 
 describe("channelsCapabilitiesCommand", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.stubEnv("NO_COLOR", "1");
     resetOutput();
     vi.clearAllMocks();
@@ -140,6 +143,7 @@ describe("channelsCapabilitiesCommand", () => {
       cfg: { channels: {} },
       configChanged: false,
     });
+    await prepareTestCommandPluginMetadata();
   });
 
   it.each([undefined, "all"])("keeps %s capabilities listing read-only", async (channel) => {

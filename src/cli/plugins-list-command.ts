@@ -21,7 +21,12 @@ export async function runPluginsListCommand(
   opts: PluginsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
-  const { buildPluginRegistrySnapshotReport } = await import("../plugins/status-snapshot.js");
+  const [{ buildPluginRegistrySnapshotReport }, { preparePluginMetadataMachineStateAsync }] =
+    await Promise.all([
+      import("../plugins/status-snapshot.js"),
+      import("../plugins/installed-plugin-index-record-state.js"),
+    ]);
+  await preparePluginMetadataMachineStateAsync({});
   // The inventory projector owns plugin metadata validation from the installed index.
   const cfg = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
   const report = buildPluginRegistrySnapshotReport({

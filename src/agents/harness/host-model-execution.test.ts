@@ -1,4 +1,6 @@
-import { expect, it, vi } from "vitest";
+import { aroundEach, expect, it, vi } from "vitest";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -20,6 +22,13 @@ import { createHarnessAttemptParams } from "./selection.test-support.js";
 import type { AgentHarness } from "./types.js";
 
 const cfg = { agents: { defaults: { model: "fixture/a" } } };
+aroundEach((runTest) =>
+  withPluginMetadataSnapshotScope(
+    createPluginMetadataSnapshotFixture({ plugins: [{ id: "fixture", providers: ["fixture"] }] }),
+    runTest,
+    { config: cfg, trustConfigIdentity: true },
+  ),
+);
 const permittedModel = { provider: "fixture", model: "a" };
 const policy = prepareOperatorModelPolicy({ cfg, policy: {}, manifestPlugins: [] });
 const result = makeEmbeddedRunnerAttempt({

@@ -17,7 +17,7 @@ import { recordPluginInstall } from "./installs.js";
 import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
 import { getScopedPluginCache } from "./plugin-cache.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
-import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "./plugin-metadata-snapshot.js";
 import { prepareAuthChoiceLoadedPluginProvider } from "./provider-auth-choice.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "./runtime.js";
@@ -111,7 +111,7 @@ it.each([false, true])(
       },
       async () => {
         const env = { ...process.env };
-        const runningMetadata = loadPluginMetadataSnapshot({
+        const runningMetadata = await resolvePluginMetadataSnapshotAsync({
           config,
           workspaceDir,
           env,

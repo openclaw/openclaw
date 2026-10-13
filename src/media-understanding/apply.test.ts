@@ -313,30 +313,36 @@ describe("applyMediaUnderstanding", () => {
       const actual =
         await vi.importActual<typeof import("./provider-registry.js")>("./provider-registry.js");
       const registryProviders = createRegistryMediaProviders();
+      const build = (overrides?: Record<string, MediaUnderstandingProvider>) => {
+        const registry = new Map<string, MediaUnderstandingProvider>(
+          Object.entries(registryProviders),
+        );
+        for (const [key, provider] of Object.entries(overrides ?? {})) {
+          const normalizedKey = actual.normalizeMediaProviderId(key);
+          const existing = registry.get(normalizedKey);
+          registry.set(
+            normalizedKey,
+            existing
+              ? {
+                  ...existing,
+                  ...provider,
+                  capabilities: provider.capabilities ?? existing.capabilities,
+                }
+              : provider,
+          );
+        }
+        return registry;
+      };
+      const { createMediaProviderAcquisition } = await import("./runner.test-mocks.js");
       return {
         ...actual,
-        buildMediaUnderstandingRegistry: (
-          overrides?: Record<string, MediaUnderstandingProvider>,
-        ) => {
-          const registry = new Map<string, MediaUnderstandingProvider>(
-            Object.entries(registryProviders),
-          );
-          for (const [key, provider] of Object.entries(overrides ?? {})) {
-            const normalizedKey = actual.normalizeMediaProviderId(key);
-            const existing = registry.get(normalizedKey);
-            registry.set(
-              normalizedKey,
-              existing
-                ? {
-                    ...existing,
-                    ...provider,
-                    capabilities: provider.capabilities ?? existing.capabilities,
-                  }
-                : provider,
-            );
-          }
-          return registry;
-        },
+        buildMediaUnderstandingRegistry: build,
+        acquireMediaUnderstandingRegistry: async (params: {
+          overrides?: Record<string, MediaUnderstandingProvider>;
+        }) => ({
+          ...createMediaProviderAcquisition(Object.values(registryProviders)),
+          registry: build(params.overrides),
+        }),
       };
     });
     ({ applyMediaUnderstanding } = await import("./apply.js"));

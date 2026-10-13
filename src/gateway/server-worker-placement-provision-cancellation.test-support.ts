@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { preparePluginTestRuntimeMetadata } from "../plugin-sdk/plugin-test-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -53,6 +54,7 @@ export async function createRuntime(
 
 export function setupSessionFixture(request: WorkerSessionPlacementIdentity) {
   beforeEach(async () => {
+    await preparePluginTestRuntimeMetadata(support.testState.config);
     const { runtimeFactoryMocks, moveDestinationMocks } = getWorkerPlacementStartupMocks();
     moveDestinationMocks.prepareGatewaySessionTarget.mockReset();
     const actual = await vi.importActual<

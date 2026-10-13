@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createPreparedRuntimeModelMaterializer } from "./credential-scoped-model.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";
 
@@ -37,6 +38,7 @@ function buildMaterializer(params: {
   resolveModel: () => Promise<{ model?: typeof routedModel | null; error?: string }>;
 }) {
   return createPreparedRuntimeModelMaterializer({
+    metadataSnapshot: createPluginMetadataSnapshotFixture(),
     provider: "openai",
     modelId: "gpt-5.5",
     // Base model deliberately mismatched so materialization must resolve.
@@ -132,6 +134,7 @@ describe("generation route-model memo", () => {
       }
       const buildBaseReturningMaterializer = (base: typeof routedModel) =>
         createPreparedRuntimeModelMaterializer({
+          metadataSnapshot: createPluginMetadataSnapshotFixture(),
           provider: "openai",
           modelId: "gpt-5.5",
           getModel: () => base,

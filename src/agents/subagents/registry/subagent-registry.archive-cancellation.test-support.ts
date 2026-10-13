@@ -394,7 +394,7 @@ export function registerArchiveCancellationTests({
   it("continues killed cleanup when ended hook loading fails", async () => {
     const mod = getRegistry();
     const now = Date.now();
-    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(() => {
+    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(async () => {
       throw new Error("plugin load failed");
     });
     await addCanonicalSubagentRunForTests({

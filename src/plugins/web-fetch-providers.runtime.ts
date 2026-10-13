@@ -9,7 +9,7 @@ import {
   resolveManifestDeclaredWebProviderCandidatePluginIds,
 } from "./web-provider-resolution-shared.js";
 import {
-  resolvePluginWebProviders,
+  resolvePluginWebProvidersAsync,
   type ResolvePluginWebProvidersParams,
   type ResolveRuntimeWebProvidersParams,
   type WebProviderRuntimeResolution,
@@ -28,11 +28,11 @@ const providerResolution = {
     mapRegistryProviders({ registry, entries: registry.webFetchProviders, onlyPluginIds }),
 } satisfies WebProviderRuntimeResolution<PluginWebFetchProviderEntry>;
 
-/** Resolves web fetch providers from bundled artifacts or scoped plugin loads. */
-export function resolvePluginWebFetchProviders(
+/** Resolves plugin web fetch providers after preparing worker-owned metadata. */
+export function resolvePluginWebFetchProvidersAsync(
   params: ResolvePluginWebProvidersParams,
-): PluginWebFetchProviderEntry[] {
-  return resolvePluginWebProviders(params, {
+): Promise<PluginWebFetchProviderEntry[]> {
+  return resolvePluginWebProvidersAsync(params, {
     ...providerResolution,
     resolveBundledPublicArtifactProviders: resolveBundledWebFetchProvidersFromPublicArtifacts,
     resolveBundledRuntimeArtifactProviders:
@@ -40,11 +40,11 @@ export function resolvePluginWebFetchProviders(
   });
 }
 
-/** Resolves already-eligible runtime web fetch providers without setup-mode activation. */
-export function resolveRuntimeWebFetchProviders(
+/** Resolves eligible runtime providers through the async registry owner. */
+export function resolveRuntimeWebFetchProvidersAsync(
   params: ResolveRuntimeWebProvidersParams,
-): PluginWebFetchProviderEntry[] {
-  return resolvePluginWebProviders(params, {
+): Promise<PluginWebFetchProviderEntry[]> {
+  return resolvePluginWebProvidersAsync(params, {
     ...providerResolution,
     resolveBundledRuntimeArtifactProviders:
       resolveBundledRuntimeWebFetchProvidersFromPublicArtifacts,

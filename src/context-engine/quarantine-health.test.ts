@@ -11,6 +11,7 @@ import {
 } from "../plugin-state/plugin-state-store.js";
 import * as pluginStateWorker from "../plugin-state/plugin-state-worker-client.js";
 import { createRuntimeHealthRecordEnvelope } from "../plugin-state/runtime-health-store.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { loadOpenClawPlugins } from "../plugins/loader-runtime-load.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -328,6 +329,9 @@ describe("context engine quarantine health", () => {
       if (mode === "cached" || mode === "cached publication throws") {
         await ensureCliPluginRegistryLoaded({ scope: "all", config });
         cachedRegistry = pluginRuntime.getActivePluginRegistry();
+      }
+      if (mode === "sync" || mode === "sync superseded") {
+        await preparePluginMetadataMachineStateAsync({});
       }
       const quarantine = {
         engineId,

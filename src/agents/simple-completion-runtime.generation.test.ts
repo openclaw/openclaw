@@ -31,19 +31,26 @@ vi.mock("./auth-profiles/store-runtime.js", () => ({
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
-  resolvePluginMetadataSnapshot: mocks.resolvePluginMetadataSnapshot,
+  resolvePluginMetadataSnapshotAsync: mocks.resolvePluginMetadataSnapshot,
 }));
 
 // mock-isolation: a private generation store records which generation each step reads.
-vi.mock("../plugins/runtime/generation-scope.js", async () => {
+vi.mock("../plugins/runtime/generation-scope.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/runtime/generation-scope.js")>();
   const { AsyncLocalStorage } = await import("node:async_hooks");
   const generation = new AsyncLocalStorage<string>();
   mocks.readGeneration = () => generation.getStore() ?? mocks.publishedGeneration;
   return {
     getPluginRuntimeGenerationRegistry: () => undefined,
-    runOutsidePluginRuntimeGenerationScope: (run: () => unknown) => generation.exit(run),
-    withPluginRuntimeGenerationScope: (snapshot: { testGeneration?: string }, run: () => unknown) =>
-      generation.run(snapshot.testGeneration ?? "unknown", run),
+    runOutsidePluginRuntimeGenerationScope: (run: () => unknown) =>
+      actual.runOutsidePluginRuntimeGenerationScope(() => generation.exit(run)),
+    withPluginRuntimeGenerationScope: (
+      snapshot: PreparedModelRuntimeSnapshot & { testGeneration?: string },
+      run: () => unknown,
+    ) =>
+      actual.withPluginRuntimeGenerationScope(snapshot, () =>
+        generation.run(snapshot.testGeneration ?? "unknown", run),
+      ),
   };
 });
 

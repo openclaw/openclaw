@@ -1,10 +1,20 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { isTerminalAssistantError } from "../llm/utils/retry.js";
+import { estimateAggregateUsageCost } from "../utils/usage-format.js";
 import {
   buildAssistantFailoverSignal,
   classifyAssistantFailoverReason,
 } from "./embedded-agent-helpers/assistant-message-failures.js";
 import { recordModelFallbackStop } from "./model-fallback-stop.js";
+import type { IsolatedCompletionPurpose } from "./run-trigger.js";
+import {
+  hasObservedModelUsage,
+  normalizeUsage,
+  toDiagnosticUsage,
+  type UsageLike,
+} from "./usage.js";
 
 type IsolatedCompletionErrorCode =
   | "unsupported"
@@ -84,4 +94,47 @@ export function isRetryableIsolatedQuotaFailure(assistant: AssistantMessage): bo
     (reason === "rate_limit" || reason === "billing") &&
     assistant.content.every((block) => block.type === "text" || block.type === "thinking")
   );
+}
+
+export type IsolatedCompletionResult = {
+  text: string;
+  provider: string;
+  model: string;
+  owner: { kind: "cli" | "harness"; id: string };
+  /** CLI runtimes may not report token usage; absence must not be projected as zero. */
+  usage?: UsageLike;
+  /** Terminal cumulative CLI turn usage; diagnostics prefer it over `usage`. */
+  diagnosticUsage?: UsageLike;
+};
+
+/** Plugin completions finalize usage with host-plugin attribution; core callers have no other path. */
+export function emitIsolatedCompletionUsage(params: {
+  config: OpenClawConfig;
+  agentId: string;
+  agentDir: string;
+  purpose?: IsolatedCompletionPurpose;
+  result: IsolatedCompletionResult;
+}): void {
+  const { config, result } = params;
+  if (params.purpose === "plugin-completion" || !isDiagnosticsEnabled(config)) {
+    return;
+  }
+  const usage = normalizeUsage(result.diagnosticUsage ?? result.usage);
+  if (!hasObservedModelUsage(usage)) {
+    return;
+  }
+  emitTrustedDiagnosticEvent({
+    type: "model.usage",
+    agentId: params.agentId,
+    provider: result.provider,
+    model: result.model,
+    usage: toDiagnosticUsage(usage),
+    costUsd: estimateAggregateUsageCost({
+      usage,
+      provider: result.provider,
+      model: result.model,
+      config,
+      agentDir: params.agentDir,
+    }),
+  });
 }

@@ -36,7 +36,7 @@ import {
 } from "./test-helpers.js";
 import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 
-const { createOpenClawTools } = await import("../agents/openclaw-tools.js");
+const { createOpenClawToolsAsync } = await import("../agents/openclaw-tools.js");
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -57,17 +57,19 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 const SESSION_SEND_E2E_TIMEOUT_MS = 10_000;
 const SESSION_SEND_DM_ROUTING_E2E_TIMEOUT_MS = 30_000;
 
-function getSessionsSendTool(options?: Parameters<typeof createOpenClawTools>[0]) {
-  const tool = createOpenClawTools(
-    options?.config
-      ? {
-          ...options,
-          config: {
-            ...options.config,
-            session: { ...options.config.session, store: testState.sessionStorePath },
-          },
-        }
-      : options,
+async function getSessionsSendTool(options?: Parameters<typeof createOpenClawToolsAsync>[0]) {
+  const tool = (
+    await createOpenClawToolsAsync(
+      options?.config
+        ? {
+            ...options,
+            config: {
+              ...options.config,
+              session: { ...options.config.session, store: testState.sessionStorePath },
+            },
+          }
+        : options,
+    )
   ).find((candidate) => candidate.name === "sessions_send");
   if (!tool) {
     throw new Error("missing sessions_send tool");
@@ -245,7 +247,7 @@ describe("sessions_send gateway loopback", () => {
         },
       });
       spy.mockClear();
-      const tool = getSessionsSendTool({
+      const tool = await getSessionsSendTool({
         agentSessionKey: "agent:main:main",
         config: { tools: { sessions: { visibility: "all" } } },
       });
@@ -284,7 +286,7 @@ describe("sessions_send gateway loopback", () => {
       });
     });
 
-    const tool = getSessionsSendTool();
+    const tool = await getSessionsSendTool();
 
     const result = await tool
       .execute("call-loopback", {
@@ -365,7 +367,7 @@ describe("sessions_send label lookup", () => {
         timeoutMs: 5000,
       });
 
-      const tool = getSessionsSendTool({
+      const tool = await getSessionsSendTool({
         config: { tools: { sessions: { visibility: "all" } } },
       });
 
@@ -460,7 +462,7 @@ describe("sessions_send agent targeting", () => {
         );
         spy.mockClear();
 
-        const tool = getSessionsSendTool({
+        const tool = await getSessionsSendTool({
           agentSessionKey: "agent:main:main",
           config,
         });

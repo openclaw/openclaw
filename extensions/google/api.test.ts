@@ -1,3 +1,4 @@
+import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 // Google tests cover api plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
@@ -7,10 +8,13 @@ import {
   normalizeGoogleGenerativeAiBaseUrl,
   normalizeGoogleProviderConfig,
   resolveGoogleGenerativeAiHttpRequestConfig,
+  resolveGoogleGenerativeAiHttpRequestConfigAsync,
   resolveGoogleGenerativeAiApiOrigin,
   resolveGoogleGenerativeAiTransport,
   shouldNormalizeGoogleGenerativeAiProviderConfig,
 } from "./api.js";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 describe("google generative ai helpers", () => {
   it("normalizes only explicit Google Generative AI baseUrls", () => {
@@ -198,8 +202,8 @@ describe("google generative ai helpers", () => {
     ).toBe("https://generativelanguage.googleapis.com");
   });
 
-  it("builds shared Google Generative AI HTTP request config", () => {
-    const oauthConfig = resolveGoogleGenerativeAiHttpRequestConfig({
+  it("builds shared Google Generative AI HTTP request config", async () => {
+    const oauthConfig = await resolveGoogleGenerativeAiHttpRequestConfigAsync({
       apiKey: JSON.stringify({ token: "oauth-token" }),
       baseUrl: "https://generativelanguage.googleapis.com",
       capability: "audio",
@@ -214,7 +218,7 @@ describe("google generative ai helpers", () => {
     });
     expect(oauthHeaders["x-goog-api-client"]).toMatch(/^openclaw\//u);
 
-    const apiKeyConfig = resolveGoogleGenerativeAiHttpRequestConfig({
+    const apiKeyConfig = await resolveGoogleGenerativeAiHttpRequestConfigAsync({
       apiKey: "api-key-123",
       capability: "image",
       transport: "http",
@@ -236,7 +240,7 @@ describe("google generative ai helpers", () => {
     expect(normalized).toBe("https://generativelanguage.googleapis.com/v1beta/openai");
   });
 
-  it("rejects non-Google Gemini base URLs and honors explicit private-network opt-in", () => {
+  it("rejects non-Google Gemini base URLs and honors explicit private-network opt-in", async () => {
     expect(() =>
       resolveGoogleGenerativeAiHttpRequestConfig({
         apiKey: "api-key-123",
@@ -255,7 +259,7 @@ describe("google generative ai helpers", () => {
       }),
     ).toThrow("Google Generative AI baseUrl must use https://generativelanguage.googleapis.com");
 
-    const config = resolveGoogleGenerativeAiHttpRequestConfig({
+    const config = await resolveGoogleGenerativeAiHttpRequestConfigAsync({
       apiKey: "api-key-123",
       baseUrl: "https://generativelanguage.googleapis.com/v1beta",
       capability: "image",

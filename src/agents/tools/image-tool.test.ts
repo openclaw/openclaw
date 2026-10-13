@@ -17,6 +17,7 @@ import type {
   ImagesDescriptionRequest,
   MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
@@ -298,6 +299,7 @@ async function writeAuthProfiles(agentDir: string, profiles: unknown) {
 async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promise<T> {
   const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-"));
   try {
+    await prepareBundledDiscoveryMode(process.env);
     return await run(agentDir);
   } finally {
     await fs.rm(agentDir, { recursive: true, force: true });
@@ -798,8 +800,9 @@ describe("image tool implicit imageModel config", () => {
     "GITHUB_TOKEN",
   ]);
 
-  beforeEach(() => {
+  beforeEach(async () => {
     installImageUnderstandingProviderStubs(minimaxProvider);
+    await prepareBundledDiscoveryMode(process.env);
   });
 
   afterEach(() => {
@@ -2080,6 +2083,7 @@ describe("image tool MiniMax VLM routing", () => {
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "minimax-vlm", applyEnv: false });
     installImageUnderstandingProviderStubs(minimaxProvider);
+    await prepareBundledDiscoveryMode(process.env);
   });
 
   afterEach(async () => {
@@ -2233,6 +2237,7 @@ describe("image tool managed inbound media", () => {
     await fs.writeFile(mediaPath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        await prepareBundledDiscoveryMode(process.env);
         await run({ stateDir, mediaId, mediaPath });
       });
     } finally {
@@ -2475,8 +2480,9 @@ describe("image compression policy", () => {
     },
   } satisfies OpenClawConfig;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     installImageUnderstandingProviderStubs();
+    await prepareBundledDiscoveryMode(process.env);
   });
 
   afterEach(() => {

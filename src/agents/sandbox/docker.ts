@@ -465,7 +465,7 @@ async function ensureSandboxContainerLifecycle(
   });
   const genericConfigHash = computeSandboxConfigHash({
     docker: params.cfg.docker,
-    dockerEnvPolicyEpoch: resolveDockerEnvPolicyEpoch(params.cfg.docker.env),
+    dockerEnvPolicyEpoch: await resolveDockerEnvPolicyEpoch(params.cfg.docker.env),
     workspaceAccess: params.cfg.workspaceAccess,
     workspaceDir: params.workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir,

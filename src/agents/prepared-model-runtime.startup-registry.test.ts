@@ -12,7 +12,7 @@ import {
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   bindPluginRegistryGatewayOwner,
@@ -95,7 +95,7 @@ it.each([
     };
     await using cache = createPluginCache();
     await withPluginCache(cache, async () => {
-      const metadata = loadPluginMetadataSnapshot({ config, workspaceDir });
+      const metadata = await resolvePluginMetadataSnapshotAsync({ config, workspaceDir });
       const root = await loadAndActivateRootPluginRegistry({
         config,
         workspaceDir,
@@ -178,7 +178,7 @@ it.each([
         await using retiredBuild = new PreparedModelRuntimeBuildResources(
           retainPreparedPluginRegistry,
         );
-        expect(() =>
+        await expect(
           prepareWorkspacePluginRegistries(
             input,
             metadata,
@@ -186,7 +186,7 @@ it.each([
             loadInbound,
             true,
           ),
-        ).toThrow(/retired|reloaded or disabled/);
+        ).rejects.toThrow(/retired|reloaded or disabled/);
         expect(captures).toHaveLength(1);
       }
     });
@@ -232,7 +232,7 @@ it.each(["inbound", "selected", "inspection"] as const)(
     };
     await using cache = createPluginCache();
     await withPluginCache(cache, async () => {
-      const metadata = loadPluginMetadataSnapshot({ config, workspaceDir });
+      const metadata = await resolvePluginMetadataSnapshotAsync({ config, workspaceDir });
       const gatewayRegistry = await loadAndActivateRootPluginRegistry({
         config,
         workspaceDir,
@@ -255,7 +255,7 @@ it.each(["inbound", "selected", "inspection"] as const)(
         );
         const registry = await withPluginRuntimeRegistryScope(request, async () => {
           if (producer === "inbound") {
-            const loaded = loadPreparedInboundPluginRegistry(input, metadata);
+            const loaded = await loadPreparedInboundPluginRegistry(input, metadata);
             resources.retainRegistry(loaded);
             return loaded;
           }

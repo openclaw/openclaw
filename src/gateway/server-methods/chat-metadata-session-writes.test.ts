@@ -15,6 +15,8 @@ import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { recordSessionParticipant } from "../../config/sessions/session-accessor.sqlite-participants.native.js";
 import { appendTranscriptEventSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -565,9 +567,19 @@ it.each([
       );
       const prepareProjection = vi.spyOn(metadataProjection, "prepareChatMetadataModelProjection");
       const harness = createChatMetadataHarness(config, { useDefaultProjection: true });
-      harness.setOwner(
-        createChatMetadataOwner(config, "gpt-5.6-luna", {}, "openai", "openai-chatgpt-responses"),
-      );
+      const metadataSnapshot = createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "openai", providers: ["openai"] }],
+      });
+      harness.setOwner({
+        ...createChatMetadataOwner(
+          config,
+          "gpt-5.6-luna",
+          {},
+          "openai",
+          "openai-chatgpt-responses",
+        ),
+        metadataSnapshot,
+      });
       const context = createDirectChatContext({
         getRuntimeConfig: () => config,
         readChatMetadata: harness.runtime.read,
@@ -575,14 +587,19 @@ it.each([
       const handler = handleChatMetadataRequest;
       const invoke = (respond: RespondFn) =>
         Promise.resolve(
-          handler({
-            params: { sessionKey: selected.sessionKey },
-            context,
-            respond,
-            client,
-            req: { type: "req", id: "metadata-read-marker", method: "chat.metadata" },
-            isWebchatConnect: () => false,
-          }),
+          withPluginMetadataSnapshotScope(
+            metadataSnapshot,
+            () =>
+              handler({
+                params: { sessionKey: selected.sessionKey },
+                context,
+                respond,
+                client,
+                req: { type: "req", id: "metadata-read-marker", method: "chat.metadata" },
+                isWebchatConnect: () => false,
+              }),
+            { trustConfigIdentity: true },
+          ),
         );
       let release: (() => void) | undefined;
       let pending: Promise<void> | undefined;

@@ -14,6 +14,7 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { openIncognitoTestActor } from "../state/openclaw-agent-execution-incognito.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
@@ -165,6 +166,7 @@ test.each([
   "full target recovery probe under $scope scope (inherited=$inherited)",
   async ({ scope, inherited }) => {
     await withStateDirEnv("full-target-recovery-probe-", async () => {
+      await preparePluginMetadataMachineStateAsync({});
       const profile = { provider: "full-target-probe", settings: { region: "synthetic" } };
       const individual: OpenClawConfig = {
         agents: { entries: { main: {} } },

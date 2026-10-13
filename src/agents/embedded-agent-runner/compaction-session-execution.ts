@@ -28,6 +28,7 @@ import {
 } from "../agent-settings.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import { pickFallbackThinkingLevel } from "../embedded-agent-helpers.js";
+import { getModelProviderRequestRouteFacts } from "../provider-request-config.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
@@ -207,6 +208,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         provider,
         modelId,
         baseUrl: effectiveModel.baseUrl ?? undefined,
+        providerMetadataOwners:
+          getModelProviderRequestRouteFacts(effectiveModel)?.providerMetadataOwners,
       }),
     });
 

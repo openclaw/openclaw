@@ -14,6 +14,7 @@ import {
 import { captureIncognitoSessionSource } from "../../../config/sessions/session-incognito-binding.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { getInProcessGatewayRequestContext } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   normalizeAgentId,
   normalizeMainKey,
@@ -82,7 +83,7 @@ function resolveRequesterSessionEntryScope(
   requesterSessionKey: string,
   explicitAgentId?: string,
 ): Omit<RequesterSessionEntryResult, "entry"> & { storageKey: string } {
-  const cfg = getRuntimeConfig();
+  const cfg = getInProcessGatewayRequestContext()?.getRuntimeConfig() ?? getRuntimeConfig();
   const rawStorageKey = requesterSessionKey.trim();
   const canonicalKey = resolveRequesterStoreKey(cfg, requesterSessionKey, explicitAgentId);
   const configuredMainKey = normalizeMainKey(cfg.session?.mainKey);

@@ -5,6 +5,7 @@ import {
 } from "../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { prepareBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import { resolveSourceCheckoutBundledPluginIds } from "./bundled-sources.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
@@ -24,6 +25,7 @@ export async function runActivePluginPayloadSmokeCheck(params: {
   records: Record<string, PluginInstallRecord>;
   env: NodeJS.ProcessEnv;
 }): Promise<PluginPayloadSmokeResult> {
+  await prepareBundledDiscoveryMode(params.env);
   return await runPluginPayloadSmokeCheck({
     records: filterRecordsToActive(params),
     env: params.env,

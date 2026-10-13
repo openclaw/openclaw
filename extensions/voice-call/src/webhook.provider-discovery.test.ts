@@ -7,7 +7,7 @@ import {
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
-import { getRealtimeTranscriptionProvider } from "openclaw/plugin-sdk/realtime-transcription";
+import { getRealtimeTranscriptionProviderAsync } from "openclaw/plugin-sdk/realtime-transcription";
 import { useAutoCleanupTempDirTracker, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
 import { CallManager } from "./manager.js";
@@ -72,7 +72,7 @@ describe("VoiceCallWebhookServer transcription provider discovery", () => {
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
         },
         async () => {
-          const activeProvider = getRealtimeTranscriptionProvider("active-stt", cfg);
+          const activeProvider = await getRealtimeTranscriptionProviderAsync("active-stt", cfg);
           if (!activeProvider) {
             throw new Error("expected the real loader to discover the active fixture provider");
           }

@@ -16,7 +16,7 @@ import {
   createGoogleMediaUnderstandingProviderMetadata,
   GOOGLE_MEDIA_UNDERSTANDING_DEFAULT_MODELS,
 } from "./generation-provider-metadata.js";
-import { resolveGoogleGenerativeAiHttpRequestConfig } from "./http-request.js";
+import { resolveGoogleGenerativeAiHttpRequestConfigAsync } from "./http-request.js";
 import { normalizeGoogleModelId } from "./model-id.js";
 
 const DEFAULT_GOOGLE_AUDIO_PROMPT = "Transcribe the audio.";
@@ -44,7 +44,7 @@ async function generateGeminiInlineDataText(params: {
   const requestedModel = params.model?.trim();
   const model = requestedModel ? normalizeGoogleModelId(requestedModel) : params.defaultModel;
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-    resolveGoogleGenerativeAiHttpRequestConfig({
+    await resolveGoogleGenerativeAiHttpRequestConfigAsync({
       apiKey: params.apiKey,
       baseUrl: params.baseUrl,
       headers: params.headers,

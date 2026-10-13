@@ -1,8 +1,11 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolvePluginCapabilityProvider,
+  resolvePluginCapabilityProviderAsync,
   resolvePluginCapabilityProviders,
+  resolvePluginCapabilityProvidersAsync,
 } from "../plugins/capability-provider-runtime.js";
+import { createLegacyPluginSdkProviderProjection } from "../plugins/legacy-sdk-provider-projection.js";
 import {
   buildCapabilityProviderIndex,
   normalizeCapabilityProviderId as normalizeRealtimeVoiceProviderId,
@@ -25,6 +28,19 @@ export function listRealtimeVoiceProviders(
   return [...buildCapabilityProviderIndex(providers, "canonical").values()];
 }
 
+export async function listRealtimeVoiceProvidersAsync(
+  cfg?: OpenClawConfig,
+  additionalProviderIds?: readonly string[],
+): Promise<RealtimeVoiceProviderPlugin[]> {
+  using projection = createLegacyPluginSdkProviderProjection();
+  const providers = await resolvePluginCapabilityProvidersAsync(
+    { key: "realtimeVoiceProviders", cfg, additionalProviderIds },
+    (registry) => projection.select(registry),
+  );
+  projection.adopt();
+  return [...buildCapabilityProviderIndex(providers, "canonical").values()];
+}
+
 export function getRealtimeVoiceProvider(
   providerId: string | undefined,
   cfg?: OpenClawConfig,
@@ -40,14 +56,29 @@ export function getRealtimeVoiceProvider(
   });
 }
 
-export function canonicalizeRealtimeVoiceProviderId(
+export async function getRealtimeVoiceProviderAsync(
   providerId: string | undefined,
   cfg?: OpenClawConfig,
-): RealtimeVoiceProviderId | undefined {
+): Promise<RealtimeVoiceProviderPlugin | undefined> {
   const normalized = normalizeRealtimeVoiceProviderId(providerId);
   if (!normalized) {
     return undefined;
   }
-  // Unknown ids stay normalized so validation can report the same operator-facing value.
-  return getRealtimeVoiceProvider(normalized, cfg)?.id ?? normalized;
+  using projection = createLegacyPluginSdkProviderProjection();
+  const provider = await resolvePluginCapabilityProviderAsync(
+    { key: "realtimeVoiceProviders", providerId: normalized, cfg },
+    (registry) => projection.select(registry),
+  );
+  projection.adopt();
+  return provider;
+}
+
+export async function canonicalizeRealtimeVoiceProviderIdAsync(
+  providerId: string | undefined,
+  cfg?: OpenClawConfig,
+): Promise<RealtimeVoiceProviderId | undefined> {
+  const normalized = normalizeRealtimeVoiceProviderId(providerId);
+  return normalized
+    ? ((await getRealtimeVoiceProviderAsync(normalized, cfg))?.id ?? normalized)
+    : undefined;
 }

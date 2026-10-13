@@ -12,6 +12,12 @@ import {
   createPlainTextToolCallCompatWrapper,
   MOONSHOT_THINKING_STREAM_HOOKS,
 } from "./provider-stream.js";
+import { useProviderCatalogMetadata } from "./test-helpers/provider-catalog.js";
+
+useProviderCatalogMetadata(
+  new URL("../../extensions/openai/", import.meta.url),
+  new URL("../../extensions/openrouter/", import.meta.url),
+);
 
 type StreamFn = NonNullable<ProviderWrapStreamFnContext["streamFn"]>;
 

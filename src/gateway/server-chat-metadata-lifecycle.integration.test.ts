@@ -224,7 +224,7 @@ describe("gateway chat metadata lifecycle composition", () => {
       registry.agentHarnesses.push({ pluginId: "native-test", source: "test", harness });
       const previousRegistry = captureActivePluginRegistrySnapshot();
       setActivePluginRegistry(registry);
-      mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
+      mocks.loadAgentRuntimePluginRegistryHandle.mockResolvedValue(registry);
       mocks.authStorage.getAll.mockReturnValue({});
       mocks.preparedAuthStore = { version: 1, profiles: {} };
       mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue({
@@ -387,7 +387,7 @@ describe("gateway chat metadata lifecycle composition", () => {
       registry.agentHarnesses.push({ pluginId: "native-test", source: "test", harness });
       const previousRegistry = captureActivePluginRegistrySnapshot();
       setActivePluginRegistry(registry);
-      mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
+      mocks.loadAgentRuntimePluginRegistryHandle.mockResolvedValue(registry);
       mocks.authStorage.getAll.mockReturnValue({});
       mocks.preparedAuthStore = { version: 1, profiles: {} };
       const catalog = { entries: [nativeModel], routeVariants: [nativeModel], authoritative };
@@ -711,7 +711,7 @@ describe("gateway chat metadata lifecycle composition", () => {
       retiredRegistry.plugins.push(record);
       const instance = new PluginInstance(record.id, { record, registry: retiredRegistry });
       mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(
-        (params: { workspaceDir?: string }) =>
+        async (params: { workspaceDir?: string }) =>
           params.workspaceDir === "/tmp/workspace-main"
             ? retiredRegistry
             : createEmptyPluginRegistry(),
@@ -733,7 +733,9 @@ describe("gateway chat metadata lifecycle composition", () => {
           );
           await expect(lifecycle.read({ agentId: "healthy" })).resolves.toEqual(healthy);
         }
-        mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(createEmptyPluginRegistry);
+        mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(async () =>
+          createEmptyPluginRegistry(),
+        );
         const replacement = publishOwner(rosterConfig);
         const reading = lifecycle.read({ agentId: "main" });
         await replacement;

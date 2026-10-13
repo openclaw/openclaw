@@ -13,6 +13,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { preparePluginAutoEnableTestDiscovery } from "../config/plugin-auto-enable.test-helpers.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessions.js";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 import {
@@ -32,6 +33,7 @@ async function withStateDirEnv<T>(
 ) {
   return withRawStateDirEnv(prefix, async (context) => {
     try {
+      preparePluginAutoEnableTestDiscovery();
       return await fn(context);
     } finally {
       await rowReader.dispose();

@@ -26,6 +26,7 @@ import {
   observeCompletionCommands,
 } from "./agent-runner-result-accounting.persistence.test-support.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
+import { withAgentRunnerTestMetadata } from "./agent-runner.test-fixtures.js";
 import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
 import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
@@ -578,7 +579,9 @@ it.each([
       context.execution.result.meta.error = { kind: "hook_block", message: "Reply suppressed" };
     }
 
-    const result = await finalizeReplyAgentRun(context);
+    const result = await withAgentRunnerTestMetadata(context.followupRun.run, () =>
+      finalizeReplyAgentRun(context),
+    );
     context.replyOperation.complete();
 
     if (missing) {
@@ -704,13 +707,15 @@ describe("followup context-pressure accounting", () => {
       Object.assign(entry, { modelProvider: outer.provider, model: outer.model });
       await fixture.replace(entry);
 
-      await fixture.account(lane, {
-        provider: diagnostic.provider,
-        model: diagnostic.model,
-        agentHarnessId: "codex",
-        ...(runtimeOwned ? { runtimeModelSelection: selection } : {}),
-        usage: { input: 120, output: 8 },
-      });
+      await withAgentRunnerTestMetadata(fixture.context.followupRun.run, () =>
+        fixture.account(lane, {
+          provider: diagnostic.provider,
+          model: diagnostic.model,
+          agentHarnessId: "codex",
+          ...(runtimeOwned ? { runtimeModelSelection: selection } : {}),
+          usage: { input: 120, output: 8 },
+        }),
+      );
 
       const persisted = fixture.read();
       expect(persisted?.fallbackNotice === undefined).toBe(runtimeOwned);

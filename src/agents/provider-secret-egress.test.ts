@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { isSecretValueRegisteredForRedaction } from "../logging/secret-redaction-registry.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { looksLikeSecretSentinel, mintSecretSentinel } from "../secrets/sentinel.js";
 import {
   attachModelProviderRequestTransport,
@@ -9,6 +10,10 @@ import { protectPreparedProviderRuntimeAuth } from "./provider-runtime-auth-prot
 import { unwrapModelHeaderSentinelsForProviderEgress } from "./provider-secret-egress.js";
 
 describe("protectPreparedProviderRuntimeAuth", () => {
+  beforeEach(async () => {
+    await preparePluginMetadataMachineStateAsync({});
+  });
+
   it("sentinels a real credential returned by the auth exchange and registers it for redaction", () => {
     const runtimeToken = "bedrock-api-key-egress-runtime-token";
     const result = protectPreparedProviderRuntimeAuth({

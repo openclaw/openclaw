@@ -70,6 +70,7 @@ const context: PluginCapabilityCatalogHostContext = {
   resolveAgentDir: unavailable,
   createRealtimeTranscriptionWebSocketSession: unavailable,
   resolveProviderRequestHeaders: unavailable,
+  resolveProviderRequestHeadersAsync: unavailable,
   resolveProviderAuthProfileApiKey: unavailable,
   resolveApiKeyForProvider: unavailable,
   captureWsEvent: unavailable,

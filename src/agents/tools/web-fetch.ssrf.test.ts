@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { type FetchMock, withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { createWebFetchTool } from "./web-fetch.js";
 import { makeFetchHeaders } from "./web-fetch.test-harness.js";
@@ -114,6 +115,7 @@ describe("web_fetch SSRF protection", () => {
   });
 
   it("blocks localhost hostnames before fetch/firecrawl", async () => {
+    await prepareBundledDiscoveryMode(process.env);
     const fetchSpy = setMockFetch();
     const tool = createWebFetchToolForTest({
       firecrawlApiKey: "firecrawl-test", // pragma: allowlist secret
@@ -165,6 +167,7 @@ describe("web_fetch SSRF protection", () => {
   });
 
   it("blocks redirects to private hosts", async () => {
+    await prepareBundledDiscoveryMode(process.env);
     // Redirect targets are new network destinations and must be re-checked
     // against the same SSRF policy as the original URL.
     lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);

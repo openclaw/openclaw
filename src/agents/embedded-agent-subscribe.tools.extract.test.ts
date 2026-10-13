@@ -150,14 +150,14 @@ describe("extractMessagingToolSend", () => {
     expect(extractMessagingToolSend("message", args)).toBeUndefined();
   });
 
-  it("keeps explicit thread evidence with an implicit provider", () => {
+  it("keeps an opaque target and explicit thread evidence without a provider", () => {
     expect(
       extractMessagingToolSend("message", {
         action: "send",
         to: "channel:123",
         threadId: "456",
       }),
-    ).toMatchObject({ provider: "message", threadId: "456" });
+    ).toMatchObject({ provider: "message", to: "channel:123", threadId: "456" });
   });
 
   it("uses send transport thread precedence", () => {

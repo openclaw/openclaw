@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { jsonResult } from "../../agents/tools/common.js";
 import { resolveMessageToolDiscoveryAsync } from "../../agents/tools/message-tool-discovery.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -618,6 +619,7 @@ describe("message action discovery", () => {
     },
     { name: "missing channel", channel: "demo-missing", presentation: false, pin: false },
   ])("scopes capability fields to $name", async ({ channel, presentation, pin }) => {
+    await prepareBundledDiscoveryMode();
     activateCapabilities();
     const { schema } = await resolveMessageToolDiscoveryAsync({
       cfg: {},

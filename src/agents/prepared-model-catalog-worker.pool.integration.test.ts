@@ -67,7 +67,11 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
-const { makeTempDir, observeCatalogEntry: observeEntry } = usePreparedCatalogWorkerFixtures({
+const {
+  makeTempDir,
+  observeCatalogEntry: observeEntry,
+  readCatalogWorkers,
+} = usePreparedCatalogWorkerFixtures({
   observeCatalogWork: true,
 });
 
@@ -91,11 +95,18 @@ function observeWorkers() {
   const workerChannel = channel("worker_threads");
   const recordWorker = (message: unknown) => {
     if (isRecord(message) && message.worker instanceof Worker) {
-      spawned.push(message.worker);
-      peakWorkers = Math.max(
-        peakWorkers,
-        spawned.filter((worker) => worker.threadId !== -1).length,
-      );
+      const worker = message.worker;
+      // The native event fires inside construction, before the fixture records the worker's URL.
+      queueMicrotask(() => {
+        if (!readCatalogWorkers().includes(worker)) {
+          return;
+        }
+        spawned.push(worker);
+        peakWorkers = Math.max(
+          peakWorkers,
+          spawned.filter((created) => created.threadId !== -1).length,
+        );
+      });
     }
   };
   return {

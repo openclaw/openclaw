@@ -1,5 +1,5 @@
 /** Tests model fallback notice formatting and transition state tracking. */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { canonicalizeProviderModelId } from "../agents/provider-model-route.js";
 import {
@@ -30,6 +30,7 @@ const activeFallbackState: FallbackNoticeState = {
 
 function registerAnthropicCliBackendForTest(): void {
   cliBackendsTesting.setDepsForTest({
+    resolvePluginSetupCliBackend: () => undefined,
     resolveRuntimeCliBackends: () => [
       {
         id: "claude-cli",
@@ -74,6 +75,9 @@ const cliAliasTransition = {
 } satisfies Parameters<typeof resolveFallbackTransition>[0];
 
 describe("fallback-state", () => {
+  beforeEach(() => {
+    cliBackendsTesting.setDepsForTest({ resolvePluginSetupCliBackend: () => undefined });
+  });
   afterEach(() => {
     cliBackendsTesting.resetDepsForTest();
   });

@@ -5,6 +5,10 @@ import {
   type PluginCommandCatalogDecision,
   type PluginCommandDispatch,
 } from "openclaw/plugin-sdk/plugin-command-runtime";
+import {
+  useBundledProviderPolicyArtifactsForTest,
+  useProviderCatalogMetadata,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import * as sessionStore from "openclaw/plugin-sdk/session-store-runtime";
 import { beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
@@ -237,52 +241,57 @@ describe("Slack native command argument menus", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it.each(["config", "parent"])("renders /think choices from the %s model", async (source) => {
-    const parentKey = "agent:main:slack:channel:c1";
-    const sessionKey = `${parentKey}:thread:100`;
-    if (source === "parent") {
-      const reader = vi
-        .spyOn(sessionStore, "getSessionEntryAsync")
-        .mockImplementation(async (params) =>
-          params.sessionKey === parentKey
-            ? {
-                sessionId: "parent",
-                updatedAt: 1,
-                providerOverride: "openai",
-                modelOverride: "gpt-5.6-luna",
-              }
-            : undefined,
-        );
-      onTestFinished(() => reader.mockRestore());
-      getSlackSlashMocks().resolveAgentRouteMock.mockReturnValue({
-        agentId: "main",
-        sessionKey,
-        accountId: "acct",
-      });
-    }
-    const testHarness = createArgMenusHarness({
-      commands: { native: true, nativeSkills: false },
-      agents: {
-        defaults: {
-          model: { primary: source === "parent" ? "openai/gpt-5.4" : "openai/gpt-5.6-luna" },
-          models: {
-            "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } },
+  describe("model-dependent menus", () => {
+    useProviderCatalogMetadata(new URL("../../../openai/", import.meta.url));
+    useBundledProviderPolicyArtifactsForTest(["openai"]);
+
+    it.each(["config", "parent"])("renders /think choices from the %s model", async (source) => {
+      const parentKey = "agent:main:slack:channel:c1";
+      const sessionKey = `${parentKey}:thread:100`;
+      if (source === "parent") {
+        const reader = vi
+          .spyOn(sessionStore, "getSessionEntryAsync")
+          .mockImplementation(async (params) =>
+            params.sessionKey === parentKey
+              ? {
+                  sessionId: "parent",
+                  updatedAt: 1,
+                  providerOverride: "openai",
+                  modelOverride: "gpt-5.6-luna",
+                }
+              : undefined,
+          );
+        onTestFinished(() => reader.mockRestore());
+        getSlackSlashMocks().resolveAgentRouteMock.mockReturnValue({
+          agentId: "main",
+          sessionKey,
+          accountId: "acct",
+        });
+      }
+      const testHarness = createArgMenusHarness({
+        commands: { native: true, nativeSkills: false },
+        agents: {
+          defaults: {
+            model: { primary: source === "parent" ? "openai/gpt-5.4" : "openai/gpt-5.6-luna" },
+            models: {
+              "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } },
+            },
           },
         },
-      },
+      });
+      await registerCommands(testHarness.ctx, testHarness.account);
+      const handler = requireHandler(testHarness.commands, "/think", "/think");
+
+      const values = await getCommandArgMenuValues(handler);
+
+      expect(values.length).toBeGreaterThan(0);
+      expect(values).toContain("ultra");
+      if (source === "parent") {
+        expect(sessionStore.getSessionEntryAsync).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: "main", sessionKey: parentKey }),
+        );
+      }
     });
-    await registerCommands(testHarness.ctx, testHarness.account);
-    const handler = requireHandler(testHarness.commands, "/think", "/think");
-
-    const values = await getCommandArgMenuValues(handler);
-
-    expect(values.length).toBeGreaterThan(0);
-    expect(values).toContain("ultra");
-    if (source === "parent") {
-      expect(sessionStore.getSessionEntryAsync).toHaveBeenCalledWith(
-        expect.objectContaining({ agentId: "main", sessionKey: parentKey }),
-      );
-    }
   });
 
   it("falls back to static menus when app.options() throws during registration", async () => {

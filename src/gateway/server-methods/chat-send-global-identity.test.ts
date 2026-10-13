@@ -17,6 +17,8 @@ import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { readSessionPendingInputByKey } from "../../config/sessions/session-accessor.sqlite-pending-inputs.js";
 import { SessionPendingInputCustodyError } from "../../config/sessions/session-pending-input-custody-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -33,6 +35,14 @@ import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import type { GatewayClient } from "./types.js";
 
 type DispatchOptions = Parameters<typeof dispatch.dispatchInboundMessageWithProjectedDispatcher>[0];
+
+async function sendChat(...args: Parameters<typeof handleDirectExternalChatSend>) {
+  const config = args[0].context.getRuntimeConfig();
+  const metadata = await resolvePluginMetadataSnapshotAsync({ config });
+  return withPluginMetadataSnapshotScope(metadata, () => handleDirectExternalChatSend(...args), {
+    config,
+  });
+}
 
 it.each<{
   name: string;
@@ -462,7 +472,7 @@ it.each<{
         idempotencyKey: runId,
         ...(scenario.writeDuringProfilePreparation ? { queueMode: "interrupt" as const } : {}),
       };
-      sending = handleDirectExternalChatSend(
+      sending = sendChat(
         {
           params,
           req: { type: "req", id: runId, method: "chat.send", params },
@@ -730,7 +740,7 @@ it.each<{
         rows.push(literalScope);
         const beforeRetry = await snapshot();
         const replayResponse = vi.fn();
-        await handleDirectExternalChatSend({
+        await sendChat({
           params,
           req: { type: "req", id: `${runId}-retry`, method: "chat.send", params },
           respond: replayResponse,

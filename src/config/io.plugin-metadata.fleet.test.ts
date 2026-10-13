@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import { resolveConfigWidePluginMetadataSnapshot } from "./io.plugin-metadata.js";
+import { resolveConfigWidePluginMetadataSnapshotAsync } from "./io.plugin-metadata.js";
 
 const { loadRegistry } = vi.hoisted(() => ({ loadRegistry: vi.fn() }));
 
@@ -19,7 +19,7 @@ afterEach(() => {
   clearPluginMetadataLifecycleCaches();
 });
 
-it("materializes shared plugin metadata once across the fleet and retains its immutable facts", () => {
+it("materializes shared plugin metadata once across the fleet and retains its immutable facts", async () => {
   const configSchema = { type: "object", properties: { label: { type: "string" } } };
   const source = createPluginMetadataSnapshotFixture({
     plugins: [{ id: "shared", providers: ["shared"], configSchema }],
@@ -39,9 +39,9 @@ it("materializes shared plugin metadata once across the fleet and retains its im
     },
   };
   const freeze = vi.spyOn(Object, "freeze");
-  withPluginCache(createPluginCache(), () => {
+  await withPluginCache(createPluginCache(), async () => {
     const params = { config, env: {}, installRecords: {}, allowCurrent: false };
-    const snapshot = resolveConfigWidePluginMetadataSnapshot(params);
+    const snapshot = await resolveConfigWidePluginMetadataSnapshotAsync(params);
     expect(snapshot.plugins.map((plugin) => plugin.id)).toEqual(["shared"]);
     expect(snapshot.owners.providers.get("shared")).toEqual(["shared"]);
     expect(snapshot.registryIndex.workspaceDir).toBe("/fleet/first");
@@ -52,7 +52,7 @@ it("materializes shared plugin metadata once across the fleet and retains its im
     expect(() => {
       configSchema.properties.label.type = "number";
     }).toThrow();
-    expect(resolveConfigWidePluginMetadataSnapshot(params)).toBe(snapshot);
+    expect(await resolveConfigWidePluginMetadataSnapshotAsync(params)).toBe(snapshot);
     expect(freeze.mock.calls.filter(([value]) => value === configSchema)).toHaveLength(1);
     expect(loadRegistry).toHaveBeenCalledTimes(3);
   });

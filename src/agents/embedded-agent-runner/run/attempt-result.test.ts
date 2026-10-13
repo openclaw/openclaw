@@ -13,8 +13,11 @@ import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { HEARTBEAT_TOKEN } from "../../../auto-reply/tokens.js";
 import { runAgentLoop } from "../../../plugin-sdk/agent-core.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
+import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
+import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
 import type { Deferred } from "../../../shared/deferred.js";
 import { createSubscribedSessionHarness } from "../../embedded-agent-subscribe.e2e-harness.js";
+import { attachPreparedProviderModelFixture } from "../../provider-request.test-support.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { getCoreTtsAttemptResultMediaUrls } from "../../tools/tts-tool-result-provenance.js";
@@ -715,7 +718,7 @@ describe("attempt result projection", () => {
 });
 
 describe("trailing source progress at runtime settlement", () => {
-  const testModel: Model = {
+  const testModel = attachPreparedProviderModelFixture({
     id: "settle-model",
     name: "Settle Model",
     api: "openai-responses",
@@ -726,7 +729,7 @@ describe("trailing source progress at runtime settlement", () => {
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 100_000,
     maxTokens: 8_000,
-  };
+  } satisfies Model);
   // Native-async calls run while the provider streams; each settles before the next fragment.
   type ModelCall = { tools?: Array<"progress" | "read">; async?: true };
 
@@ -880,7 +883,10 @@ describe("trailing source progress at runtime settlement", () => {
     ["later work", [{ tools: ["progress"], async: true }, { tools: ["read"] }, {}], false],
     ["shared provider response", [{ tools: ["read", "progress"], async: true }, {}], false],
   ])("settles source progress with %s", async (_name, calls, delivered) => {
-    const { result, finalizerInstruction } = await settleRealLoop(calls);
+    const { result, finalizerInstruction } = await withPluginRuntimeGenerationScope(
+      { metadataSnapshot: createPluginMetadataSnapshotFixture() },
+      () => settleRealLoop(calls),
+    );
     expect(result.sourceReplyDeliveryState).toBe(delivered ? "delivered" : "missing");
     expect(result.messagingToolSentTargets?.map((send) => send.sourceReplyFinal)).toEqual([
       delivered,

@@ -4,13 +4,15 @@ import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
-import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
+import { resolvePreparedProviderIdForAuth as resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUtilityModelSeparationError } from "../config/utility-model-separation-migration.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   applyProviderPluginAuthMethodResultConfig,
   prepareAuthChoiceLoadedPluginProvider,
@@ -62,12 +64,19 @@ export function selectSetupCredential(
   profiles: ProviderAuthResult["profiles"],
   modelRef: string,
   config: OpenClawConfig,
+  metadataSnapshot?: PluginMetadataSnapshot,
 ) {
-  const provider = resolveProviderIdForAuth(parseInferenceRef(modelRef).provider, { config });
+  const provider = resolveProviderIdForAuth(parseInferenceRef(modelRef).provider, {
+    config,
+    metadataSnapshot,
+  });
   return profiles.find(
     (profile) =>
-      resolveProviderIdForAuth(profile.credential.provider, { config, storedCredential: true }) ===
-      provider,
+      resolveProviderIdForAuth(profile.credential.provider, {
+        config,
+        metadataSnapshot,
+        storedCredential: true,
+      }) === provider,
   );
 }
 
@@ -76,9 +85,16 @@ export async function isSetupCredentialReplacement(params: {
   baseConfig: OpenClawConfig;
   agentDir: string;
 }): Promise<boolean> {
-  const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir);
+  const [store, metadataSnapshot] = await Promise.all([
+    loadAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir),
+    resolvePluginMetadataSnapshotAsync({
+      config: params.baseConfig,
+      allowWorkspaceScopedCurrent: true,
+    }),
+  ]);
   const provider = resolveProviderIdForAuth(params.provider, {
     config: params.baseConfig,
+    metadataSnapshot,
     storedCredential: true,
   });
   return (
@@ -87,6 +103,7 @@ export async function isSetupCredentialReplacement(params: {
         !credential.setup &&
         resolveProviderIdForAuth(credential.provider, {
           config: params.baseConfig,
+          metadataSnapshot,
           storedCredential: true,
         }) === provider,
     ) ||

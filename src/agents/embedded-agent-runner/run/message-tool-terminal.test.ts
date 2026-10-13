@@ -3,8 +3,21 @@
 // the run before the model can observe the tool result.
 import type { Agent, AfterToolCallContext } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
+import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
+
+// These hook fixtures bypass the runner's prepared plugin-generation admission.
+function afterToolCallWithMetadata(
+  agent: Agent,
+  ...args: Parameters<NonNullable<Agent["afterToolCall"]>>
+) {
+  return withPluginRuntimeGenerationScope(
+    { metadataSnapshot: createPluginMetadataSnapshotFixture() },
+    () => agent.afterToolCall?.(...args),
+  );
+}
 
 async function recordsDeliveredSourceReply(params: {
   sourceReplyDeliveryMode?: Parameters<
@@ -22,7 +35,7 @@ async function recordsDeliveredSourceReply(params: {
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     onDeliveredSourceReply,
   });
-  await agent.afterToolCall?.(params.context);
+  await afterToolCallWithMetadata(agent, params.context);
   return onDeliveredSourceReply.mock.calls.length > 0;
 }
 
@@ -192,7 +205,8 @@ describe("message-tool-only source replies", () => {
       });
 
       await expect(
-        agent.afterToolCall?.(
+        afterToolCallWithMetadata(
+          agent,
           createAfterToolCallContext({
             toolName: "message",
             args: { action, target: "channel:source", message: "visible reply" },
@@ -228,7 +242,8 @@ describe("message-tool-only source replies", () => {
     });
 
     await expect(
-      agent.afterToolCall?.(
+      afterToolCallWithMetadata(
+        agent,
         createAfterToolCallContext({
           toolName: "message",
           args: { action: "send", message: "visible reply" },
@@ -246,7 +261,8 @@ describe("message-tool-only source replies", () => {
     });
 
     await expect(
-      agent.afterToolCall?.(
+      afterToolCallWithMetadata(
+        agent,
         createAfterToolCallContext({
           toolName: "message",
           args: { action: "send", message: "still working", final: false },
@@ -306,7 +322,8 @@ describe("message-tool-only source replies", () => {
       sessionKey: string;
     });
 
-    await agent.afterToolCall?.(
+    await afterToolCallWithMetadata(
+      agent,
       createAfterToolCallContext({
         toolName: "message",
         args: {
@@ -338,7 +355,8 @@ describe("message-tool-only source replies", () => {
     });
 
     await expect(
-      agent.afterToolCall?.(
+      afterToolCallWithMetadata(
+        agent,
         createAfterToolCallContext({
           toolName: "message",
           args: { action: "send", message: "failed reply" },

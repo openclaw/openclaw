@@ -8,6 +8,7 @@ import {
   testing as extraParamsTesting,
   type WrapProviderStreamFnParams,
 } from "./embedded-agent-runner/extra-params.test-support.js";
+import { installProviderRequestMetadataFixture } from "./provider-request.test-support.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 vi.mock("../plugins/provider-hook-runtime.js", () => ({
@@ -149,6 +150,8 @@ function createTestOpenAIProviderWrapper(params: WrapProviderStreamFnParams): St
     params.context.extraParams,
   );
 }
+
+installProviderRequestMetadataFixture();
 
 beforeEach(() => {
   installFullProviderRuntimeDepsForTest();

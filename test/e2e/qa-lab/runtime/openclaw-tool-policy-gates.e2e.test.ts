@@ -1,28 +1,30 @@
 import os from "node:os";
 import path from "node:path";
 import { expect, test } from "vitest";
-import { createOpenClawCodingTools } from "../../../../src/agents/agent-tools.js";
+import { createOpenClawCodingToolsAsync } from "../../../../src/agents/agent-tools.js";
 import { createAgentToolsSandboxContext } from "../../../../src/agents/test-helpers/agent-tools-sandbox-context.js";
 import { createHostSandboxFsBridge } from "../../../../src/agents/test-helpers/host-sandbox-fs-bridge.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 
-type OpenClawCodingToolsOptions = NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>;
+type OpenClawCodingToolsOptions = NonNullable<Parameters<typeof createOpenClawCodingToolsAsync>[0]>;
 
-function toolNames(
+async function toolNames(
   config: OpenClawConfig,
   options: Pick<OpenClawCodingToolsOptions, "sandbox"> = {},
 ) {
   return new Set(
-    createOpenClawCodingTools({
-      config,
-      sessionKey: "agent:policy:main",
-      agentId: "policy",
-      workspaceDir: path.join(os.tmpdir(), "openclaw-tool-policy-workspace"),
-      agentDir: path.join(os.tmpdir(), "openclaw-tool-policy-agent"),
-      modelProvider: "openai",
-      modelId: "gpt-5.4",
-      ...options,
-    }).map((tool) => tool.name),
+    (
+      await createOpenClawCodingToolsAsync({
+        config,
+        sessionKey: "agent:policy:main",
+        agentId: "policy",
+        workspaceDir: path.join(os.tmpdir(), "openclaw-tool-policy-workspace"),
+        agentDir: path.join(os.tmpdir(), "openclaw-tool-policy-agent"),
+        modelProvider: "openai",
+        modelId: "gpt-5.4",
+        ...options,
+      })
+    ).map((tool) => tool.name),
   );
 }
 
@@ -35,11 +37,11 @@ function expectIncluded(names: Set<string>, included: string[], excluded: string
   }
 }
 
-test("OpenClaw applies every configured tool policy as a restrictive intersection", () => {
+test("OpenClaw applies every configured tool policy as a restrictive intersection", async () => {
   const profileConfig: OpenClawConfig = {
     tools: { profile: "coding" },
   };
-  expectIncluded(toolNames(profileConfig), ["read", "write", "edit", "exec"], ["message"]);
+  expectIncluded(await toolNames(profileConfig), ["read", "write", "edit", "exec"], ["message"]);
 
   const globalConfig: OpenClawConfig = {
     tools: {
@@ -49,7 +51,7 @@ test("OpenClaw applies every configured tool policy as a restrictive intersectio
     },
   };
   expectIncluded(
-    toolNames(globalConfig),
+    await toolNames(globalConfig),
     ["read", "write", "edit", "exec", "process"],
     ["apply_patch", "message"],
   );
@@ -67,7 +69,7 @@ test("OpenClaw applies every configured tool policy as a restrictive intersectio
     },
   };
   expectIncluded(
-    toolNames(providerConfig),
+    await toolNames(providerConfig),
     ["read", "write", "exec", "process"],
     ["apply_patch", "edit", "message"],
   );
@@ -85,7 +87,11 @@ test("OpenClaw applies every configured tool policy as a restrictive intersectio
       },
     },
   };
-  expectIncluded(toolNames(agentConfig), ["read", "write", "exec"], ["edit", "process", "message"]);
+  expectIncluded(
+    await toolNames(agentConfig),
+    ["read", "write", "exec"],
+    ["edit", "process", "message"],
+  );
 
   const sandboxDir = path.join(os.tmpdir(), "openclaw-tool-policy-sandbox");
   const sandbox = createAgentToolsSandboxContext({
@@ -98,5 +104,5 @@ test("OpenClaw applies every configured tool policy as a restrictive intersectio
       deny: ["write", "exec"],
     },
   });
-  expectIncluded(toolNames(agentConfig, { sandbox }), ["read"], ["write", "edit", "exec"]);
+  expectIncluded(await toolNames(agentConfig, { sandbox }), ["read"], ["write", "edit", "exec"]);
 });

@@ -1,10 +1,11 @@
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
+import { resolveProviderRequestHeadersLegacy as resolveProviderRequestHeaders } from "../agents/provider-attribution-sdk.js";
 import {
   createProviderHttpError,
   readProviderJsonResponse,
   readProviderTextResponse,
 } from "../agents/provider-http-errors.js";
-import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
+import { resolveProviderRequestHeadersAsync } from "../agents/provider-request-config.js";
 import { warn } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
@@ -33,6 +34,7 @@ export function createPluginCapabilityCatalogContext(
     resolveAgentDir,
     createRealtimeTranscriptionWebSocketSession,
     resolveProviderRequestHeaders,
+    resolveProviderRequestHeadersAsync,
     resolveProviderAuthProfileApiKey,
     resolveApiKeyForProvider: async (
       params: Parameters<PluginCapabilityCatalogHostContext["resolveApiKeyForProvider"]>[0],

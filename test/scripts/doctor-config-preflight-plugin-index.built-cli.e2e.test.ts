@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { resolveDefaultAgentWorkspaceDir } from "../../src/agents/workspace-default.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { hasActiveStartupMigrationLease } from "../../src/infra/startup-migration-checkpoint.js";
+import { prepareBundledDiscoveryMode } from "../../src/plugins/bundled-discovery-state.js";
 import { writePersistedInstalledPluginIndex } from "../../src/plugins/installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndexSync } from "../../src/plugins/installed-plugin-index-store.js";
 import { clearPluginMetadataLifecycleCaches } from "../../src/plugins/plugin-metadata-lifecycle.js";
@@ -109,6 +110,7 @@ describe("Doctor plugin index persistence built CLI proof", () => {
       "utf8",
     );
 
+    await prepareBundledDiscoveryMode(instance.env);
     const current = loadPluginMetadataSnapshot({
       config,
       env: instance.env,

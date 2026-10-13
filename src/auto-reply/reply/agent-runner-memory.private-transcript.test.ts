@@ -34,6 +34,7 @@ import {
   waitForDiagnosticEventsDrained,
 } from "../../infra/diagnostic-events.js";
 import { clearMemoryPluginState } from "../../plugins/memory-state.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
@@ -229,6 +230,7 @@ it.each(["completed", "interrupted"] as const)(
         await setSessionMcpRuntimeScheduler(scheduler);
         await state.writeConfig(cfg);
         setRuntimeConfigSnapshot(cfg);
+        await resolvePluginMetadataSnapshotAsync({ config: cfg });
         await replaceSessionEntry(scope, {
           sessionId: scope.sessionId,
           updatedAt: Date.now(),

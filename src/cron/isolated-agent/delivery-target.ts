@@ -414,11 +414,12 @@ export async function resolveDeliveryTarget(
     resolvedTarget,
     threadId: explicitThreadId,
   });
-  const routeCanCanonicalizeTarget = deliveryTargetRuntime.channelCanResolveOutboundSessionRoute({
-    cfg,
-    channel,
-    agentId,
-  });
+  const routeCanCanonicalizeTarget =
+    await deliveryTargetRuntime.channelCanResolveOutboundSessionRoute({
+      cfg,
+      channel,
+      agentId,
+    });
   const routeShouldCanonicalizeTarget =
     route && (route.threadId !== undefined || route.to !== routeTargetCandidate);
   if (route && routeCanCanonicalizeTarget && routeShouldCanonicalizeTarget) {

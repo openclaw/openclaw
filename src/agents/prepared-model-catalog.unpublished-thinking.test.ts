@@ -3,9 +3,18 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { loadProviderScopedThinkingCatalog } from "./prepared-model-catalog.js";
 
 const discovery = vi.hoisted(() => vi.fn(() => []));
-vi.mock("../plugins/provider-discovery.runtime.js", () => ({
-  resolvePluginDiscoveryProvidersRuntime: discovery,
-}));
+// mock-isolation: Unpublished-thinking probes must not start provider discovery.
+vi.mock("../plugins/provider-discovery.runtime.js", () => {
+  const runtime = {
+    resolvePluginDiscoveryProvidersRuntime: discovery,
+  };
+  return {
+    ...runtime,
+    resolvePluginDiscoveryProvidersRuntimeAsync: async (
+      ...args: Parameters<typeof runtime.resolvePluginDiscoveryProvidersRuntime>
+    ) => runtime.resolvePluginDiscoveryProvidersRuntime(...args),
+  };
+});
 
 it.each([
   { provider: "anthropic", model: "claude-sonnet-5" },

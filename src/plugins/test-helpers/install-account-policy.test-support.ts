@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugin-metadata-lifecycle.js";
-import { loadPluginMetadataSnapshot } from "../plugin-metadata-snapshot.js";
+import {
+  loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshotAsync,
+} from "../plugin-metadata-snapshot.js";
 import { createColdPluginFixture } from "./cold-plugin-fixtures.js";
 
 export function createInstallAccountPolicyFixture(rootDir: string, channelId: string) {
@@ -39,6 +42,15 @@ export function createInstallAccountPolicyFixture(rootDir: string, channelId: st
     env,
     readMetadata(currentConfig = config, workspaceDir?: string) {
       return loadPluginMetadataSnapshot({
+        config: currentConfig,
+        workspaceDir,
+        env,
+        allowCurrent: false,
+        preferPersisted: false,
+      });
+    },
+    async readMetadataAsync(currentConfig = config, workspaceDir?: string) {
+      return await resolvePluginMetadataSnapshotAsync({
         config: currentConfig,
         workspaceDir,
         env,

@@ -874,7 +874,7 @@ describe("configured transcript occupancy diagnostics", () => {
       f.setProviders([]);
       const service = createTranscriptsAutoStartService(f.ctx);
       try {
-        service.start();
+        await service.start().settled;
         expect((await f.read()).configuredSources.map((source) => source.startDiagnostic)).toEqual(
           entries.map(() => "retrying"),
         );

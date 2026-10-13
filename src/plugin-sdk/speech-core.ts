@@ -38,9 +38,12 @@ export { parseTtsDirectives } from "../tts/directives.js";
 export { parseSpeechDirectiveNumberOverride } from "../tts/directive-number.js";
 export {
   canonicalizeSpeechProviderId,
+  canonicalizeSpeechProviderIdAsync,
   getSpeechProvider,
+  getSpeechProviderAsync,
   listLoadedSpeechProviders,
   listSpeechProviders,
+  listSpeechProvidersAsync,
   normalizeSpeechProviderId,
 } from "../tts/provider-registry.js";
 export { resolveEffectiveTtsConfig } from "../tts/tts-config.js";

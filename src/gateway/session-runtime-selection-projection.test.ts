@@ -6,6 +6,8 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createChatMetadataHarness } from "./server-methods/chat-metadata-runtime.test-support.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
@@ -31,151 +33,161 @@ describe("session runtime selection ownership projection", () => {
     async ({ kind, key, locked }) => {
       await withOpenClawTestState(
         { scenario: "minimal", label: "runtime-selection-owner" },
-        async (state) => {
-          const cfg: OpenClawConfig = {
-            agents: {
-              defaults: {
-                workspace: state.workspaceDir,
-                model: "openai/gpt-5.6-sol",
-                models: {
-                  "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
-                  "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } },
-                },
-              },
-            },
-          };
-          setRuntimeConfigSnapshot(cfg);
-          const modelLocked = ["locked-harness", "locked-override", "acp-locked-harness"].includes(
-            kind,
-          );
-          const entry: SessionEntry = {
-            sessionId: "current-session",
-            lifecycleRevision: "current-revision",
-            updatedAt: 1,
-            ...(modelLocked ? { modelSelectionLocked: true } : {}),
-            ...(["locked-harness", "historical-harness", "acp-locked-harness"].includes(kind)
-              ? { agentHarnessId: "codex" }
-              : {}),
-            ...(kind === "runtime-pin" || kind === "locked-override"
-              ? { agentRuntimeOverride: "codex" }
-              : {}),
-            thinkingLevel: "high",
-          };
-          const scope = { agentId: "main", sessionKey: key, env: state.env };
-          await upsertSessionEntryCore(scope, entry);
-          if (kind === "acp" || kind === "acp-locked-harness") {
-            await upsertAcpSessionMeta({
-              cfg,
-              agentId: "main",
-              sessionKey: key,
-              env: state.env,
-              mutate: () => ({
-                backend: "acpx",
-                agent: "main",
-                runtimeSessionName: key,
-                mode: "persistent",
-                state: "idle",
-                lastActivityAt: 1,
+        async (state) =>
+          withPluginRuntimeGenerationScope(
+            {
+              metadataSnapshot: createPluginMetadataSnapshotFixture({
+                plugins: [{ id: "openai", providers: ["openai"] }],
               }),
-            });
-          }
-          const [acpMeta] = await readAcpSessionMetaForEntries({
-            cfg,
-            entries: [{ agentId: "main", sessionKey: key, entry }],
-          });
-          const row = buildGatewaySessionRow({
-            cfg,
-            agentId: "main",
-            key,
-            entry,
-            preparedAcpMeta: acpMeta ?? null,
-            store: { [key]: entry },
-            storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
-            modelCatalog: catalog,
-            lightweightListRow: true,
-          });
-          expect(row.runtimeSelectionLocked).toBe(locked);
-          expect(row.modelSelectionLocked).toBe(modelLocked ? true : undefined);
-          if (kind === "runtime-pin") {
-            expect(row.agentRuntime?.source).toBe("session-key");
-          }
-          const metadata = createChatMetadataHarness(cfg);
-          await metadata.runtime.refresh();
-          const hostSql = observeHostDataSql();
-          try {
-            const params = { agentId: "main", sessionKey: key, sessionEntry: entry };
-            expect((await metadata.runtime.read(params)).runtimeSelectionLocked).toBe(locked);
-            expect(
-              (await metadata.runtime.readStartup(params))?.metadata?.runtimeSelectionLocked,
-            ).toBe(locked);
-            expect(
-              await metadata.runtime.readStartup({ ...params, readPolicy: "ready" }),
-            ).not.toHaveProperty("metadata");
-            expect(hostSql.queries.filter((sql) => /\bacp_sessions\b/i.test(sql))).toEqual([]);
-          } finally {
-            hostSql.restore();
-            await metadata.runtime.stop();
-          }
-          const patched = projectSessionPatchResult({
-            cfg,
-            canonicalKey: key,
-            entry,
-            preparedAcpMeta: acpMeta ?? null,
-            targetAgentId: "main",
-            storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
-            modelCatalog: catalog,
-          });
-          expect(patched.resolved?.runtimeSelectionLocked).toBe(locked);
-          const expectedRuntime =
-            kind === "locked-harness" || kind === "locked-override"
-              ? { id: "codex", source: "session" }
-              : kind === "acp-locked-harness"
-                ? { id: "acpx", source: "session-key" }
-                : kind === "historical-harness"
-                  ? { id: "openclaw", source: "model" }
-                  : undefined;
-          if (expectedRuntime) {
-            expect(row.agentRuntime).toMatchObject(expectedRuntime);
-            expect(patched.resolved?.agentRuntime).toEqual(expectedRuntime);
-          }
-          expect(row.thinkingLevel).toBe("high");
-          expect(patched.resolved?.thinkingLevel).toBe("high");
-          expect(buildGatewaySessionSnapshot({ sessionRow: row }).runtimeSelectionLocked).toBe(
-            locked,
-          );
-          const lifecycle = buildGatewaySessionSnapshot({
-            sessionRow: row,
-            includeSession: true,
-            lifecycle: true,
-          });
-          expect(lifecycle).not.toHaveProperty("runtimeSelectionLocked");
-          expect(lifecycle).not.toHaveProperty("session.runtimeSelectionLocked");
-          if (kind === "acp") {
-            const project = (patch: { model?: string; agentRuntime?: null }) =>
-              projectSessionsPatchEntry({
+            },
+            async () => {
+              const cfg: OpenClawConfig = {
+                agents: {
+                  defaults: {
+                    workspace: state.workspaceDir,
+                    model: "openai/gpt-5.6-sol",
+                    models: {
+                      "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+                      "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } },
+                    },
+                  },
+                },
+              };
+              setRuntimeConfigSnapshot(cfg);
+              const modelLocked = [
+                "locked-harness",
+                "locked-override",
+                "acp-locked-harness",
+              ].includes(kind);
+              const entry: SessionEntry = {
+                sessionId: "current-session",
+                lifecycleRevision: "current-revision",
+                updatedAt: 1,
+                ...(modelLocked ? { modelSelectionLocked: true } : {}),
+                ...(["locked-harness", "historical-harness", "acp-locked-harness"].includes(kind)
+                  ? { agentHarnessId: "codex" }
+                  : {}),
+                ...(kind === "runtime-pin" || kind === "locked-override"
+                  ? { agentRuntimeOverride: "codex" }
+                  : {}),
+                thinkingLevel: "high",
+              };
+              const scope = { agentId: "main", sessionKey: key, env: state.env };
+              await upsertSessionEntryCore(scope, entry);
+              if (kind === "acp" || kind === "acp-locked-harness") {
+                await upsertAcpSessionMeta({
+                  cfg,
+                  agentId: "main",
+                  sessionKey: key,
+                  env: state.env,
+                  mutate: () => ({
+                    backend: "acpx",
+                    agent: "main",
+                    runtimeSessionName: key,
+                    mode: "persistent",
+                    state: "idle",
+                    lastActivityAt: 1,
+                  }),
+                });
+              }
+              const [acpMeta] = await readAcpSessionMetaForEntries({
                 cfg,
-                storeKey: key,
-                agentId: "main",
-                existingEntry: entry,
-                isLabelInUse: () => false,
-                patch: { key, ...patch },
-                loadGatewayModelCatalogSnapshot: async () => ({
-                  entries: catalog,
-                  routeVariants: catalog,
-                }),
+                entries: [{ agentId: "main", sessionKey: key, entry }],
               });
-            expect(await project({ model: "openai/gpt-5.6-luna" })).toMatchObject({
-              ok: true,
-              entry: { modelOverride: "gpt-5.6-luna" },
-            });
-            expect(
-              await project({ model: "openai/gpt-5.6-luna", agentRuntime: null }),
-            ).toMatchObject({
-              ok: false,
-              error: { message: "Runtime selection is owned by this ACP session." },
-            });
-          }
-        },
+              const row = buildGatewaySessionRow({
+                cfg,
+                agentId: "main",
+                key,
+                entry,
+                preparedAcpMeta: acpMeta ?? null,
+                store: { [key]: entry },
+                storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
+                modelCatalog: catalog,
+                lightweightListRow: true,
+              });
+              expect(row.runtimeSelectionLocked).toBe(locked);
+              expect(row.modelSelectionLocked).toBe(modelLocked ? true : undefined);
+              if (kind === "runtime-pin") {
+                expect(row.agentRuntime?.source).toBe("session-key");
+              }
+              const metadata = createChatMetadataHarness(cfg);
+              await metadata.runtime.refresh();
+              const hostSql = observeHostDataSql();
+              try {
+                const params = { agentId: "main", sessionKey: key, sessionEntry: entry };
+                expect((await metadata.runtime.read(params)).runtimeSelectionLocked).toBe(locked);
+                expect(
+                  (await metadata.runtime.readStartup(params))?.metadata?.runtimeSelectionLocked,
+                ).toBe(locked);
+                expect(
+                  await metadata.runtime.readStartup({ ...params, readPolicy: "ready" }),
+                ).not.toHaveProperty("metadata");
+                expect(hostSql.queries.filter((sql) => /\bacp_sessions\b/i.test(sql))).toEqual([]);
+              } finally {
+                hostSql.restore();
+                await metadata.runtime.stop();
+              }
+              const patched = projectSessionPatchResult({
+                cfg,
+                canonicalKey: key,
+                entry,
+                preparedAcpMeta: acpMeta ?? null,
+                targetAgentId: "main",
+                storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
+                modelCatalog: catalog,
+              });
+              expect(patched.resolved?.runtimeSelectionLocked).toBe(locked);
+              const expectedRuntime =
+                kind === "locked-harness" || kind === "locked-override"
+                  ? { id: "codex", source: "session" }
+                  : kind === "acp-locked-harness"
+                    ? { id: "acpx", source: "session-key" }
+                    : kind === "historical-harness"
+                      ? { id: "openclaw", source: "model" }
+                      : undefined;
+              if (expectedRuntime) {
+                expect(row.agentRuntime).toMatchObject(expectedRuntime);
+                expect(patched.resolved?.agentRuntime).toEqual(expectedRuntime);
+              }
+              expect(row.thinkingLevel).toBe("high");
+              expect(patched.resolved?.thinkingLevel).toBe("high");
+              expect(buildGatewaySessionSnapshot({ sessionRow: row }).runtimeSelectionLocked).toBe(
+                locked,
+              );
+              const lifecycle = buildGatewaySessionSnapshot({
+                sessionRow: row,
+                includeSession: true,
+                lifecycle: true,
+              });
+              expect(lifecycle).not.toHaveProperty("runtimeSelectionLocked");
+              expect(lifecycle).not.toHaveProperty("session.runtimeSelectionLocked");
+              if (kind === "acp") {
+                const project = (patch: { model?: string; agentRuntime?: null }) =>
+                  projectSessionsPatchEntry({
+                    cfg,
+                    storeKey: key,
+                    agentId: "main",
+                    existingEntry: entry,
+                    isLabelInUse: () => false,
+                    patch: { key, ...patch },
+                    loadGatewayModelCatalogSnapshot: async () => ({
+                      entries: catalog,
+                      routeVariants: catalog,
+                    }),
+                  });
+                expect(await project({ model: "openai/gpt-5.6-luna" })).toMatchObject({
+                  ok: true,
+                  entry: { modelOverride: "gpt-5.6-luna" },
+                });
+                expect(
+                  await project({ model: "openai/gpt-5.6-luna", agentRuntime: null }),
+                ).toMatchObject({
+                  ok: false,
+                  error: { message: "Runtime selection is owned by this ACP session." },
+                });
+              }
+            },
+          ),
       );
     },
   );

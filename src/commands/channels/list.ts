@@ -11,6 +11,7 @@ import {
   type RuntimeChannelStatusPayload,
 } from "../../channels/status/read-model.js";
 import { callGateway } from "../../gateway/call.js";
+import { prepareBundledDiscoveryModeNative } from "../../plugins/bundled-discovery-state.native.js";
 import { resolvePluginControlPlaneWorkspace } from "../../plugins/control-plane-workspace.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
@@ -108,6 +109,7 @@ export async function channelsListCommand(
   if (!cfg) {
     return;
   }
+  prepareBundledDiscoveryModeNative();
   const showAll = opts.all === true;
   const workspace = resolvePluginControlPlaneWorkspace({
     config: cfg,

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { preparePluginAutoEnableTestDiscovery } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { NodeRegistry } from "../../gateway/node-registry.js";
 import { recordRemoteNodeInfo, setSkillsRemoteRegistry } from "./remote.js";
@@ -41,6 +42,7 @@ export function createRemoteSkillWorkspace(bin: string): {
   cfg: OpenClawConfig;
   workspaceDir: string;
 } {
+  preparePluginAutoEnableTestDiscovery();
   const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-remote-skills-"));
   const skillDir = path.join(workspaceDir, "skills", "remote-skill");
   fs.mkdirSync(skillDir, { recursive: true });

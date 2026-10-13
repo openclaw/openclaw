@@ -1,6 +1,7 @@
 // Verifies optional media/PDF tool factory planning from plugin metadata and auth.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
@@ -11,7 +12,7 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { createOpenClawToolsAsync } from "./openclaw-tools.js";
 import {
   resolveImageToolFactoryAvailable,
   resolveOptionalMediaToolFactoryPlan,
@@ -113,11 +114,12 @@ function createImageAndPdfPlugins(): [PluginManifestRecord, PluginManifestRecord
   return [plugins[0], plugins[3]];
 }
 
-function installSnapshot(
+async function installSnapshot(
   config: OpenClawConfig,
   plugins: PluginManifestRecord[],
   workspaceDir?: string,
 ) {
+  await prepareBundledDiscoveryMode();
   const prepared = createPluginMetadataSnapshotFixture({ plugins });
   const policyHash = resolveInstalledPluginIndexPolicyHash(config);
   const index = { ...prepared.index, policyHash };
@@ -145,9 +147,9 @@ describe("optional media tool factory planning", () => {
     vi.unstubAllEnvs();
   });
 
-  it("uses the prepared media family for image-tool availability", () => {
+  it("uses the prepared media family for image-tool availability", async () => {
     const config: OpenClawConfig = {};
-    const snapshot = installSnapshot(config, [
+    const snapshot = await installSnapshot(config, [
       createPlugin({
         id: "media-owner",
         contracts: { mediaUnderstandingProviders: ["media-owner"] },
@@ -182,9 +184,9 @@ describe("optional media tool factory planning", () => {
     ).toBe(true);
   });
 
-  it("requires image capability and auth on the same prepared provider", () => {
+  it("requires image capability and auth on the same prepared provider", async () => {
     const config: OpenClawConfig = {};
-    const snapshot = installSnapshot(config, [
+    const snapshot = await installSnapshot(config, [
       createPlugin({
         id: "media-owner",
         contracts: {
@@ -212,7 +214,7 @@ describe("optional media tool factory planning", () => {
     ).toBe(false);
   });
 
-  it("keeps config vision routes while gating OpenAI subscription auth on prepared Codex", () => {
+  it("keeps config vision routes while gating OpenAI subscription auth on prepared Codex", async () => {
     vi.stubEnv("OPENAI_API_KEY", "");
     const config = {
       models: {
@@ -228,7 +230,7 @@ describe("optional media tool factory planning", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    const snapshot = installSnapshot(config, []);
+    const snapshot = await installSnapshot(config, []);
     const preparedModelRuntime = {
       metadataSnapshot: snapshot,
       mediaCapabilityProviders: { mediaUnderstandingProviders: [] },
@@ -278,11 +280,11 @@ describe("optional media tool factory planning", () => {
     }
   });
 
-  it("does not plan media factories from workspace-scoped metadata without workspace context", () => {
+  it("does not plan media factories from workspace-scoped metadata without workspace context", async () => {
     // Workspace snapshots are process-local facts and must not leak to unrelated runs.
     const config: OpenClawConfig = {};
     vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
-    installSnapshot(
+    await installSnapshot(
       config,
       [
         createPlugin({
@@ -316,10 +318,10 @@ describe("optional media tool factory planning", () => {
     ).toBe(true);
   });
 
-  it("preserves implicit allow-all from alsoAllow-only policies for built-in media factories", () => {
+  it("preserves implicit allow-all from alsoAllow-only policies for built-in media factories", async () => {
     const config = createExplicitMediaModelConfig();
     const allowlistFromAlsoAllowOnlyPolicy = ["group:memory", DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY];
-    installSnapshot(config, []);
+    await installSnapshot(config, []);
 
     expect(
       resolveOptionalMediaToolFactoryPlan({
@@ -334,21 +336,23 @@ describe("optional media tool factory planning", () => {
       pdf: true,
     });
 
-    const toolNames = createOpenClawTools({
-      config,
-      agentDir: "/tmp/openclaw-agent-main",
-      authProfileStore: createAuthStore(),
-      pluginToolAllowlist: allowlistFromAlsoAllowOnlyPolicy,
-    }).map((tool) => tool.name);
+    const toolNames = (
+      await createOpenClawToolsAsync({
+        config,
+        agentDir: "/tmp/openclaw-agent-main",
+        authProfileStore: createAuthStore(),
+        pluginToolAllowlist: allowlistFromAlsoAllowOnlyPolicy,
+      })
+    ).map((tool) => tool.name);
     expect(toolNames).toContain("image_generate");
     expect(toolNames).toContain("video_generate");
     expect(toolNames).toContain("music_generate");
     expect(toolNames).toContain("pdf");
   });
 
-  it("keeps denylists authoritative when alsoAllow-only policies preserve factory construction", () => {
+  it("keeps denylists authoritative when alsoAllow-only policies preserve factory construction", async () => {
     const config = createExplicitMediaModelConfig();
-    installSnapshot(config, []);
+    await installSnapshot(config, []);
 
     expect(
       resolveOptionalMediaToolFactoryPlan({
@@ -365,9 +369,9 @@ describe("optional media tool factory planning", () => {
     });
   });
 
-  it("keeps auth-backed providers on the factory path", () => {
+  it("keeps auth-backed providers on the factory path", async () => {
     const config: OpenClawConfig = {};
-    installSnapshot(config, createStandardMediaPlugins());
+    await installSnapshot(config, createStandardMediaPlugins());
     vi.stubEnv("VIDEO_OWNER_API_KEY", "video-key");
 
     expect(
@@ -385,12 +389,12 @@ describe("optional media tool factory planning", () => {
 
   it("defers PDF resolution and passes the active model at execution", async () => {
     const config: OpenClawConfig = {};
-    installSnapshot(config, createImageAndPdfPlugins());
+    await installSnapshot(config, createImageAndPdfPlugins());
     const resolveSpy = vi.spyOn(pdfModelConfigModule, "resolvePdfModelConfigForTool");
 
     for (const modelHasVision of [true, false]) {
       const callCountBeforePrep = resolveSpy.mock.calls.length;
-      const tools = createOpenClawTools({
+      const tools = await createOpenClawToolsAsync({
         config,
         agentDir: "/tmp/openclaw-agent-main",
         authProfileStore: createAuthStore(["openrouter"]),
@@ -416,9 +420,9 @@ describe("optional media tool factory planning", () => {
     }
   });
 
-  it("rechecks workspace capability activation after the selected slot changes", () => {
+  it("rechecks workspace capability activation after the selected slot changes", async () => {
     const config: OpenClawConfig = {};
-    installSnapshot(config, [
+    await installSnapshot(config, [
       {
         ...createPlugin({
           id: "workspace-image",
@@ -439,7 +443,7 @@ describe("optional media tool factory planning", () => {
     expect(available()).toBe(false);
   });
 
-  it("honors manifest-declared image provider auth alias base-url guards", () => {
+  it("honors manifest-declared image provider auth alias base-url guards", async () => {
     const config: OpenClawConfig = {
       models: {
         providers: {
@@ -450,7 +454,7 @@ describe("optional media tool factory planning", () => {
         },
       },
     };
-    installSnapshot(config, [
+    await installSnapshot(config, [
       createPlugin({
         id: "openai",
         contracts: { imageGenerationProviders: ["openai"] },

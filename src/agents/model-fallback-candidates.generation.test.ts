@@ -1,10 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   adoptCurrentPluginMetadataSnapshotIfAbsent,
   withPluginMetadataSnapshotScope,
 } from "../plugins/current-plugin-metadata-snapshot.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { projectPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -17,6 +18,9 @@ import { createModelFallbackConfig } from "./test-helpers/model-fallback-config-
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 describe("fallback candidates across provider generations", () => {
+  beforeEach(async () => {
+    await preparePluginMetadataMachineStateAsync({});
+  });
   afterEach(() => resetPluginRuntimeStateForTest());
 
   it("refreshes native candidates when an agent switches to and from ACP", () => {

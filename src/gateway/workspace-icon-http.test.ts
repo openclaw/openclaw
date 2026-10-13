@@ -14,6 +14,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as boundaryFileRead from "../infra/boundary-file-read.js";
 import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -147,8 +148,9 @@ describe("handleWorkspaceIconHttpRequest", () => {
     );
   }
 
-  function publishPluginMetadata() {
+  async function publishPluginMetadata() {
     resetPluginRuntimeStateForTest();
+    await preparePluginMetadataMachineStateAsync({});
     setActivePluginRegistry(createEmptyPluginRegistry());
     setGatewayPluginMetadataSnapshot(createPluginMetadataSnapshotFixture(), {
       config: cfg,
@@ -166,7 +168,7 @@ describe("handleWorkspaceIconHttpRequest", () => {
     };
     await state.writeConfig(cfg);
     setRuntimeConfigSnapshot(cfg);
-    publishPluginMetadata();
+    await publishPluginMetadata();
     // Gateway startup admits the physical store before serving prepared reads.
     seedSession(undefined, "agent:main:fixture");
     projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
@@ -203,9 +205,9 @@ describe("handleWorkspaceIconHttpRequest", () => {
     await state?.cleanup();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     // The shared test setup retires plugin runtime metadata after every case.
-    publishPluginMetadata();
+    await publishPluginMetadata();
     authorityCurrent = true;
     mocks.authorize
       .mockReset()

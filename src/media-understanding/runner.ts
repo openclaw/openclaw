@@ -49,7 +49,7 @@ import {
   resolveDefaultMediaModelFromRegistry,
 } from "./provider-registry-metadata.js";
 import {
-  buildMediaUnderstandingRegistry,
+  acquireMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
 } from "./provider-registry.js";
 import {
@@ -92,9 +92,9 @@ type AutoModelSelectionParams = Parameters<typeof resolveAutoImageModel>[0] & {
  * `runCapability` receives the factory form so a turn that never needs the
  * registry (the native-vision fast path) never pays to build it.
  */
-type LazyProviderRegistry = ProviderRegistry | (() => ProviderRegistry);
+type LazyProviderRegistry = ProviderRegistry | (() => ProviderRegistry | Promise<ProviderRegistry>);
 
-function resolveProviderRegistry(registry: LazyProviderRegistry): ProviderRegistry {
+async function resolveProviderRegistry(registry: LazyProviderRegistry): Promise<ProviderRegistry> {
   return typeof registry === "function" ? registry() : registry;
 }
 type ModelCatalogApi = typeof import("../agents/model-catalog.js") &
@@ -254,8 +254,8 @@ async function resolveAutoImageModelId(
   if (defaultModel) {
     return defaultModel;
   }
-  const { resolveDefaultMediaModel } = await import("./defaults.js");
-  const bundledDefaultModel = resolveDefaultMediaModel({
+  const { resolveDefaultMediaModelCore } = await import("./defaults.js");
+  const bundledDefaultModel = resolveDefaultMediaModelCore({
     cfg: params.cfg,
     providerId: params.providerId,
     capability: "image",
@@ -357,21 +357,29 @@ function resolveImageModelFromAgentDefaults(params: {
   return entries;
 }
 
-function hasExplicitImageUnderstandingConfig(params: {
+async function hasExplicitImageUnderstandingConfig(params: {
   cfg: OpenClawConfig;
   providerRegistry: LazyProviderRegistry;
-}): boolean {
-  return (params.cfg.tools?.media?.models ?? []).some((entry) => {
+}): Promise<boolean> {
+  for (const entry of params.cfg.tools?.media?.models ?? []) {
     const configured = resolveConfiguredMediaEntryCapabilities(entry);
     if (configured) {
-      return configured.includes("image");
+      if (configured.includes("image")) {
+        return true;
+      }
+      continue;
     }
-    return matchesMediaEntryCapability({
-      entry,
-      capability: "image",
-      providerRegistry: resolveProviderRegistry(params.providerRegistry),
-    });
-  });
+    if (
+      matchesMediaEntryCapability({
+        entry,
+        capability: "image",
+        providerRegistry: await resolveProviderRegistry(params.providerRegistry),
+      })
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function activeModelSupportsNativeVision(
@@ -429,7 +437,7 @@ async function* resolveAutoAudioEntries(
 
 async function resolveAutoEntries(
   params: Omit<AutoModelSelectionParams, "providerRegistry"> & {
-    providerRegistry?: ProviderRegistry;
+    providerRegistry: ProviderRegistry;
     nativeVisionActive: boolean;
   },
 ): Promise<ResolvedMediaModelEntry[]> {
@@ -441,8 +449,7 @@ async function resolveAutoEntries(
   }
   const prepared = {
     ...params,
-    providerRegistry:
-      params.providerRegistry ?? buildMediaUnderstandingRegistry(undefined, params.cfg),
+    providerRegistry: params.providerRegistry,
   };
   const activeProvider = normalizeMediaExecutionProviderId(prepared.activeModel?.provider ?? "");
   if (activeProvider) {
@@ -469,11 +476,32 @@ export async function resolveAutoImageModel(params: {
   workspaceDir?: string;
   activeModel?: ActiveMediaModel;
 }): Promise<ActiveMediaModel | null> {
-  const entries = await resolveAutoEntries({
-    ...params,
-    capability: "image",
-    nativeVisionActive: false,
+  const { resolvePluginMetadataSnapshotAsync } =
+    await import("../plugins/plugin-metadata-snapshot.js");
+  await resolvePluginMetadataSnapshotAsync({
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
   });
+  const explicit = resolveImageModelFromAgentDefaults(params).find(
+    (entry) => entry.provider && entry.model?.trim(),
+  );
+  if (explicit?.provider && explicit.model?.trim()) {
+    return { provider: explicit.provider, model: explicit.model.trim() };
+  }
+  const acquired = await acquireMediaUnderstandingRegistry({ cfg: params.cfg });
+  let entries: ResolvedMediaModelEntry[];
+  try {
+    entries = await acquired.run(() =>
+      resolveAutoEntries({
+        ...params,
+        providerRegistry: acquired.registry,
+        capability: "image",
+        nativeVisionActive: false,
+      }),
+    );
+  } finally {
+    await acquired.release();
+  }
   for (const { entry } of entries) {
     if (entry.type === "cli") {
       continue;
@@ -667,6 +695,8 @@ export async function runCapability(params: {
   activeModel?: ActiveMediaModel;
   request?: MediaRequestOverrides;
 }): Promise<RunCapabilityResult> {
+  const { prepareBundledDiscoveryMode } = await import("../plugins/bundled-discovery-state.js");
+  await prepareBundledDiscoveryMode();
   const { capability, cfg, ctx } = params;
   const config: MediaUnderstandingConfig = params.config ?? cfg.tools?.media?.[capability] ?? {};
   const selection = selectAttachments({
@@ -771,7 +801,10 @@ export async function runCapability(params: {
   if (
     capability === "image" &&
     activeProvider &&
-    !hasExplicitImageUnderstandingConfig({ cfg, providerRegistry: params.providerRegistry }) &&
+    !(await hasExplicitImageUnderstandingConfig({
+      cfg,
+      providerRegistry: params.providerRegistry,
+    })) &&
     (await resolveNativeVisionFlag()) === true
   ) {
     if (shouldLogVerbose()) {
@@ -819,7 +852,7 @@ export async function runCapability(params: {
   // Every path past the native-vision skip branch reads the registry: resolve
   // it once here (apply.ts's memoized factory builds it at most once per turn)
   // and reuse the concrete value for every remaining call below.
-  const providerRegistry = resolveProviderRegistry(params.providerRegistry);
+  const providerRegistry = await resolveProviderRegistry(params.providerRegistry);
   const entries = resolveModelEntries({
     cfg,
     capability,

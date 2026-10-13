@@ -5,9 +5,14 @@ import type {
   ProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createPluginRuntimeMock,
+  useProviderCatalogMetadata,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 function cloudAuthMethod(): ProviderAuthMethod {
   const registerProvider = vi.fn<(provider: ProviderPlugin) => void>();

@@ -7,7 +7,7 @@ import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { resolveManifestProviderAuthChoices } from "../plugins/provider-auth-choices.js";
 import { detectAvailableSetupProviderIds } from "../plugins/provider-setup-availability.js";
-import { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
+import { resolvePluginProvidersCoreAsync } from "../plugins/providers.runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { detectSetupInference } from "./setup-inference-detect.js";
@@ -113,7 +113,7 @@ it.each([false, true])(
               },
               resolvePluginProviders: (params) => {
                 inventories.providers = params.pluginMetadataSnapshot;
-                return resolvePluginProvidersCore(params);
+                return resolvePluginProvidersCoreAsync(params);
               },
             },
             "main",

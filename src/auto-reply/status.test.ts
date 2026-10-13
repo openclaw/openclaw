@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   buildStatusMessage as buildStatusMessageRaw,
   statusModelRefs,
@@ -24,15 +26,20 @@ type StatusTestArgs = Omit<Partial<StatusArgs>, "sessionEntry"> & {
 };
 
 function buildStatusMessage({ sessionEntry, ...args }: StatusTestArgs): string {
-  return buildStatusMessageRaw({
-    ...statusContext,
-    modelAuth: "api-key",
-    activeModelAuth: "api-key",
-    modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-opus-4-6" }),
-    agent: { model: "anthropic/claude-opus-4-6" },
-    ...args,
-    sessionEntry: sessionEntry && { sessionId: "status", updatedAt: 0, ...sessionEntry },
-  });
+  return withPluginMetadataSnapshotScope(
+    createPluginMetadataSnapshotFixture(),
+    () =>
+      buildStatusMessageRaw({
+        ...statusContext,
+        modelAuth: "api-key",
+        activeModelAuth: "api-key",
+        modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-opus-4-6" }),
+        agent: { model: "anthropic/claude-opus-4-6" },
+        ...args,
+        sessionEntry: sessionEntry && { sessionId: "status", updatedAt: 0, ...sessionEntry },
+      }),
+    { trustConfigIdentity: true },
+  );
 }
 
 function modelArgs(provider: string, model: string): Pick<StatusArgs, "modelRefs" | "agent"> {

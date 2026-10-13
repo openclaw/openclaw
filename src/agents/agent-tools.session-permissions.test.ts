@@ -6,7 +6,7 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/
 import * as logger from "../logger.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
+import { createOpenClawCodingToolsAsync } from "./agent-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { getTextContent } from "./test-helpers/agent-tools-fs-helpers.js";
@@ -31,9 +31,9 @@ function args(name: (typeof fileTools)[number], target: string) {
   }
   return name === "write" ? { path: target, content: "changed\n" } : { path: target };
 }
-function tool(name: string, options: Parameters<typeof createOpenClawCodingTools>[0]) {
+async function tool(name: string, options: Parameters<typeof createOpenClawCodingToolsAsync>[0]) {
   return expectDefined(
-    createOpenClawCodingTools(options).find((entry) => entry.name === name),
+    (await createOpenClawCodingToolsAsync(options)).find((entry) => entry.name === name),
     name,
   );
 }
@@ -63,7 +63,7 @@ async function aliasedWorkspace(
 describe("session permission filesystem tools", () => {
   it("logs required-root containment without exposing policy advice in full mode", async () => {
     await workspace(async ({ root, outside }) => {
-      const patch = tool("apply_patch", {
+      const patch = await tool("apply_patch", {
         workspaceDir: root,
         requireWorkspaceOnly: true,
         sessionPermissionPolicy: { root, mode: "full" },
@@ -104,7 +104,7 @@ describe("session permission filesystem tools", () => {
         await aliasedWorkspace(async ({ root, alias }) => {
           const target = path.join(root, "proof.txt");
           await fs.writeFile(target, "original\n");
-          const operation = tool(name, {
+          const operation = await tool(name, {
             workspaceDir: alias,
             cwd: path.join(alias, "packages/app"),
             sessionPermissionPolicy: { root, mode: "guarded" },
@@ -126,7 +126,7 @@ describe("session permission filesystem tools", () => {
     it("allows read-only alias reads while excluding mutations and outside files", async () => {
       await aliasedWorkspace(async ({ root, alias, outside }) => {
         await fs.writeFile(path.join(root, "proof.txt"), "original\n");
-        const tools = createOpenClawCodingTools({
+        const tools = await createOpenClawCodingToolsAsync({
           workspaceDir: alias,
           cwd: alias,
           sessionPermissionPolicy: { root, mode: "read-only" },
@@ -151,7 +151,7 @@ describe("session permission filesystem tools", () => {
       await aliasedWorkspace(async ({ parent, root, alias }) => {
         const inside = path.join(root, "proof.txt");
         await fs.writeFile(inside, "original\n");
-        const tools = createOpenClawCodingTools({
+        const tools = await createOpenClawCodingToolsAsync({
           workspaceDir: alias,
           cwd: alias,
           sessionPermissionPolicy: { root, mode: "guarded" },
@@ -176,7 +176,7 @@ describe("session permission filesystem tools", () => {
 
     it("keeps missing daily memory optional through the alias", async () => {
       await aliasedWorkspace(async ({ root, alias }) => {
-        const read = tool("read", {
+        const read = await tool("read", {
           workspaceDir: alias,
           sessionPermissionPolicy: { root, mode: "guarded" },
         });
@@ -190,7 +190,7 @@ describe("session permission filesystem tools", () => {
       await aliasedWorkspace(async ({ root, alias }) => {
         await fs.mkdir(path.join(root, "real"));
         await fs.symlink(path.join(root, "real"), path.join(root, "link"), "dir");
-        const patch = tool("apply_patch", {
+        const patch = await tool("apply_patch", {
           workspaceDir: alias,
           cwd: alias,
           sessionPermissionPolicy: { root, mode: "guarded" },
@@ -227,7 +227,7 @@ describe("session permission filesystem tools", () => {
           // Preserve raw '..' bytes: native traversal escapes while normalization hits the decoy.
           const canonicalInput = `${root}/${relativeEscape}`;
           await expect(fs.realpath(canonicalInput)).resolves.toBe(outside);
-          const tools = createOpenClawCodingTools({
+          const tools = await createOpenClawCodingToolsAsync({
             workspaceDir: alias,
             cwd: alias,
             sessionPermissionPolicy: { root, mode: "guarded" },
@@ -253,7 +253,7 @@ describe("session permission filesystem tools", () => {
 
   it("separates a nested session cwd from its workspace permission boundary", async () => {
     await workspace(async ({ root, outside }) => {
-      const tools = createOpenClawCodingTools({
+      const tools = await createOpenClawCodingToolsAsync({
         workspaceDir: root,
         cwd: path.join(root, "packages/app"),
         sessionPermissionPolicy: { root, mode: "workspace" },
@@ -284,7 +284,7 @@ describe("session permission filesystem tools", () => {
 
   it("denies exec when a turn tightens the dispatch-provided full mode", async () => {
     await workspace(async ({ root }) => {
-      const exec = tool("exec", {
+      const exec = await tool("exec", {
         workspaceDir: root,
         sessionPermissionPolicy: { root, mode: "full" },
         exec: { host: "gateway", mode: "full", security: "deny", ask: "off" },
@@ -299,7 +299,7 @@ describe("session permission filesystem tools", () => {
     "confines full-mode directory listing when required=%s",
     async (required) => {
       await workspace(async ({ root, parent }) => {
-        const ls = tool("ls", {
+        const ls = await tool("ls", {
           workspaceDir: root,
           requireWorkspaceOnly: required,
           sessionPermissionPolicy: { root, mode: "full" },
@@ -326,7 +326,7 @@ describe("session permission filesystem tools", () => {
       await workspace(async ({ root, outside }) => {
         const inside = path.join(root, "proof.txt");
         await fs.writeFile(inside, "original\n");
-        const operation = tool(name, {
+        const operation = await tool(name, {
           workspaceDir: root,
           requireWorkspaceOnly: required,
           sessionPermissionPolicy: { root, mode: "full" },

@@ -257,7 +257,8 @@ describe("google prompt cache failure handling", () => {
   it("keeps request-header construction failures outside optional cache handling", async () => {
     const constructionFailure = new Error("request headers unavailable");
     const model = makeGoogleModel();
-    Object.defineProperty(model, "headers", {
+    Object.defineProperty(model.headers, "X-Provider", {
+      enumerable: true,
       get() {
         throw constructionFailure;
       },

@@ -519,8 +519,9 @@ async function runRefreshScenario(root: string): Promise<void> {
 async function runScopeScenario(root: string): Promise<void> {
   authRuntimeEntered = true;
   const { createPluginCache, withPluginCache } = await import("../plugins/plugin-cache.js");
-  const { loadPluginMetadataSnapshot } = await import("../plugins/plugin-metadata-snapshot.js");
-  const { loadPluginRegistryHandle } = await import("../plugins/loader.js");
+  const { resolvePluginMetadataSnapshotAsync } =
+    await import("../plugins/plugin-metadata-snapshot.js");
+  const { loadPluginRegistryHandleAsync } = await import("../plugins/loader.js");
   const { createEmptyPluginRegistry } = await import("../plugins/registry-empty.js");
   const { getPluginRegistryState } = await import("../plugins/runtime-state.js");
   const { setActivePluginRegistry } = await import("../plugins/runtime.js");
@@ -530,14 +531,14 @@ async function runScopeScenario(root: string): Promise<void> {
     await import("../plugins/runtime/gateway-request-scope.js");
   const { withMcpAuthProfileBearer } = await import("./mcp-auth-profile.js");
   const prepare = (fixture: ProviderFixture) =>
-    withPluginCache(createPluginCache(), () => {
-      const metadataSnapshot = loadPluginMetadataSnapshot({
+    withPluginCache(createPluginCache(), async () => {
+      const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
         config: fixture.config,
         env: process.env,
         workspaceDir: fixture.workspaceDir,
         preferPersisted: false,
       });
-      const pluginRegistry = loadPluginRegistryHandle({
+      const pluginRegistry = await loadPluginRegistryHandleAsync({
         config: fixture.config,
         env: process.env,
         workspaceDir: fixture.workspaceDir,
@@ -553,15 +554,17 @@ async function runScopeScenario(root: string): Promise<void> {
     const fixtures = ["first", "second", "disabled"].map((owner) =>
       writeProvider(root, owner, endpoint.tokenUrl, owner !== "disabled"),
     );
-    const owners = fixtures.map((fixture, index) => {
-      const generation = prepare(fixture);
-      const request = {
-        pluginId: `requester-${index}`,
-        isWebchatConnect: () => false,
-        resolveGatewayContext: () => undefined,
-      };
-      return { fixture, generation, request };
-    });
+    const owners = await Promise.all(
+      fixtures.map(async (fixture, index) => {
+        const generation = await prepare(fixture);
+        const request = {
+          pluginId: `requester-${index}`,
+          isWebchatConnect: () => false,
+          resolveGatewayContext: () => undefined,
+        };
+        return { fixture, generation, request };
+      }),
+    );
     type ScopedOwner = (typeof owners)[number];
     const [first, second, disabled] = owners;
     assert(first && second && disabled);

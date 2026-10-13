@@ -530,6 +530,7 @@ export async function loadPreparedModelCatalogView(
           provider,
           entry: params.sessionEntry,
           cfg: owner.config,
+          metadataSnapshot: owner.metadataSnapshot,
         }) ??
         resolveAgentHarnessPolicy({
           provider,

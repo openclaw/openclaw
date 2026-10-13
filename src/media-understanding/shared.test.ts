@@ -5,6 +5,7 @@ import {
   MAX_TIMER_TIMEOUT_MS,
 } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { installProviderRequestMetadataFixture } from "../agents/provider-request.test-support.js";
 import { VERSION } from "../version.js";
 
 const { fetchWithSsrFGuardMock, shouldUseEnvHttpProxyForUrlMock } = vi.hoisted(() => ({
@@ -414,6 +415,8 @@ describe("provider operation deadlines", () => {
 });
 
 describe("resolveProviderHttpRequestConfig", () => {
+  installProviderRequestMetadataFixture();
+
   it("preserves explicit caller headers but protects attribution headers", () => {
     const resolved = resolveProviderHttpRequestConfig({
       baseUrl: "https://api.openai.com/v1/",

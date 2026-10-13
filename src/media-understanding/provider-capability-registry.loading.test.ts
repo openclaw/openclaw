@@ -9,7 +9,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
-import { buildMediaUnderstandingCapabilityRegistry } from "./provider-capability-registry.js";
+import { buildMediaUnderstandingCapabilityRegistryAsync } from "./provider-capability-registry.js";
 
 let root: string;
 
@@ -98,7 +98,7 @@ describe("media capability inference owner loading", () => {
     },
   ])(
     "infers a $name without importing unrelated owners",
-    ({ active, providerId, configuredId, imageFallback, taggedPeers }) => {
+    async ({ active, providerId, configuredId, imageFallback, taggedPeers }) => {
       const selected = createMediaOwner("qa-selected-owner", providerId);
       const unrelated = createMediaOwner("qa-unrelated-owner", "qa-unrelated");
       const config: OpenClawConfig = {
@@ -163,9 +163,9 @@ describe("media capability inference owner loading", () => {
           contracts: { mediaUnderstandingProviders: [fixture.providerId] },
         })),
       });
-      const capabilities = withPluginRuntimeGenerationScope(
+      const capabilities = await withPluginRuntimeGenerationScope(
         { metadataSnapshot, pluginRegistry: registry },
-        () => buildMediaUnderstandingCapabilityRegistry(config),
+        () => buildMediaUnderstandingCapabilityRegistryAsync(config),
       );
       expect(capabilities.get(providerId)?.capabilities).toEqual(["audio"]);
       expect(fs.existsSync(unrelated.runtimeMarker)).toBe(false);

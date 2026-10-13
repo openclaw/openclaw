@@ -162,8 +162,9 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "interactive-runtime": 11,
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
-  // +1: deprecated agent media projection re-export during the media migration window.
-  "media-runtime": 3,
+  // Deprecated media projection plus media-sync-discovery compatibility for
+  // resolveAutoMediaKeyProviders and resolveDefaultMediaModel.
+  "media-runtime": 4,
   // +3: deprecated media projection type, builder, and local-roots compatibility re-export.
   "agent-media-payload": 3,
   // +2: deprecated media projection type and builder.
@@ -174,7 +175,11 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // provider-auth.updateAuthProfileStoreWithLock. resolveAuthStorePathForDisplay
   // stays compatible; its resolveAuthStorePathForDisplayAsync replacement is core-internal.
   // +1: released snapshot publication remains during its approved async replacement.
-  "agent-runtime": 15,
+  // +2: shipped model-reference parsers remain while callers adopt async preparation.
+  // +1: shipped resolveProviderIdForAuth remains while callers adopt resolveProviderIdForAuthAsync.
+  "agent-runtime": 18,
+  // Released model-session override remains while callers adopt its async replacement.
+  "model-session-runtime": 1,
   "memory-host-core": 2,
   // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
   // +4: legacy AgentHarness, attempt, embedded-run, and side-question contracts remain
@@ -206,14 +211,18 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "session-catalog": 2,
   // +2: released synchronous transcript event/stat reads during the worker cutover.
   "session-store-runtime": 9,
-  // Released synchronous sandbox lookup remains while plugins adopt async or prepared reads.
-  sandbox: 1,
+  // Released synchronous sandbox lookup and environment sanitizer remain while
+  // plugins adopt async or prepared reads and sanitizeEnvVarsAsync.
+  sandbox: 2,
   // +2: shipped Slack and Discord setup helpers retained through their package migration window.
   "setup-runtime": 2,
   "reply-history": 6,
   // +7: released auth read/write/availability helpers during async migration.
   "provider-auth": 22,
   "models-provider-runtime": 1,
+  // Prepared-only compatibility while provider and memory callers adopt async discovery.
+  "provider-catalog-runtime": 1,
+  "memory-core-host-engine-foundation": 1,
   // Released synchronous command discovery remains while plugins adopt worker-backed preparation.
   "command-auth-native": 3,
   "native-command-registry": 1,
@@ -266,7 +275,13 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: readRuntimeConfig and captureRuntimeConfigAsyncReader on runtime-config-snapshot.
       // +10: shared database-engine contracts and operations after the SQLite export cutover.
       // +1: approved async auth-snapshot publication with retained sync compatibility.
-      3739,
+      // +4: saveAuthProfileStoreAsync, resolveAutoMediaKeyProvidersAsync,
+      // resolveDefaultMediaModelAsync, and applyModelOverrideWithAuthProfileCompatibilityAsync.
+      // Auth, media-discovery, and model-session compat records retain their synchronous pairs.
+      // +5: parseModelRefAsync, prepareModelRefResolver, and their three preparation/resolver types.
+      // +2: resolvePluginProvidersAsync and resolveMemorySearchConfigAsync on existing public subpaths.
+      // sanitizeEnvVarsAsync joins these approved SDK cutovers.
+      3750,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -298,7 +313,11 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: the same prepared runtime reader and asynchronous config preparation functions.
       // +5: shared database-engine host and worker operations.
       // +1: approved async auth-snapshot publication with retained sync compatibility.
-      2192,
+      // +4: the same auth-save, media-discovery, and model-session replacement functions.
+      // +2: the same async model-reference parser and prepared resolver factory.
+      // +2: the same provider and memory async discovery replacements.
+      // sanitizeEnvVarsAsync joins these approved SDK cutovers.
+      2200,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -315,9 +334,15 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: released synchronous sandbox lookup retained until a later release after stable deprecation.
       // +1: createSessionHeaderLink from shipped 2026.10.1 until plugin-sdk-session-header-link expires.
       // +2: retained synchronous transcript event/stat reads until a later release after stable deprecation.
-      // +4: the runtime config getter and three auth/store compatibility pairs named above.
+      // +3: runtime config, secret-read and display compatibility.
       // +1: released snapshot publication remains during its approved async replacement.
-      209,
+      // +4: saveAuthProfileStore, resolveAutoMediaKeyProviders, resolveDefaultMediaModel,
+      // and applyModelOverrideWithAuthProfileCompatibility retain their shipped contracts.
+      // +2: model-ref-sync-discovery retains parseModelRef and resolveModelRefFromString.
+      // +2: retained, prepared-only provider and memory discovery counterparts.
+      // The sandbox sanitizer retains its shipped compatibility entry.
+      // +1: shipped resolveProviderIdForAuth remains while callers adopt resolveProviderIdForAuthAsync.
+      217,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

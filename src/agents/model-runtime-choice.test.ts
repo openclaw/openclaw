@@ -1,6 +1,7 @@
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
@@ -95,6 +96,9 @@ function renderPublishedAliases(owner: PreparedModelRuntimeSnapshot) {
 }
 
 describe("prepared model support admission", () => {
+  beforeEach(async () => {
+    await preparePluginMetadataMachineStateAsync({});
+  });
   const selection = { agentId: "main", raw: "fixture/new-model", source: "override" as const };
   const custom: OpenClawConfig = {
     ...cfg,

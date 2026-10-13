@@ -8,12 +8,13 @@ import {
 } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolvePreparedSandboxRuntimeStatus } from "openclaw/plugin-sdk/sandbox";
 import {
   captureSessionEntryCurrentCheckAsync,
   type PreparedSessionSourceAssertion,
 } from "openclaw/plugin-sdk/session-binding-runtime";
-import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { resolveStorePath, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 
 type ExecHost = "sandbox" | "gateway" | "node";
 type ExecTarget = "auto" | ExecHost;
@@ -99,7 +100,13 @@ export async function prepareCodexNativeExecutionPolicy(
   const selected = await captureSessionEntryCurrentCheckAsync({
     agentId: sourceAgentId,
     sessionKey: sourceSessionKey,
-    storePath: captured.sessionTarget?.storePath ?? captured.storePath,
+    storePath:
+      captured.sessionTarget?.storePath ??
+      captured.storePath ??
+      resolveStorePath(
+        (captured.config ?? (await captureRuntimeConfigAsyncReader()())).session?.store,
+        { agentId: sourceAgentId },
+      ),
     fields: ["sessionId", "lifecycleRevision", "execHost", "execNode", "sandbox", "sandboxMode"],
     errorMessage: "Codex session execution policy changed; prepare the operation again.",
   });

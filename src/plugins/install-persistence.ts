@@ -10,6 +10,7 @@ import { composeConfigWriteAssertions } from "../config/write-authority.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
+import { prepareBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import {
   isPluginCandidateInstallOwnerAmbiguous,
   resolvePluginCandidateInstallOwner,
@@ -214,6 +215,7 @@ async function persistPluginInstallOwned(
   params: PluginInstallPersistenceParams,
   assertOwned: () => void,
 ): Promise<OpenClawConfig> {
+  const env = process.env;
   let committed = false;
   let retainPublishedPayload = false;
   try {
@@ -224,6 +226,7 @@ async function persistPluginInstallOwned(
     );
     // Validate published bytes in a fresh generation while retaining the prior ledger for cleanup.
     return await withPluginCache(createPluginCache(), async () => {
+      await prepareBundledDiscoveryMode(env);
       const runtime = params.runtime ?? defaultRuntime;
       // Terminal diagnostics may contain paths/errors; management receives only producer-authored summaries.
       const warn = (message: string, managementMessage: string): void => {

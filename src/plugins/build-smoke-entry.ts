@@ -8,3 +8,4 @@ export {
   setPluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
 export { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
+export { preparePluginMetadataMachineStateAsync } from "./installed-plugin-index-record-state.js";

@@ -1,6 +1,8 @@
 import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import { projectSessionModelCatalog } from "../../../src/gateway/server-methods/chat-metadata-session-projection.js";
+import { withPluginMetadataSnapshotScope } from "../../../src/plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../../../src/plugins/plugin-metadata.test-support.js";
 import type { ModelCatalogEntry } from "../api/types.ts";
 import {
   captureUiProof,
@@ -36,11 +38,16 @@ suite.define(() => {
       const models =
         route === "before"
           ? hostModels
-          : projectSessionModelCatalog(
-              { agentId: "main", sessionKey },
-              hostModels,
-              config,
-              undefined,
+          : withPluginMetadataSnapshotScope(
+              createPluginMetadataSnapshotFixture(),
+              () =>
+                projectSessionModelCatalog(
+                  { agentId: "main", sessionKey },
+                  hostModels,
+                  config,
+                  undefined,
+                ),
+              { trustConfigIdentity: true },
             );
       const gateway = await installMockGateway(page, {
         sessionKey,

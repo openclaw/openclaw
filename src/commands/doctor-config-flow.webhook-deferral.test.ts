@@ -9,6 +9,7 @@ import {
   readDeferredPluginMigrations,
   recordDeferredPluginMigrations,
 } from "../infra/deferred-plugin-migrations.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import {
   applyPluginDoctorCompatibilityMigrations,
   withDeferredPluginDoctorMigrations,
@@ -113,6 +114,7 @@ it("publishes deferred official Teams listener pins before candidate startup", a
       const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
       expect(snapshot.issues).toEqual([]);
       expect(snapshot.valid).toBe(true);
+      await prepareBundledDiscoveryMode();
       const migration = withDeferredPluginDoctorMigrations(
         readDeferredPluginMigrations().map(({ pluginId }) => pluginId),
         () =>

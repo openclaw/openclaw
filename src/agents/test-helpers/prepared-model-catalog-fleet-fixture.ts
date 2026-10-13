@@ -3,7 +3,7 @@ import path from "node:path";
 import { vi } from "vitest";
 import { fixtureReceiptWorkerClientSource } from "../../../test/helpers/fixture-receipts.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { saveAuthProfileStore } from "../auth-profiles/store-runtime.js";
 import {
   EXTERNAL_AUTH_PATH_ENV,
@@ -156,7 +156,7 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
         gatewayLifecycle: true,
         allowGatewaySubagentBinding: true,
         catalogMode: "static",
-        pluginMetadataSnapshot: loadPluginMetadataSnapshot({
+        pluginMetadataSnapshot: await resolvePluginMetadataSnapshotAsync({
           config,
           env: process.env,
           workspaceDir: fixture.workspaceDir,

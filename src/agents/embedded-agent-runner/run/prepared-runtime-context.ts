@@ -1,5 +1,5 @@
 import { isCurrentPluginMetadataSnapshotRuntimeGeneration } from "../../../plugins/current-plugin-metadata-snapshot.js";
-import { loadPluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import {
@@ -34,24 +34,29 @@ export function resolveSharedPluginRuntimeWorkspace(
 }
 
 /** Selects plugin-generation facts independently from a run's execution boundary. */
-export function resolvePreparedRuntimeWorkspaces(params: RunEmbeddedAgentParamsWithSessionFile) {
+export async function resolvePreparedRuntimeWorkspaces(
+  params: RunEmbeddedAgentParamsWithSessionFile,
+) {
   const requestedWorkspaceResolution = resolveRunWorkspaceDir(params);
   const workspaceParams = {
     ...params,
     workspaceDir: requestedWorkspaceResolution.workspaceDir,
     isCanonicalWorkspace: requestedWorkspaceResolution.isCanonicalWorkspace,
   };
+  const rootedWorkspace = resolveRootedRunRuntimeWorkspace(workspaceParams);
+  const pluginMetadataSnapshot =
+    params.pluginGeneration?.pluginMetadataSnapshot ??
+    (await resolvePluginMetadataSnapshotAsync({
+      config: params.config ?? {},
+      workspaceDir: rootedWorkspace?.workspaceDir ?? requestedWorkspaceResolution.workspaceDir,
+      env: process.env,
+    }));
   // An admitted generation keeps its own workspace identity; only rooted selection applies.
   const sharedRuntimeWorkspace = params.pluginGeneration
-    ? resolveRootedRunRuntimeWorkspace(workspaceParams)
-    : resolveSharedPluginRuntimeWorkspace(workspaceParams, () =>
-        loadPluginMetadataSnapshot({
-          config: params.config ?? {},
-          workspaceDir: requestedWorkspaceResolution.workspaceDir,
-          env: process.env,
-        }),
-      );
+    ? rootedWorkspace
+    : resolveSharedPluginRuntimeWorkspace(workspaceParams, () => pluginMetadataSnapshot);
   return {
+    pluginMetadataSnapshot,
     requestedWorkspaceResolution,
     runtimeWorkspaceResolution: sharedRuntimeWorkspace ?? requestedWorkspaceResolution,
     preserveExecutionWorkspace: sharedRuntimeWorkspace !== undefined,

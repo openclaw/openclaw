@@ -87,7 +87,9 @@ async function acquireConfiguredRegistryBorrower(source: "owned" | "gateway" = "
       logger: { info() {}, warn() {}, error() {}, debug() {} },
     });
     setActivePluginRegistry(registry, undefined, "gateway-bindable", workspaceDir);
-    expect(runInScope(() => loadPreparedInboundPluginRegistry(input, metadata))).toBe(registry);
+    expect(await runInScope(() => loadPreparedInboundPluginRegistry(input, metadata))).toBe(
+      registry,
+    );
     expect(mocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
   }
   return await runInScope(async () => {

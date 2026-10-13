@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
+import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../media-generation-activity.test-support.js";
 import {
   buildEmbeddedRunnerAssistant,
@@ -59,10 +61,14 @@ describe("terminal auth resolution", () => {
       expected: "openai isn't accepting your saved login.",
     },
   ])("surfaces provider recovery guidance for $reason terminal failures", async (testCase) => {
-    const text = await resolveTerminalText({
-      assistantProfileFailureReason: testCase.reason,
-      retryState: { emptyResponseAttempts: 1 },
-    });
+    const text = await withPluginRuntimeGenerationScope(
+      { metadataSnapshot: createPluginMetadataSnapshotFixture() },
+      () =>
+        resolveTerminalText({
+          assistantProfileFailureReason: testCase.reason,
+          retryState: { emptyResponseAttempts: 1 },
+        }),
+    );
     expect(text).toContain(testCase.expected);
     expect(text).toContain("openclaw configure");
   });

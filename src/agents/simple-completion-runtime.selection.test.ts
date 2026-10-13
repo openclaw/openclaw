@@ -1,6 +1,7 @@
 // Verifies simple-completion model selection preserves provider, model, and profile refs.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import {
   acquireSimpleCompletionModelForAgent,
@@ -8,10 +9,29 @@ import {
 } from "./simple-completion-runtime.js";
 import type { SimpleCompletionModelResolver } from "./simple-completion-scope.js";
 
+const manifestPlugins = createPluginMetadataSnapshotFixture({
+  plugins: [
+    {
+      id: "google",
+      modelIdNormalization: {
+        providers: {
+          google: { aliases: { "gemini-3.1-flash-lite-preview": "gemini-3.1-flash-lite" } },
+        },
+      },
+    },
+  ],
+});
+
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
+  resolvePluginMetadataSnapshotAsync: async () => manifestPlugins,
+}));
+
 function resolveSimpleCompletionSelectionForAgent(
   params: Parameters<typeof resolveSimpleCompletionSelectionForAgentBase>[0],
 ) {
   return resolveSimpleCompletionSelectionForAgentBase({
+    manifestPlugins,
     ...params,
     cfg: createCanonicalAgentConfigFixture(params.cfg).config,
   });
@@ -47,6 +67,7 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
 
     expect(
       resolveSimpleCompletionSelectionForAgentBase({
+        manifestPlugins,
         cfg,
         agentId: "worker",
         modelRef: "fast",
@@ -54,6 +75,7 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
     ).toMatchObject({ provider: "anthropic", modelId: "worker-model" });
     expect(
       resolveSimpleCompletionSelectionForAgentBase({
+        manifestPlugins,
         cfg,
         agentId: "main",
         modelRef: "fast",
@@ -226,6 +248,7 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
     };
     expect(
       resolveSimpleCompletionSelectionForAgentBase({
+        manifestPlugins,
         cfg,
         agentId: "main",
         modelRef: "fixture/operation",

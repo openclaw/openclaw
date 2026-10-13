@@ -6,7 +6,7 @@ import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
+import { createOpenClawCodingToolsAsync } from "./agent-tools.js";
 import { addSession, markExited } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
@@ -100,16 +100,16 @@ function backgroundProcess(sessionKey: string, scopeKey = sessionKey) {
   return process;
 }
 
-function requireTool(tools: ReturnType<typeof createTestOpenClawTools>, name: string) {
+function requireTool(tools: Awaited<ReturnType<typeof createTestOpenClawTools>>, name: string) {
   const tool = tools.find((candidate) => candidate.name === name);
   assert.isDefined(tool);
   return tool;
 }
 
 function createTestOpenClawTools(
-  options: NonNullable<Parameters<typeof createOpenClawCodingTools>[0]> = {},
+  options: NonNullable<Parameters<typeof createOpenClawCodingToolsAsync>[0]> = {},
 ) {
-  return createOpenClawCodingTools({
+  return createOpenClawCodingToolsAsync({
     ...options,
     config: {
       ...options.config,
@@ -188,7 +188,7 @@ describe("requester yield ownership", () => {
       });
     }
     const onYield = vi.fn();
-    const tools = createTestOpenClawTools({
+    const tools = await createTestOpenClawTools({
       config,
       sessionKey,
       sessionId: "envelope-session",
@@ -391,7 +391,7 @@ describe("requester yield ownership", () => {
   it("omits yield for the execution identity and leaves its child owned", async () => {
     await seedRequiredChild();
     const before = structuredClone(getSubagentRunByRunId("run-child"));
-    const tools = createTestOpenClawTools({
+    const tools = await createTestOpenClawTools({
       sessionKey: "agent:main:telegram:default:direct:1234",
       runSessionKey: CRON_RUN_KEY,
       sessionId: "cron-requester-session",
@@ -427,7 +427,7 @@ describe("requester yield ownership", () => {
       });
       const process = backgroundProcess(sessionKey, scopeKey);
       const onYield = vi.fn();
-      const tools = createTestOpenClawTools({
+      const tools = await createTestOpenClawTools({
         sessionKey: controllerKey,
         runSessionKey: runKey,
         exec: { scopeKey },
@@ -484,12 +484,14 @@ describe("requester yield ownership", () => {
         delete process.sessionKey;
       }
       const onYield = vi.fn();
-      const tool = createTestOpenClawTools({
-        sessionKey: "agent:main:subagent:watcher",
-        sessionId: "watcher-session",
-        runId: "run-watcher",
-        onYield,
-      }).find((candidate) => candidate.name === "sessions_yield");
+      const tool = (
+        await createTestOpenClawTools({
+          sessionKey: "agent:main:subagent:watcher",
+          sessionId: "watcher-session",
+          runId: "run-watcher",
+          onYield,
+        })
+      ).find((candidate) => candidate.name === "sessions_yield");
       assert.isDefined(tool);
 
       expect((await tool.execute("yield-watcher", { waitFor: "message" })).details).toMatchObject({
@@ -503,13 +505,15 @@ describe("requester yield ownership", () => {
     const sessionKey = "agent:main:subagent:watcher";
     backgroundProcess(sessionKey);
     const onYield = vi.fn();
-    const tool = createTestOpenClawTools({
-      sessionKey,
-      sessionId: "watcher-session",
-      runId: "run-requester",
-      claimYieldCompletion: () => true,
-      onYield,
-    }).find((candidate) => candidate.name === "sessions_yield");
+    const tool = (
+      await createTestOpenClawTools({
+        sessionKey,
+        sessionId: "watcher-session",
+        runId: "run-requester",
+        claimYieldCompletion: () => true,
+        onYield,
+      })
+    ).find((candidate) => candidate.name === "sessions_yield");
     assert.isDefined(tool);
 
     expect((await tool.execute("yield-watcher", {})).details).toMatchObject({
@@ -526,17 +530,19 @@ describe("requester yield ownership", () => {
       requesterTurnRunId: undefined,
     });
     const onYield = vi.fn();
-    const tool = createTestOpenClawTools({
-      sessionKey,
-      sessionId: "watcher-session",
-      runId: "run-watcher",
-      claimYieldCompletion: async () => {
-        await Promise.resolve();
-        backgroundProcess(sessionKey);
-        return false;
-      },
-      onYield,
-    }).find((candidate) => candidate.name === "sessions_yield");
+    const tool = (
+      await createTestOpenClawTools({
+        sessionKey,
+        sessionId: "watcher-session",
+        runId: "run-watcher",
+        claimYieldCompletion: async () => {
+          await Promise.resolve();
+          backgroundProcess(sessionKey);
+          return false;
+        },
+        onYield,
+      })
+    ).find((candidate) => candidate.name === "sessions_yield");
     assert.isDefined(tool);
 
     expect((await tool.execute("yield-watcher", {})).details).toMatchObject({
@@ -584,7 +590,7 @@ describe("requester yield ownership", () => {
         tools: policy,
       };
       const inheritedToolAllowlistRef: string[] = [];
-      const parent = createTestOpenClawTools({
+      const parent = await createTestOpenClawTools({
         config,
         sessionKey: CRON_RUN_KEY,
         inheritedToolAllowlistRef,
@@ -605,7 +611,7 @@ describe("requester yield ownership", () => {
           inheritedToolAllow: inheritedToolAllowlistRef,
         },
       );
-      const child = createTestOpenClawTools({
+      const child = await createTestOpenClawTools({
         config: { ...config, tools: { profile: "coding" } },
         sessionKey: childSessionKey,
       });

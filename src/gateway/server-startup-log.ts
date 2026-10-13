@@ -39,6 +39,7 @@ export async function logGatewayStartup(params: {
     agentId: tryResolveAmbientOwnerAgentId(params.cfg),
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    manifestPlugins: params.manifestRecords,
   });
   const agentModelLog = formatAgentModelStartupLogLine({
     cfg: params.cfg,

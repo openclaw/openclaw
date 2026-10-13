@@ -299,7 +299,7 @@ class ProviderAdapterEmbeddings implements Embeddings {
     return await runProviderAdapterLifecycle(async () => {
       await drainRetainedProviders();
       const providerId = embedding.provider;
-      const { getMemoryEmbeddingProvider, registerRuntimeAuthProfileStoreMutationListener } =
+      const { getMemoryEmbeddingProviderAsync, registerRuntimeAuthProfileStoreMutationListener } =
         await loadMemoryEmbeddingProviderModule();
       if (!this.closed && !this.unregisterAuthMutationListener) {
         // Auth profiles can rotate without replacing config. Observe their owner
@@ -308,7 +308,7 @@ class ProviderAdapterEmbeddings implements Embeddings {
           (event) => this.invalidateProvidersForAuthMutation(event),
         );
       }
-      const adapter = getMemoryEmbeddingProvider(providerId, config);
+      const adapter = await getMemoryEmbeddingProviderAsync(providerId, config);
       if (!adapter) {
         throw new Error(`Unknown memory embedding provider: ${providerId}`);
       }

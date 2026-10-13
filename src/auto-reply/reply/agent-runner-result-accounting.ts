@@ -11,6 +11,7 @@ import type { SessionActorReducer } from "../../config/sessions/session-actor-co
 import { reduceSessionActorEntry } from "../../config/sessions/session-actor-reducers.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
 import { normalizeVerboseLevel } from "../thinking.js";
@@ -413,7 +414,12 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     // pending live-switch flag; CLI harness runs never hit the embedded
     // attempt-recovery clear, so /status would report the switch forever.
     if (completion && sessionKey && hadPendingLiveModelSwitch) {
+      const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+        config: cfg,
+        allowWorkspaceScopedCurrent: true,
+      });
       const reducer = prepareLiveModelSwitchAfterRun({
+        metadataSnapshot,
         cfg,
         sessionKey,
         agentId: followupRun.run.agentId,

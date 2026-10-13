@@ -8,6 +8,7 @@ import {
 } from "../config/config.js";
 import { withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
@@ -107,6 +108,7 @@ describe("Doctor gateway bind persistence", () => {
     async (scenario) => {
       await withTempHome(async (home) => {
         await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+          await prepareBundledDiscoveryMode();
           const configPath = await writeOpenClawConfig(home, {
             gateway: { $include: "gateway.json" },
           });

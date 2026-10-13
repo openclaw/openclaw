@@ -32,11 +32,12 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { runReplyAgent } from "./agent-runner-run.js";
 import {
   createTestFollowupRun,
   installAgentRunnerMemoryFixture,
   isModelRuntimeContextCarrier,
+  runTestReplyAgent as runReplyAgent,
+  withAgentRunnerTestMetadata,
 } from "./agent-runner.test-fixtures.js";
 import { createTypingController } from "./typing.js";
 
@@ -232,7 +233,10 @@ describe("required maintenance with restart-safe admitted input", () => {
           await setSessionMcpRuntimeScheduler(scheduler);
           await state.writeConfig(cfg);
           setRuntimeConfigSnapshot(cfg);
-          const admittedRunContext = await admissionOwner.admit("embedded");
+          const admittedRunContext = await withAgentRunnerTestMetadata(
+            { config: cfg, workspaceDir: state.workspaceDir },
+            () => admissionOwner.admit("embedded"),
+          );
           const assertCurrent = resolveAdmittedRunActiveAssertion(admittedRunContext);
           if (!assertCurrent) {
             throw new Error("Missing real admitted run authority");

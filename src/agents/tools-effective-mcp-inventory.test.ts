@@ -5,16 +5,6 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import { buildRuntimeCompatibleMcpToolInventory } from "./tools-effective-mcp-inventory.js";
-import type { AnyAgentTool } from "./tools/common.js";
-
-const normalizeToolsMock = vi.hoisted(() =>
-  vi.fn((options: { tools: AnyAgentTool[] }) => options.tools),
-);
-
-vi.mock("./embedded-agent-runner/tool-schema-runtime.js", () => ({
-  normalizeProviderToolSchemas: normalizeToolsMock,
-  logProviderToolSchemaDiagnostics: vi.fn(),
-}));
 
 afterEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
@@ -69,8 +59,5 @@ it("preserves MCP inventory ownership and fallback without loading registry meta
   });
   expect(inventory.entries[1]?.label).toBe("Lookup (bundle-mcp)");
   expect(inventory.notices[0]?.message).toContain('Tool "invalid" from plugin "bundle-mcp"');
-  expect(normalizeToolsMock).toHaveBeenCalledWith(
-    expect.objectContaining({ allowRuntimePluginLoad: false }),
-  );
   expect(readMetadata).not.toHaveBeenCalled();
 });

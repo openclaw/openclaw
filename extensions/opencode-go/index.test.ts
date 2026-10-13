@@ -74,8 +74,10 @@ async function captureGoWirePayload({
     maxTokens: 8192,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   };
+  const streamStarted = Promise.withResolvers<void>();
   const baseStreamFn = vi.fn<StreamFn>((runtimeModel, _context, options) => {
     void options?.onPayload?.(payload, runtimeModel);
+    streamStarted.resolve();
     return createAssistantMessageEventStream();
   });
   const wrap = standalone ? provider.wrapSimpleCompletionStreamFn : provider.wrapStreamFn;
@@ -88,7 +90,8 @@ async function captureGoWirePayload({
     thinkingLevel,
   });
   expect(streamFn).toBeTypeOf("function");
-  await streamFn?.(model, { messages: [] }, {});
+  const stream = await streamFn?.(model, { messages: [] }, {});
+  await Promise.race([streamStarted.promise, stream?.result()]);
   expect(baseStreamFn).toHaveBeenCalledOnce();
   return payload;
 }
@@ -580,9 +583,11 @@ describe("opencode-go provider plugin", () => {
       },
     ] as const) {
       const capturedHeaders: Array<Record<string, string> | undefined> = [];
+      let streamStarted = Promise.withResolvers<void>();
       const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
         capturedHeaders.push((options as { headers?: Record<string, string> })?.headers);
-        return {} as never;
+        streamStarted.resolve();
+        return createAssistantMessageEventStream();
       };
       const streamFn = testCase.wrap?.({
         streamFn: baseStreamFn as never,
@@ -593,7 +598,7 @@ describe("opencode-go provider plugin", () => {
       } as never);
 
       expect(streamFn).toBeTypeOf("function");
-      await streamFn?.(
+      const nativeStream = await streamFn?.(
         {
           provider: "opencode-go",
           id: "qwen3.8-max",
@@ -603,7 +608,9 @@ describe("opencode-go provider plugin", () => {
         {} as never,
         { headers: { "User-Agent": "configured-client/1.0", "X-Custom": "1" } },
       );
-      await streamFn?.(
+      await Promise.race([streamStarted.promise, nativeStream?.result()]);
+      streamStarted = Promise.withResolvers<void>();
+      const proxyStream = await streamFn?.(
         {
           provider: "opencode-go",
           id: "qwen3.8-max",
@@ -613,6 +620,7 @@ describe("opencode-go provider plugin", () => {
         {} as never,
         { headers: { "User-Agent": "configured-client/2.0", "X-Custom": "2" } },
       );
+      await Promise.race([streamStarted.promise, proxyStream?.result()]);
 
       expect(capturedHeaders).toEqual([
         {

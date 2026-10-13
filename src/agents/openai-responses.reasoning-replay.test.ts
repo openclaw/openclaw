@@ -99,7 +99,6 @@ async function runAbortedOpenAIResponsesStream(params: {
 }) {
   // Abort after payload capture so tests inspect serialization without network I/O.
   const controller = new AbortController();
-  controller.abort();
   let payload: Record<string, unknown> | undefined;
 
   const responseStream = stream(
@@ -117,6 +116,7 @@ async function runAbortedOpenAIResponsesStream(params: {
       signal: controller.signal,
       onPayload: (nextPayload: unknown) => {
         payload = nextPayload as Record<string, unknown>;
+        controller.abort();
       },
     } as never,
   );

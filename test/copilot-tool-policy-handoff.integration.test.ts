@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { Model } from "openclaw/plugin-sdk/llm";
+import {
+  useBundledProviderPolicyArtifactsForTest,
+  useProviderCatalogMetadata,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createCopilotToolPolicyHarnessFixtureForTest } from "../extensions/copilot/test-api.js";
 import {
@@ -13,6 +17,12 @@ import { clearAgentHarnesses, registerAgentHarness } from "../src/agents/harness
 import { runAgentHarnessAttempt } from "../src/agents/harness/selection.js";
 import { replaceSessionEntry } from "../src/config/sessions/session-accessor.js";
 import { useSessionStoreTempDirs } from "../src/test-utils/session-state-cleanup.js";
+
+useProviderCatalogMetadata(
+  new URL("../extensions/copilot/", import.meta.url),
+  new URL("../extensions/github-copilot/", import.meta.url),
+);
+useBundledProviderPolicyArtifactsForTest(["github-copilot"]);
 
 const createdFixtures: Array<ReturnType<typeof createCopilotToolPolicyHarnessFixtureForTest>> = [];
 

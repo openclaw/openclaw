@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { noteCommittedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -30,11 +31,22 @@ const acquireSnapshotMock =
   vi.fn<(input: PreparedModelRuntimeInput) => Promise<PreparedModelRuntimeSnapshot>>();
 const releaseSnapshotMock = vi.fn();
 const augmentCatalogMock =
-  vi.fn<(params: { snapshot: ModelCatalogSnapshot }) => Promise<ModelCatalogSnapshot>>();
+  vi.fn<typeof import("./harness/model-catalog.js").augmentModelCatalogWithAgentHarness>();
+const metadataSnapshotMock =
+  vi.fn<
+    typeof import("../plugins/plugin-metadata-snapshot.js").resolvePluginMetadataSnapshotAsync
+  >();
 
+// mock-isolation: only harness catalog augmentation is used by this scoped fixture.
 vi.mock("./harness/model-catalog.js", () => ({
-  augmentModelCatalogWithAgentHarness: (params: { snapshot: ModelCatalogSnapshot }) =>
+  augmentModelCatalogWithAgentHarness: (params: Parameters<typeof augmentCatalogMock>[0]) =>
     augmentCatalogMock(params),
+}));
+
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
+  resolvePluginMetadataSnapshotAsync: (...params: Parameters<typeof metadataSnapshotMock>) =>
+    metadataSnapshotMock(...params),
 }));
 
 vi.mock("./model-catalog.js", () => ({ loadManifestModelCatalog: () => manifestCatalogMock() }));
@@ -99,7 +111,8 @@ const entry = {
 } satisfies ModelCatalogEntry;
 
 describe("loadProviderScopedThinkingCatalog", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await preparePluginMetadataMachineStateAsync({});
     noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" });
     vi.clearAllMocks();
     manifestCatalogMock.mockReturnValue([]);
@@ -114,6 +127,12 @@ describe("loadProviderScopedThinkingCatalog", () => {
     });
     acquireSnapshotMock.mockImplementation(async (input) => owner(input.config, []));
     augmentCatalogMock.mockImplementation(async ({ snapshot }) => snapshot);
+    metadataSnapshotMock.mockImplementation(async ({ config }) =>
+      createPluginMetadataSnapshot({
+        config,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+      }),
+    );
   });
 
   it("reuses paired completed catalogs for thinking capabilities", async () => {
@@ -152,6 +171,8 @@ describe("loadProviderScopedThinkingCatalog", () => {
     expect(manifestCatalogMock).not.toHaveBeenCalled();
     expect(scopedCatalogMock).not.toHaveBeenCalled();
     expect(acquireSnapshotMock).not.toHaveBeenCalled();
+    expect(metadataSnapshotMock).not.toHaveBeenCalled();
+    expect(augmentCatalogMock.mock.calls[0]?.[0].manifestPlugins).toBe(snapshot.metadataSnapshot);
   });
 
   it("keeps ownerless native observations passive", async () => {
@@ -159,6 +180,8 @@ describe("loadProviderScopedThinkingCatalog", () => {
     const staticEntry = { ...entry, reasoning: true };
     acquireSnapshotMock.mockResolvedValue(owner(config, [staticEntry]));
     const entries = [{ ...staticEntry, nativeRuntime: "test-harness" }];
+    const metadataSnapshot = owner(config, []).metadataSnapshot;
+    metadataSnapshotMock.mockResolvedValue(metadataSnapshot);
     augmentCatalogMock.mockResolvedValue({ entries, routeVariants: entries });
     const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
     expect(
@@ -172,6 +195,8 @@ describe("loadProviderScopedThinkingCatalog", () => {
     expect(releaseSnapshotMock).not.toHaveBeenCalled();
     expect(manifestCatalogMock).not.toHaveBeenCalled();
     expect(scopedCatalogMock).not.toHaveBeenCalled();
+    expect(metadataSnapshotMock).toHaveBeenCalledOnce();
+    expect(augmentCatalogMock.mock.calls[0]?.[0].manifestPlugins).toBe(metadataSnapshot);
   });
 
   it.each([

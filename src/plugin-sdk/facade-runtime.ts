@@ -120,6 +120,12 @@ function loadFacadeActivationCheckRuntime(): FacadeActivationCheckRuntimeModule 
   }
 }
 
+async function prepareFacadeMetadata(params: BundledPluginPublicSurfaceParams): Promise<void> {
+  const { preparePluginMetadataMachineStateAsync } =
+    await import("../plugins/installed-plugin-index-record-state.js");
+  await preparePluginMetadataMachineStateAsync({ env: params.env });
+}
+
 // Async and synchronous host readers share the same native module and memo.
 async function loadFacadeActivationCheckRuntimeAsync(): Promise<FacadeActivationCheckRuntimeModule> {
   const module =
@@ -184,6 +190,7 @@ export function loadActivatedBundledPluginPublicSurfaceModuleSync<T extends obje
 export async function loadActivatedBundledPluginPublicSurfaceModule<T extends object>(
   params: BundledPluginPublicSurfaceParams,
 ): Promise<T> {
+  await prepareFacadeMetadata(params);
   await loadFacadeActivationCheckRuntimeAsync().catch(throwFacadeActivationCheckRuntimeUnavailable);
   return loadActivatedBundledPluginPublicSurfaceModuleSync<T>(params);
 }
@@ -206,6 +213,7 @@ export function tryLoadActivatedBundledPluginPublicSurfaceModuleSync<T extends o
 export async function tryLoadActivatedBundledPluginPublicSurfaceModule<T extends object>(
   params: BundledPluginPublicSurfaceParams,
 ): Promise<T | null> {
+  await prepareFacadeMetadata(params);
   await loadFacadeActivationCheckRuntimeAsync();
   return tryLoadActivatedBundledPluginPublicSurfaceModuleSync<T>(params);
 }

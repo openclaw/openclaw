@@ -6,6 +6,7 @@ import {
   registerProviderPlugin,
   requireRegisteredProvider,
   resolveProviderPluginChoice,
+  useProviderCatalogMetadata,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
@@ -13,6 +14,8 @@ import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import xiaomiPlugin from "./index.js";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 type OpenAICompletionsModel = Model<"openai-completions">;
 

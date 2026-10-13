@@ -5,9 +5,9 @@ import {
   findNormalizedProviderKey,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { resolvePrimaryStringValue } from "../../packages/normalization-core/src/string-coerce.js";
-import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import {
   normalizeAgentModelMapForConfig,
   normalizeAgentModelRefForConfig,
@@ -97,7 +97,7 @@ function normalizeProviderModelsForConfig(
   const seenById = new Map<string, number>();
 
   for (const model of models) {
-    const id = normalizeConfiguredProviderCatalogModelId(providerId, model.id);
+    const id = normalizeConfiguredProviderCatalogModelId(normalizeProviderId(providerId), model.id);
     const normalized = id === model.id ? model : { ...model, id };
     if (normalized !== model) {
       mutated = true;

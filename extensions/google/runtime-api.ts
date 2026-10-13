@@ -13,6 +13,7 @@ export {
   createGoogleGenerativeAiTransportStreamFn,
   resolveGoogleGemini3ThinkingLevel,
   resolveGoogleGenerativeAiHttpRequestConfig,
+  resolveGoogleGenerativeAiHttpRequestConfigAsync,
   sanitizeGoogleThinkingPayload,
   stripInvalidGoogleThinkingBudget,
 } from "./api.js";

@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import * as runtimeConfig from "../config/config.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { resolveProviderAuths } from "./provider-usage.auth.js";
 
 const {
@@ -45,26 +48,8 @@ vi.mock("../plugins/provider-runtime.js", async () => ({
   )),
   resolveProviderUsageAuthWithPlugin: resolvePlugin,
 }));
-vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
-  loadManifestMetadataSnapshot: () => ({
-    plugins: [
-      {
-        id: "minimax",
-        origin: "bundled",
-        providers: ["minimax", "minimax-portal"],
-      },
-      {
-        id: "openai",
-        origin: "bundled",
-        providers: ["openai"],
-        providerUsageAuthEnvVars: {
-          openai: ["OPENAI_ADMIN_KEY"],
-        },
-      },
-    ],
-  }),
-}));
 
+// mock-isolation: Credential precedence uses fixed environment metadata, not installed providers.
 vi.mock("../secrets/provider-env-vars.js", () => ({
   listKnownProviderAuthEnvVarNamesCore: () => [
     "ANTHROPIC_API_KEY",
@@ -74,6 +59,7 @@ vi.mock("../secrets/provider-env-vars.js", () => ({
   resolveProviderAuthEnvVarCandidatesCore: () => ({
     anthropic: ["ANTHROPIC_API_KEY"],
     minimax: ["MINIMAX_CODE_PLAN_KEY"],
+    "minimax-portal": ["MINIMAX_OAUTH_TOKEN"],
     openai: ["OPENAI_API_KEY"],
     zai: ["ZAI_API_KEY"],
   }),
@@ -82,6 +68,7 @@ vi.mock("../secrets/provider-env-vars.js", () => ({
     envCandidateMap: {
       anthropic: ["ANTHROPIC_API_KEY"],
       minimax: ["MINIMAX_CODE_PLAN_KEY"],
+      "minimax-portal": ["MINIMAX_OAUTH_TOKEN"],
       openai: ["OPENAI_API_KEY"],
       zai: ["ZAI_API_KEY"],
     },
@@ -102,12 +89,45 @@ function seed(profiles: AuthProfileStore["profiles"], orders: Record<string, str
 
 describe("provider usage auth boundary", () => {
   beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync").mockResolvedValue(
+      createPluginMetadataSnapshotFixture({
+        plugins: [
+          { id: "minimax", providers: ["minimax", "minimax-portal"] },
+          {
+            id: "openai",
+            providers: ["openai"],
+            providerUsageAuthEnvVars: { openai: ["OPENAI_ADMIN_KEY"] },
+          },
+        ],
+      }),
+    );
     hasSource.mockReset().mockReturnValue(false);
     loadStore.mockReset().mockImplementation(createEmptyStore);
     loadLocalStore.mockReset().mockImplementation(createEmptyStore);
     order.mockReset().mockReturnValue([]);
     resolveKey.mockReset().mockResolvedValue(null);
     resolvePlugin.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("prepares omitted runtime config before deriving usage auth metadata", async () => {
+    const config = { tools: { profile: "coding" as const } };
+    const env = { ZAI_API_KEY: "standalone-key" };
+    const readConfig = Object.assign(
+      vi.fn(async () => config),
+      { assertCurrent: vi.fn() },
+    );
+    vi.spyOn(runtimeConfig, "captureRuntimeConfigAsyncReader").mockReturnValue(readConfig);
+
+    expect(
+      await resolveProviderAuths({ providers: ["zai"], env, agentDir: "/tmp/openclaw-agent" }),
+    ).toEqual([{ provider: "zai", token: "standalone-key" }]);
+    expect(readConfig).toHaveBeenCalledOnce();
+    expect(pluginMetadata.resolvePluginMetadataSnapshotAsync).toHaveBeenCalledExactlyOnceWith({
+      config,
+      env,
+      allowWorkspaceScopedCurrent: true,
+    });
   });
 
   it("normalizes direct plugin candidates ahead of provider environment credentials", async () => {

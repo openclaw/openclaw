@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LookupFn } from "../../infra/net/ssrf.js";
 import * as logger from "../../logger.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import "./web-fetch.test-mocks.js";
 import { createWebFetchTool } from "./web-fetch.js";
@@ -259,6 +260,7 @@ describe("web_fetch headers and response extraction", () => {
   });
 
   it("bypasses Firecrawl when runtime metadata marks Firecrawl inactive", async () => {
+    await prepareBundledDiscoveryMode(process.env);
     // Runtime metadata is authoritative for the current credential snapshot; a
     // stale configured provider should not force provider fallback.
     const fetchSpy = vi

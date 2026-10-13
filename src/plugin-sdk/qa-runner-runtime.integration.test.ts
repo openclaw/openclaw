@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import * as activationCheckRuntime from "./facade-activation-check.runtime.js";
 import {
@@ -115,6 +116,7 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
       "utf8",
     );
 
+    await preparePluginMetadataMachineStateAsync({});
     const contributions = listQaRunnerCliContributions();
     const contribution = contributions[0];
     expect(contribution?.status).toBe("available");
@@ -140,7 +142,7 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
     ]);
   });
 
-  it("requires linked runners to expose the dedicated QA surface", () => {
+  it("requires linked runners to expose the dedicated QA surface", async () => {
     const stateDir = tempDirs.make("openclaw-qa-runner-legacy-state-");
     const pluginDir = path.join(stateDir, "extensions", "qa-legacy");
     const configPath = path.join(stateDir, "openclaw.json");
@@ -191,6 +193,7 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
       "utf8",
     );
 
+    await preparePluginMetadataMachineStateAsync({});
     expect(() => listQaRunnerCliContributions()).toThrow(
       "Unable to resolve bundled plugin public surface qa-legacy/qa-runner-api.js",
     );

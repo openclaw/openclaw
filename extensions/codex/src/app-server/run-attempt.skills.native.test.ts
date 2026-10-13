@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
+import { preparePluginTestRuntimeMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { createCodexNativeTestState } from "./native-app-server.test-support.js";
@@ -169,6 +170,7 @@ async function createNativeFixture(modelId: string, contextWindow = 200_000) {
       vi.stubEnv(name, value);
     }
   }
+  await preparePluginTestRuntimeMetadata();
   const fixture = await startResponsesFixture();
   await writeCodexFixtureConfig({
     root,

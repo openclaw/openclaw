@@ -7,7 +7,7 @@ import {
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { runIsolatedCompletion } from "../../agents/isolated-completion.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
-import { resolveCompatibleAgentRuntimeForProvider } from "../../agents/session-runtime-compat.js";
+import { resolveCompatibleAgentRuntimeForProviderAsync } from "../../agents/session-runtime-compat.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-runtime.js";
 import { resolveAutomaticUtilityRuntimeOverride } from "../../agents/utility-model.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -127,7 +127,7 @@ async function runLabelAttempts(
       assertOperatorModelAllowed(params.operatorAuthority, model);
       // The session's runtime override was resolved for its primary provider; a
       // utility model on another provider cannot run through that harness.
-      const selectedRuntime = resolveCompatibleAgentRuntimeForProvider({
+      const selectedRuntime = await resolveCompatibleAgentRuntimeForProviderAsync({
         provider: selection.provider,
         runtime: params.agentHarnessRuntimeOverride,
         cfg: params.cfg,

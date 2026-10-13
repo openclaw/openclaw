@@ -6,6 +6,7 @@ import {
   createModelsListTestContext,
   providerCatalogEntry,
 } from "../gateway/server-methods/models-list-result.openai-routes.test-support.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
@@ -57,6 +58,7 @@ describe("terminal model catalog availability", () => {
           },
           plugins: { enabled: false },
         };
+        await preparePluginMetadataMachineStateAsync({});
         const context = createModelsListTestContext({
           cfg: config,
           agentDir: state.agentDir(),

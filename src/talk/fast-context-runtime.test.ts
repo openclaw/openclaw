@@ -24,7 +24,7 @@ describe("resolveRealtimeVoiceFastContextConsult", () => {
     mocks.authorizeActiveMemorySearchHits.mockReset().mockImplementation(async ({ hits }) => hits);
     mocks.getActiveMemoryProviderCore.mockReset();
     mocks.getActiveMemorySearchManagerCore.mockReset();
-    mocks.isActiveMemoryProviderNative.mockReset().mockReturnValue(true);
+    mocks.isActiveMemoryProviderNative.mockReset().mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -211,7 +211,7 @@ describe("resolveRealtimeVoiceFastContextConsult", () => {
       });
 
     beforeEach(() => {
-      mocks.isActiveMemoryProviderNative.mockReturnValue(false);
+      mocks.isActiveMemoryProviderNative.mockResolvedValue(false);
     });
 
     it("removes unauthorized session hits before building caller context", async () => {

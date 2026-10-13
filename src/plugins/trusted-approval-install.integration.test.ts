@@ -14,7 +14,7 @@ import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resetGlobalHookRunner } from "./hook-runner-global.js";
 import { installPluginFromPath } from "./install.js";
-import { clearPluginRegistryLoadCache, loadOpenClawPlugins } from "./loader.js";
+import { clearPluginRegistryLoadCache, loadOpenClawPluginsAsync } from "./loader.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 import { resolvePluginTools } from "./tools.js";
@@ -151,7 +151,7 @@ async function exerciseProbe(params: {
       entries: { [pluginId]: { enabled: true, config: { output, trace, mode: params.mode } } },
     },
   };
-  const registry = loadOpenClawPlugins({
+  const registry = await loadOpenClawPluginsAsync({
     config,
     workspaceDir: params.root,
     cache: false,

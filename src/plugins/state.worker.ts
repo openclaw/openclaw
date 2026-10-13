@@ -11,6 +11,7 @@ import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js"
 import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "../state/openclaw-state-lease-worker.js";
 import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease.types.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
+import { publishBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import {
   readPluginBindingApprovalsInDatabase,
@@ -18,6 +19,7 @@ import {
 } from "./conversation-binding-state.kernel.js";
 import type { PluginBindingApprovalEntry } from "./conversation-binding-state.types.js";
 import { withPluginInstallRoots } from "./install-root-context.js";
+import { getPersistedInstalledPluginIndexCacheEntry } from "./installed-plugin-index-record-state.js";
 import {
   publishPluginSourceAdmissionInDatabase,
   refreshPersistedInstalledPluginIndexWithLeaseSync,
@@ -33,6 +35,10 @@ import {
 import { HostedCatalogSignedFeedMonotonicityError } from "./official-external-plugin-catalog-source.js";
 import type { HostedOfficialExternalPluginCatalogSnapshot } from "./official-external-plugin-catalog.types.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import {
+  INSTALLED_PLUGIN_INDEX_STATE_KEY,
+  readPluginMetadataStateRowsInDatabase,
+} from "./plugin-metadata-state-row.kernel.js";
 import type { PluginSourceAdmissionPublication } from "./plugin-source-admission.types.js";
 
 function indexWriteLease(identity: OpenClawStateLeaseIdentity): InstalledPluginIndexWriteLease {
@@ -75,9 +81,27 @@ export const pluginRuntimeOperations = {
     return withPluginInstallRoots(installRoots, () =>
       withPluginCache(createPluginCache(), () => {
         const database = open();
+        const env = cloneEnvWithPlatformSemantics(prepared.env);
+        const includeIndex = prepared.reason === "policy-changed" || !prepared.installRecords;
+        const rows = readPluginMetadataStateRowsInDatabase(
+          database.db,
+          includeIndex
+            ? ["plugins.bundledDiscovery", INSTALLED_PLUGIN_INDEX_STATE_KEY]
+            : ["plugins.bundledDiscovery"],
+        );
+        const discoveryMode = rows.find((row) => row.state_key === "plugins.bundledDiscovery");
+        publishBundledDiscoveryMode(
+          discoveryMode ? JSON.parse(discoveryMode.value_json) : undefined,
+          env,
+        );
+        if (includeIndex) {
+          getPersistedInstalledPluginIndexCacheEntry({ env, filePath: database.path }, () =>
+            rows.find((row) => row.state_key === INSTALLED_PLUGIN_INDEX_STATE_KEY),
+          );
+        }
         return refreshPersistedInstalledPluginIndexWithLeaseSync({
           ...prepared,
-          env: cloneEnvWithPlatformSemantics(prepared.env),
+          env,
           candidates: candidates && restoreCandidates(candidates),
           discovery: discovery && {
             candidates: restoreCandidates(discovery.candidates),

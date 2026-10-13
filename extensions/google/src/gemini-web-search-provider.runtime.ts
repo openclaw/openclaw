@@ -27,7 +27,7 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveGoogleApiClientHeaders } from "../google-api-client-header.js";
+import { resolveGoogleApiClientHeadersAsync } from "../google-api-client-header.js";
 import {
   resolveGeminiConfig,
   resolveGeminiBaseUrl,
@@ -223,20 +223,20 @@ function resolveGeminiWebSearchHeaders(gemini?: GeminiConfig): Record<string, st
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
-function buildGeminiRequestHeaders(params: {
+async function buildGeminiRequestHeaders(params: {
   apiKey: string;
   baseUrl: string;
   operatorHeaders?: Record<string, string>;
-}): HeadersInit {
+}): Promise<HeadersInit> {
   const providerHeaders = {
     "Content-Type": "application/json",
     "x-goog-api-key": params.apiKey,
-    ...resolveGoogleApiClientHeaders({
+    ...(await resolveGoogleApiClientHeadersAsync({
       baseUrl: params.baseUrl,
       api: "google-generative-ai",
       capability: "other",
       transport: "http",
-    }),
+    })),
   };
   if (!params.operatorHeaders) {
     return providerHeaders;
@@ -261,7 +261,7 @@ async function runGeminiSearch(params: {
   const endpoint = `${params.baseUrl}/models/${params.model}:generateContent`;
   const googleSearch =
     params.timeRangeFilter === undefined ? {} : { timeRangeFilter: params.timeRangeFilter };
-  const headers = buildGeminiRequestHeaders({
+  const headers = await buildGeminiRequestHeaders({
     apiKey: params.apiKey,
     baseUrl: params.baseUrl,
     operatorHeaders: params.headers,

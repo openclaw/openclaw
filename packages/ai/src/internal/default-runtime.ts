@@ -3,6 +3,7 @@
 // consumers create isolated runtimes via createLlmRuntime(); exporting these
 // from the root barrel would reintroduce the mutable process-global registry.
 import { createApiRegistry, type ApiRegistry } from "../api-registry.js";
+import { registerBuiltInApiProviders } from "../providers/register-builtins.js";
 import { createLlmRuntime, type LlmRuntime } from "../stream.js";
 
 type DefaultRuntimeState = {
@@ -18,6 +19,7 @@ function resolveDefaultRuntime(): DefaultRuntimeState {
     return globalStore[DEFAULT_RUNTIME_KEY] as DefaultRuntimeState;
   }
   const registry = createApiRegistry();
+  registerBuiltInApiProviders(registry);
   const runtime = createLlmRuntime(registry);
   const state = { registry, runtime };
   globalStore[DEFAULT_RUNTIME_KEY] = state;

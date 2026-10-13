@@ -122,9 +122,22 @@ const mockCodexProvider = vi.hoisted(() => ({
   credentialPath: "",
 }));
 
-vi.mock("../plugins/web-search-providers.runtime.js", () => ({
-  resolvePluginWebSearchProviders: webSearchProviderMocks.resolvePluginWebSearchProviders,
-}));
+// mock-isolation: Setup interaction fixtures provide exact provider choices without loading plugin runtimes.
+vi.mock("../plugins/web-search-providers.runtime.js", async () => {
+  const { preparePluginMetadataMachineStateAsync } =
+    await import("../plugins/installed-plugin-index-record-state.js");
+  return {
+    resolvePluginWebSearchProvidersAsync: async (
+      params: Parameters<
+        typeof import("../plugins/web-search-providers.runtime.js").resolvePluginWebSearchProvidersAsync
+      >[0],
+    ) => {
+      const activateMetadata = await preparePluginMetadataMachineStateAsync({ env: params.env });
+      activateMetadata();
+      return webSearchProviderMocks.resolvePluginWebSearchProviders(params);
+    },
+  };
+});
 
 const ensureOnboardingPluginInstalled = vi.hoisted(() =>
   vi.fn<typeof import("../commands/onboarding-plugin-install.js").ensureOnboardingPluginInstalled>(

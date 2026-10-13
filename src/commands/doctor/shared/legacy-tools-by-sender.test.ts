@@ -1,11 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { getConfigValueAtPath, setConfigValueAtPath } from "../../../config/config-paths.js";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import { resolveToolsBySender } from "../../../config/tools-by-sender.js";
 import type { GroupToolPolicyBySenderConfig } from "../../../config/types.tools.js";
 import { validateConfigObjectRaw } from "../../../config/validation-core.js";
+import { preparePluginMetadataMachineStateAsync } from "../../../plugins/installed-plugin-index-record-state.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
+
+beforeEach(async () => {
+  await preparePluginMetadataMachineStateAsync({});
+});
 
 describe("Doctor sender tool policy migration", () => {
   const opaque = { toolsBySender: { external: { template: "unchanged" } } };

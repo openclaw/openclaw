@@ -23,6 +23,8 @@ import {
   resolveConfiguredChannelPluginIds,
   resolveDiscoverableScopedChannelPluginIds,
 } from "../../../plugins/channel-plugin-ids.js";
+import { withPluginMetadataSnapshotScope } from "../../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../../plugins/plugin-metadata-snapshot.js";
 import type { PluginRegistry } from "../../../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../../../runtime.js";
@@ -79,15 +81,22 @@ async function runPluginStopHooks(registry: PluginRegistry): Promise<void> {
   }
 }
 
-function isGatewayOwnedMessageAction(action: string, scopedChannel: string | undefined): boolean {
+async function isGatewayOwnedMessageAction(
+  action: string,
+  scopedChannel: string | undefined,
+): Promise<boolean> {
   if (!CHANNEL_MESSAGE_ACTION_NAME_SET.has(action) || !scopedChannel) {
     return false;
   }
-  const plugin = getChannelPlugin(scopedChannel);
-  const executionMode = plugin?.actions?.resolveExecutionMode?.({
-    action: action as ChannelMessageActionName,
+  const metadata = await resolvePluginMetadataSnapshotAsync({});
+  return withPluginMetadataSnapshotScope(metadata, () => {
+    const plugin = getChannelPlugin(scopedChannel);
+    return (
+      plugin?.actions?.resolveExecutionMode?.({
+        action: action as ChannelMessageActionName,
+      }) === "gateway"
+    );
   });
-  return executionMode === "gateway";
 }
 
 /** Create shared option decorators and the common message action runner. */
@@ -127,7 +136,7 @@ export function createMessageCliHelpers(messageChannelOptions: string) {
             const preloadPlugins =
               opts.dryRun === true ||
               action === "broadcast" ||
-              !isGatewayOwnedMessageAction(action, scopedChannel);
+              !(await isGatewayOwnedMessageAction(action, scopedChannel));
             await measureCliCommandStartup("config-ready", async () => {
               const { ensureConfigReady } = await import("../config-guard.js");
               await ensureConfigReady({

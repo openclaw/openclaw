@@ -5,6 +5,7 @@ import {
   removeChatAbortControllerEntry,
   type ChatAbortControllerEntry,
 } from "../gateway/chat-abort.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { FailoverError } from "./failover-error.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
 import { createModelFallbackConfig } from "./test-helpers/model-fallback-config-fixture.js";
@@ -37,7 +38,8 @@ function registerExecutingChatSendRun(entries: Map<string, ChatAbortControllerEn
 describe("model fallback run deadline", () => {
   const entries = new Map<string, ChatAbortControllerEntry>();
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await preparePluginMetadataMachineStateAsync({});
     vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
   });
 

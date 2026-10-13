@@ -39,7 +39,7 @@ import { isTrustedOfficialPluginInstallRecord } from "./official-external-instal
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import {
-  resolvePluginMetadataSnapshot,
+  resolvePluginMetadataSnapshotAsync,
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
 
@@ -147,12 +147,12 @@ export async function resolvePluginCapabilityConsent(params: {
     const workspace = resolvePluginControlPlaneWorkspace({ config: params.config, env });
     const metadata =
       params.metadata ??
-      resolvePluginMetadataSnapshot({
+      (await resolvePluginMetadataSnapshotAsync({
         allowCurrent: false,
         config: params.config,
         env,
         ...(workspace.workspaceDir !== undefined ? { workspaceDir: workspace.workspaceDir } : {}),
-      });
+      }));
     const pluginId = metadata.normalizePluginId(params.pluginId);
     const plugin = metadata.index.plugins.find((candidate) => candidate.pluginId === pluginId);
     if (!plugin || plugin.origin === "bundled") {
@@ -442,7 +442,7 @@ export async function prepareManagedPluginArtifactConsentHandler(
   const workspace = resolvePluginControlPlaneWorkspace({ config: params.config, env });
   const metadata =
     Object.keys(previousRecords).length > 0
-      ? resolvePluginMetadataSnapshot({
+      ? await resolvePluginMetadataSnapshotAsync({
           allowCurrent: false,
           config: params.config,
           env,

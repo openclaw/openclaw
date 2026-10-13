@@ -121,7 +121,7 @@ async function lookupFastContext(params: {
     getActiveMemorySearchManagerCore,
     isActiveMemoryProviderNative,
   } = await import("../plugins/memory-runtime.js");
-  if (isActiveMemoryProviderNative({ cfg: params.cfg, agentId: params.agentId })) {
+  if (await isActiveMemoryProviderNative({ cfg: params.cfg, agentId: params.agentId })) {
     // A native provider reads only under the live call's owner-held liveness. Callers
     // released before liveness existed get the unavailable outcome, never a provider read.
     if (!params.callerSuppliedLiveness) {

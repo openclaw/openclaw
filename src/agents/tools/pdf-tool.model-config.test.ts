@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { finalizePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
@@ -50,8 +51,9 @@ function configuredProvider(
   };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   available.clear();
+  await prepareBundledDiscoveryMode(process.env);
   vi.spyOn(modelConfigHelpers, "hasProviderAuthForTool").mockImplementation(({ provider }) =>
     available.has(provider),
   );

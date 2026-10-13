@@ -83,6 +83,9 @@ vi.mock("../plugins/setup-registry.js", () => ({
 
 const env = makeIsolatedEnv();
 const emptyDiscovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
+const slackManifestRegistry = makeRegistry([
+  { id: "slack", channels: ["slack"], origin: "bundled" },
+]);
 const codexManifestResult = loadPluginManifest(path.join(process.cwd(), "extensions", "codex"));
 if (!codexManifestResult.ok) {
   throw new Error(codexManifestResult.error);
@@ -703,6 +706,7 @@ describe("applyPluginAutoEnable core", () => {
         plugins: { entries: { slack: { enabled: false, config: {} } } },
       },
       env,
+      manifestRegistry: slackManifestRegistry,
     });
 
     expect(result.config.plugins?.entries?.slack?.enabled).toBe(false);
@@ -713,6 +717,7 @@ describe("applyPluginAutoEnable core", () => {
     const result = applyPluginAutoEnable({
       config: { channels: { slack: { botToken: "x", enabled: false } } },
       env,
+      manifestRegistry: slackManifestRegistry,
     });
 
     expect(result.config.channels?.slack?.enabled).toBe(false);
@@ -774,7 +779,7 @@ describe("applyPluginAutoEnable core", () => {
       createConfigResolutionFacts([{ varName: "A2A_UNSET_OUT", configPath: unresolvedPath }]),
     );
 
-    const result = applyPluginAutoEnable({ config, env });
+    const result = applyPluginAutoEnable({ config, env, manifestRegistry: slackManifestRegistry });
 
     // The rewrite enabled Slack, so the caller receives a different object than it passed in.
     expect(result.config).not.toBe(config);
@@ -794,7 +799,7 @@ describe("applyPluginAutoEnable core", () => {
       ]),
     );
 
-    const result = applyPluginAutoEnable({ config, env });
+    const result = applyPluginAutoEnable({ config, env, manifestRegistry: slackManifestRegistry });
 
     // Untouched sibling values keep their fact; only the rewritten path may lose it.
     expect(result.config.channels?.slack?.botToken).toBe("${SLACK_UNSET_TOKEN}");
@@ -803,7 +808,7 @@ describe("applyPluginAutoEnable core", () => {
 
   it("leaves a config without loader facts without facts", () => {
     const config: OpenClawConfig = { channels: { slack: { botToken: "x" } } };
-    const result = applyPluginAutoEnable({ config, env });
+    const result = applyPluginAutoEnable({ config, env, manifestRegistry: slackManifestRegistry });
     expect(result.config).not.toBe(config);
     expect(getConfigResolutionFacts(result.config)).toBeNull();
   });

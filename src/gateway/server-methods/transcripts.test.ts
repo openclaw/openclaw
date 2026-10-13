@@ -151,7 +151,7 @@ describe("transcript Gateway read authorization and errors", () => {
 
   beforeEach(() => {
     logGateway.warn.mockClear();
-    vi.spyOn(transcriptProviders, "getTranscriptSourceProvider").mockReturnValue(undefined);
+    vi.spyOn(transcriptProviders, "getTranscriptSourceProvider").mockResolvedValue(undefined);
   });
   afterEach(() => vi.restoreAllMocks());
 
@@ -485,7 +485,7 @@ describe("meeting transcript RPC", () => {
   beforeEach(async () => {
     state = await createOpenClawTestState(profileState);
     const stateDir = state.stateDir;
-    vi.spyOn(transcriptProviders, "getTranscriptSourceProvider").mockReturnValue(undefined);
+    vi.spyOn(transcriptProviders, "getTranscriptSourceProvider").mockResolvedValue(undefined);
     store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     });

@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as preparedModelCatalog from "../agents/prepared-model-catalog.js";
 import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
@@ -17,6 +17,7 @@ import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { loadCronStore, resolveCronJobsStorePath, saveCronStore } from "../cron/store.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -42,6 +43,8 @@ type PublishedOwnerSnapshot = Awaited<
 
 const asPublishedOwner = (value: PublishedModelCatalogOwnerCandidate): PublishedOwnerSnapshot =>
   value as unknown as PublishedOwnerSnapshot;
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("local gateway request context", () => {
   it("keeps local RPC available without claiming Gateway routing or readiness", async () => {
@@ -189,6 +192,7 @@ describe("local gateway request context", () => {
   });
 
   it("refreshes local models.list auth after login and logout", async () => {
+    await preparePluginMetadataMachineStateAsync({});
     const cfg = {
       agents: {
         entries: {

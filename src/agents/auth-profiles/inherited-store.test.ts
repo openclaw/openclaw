@@ -108,7 +108,12 @@ it.each([
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   const original = fs.readFileSync(mainPath);
-  const runtime = createAuthProfileStoreRuntime(createExternalAuthRuntime(() => []));
+  const runtime = createAuthProfileStoreRuntime(
+    createExternalAuthRuntime(
+      () => [],
+      async () => () => [],
+    ),
+  );
   const options = {
     inheritedAuthDir: mainDir,
     allowKeychainPrompt: false,
@@ -232,7 +237,9 @@ it.each(["explicit empty ids", "authoritative empty", "no overlay", "published o
       fs.writeFileSync(database.path, "The unused persisted source is unavailable");
     }
     const external = vi.fn(() => []);
-    const runtime = createAuthProfileStoreRuntime(createExternalAuthRuntime(external));
+    const runtime = createAuthProfileStoreRuntime(
+      createExternalAuthRuntime(external, async () => external),
+    );
     const context = captureOpenClawStateWorkerContext({ env });
     const result = await runtime.prepareAuthProfileStoreForModelRuntime(
       agentDir,

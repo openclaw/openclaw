@@ -6,6 +6,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRemoteCatalogUrl } from "../model-catalog/remote-config.js";
 import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
+import { useProviderCatalogMetadata } from "../plugin-sdk/test-helpers/provider-catalog.js";
+import { useBundledProviderPolicyArtifactsForTest } from "../plugin-sdk/test-helpers/provider-policy-artifacts.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import * as providerPolicySurface from "../plugins/provider-policy-surface.js";
 import {
@@ -17,6 +19,9 @@ import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
 import { openAIModelCatalogRoutePolicy } from "./openai-model-routes.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
+
+useProviderCatalogMetadata(new URL("../../extensions/openai/", import.meta.url));
+useBundledProviderPolicyArtifactsForTest(["openai"]);
 
 describe("resolveLogicalVisibleModelCatalog", () => {
   it("keeps the selected model ahead of curated and live rows in a large catalog", async () => {

@@ -130,12 +130,17 @@ export {
   type RealtimeVoiceFastContextConsultResult,
 } from "../talk/fast-context-runtime.js";
 export {
-  canonicalizeRealtimeVoiceProviderId,
-  getRealtimeVoiceProvider,
-  listRealtimeVoiceProviders,
+  canonicalizeRealtimeVoiceProviderIdLegacy as canonicalizeRealtimeVoiceProviderId,
+  getRealtimeVoiceProviderLegacy as getRealtimeVoiceProvider,
+  listRealtimeVoiceProvidersLegacy as listRealtimeVoiceProviders,
+  resolveConfiguredRealtimeVoiceProviderLegacy as resolveConfiguredRealtimeVoiceProvider,
+} from "../talk/provider-registry-sdk.js";
+export {
+  canonicalizeRealtimeVoiceProviderIdAsync,
+  getRealtimeVoiceProviderAsync,
+  listRealtimeVoiceProvidersAsync,
 } from "../talk/provider-registry.js";
 export {
-  resolveConfiguredRealtimeVoiceProvider,
   resolveConfiguredRealtimeVoiceProviderAsync,
   type ResolvedRealtimeVoiceProvider,
 } from "../talk/provider-resolver.js";

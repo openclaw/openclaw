@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { ChannelConfiguredBindingProvider } from "../channels/plugins/types.adapters.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
@@ -103,7 +104,8 @@ function resolveDiscordBindingSpecBySession(
   });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await resolvePluginMetadataSnapshotAsync({ config: {}, env: process.env });
   setActivePluginRegistry(
     createTestRegistry([
       {

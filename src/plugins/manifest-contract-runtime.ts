@@ -5,7 +5,7 @@ import {
   listAvailableManifestContractPlugins,
 } from "./manifest-contract-eligibility.js";
 import type { PluginManifestContractListKey, PluginManifestRecord } from "./manifest-registry.js";
-import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "./plugin-metadata-snapshot.js";
 
 type ManifestContractRuntimePluginResolution = {
   pluginIds: string[];
@@ -13,12 +13,12 @@ type ManifestContractRuntimePluginResolution = {
   plugins: PluginManifestRecord[];
 };
 
-export function resolveManifestContractRuntimePluginResolution(params: {
+export async function resolveManifestContractRuntimePluginResolution(params: {
   cfg?: OpenClawConfig;
   contract: PluginManifestContractListKey;
   value?: string;
-}): ManifestContractRuntimePluginResolution {
-  const snapshot = loadPluginMetadataSnapshot({
+}): Promise<ManifestContractRuntimePluginResolution> {
+  const snapshot = await resolvePluginMetadataSnapshotAsync({
     config: params.cfg ?? {},
     env: process.env,
   });

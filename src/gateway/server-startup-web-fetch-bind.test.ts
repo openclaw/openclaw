@@ -47,7 +47,8 @@ vi.mock("../secrets/runtime-web-tools-fallback.runtime.js", async () => {
     ...actual,
     runtimeWebToolsFallbackProviders: {
       ...actual.runtimeWebToolsFallbackProviders,
-      resolvePluginWebFetchProviders: webFetchProviderDiscovery.resolvePluginWebFetchProvidersMock,
+      resolvePluginWebFetchProvidersAsync:
+        webFetchProviderDiscovery.resolvePluginWebFetchProvidersMock,
     },
   };
 });

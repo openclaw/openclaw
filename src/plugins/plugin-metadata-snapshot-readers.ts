@@ -7,7 +7,9 @@ export type CurrentSnapshotModule = Pick<
 >;
 export type SnapshotLoaderModule = Pick<
   typeof import("./plugin-metadata-snapshot.js"),
-  "resolvePluginMetadataSnapshot" | "loadPluginMetadataSnapshot"
+  | "resolvePluginMetadataSnapshot"
+  | "loadPluginMetadataSnapshot"
+  | "loadLegacyPluginMetadataSnapshot"
 >;
 
 type SnapshotReaderSlot = Partial<CurrentSnapshotModule & SnapshotLoaderModule>;
@@ -21,6 +23,7 @@ const readerKeys = [
   "getCurrentPluginMetadataSnapshot",
   "resolvePluginMetadataSnapshot",
   "loadPluginMetadataSnapshot",
+  "loadLegacyPluginMetadataSnapshot",
 ] as const satisfies readonly (keyof SnapshotReaderSlot)[];
 
 // globalThis-keyed so a require-loaded second module instance shares the slot.

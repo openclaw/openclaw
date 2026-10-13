@@ -201,6 +201,10 @@ export async function prepareGatewayServerBootstrap(input: {
   const { applyGatewayAuthOverridesForStartupPreflight, loadGatewayStartupConfigSnapshot } =
     await startupConfigModulePromise;
 
+  // Config validation retains private snapshot bytes; auto-enable needs the live policy fact.
+  const { prepareBundledDiscoveryMode } = await import("../plugins/bundled-discovery-state.js");
+  await prepareBundledDiscoveryMode(process.env);
+
   const startupConfigLoad = await startupTrace.measure("config.snapshot", () =>
     loadGatewayStartupConfigSnapshot({
       minimalTestGateway,

@@ -7,6 +7,7 @@ import type {
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { executeWebSearchCandidates } from "../../web-search/runtime-execution.js";
 import type { RunWebSearchParams } from "../../web-search/runtime-types.js";
+import { withToolTestMetadata } from "./tool-metadata.test-support.js";
 import { createWebSearchTool } from "./web-search.js";
 
 const mocks = vi.hoisted(() => ({ runWebSearch: vi.fn(), endpoint: vi.fn() }));
@@ -48,9 +49,9 @@ it("web_search preserves provider HTTP 403 guidance without exposing the respons
     async (_params: unknown, run: (context: { response: Response }) => Promise<unknown>) =>
       run({ response: new Response(BODY, { status: 403 }) }),
   );
-  const result = await createWebSearchTool({ config })?.execute("search-http-error", {
-    query: "synthetic query",
-  });
+  const result = await withToolTestMetadata(config, () =>
+    createWebSearchTool({ config })?.execute("search-http-error", { query: "synthetic query" }),
+  );
 
   expect(result?.details).toMatchObject({
     kind: "error",

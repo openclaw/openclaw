@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { deliverAgentCommandResult } from "../../agents/command/delivery.js";
+import { preparePluginMetadataMachineStateAsync } from "../../plugins/installed-plugin-index-record-state.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -35,9 +36,10 @@ const sessionCases = [
   },
 ] as const;
 
-beforeEach(() => {
+beforeEach(async () => {
   mocks.command.mockReset();
   setActivePluginRegistry(createTestRegistry([]));
+  await preparePluginMetadataMachineStateAsync({});
   vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
   vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});

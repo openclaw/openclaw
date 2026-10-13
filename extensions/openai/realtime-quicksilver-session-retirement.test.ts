@@ -67,8 +67,8 @@ describe("GA Realtime call retirement", () => {
   });
 
   it("refreshes broker config and logger without replacing its native operations or reservations", async () => {
-    const originalHeaders = vi.fn(openAIRealtimeHost.resolveProviderRequestHeaders);
-    const replacementHeaders = vi.fn(openAIRealtimeHost.resolveProviderRequestHeaders);
+    const originalHeaders = vi.fn(openAIRealtimeHost.resolveProviderRequestHeadersAsync);
+    const replacementHeaders = vi.fn(openAIRealtimeHost.resolveProviderRequestHeadersAsync);
     const originalConfig = vi.fn(() => undefined);
     const nextConfig = vi.fn(() => ({
       gateway: { controlUi: { allowedOrigins: ["https://updated.example"] } },
@@ -88,13 +88,13 @@ describe("GA Realtime call retirement", () => {
     );
     const first = acquireOpenAIQuicksilverBrowserSessionBroker(
       { getConfig: originalConfig, logger: originalLogger },
-      { ...openAIRealtimeHost, resolveProviderRequestHeaders: originalHeaders },
+      { ...openAIRealtimeHost, resolveProviderRequestHeadersAsync: originalHeaders },
     );
     try {
       const reservation = await reserveRetirementSession(first, retirementBridge);
       const retained = acquireOpenAIQuicksilverBrowserSessionBroker(
         { getConfig: nextConfig, logger: nextLogger },
-        { ...openAIRealtimeHost, resolveProviderRequestHeaders: replacementHeaders },
+        { ...openAIRealtimeHost, resolveProviderRequestHeadersAsync: replacementHeaders },
       );
       expect(retained).toBe(first);
       const response = createResponseHarness();

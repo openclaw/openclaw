@@ -1,6 +1,7 @@
 // Invalid plugin config tests cover doctor diagnostics for malformed plugin configuration.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { withDoctorPluginMetadataForTest } from "./plugin-metadata.test-support.js";
 
 const validationMocks = vi.hoisted(() => ({
   validateConfigObjectWithPlugins: vi.fn(),
@@ -96,7 +97,9 @@ describe("legacy migration with invalid plugin config", () => {
       },
       session: { typingMode: "thinking" },
     };
-    const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
+    const result = withDoctorPluginMetadataForTest({ agents: raw.agents }, () =>
+      migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw }),
+    );
 
     expect(result).toEqual({
       config: {

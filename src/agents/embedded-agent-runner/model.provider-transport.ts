@@ -10,6 +10,7 @@ export function resolveProviderTransport(params: {
   api?: Api | null;
   baseUrl?: string;
   cfg?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
 }): { api?: Api; baseUrl?: string } {
@@ -18,6 +19,7 @@ export function resolveProviderTransport(params: {
     provider: params.provider,
     ...(params.modelId ? { modelId: params.modelId } : {}),
     config: params.cfg,
+    env: params.env,
     workspaceDir: params.workspaceDir,
     context: {
       config: params.cfg,

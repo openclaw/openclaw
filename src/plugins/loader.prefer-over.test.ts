@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
-import { clearPluginLoaderCache, loadOpenClawPlugins } from "./loader.test-fixtures.js";
+import { clearPluginLoaderCache, loadOpenClawPluginsForTest } from "./loader.test-fixtures.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 
@@ -140,7 +140,7 @@ describe("plugin loader preferOver activation", () => {
         canonicalAliasesRequireOwnField ? { canonicalAliasesRequireOwnField } : undefined,
       );
 
-      const registry = loadOpenClawPlugins({
+      const registry = loadOpenClawPluginsForTest({
         cache: false,
         config: autoEnabled.config,
         activationSourceConfig: rawConfig,
@@ -180,7 +180,7 @@ describe("plugin loader preferOver activation", () => {
       OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
     };
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadOpenClawPluginsForTest({
       cache: false,
       config: {
         channels: { qqbot: { appId: "app", clientSecret: "secret" } },

@@ -6,6 +6,7 @@ import {
   AgentHarnessPreflightError,
   embeddedAgentLog,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { preparePluginTestRuntimeMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { startCodexAttemptThread } from "./attempt-startup.js";
 import {
@@ -118,6 +119,7 @@ describe("startCodexAttemptThread", () => {
     setManagedCodexPluginRoot(fileURLToPath(new URL("../../", import.meta.url)));
     defaultCodexPluginMetadataCache.clear();
     resetCodexTestBindingStore();
+    await preparePluginTestRuntimeMetadata();
   });
 
   afterEach(async () => {

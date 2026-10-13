@@ -16,7 +16,7 @@ import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metad
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
 import {
   acquirePluginRegistryForInspection,
-  loadPluginRegistryHandle,
+  loadPluginRegistryHandleAsync,
   type PluginLoadOptions,
 } from "../plugins/loader.js";
 import { adoptRuntimeMemoryRegistrations } from "../plugins/memory-state.js";
@@ -24,7 +24,7 @@ import {
   collectRegistryInvocationInstances,
   PluginInvocationScope,
 } from "../plugins/plugin-invocation-scope.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import {
@@ -72,9 +72,9 @@ type AgentRuntimePluginRegistryParams = {
   purpose?: RuntimePluginLoadPurpose;
 };
 
-function resolveAgentRuntimePluginRegistryLoad(
+async function resolveAgentRuntimePluginRegistryLoad(
   params: AgentRuntimePluginRegistryParams,
-): PluginLoadOptions {
+): Promise<PluginLoadOptions> {
   const loadOptions: PluginLoadOptions = {
     config: params.config,
     activationSourceConfig: params.config && projectConfigOntoRuntimeSourceSnapshot(params.config),
@@ -92,11 +92,12 @@ function resolveAgentRuntimePluginRegistryLoad(
   }
   const metadataSnapshot =
     params.metadataSnapshot ??
-    loadPluginMetadataSnapshot({
+    (await resolvePluginMetadataSnapshotAsync({
       config: params.config ?? {},
       env: params.env ?? process.env,
       workspaceDir: loadOptions.workspaceDir,
-    });
+      allowWorkspaceScopedCurrent: true,
+    }));
   const workspaceDir = metadataSnapshot.workspaceDir ?? loadOptions.workspaceDir;
   const requestPluginRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
   // Gateway-hosted fall-through must not cold-load every plugin (30-45s event-loop convoy);
@@ -245,7 +246,7 @@ export type AcquiredAgentRuntimePluginRegistry =
 export async function acquireAgentRuntimePluginRegistry(
   params: AgentRuntimePluginRegistryParams,
 ): Promise<AcquiredAgentRuntimePluginRegistry> {
-  const loadOptions = resolveAgentRuntimePluginRegistryLoad(params);
+  const loadOptions = await resolveAgentRuntimePluginRegistryLoad(params);
   const reusable = reusableAgentRuntimeRegistry(params, loadOptions);
   if (reusable) {
     return { registry: bindAdmittingGateway(reusable), primaryRegistry: reusable };
@@ -303,11 +304,11 @@ export async function acquireAgentRuntimePluginRegistry(
 }
 
 /** Loads the registry handle owned by an agent prepared-runtime generation. */
-export function loadAgentRuntimePluginRegistryHandle(
+export async function loadAgentRuntimePluginRegistryHandle(
   params: AgentRuntimePluginRegistryParams,
   onPrimaryRegistry?: (registry: PluginRegistry) => void,
-): PluginRegistry {
-  const loadOptions = resolveAgentRuntimePluginRegistryLoad(params);
+): Promise<PluginRegistry> {
+  const loadOptions = await resolveAgentRuntimePluginRegistryLoad(params);
   const reusable = reusableAgentRuntimeRegistry(params, loadOptions);
   if (reusable) {
     onPrimaryRegistry?.(reusable);
@@ -316,11 +317,11 @@ export function loadAgentRuntimePluginRegistryHandle(
   // Discovery-only load: full mode can replace process-global sandbox backends.
   // Adopt full-only runtime capabilities from the matching composition-root owners.
   // Prepared metadata outlives a transient caller's install or reload lease.
-  const load = () => loadPluginRegistryHandle(loadOptions);
+  const load = () => loadPluginRegistryHandleAsync(loadOptions);
   const channelSource = captureRuntimeChannelSource(getActivePluginRegistry());
-  const pluginRegistry = params.metadataSnapshot
+  const pluginRegistry = await (params.metadataSnapshot
     ? withPluginMetadataSnapshotScope(params.metadataSnapshot, load)
-    : load();
+    : load());
   // Media providers remain owned by this source when full-only donors require a copy.
   onPrimaryRegistry?.(pluginRegistry);
   return adoptAgentRuntimeRegistrations(pluginRegistry, params, loadOptions.config, channelSource)
@@ -340,22 +341,23 @@ export async function withAgentPluginRegistry<T>(params: {
     return await params.run(requestPluginRegistry);
   }
   // Borrowed Gateway registries must not load direct-host context dependencies.
-  const [{ setPluginRuntimeLoadContext }, { resolvePluginRuntimeLoadContext }] = await Promise.all([
-    import("../plugins/runtime/load-context.js"),
-    import("../plugins/runtime/load-context.resolve.js"),
-  ]);
+  const [{ setPluginRuntimeLoadContext }, { resolvePluginRuntimeLoadContextAsync }] =
+    await Promise.all([
+      import("../plugins/runtime/load-context.js"),
+      import("../plugins/runtime/load-context.resolve.js"),
+    ]);
   // Direct hosts resolve one policy generation; disabled plugins never reopen discovery.
-  const context = resolvePluginRuntimeLoadContext({
+  const context = await resolvePluginRuntimeLoadContextAsync({
     config: params.config,
     activationSourceConfig: projectConfigOntoRuntimeSourceSnapshot(params.config),
     env: params.env,
     workspaceDir: params.workspaceDir,
     ...(params.config.plugins?.enabled === false
       ? { manifestRegistry: { plugins: [], diagnostics: [] } }
-      : { metadataSnapshot: loadPluginMetadataSnapshot(params) }),
+      : {}),
   });
   // The resolver inherits request or configured scope; an empty override drops hook-only plugins.
-  const pluginRegistry = loadAgentRuntimePluginRegistryHandle({
+  const pluginRegistry = await loadAgentRuntimePluginRegistryHandle({
     config: params.config,
     env: context.env,
     metadataSnapshot: context.metadataSnapshot,

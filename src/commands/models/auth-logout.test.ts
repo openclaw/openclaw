@@ -21,6 +21,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../../gateway/server-methods.js";
 import type { RespondFn } from "../../gateway/server-methods/types.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 
@@ -127,29 +129,36 @@ async function dispatchAuthLogout(
     Object.keys(mocks.ensureAuthProfileStoreWithoutExternalProfiles().profiles),
   );
   const respond = vi.fn<RespondFn>();
-  await handleGatewayRequest({
-    req: {
-      type: "req",
-      id: crypto.randomUUID(),
-      method: "models.authLogout",
-      params: { provider: "openai", agentId: "main", ...selection },
-    },
-    respond,
-    client: {
-      connId: crypto.randomUUID(),
-      connect: {
-        role: "operator",
-        scopes: ["operator.admin"],
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: { id: "cli", version: "test", platform: "test", mode: "cli" },
-      },
-    },
-    isWebchatConnect: () => false,
-    context: createDirectChatContext({
-      getRuntimeConfig: () => ({ ...cfg, agents: { entries: { main: {} } } }),
-    }),
+  const runtimeConfig = { ...cfg, agents: { entries: { main: {} } } };
+  const metadataSnapshot = await resolvePluginMetadataSnapshotAsync({
+    config: runtimeConfig,
+    env: process.env,
   });
+  await withPluginRuntimeGenerationScope({ metadataSnapshot }, () =>
+    handleGatewayRequest({
+      req: {
+        type: "req",
+        id: crypto.randomUUID(),
+        method: "models.authLogout",
+        params: { provider: "openai", agentId: "main", ...selection },
+      },
+      respond,
+      client: {
+        connId: crypto.randomUUID(),
+        connect: {
+          role: "operator",
+          scopes: ["operator.admin"],
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: { id: "cli", version: "test", platform: "test", mode: "cli" },
+        },
+      },
+      isWebchatConnect: () => false,
+      context: createDirectChatContext({
+        getRuntimeConfig: () => runtimeConfig,
+      }),
+    }),
+  );
   expect(respond).toHaveBeenCalledOnce();
   const [ok, payload, error] = expectDefined(respond.mock.calls[0], "Gateway logout response");
   if (!ok) {

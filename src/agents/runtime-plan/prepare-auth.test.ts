@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import type { AuthProfileStore } from "../auth-profiles.js";
 import {
@@ -18,13 +19,18 @@ import {
 } from "./prepare-auth.js";
 import { prepareAgentRuntimeAuthPlan, prepareAuthFixture } from "./prepare-auth.test-support.js";
 
-// Provider-hook behavior is covered by its owner suites.
+// mock-isolation: Route planning uses no provider runtime hooks.
 vi.mock("../../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: () => undefined,
+  prepareProviderSyntheticAuthWithPlugin: async () => undefined,
   resolveProviderDeprecatedAuthProfileIds: () => [],
   resolveProviderSyntheticAuthWithPlugin: () => undefined,
   shouldDeferProviderSyntheticProfileAuthWithPlugin: () => undefined,
 }));
+
+beforeEach(async () => {
+  await Promise.all([prepareBundledDiscoveryMode(), prepareBundledDiscoveryMode({})]);
+});
 
 function authStore(
   profiles: AuthProfileStore["profiles"],

@@ -129,12 +129,35 @@ export function captureConfigReadEnvMutation<T>(
   run: () => T,
   retainRestore?: (restore: () => void) => void,
 ): T {
-  const before = snapshotEnvProperties(env);
-  const beforeOwned = snapshotConfigEnvOwnership(env, before);
-  const scope = configReadEnvChanges.getStore();
+  const record = captureConfigReadEnvMutationReceipt(env, retainRestore);
   try {
     return run();
   } finally {
+    record();
+  }
+}
+
+export async function captureConfigReadEnvMutationAsync<T>(
+  env: NodeJS.ProcessEnv,
+  run: () => Promise<T>,
+  retainRestore?: (restore: () => void) => void,
+): Promise<T> {
+  const record = captureConfigReadEnvMutationReceipt(env, retainRestore);
+  try {
+    return await run();
+  } finally {
+    record();
+  }
+}
+
+function captureConfigReadEnvMutationReceipt(
+  env: NodeJS.ProcessEnv,
+  retainRestore?: (restore: () => void) => void,
+): () => void {
+  const before = snapshotEnvProperties(env);
+  const beforeOwned = snapshotConfigEnvOwnership(env, before);
+  const scope = configReadEnvChanges.getStore();
+  return () => {
     const after = snapshotEnvProperties(env);
     const afterOwned = snapshotConfigEnvOwnership(env, after);
     const changes = [
@@ -210,7 +233,7 @@ export function captureConfigReadEnvMutation<T>(
     if (scope?.active && scope.env === env) {
       scope.receipts.push(restore);
     }
-  }
+  };
 }
 
 export function cloneEnvWithPlatformSemantics(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {

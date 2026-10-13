@@ -11,7 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   clearPluginLoaderCache,
-  loadOpenClawPlugins,
+  loadOpenClawPluginsForTest,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
 import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
@@ -218,7 +218,7 @@ describe("config model validation with provider runtime", () => {
           if (ambient === "foreign") {
             ambientConfig.plugins!.entries!["pin-alpha"] = { enabled: false };
           }
-          loadOpenClawPlugins({
+          loadOpenClawPluginsForTest({
             config: ambientConfig,
             workspaceDir: state.workspaceDir,
             onlyPluginIds: [ambient === "matching" ? "pin-alpha" : "pin-beta"],
@@ -333,7 +333,7 @@ describe("config model validation with provider runtime", () => {
     "rejects a %s provider even when an ambient registry has its hook",
     async (policy) => {
       await withProviderFixtures(async ({ config, state, imported }) => {
-        const ambient = loadOpenClawPlugins({
+        const ambient = loadOpenClawPluginsForTest({
           config,
           workspaceDir: state.workspaceDir,
           onlyPluginIds: ["pin-alpha"],

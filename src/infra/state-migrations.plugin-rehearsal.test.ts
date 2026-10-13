@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import {
   applyPluginDoctorCompatibilityMigrations,
   resolveLivePluginDoctorStateMigrationInventory,
@@ -160,6 +161,7 @@ it.each(["direct", "automatic", "post-session"] as const)(
     expect(readDeferredPluginMigrations({ env })).toEqual([
       expect.objectContaining({ pluginId: "external-owner", requiresStateMigration: true }),
     ]);
+    await prepareBundledDiscoveryMode(env);
     expect(applyPluginDoctorCompatibilityMigrations(config, { env }).changes).toContain(
       "external-owner config repaired",
     );

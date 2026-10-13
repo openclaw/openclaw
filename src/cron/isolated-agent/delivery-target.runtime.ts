@@ -1,7 +1,7 @@
 /** Runtime-loaded channel target helpers used by cron delivery resolution. */
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
+import { resolveOutboundChannelPluginAsync } from "../../infra/outbound/channel-resolution.js";
 import {
   resolveOutboundSessionRoute,
   type OutboundSessionRoute,
@@ -24,7 +24,7 @@ export async function resolveChannelTargetForDelivery(params: {
 }): Promise<{ ok: true; target: ResolvedMessagingTarget } | { ok: false; error: Error }> {
   // Delivery may be the first channel touch after startup; allow bootstrap so
   // plugin config and account metadata are available before target resolution.
-  const plugin = resolveOutboundChannelPlugin({
+  const plugin = await resolveOutboundChannelPluginAsync({
     channel: params.channel,
     cfg: params.cfg,
     agentId: params.agentId,
@@ -60,7 +60,7 @@ export async function resolveOutboundSessionRouteForDelivery(params: {
 }): Promise<OutboundSessionRoute | null> {
   // Route lookup also bootstraps the plugin so canonical thread/session mapping
   // matches the send-time channel runtime.
-  const plugin = resolveOutboundChannelPlugin({
+  const plugin = await resolveOutboundChannelPluginAsync({
     channel: params.channel,
     cfg: params.cfg,
     agentId: params.agentId,
@@ -70,17 +70,16 @@ export async function resolveOutboundSessionRouteForDelivery(params: {
 }
 
 /** Returns whether a channel can canonicalize outbound cron delivery sessions. */
-export function channelCanResolveOutboundSessionRoute(params: {
+export async function channelCanResolveOutboundSessionRoute(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
   agentId: string;
-}): boolean {
-  return Boolean(
-    resolveOutboundChannelPlugin({
-      channel: params.channel,
-      cfg: params.cfg,
-      agentId: params.agentId,
-      allowBootstrap: true,
-    })?.messaging?.resolveOutboundSessionRoute,
-  );
+}): Promise<boolean> {
+  const plugin = await resolveOutboundChannelPluginAsync({
+    channel: params.channel,
+    cfg: params.cfg,
+    agentId: params.agentId,
+    allowBootstrap: true,
+  });
+  return Boolean(plugin?.messaging?.resolveOutboundSessionRoute);
 }

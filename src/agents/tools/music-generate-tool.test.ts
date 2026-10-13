@@ -23,6 +23,7 @@ import * as mediaStore from "../../media/store.js";
 import * as webMedia from "../../media/web-media.js";
 import * as musicGenerationRuntime from "../../music-generation/runtime.js";
 import type { MusicGenerationProvider } from "../../music-generation/types.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import * as fetchTimeout from "../../utils/fetch-timeout.js";
 import { formatAgentInternalEventsForPrompt } from "../internal-events.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
@@ -764,6 +765,7 @@ describe("createMusicGenerateTool", () => {
   });
 
   it("lists provider capabilities", async () => {
+    await prepareBundledDiscoveryMode(process.env);
     vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([
       {
         id: "minimax",

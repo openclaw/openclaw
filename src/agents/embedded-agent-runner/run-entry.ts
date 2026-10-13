@@ -6,6 +6,7 @@ import {
   emitAgentEventForRunContext,
 } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { mergeAcceptedSessionSpawnsForRun } from "../accepted-session-spawn.js";
 import { readPreparedRunOperatorAuthority } from "../admitted-run-context.js";
@@ -71,8 +72,9 @@ type RunEntryCandidate<T> = {
 
 /** Runs one logical turn across model candidates and advances only the accepted winner. */
 export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
-  params: EmbeddedAgentRunEntryParams<T>,
+  input: EmbeddedAgentRunEntryParams<T>,
 ): Promise<EmbeddedAgentRunEntryResult<T>> {
+  let params = input;
   const admission = params.preparedRunAdmission;
   const requester = {
     ...params.identity,
@@ -80,6 +82,14 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
     abortSignal: params.abortSignal,
   };
   try {
+    if (params.selection.manifestPlugins === undefined) {
+      const manifestPlugins = await resolvePluginMetadataSnapshotAsync({
+        config: params.selection.cfg,
+        workspaceDir: params.harness.workspaceDir,
+        allowWorkspaceScopedCurrent: true,
+      });
+      params = { ...params, selection: { ...params.selection, manifestPlugins } };
+    }
     assertRequiredWorkerSelection(params.selection.cfg, {
       agentRuntime: params.harness.resolveRuntimeOverride(
         params.selection.provider,

@@ -4,17 +4,20 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetPluginCache } from "../plugins/plugin-cache.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
 
 const metadataMocks = vi.hoisted(() => ({
   listBundledPluginMetadata: vi.fn(),
-  resolvePluginMetadataSnapshot: vi.fn<
-    (params?: { config?: { plugins?: { load?: { paths?: string[] } } } }) => {
-      plugins: never[];
-    }
-  >(() => ({ plugins: [] })),
+  resolvePluginMetadataSnapshot:
+    vi.fn<
+      (params?: {
+        config?: { plugins?: { load?: { paths?: string[] } } };
+      }) => PluginMetadataSnapshot
+    >(),
 }));
 
 vi.mock("../plugins/bundled-plugin-metadata.js", () => ({
@@ -50,9 +53,10 @@ function writeChannelContract(params: {
   );
   return {
     id: params.pluginId,
-    origin: "config",
+    origin: "config" as const,
     channels: params.ownership === "channels" ? [params.channelId] : [],
-    channelConfigs: params.ownership === "channelConfigs" ? { [params.channelId]: {} } : {},
+    channelConfigs:
+      params.ownership === "channelConfigs" ? { [params.channelId]: { schema: {} } } : {},
     rootDir,
   };
 }
@@ -65,7 +69,9 @@ describe("getSecretTargetRegistry metadata reuse", () => {
       throw new Error("source bundled metadata must not be scanned");
     });
     metadataMocks.resolvePluginMetadataSnapshot.mockClear();
-    metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue({ plugins: [] });
+    metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue(
+      createPluginMetadataSnapshotFixture(),
+    );
   });
 
   afterEach(() => {
@@ -74,7 +80,7 @@ describe("getSecretTargetRegistry metadata reuse", () => {
     cleanupTrackedTempDirs(tempDirs);
   });
 
-  it.each(["bundled", "config"])(
+  it.each(["bundled", "config"] as const)(
     "rejects a broken %s contract during source docs generation without changing runtime tolerance",
     async (origin) => {
       const healthy = writeChannelContract({
@@ -108,7 +114,9 @@ describe("getSecretTargetRegistry metadata reuse", () => {
       );
       vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.dirname(healthy.rootDir));
       vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
-      metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue({ plugins: records } as never);
+      metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue(
+        createPluginMetadataSnapshotFixture({ plugins: records }),
+      );
       const { getSecretTargetRegistry } = await import("./target-registry-data.js");
       const { buildSecretRefCredentialMatrix } =
         await import("./credential-matrix.test-support.js");
@@ -119,9 +127,11 @@ describe("getSecretTargetRegistry metadata reuse", () => {
       expect(runtimeIds).not.toContain("channels.broken.token");
       expect(() => buildSecretRefCredentialMatrix()).toThrow(failure);
 
-      metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue({
-        plugins: [records[0], records[2]],
-      } as never);
+      metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue(
+        createPluginMetadataSnapshotFixture({
+          plugins: records.filter((record) => record.rootDir !== broken.rootDir),
+        }),
+      );
       const matrixIds = buildSecretRefCredentialMatrix().entries.map((entry) => entry.id);
       expect(matrixIds).toContain("channels.healthy.token");
       expect(matrixIds).toContain("gateway.auth.token");
@@ -142,7 +152,9 @@ describe("getSecretTargetRegistry metadata reuse", () => {
         path.join(record.rootDir, "secret-contract-api.cjs"),
         path.join(outsideDir, "linked-contract.cjs"),
       );
-      metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue({ plugins: [record] } as never);
+      metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue(
+        createPluginMetadataSnapshotFixture({ plugins: [record] }),
+      );
       const { getSecretTargetRegistry } = await import("./target-registry-data.js");
       expect(
         getSecretTargetRegistry({ config: {}, env: {} }).map((entry) => entry.id),
@@ -172,20 +184,22 @@ describe("getSecretTargetRegistry metadata reuse", () => {
   it("registers secret targets for installed-origin plugins (#104320)", async () => {
     // The Exa web providers moved from bundled origin to an installed plugin
     // package; the gateway's known-target registry must keep covering them.
-    metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue({
-      plugins: [
-        {
-          id: "exa",
-          origin: "global",
-          channels: [],
-          contracts: { webSearchProviders: ["exa"] },
-          configUiHints: { "webSearch.apiKey": { sensitive: true } },
-          configContracts: {
-            secretInputs: { paths: [{ path: "webSearch.apiKey" }] },
+    metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue(
+      createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "exa",
+            origin: "global",
+            channels: [],
+            contracts: { webSearchProviders: ["exa"] },
+            configUiHints: { "webSearch.apiKey": { sensitive: true } },
+            configContracts: {
+              secretInputs: { paths: [{ path: "webSearch.apiKey" }] },
+            },
           },
-        },
-      ],
-    } as never);
+        ],
+      }),
+    );
     const { getSecretTargetRegistry } = await import("./target-registry-data.js");
     const { isKnownSecretTargetId } = await import("./target-registry-query.js");
 
@@ -221,12 +235,11 @@ describe("getSecretTargetRegistry metadata reuse", () => {
         configContracts: { secretInputs: { paths: [{ path: secretPath }] } },
       };
       fs.writeFileSync(path.join(pluginRoot, "openclaw.plugin.json"), JSON.stringify(manifest));
-      return { ...manifest, origin: "config", channels: [], rootDir: pluginRoot };
+      return { ...manifest, origin: "config" as const, channels: [], rootDir: pluginRoot };
     });
-    metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue({
-      plugins,
-      manifestRegistry: { plugins, diagnostics: [] },
-    } as never);
+    metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue(
+      createPluginMetadataSnapshotFixture({ plugins }),
+    );
 
     const config = {
       plugins: {
@@ -449,7 +462,7 @@ describe("getSecretTargetRegistry metadata reuse", () => {
     metadataMocks.resolvePluginMetadataSnapshot.mockImplementation(
       (params?: { config?: { plugins?: { load?: { paths?: string[] } } } }) => {
         const pluginId = params?.config?.plugins?.load?.paths?.[0] ?? "missing";
-        return {
+        return createPluginMetadataSnapshotFixture({
           plugins: [
             {
               id: pluginId,
@@ -460,7 +473,7 @@ describe("getSecretTargetRegistry metadata reuse", () => {
               },
             },
           ],
-        } as never;
+        });
       },
     );
     const { getSecretTargetRegistry } = await import("./target-registry-data.js");
@@ -495,7 +508,9 @@ describe("getSecretTargetRegistry metadata reuse", () => {
         ownership: "channelConfigs",
       }),
     ];
-    metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue({ plugins: records } as never);
+    metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue(
+      createPluginMetadataSnapshotFixture({ plugins: records }),
+    );
     const { getSecretTargetRegistry } = await import("./target-registry-data.js");
 
     const ids = getSecretTargetRegistry({

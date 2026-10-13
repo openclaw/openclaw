@@ -7,6 +7,7 @@ import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { installHooksFromPath } from "./install.js";
 import {
   clearInternalHooks,
@@ -156,6 +157,11 @@ describe("internal hook lifecycle", () => {
     const discovered = loadWorkspaceHookEntries(fixture.workspaceDir, {
       bundledHooksDir: fixture.bundledHooksDir,
       config: fixture.initialConfig,
+      metadataSnapshot: await resolvePluginMetadataSnapshotAsync({
+        config: fixture.initialConfig,
+        workspaceDir: fixture.workspaceDir,
+        env: fixture.env,
+      }),
       managedHooksDir: fixture.managedHooksDir,
     });
     expect(discovered).toEqual([

@@ -3,6 +3,10 @@ import { resolveConfiguredProviderDefaultApi } from "../agents/embedded-agent-ru
 import { resolveUsableCustomProviderApiKey } from "../agents/model-auth-provider-config.js";
 import { resolveManagedSecretRefRuntimeProviderAuth } from "../agents/model-auth-runtime-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { Api } from "../llm/types.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
+import { resolveProviderRuntimePluginAsync } from "../plugins/provider-hook-runtime.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import type { NativeInferenceStartup } from "../worker/native-inference-startup.js";
 import {
@@ -27,15 +31,16 @@ export const NODE_WORKER_INFERENCE_SETUP_ERROR =
   'nodeHost.workerRuns.isolation to "none", then restart the node host.';
 
 /** Capture worker-compatible models and their already-resolved node-local credentials. */
-export function snapshotNodeWorkerNativeInference(
+export async function snapshotNodeWorkerNativeInferenceAsync(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform = process.platform,
-): NodeWorkerNativeInferenceSnapshot | undefined {
+): Promise<NodeWorkerNativeInferenceSnapshot | undefined> {
   if (platform === "win32") {
     return undefined;
   }
   const models = new Map<string, NodeWorkerNativeInferenceModel>();
+  let metadataSnapshot: Awaited<ReturnType<typeof resolvePluginMetadataSnapshotAsync>> | undefined;
   for (const [providerId, provider] of Object.entries(config.models?.providers ?? {})) {
     const credential =
       resolveManagedSecretRefRuntimeProviderAuth({ cfg: config, provider: providerId })?.apiKey ??
@@ -43,13 +48,23 @@ export function snapshotNodeWorkerNativeInference(
     if (!credential?.trim()) {
       continue;
     }
-    const providerApi =
-      provider.api ??
-      resolveConfiguredProviderDefaultApi({
-        provider: providerId,
-        providerConfig: provider,
-        cfg: config,
-      });
+    let providerApi: Api | undefined = provider.api;
+    if (providerApi === undefined && provider.baseUrl?.trim()) {
+      metadataSnapshot ??= await resolvePluginMetadataSnapshotAsync({ config, env });
+      providerApi = await withPluginMetadataSnapshotScope(
+        metadataSnapshot,
+        async () => {
+          await resolveProviderRuntimePluginAsync({ provider: providerId, config, env });
+          return resolveConfiguredProviderDefaultApi({
+            provider: providerId,
+            providerConfig: provider,
+            cfg: config,
+            env,
+          });
+        },
+        { config, env },
+      );
+    }
     for (const configured of provider.models ?? []) {
       const headers = { ...provider.headers, ...configured.headers };
       const parsed = NativeRuntimeModelSchema.safeParse({

@@ -17,7 +17,7 @@ import { withActivatedPluginIds } from "../plugins/activation-context.js";
 import { resolveManifestActivationPluginIds } from "../plugins/activation-planner.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
 import { loadPluginRegistryHandle } from "../plugins/loader.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { readActiveOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease.js";
@@ -29,8 +29,8 @@ import {
 
 type CleanupRunResult = Awaited<ReturnType<typeof runSessionsCleanup>>;
 
-function prepareCleanupHarnessOwners(config: OpenClawConfig, workspaceDir: string) {
-  const metadata = loadPluginMetadataSnapshot({ config, workspaceDir });
+async function prepareCleanupHarnessOwners(config: OpenClawConfig, workspaceDir: string) {
+  const metadata = await resolvePluginMetadataSnapshotAsync({ config, workspaceDir });
   const harnessOwners = metadata.plugins.flatMap((plugin) => {
     const runtime = plugin.activation?.onAgentHarnesses?.[0];
     return runtime ? [{ plugin, runtime }] : [];
@@ -67,7 +67,7 @@ function prepareCleanupHarnessOwners(config: OpenClawConfig, workspaceDir: strin
 }
 
 function warnUnavailableCleanupOwners(
-  owners: ReturnType<typeof prepareCleanupHarnessOwners>,
+  owners: Awaited<ReturnType<typeof prepareCleanupHarnessOwners>>,
   result: CleanupRunResult,
   runtime: RuntimeEnv,
 ): void {
@@ -126,14 +126,17 @@ export async function runLocalSessionsCleanup(
   runtime: RuntimeEnv,
 ): Promise<CleanupRunResult> {
   const run = async (): Promise<CleanupRunResult> => {
-    const ownersByWorkspace = new Map<string, ReturnType<typeof prepareCleanupHarnessOwners>>();
+    const ownersByWorkspace = new Map<
+      string,
+      Awaited<ReturnType<typeof prepareCleanupHarnessOwners>>
+    >();
     const results: CleanupRunResult[] = [];
     let failure: CleanupRunResult["failure"];
     for (const target of params.targets) {
       const workspaceDir = resolveAgentWorkspaceDir(params.cfg, target.agentId);
       let owners = ownersByWorkspace.get(workspaceDir);
       if (!owners) {
-        owners = prepareCleanupHarnessOwners(params.cfg, workspaceDir);
+        owners = await prepareCleanupHarnessOwners(params.cfg, workspaceDir);
         ownersByWorkspace.set(workspaceDir, owners);
       }
       let result: CleanupRunResult;

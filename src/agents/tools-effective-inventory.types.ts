@@ -7,6 +7,7 @@ import type { ToolsEffectiveEntry } from "../../packages/gateway-protocol/src/sc
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
+import type { ModelManifestNormalizationContext } from "./model-ref-shared.js";
 
 export type {
   ToolsEffectiveEntry as EffectiveToolInventoryEntry,
@@ -18,7 +19,7 @@ export type {
 export type EffectiveToolSource = ToolsEffectiveEntry["source"];
 
 /** Inputs for resolving the effective tool inventory in a session/runtime context. */
-export type ResolveEffectiveToolInventoryParams = {
+export type ResolveEffectiveToolInventoryParams = ModelManifestNormalizationContext & {
   cfg: OpenClawConfig;
   conversationCapabilityProfile?: ResolvedConversationCapabilityProfile;
   agentId?: string;

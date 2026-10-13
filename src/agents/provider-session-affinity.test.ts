@@ -2,9 +2,15 @@ import { createServer, type IncomingHttpHeaders } from "node:http";
 import { createApiRegistry, createLlmRuntime } from "@openclaw/ai";
 import type { Model, StreamOptions } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
+import { useProviderCatalogMetadata } from "../plugin-sdk/test-helpers/provider-catalog.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
+
+useProviderCatalogMetadata(
+  new URL("../../extensions/openai/", import.meta.url),
+  new URL("../../extensions/openrouter/", import.meta.url),
+);
 
 describe("registered managed completion API session affinity", () => {
   it.each<{

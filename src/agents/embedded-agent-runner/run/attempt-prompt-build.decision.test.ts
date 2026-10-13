@@ -20,13 +20,14 @@ import {
 } from "../../../plugins/runtime.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import { attachPreparedProviderModelFixture } from "../../provider-request.test-support.js";
 import {
   createAssistant,
   createAssistantResultStream,
   streamMocks,
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
-  testModel,
+  testModel as rawTestModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import { leasePendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
 import type { ToolSearchCatalogRef } from "../../tool-search.js";
@@ -39,6 +40,8 @@ import { forgetPromptBuildDrainCacheForRun } from "./attempt-prompt-helpers.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import { createPromptBuildToolPolicy } from "./attempt-prompt-support.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
+
+const testModel = attachPreparedProviderModelFixture(rawTestModel);
 
 vi.mock("../../../plugins/host-hook-state.js", () => ({
   drainPluginNextTurnInjectionContext: vi.fn(async () => ({ queuedInjections: [] })),

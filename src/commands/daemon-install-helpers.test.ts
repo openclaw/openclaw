@@ -10,6 +10,7 @@ import {
   readLaunchAgentProgramArgumentsFromFile,
 } from "../daemon/launchd-plist.js";
 import { decodeLaunchAgentPlistFixture } from "../daemon/launchd-plist.test-support.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 
@@ -671,6 +672,7 @@ describe("buildGatewayInstallPlan", () => {
     };
     const { loadManifestMetadataSnapshot } =
       await import("../plugins/manifest-contract-eligibility.js");
+    await preparePluginMetadataMachineStateAsync({ env });
     const snapshot = loadManifestMetadataSnapshot({ config, env });
     const externalPlugin = snapshot.plugins.find(({ id }) => id === pluginId);
     expect(externalPlugin).toEqual(expect.objectContaining({ origin: "config" }));
