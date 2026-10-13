@@ -372,7 +372,6 @@ export function createAgentHarnessHostCapabilities(params: {
     });
   });
 
-  const trajectoryRecorder = attempt.trajectoryRecorder;
   const scheduledToolSources = new WeakMap<
     AnyAgentTool,
     Readonly<{ targetTool: "exec" | "process"; execute: AnyAgentTool["execute"] }>
@@ -486,11 +485,7 @@ export function createAgentHarnessHostCapabilities(params: {
     },
     ...(annotateCurrentUserTurn ? { annotateCurrentUserTurn } : {}),
     ...media.capabilities,
-    ...(trajectoryRecorder
-      ? {
-          trajectory: bindHarnessTrajectory(trajectoryRecorder, assertActive),
-        }
-      : {}),
+    ...bindHarnessTrajectory(attempt, assertActive, assertActive.assertScopeCurrent),
     preparedEnvironment: () => {
       assertActive();
       return preparedRunEnvironment;

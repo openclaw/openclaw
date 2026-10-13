@@ -703,12 +703,12 @@ describe("memory manager agent database lifecycle", () => {
         fixture.createConfig({ provider: "none", sources: ["memory"], vectorEnabled: false }),
       );
       const open = MemoryIndexDatabase.openShadow.bind(MemoryIndexDatabase);
-      let shadow: { owner: MemoryIndexDatabase; path: string } | undefined;
+      let shadow: { owner: MemoryIndexDatabase; db: DatabaseSync; path: string } | undefined;
       const releaseFailure = new Error("controlled shadow release failure");
       const replacement = "replacement file must survive rejected identity";
       vi.spyOn(MemoryIndexDatabase, "openShadow").mockImplementation(async (filename, ...args) => {
         const owner = await open(filename, ...args);
-        shadow = { owner, path: filename };
+        shadow = { owner, db: owner.db, path: filename };
         if (failure === "unreleased") {
           vi.spyOn(owner, "release").mockImplementation(() => {
             throw releaseFailure;
@@ -733,7 +733,7 @@ describe("memory manager agent database lifecycle", () => {
         );
         expect(shadow).toBeDefined();
         expect(shadow!.owner.shadowReleased).toBe(failure === "replaced");
-        expect(shadow!.owner.db.isOpen).toBe(failure === "unreleased");
+        expect(shadow!.db.isOpen).toBe(failure === "unreleased");
         if (failure === "unreleased") {
           expect((await fs.stat(shadow!.path)).isFile()).toBe(true);
         } else {
@@ -742,7 +742,7 @@ describe("memory manager agent database lifecycle", () => {
       } finally {
         vi.restoreAllMocks();
         // The injected release failure deliberately leaves this fixture-owned handle open.
-        if (shadow?.owner.db.isOpen) {
+        if (shadow?.db.isOpen) {
           shadow.owner.release();
         }
       }

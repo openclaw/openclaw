@@ -13,6 +13,7 @@ import {
 } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import "./app-sidebar.ts";
 
 const result: SessionsCatalogImportResult = {
@@ -88,6 +89,8 @@ describe("AppSidebar catalog import", () => {
     }
     await vi.advanceTimersByTimeAsync(0);
     await toast.updateComplete;
+    await vi.dynamicImportSettled();
+    flush();
     expect(sidebar.onNavigate).not.toHaveBeenCalled();
     if (stale) {
       expect(toast.textContent?.trim()).toBe("");

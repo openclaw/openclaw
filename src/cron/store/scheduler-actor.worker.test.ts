@@ -37,7 +37,8 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  vi.setSystemTime(now);
 });
 
 afterEach(() => {
@@ -448,49 +449,90 @@ it("keeps scheduling for an active subscriber and resumes after every subscriber
   ]);
   expect(scheduler.receipts()).toHaveLength(1);
 });
-it("keeps an idle notification watchdog and repairs a resume whose refresh was lost", async () => {
-  const scheduler = storedScheduler("idle-watchdog", []);
+it("parks empty and disabled actors until an explicit row/config refresh", async () => {
+  const scheduler = storedScheduler("idle-parked", []);
   const receiver = new BroadcastChannel(scheduler.channelName);
   const posted = vi.spyOn(BroadcastChannel.prototype, "postMessage");
   try {
     expect(scheduler.start().nextWakeAtMs).toBeUndefined();
-    const notification = once(receiver, "message");
-    await vi.advanceTimersByTimeAsync(minute);
-    expect(posted).toHaveBeenCalledWith({
-      type: "cron.schedulerWake",
-      storeKey: scheduler.storeKey,
-    });
-    const [event] = await notification;
-    expect(event.data).toEqual({ type: "cron.schedulerWake", storeKey: scheduler.storeKey });
-
-    expect(
-      scheduler.refresh({ paused: true, nowMs: now + minute, monotonicMs: minute }).nextWakeAtMs,
-    ).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(2 * minute);
+    expect(posted).not.toHaveBeenCalled();
     withinWorker(() =>
       runOpenClawStateWriteTransaction(
         () =>
           saveCronStoreInDatabase(database, scheduler.storeKey, {
             version: 1,
-            jobs: [job("resumed", now + minute)],
+            jobs: [job("added", now + 3 * minute)],
           }),
         { database, path: database.path, env: fixture.env },
       ),
     );
-    posted.mockClear();
-    const resumeNotification = once(receiver, "message");
+    const disabled = { version: 2, config: { ...snapshot.config, cronEnabled: false } };
+    expect(
+      scheduler.refresh({ snapshot: disabled, nowMs: now + 2 * minute }).nextWakeAtMs,
+    ).toBeUndefined();
     await vi.advanceTimersByTimeAsync(minute);
-    expect(posted).toHaveBeenCalledWith({
-      type: "cron.schedulerWake",
-      storeKey: scheduler.storeKey,
+    expect(posted).not.toHaveBeenCalled();
+    scheduler.refresh({
+      nowMs: now + 3 * minute,
+      snapshot: { version: 3, config: snapshot.config },
     });
-    await resumeNotification;
+    const notification = once(receiver, "message");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await notification;
     expect(
       scheduler
-        .tick(now + 2 * minute, 2 * minute, { channelName: scheduler.channelName, paused: false })
+        .tick(now + 3 * minute + 2_000, 3 * minute + 2_000)
         .accepted.map(({ job: entry }) => entry.id),
-    ).toEqual(["resumed"]);
+    ).toEqual(["added"]);
   } finally {
     posted.mockRestore();
     receiver.close();
   }
+});
+
+it("observes future deadlines without SQL wakes and retries an unacknowledged due wake", async () => {
+  const deadline = now + 10 * minute;
+  const scheduler = storedScheduler("future-deadline", [job("future", deadline)]);
+  const receiver = new BroadcastChannel(scheduler.channelName);
+  const posted = vi.spyOn(BroadcastChannel.prototype, "postMessage");
+  try {
+    expect(scheduler.start().nextWakeAtMs).toBe(deadline);
+    await vi.advanceTimersByTimeAsync(9 * minute);
+    expect(posted).not.toHaveBeenCalled();
+    const notification = once(receiver, "message");
+    await vi.advanceTimersByTimeAsync(minute);
+    await notification;
+    expect(posted).toHaveBeenCalledTimes(1);
+    const retry = once(receiver, "message");
+    await vi.advanceTimersByTimeAsync(minute);
+    await retry;
+    expect(posted).toHaveBeenCalledTimes(2);
+    expect(
+      scheduler.tick(deadline + minute, 11 * minute).accepted.map(({ job: entry }) => entry.id),
+    ).toEqual(["future"]);
+  } finally {
+    posted.mockRestore();
+    receiver.close();
+  }
+});
+
+it("does not mistake a normal long deadline for a clock jump", () => {
+  const deadline = now + 10 * minute;
+  const scheduler = storedScheduler(
+    "long-deadline",
+    Array.from({ length: 7 }, (_, index) => job(`job-${index}`, deadline)),
+  );
+  scheduler.start();
+  // A real catch-up is bounded to five; an on-time wake admits all seven.
+  expect(scheduler.tick(deadline, 10 * minute).accepted).toHaveLength(7);
+});
+
+it("bounds missed due work after sleep when both clocks advance together", () => {
+  const scheduler = storedScheduler(
+    "sleep",
+    Array.from({ length: 7 }, (_, index) => job(`sleep-${index}`, now + minute)),
+  );
+  scheduler.start();
+  expect(scheduler.tick(now + 60 * minute, 60 * minute).accepted).toHaveLength(5);
 });

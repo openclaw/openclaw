@@ -70,14 +70,29 @@ function terminalUploadFile(name: string, content: string): File {
   return file;
 }
 
-async function mountReadyPanel(client: TerminalGatewayClient) {
+async function mountReadyPanel(
+  client: TerminalGatewayClient,
+  requests: ReadonlyArray<{ method: string }> = [],
+) {
   const panel = createUploadPanel();
   panel.client = client;
   panel.available = true;
   document.body.append(panel);
   panel.toggle();
   await waitForFast(() => {
-    expect(panel.renderRoot.querySelector<HTMLButtonElement>(".tp-upload")?.disabled).toBe(false);
+    const disabled = panel.renderRoot.querySelector<HTMLButtonElement>(".tp-upload")?.disabled;
+    expect(
+      disabled,
+      JSON.stringify({
+        hasUpdated: panel.hasUpdated,
+        connected: panel.isConnected,
+        open: panel.terminalPanelOpen,
+        disabled,
+        terminalFactoryCalls: createGhosttyTerminalMock.mock.calls.length,
+        requestCount: requests.length,
+        requestMethods: requests.slice(-12).map((request) => request.method),
+      }),
+    ).toBe(false);
   });
   return panel;
 }
@@ -228,7 +243,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
         },
         addEventListener: () => () => {},
       };
-      const panel = await mountReadyPanel(client);
+      const panel = await mountReadyPanel(client, requests);
       dropFiles(panel, [
         terminalUploadFile("scan final.pdf", "pdf"),
         terminalUploadFile("notes.txt", "note"),

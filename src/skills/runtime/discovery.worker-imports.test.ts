@@ -43,19 +43,22 @@ it("scans workspace skills without loading Gateway persistence", async () => {
       {
         key: "workspace",
         environment: captureSkillsDiscoveryEnvironment(),
-        request: {
-          sourcePlan: {
-            workspaceDir,
-            managedSkillsDir: path.join(workspaceDir, "managed-skills"),
-            pluginSkillRoots: [],
-            roots: [{ dir: skillRoot, source: "openclaw-workspace", tier: "workspace" }],
+        selection: {
+          kind: "selected",
+          request: {
+            sourcePlan: {
+              workspaceDir,
+              managedSkillsDir: path.join(workspaceDir, "managed-skills"),
+              pluginSkillRoots: [],
+              roots: [{ dir: skillRoot, source: "openclaw-workspace", tier: "workspace" }],
+            },
+            limits: {
+              maxCandidatesPerRoot: 10,
+              maxSkillsLoadedPerSource: 10,
+              maxSkillFileBytes: 1024,
+            },
+            additionalBins: [],
           },
-          limits: {
-            maxCandidatesPerRoot: 10,
-            maxSkillsLoadedPerSource: 10,
-            maxSkillFileBytes: 1024,
-          },
-          additionalBins: [],
         },
       },
     ],
