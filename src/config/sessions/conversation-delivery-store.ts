@@ -168,7 +168,9 @@ function writeConversationDelivery(
               { type: "session.conversation.delivery.transition", input },
               authority,
             );
-      return readSessionActorStorageResult(outcome);
+      return readSessionActorStorageResult<
+        ConversationDeliveryRecord | { created: boolean; record: ConversationDeliveryRecord }
+      >(outcome);
     });
   }
   const { options } = pinConversationDatabaseScope(scope);

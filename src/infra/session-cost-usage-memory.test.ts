@@ -2,13 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionActorAuthority } from "../config/sessions/session-actor-contract.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { failSessionActorMemoryPublication } from "../config/sessions/session-actor-memory-publication.test-support.js";
 import {
   acquireSessionActorStorage,
   runWithSessionActorStorage,
 } from "../config/sessions/session-actor-storage-binding.js";
 import { resolveMemorySessionTargetsInWorker } from "../config/sessions/session-transcript-inventory-runtime.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { runSessionActorUsage } from "./session-cost-usage-memory.js";
 import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
@@ -131,11 +131,7 @@ describe("actor memory usage", () => {
         { kind: "refresh", pricingFingerprint: "fixture" },
         () => undefined,
       );
-    const stop = sessionChanges.subscribeProjection((change) => {
-      if ("sessionKey" in change && change.sessionKey === sessionKey) {
-        throw new Error("projection unavailable");
-      }
-    });
+    const stop = failSessionActorMemoryPublication(sessionKey);
     try {
       await expect(refresh()).rejects.toMatchObject({ name: "SessionActorStorageCommittedError" });
     } finally {

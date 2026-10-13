@@ -1,9 +1,9 @@
 import { describe, expect, it, onTestFinished } from "vitest";
 import type { SessionActor } from "../config/sessions/session-actor-contract.js";
+import { failSessionActorMemoryPublication } from "../config/sessions/session-actor-memory-publication.test-support.js";
 import { createMemorySessionActorOwner } from "../config/sessions/session-actor-memory.js";
 import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import { progressCardStore } from "../gateway/progress-card-store.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
 
 const sessionKey = "agent:main:dashboard:incognito-progress";
 const authority = { assertCurrent() {}, authorize() {} };
@@ -46,11 +46,7 @@ async function withFixture(run: (fixture: Fixture) => Promise<void>) {
 describe("session actor progress-card store", () => {
   it("reports publication failure after retaining the committed card", () =>
     withFixture(async ({ store }) => {
-      const stop = sessionChanges.subscribeProjection((change) => {
-        if ("sessionKey" in change && change.sessionKey === sessionKey) {
-          throw new Error("projection unavailable");
-        }
-      });
+      const stop = failSessionActorMemoryPublication(sessionKey);
       try {
         await expect(store.put(sessionKey, { markdown: "Saved" })).rejects.toMatchObject({
           name: "SessionActorStorageCommittedError",
