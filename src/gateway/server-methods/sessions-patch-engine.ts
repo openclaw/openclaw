@@ -233,10 +233,11 @@ export async function executeSessionPatchMutations(params: {
   );
 
   if (activePrepared.length > 0) {
-    const releaseArchiveDrains = async () =>
-      Promise.all(
+    const releaseArchiveDrains = async () => {
+      await Promise.all(
         activePrepared.map((target) => releaseSessionPatchArchive(target.archivePreparation)),
       );
+    };
     try {
       // Cloud reclaim precedes every mutation mutex; an earlier Move may need one.
       timing?.mark("archive");
