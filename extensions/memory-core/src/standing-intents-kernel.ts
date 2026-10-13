@@ -42,6 +42,10 @@ export function invalidateStandingIntentLifecycle(db: DatabaseSync): void {
   lifecycleDeadlines.delete(db);
 }
 
+export function getStandingIntentLifecycleDeadline(db: DatabaseSync): number | null {
+  return lifecycleDeadlines.get(db)?.nextDueAt ?? null;
+}
+
 export function maintainStandingIntentLifecycle(db: DatabaseSync, nowMs: number): void {
   const deadline = lifecycleDeadlines.get(db);
   if (deadline && nowMs >= deadline.observedAt && nowMs < deadline.nextDueAt) {
