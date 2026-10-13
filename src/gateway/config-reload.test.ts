@@ -1672,6 +1672,7 @@ describe("startGatewayConfigReloader", () => {
   it.each(["direct", "watcher-echo", "failed-cleanup", "committed", "carried-successor"] as const)(
     "settles an RPC write inside its originating gateway root (%s)",
     async (scenario) => {
+      const { clock, scheduler } = createConfigReloadTestClock();
       const root = tempDirs.make("openclaw-config-receipt-");
       const bundledPluginsDir = tempDirs.make("openclaw-config-receipt-bundled-");
       const configPath = nodePath.join(root, "openclaw.json");
@@ -1744,6 +1745,7 @@ describe("startGatewayConfigReloader", () => {
         await withEnvAsync(configEnv, async () => {
           const configIo = createConfigIO({ configPath, pluginValidation: "skip" });
           const reloader = startGatewayConfigReloader({
+            scheduler,
             testDebounceMs: 0,
             initialConfig,
             initialSnapshotRawHash: (await configIo.readConfigFileSnapshot()).hash ?? null,
@@ -1803,7 +1805,7 @@ describe("startGatewayConfigReloader", () => {
                 request.release();
               });
 
-              await vi.advanceTimersByTimeAsync(0);
+              const applying = clock.wake();
               await hotReloadStarted.promise;
               expect(onHotReload).toHaveBeenCalledOnce();
               expect(settled).toBe(false);
@@ -1827,8 +1829,10 @@ describe("startGatewayConfigReloader", () => {
               }
 
               hotReloadGate.resolve();
-              await vi.waitFor(() => expect(settled).toBe(true));
-              await flushReload(reloader);
+              await applying;
+              await clock.wake();
+              await writeResult.application;
+              expect(settled).toBe(true);
               const applied =
                 scenario === "direct" ||
                 scenario === "watcher-echo" ||
@@ -1837,11 +1841,8 @@ describe("startGatewayConfigReloader", () => {
               if (successorWrite) {
                 await expect(successorWrite.application).resolves.toBe("applied");
               }
-              // Timer advancement does not join the watcher's real filesystem reread.
-              await vi.waitFor(() =>
-                expect(competingRootCounts).toEqual(
-                  scenario === "watcher-echo" || scenario === "failed-cleanup" ? [0, 0] : [0],
-                ),
+              expect(competingRootCounts).toEqual(
+                scenario === "watcher-echo" || scenario === "failed-cleanup" ? [0, 0] : [0],
               );
               if (applied) {
                 expect(log.error).not.toHaveBeenCalled();

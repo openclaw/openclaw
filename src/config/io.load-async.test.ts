@@ -78,7 +78,7 @@ function fixture(raw?: string) {
   return { ...options, io: createConfigIO(options) };
 }
 
-it.each(["load", "snapshot", "policy"] as const)(
+it.each(["load", "snapshot", "host-snapshot", "metadata", "write-snapshot", "policy"] as const)(
   "%s consumes canonical config without reading pending migrations or changing artifacts",
   async (method) => {
     const raw = JSON.stringify({
@@ -101,7 +101,7 @@ it.each(["load", "snapshot", "policy"] as const)(
     const mainSql = observeMainThreadSql();
     const synchronousSnapshot = vi.spyOn(sqliteReadOnlyWorker, "runSqliteReadOnlyWorkerSync");
     const unregister =
-      method === "snapshot"
+      method === "host-snapshot"
         ? registerManagedRuntimeConfigWriteOwner(
             options.configPath,
             undefined,
@@ -109,7 +109,7 @@ it.each(["load", "snapshot", "policy"] as const)(
           )
         : undefined;
     try {
-      const config = await withArtifactPreservingStateReads(() =>
+      const read = () =>
         withPluginCache(createPluginCache(), async () => {
           if (method === "policy") {
             return await readCurrentConfigForPolicyCheckAsync(options);
@@ -118,11 +118,19 @@ it.each(["load", "snapshot", "policy"] as const)(
           if (method === "load") {
             return await io.loadConfigAsync();
           }
-          const snapshot = await io.readConfigFileSnapshot();
+          const snapshot =
+            method === "metadata"
+              ? (await io.readConfigFileSnapshotWithPluginMetadata()).snapshot
+              : method === "write-snapshot"
+                ? (await io.readConfigFileSnapshotForWrite()).snapshot
+                : await io.readConfigFileSnapshot();
           expect(snapshot).toMatchObject({ valid: true, raw });
           return snapshot.config;
-        }),
-      );
+        });
+      // Plain loads use their caller's inspection scope; snapshot APIs own theirs.
+      const config = await (method === "load" || method === "policy"
+        ? withArtifactPreservingStateReads(read)
+        : read());
       expect(config.gateway?.mode).toBe("local");
       expect(config).toHaveProperty("session.store", "/srv/synthetic-session-state/sessions.json");
       expect(synchronousSnapshot).not.toHaveBeenCalled();
@@ -164,7 +172,9 @@ it("rejects an invalid async load and rolls back its injected config environment
 it.each(["metadata", "handoff"] as const)(
   "refuses snapshot results after its host owner is replaced during %s",
   async (phase) => {
-    const options = fixture(JSON.stringify({ gateway: { mode: "local" } }));
+    const options = fixture(
+      JSON.stringify({ gateway: { mode: "local" }, plugins: { enabled: false } }),
+    );
     const prepared = createDeferredCore();
     const release = createDeferredCore();
     const resolveMetadata = pluginMetadata.resolveConfigWidePluginMetadataSnapshotAsync;
@@ -264,7 +274,7 @@ it.each(["full", "core-only"] as const)(
 );
 
 it("rechecks the cold reader before observation after delayed metadata preparation", async () => {
-  const raw = JSON.stringify({ gateway: { mode: "local" } });
+  const raw = JSON.stringify({ gateway: { mode: "local" }, plugins: { enabled: false } });
   const { io, env, homedir, configPath, logger } = fixture(raw);
   const started = createDeferredCore();
   const release = createDeferredCore();

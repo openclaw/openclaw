@@ -157,7 +157,6 @@ export function prepareInitialPersistedUserTurnCohort(params: {
     },
   };
   let initial: InitialPersistedUserTurn | undefined;
-  let messagePresence: boolean | undefined;
   return {
     selection,
     consume(
@@ -167,8 +166,6 @@ export function prepareInitialPersistedUserTurnCohort(params: {
     ) {
       assertOwned();
       owner.assertCurrent();
-      messagePresence =
-        prepared.kind === "bounded" ? prepared.transcript?.messagePresence : undefined;
       const selected = selectCurrentUserTurnFromCohort({
         sessionManager,
         message,
@@ -186,7 +183,6 @@ export function prepareInitialPersistedUserTurnCohort(params: {
       }
     },
     readInitial: () => initial,
-    readMessagePresence: () => messagePresence,
   };
 }
 

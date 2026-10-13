@@ -398,12 +398,34 @@ describe("typed Goal operation persistence", () => {
       database().db.prepare("SELECT * FROM session_goal_operations ORDER BY operation_id").all(),
     ).toEqual(retained);
     await writeFixture((db) => {
-      db.exec("DELETE FROM session_goal_operations");
+      db.prepare("DELETE FROM session_goal_operations WHERE operation_id = ?").run("retained-0");
     });
-    await expect(admit()).resolves.toMatchObject({
+    const accepted = await admit();
+    expect(accepted).toMatchObject({
       appendedCount: 1,
       sessionTurnMutationResult: { replayed: false },
     });
+    const acceptedEntry = loadSessionEntry(scope());
+    const acceptedReceipts = database()
+      .db.prepare("SELECT * FROM session_goal_operations ORDER BY operation_id")
+      .all();
+    expect(acceptedReceipts).toHaveLength(4096);
+    await expect(
+      mutateSessionGoal({
+        ...scope(),
+        expectedSessionId: sessionId,
+        operation: {
+          ...identity("edit-at-capacity"),
+          action: "edit",
+          goalId: accepted.sessionTurnMutationResult!.result.goalId,
+          objective: "must not commit",
+        },
+      }),
+    ).rejects.toMatchObject({ code: "capacity" });
+    expect(loadSessionEntry(scope())).toEqual(acceptedEntry);
+    expect(
+      database().db.prepare("SELECT * FROM session_goal_operations ORDER BY operation_id").all(),
+    ).toEqual(acceptedReceipts);
   });
 
   it("does not commit a Goal when admission skips its message", async () => {

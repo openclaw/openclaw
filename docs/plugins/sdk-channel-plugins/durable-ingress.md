@@ -78,11 +78,12 @@ channel-local TTL cache.
 
 Persistent replay guards await SQLite reads, comparisons, writes, and legacy-file
 migration in the shared state worker. Competing records are compared again in the
-write transaction; clearing memory or forgetting a key fences older asynchronous
-cache fills. Await commits and deletions before acknowledging adoption or finishing
-cleanup. Error hooks retain their existing policy: a throwing hook rejects the
-operation, while a nonthrowing hook permits the guard's memory fallback. Worker
-failures never switch persistence to synchronous SQLite. Multi-key commits and
+write transaction. Forgetting a key clears its memory entry in the same queue as
+its durable deletion. Memory-only clears are best effort: an in-flight read may
+refill the cache afterward. Await commits and deletions before acknowledging
+adoption or finishing cleanup. Error hooks retain their existing policy: a throwing
+hook rejects the operation, while a nonthrowing hook permits the guard's memory
+fallback. Worker failures never switch persistence to synchronous SQLite. Multi-key commits and
 deletions settle every accepted write before returning an error, so rollback and
 shutdown cannot race a still-running sibling mutation.
 

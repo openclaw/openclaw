@@ -1,4 +1,5 @@
 import {
+  hasNonEmptyString,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
@@ -497,18 +498,14 @@ function* createMessageToolSteps(
         });
       }
 
-      const hasCurrentMessageId =
-        typeof options?.currentMessageId === "number" ||
-        (typeof options?.currentMessageId === "string" &&
-          options.currentMessageId.trim().length > 0);
-
       const toolContext =
         effectiveCurrentChannel.currentChannelId ||
         effectiveCurrentChannel.currentChatType ||
         effectiveCurrentChannel.currentChannelProvider ||
         effectiveCurrentChannel.currentMessagingTarget ||
         currentThreadTs ||
-        hasCurrentMessageId ||
+        typeof options?.currentMessageId === "number" ||
+        hasNonEmptyString(options?.currentMessageId) ||
         replyToMode ||
         options?.hasRepliedRef ||
         options?.sameChannelThreadRequired
@@ -660,8 +657,7 @@ function* createMessageToolSteps(
             resolveTrustedDecisionChannel(result.channel, preparedMessageToolCatalog),
           );
           const toolResult = getToolResult(result);
-          // A2A enters through webchat but resolves an external source route here.
-          // Compare the completed send with that route, independently of display mirrors.
+          // Resolve source completion independently of display mirrors.
           const sourceReply = {
             action,
             cfg,
@@ -676,8 +672,9 @@ function* createMessageToolSteps(
             replyToIsExplicit: Boolean(readToolStringParam(actionParams, "replyTo")),
           };
           const currentSourceReply =
-            result.handledBy !== "internal-source" &&
-            (await isDeliveredCurrentSourceReplyAsync(sourceReply));
+            result.handledBy === "internal-source"
+              ? options?.inputProvenance?.kind !== "inter_session"
+              : await isDeliveredCurrentSourceReplyAsync(sourceReply);
           // A completed provider write must settle even if its caller was revoked
           // while awaiting the accepted response. Its next request stays fenced.
           if (

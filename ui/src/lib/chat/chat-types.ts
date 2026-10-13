@@ -10,6 +10,7 @@ import type {
 import type { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";
 import type { MessageClientSource } from "../../../../src/chat/message-client-source.js";
 import type { ClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
+import type { RunFailureNotice } from "../../../../src/shared/run-failure-notice.js";
 import type { SkillWorkshopChangeNotice } from "../../../../src/shared/skill-workshop-change-notice.js";
 import type { BrowserTabTarget } from "../../components/browser/browser-target.ts";
 import type { toolIcons } from "../../components/icons-tools.ts";
@@ -234,6 +235,7 @@ export type ChatItem =
       handoffBoundary?: true;
       /** A background skill review's changes; rendered as a native row instead of `text`. */
       skillChanges?: SkillWorkshopChangeNotice;
+      runError?: RunFailureNotice;
       permissionMissing?: NodePermissionRequest;
     }
   | {

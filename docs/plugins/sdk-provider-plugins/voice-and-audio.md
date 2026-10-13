@@ -148,7 +148,9 @@ Register each capability inside `register(api)` alongside your existing
     when Gateway relay policy controls responses. `talk.catalog` resolves the
     provider's discovery default for the configured Talk agent and provider
     settings, excluding an explicit model; readiness and capabilities use the
-    effective model overrides.
+    effective model overrides. Within one catalog request, the selected realtime
+    provider's resolved configuration, readiness, and capabilities are reused for
+    its catalog entry. Each new request checks availability again.
     Consumers adding a new transport without changing existing model defaults
     can pass `useProviderDefaultModel: true` to
     `resolveConfiguredRealtimeVoiceProvider(...)`. This fills an absent model

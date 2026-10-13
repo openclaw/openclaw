@@ -253,10 +253,29 @@ describe("registered chat.send recovered output over Responses HTTP", () => {
       );
       if (failed) {
         expect(completed.status).toBe("error");
-        const failedReply = `⚠️ The AI service is having trouble. Please try again in a moment.\n\n${prefix}`;
-        expect(messageText(history.messages.at(-1))).toBe(failedReply);
-        expect(messageText(publishedMessages.get(sessionKey)?.at(-1))).toBe(failedReply);
-        expect(terminal.some((event) => event.state === "error")).toBe(true);
+        for (const messages of [history.messages, publishedMessages.get(sessionKey) ?? []]) {
+          const records = messages.filter(isRecord);
+          const partial = records.findLast((message) => message.role === "assistant");
+          expect(messageText(partial)).toBe(prefix);
+          expect(partial).not.toHaveProperty("stopReason");
+          expect(partial).not.toHaveProperty("openclawRunError");
+        }
+        // Terminal failures publish chat.error after persistence; custom receipts live in history.
+        const notices = history.messages
+          .filter(isRecord)
+          .filter((message) => message.customType === "run-failed-before-reply");
+        expect(notices, "durable terminal failure receipt").toHaveLength(1);
+        expect(notices[0]).toMatchObject({
+          role: "custom",
+          openclawRunError: { runId: started.runId, summary: expect.stringMatching(/\S/) },
+        });
+        expect(terminal).toEqual([
+          expect.objectContaining({
+            runId: started.runId,
+            state: "error",
+            errorMessage: expect.stringMatching(/\S/),
+          }),
+        ]);
         const deltas = events.filter(
           (event): event is Extract<ChatEvent, { state: "delta" }> =>
             event.runId === started.runId && event.state === "delta",

@@ -78,7 +78,7 @@ Node and SSH workspace access and reconciliation outlive worker RPC credential e
 
 - A worker provider plugin. The bundled `crabbox` plugin drives the [Crabbox](https://crabbox.sh/) CLI; Crabbox owns the supported cloud backends and their configuration. The plugin automatically prepares its supported CLI for the Gateway user, keeping the managed distribution separate from operator-installed binaries. It can also use a supported executable from `PATH` or `settings.binary`. See [Crabbox configuration](/gateway/config-cloud-workers#crabbox-profile) for the version requirement, Doctor preparation, and restricted-host upgrades.
 - For Crabbox AWS workers, the effective `aws.instanceProfile` must be empty. The provider checks `crabbox config show --json` before allocation, then requires `crabbox inspect --json` to report `providerMetadata.instanceProfileAttached: false` from EC2 `DescribeInstances`. Leases with an instance role or without authoritative metadata are stopped and rejected. Local CLI/configuration preparation failures finish before the allocation boundary and do not leave a cleanup request for a nonexistent lease. Failures after an allocation request still retain their exact cleanup owner until Stop proves release.
-- A supported Node.js release and npm on the leased machine. Bare cloud images may lack them — supply them through the image, Crabbox bootstrap, or the profile's `setup` command. Native Windows requires Node and npm on the machine `PATH`. Headless Windows workers also require Crabbox's managed detached-process launcher; see [Windows prerequisites](/gateway/cloud-workers/setup-and-bundle-installation#native-windows-prerequisites). OpenClaw does not install Node. The machine also needs registry access to install the runtime's dependencies for its operating system and CPU.
+- On Linux x64/arm64, OpenClaw installs a verified official Node.js toolchain automatically when needed; the image must provide compatible glibc, `curl`, `tar`, and `sha256sum`, with HTTPS access to nodejs.org. macOS and Windows require supported Node.js and npm supplied by the image or optional profile `setup`. Native Windows requires them on the machine `PATH`. Headless Windows workers also require Crabbox's managed detached-process launcher; see [Windows prerequisites](/gateway/cloud-workers/setup-and-bundle-installation#native-windows-prerequisites). The machine also needs registry access to install the runtime's dependencies for its operating system and CPU.
 - GitHub CLI (`gh`) on the worker's `PATH` for GitHub commands and HTTPS pushes. The sealed worker bundle includes the credential-binding launcher, not GitHub CLI. Crabbox developer images include `gh`; install it in `settings.setup` for other images.
 - A repository session created with `repository: { url, ref? }`, or a live, registry-owned session managed worktree created with `worktree: true`. Add `worktreeSource: "empty"` to create a fresh workspace without a user repository. Repository sources require a managed node and access to the upstream Git repository. Arbitrary plain Gateway folders are not copied or dispatched; choose a fresh workspace instead.
 
@@ -106,15 +106,35 @@ crabbox doctor --provider <backend> --json
 
 Read-only readiness does not prove allocation, setup, enrollment, or cleanup. Verify the complete session flow before relying on a new profile; see [Verify the profile](/gateway/cloud-workers/verify-the-profile).
 
+## Quick start
+
+With Crabbox logged in on the Gateway host, open **New Session** and pick **Cloud**
+in the where picker. OpenClaw discovers the configured backend, then saves a
+`cloud` profile when you select it. You can edit that profile later in
+**Settings → Connections → Cloud workers**. An explicitly configured direct
+provider can supply the same suggestion; discovery checks configuration, while
+allocation still performs the provider's normal preflight checks.
+
+The suggested profile uses Linux, the smallest advertised standard machine
+class, an 8-hour lifetime, a 45-minute idle timeout and idle suspend, and warm
+images. Viewing the suggestion does not save config or allocate a machine.
+Saving requires administrator access. Existing profiles take precedence, and
+adopting an existing `cloud` profile leaves it unchanged.
+If config reload is disabled, saving schedules a Gateway restart. Until the
+saved profile becomes active, selection reports that the profile is saved and
+asks you to wait for the restart and retry; retrying does not save it again.
+
 ## Configuration
 
-Manage profiles in the Control UI under **Settings → Connections → Cloud workers**, or edit `cloudWorkers.profiles` directly in `openclaw.json` — both write the same config keys. The settings page lists each profile's backend, class, lifetime, and idle-stop in plain language, and shows whether it is advertised to `environments.list`. Saved changes apply without restarting the Gateway. With `gateway.reload.mode: "off"`, a save from this page restarts the Gateway to apply it, while direct edits to `openclaw.json` wait for a manual `openclaw gateway restart`. With no profiles configured it explains the feature, links back to this page, and starts the add flow.
+Open **Settings → Connections → Cloud environments** to see one row per repository with a snapshot, a repository default profile, or a prepared worker. Select a repository to inspect its snapshots and setup or change its default machine. The sheet appears beside the list on wide screens and below it on narrow screens. Before any environments exist, the page explains that the first cloud session prepares the repository and saves a snapshot.
+
+Expand **Advanced** at the bottom for **Machines**, **Pool**, **Snapshot retention**, and **Machine images**, in that order. Machines lets you add, edit, or delete profiles; Pool shows ready workers and the shared pool cap. Snapshot retention applies to all repositories. Machine images keeps snapshots without a repository, including uncertain captures, available for inspection and recovery. Profile changes write `cloudWorkers.profiles`, the same keys you can edit directly in `openclaw.json`. Saved changes apply without restarting the Gateway. With `gateway.reload.mode: "off"`, a save from this page restarts the Gateway to apply it, while direct edits to `openclaw.json` wait for a manual `openclaw gateway restart`.
 
 **Machine class** is required in the class-based editor. Enter a class accepted by the selected Crabbox backend and binary; the provider determines its effective sizing. Changing the backend or binary leaves the class unchanged, so verify that it is accepted before saving. To configure a classless profile, use **Settings → Advanced** and omit `settings.class`; **Edit** on an existing classless profile opens Advanced. OpenClaw then omits `--class` unless the placement supplies a class, leaving resource selection to Crabbox without claiming a default size. Explicit `null`, empty or whitespace strings, and nonstring class values are invalid.
 
 The **Operating system** select sets `settings.target` using the profile's advertised operating systems. It appears when at least two systems are advertised, or when a saved target is no longer advertised so you can clear it with **Provider default**. The bundled Crabbox provider defaults to Linux and also accepts Windows (WSL2), native Windows, and macOS; see [operating-system selection](/gateway/cloud-workers/placement-and-machine-selection#choose-an-operating-system-and-machine-class-per-session). Unavailable choices remain visible with the provider's repair hint and cannot be selected. New profiles without an advertised catalog show no selector. Advanced JSON preserves the same setting.
 
-Add a profile under `cloudWorkers.profiles` in `openclaw.json`. This Debian/Ubuntu setup example preserves supported Node.js installations, waits for first-boot cloud-init before touching packages, installs Node.js 24 when Node is missing or unsupported (including downgrading unsupported newer APT packages), upgrades an nvm installation that shadows Node on `PATH` in place, and installs GitHub CLI when missing. The apt lock timeout keeps a package manager that is still running at first boot from failing the dispatch. It rechecks Node and npm before enrollment. The current runtime requires Node.js 24.16.0 or newer on the 24.x line, or 26.1.0 or newer; Node.js 22 and 25 are unsupported.
+Add a profile under `cloudWorkers.profiles` in `openclaw.json`. Linux x64 and arm64 workers automatically install a verified official Node.js toolchain when the image has no supported Node on `PATH`. `settings.setup` is optional; use it for additional machine prerequisites such as GitHub CLI. macOS and Windows keep using image-provided Node and npm. The runtime requires Node.js 24.16.0 or newer on the 24.x line, or 26.1.0 or newer; Node.js 22 and 25 are unsupported.
 
 ```json
 {
@@ -129,8 +149,7 @@ Add a profile under `cloudWorkers.profiles` in `openclaw.json`. This Debian/Ubun
           "class": "standard",
           "ttl": "8h",
           "idleTimeout": "45m",
-          "warmImage": true,
-          "setup": "#!/usr/bin/env bash\nset -euo pipefail\nnode_supported() { command -v node >/dev/null 2>&1 && node -e 'const [major, minor, patch] = process.versions.node.split(\".\").map(Number); process.exit([major, minor, patch].every(Number.isInteger) && ((major === 24 && minor >= 16) || (major === 26 && minor >= 1) || major > 26) ? 0 : 1)'; }\nif ! node_supported; then\n  node_path=\"$(command -v node 2>/dev/null || true)\"; case \"$node_path\" in */nvm/*) shadow_nvm=\"${node_path%%/nvm/*}/nvm\";; *) shadow_nvm=\"\";; esac\n  nvm_sh=\"\"; for d in \"$shadow_nvm\" \"${NVM_DIR:-}\" /usr/local/nvm /usr/local/share/nvm \"$HOME/.nvm\"; do [ -n \"$d\" ] && [ -s \"$d/nvm.sh\" ] && { nvm_sh=\"$d/nvm.sh\"; break; }; done\n  if [ -n \"$nvm_sh\" ]; then\n    # An nvm-managed Node earlier on PATH would shadow an apt-installed one; upgrade it in place.\n    export NVM_DIR=\"$(dirname \"$nvm_sh\")\"; . \"$nvm_sh\"; nvm install 24 >/dev/null; nvm alias default 24 >/dev/null; hash -r\n  elif command -v apt-get >/dev/null 2>&1; then\n    command -v cloud-init >/dev/null 2>&1 && sudo cloud-init status --wait >/dev/null 2>&1 || true\n    export DEBIAN_FRONTEND=noninteractive\n    curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -\n    sudo apt-get -o DPkg::Lock::Timeout=600 install -y --allow-downgrades 'nodejs=24.*'\n    hash -r\n  else\n    printf '%s\\n' 'Worker setup: no apt-get or nvm; cannot install Node.js 24 on this image.' >&2; exit 1\n  fi\nfi\nnode_supported || { printf 'Worker setup requires Node.js 24.16+ or 26.1+; PATH resolves %s (%s). Remove or upgrade the shadowing installation.\\n' \"$(command -v node || echo none)\" \"$(node --version 2>/dev/null || echo unknown)\" >&2; exit 1; }\nnpm --version\ncommand -v gh >/dev/null 2>&1 || { (sudo apt-get -o DPkg::Lock::Timeout=600 update && sudo apt-get -o DPkg::Lock::Timeout=600 install -y gh) || true; }\n\n"
+          "warmImage": true
         }
       }
     }

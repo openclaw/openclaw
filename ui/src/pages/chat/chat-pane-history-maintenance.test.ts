@@ -66,7 +66,8 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     }));
     const mounting = mountTestTranscript("maintenance-history", rows, props.transcript);
     await vi.advanceTimersByTimeAsync(0);
-    const { container, renderRows, transcript } = await mounting;
+    const { container, renderRows, transcript, session } = await mounting;
+    session.setContentReady(true);
     let maximum = 800;
     Object.defineProperties(container, {
       clientHeight: { configurable: true, value: 600 },
@@ -96,6 +97,8 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     vi.advanceTimersToNextFrame();
     flush();
     expect(container.scrollTop).toBe(800);
+    expect(transcript.scrollToEnd({ behavior: "instant" })).toBe(true);
+    expect(transcript.isPositionSettled).toBe(true);
     container.dispatchEvent(new Event("scroll"));
     renderRows(rows);
     const sentinel = container.appendChild(document.createElement("div"));

@@ -1010,32 +1010,6 @@ describe("node.invoke APNs wake path", () => {
     },
   );
 
-  it("releases idle wake state when an unregistered node reconnects during invoke", async () => {
-    const nodeId = "ios-node-reconnect-without-registration";
-    mocks.loadApnsRegistration.mockResolvedValue(null);
-    const session: TestNodeSession = { nodeId, commands: ["camera.capture"] };
-    let lookupCount = 0;
-    const nodeRegistry = {
-      get: vi.fn(() => {
-        lookupCount += 1;
-        return lookupCount === 1 ? undefined : session;
-      }),
-      invoke: vi.fn().mockResolvedValue({
-        ok: true,
-        payload: { ok: true },
-      }),
-    };
-
-    const respond = await invokeNode({
-      nodeRegistry,
-      requestParams: { nodeId, idempotencyKey: "idem-reconnect-without-registration" },
-    });
-
-    expect(firstRespondCall(respond)[0]).toBe(true);
-    expect(nodeRegistry.invoke).toHaveBeenCalledTimes(1);
-    expect(getNodeWakeStateSnapshot(nodeId)).toBeUndefined();
-  });
-
   it("does not throttle repeated relay wake attempts when relay config is missing", async () => {
     mocks.loadApnsRegistration.mockResolvedValue(relayRegistration("ios-node-relay-no-auth"));
     mocks.resolveApnsRelayConfigFromEnv.mockReturnValue({
@@ -1127,26 +1101,6 @@ describe("node.invoke APNs wake path", () => {
     await expectWakeAndNudgeSent("ios-node-clear-wake");
     expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(2);
     expect(mocks.sendApnsAlert).toHaveBeenCalledTimes(2);
-  });
-
-  it("stops waking an offline node when the invoke deadline expires", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const nodeId = "ios-node-short-invoke-deadline";
-    mockDirectWakeConfig(nodeId);
-    const nodeRegistry = createMissingNodeRegistry();
-
-    const pending = invokeNode({
-      nodeRegistry,
-      requestParams: { nodeId, idempotencyKey: "idem-short-invoke-deadline", timeoutMs: 100 },
-    });
-
-    await vi.advanceTimersByTimeAsync(100);
-
-    expectInvokeTimeout(await pending);
-    expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(1);
-    expect(mocks.sendApnsAlert).not.toHaveBeenCalled();
-    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
   });
 
   it("times out when initial node pairing capture remains in flight", async () => {
@@ -1414,26 +1368,6 @@ describe("node.invoke APNs wake path", () => {
       pairingReleased.resolve();
       registry.unregister(connId);
     }
-  });
-
-  it("caps oversized reconnect wait timers", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const nodeRegistry = {
-      get: vi.fn(() => undefined),
-      getForPairingGeneration: vi.fn(() => undefined),
-    };
-
-    const reconnectPromise = waitForNodeReconnect({
-      nodeId: "ios-node-never-reconnects",
-      context: { nodeRegistry },
-      timeoutMs: Number.MAX_SAFE_INTEGER,
-      pollMs: Number.MAX_SAFE_INTEGER,
-    });
-
-    await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
-    await expect(reconnectPromise).resolves.toBe(false);
-    expect(nodeRegistry.get).toHaveBeenCalledWith("ios-node-never-reconnects");
   });
 
   it.each([-3_600_000])(

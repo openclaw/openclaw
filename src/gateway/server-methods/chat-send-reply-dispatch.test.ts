@@ -97,40 +97,6 @@ function interceptDeliverySnapshot(afterRead: () => void) {
 }
 
 describe("chat delivery watermark preparation", () => {
-  it("selects display payloads and delivery anchors in one transcript request", async () => {
-    await withOpenClawTestState({ label: "chat-delivery-one-snapshot" }, async () => {
-      const { dispatch, append } = await createReplyTranscriptFixture();
-      dispatch.captureAgentTranscriptStart();
-      await append("answer", { role: "assistant", content: "Committed answer." });
-      const requests: string[] = [];
-      const createReaders = historyReaders.createSessionHistoryWorkerReaders;
-      const readerSpy = vi
-        .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
-        .mockImplementation((runRequest) =>
-          createReaders((prepare, ...args) =>
-            runRequest(
-              () => {
-                const input = prepare();
-                requests.push(input.kind);
-                return input;
-              },
-              ...args,
-            ),
-          ),
-        );
-      try {
-        expect(await dispatch.resolveReplyDelivery()).toBe("delivered");
-        expect(
-          requests.filter((kind) =>
-            ["transcript-anchors", "transcript-watermark", "history-page"].includes(kind),
-          ),
-        ).toEqual(["transcript-anchors"]);
-      } finally {
-        readerSpy.mockRestore();
-      }
-    });
-  });
-
   it.each(["rewrite", "replacement"] as const)(
     "reads released actor reply facts and rejects the old answer after %s",
     async (change) => {

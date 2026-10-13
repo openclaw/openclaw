@@ -79,6 +79,7 @@ describe("plugin SDK sandbox process ownership", () => {
     const root = roots.make("openclaw-sdk-state-owner-");
     vi.stubEnv("HOME", root);
     vi.stubEnv("USERPROFILE", root);
+    vi.stubEnv("BUN_RUNTIME_TRANSPILER_CACHE_PATH", "0");
     const env = {
       PATH: process.env.PATH,
       SystemRoot: process.env.SystemRoot,

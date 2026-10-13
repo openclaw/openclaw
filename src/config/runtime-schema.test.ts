@@ -1,5 +1,6 @@
 // Covers runtime schema defaults and generated runtime config behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -22,6 +23,7 @@ const mockGetCurrentPluginMetadataSnapshot = vi.hoisted(() => vi.fn());
 
 let readBestEffortRuntimeConfigSchema: typeof import("./runtime-schema.js").readBestEffortRuntimeConfigSchema;
 let loadGatewayRuntimeConfigSchema: typeof import("./runtime-schema.js").loadGatewayRuntimeConfigSchema;
+let invalidateGatewayRuntimeConfigSchema: typeof import("./runtime-schema.js").invalidateGatewayRuntimeConfigSchema;
 
 function explicitMainRoster(): OpenClawConfig {
   return { agents: { entries: { main: {} } } };
@@ -143,8 +145,11 @@ function getCurrentMetadataSnapshotArg(index = 0): Record<string, unknown> | und
 }
 
 beforeAll(async () => {
-  ({ readBestEffortRuntimeConfigSchema, loadGatewayRuntimeConfigSchema } =
-    await import("./runtime-schema.js"));
+  ({
+    readBestEffortRuntimeConfigSchema,
+    loadGatewayRuntimeConfigSchema,
+    invalidateGatewayRuntimeConfigSchema,
+  } = await import("./runtime-schema.js"));
 });
 
 afterEach(() => {
@@ -314,6 +319,35 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     });
     mockLoadPluginManifestRegistry.mockReturnValue(makeManifestRegistry());
   });
+
+  it.each(["config", "plugin registry", "invalidation"] as const)(
+    "refreshes shared schema metadata after %s changes",
+    (change) => {
+      let config = explicitMainRoster();
+      loadGatewayRuntimeConfigSchema(config);
+      loadGatewayRuntimeConfigSchema(config);
+      expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(1);
+
+      setGatewayPluginMetadataSnapshot(
+        createPluginMetadataSnapshotFixture({
+          plugins: [{ id: "updated-plugin", configSchema: { type: "object" } }],
+        }),
+      );
+
+      if (change === "config") {
+        config = { ...config, plugins: { entries: { demo: { enabled: false } } } };
+      } else if (change === "plugin registry") {
+        setActivePluginRegistry(createEmptyPluginRegistry());
+      } else {
+        invalidateGatewayRuntimeConfigSchema();
+      }
+
+      expect(loadGatewayRuntimeConfigSchema(config).schema).toHaveProperty(
+        "properties.plugins.properties.entries.properties.updated-plugin",
+      );
+      expect(mockLoadConfig).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses manifest metadata instead of booting plugin runtime", () => {
     const result = loadGatewayRuntimeConfigSchema();

@@ -732,4 +732,11 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["users.background.remove", "users", "operator.write", "2026.9"],
   ["debugProxy.capture", "debug-proxy", "operator.admin", "2026.9"],
   ["openclaw.setup.auto", "system-agent", "operator.admin", "2026.10"],
+  [
+    "environments.adoptSuggestedProfile",
+    "environments",
+    "operator.admin",
+    "2026.10",
+    CONTROL_PLANE_WRITE,
+  ],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

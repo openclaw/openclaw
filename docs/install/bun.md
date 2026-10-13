@@ -12,7 +12,9 @@ Node remains OpenClaw's primary, default, and recommended runtime. Bun 1.4+ buil
 </Warning>
 
 Desktop apps manage their own runtime: the native macOS app and fresh local
-Tauri installations on Linux use the same pinned OpenClaw Bun fork. Existing
+Tauri installations on Linux and Windows use the same pinned OpenClaw Bun fork.
+On Windows, [Windows Hub](/platforms/windows#recommended-windows-hub) is the
+recommended desktop app; Tauri is the backup. Existing
 Linux Tauri installations retain their runtime across startup and app updates
 until you explicitly choose **Use bundled runtime…**. macOS Tauri keeps its
 existing behavior, separate from the native macOS app. See

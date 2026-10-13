@@ -85,15 +85,16 @@ export function renderLazyViewError(params: {
   onClose?: (event: Event) => void;
   onRetry: (event: Event) => void;
   render?: () => unknown;
+  inline?: boolean;
   stale?: boolean;
   subtitle?: string;
 }) {
-  const { render, ...props } = params;
+  const { render, inline, ...props } = params;
   return html`
     ${render?.() ?? nothing}
     ${solidContent(LazyViewError, {
       ...props,
-      inline: Boolean(render),
+      inline: inline ?? Boolean(render),
     })}
   `;
 }

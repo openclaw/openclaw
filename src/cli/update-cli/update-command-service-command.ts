@@ -161,6 +161,7 @@ export async function runUpdatedInstallGatewayCommand(
   const run = params.opts.run;
   const executor = run?.executorFence;
   const assertCurrent = () => {
+    run?.deadline?.signal.throwIfAborted();
     params.signal?.throwIfAborted();
     if (params.opts.run !== run || run?.executorFence !== executor) {
       throw new Error("Native command lost its original update executor.");
@@ -281,7 +282,7 @@ export async function runUpdatedInstallGatewayCommand(
         : {}),
       cwd: params.result.root,
       env: commandEnv,
-      timeoutMs: installing ? installTimeoutMs : params.timeoutMs,
+      timeoutMs: run?.deadline?.remainingMs() ?? (installing ? installTimeoutMs : params.timeoutMs),
       ...(params.signal ? { signal: params.signal } : {}),
     });
   };
@@ -412,6 +413,7 @@ export async function restartRetainedUpdateGatewayService(params: {
         },
         preserveDefinition: true,
         preserveAutoStart: true,
+        deadline: params.run.deadline,
       });
     }),
   );

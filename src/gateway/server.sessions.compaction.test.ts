@@ -48,6 +48,8 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 import { loseSessionSignalAcknowledgement } from "./test/session-signal-failure.test-support.js";
 import { registerWorkerInferenceSessionControl } from "./worker-environments/inference-control-internal.js";
+// Load after the fixture mocks, during collection rather than the first RPC deadline.
+import "./server-methods/sessions-compact.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
@@ -226,8 +228,6 @@ test("sessions.compact without maxLines runs embedded manual compaction without 
   });
 
   const { ws } = await openClient();
-  // Prepare the lazy handler before arming the RPC and event observers.
-  await import("./server-methods/sessions-compact.js");
   await rpcReq(ws, "sessions.subscribe", {});
   const signalVersion = await getSessionStateVersion(sessionScope.sessionKey, "main");
   const signal = loseSessionSignalAcknowledgement();

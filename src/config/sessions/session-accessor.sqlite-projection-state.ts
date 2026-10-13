@@ -183,6 +183,8 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
       });
     }
     writeSessionEntry(database, sessionKey, entry, {
+      // Inbound initialization observes activity even without authoritative route facts.
+      observeConversation: true,
       allowStoredAliases: options.allowCanonicalRepair === true,
       preserveNodeSuggestions: options.allowCanonicalRepair === true,
       previousEntry: expectedCurrentEntry ?? null,

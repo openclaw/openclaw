@@ -45,6 +45,7 @@ import {
   stripExtractedFileImageMetadata,
   type ExtractedFileImage,
 } from "../../media-understanding/extracted-file-images.js";
+import type { PluginHookReplyDispatchContext } from "../../plugins/hook-types.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
 import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
@@ -119,6 +120,7 @@ export async function tryDispatchAcpReplyCore(
     bypassForCommand: boolean;
     onAgentRunStart?: GetReplyOptions["onAgentRunStart"];
     onPreparedAgentRunStart?: GetReplyOptions["onPreparedAgentRunStart"];
+    turnAdoption?: PluginHookReplyDispatchContext["turnAdoption"];
     userTurnTranscriptRecorder?: GetReplyOptions["userTurnTranscriptRecorder"];
     prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
     recordProcessed: InboundMessageAuditTerminalRecorder["note"];
@@ -646,6 +648,16 @@ export async function tryDispatchAcpReplyCore(
       mode: "prompt",
       requestId,
       ...(params.abortSignal ? { signal: params.abortSignal } : {}),
+      onBeforePrompt: async () => {
+        await input.withCurrent(() => {});
+        await params.turnAdoption?.adopt();
+        await assertPreparedConversationBindingRouteCurrent(params.ctx);
+        await input.withCurrent(() => {
+          if (getAdmittedRunDelegatedAuthority(turnAdmission) === undefined) {
+            throw new Error("ACP turn admission ended before input dispatch.");
+          }
+        });
+      },
       onElicitation,
       onLifecycle: recordUnsupportedNativeActionEvidence,
       onEvent: async (event) => {
@@ -712,6 +724,7 @@ export async function tryDispatchAcpReplyCore(
     emitAuditTerminal();
     return result;
   } catch (err) {
+    params.turnAdoption?.assertCurrent();
     const acpError = toAcpRuntimeError({
       error: err,
       fallbackCode: "ACP_TURN_FAILED",

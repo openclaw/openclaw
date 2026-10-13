@@ -171,8 +171,6 @@ const AGENT_CLI_SIGNAL_EXIT_CODES: Record<AgentCliSignal, number> = {
 };
 const MESSAGE_FILE_DECODER = new TextDecoder("utf-8", { fatal: true });
 
-let gatewayAbortRetryDelaysMsForTests: readonly number[] | undefined;
-
 type EmbeddedAgentCommandOpts = Parameters<typeof import("./agent.js").agentCommand>[0];
 
 /**
@@ -279,13 +277,6 @@ async function acquireEmbeddedAgentStateLock(
     formatActiveGatewayRefusal: formatActiveGatewayLocalRefusal,
   });
 }
-
-/** Test-only hook for shortening retry timing. */
-export const agentViaGatewayTesting = {
-  setGatewayAbortRetryDelaysMsForTests(delays?: readonly number[]): void {
-    gatewayAbortRetryDelaysMsForTests = delays;
-  },
-};
 
 function protectJsonStdout(opts: Pick<AgentCliOpts, "json">): void {
   if (opts.json === true) {
@@ -674,9 +665,8 @@ async function abortAcceptedGatewayAgentRunWithRetries(params: {
   request: GatewayAbortRequest;
   logFailure?: boolean;
 }): Promise<boolean> {
-  const retryDelaysMs = gatewayAbortRetryDelaysMsForTests ?? GATEWAY_ABORT_RETRY_DELAYS_MS;
-  for (const [attempt, retryDelayMs] of [...retryDelaysMs, 0].entries()) {
-    const isFinalAttempt = attempt === retryDelaysMs.length;
+  for (const [attempt, retryDelayMs] of [...GATEWAY_ABORT_RETRY_DELAYS_MS, 0].entries()) {
+    const isFinalAttempt = attempt === GATEWAY_ABORT_RETRY_DELAYS_MS.length;
     const logFailure = params.logFailure !== false && isFinalAttempt;
     if (params.signal && params.runId && params.sessionKey) {
       try {

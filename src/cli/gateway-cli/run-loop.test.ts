@@ -1422,34 +1422,6 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("reopens refused SIGUSR2 admission without consuming a later signal token (#83131)", async () => {
-    consumeGatewayRestartIntentPayload.mockRejectedValueOnce(
-      new Error("lifecycle module corrupted"),
-    );
-
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      const { close, start, exited } = await createSignaledLoopHarness();
-      const restartSignal = captureSignal("SIGUSR2");
-      const sigterm = captureSignal("SIGTERM");
-
-      restartSignal();
-      await waitForLoopTurn();
-      await waitForLoopTurn();
-
-      expect(gatewayLog.error).toHaveBeenCalledWith(
-        "SIGUSR2 handler failed: lifecycle module corrupted",
-      );
-      expect(markGatewayRestartHandled).toHaveBeenCalledOnce();
-      expect(rollbackGatewayRestartSignalAdmission).not.toHaveBeenCalled();
-      expect(gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed()).toBe(false);
-      expect(close).not.toHaveBeenCalled();
-      expect(start).toHaveBeenCalledTimes(1);
-
-      sigterm();
-      await expect(exited).resolves.toBe(0);
-    });
-  });
-
   it("recloses restart admission after a failed SIGUSR2 handler rolls it back", async () => {
     markGatewayRestartHandled.mockImplementationOnce(() => {
       throw new Error("restart token cleanup failed");

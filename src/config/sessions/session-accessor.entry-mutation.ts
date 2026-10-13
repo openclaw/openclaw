@@ -501,17 +501,11 @@ export async function createSessionEntryWithTranscript<TError = string>(
   const agentId = captured.agentId ?? resolveAgentIdFromSessionKey(captured.sessionKey);
   const target = { ...captured, agentId, storePath };
   const incognito = captureIncognitoSessionBinding(target);
-  // A sibling's cold registration must not invalidate discovery of this same store.
-  // Release admission before creation callbacks acquire their own commit custody.
+  // Preserve earlier queued writes for existing-key adoption and protect shared-store
+  // discovery from sibling cold registration. Commit custody is acquired separately.
   const admission =
     isMainThread && !incognito ? resolveSqliteWriteAdmissionScope(target) : undefined;
-  const prepare = async () => {
-    const resolved = await prepareSqliteScope(target);
-    if (admission && resolved.path !== admission.path) {
-      throw new Error("Session creation preparation changed its reserved database path");
-    }
-    return resolved;
-  };
+  const prepare = () => prepareSqliteScope(target);
   const resolved = captureLifecycleDatabaseScope(
     isMainThread && !incognito
       ? admission

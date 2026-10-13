@@ -9,6 +9,7 @@ import {
 import {
   cancelStandingIntentInDatabase,
   createStandingIntentInDatabase,
+  hasNoActiveStandingIntents,
   invalidateStandingIntentLifecycle,
   listStandingIntentsInDatabase,
   maintainStandingIntentLifecycle,
@@ -60,6 +61,10 @@ export function bindSqliteWorkerBackend(
       }
       if (schemaPrepared) {
         return { kind: "schema-prepared" };
+      }
+      // Absence survives until an owner write; there is no effect to transact or authorize.
+      if (command.type === "match" && hasNoActiveStandingIntents(db)) {
+        return { kind: "result", value: [] };
       }
       return transact<
         StandingIntentWorkerOperations[keyof StandingIntentWorkerOperations]["output"]

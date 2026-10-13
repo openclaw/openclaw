@@ -23,10 +23,15 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import {
+  prepareSessionActorParticipantUpdate,
+  readSessionActorParticipants,
+} from "./session-actor-entry-publication.worker.js";
 import { MAX_SESSION_PARTICIPANTS } from "./session-entry-provenance.js";
 import {
   participantIdentityNamespace,
   mergeParticipantAggregate,
+  readParticipantIdentity,
 } from "./session-participant-identity.js";
 import type {
   RecordSessionParticipantResult,
@@ -79,15 +84,26 @@ function recordSessionParticipantWithAliasRead(
   const write = (database: OpenClawAgentDatabase): SessionParticipantWriteResult => {
     ensureSessionParticipantsSchema(database.db);
     const kysely = getSessionKysely(database.db);
+    const participants = readSessionActorParticipants(database, resolved.sessionKey);
+    const publishActor = prepareSessionActorParticipantUpdate(database, resolved.sessionKey);
+    const retainedRows = participants?.map((participant) => ({
+      actor_id: participant.identity.id,
+      identity_namespace: participantIdentityNamespace(participant.identity),
+      contribution_count: participant.contributionCount,
+      first_prompted_at: participant.firstPromptedAt,
+      last_prompted_at: participant.lastPromptedAt,
+    }));
     const participantQuery = kysely
       .selectFrom("session_participants")
       .select(["actor_id", "contribution_count", "first_prompted_at", "last_prompted_at"])
       .where("session_key", "=", resolved.sessionKey)
       .where("identity_namespace", "=", namespace);
-    const exact = executeSqliteQueryTakeFirstSync(
-      database.db,
-      participantQuery.where("actor_id", "=", actorId),
-    );
+    const exact = retainedRows
+      ? retainedRows.find((row) => row.actor_id === actorId && row.identity_namespace === namespace)
+      : executeSqliteQueryTakeFirstSync(
+          database.db,
+          participantQuery.where("actor_id", "=", actorId),
+        );
     // SQLite bindings replace lone surrogates; preserve the original JS identity comparison.
     let existing = exact?.actor_id === actorId ? exact : undefined;
     // Prefer the exact row, otherwise the first retained alias. Preserve raw history;
@@ -95,21 +111,28 @@ function recordSessionParticipantWithAliasRead(
     if (!existing && params.identity.type === "profile") {
       const aliases = readAliases();
       if (aliases && aliases.size > 1) {
-        existing = executeSqliteQuerySync(
-          database.db,
-          participantQuery.orderBy("actor_id"),
-        ).rows.find((row) => aliases.has(row.actor_id));
+        existing = (
+          retainedRows
+            ? retainedRows
+                .filter((row) => row.identity_namespace === namespace)
+                .toSorted((a, b) =>
+                  Buffer.compare(Buffer.from(a.actor_id), Buffer.from(b.actor_id)),
+                )
+            : executeSqliteQuerySync(database.db, participantQuery.orderBy("actor_id")).rows
+        ).find((row) => aliases.has(row.actor_id));
       }
     }
     if (!existing) {
-      const count = executeSqliteQueryTakeFirstSync(
-        database.db,
-        kysely
-          .selectFrom("session_participants")
-          .select((eb) => eb.fn.countAll<number>().as("count"))
-          .where("session_key", "=", resolved.sessionKey),
-      );
-      if ((count?.count ?? 0) >= MAX_SESSION_PARTICIPANTS) {
+      const count = participants
+        ? participants.length
+        : (executeSqliteQueryTakeFirstSync(
+            database.db,
+            kysely
+              .selectFrom("session_participants")
+              .select((eb) => eb.fn.countAll<number>().as("count"))
+              .where("session_key", "=", resolved.sessionKey),
+          )?.count ?? 0);
+      if (count >= MAX_SESSION_PARTICIPANTS) {
         return { value: "capped", projectionChanged: false };
       }
     }
@@ -146,6 +169,25 @@ function recordSessionParticipantWithAliasRead(
       !existing ||
       existing.actor_id !== actorId ||
       aggregate.first_prompted_at !== existing.first_prompted_at;
+    if (participants && publishActor) {
+      const identity = readParticipantIdentity(
+        namespace,
+        existing?.actor_id ?? actorId.toWellFormed(),
+      );
+      publishActor([
+        ...participants.filter(
+          (participant) =>
+            participant.identity.id !== identity.id ||
+            participantIdentityNamespace(participant.identity) !== namespace,
+        ),
+        {
+          identity,
+          contributionCount: aggregate.contribution_count,
+          firstPromptedAt: aggregate.first_prompted_at,
+          lastPromptedAt: aggregate.last_prompted_at,
+        },
+      ]);
+    }
     publishSessionEntryCacheParticipantUpdate(database, resolved.sessionKey, {
       writeGeneration,
       projectionChanged,

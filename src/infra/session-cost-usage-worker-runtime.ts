@@ -81,6 +81,7 @@ export type PreparedUsageCostWorker = {
   config?: OpenClawConfig;
   agentDir: string;
   databases: Array<OpenClawAgentDatabaseOptions & { agentId: string; path: string }>;
+  archiveStorePaths: string[];
   incognito?: UsageCostIncognitoBinding;
   sessionActor?: SessionActorStorageBinding;
 };
@@ -114,6 +115,7 @@ export function prepareUsageCostWorker(params: {
       config: params.config,
       agentDir: params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionActor.agentId),
       databases: [],
+      archiveStorePaths: [],
       sessionActor,
     };
   }
@@ -142,9 +144,10 @@ export function prepareUsageCostWorker(params: {
     databases.set(JSON.stringify([prepared.agentId, prepared.path]), prepared);
   };
   add({ agentId, path: databasePath, env });
+  const archiveStorePaths = listDurableSqliteTargetPathsForSessionStorePath(storePath);
   const targets = [
     { agentId, storePath },
-    ...listDurableSqliteTargetPathsForSessionStorePath(storePath).map((targetPath) => ({
+    ...archiveStorePaths.map((targetPath) => ({
       agentId,
       storePath: targetPath,
     })),
@@ -175,6 +178,7 @@ export function prepareUsageCostWorker(params: {
     config: params.config,
     agentDir: params.agentDir ?? resolveAgentDir(params.config ?? {}, agentId),
     databases: [...databases.values()],
+    archiveStorePaths,
     incognito,
   };
 }
@@ -337,6 +341,7 @@ async function runPreparedUsageCostWorker(
   incognito?: ReturnType<typeof createIncognitoUsageCostAdapter>,
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
   const location = structuredClone(prepared.location);
+  const archiveStorePaths = [...prepared.archiveStorePaths];
   const capturedOperation = structuredClone(operation);
   const signal = getAsyncWorkSignal();
   return withSessionCostUsageWorkerDatabases(prepared.databases, async (scope) => {
@@ -442,12 +447,14 @@ async function runPreparedUsageCostWorker(
           location,
           operation: workerOperation,
           databases: [],
+          archiveStorePaths,
           transcriptFiles: incognito?.filePaths,
         },
         {
           signal,
           beforeDispatch: assertCurrent,
-          inputBytes: 2 * JSON.stringify({ location, operation: workerOperation }).length,
+          inputBytes:
+            2 * JSON.stringify({ location, operation: workerOperation, archiveStorePaths }).length,
           timeoutMs: USAGE_COST_WORKER_TIMEOUT_MS,
           onRequest: async (value, context) => {
             const transferList: Transferable[] = [];

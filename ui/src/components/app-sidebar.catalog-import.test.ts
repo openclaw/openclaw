@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SessionsCatalogImportResult } from "../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import "../lib/toast-host.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import {
   catalogPage,

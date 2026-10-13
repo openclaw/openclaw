@@ -205,7 +205,7 @@ if (shouldRunCli && !compileCacheRespawnEnv) {
       console.error("[openclaw]", message);
     }
     restoreRuntimeTerminalState("uncaught exception", { resumeStdinIfPaused: false });
-    exitAfterSignalExitBarriers(1);
+    exitAfterSignalExitBarriers(1, "uncaught exception");
   });
 
   void runCliWithExitFinalization({

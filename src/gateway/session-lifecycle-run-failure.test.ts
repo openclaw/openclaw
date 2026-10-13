@@ -419,13 +419,14 @@ describe("durable pre-reply run failure", () => {
   });
 
   it.each(["active", "inactive", "other-run", "commentary", "success"] as const)(
-    "checks assistant output on the %s branch for this run",
+    "persists one terminal receipt despite assistant output on the %s branch",
     async (branch) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         setRuntimeConfigSnapshot({});
         await seed(branch);
         await persistGatewaySessionLifecycleEvent({ ...target, event });
-        expect(await reports()).toHaveLength(branch === "active" ? 0 : 1);
+        await persistGatewaySessionLifecycleEvent({ ...target, event });
+        expect(await reports()).toMatchObject([{ details: { runId, error } }]);
       });
     },
   );

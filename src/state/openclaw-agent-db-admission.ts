@@ -73,7 +73,11 @@ import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js
 
 /** Denial still invokes run under admission, with a throwing authority check, to permit cleanup. */
 export type OpenClawAgentDatabaseWriteAdmission = <T>(
-  run: (assertCurrent: () => void, validation?: OpenClawAgentDatabaseValidation) => T | Promise<T>,
+  run: (
+    assertCurrent: () => void,
+    validation?: OpenClawAgentDatabaseValidation,
+    integrityRevoked?: boolean,
+  ) => T | Promise<T>,
 ) => Promise<T>;
 
 /** Refusal must unwind ownership without entering corruption repair or changing its caller error. */
@@ -416,13 +420,14 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     let suspended = false;
     try {
       while (true) {
-        const outcome = await withAdmission(async (assertCurrent, validation) => {
+        const outcome = await withAdmission(async (assertCurrent, validation, integrityRevoked) => {
           suspended = false;
           assertAgentDatabaseOpenAuthority(steps, () => {
             assertCurrent();
             assertOpenClawAgentDatabaseAdmissionCurrent(options, pending);
           });
           pending.validation = validation;
+          pending.integrityRevoked = integrityRevoked;
           const step = failure ? steps.throw(failure.error) : steps.next();
           if (!step.done) {
             suspended = true;

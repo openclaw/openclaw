@@ -516,7 +516,8 @@ export function createDispatchReplyOperationCoordinator(params: {
             routeThreadId: params.routeThreadId,
           }))
       ) {
-        if (allowActiveResolution) {
+        // A low-level successor retains its own cancellation while it waits for queue admission.
+        if (allowActiveResolution && !params.allowActiveQueueResolution) {
           preDispatchAbortOperation = admission.activeOperation;
         }
         preDispatchLifecycleAdmission = admission.lifecycleAdmission;

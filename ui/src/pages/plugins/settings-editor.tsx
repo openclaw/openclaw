@@ -15,12 +15,12 @@ import {
 } from "../../components/config-form.shared.ts";
 import { renderNode } from "../../components/config-form.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { Menu } from "../../components/solid/menu.tsx";
 import { SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { defineSolidBridge, LitContent } from "../../lit/solid-bridge.ts";
-import "../../components/web-awesome.ts";
 import type { JSX } from "../../types/solid-elements.d.ts";
 import { PluginCredentialEditor, type PluginCredentialEditorProps } from "./credential-editor.tsx";
 import "./custom-elements.ts";
@@ -120,7 +120,7 @@ function PluginSettingsRow(props: FieldProps) {
         if (
           !(target instanceof Element) ||
           target.closest(
-            "button,a,input,select,textarea,label,wa-switch,wa-checkbox,wa-dropdown,summary,[contenteditable]",
+            "button,a,input,select,textarea,label,summary,[contenteditable],.plugin-editor__menu",
           )
         ) {
           return;
@@ -129,42 +129,34 @@ function PluginSettingsRow(props: FieldProps) {
       }}
     >
       <div class="plugin-editor__menu">
-        <wa-dropdown
+        <Menu
+          id={configFieldId(props.field.path, "actions")}
           placement="bottom-start"
-          onWa-select={(event: CustomEvent<{ item: { value: string } }>) => {
-            const field = props.field;
-            if (event.detail.item.value === "reset" && !field.disabled) {
-              field.onPatch(
-                field.path,
-                field.isRequired ? structuredClone(field.schema.default) : undefined,
+          label={t("pluginsPage.editor.actions", { name: props.field.label })}
+          triggerClass="btn btn--icon btn--ghost"
+          trigger={<Icon name="moreHorizontal" />}
+          items={[
+            {
+              id: "reset",
+              label: t("pluginsPage.editor.reset"),
+              disabled:
+                props.field.disabled ||
+                props.field.value === undefined ||
+                (props.field.isRequired && props.field.schema.default === undefined),
+            },
+            ...(props.onAskSetting ? [{ id: "ask", label: t("pluginsPage.editor.ask") }] : []),
+          ]}
+          onSelect={(item) => {
+            if (item.id === "reset" && !props.field.disabled) {
+              props.field.onPatch(
+                props.field.path,
+                props.field.isRequired ? structuredClone(props.field.schema.default) : undefined,
               );
-            } else if (event.detail.item.value === "ask") {
-              props.onAskSetting?.({ ...field, value: effective() });
+            } else if (item.id === "ask") {
+              props.onAskSetting?.({ ...props.field, value: effective() });
             }
           }}
-        >
-          <button
-            slot="trigger"
-            type="button"
-            class="btn btn--icon btn--ghost"
-            aria-label={t("pluginsPage.editor.actions", { name: props.field.label })}
-          >
-            <Icon name="moreHorizontal" />
-          </button>
-          <wa-dropdown-item
-            value="reset"
-            prop:disabled={
-              props.field.disabled ||
-              props.field.value === undefined ||
-              (props.field.isRequired && props.field.schema.default === undefined)
-            }
-          >
-            {t("pluginsPage.editor.reset")}
-          </wa-dropdown-item>
-          {props.onAskSetting ? (
-            <wa-dropdown-item value="ask">{t("pluginsPage.editor.ask")}</wa-dropdown-item>
-          ) : null}
-        </wa-dropdown>
+        />
       </div>
       <div class="plugin-editor__copy">
         <span class="plugin-editor__title">{props.field.label}</span>

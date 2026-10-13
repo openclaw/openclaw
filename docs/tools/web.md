@@ -321,7 +321,10 @@ the OpenAI provider plugin, the managed search route stays available.
 Managed provider failures return the selected provider's identity and a safe,
 actionable diagnostic. Authentication failures identify the HTTP status and
 ask you to check credentials or select another provider. Upstream response
-bodies are not included in model-facing diagnostics. Automatic selection may
+bodies are not included in model-facing diagnostics. A provider's `TimeoutError`
+is reported as a search timeout, including its effective time limit when supplied
+as numeric metadata. Caller cancellation remains a cancellation rather than a
+provider failure. Automatic selection may
 try another configured provider; explicit provider choices never fall back.
 
 ## Native Codex web search

@@ -3,18 +3,28 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { assert, expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
-import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
+import { createRecoveryRuntimeFixture } from "../../agents/main-session-recovery/main-session-recovery-runtime.test-support.js";
+import { recoverStore } from "../../agents/main-session-recovery/main-session-restart-recovery-store.js";
+import { markStartupOrphanedMainSessionsForRecovery } from "../../agents/main-session-recovery/main-session-restart-recovery.js";
+import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import { captureRuntimeConfigAsyncReader, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
+  appendTranscriptMessage,
   loadSessionEntry,
   replaceSessionEntry,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { callGateway } from "../../gateway/call.js";
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
+import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
 import { resolveSessionMutationAuthorization } from "../../gateway/session-sharing.js";
 import { sharingPolicyClient } from "../../gateway/session-sharing.test-utils.js";
-import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import {
+  getAgentEventLifecycleGeneration,
+  rotateAgentEventLifecycleGeneration,
+} from "../../infra/agent-events.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
@@ -91,6 +101,116 @@ export function registerReplyAdmissionCases({
   runEmbeddedAgentMock,
   queueEmbeddedAgentMessageMock,
 }: AdmissionFixture): void {
+  it.each(["before cleanup", "after cleanup"] as const)(
+    "retains a backend drain abort for startup recovery when lifecycle persists %s",
+    async (order) => {
+      const suffix = order === "before cleanup" ? "before" : "after";
+      const sessionKey = `agent:main:dashboard:backend-drain-${suffix}`;
+      const sessionId = `backend-drain-session-${suffix}`;
+      const runId = `backend-drain-run-${suffix}`;
+      const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      const { sessionEntry, sessionStore, storePath } = await makeSessionFixture(
+        {
+          sessionId,
+          restartRecoveryDeliveryRunId: runId,
+          restartRecoveryDeliverySourceRunId: runId,
+          restartRecoverySourceIngress: "control-ui",
+          delivery: { kind: "internal" },
+        },
+        sessionKey,
+      );
+      const config = { session: { store: storePath } };
+      setRuntimeConfigSnapshot(config, config);
+      const scope = { sessionKey, storePath };
+      await appendTranscriptMessage(
+        { ...scope, sessionId: sessionEntry.sessionId },
+        {
+          cwd: "/tmp",
+          message: {
+            role: "user",
+            content: "Finish the synthetic task",
+            timestamp: 1,
+            idempotencyKey: runId,
+          },
+        },
+      );
+      const error = createAgentRunRestartAbortError();
+      const persistAbort = () =>
+        persistGatewaySessionLifecycleEvent({
+          ...scope,
+          event: {
+            runId,
+            sessionId: sessionEntry.sessionId,
+            lifecycleGeneration,
+            ts: Date.now(),
+            data: { phase: "error", error, aborted: true, stopReason: "restart" },
+          },
+        });
+      runEmbeddedAgentMock.mockImplementationOnce(async () => {
+        await persistGatewaySessionLifecycleEvent({
+          ...scope,
+          event: {
+            runId,
+            sessionId: sessionEntry.sessionId,
+            lifecycleGeneration,
+            ts: Date.now(),
+            data: { phase: "start", startedAt: Date.now() },
+          },
+        });
+        expect(loadSessionEntry(scope)?.lifecycleRunId).toBe(runId);
+        if (order === "before cleanup") {
+          await persistAbort();
+        }
+        // The drain cancels the backend owner, without aborting the caller signal.
+        throw error;
+      });
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+        opts: { runId },
+        sessionCtx: { Provider: "webchat", MessageSid: runId },
+        runOverrides: { config, sessionId },
+      });
+      const reply = await run();
+      expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      expect(reply).toMatchObject({ text: SILENT_REPLY_TOKEN });
+      if (order === "after cleanup") {
+        await persistAbort();
+      }
+      const interrupted = loadSessionEntry({ ...scope, readConsistency: "latest" });
+      expect(interrupted).toMatchObject({
+        status: "interrupted",
+        abortedLastRun: true,
+        restartRecoveryDeliveryRunId: runId,
+        restartRecoveryDeliverySourceRunId: runId,
+      });
+      expect(interrupted?.restartRecoveryTerminalRunIds ?? []).not.toContain(runId);
+      rotateAgentEventLifecycleGeneration();
+      await markStartupOrphanedMainSessionsForRecovery({ cfg: { session: { store: storePath } } });
+      const dispatch = vi.fn<typeof callGateway>();
+      dispatch.mockResolvedValue({ runId: "resumed-backend-drain" });
+      const settlement = createDeferred();
+      const gatewayRuntime = createRecoveryRuntimeFixture({
+        callGateway: dispatch,
+        getDispatchSettlement: () => settlement.promise,
+        sendRecoveryNotice: vi.fn(async () => ({ suppressed: false })),
+      });
+      try {
+        expect(
+          await recoverStore({ storePath, gatewayRuntime, handledSessionKeys: new Set() }),
+        ).toMatchObject({ started: 1, failed: 0 });
+        expect(
+          await recoverStore({ storePath, gatewayRuntime, handledSessionKeys: new Set() }),
+        ).toMatchObject({ started: 0, failed: 0 });
+        expect(dispatch).toHaveBeenCalledOnce();
+      } finally {
+        settlement.resolve();
+      }
+    },
+  );
+
   it("tombstones a redelivered source whose recovery claim is already terminal", async () => {
     const sessionCtx = {
       Provider: "discord",

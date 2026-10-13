@@ -12,6 +12,7 @@ import {
 import { revokeAgentDatabaseResources } from "../../state/openclaw-agent-db-resources.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
+import { refreshAuthProfileFileState } from "./file-state.js";
 import * as migration from "./legacy-source-diagnostic.js";
 import { noteCommittedSharedAuthStoreOwnership } from "./path-resolve.js";
 import * as persistedStore from "./persisted.js";
@@ -27,6 +28,7 @@ import type { AuthProfileStore, AuthProfileRowRead } from "./types.js";
 
 const reader = vi.hoisted(() => ({
   identity: undefined,
+  signal: new AbortController().signal,
   captureCredentialAuthority: () => undefined,
   read: vi.fn(),
   assertCurrent: vi.fn(),
@@ -323,6 +325,7 @@ it.each([false, true])(
           },
         }),
       );
+      await refreshAuthProfileFileState();
       inheritedRows.resolve(inherited);
       if (populated) {
         await expect(loading).resolves.toMatchObject({ profiles: local.profiles });

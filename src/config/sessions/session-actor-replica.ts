@@ -34,6 +34,7 @@ import {
   sameSessionActorTranscriptVersion,
   type SessionActorTranscriptReplica,
 } from "./session-actor-transcript-replica.js";
+import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import { deriveSessionPredicateColumns } from "./session-predicate-columns.js";
 import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
@@ -260,17 +261,18 @@ function retainSnapshot(
   state: SessionActorHotState,
   generation: string | undefined,
 ): void {
+  const next = isDeeplyFrozenPlainData(state) ? state : freezeJsonSnapshot(structuredClone(state));
+  if (cell.snapshot === next && cell.generation === generation) {
+    return touch(cell);
+  }
   const previousTranscript = cell.transcript;
-  const detached = isDeeplyFrozenPlainData(state)
-    ? state
-    : freezeJsonSnapshot(structuredClone(state));
   discard(cell);
-  cell.snapshot = detached;
-  cell.predicateColumns = detached.entry
-    ? deriveSessionPredicateColumns(JSON.stringify(detached.entry))
+  cell.snapshot = next;
+  cell.predicateColumns = next.entry
+    ? deriveSessionPredicateColumns(JSON.stringify(next.entry))
     : undefined;
   cell.generation = generation;
-  cell.bytes = JSON.stringify(detached).length * 2;
+  cell.bytes = JSON.stringify(next).length * 2;
   pool.snapshots += 1;
   pool.bytes += cell.bytes;
   if (
@@ -411,21 +413,27 @@ function readCurrentEntryCell(target: FileTarget) {
 /** Entry projections share actor residency; they never certify live authority. */
 export function readSessionActorEntryFacts(
   target: FileTarget,
+  snapshotFields: SessionActorEntryFacts["snapshots"] = "full",
 ): (SessionActorEntryFacts & { incarnation: string }) | undefined {
   const current = readCurrentEntryCell(target);
   if (!current) {
     return undefined;
   }
   const { cell, state, incarnation } = current;
-  const snapshots: SessionActorEntryFacts["snapshots"] = cell.snapshot
-    ? "full"
-    : (cell.entry?.snapshots ?? "full");
+  const snapshots = cell.snapshot ? "full" : (cell.entry?.snapshots ?? "full");
+  // Project a shallow shell before cloning potentially large, unrequested snapshots.
   return structuredClone({
     target,
-    entry: state.entry,
+    entry:
+      state.entry && snapshotFields !== "full"
+        ? attachSessionEntrySnapshots({ ...state.entry }, {}, snapshotFields)
+        : state.entry,
     members: state.members,
     participants: state.participants,
-    snapshots,
+    snapshots:
+      snapshotFields === "full"
+        ? snapshots
+        : snapshotFields.filter((field) => snapshots === "full" || snapshots.includes(field)),
     projection: cell.snapshot
       ? {
           hasBoard: cell.snapshot.hasBoard,
@@ -504,15 +512,9 @@ export function readSessionActorRowFacts(params: {
   if (summary && !projection.activitySummaryWatermark) {
     return undefined;
   }
-  const {
-    skillsSnapshot: _skills,
-    systemPromptReport: _prompt,
-    sessionDiffBaseline: _baseline,
-    ...entry
-  } = state.entry;
   return structuredClone({
     sessionKey: params.sessionKey,
-    entry,
+    entry: attachSessionEntrySnapshots({ ...state.entry }, {}, "list"),
     hasBoard: projection.hasBoard,
     ...(summary ? { activitySummaryWatermark: projection.activitySummaryWatermark } : {}),
   });

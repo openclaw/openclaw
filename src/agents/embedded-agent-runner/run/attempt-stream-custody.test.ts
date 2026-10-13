@@ -139,6 +139,12 @@ describe("installed replay repair ownership", () => {
       expect(fixture.streamGuards.isModelCallActive()).toBe(true);
       second = await fixture.open();
       expect(fixture.streamGuards.isModelCallActive()).toBe(true);
+      expect(fixture.input.setup.emitPrepStageSummary).toHaveBeenCalledExactlyOnceWith(
+        "model-dispatch",
+      );
+      expect(fixture.input.setup.prepStages.snapshot().stages.map(({ name }) => name)).toEqual([
+        "model-dispatch",
+      ]);
       firstSource.end(createAssistant(testModel, [{ type: "text", text: "Older result" }]));
       await first.result();
       expect(fixture.streamGuards.isModelCallActive()).toBe(true);

@@ -52,6 +52,7 @@ export type MenuProps = {
   onSelect?: (item: MenuItem, event: CustomEvent<MenuItem>) => void;
   onOpenChange?(open: boolean): void;
   onBeforeShow?(event: Event): void;
+  onAfterShow?(event: Event): void;
   onBeforeHide?(event: Event): void;
   ref?(handle: MenuHandle): void;
 };
@@ -274,6 +275,11 @@ export function Menu(props: BranchProps): JSX.Element {
         role="menu"
         aria-label={props.label}
         dir={direction()}
+        onOverlay-after-show={(event: Event) => {
+          if (event.target === surface) {
+            props.onAfterShow?.(event);
+          }
+        }}
       >
         {props.children}
         <For each={props.items} keyed={(entry) => entry.id}>

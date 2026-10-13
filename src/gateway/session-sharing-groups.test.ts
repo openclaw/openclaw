@@ -26,7 +26,7 @@ import { putSessionGroups, updateSessionGroupDefaults } from "./session-groups.j
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import {
-  authorizeSessionSharingTarget,
+  authorizeResolvedSessionMutationAsync,
   resolveSessionMutationAuthorization,
   resolveSessionSharingTarget,
 } from "./session-sharing.js";
@@ -75,8 +75,10 @@ describe("session sharing group mutations", () => {
         const ref = expectDefined(refs?.[0], "shared-store group member");
         const resolveTarget = () => resolveSessionSharingTarget({ cfg, ...ref });
         if (retiredOwner) {
-          const target = expectDefined(resolveTarget(), "shared-store sharing target");
-          expect(authorizeSessionSharingTarget({ cfg, client: viewer, target })).toBeNull();
+          expectDefined(resolveTarget(), "shared-store sharing target");
+          expect(
+            await authorizeResolvedSessionMutationAsync({ cfg, client: viewer, ...ref }),
+          ).toBeNull();
         } else {
           expect(resolveTarget).toThrow(AgentSelectionRequiredError);
         }

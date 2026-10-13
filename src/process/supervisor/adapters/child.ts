@@ -100,6 +100,7 @@ const WORKER_START_MESSAGE = { type: "openclaw-worker-start-v1" } as const;
 type ChildAdapterInput = ProcessAdapterConstruction & {
   /** Retain a local tree owner independently of Gateway service markers. */
   ownProcessTree?: true;
+  terminateOnHostLoss?: true;
   /** Preserve an owner-materialized Windows shell invocation without parsing it again. */
   windowsShell?: true;
   /** Own a separately signalable tree whose private IPC channel gates worker startup. */
@@ -191,6 +192,7 @@ export async function createChildAdapter(
       onSpawnCleanup: params.onSpawnCleanup,
       stderrDestination: params.stderrDestination,
       stdoutConsumption: params.stdoutConsumption,
+      terminateOnHostLoss: params.terminateOnHostLoss,
     });
   }
 

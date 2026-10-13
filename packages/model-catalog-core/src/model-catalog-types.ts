@@ -13,6 +13,20 @@ import {
   type ModelRoutingSortConfig,
 } from "../../llm-core/src/model-data.js";
 
+// Tier capacity is separate from the model's full context window. Leave room
+// below the observed serving boundary for output and tool-round growth.
+const OPENAI_ULTRAFAST_CONTEXT_TOKENS = 260_000;
+
+/** Prompt capacity for models served through a context-limited processing tier. */
+export function resolveModelServiceTierContextTokens(
+  provider: string | undefined,
+  serviceTier: string | undefined,
+): number | undefined {
+  return provider === "openai" && serviceTier === "ultrafast"
+    ? OPENAI_ULTRAFAST_CONTEXT_TOKENS
+    : undefined;
+}
+
 export const MODEL_CATALOG_APIS = [...MODEL_DATA_APIS] as const;
 
 export type ModelCatalogApi = (typeof MODEL_CATALOG_APIS)[number];

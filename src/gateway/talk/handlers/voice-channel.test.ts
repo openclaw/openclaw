@@ -1,3 +1,4 @@
+import { AsyncResource } from "node:async_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import {
@@ -7,6 +8,8 @@ import {
   releaseAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../../../infra/agent-run-registry.js";
+import { createPluginRuntimeStore } from "../../../plugin-sdk/runtime-store.js";
+import { PluginInstance } from "../../../plugins/plugin-instance.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   registerRealtimeVoiceSelection,
@@ -159,6 +162,41 @@ describe("channel-owned voice selection RPC", () => {
     );
     expect(call.currentVoice()).toBe("cedar");
     expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it("retains the channel plugin runtime when voice replacement schedules later consults", async () => {
+    const discordInstance = new PluginInstance("discord");
+    const talkVoiceInstance = new PluginInstance("talk-voice");
+    const runtimeStore = createPluginRuntimeStore<string>({
+      pluginId: "discord",
+      errorMessage: "Discord runtime not initialized",
+    });
+    let consult: (() => string) | undefined;
+    try {
+      discordInstance.run(() => runtimeStore.setRuntime("discord-runtime"));
+      const call = discordInstance.run(() =>
+        managedCall(async () => {
+          consult = new AsyncResource("discord-replacement-consult").bind(() =>
+            runtimeStore.getRuntime(),
+          );
+        }),
+      );
+
+      expect(
+        await talkVoiceInstance.run(() =>
+          invoke("talk.voice.set", { voice: "cedar" }, call.client),
+        ),
+      ).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ voice: "cedar", status: "applied" }),
+        undefined,
+      );
+
+      expect(call.currentVoice()).toBe("cedar");
+      expect(consult?.()).toBe("discord-runtime");
+    } finally {
+      await Promise.all([discordInstance.dispose(), talkVoiceInstance.dispose()]);
+    }
   });
 
   it("rejects foreign targets and unsupported voices before reconnecting", async () => {

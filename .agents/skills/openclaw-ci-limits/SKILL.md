@@ -670,6 +670,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   queue savings; observe the next exact-head CI cycle.
 - Normal canonical hybrid first attempts use the existing four-part QA smoke
   plan, removing two repeated checkouts, setups and private runtime builds.
+  Canonical `main` push/schedule first attempts on that plan use the 8-class
+  only with explicit non-frozen, non-compatibility classification. A cold private
+  runtime build and all 24 scenarios passed on two usable CPUs under a 7-GiB
+  no-swap cap (5.96-GiB peak, no OOMs). This does not qualify older backport
+  source: those targets may build with higher compiler concurrency. Other
+  contexts retain the shared 16-class/hosted/release-group routing.
   Blacksmith profiles retain four parts; GitHub profiles and fresh hybrid
   retry/manual plans retain six. Failed-job-only retries retain their original
   matrix. Keep the complete scenario inventory, separate Matrix run, worker

@@ -40,6 +40,30 @@ async function buildGatewaySessionRow(params: RowParams) {
   });
 }
 
+test("session rows retain authoritative transcript zero without promoting legacy zero", () => {
+  for (const state of ["available", "unavailable", undefined] as const) {
+    const entry: SessionEntry = { sessionId: "zero", updatedAt: 1 };
+    const row = buildSessionRowFixture({
+      cfg: createModelDefaultsConfig({ primary: "ollama/llama3.2" }),
+      key: "agent:main:zero",
+      store: {},
+      storePath: "/unused/sessions.json",
+      entry,
+      transcriptUsage: {
+        ...(state ? { usageReport: { state } } : {}),
+        totalTokens: 0,
+        totalTokensFresh: state === "available",
+        inputTokens: 0,
+        outputTokens: 0,
+      },
+      rowContext: buildSessionListRowMetadataContext({ now: 1 }),
+      lightweightListRow: true,
+    });
+    expect(row.totalTokens).toBe(state === "available" ? 0 : undefined);
+    expect(row.totalTokensFresh).toBe(state === "available");
+  }
+});
+
 test("selected global rows read transcript usage from the selected agent", async () => {
   await withStateDirEnv("session-utils-selected-global-usage-", async ({ stateDir }) => {
     const cfg: OpenClawConfig = { agents: { entries: { main: {}, work: {} } } };

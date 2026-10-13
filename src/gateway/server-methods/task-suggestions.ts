@@ -25,12 +25,14 @@ import type {
   PreparedSessionMutationFacts,
   SessionSharingTarget,
 } from "../session-sharing-policy.js";
+import { withSessionSharingTarget } from "../session-sharing-policy.js";
 import {
   prepareSessionMutationFacts,
   type SessionFactsRead,
 } from "../session-sharing-preparation.js";
+import { prepareSessionSharingProfiles } from "../session-sharing-read.js";
 import {
-  authorizeSessionSharingTarget,
+  prepareProjectedSessionSharing,
   createSessionListEntryFilter,
   resolveSessionSharingTargetAsync,
 } from "../session-sharing.js";
@@ -43,7 +45,7 @@ import {
   listTaskSuggestions,
 } from "../task-suggestion-registry.js";
 import { handleChatSend } from "./chat-send-handler.js";
-import { listWorkerProfiles } from "./environments.js";
+import { listWorkerProfiles } from "./environments.profiles.js";
 import {
   retainForwardedSessionMutationAuthorization,
   withSessionMutationCommitGuard,
@@ -83,21 +85,33 @@ async function authorizeSuggestedTaskSource(params: {
   taskId: string;
 }): Promise<{ ok: true; agentId: string } | { ok: false; error: ErrorShape }> {
   const suggestion = getTaskSuggestion(params.taskId);
-  const target = suggestion
-    ? await resolveSessionSharingTargetAsync({
-        cfg: params.cfg,
-        sessionKey: suggestion.sessionKey,
-        agentId: suggestion.agentId,
-      })
-    : null;
-  if (!target) {
+  if (!suggestion) {
     return {
       ok: false,
       error: errorShape(ErrorCodes.INVALID_REQUEST, "task suggestion was not found"),
     };
   }
-  const error = authorizeSessionSharingTarget({ cfg: params.cfg, client: params.client, target });
-  return error ? { ok: false, error } : { ok: true, agentId: target.agentId };
+  const profiles = await prepareSessionSharingProfiles(params.client);
+  return withSessionSharingTarget(
+    { cfg: params.cfg, sessionKey: suggestion.sessionKey, agentId: suggestion.agentId },
+    ({ target, members, assertCurrent }) => {
+      assertCurrent();
+      if (!target) {
+        return {
+          ok: false,
+          error: errorShape(ErrorCodes.INVALID_REQUEST, "task suggestion was not found"),
+        };
+      }
+      const sharing = prepareProjectedSessionSharing({
+        cfg: params.cfg,
+        client: params.client,
+        profiles,
+        isMember: (_target, id) => members.some((member) => member.identityId === id),
+      });
+      const error = sharing.authorizeTarget(target);
+      return error ? { ok: false, error } : { ok: true, agentId: target.agentId };
+    },
+  );
 }
 
 async function captureSuggestedTaskResponse(

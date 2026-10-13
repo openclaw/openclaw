@@ -5,6 +5,7 @@ import { validateMentionsListResult } from "../../packages/gateway-protocol/src/
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -305,30 +306,61 @@ describe("temporary human mention Inbox", () => {
     });
   });
 
-  it("retries failed refresh before an already armed distant expiry", async () => {
-    await withInbox(async (f) => {
-      await f.post("distant-expiry");
-      const snapshot = readMentionStoreSnapshot(-1, openOpenClawStateDatabase().db)!;
-      vi.spyOn(mentionWorker, "readMentionSnapshot").mockRejectedValueOnce(
-        new SqliteWorkerError("Mention snapshot is temporarily unavailable", "unavailable"),
-      );
-      await f.inbox.invalidateAsync();
-      runOpenClawStateWriteTransaction(({ db: writer }) =>
-        writeMentionStoreChanges(
-          writer,
-          snapshot.head,
-          new Map([[snapshot.sources[0]!.key, undefined]]),
-        ),
-      );
-      f.broadcast.mockClear();
-      await f.clock.advanceBy(60_000);
-      expect(f.broadcast).toHaveBeenCalledWith(
-        "mentions.changed",
-        { gatewayInstanceId: "mention-gateway", revision: 2 },
-        new Set([f.bobClient.connId]),
-      );
-      expect((await read(f.inbox, f.bobClient)).items).toEqual([]);
-    });
+  it("backs off background failures without delaying foreground reads or recovery", async () => {
+    const logs = createWarnLogCapture("mention-refresh");
+    try {
+      await withInbox(async (f) => {
+        await f.post("distant-expiry");
+        const snapshot = readMentionStoreSnapshot(-1, openOpenClawStateDatabase().db)!;
+        const reads = vi.spyOn(mentionWorker, "readMentionSnapshot");
+        const fail = () =>
+          reads.mockRejectedValueOnce(
+            new SqliteWorkerError(
+              "synthetic snapshot unavailable at /synthetic/state.sqlite",
+              "unavailable",
+            ),
+          );
+        fail();
+        await f.inbox.invalidateAsync();
+        const warning = await logs.findText("Unable to refresh the mention Inbox");
+        expect(warning).toMatch(
+          /phase=maintenance error=SqliteWorkerError code=unavailable elapsedMs=\d+ retryAfterMs=60000/,
+        );
+        expect(warning).toContain("synthetic snapshot unavailable at /synthetic/state.sqlite");
+        // Publication storms must not bypass the owner's pending retry.
+        const attempts = reads.mock.calls.length;
+        await Promise.all(Array.from({ length: 10 }, () => f.inbox.invalidateAsync()));
+        expect(reads.mock.calls).toHaveLength(attempts);
+        expect((await read(f.inbox, f.bobClient)).items).toHaveLength(1);
+        fail();
+        await f.clock.advanceBy(60_000);
+        const retryAttempts = reads.mock.calls.length;
+        await f.clock.advanceBy(60_000);
+        await f.inbox.invalidateAsync();
+        expect(reads.mock.calls).toHaveLength(retryAttempts);
+        runOpenClawStateWriteTransaction(({ db: writer }) =>
+          writeMentionStoreChanges(
+            writer,
+            snapshot.head,
+            new Map([[snapshot.sources[0]!.key, undefined]]),
+          ),
+        );
+        f.broadcast.mockClear();
+        await f.clock.advanceBy(60_000);
+        expect(f.broadcast).toHaveBeenCalledWith(
+          "mentions.changed",
+          { gatewayInstanceId: "mention-gateway", revision: 2 },
+          new Set([f.bobClient.connId]),
+        );
+        expect((await read(f.inbox, f.bobClient)).items).toEqual([]);
+        // Success resets the next failure to the initial one-minute delay.
+        fail();
+        await f.inbox.invalidateAsync();
+        expect(f.clock.armedAtMs).toBe(f.clock.clock.now() + 60_000);
+      });
+    } finally {
+      logs.cleanup();
+    }
   });
 
   it("retains original ids, order, and expiry across Gateway restart without replaying push", async () => {

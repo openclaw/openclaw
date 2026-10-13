@@ -257,19 +257,20 @@ async function readPendingInputRows(
     options: databaseOptions,
     identity,
     source: readSource,
+    assertReadCurrent,
     assertCurrent,
   } = target.resolve(resolved);
   if (!identity.key.startsWith("file:")) {
     return { rows: [], total: 0 };
   }
-  assertCurrent();
+  assertReadCurrent();
   return withSessionHistoryWorkerDatabase(databaseOptions, async (owner) => {
     const snapshot = await owner.readPendingInputHistory({
       query: { ...query, sessionKey: resolved.sessionKey },
       env: captured.env,
       source: readSource,
     });
-    assertCurrent();
+    assertReadCurrent();
     const ids = snapshot.rows
       .filter(
         (row) =>

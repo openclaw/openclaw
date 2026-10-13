@@ -31,7 +31,6 @@ import {
   prepareSessionWorktreeCreation,
   resolveSessionProjectRoot,
 } from "../../../gateway/session-worktree-preparation.js";
-import { waitForSessionParticipantRecording } from "../../../sessions/session-participant-recording.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.js";
 import type { IncognitoAgentDatabaseExecution } from "../../../state/openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../../state/openclaw-agent-execution.js";
@@ -48,7 +47,6 @@ import {
   emitSessionLifecycleEvent,
   resolveGatewaySessionStoreTargetInWorker,
   upsertSessionEntryCore,
-  readSessionEntryReadOnlyInWorker,
 } from "./subagent-spawn.runtime.js";
 
 export async function createInitialSubagentSession(input: {
@@ -59,6 +57,7 @@ export async function createInitialSubagentSession(input: {
   label?: string;
   incognito: boolean;
   requesterInternalKey: string;
+  parentTarget: GatewaySessionStoreTargetWithStore;
   senderIsOwner?: boolean;
   expectedParentSessionId?: string;
   assertActive?: SessionSourceAssertion;
@@ -161,57 +160,10 @@ export async function createInitialSubagentSession(input: {
           if (crossAgentChild && !childOwner) {
             throw new Error("Incognito child actor is unavailable");
           }
-          const parentTarget: Omit<GatewaySessionStoreTargetWithStore, "store"> = parentMemory
-            ? {
-                agentId: parentMemory.agentId,
-                canonicalKey: params.requesterInternalKey,
-                storeKeys: [params.requesterInternalKey],
-                storePath: parentMemory.path,
-              }
-            : parentBinding
-              ? {
-                  agentId: parentBinding.actor.agentId,
-                  canonicalKey: params.requesterInternalKey,
-                  storeKeys: [params.requesterInternalKey],
-                  storePath: parentBinding.actor.path,
-                  capturedReadSource: {
-                    agentId: parentBinding.actor.agentId,
-                    path: parentBinding.actor.path,
-                    databaseIdentity: parentBinding.actor.identity.incarnation,
-                  },
-                }
-              : await resolveGatewaySessionStoreTargetInWorker({
-                  cfg: params.cfg,
-                  key: params.requesterInternalKey,
-                  agentId: params.requesterAgentId,
-                  assertActive: params.assertActive,
-                });
+          const parentTarget = params.parentTarget;
           const parentStorePath = parentTarget.readSource?.path ?? parentTarget.storePath;
-          await waitForSessionParticipantRecording({
-            agentId: parentTarget.agentId,
-            sessionKey: parentTarget.canonicalKey,
-            storePath: parentStorePath,
-          });
-          params.assertActive?.();
-          // Parent rows are read on the session read worker, never on the Gateway thread.
-          const readParentEntry = () => {
-            if (parentMemory) {
-              params.assertActive?.();
-              return Promise.resolve(parentMemory.actor.snapshot(parentMemory.authority)?.entry);
-            }
-            const read = () =>
-              readSessionEntryReadOnlyInWorker(
-                {
-                  agentId: parentTarget.agentId,
-                  storePath: parentStorePath,
-                  sessionKey: parentTarget.canonicalKey,
-                },
-                () => params.assertActive?.(),
-              );
-            return parentBinding ? withIncognitoSessionBinding(parentBinding, read) : read();
-          };
-          const parentEntry = await readParentEntry();
-          params.assertActive?.();
+          // Request preparation joined participant writes and captured this complete row.
+          const parentEntry = parentTarget.store[parentTarget.canonicalKey];
           const parentLineage = captureSpawnParentLineage({
             parentEntry,
             expectedParentSessionId: params.expectedParentSessionId,

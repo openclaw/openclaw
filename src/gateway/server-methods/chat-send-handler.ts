@@ -331,6 +331,7 @@ async function handleChatSendWithOptions(
       // ACK transfers input custody. Persist approved source bytes before
       // dispatch; a validated durable retry already owns its transcript input.
       inputAdmissionAttempted = true;
+      using stagePhase = diagnostics.scope("detail.persist.stage");
       const staged = await userTurnRecorder.stageApproved?.(
         createChatSendPendingInputAdmission({
           runId: clientRunId,
@@ -341,6 +342,7 @@ async function handleChatSendWithOptions(
           assertClientUploadAllowed: admission.assertClientUploadAllowed,
         }),
       );
+      stagePhase?.finish();
       if (userTurnRecorder.isPendingInputConsumed?.()) {
         admission.cleanupAdmittedRun();
         clearAgentRunContext(clientRunId, lifecycleGeneration);
@@ -363,7 +365,9 @@ async function handleChatSendWithOptions(
     let goalResult: SessionGoalOperationResult | undefined;
     if (restartSafeAdmission) {
       inputAdmissionAttempted = true;
+      using transcriptPhase = diagnostics.scope("detail.persist.transcript");
       const persistedUserTurn = await persistGatewayUserTurnTranscript();
+      transcriptPhase?.finish();
       if (commitInitialInput || (!request.goalOperation && commitFreshInput)) {
         approvedInput = persistedUserTurn?.message;
       }
@@ -454,6 +458,7 @@ async function handleChatSendWithOptions(
       );
     }
 
+    using dashboardPhase = diagnostics.scope("detail.persist.authority");
     dashboardAuthority = await createChatSendDashboardAuthority({
       admission,
       session,
@@ -465,6 +470,7 @@ async function handleChatSendWithOptions(
       externalAuthorityAdmission,
       externalAdmissionParams,
     });
+    dashboardPhase?.finish();
     const assertDashboardReadCurrent = dashboardAuthority.assertReadCurrent;
     dashboardAuthority.bindPromptRecorder(userTurnRecorder);
     phase?.mark("preparation");

@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
@@ -8,7 +8,10 @@ import { keepHttpServerTaskAlive, waitUntilAbort } from "openclaw/plugin-sdk/cha
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
-import { killProcessTree } from "openclaw/plugin-sdk/process-runtime";
+import {
+  killProcessTree,
+  spawnOomScoreAdjusted as spawn,
+} from "openclaw/plugin-sdk/process-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {

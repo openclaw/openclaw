@@ -1,4 +1,5 @@
 import "../../../test-utils/prepare-compiled-subprocesses.js";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.sqlite-entry.js";
@@ -118,12 +119,24 @@ it.each([
         return upsert(...args);
       });
     try {
-      const result = await withIncognitoSessionBinding({ actor: parent }, () =>
+      const result = await withIncognitoSessionBinding({ actor: parent }, async () =>
         createInitialSubagentSession({
           cfg: {},
           requesterAgentId: parent.agentId,
           targetAgentId: childOwner.agentId,
           requesterInternalKey: parentKey,
+          parentTarget: {
+            agentId: parent.agentId,
+            storePath: parent.path,
+            canonicalKey: parentKey,
+            storeKeys: [parentKey],
+            store: {
+              [parentKey]: expectDefined(
+                (await parent.sessions.read(authority, { sessionKey: parentKey })).entry,
+                "parent session entry",
+              ),
+            },
+          },
           childSessionKey: childKey,
           incognito: true,
           expectedParentSessionId: name,

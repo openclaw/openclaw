@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SessionActorAuthority } from "./session-actor-contract.js";
+import type { SessionActorMemoryHistoryQuery } from "./session-actor-memory-history-contract.js";
 import { createMemorySessionActorOwner } from "./session-actor-memory.js";
 
 const sessionKey = "agent:main:dashboard:incognito-history";
@@ -297,6 +298,93 @@ describe("memory actor history", () => {
     await expect(
       storage.read({ type: "session.history.hydrate", input: { maxEventBytes: 1024 } }, authority),
     ).rejects.toThrow("too large to export");
+  });
+
+  it("refuses oversized default history reads while retaining full-message and media budgets", async () => {
+    const content = "x".repeat(8 * 1024 * 1024);
+    const { storage } = await fixture([message("large", null, "user", content)]);
+    const reads: SessionActorMemoryHistoryQuery[] = [
+      {
+        type: "session.history.recent",
+        input: { options: { maxMessages: 1, maxBytes: 16 * 1024 * 1024 } },
+      },
+      { type: "session.history.page", input: { options: { offset: 0, maxMessages: 1 } } },
+      {
+        type: "session.history.around-id",
+        input: { options: { messageId: "large", maxMessages: 1 } },
+      },
+    ];
+    for (const query of reads) {
+      expect(() => storage.readCurrent(query, authority)).toThrow(
+        "Transcript history message exceeds the 8388608-byte page limit",
+      );
+    }
+    expect(
+      await storage.read(
+        {
+          type: "session.history.around-id",
+          input: {
+            options: {
+              messageId: "missing",
+              maxMessages: 1,
+              maxBytes: 1024,
+              expectedReadWindow: { source: "stale", latestResetRawSeq: null },
+            },
+          },
+        },
+        authority,
+      ),
+    ).toMatchObject({
+      messages: [],
+      found: true,
+      windowReset: true,
+      omittedOversized: true,
+      hasOverreadContext: false,
+    });
+    const exact = await storage.read(
+      { type: "session.history.by-id", input: { messageId: "large" } },
+      authority,
+    );
+    expect(
+      exact.found && !exact.oversized && isRecord(exact.message) && exact.message.content,
+    ).toBe(content);
+    const media = await storage.read(
+      {
+        type: "session.history.page",
+        input: { options: { offset: 0, maxMessages: 1, maxBytes: 16 * 1024 * 1024 } },
+      },
+      authority,
+    );
+    expect(messageIds(media.messages)).toEqual(["large"]);
+  });
+
+  it("bounds recent history and refuses unbounded pages whose combined raw payload exceeds the cap", async () => {
+    const content = "x".repeat(3 * 1024 * 1024);
+    const { storage } = await fixture([
+      message("first", null, "user", content),
+      message("second", "first", "assistant", content),
+      message("third", "second", "user", content),
+    ]);
+    const recent = await storage.read(
+      {
+        type: "session.history.recent",
+        input: { options: { maxMessages: 3, maxBytes: 16 * 1024 * 1024 } },
+      },
+      authority,
+    );
+    expect(messageIds(recent.messages)).toEqual(["second", "third"]);
+    const reads: SessionActorMemoryHistoryQuery[] = [
+      { type: "session.history.page", input: { options: { offset: 0, maxMessages: 3 } } },
+      {
+        type: "session.history.around-id",
+        input: { options: { messageId: "second", maxMessages: 3 } },
+      },
+    ];
+    for (const query of reads) {
+      expect(() => storage.readCurrent(query, authority)).toThrow(
+        "Transcript history page exceeds the 8388608-byte limit; request a smaller limit",
+      );
+    }
   });
 
   it("retains historical sessionId windows across rotation and removes them with the logical session", async () => {

@@ -1,7 +1,8 @@
 // Full embedded-runner stream wrapper chain around the real Codex Responses
 // provider with a mocked WebSocket, proving the idle watchdog polices provider
 // silence in the shapes seen live (fresh, cached, and consumer-parked streams).
-import { createLlmRuntime } from "@openclaw/ai";
+import { createLlmRuntime, createNodeLlmRuntime, getAiTransportHost } from "@openclaw/ai";
+import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -15,6 +16,11 @@ import "../../../llm/stream.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
+import {
+  clearEmbeddedSessionForkSnapshot,
+  runEmbeddedSessionFork,
+  wrapStreamFnWithSessionFork,
+} from "../session-fork.js";
 import { resolveEmbeddedAgentStream } from "../stream-resolution.js";
 import { wrapStreamFnHandleSensitiveStopReason } from "./attempt-stop-reason-recovery.js";
 import { wrapStreamFnTrimToolCallNames } from "./attempt-tool-call-stream-normalization.js";
@@ -61,6 +67,7 @@ type Frame = Record<string, unknown>;
 class ControlledWebSocket extends EventTarget {
   static instances: ControlledWebSocket[] = [];
   static onSend?: (socket: ControlledWebSocket, payload: string) => void;
+  static onOpen?: () => void;
   readyState = 1;
   sent: string[] = [];
   closeCalls: Array<[number | undefined, string | undefined]> = [];
@@ -68,7 +75,10 @@ class ControlledWebSocket extends EventTarget {
   constructor() {
     super();
     ControlledWebSocket.instances.push(this);
-    queueMicrotask(() => this.dispatchEvent(new Event("open")));
+    queueMicrotask(() => {
+      ControlledWebSocket.onOpen?.();
+      this.dispatchEvent(new Event("open"));
+    });
   }
 
   send(payload: string): void {
@@ -191,10 +201,209 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
   afterEach(() => {
     closeOpenAICodexWebSocketSessions();
     resetOpenAICodexWebSocketStateForTest();
+    cleanupSessionResources();
     ControlledWebSocket.instances = [];
     ControlledWebSocket.onSend = undefined;
+    ControlledWebSocket.onOpen = undefined;
     vi.unstubAllGlobals();
     vi.useRealTimers();
+  });
+
+  it("blocks a native fork send when authority is revoked during websocket acquisition", async () => {
+    vi.stubGlobal("WebSocket", ControlledWebSocket);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    ControlledWebSocket.onSend = (socket) => {
+      queueMicrotask(() => socket.deliver(completedFrame("resp_fork")));
+    };
+    const identity = { agentId: "main", sessionId: "native-fork-revocation", runId: "parent" };
+    const parent = wrapStreamFnWithSessionFork(
+      (requestModel, requestContext, options) =>
+        llmRuntime.streamSimple(requestModel, requestContext, options),
+      identity,
+    );
+    const parentResult = await (
+      await parent(model, context, { apiKey, transport: "websocket" })
+    ).result();
+    expect(parentResult.stopReason).toBe("stop");
+    expect(ControlledWebSocket.instances[0]?.sent).toHaveLength(1);
+
+    ControlledWebSocket.onOpen = () => clearEmbeddedSessionForkSnapshot(identity.sessionId);
+    await expect(
+      runEmbeddedSessionFork({
+        ...identity,
+        model,
+        apiKey,
+        question: "Review without dispatch after revocation",
+        assertCurrent: () => {},
+      }),
+    ).rejects.toThrow("Cache-parity session fork requires a parent turn");
+
+    expect(ControlledWebSocket.instances).toHaveLength(2);
+    expect(ControlledWebSocket.instances[1]?.sent).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("isolates a native session fork without consuming or replacing the parent's cached continuation", async () => {
+    vi.stubGlobal("WebSocket", ControlledWebSocket);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const requests: Frame[] = [];
+    ControlledWebSocket.onSend = (socket, payload) => {
+      requests.push(JSON.parse(payload) as Frame);
+      const id = `resp_native_${requests.length}`;
+      const isFork = requests.length === 2;
+      queueMicrotask(() => {
+        socket.deliver({ type: "response.created", response: { id } });
+        if (isFork) {
+          const item = {
+            type: "message",
+            id: "msg_native_fork",
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text: "Independent review", annotations: [] }],
+          };
+          socket.deliver({
+            type: "response.output_item.added",
+            output_index: 0,
+            item: { ...item, content: [] },
+          });
+          socket.deliver({ type: "response.output_item.done", output_index: 0, item });
+          socket.deliver({
+            type: "response.completed",
+            response: { id, status: "completed", output: [item] },
+          });
+        } else {
+          socket.deliver(completedFrame(id));
+        }
+      });
+    };
+    const identity = { agentId: "main", sessionId: "native-fork-independent", runId: "parent" };
+    const parent = wrapStreamFnWithSessionFork(
+      (requestModel, requestContext, options) =>
+        llmRuntime.streamSimple(requestModel, requestContext, options),
+      identity,
+    );
+    const options = {
+      apiKey,
+      sessionId: identity.sessionId,
+      transport: "websocket-cached" as const,
+    };
+    expect((await (await parent(model, context, options)).result()).stopReason).toBe("stop");
+
+    await expect(
+      runEmbeddedSessionFork({
+        ...identity,
+        model,
+        apiKey,
+        question: "Review independently",
+        assertCurrent: () => {},
+      }),
+    ).resolves.toBe("Independent review");
+
+    const followupContext = {
+      ...context,
+      messages: [
+        ...context.messages,
+        { role: "user" as const, content: "Continue parent", timestamp: 2 },
+      ],
+    };
+    expect((await (await parent(model, followupContext, options)).result()).stopReason).toBe(
+      "stop",
+    );
+
+    expect(ControlledWebSocket.instances).toHaveLength(2);
+    expect(ControlledWebSocket.instances[0]?.sent).toHaveLength(2);
+    expect(ControlledWebSocket.instances[1]?.sent).toHaveLength(1);
+    expect(ControlledWebSocket.instances[1]?.closeCalls).toHaveLength(1);
+    expect(requests[1]).not.toHaveProperty("previous_response_id");
+    expect(requests[1]).toMatchObject({
+      prompt_cache_key: identity.sessionId,
+      input: [
+        { role: "user", content: [{ type: "input_text", text: "hi" }] },
+        { role: "user", content: [{ type: "input_text", text: "Review independently" }] },
+      ],
+    });
+    expect(requests[2]).toMatchObject({
+      previous_response_id: "resp_native_1",
+      input: [{ role: "user", content: [{ type: "input_text", text: "Continue parent" }] }],
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the parent's native auto transport after an independent fork falls back to SSE", async () => {
+    vi.stubGlobal("WebSocket", ControlledWebSocket);
+    const item = {
+      type: "message",
+      id: "msg_fallback_fork",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text: "Fallback review", annotations: [] }],
+    };
+    const fetchMock = vi.fn(async () => {
+      const events = [
+        { type: "response.created", response: { id: "resp_fallback_fork" } },
+        { type: "response.output_item.added", output_index: 0, item: { ...item, content: [] } },
+        { type: "response.output_item.done", output_index: 0, item },
+        {
+          type: "response.completed",
+          response: { id: "resp_fallback_fork", status: "completed", output: [item] },
+        },
+      ];
+      return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+        headers: { "content-type": "text/event-stream" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const runtime = createNodeLlmRuntime(llmRuntime.registry, {
+      ...getAiTransportHost(),
+      buildModelFetch: () => fetchMock,
+    });
+    ControlledWebSocket.onSend = (socket) => {
+      queueMicrotask(() => {
+        if (socket === ControlledWebSocket.instances[1]) {
+          socket.fail();
+        } else {
+          socket.deliver(completedFrame(`resp_parent_${socket.sent.length}`));
+        }
+      });
+    };
+    const identity = { agentId: "main", sessionId: "native-fork-fallback", runId: "parent" };
+    const parent = wrapStreamFnWithSessionFork(
+      (requestModel, requestContext, options) =>
+        runtime.streamSimple(requestModel, requestContext, options),
+      identity,
+    );
+    const options = { apiKey, sessionId: identity.sessionId, transport: "auto" as const };
+    expect((await (await parent(model, context, options)).result()).stopReason).toBe("stop");
+    await expect(
+      runEmbeddedSessionFork({
+        ...identity,
+        model,
+        apiKey,
+        question: "Review with independent transport recovery",
+        assertCurrent: () => {},
+      }),
+    ).resolves.toBe("Fallback review");
+
+    const followupContext = {
+      ...context,
+      messages: [
+        ...context.messages,
+        { role: "user" as const, content: "Continue parent", timestamp: 2 },
+      ],
+    };
+    expect((await (await parent(model, followupContext, options)).result()).stopReason).toBe(
+      "stop",
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(ControlledWebSocket.instances).toHaveLength(2);
+    expect(ControlledWebSocket.instances[0]?.sent).toHaveLength(2);
+    expect(ControlledWebSocket.instances[1]?.sent).toHaveLength(1);
+    expect(JSON.parse(ControlledWebSocket.instances[0]?.sent[1] ?? "{}")).toMatchObject({
+      previous_response_id: "resp_parent_1",
+      input: [{ role: "user", content: [{ type: "input_text", text: "Continue parent" }] }],
+    });
   });
 
   it("A: fresh socket that never sends is aborted at the idle timeout", async () => {
