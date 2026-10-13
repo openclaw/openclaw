@@ -18,9 +18,13 @@ function coerceFiniteValue(value: unknown): number | undefined {
 }
 
 function num(n: number): string {
-  if (Math.abs(n) >= 1000) {
+  if (Math.abs(n) >= 1_000_000) {
     const compact = formatTokenCount(Math.abs(n));
     return n < 0 ? `-${compact}` : compact;
+  }
+  if (Math.abs(n) >= 1000) {
+    const v = n / 1000;
+    return Math.abs(v) < 10 ? `${v.toFixed(1)}k` : `${Math.round(v)}k`;
   }
   return String(Math.trunc(n));
 }
