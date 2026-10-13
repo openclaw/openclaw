@@ -788,6 +788,20 @@ wa-popover.new-session-page__where-popover::part(body) {
   overflow: hidden;
 }
 
+.oc-popover.session-group-defaults__folder-popover {
+  --oc-overlay-max-width: min(420px, calc(100vw - 24px));
+  --oc-popover-padding: 0;
+
+  width: var(--oc-overlay-max-width);
+  min-width: min(224px, var(--oc-overlay-max-width), var(--oc-overlay-available-width, 100%));
+  overflow-y: auto;
+  background: var(--bg-elevated);
+}
+
+.session-group-defaults__folder-popover > .new-session-page__browser {
+  flex-shrink: 0;
+}
+
 /* Popovers need their own scroll region because project and destination
    catalogs can grow beyond the available viewport. */
 .new-session-page__picker-root {

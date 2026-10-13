@@ -10,6 +10,7 @@ import {
   openChatSidePanelType,
 } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installNativeWebChrome } from "./native-nav.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Native desktop titlebar E2E" });
 
@@ -119,6 +120,7 @@ suite.define(() => {
         const actions = await installWindowChrome(page, platform);
         await installMockGateway(page, {
           featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
+          historyMessages: [{ role: "assistant", content: "Titlebar selection regression." }],
         });
         await page.goto(suite.server.baseUrl);
         await page.locator(".chat-pane__header").waitFor();
@@ -138,7 +140,9 @@ suite.define(() => {
                   .getBoundingClientRect();
                 return buttons.flatMap((button) => {
                   const box = button.getBoundingClientRect();
-                  return box.y < 52 && (box.right > viewportWidth - 138 || box.x < titlebar.right)
+                  return box.y < 52 &&
+                    (box.right > viewportWidth - 138 ||
+                      (box.x < titlebar.right && box.right > titlebar.left))
                     ? [button.getAttribute("aria-label") ?? button.textContent?.trim()]
                     : [];
                 });
@@ -172,6 +176,27 @@ suite.define(() => {
         ).toEqual({ canGoBack: false, canGoForward: false });
         await assertChromeClear();
         await capture("chat-expanded");
+        const transcript = page
+          .locator(".chat-thread")
+          .getByText("Titlebar selection regression.", { exact: true });
+        await transcript.waitFor();
+        const beforeTextPress = await actions();
+        // A transcript hit can carry titlebar-band coordinates after scrolling.
+        // Route that hit through the real bubbling path, not the drag helper.
+        expect(
+          await transcript.evaluate((element) =>
+            element.dispatchEvent(
+              new MouseEvent("mousedown", {
+                bubbles: true,
+                composed: true,
+                cancelable: true,
+                button: 0,
+                clientY: 26,
+              }),
+            ),
+          ),
+        ).toBe(true);
+        expect(await actions()).toEqual(beforeTextPress);
         const bar = await toolbar.boundingBox();
         expect(bar).not.toBeNull();
         await page.mouse.move(bar!.x + 140, 40);
@@ -181,13 +206,13 @@ suite.define(() => {
         await expect
           .poll(async () => (await actions()).filter((action) => action === "drag"))
           .toHaveLength(1);
-        await toolbar.dblclick({ position: { x: 140, y: 40 } });
+        await page.mouse.dblclick(bar!.x + 140, 40);
         const maximize = page.locator('.openclaw-window-controls [data-action="toggle-maximize"]');
         await expect.poll(() => maximize.getAttribute("aria-label")).toBe("Restore window");
         await maximize.click();
         await expect.poll(() => maximize.getAttribute("aria-label")).toBe("Maximize window");
         const beforeNavigation = await actions();
-        await toolbar.getByRole("button", { name: "Collapse sidebar" }).click();
+        await page.locator(".sidebar-session-toolbar__collapse").click();
         expect(await actions()).toEqual(beforeNavigation);
         await expect
           .poll(() => page.locator(".shell").getAttribute("class"))
@@ -207,7 +232,7 @@ suite.define(() => {
         await focusChatSidePanel(page);
         await assertChromeClear();
         await capture("chat-focused-panel");
-        await toolbar.getByRole("button", { name: "New session" }).click();
+        await page.locator(".sidebar-rail__create a, .sidebar-rail__create button").click();
         await page.locator(".new-session-page__message").waitFor();
         await assertChromeClear();
         await capture("new-session");
@@ -255,4 +280,170 @@ suite.define(() => {
       },
     );
   });
+
+  it.each(["web", "macos", "tauri-linux", "tauri-macos"] as const)(
+    "aligns the %s rail, panel header, and content history row",
+    async (host) => {
+      await suite.withPage({ viewport: { width: 1240, height: 860 } }, async ({ page }) => {
+        const native = host !== "web";
+        const macos = host === "macos" || host === "tauri-macos";
+        if (host === "macos") {
+          await installNativeWebChrome(page);
+        }
+        if (host.startsWith("tauri-")) {
+          await installWindowChrome(page, macos ? "macos" : "linux");
+        }
+        await installMockGateway(page, {
+          featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
+          historyMessages: [{ role: "assistant", content: "Selectable transcript content." }],
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const row = page.locator(".sidebar-session-toolbar");
+        const collapse = row.getByRole("button", { name: "Collapse sidebar" });
+        await collapse.waitFor();
+        expect(await collapse.getAttribute("aria-expanded")).toBe("true");
+        expect(await row.locator("a").count()).toBe(0);
+        expect(await row.getByRole("button", { name: /New (session|conversation)/ }).count()).toBe(
+          0,
+        );
+        await page.mouse.move(600, 600);
+        const restingBackgrounds = await row
+          .locator("button.sidebar-session-toolbar__button")
+          .evaluateAll((buttons) =>
+            buttons.map((button) => getComputedStyle(button).backgroundColor),
+          );
+        expect(restingBackgrounds).toEqual(["rgba(0, 0, 0, 0)", "rgba(0, 0, 0, 0)"]);
+        expect(await page.locator(".sidebar-brand__search").isVisible()).toBe(true);
+        const geometry = await row.evaluate((element) => {
+          const box = (selector: string) =>
+            document.querySelector(selector)!.getBoundingClientRect().toJSON();
+          return {
+            row: element.getBoundingClientRect().toJSON(),
+            title: element.firstElementChild!.getBoundingClientRect().toJSON(),
+            rail: box(".sidebar-rail"),
+            agent: box(".sidebar-agent-card__main"),
+            panelPadding: getComputedStyle(document.querySelector(".sidebar-shell")!).paddingTop,
+          };
+        });
+        expect(geometry.rail.width).toBe(52);
+        if (native) {
+          expect(geometry.row.y).toBe(0);
+          expect(geometry.row.height).toBe(52);
+          expect(geometry.panelPadding).toBe("0px");
+          expect(geometry.title.y + geometry.title.height / 2).toBeCloseTo(26, 1);
+          expect(geometry.title.x).toBe(macos ? 92 : 68);
+          expect(geometry.agent.y + geometry.agent.height / 2).toBe(macos ? 70 : 26);
+          const history = page.locator(".macos-titlebar-controls");
+          expect(await history.getByRole("button").allTextContents()).toHaveLength(2);
+          expect(await history.getByRole("button", { name: "Open command palette" }).count()).toBe(
+            0,
+          );
+          const [bar, content, title] = await Promise.all([
+            history.boundingBox(),
+            page.locator(".content").boundingBox(),
+            page.locator(".chat-pane__crumbs").first().boundingBox(),
+          ]);
+          expect(bar!.x).toBe(content!.x + 12);
+          expect(title!.x).toBeGreaterThanOrEqual(bar!.x + bar!.width + 8);
+        }
+        for (const panel of ["pages", "online"] as const) {
+          await page.locator(`[data-navigation-view="${panel}"]`).click();
+          const header = page.locator(".sidebar-panel-header");
+          const toggle = header.getByRole("button", { name: "Collapse sidebar" });
+          await toggle.waitFor();
+          const panelGeometry = await header.evaluate((element) => {
+            const title = element.firstElementChild!.getBoundingClientRect();
+            const collapseBounds = element
+              .querySelector(".sidebar-session-toolbar__collapse")!
+              .getBoundingClientRect();
+            const headerBounds = element.getBoundingClientRect();
+            return {
+              x: title.x,
+              y: headerBounds.y,
+              height: headerBounds.height,
+              center: title.y + title.height / 2,
+              collapseCenter: collapseBounds.y + collapseBounds.height / 2,
+              collapseRight: collapseBounds.right,
+              right: headerBounds.right,
+            };
+          });
+          expect(panelGeometry.y).toBe(geometry.row.y);
+          expect(panelGeometry.height).toBe(geometry.row.height);
+          expect(panelGeometry.center).toBeCloseTo(geometry.row.y + geometry.row.height / 2, 1);
+          expect(panelGeometry.collapseCenter).toBeCloseTo(panelGeometry.center, 1);
+          expect(panelGeometry.collapseRight).toBe(panelGeometry.right - 8);
+          // Empty header space must stay non-interactive so it can drag the window.
+          const dragGap = await header.evaluate((element) => {
+            const bounds = element.getBoundingClientRect();
+            const controls = [...element.querySelectorAll("button")]
+              .map((button) => button.getBoundingClientRect())
+              .toSorted((a, b) => a.left - b.left);
+            let start = bounds.left;
+            let widest = { left: start, width: 0 };
+            for (const control of [...controls, { left: bounds.right, right: bounds.right }]) {
+              if (control.left - start > widest.width) {
+                widest = { left: start, width: control.left - start };
+              }
+              start = Math.max(start, control.right);
+            }
+            const hit = document.elementFromPoint(
+              widest.left + widest.width / 2,
+              bounds.top + bounds.height / 2,
+            );
+            return { width: widest.width, button: Boolean(hit?.closest("button")) };
+          });
+          expect(dragGap.width).toBeGreaterThanOrEqual(24);
+          expect(dragGap.button).toBe(false);
+          if (native) {
+            expect(panelGeometry.x).toBe(macos ? 92 : 68);
+          }
+          await toggle.click();
+          await page.locator(".shell-chrome-controls__nav-toggle").click();
+        }
+        await page.locator('[data-navigation-view="sessions"]').click();
+        await collapse.click();
+        const cluster = page.locator(".shell-chrome-controls");
+        await cluster.waitFor();
+        expect(
+          await cluster
+            .locator("button, a")
+            .evaluateAll((elements) =>
+              elements.map((element) => element.getAttribute("aria-label")),
+            ),
+        ).toEqual(["Expand sidebar"]);
+        expect(await page.locator(".sidebar-brand__search").isVisible()).toBe(true);
+        if (native) {
+          expect(
+            await cluster.locator("button").evaluate((button) => {
+              const style = getComputedStyle(button);
+              return {
+                border: style.borderTopWidth,
+                background: style.backgroundColor,
+                shadow: style.boxShadow,
+              };
+            }),
+          ).toEqual({ border: "0px", background: "rgba(0, 0, 0, 0)", shadow: "none" });
+          expect((await cluster.boundingBox())!.x).toBe(macos ? 92 : 64);
+          await expect
+            .poll(async () => {
+              const [controls, history, title] = await Promise.all([
+                cluster.boundingBox(),
+                page.locator(".macos-titlebar-controls").boundingBox(),
+                page.locator(".chat-pane__crumbs").first().boundingBox(),
+              ]);
+              return Boolean(
+                controls &&
+                history &&
+                title &&
+                history.x >= controls.x + controls.width + 8 &&
+                title.x >= history.x + history.width + 8,
+              );
+            })
+            .toBe(true);
+        }
+        await cluster.getByRole("button", { name: "Expand sidebar" }).click();
+        await collapse.waitFor();
+      });
+    },
+  );
 });

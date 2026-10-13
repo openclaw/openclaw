@@ -366,6 +366,44 @@ legacy and qualified identity prevents the drain from consuming another
 conversation's queue. Reading or consuming a legacy alias does not rename its
 stored session key.
 
+Use `api.session.workflow.steerActiveRun({ sessionKey, text, idempotencyKey? })`
+to deliver guidance to the session's active run without starting a new turn.
+It returns `{ steered: true, runId? }` when the run accepts the text, or
+`{ steered: false, reason }` when no run is active, the run is not accepting
+steering, or the runtime rejects it. Acceptance does not wait for transcript
+commitment. The optional `idempotencyKey` is carried by the transcript recorder
+for duplicate correlation.
+
+Active steering requires a guarded (V2) runtime, such as the built-in OpenClaw
+runtime or Codex. Legacy V1 runtimes, including Copilot, return
+`{ steered: false, reason: "active runtime does not support guarded steering" }`
+without queueing the guidance. The API does not automatically enqueue a later
+turn; use the explicit fallback below when needed.
+
+Steering requires `plugins.entries.<id>.hooks.allowPromptInjection` (enabled
+unless explicitly set to `false`) and a live plugin instance. Disabled prompt
+injection returns `steered: false`; an expired plugin instance cannot dispatch.
+The host and guarded runtime recheck the plugin instance before dispatch,
+including after transcript persistence. Disabling or disposing the plugin while
+guidance is pending rejects the steer rather than silently dropping it.
+The input is hidden, plugin-authored internal context, with provenance
+`{ kind: "internal_system", sourceTool: "plugin:<id>" }`. It carries no sender or
+owner authority and never answers a pending user question.
+
+If the guidance should survive until another turn, fall back to the durable
+injection queue when steering is unavailable:
+
+```typescript
+const guidance = { sessionKey, text, idempotencyKey: "review-1" };
+const result = await api.session.workflow.steerActiveRun(guidance);
+if (!result.steered) {
+  await api.session.workflow.enqueueNextTurnInjection({
+    ...guidance,
+    ttlMs: 24 * 60 * 60 * 1000,
+  });
+}
+```
+
 Cleanup semantics are part of the contract. Session extension cleanup and
 runtime lifecycle cleanup callbacks receive `reset`, `delete`, `disable`, or
 `restart`. The host removes the owning plugin's persistent session extension

@@ -14,7 +14,7 @@ import { sessionsListResponse } from "./session-management.test-support.ts";
 const suite = createControlUiE2eSuite({ name: "Chat header and delegated work" });
 
 suite.define(() => {
-  it("opens Subagents for a batch without duplicate wait status and leaves the next empty conversation collapsed", async () => {
+  it("keeps new batches collapsed until Subagents is opened manually without duplicate wait status", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -126,6 +126,10 @@ suite.define(() => {
           session: child,
           ancestorSessions: [runningParent],
         });
+        const runningCount = activePane.locator(".chat-pane__subagents-running");
+        await runningCount.waitFor();
+        expect(await panel.isVisible()).toBe(false);
+        await selectChatLayoutAction(activePane, "Subagents");
         const panelRow = panel.locator(`[data-session-key="${child.key}"]`);
         await panelRow.getByText("Backend review", { exact: true }).waitFor();
         expect(await activePane.locator(".chat-pane__subagents-running").textContent()).toContain(

@@ -50,9 +50,7 @@ export class DesktopPcmQueue {
     }
     const source = this.context.createBufferSource();
     const ended = () => {
-      if (!this.sources.delete(source)) {
-        return;
-      }
+      this.sources.delete(source);
       source.removeEventListener("ended", ended);
       source.disconnect();
     };
