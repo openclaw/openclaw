@@ -32,15 +32,7 @@ import {
 } from "../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../infra/sqlite-worker-operation-settlement.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import type {
-  OpenClawAgentDatabase,
-  OpenClawAgentDatabaseOptions,
-} from "../state/openclaw-agent-db-contract.js";
-import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
-import {
-  getOpenClawAgentDatabaseIfOpen,
-  withOpenClawAgentDatabaseRuntime,
-} from "../state/openclaw-agent-db.js";
+import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
 import type { AgentDatabaseRequestExecutionSource } from "../state/openclaw-agent-execution-admission-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import {
@@ -268,117 +260,105 @@ function buildSqliteTrajectoryRuntimeSink(
         if (pendingEvents.size === 0) {
           return;
         }
-        const append = async (
-          owner: { database: OpenClawAgentDatabase } | { incognito: IncognitoTrajectoryTarget },
-        ) => {
-          // Admission transfers the batch; later arrivals cannot evict accepted rows.
-          const batch = { events: pendingEvents, bytes: queuedBytes, discardPrevious };
-          inFlight = batch;
-          pendingEvents = new Map();
-          queuedBytes = 0;
-          discardPrevious = false;
-          const events = [...batch.events.keys()];
-          try {
-            if ("incognito" in owner) {
-              const committed = () => {
-                inFlight = undefined;
-              };
-              const authority: IncognitoTrajectoryTarget["authority"] = {
-                assertCurrent: () => {
-                  owner.incognito.authority.assertCurrent();
-                  params.assertCommitAllowed?.();
-                },
-                authorize(_stage, facts) {
-                  if (
-                    facts.sessionKey !== owner.incognito.sessionKey ||
-                    facts.sharing?.entry?.sessionId !== marker.sessionId ||
-                    facts.sharing?.entry?.lifecycleRevision !== owner.incognito.lifecycleRevision
-                  ) {
-                    throw new Error("Incognito trajectory source changed before persistence");
-                  }
-                },
-              };
-              try {
-                await owner.incognito.actor.sessions.sideData(
-                  authority,
-                  {
-                    type: "session.trajectory.append",
-                    input: {
-                      sessionKey: owner.incognito.sessionKey,
-                      lifecycleRevision: owner.incognito.lifecycleRevision,
-                      sessionId: marker.sessionId,
-                      events,
-                      discardPrevious: batch.discardPrevious,
-                      maxRuntimeBytes: params.maxRuntimeFileBytes,
-                    },
+        // Admission transfers the batch; later arrivals cannot evict accepted rows.
+        const batch = { events: pendingEvents, bytes: queuedBytes, discardPrevious };
+        inFlight = batch;
+        pendingEvents = new Map();
+        queuedBytes = 0;
+        discardPrevious = false;
+        const events = [...batch.events.keys()];
+        try {
+          if (incognito) {
+            const committed = () => {
+              inFlight = undefined;
+            };
+            const authority: IncognitoTrajectoryTarget["authority"] = {
+              assertCurrent: () => {
+                incognito.authority.assertCurrent();
+                params.assertCommitAllowed?.();
+              },
+              authorize(_stage, facts) {
+                if (
+                  facts.sessionKey !== incognito.sessionKey ||
+                  facts.sharing?.entry?.sessionId !== marker.sessionId ||
+                  facts.sharing?.entry?.lifecycleRevision !== incognito.lifecycleRevision
+                ) {
+                  throw new Error("Incognito trajectory source changed before persistence");
+                }
+              },
+            };
+            try {
+              await incognito.actor.sessions.sideData(
+                authority,
+                {
+                  type: "session.trajectory.append",
+                  input: {
+                    sessionKey: incognito.sessionKey,
+                    lifecycleRevision: incognito.lifecycleRevision,
+                    sessionId: marker.sessionId,
+                    events,
+                    discardPrevious: batch.discardPrevious,
+                    maxRuntimeBytes: params.maxRuntimeFileBytes,
                   },
-                  undefined,
-                  committed,
-                  committed,
+                },
+                undefined,
+                committed,
+                committed,
+              );
+            } catch (error) {
+              if (inFlight === batch && hasSqliteWorkerOutcomeUnknown(error)) {
+                unsettledAppend = new SqliteWorkerError(
+                  "Trajectory append outcome is unknown; pending events cannot be replayed",
+                  "outcome-unknown",
                 );
-              } catch (error) {
-                if (inFlight === batch && hasSqliteWorkerOutcomeUnknown(error)) {
+              }
+              throw error;
+            } finally {
+              if (inFlight !== batch && !unsettledAppend) {
+                await settleIncognitoTrajectoryRuntimeRetention({
+                  actor: incognito.actor,
+                  authority,
+                  input: { sessionKey: incognito.sessionKey, sessionId: marker.sessionId },
+                });
+              }
+            }
+          } else {
+            await appendSqliteTrajectoryRuntimeEventsInWorker(
+              databaseOptions,
+              {
+                events,
+                discardPrevious: batch.discardPrevious,
+                maxRuntimeBytes: params.maxRuntimeFileBytes,
+                sessionId: marker.sessionId,
+              },
+              params.assertCommitAllowed,
+              (outcome) => {
+                if (outcome === "committed") {
+                  inFlight = undefined;
+                } else {
                   unsettledAppend = new SqliteWorkerError(
                     "Trajectory append outcome is unknown; pending events cannot be replayed",
                     "outcome-unknown",
                   );
                 }
-                throw error;
-              } finally {
-                if (inFlight !== batch && !unsettledAppend) {
-                  await settleIncognitoTrajectoryRuntimeRetention({
-                    actor: owner.incognito.actor,
-                    authority,
-                    input: { sessionKey: owner.incognito.sessionKey, sessionId: marker.sessionId },
-                  });
-                }
+              },
+            );
+          }
+        } finally {
+          if (inFlight === batch && !unsettledAppend) {
+            inFlight = undefined;
+            // A newer overflow already expires this failed prefix. Otherwise put
+            // it back before the newer queue and apply the same rolling window.
+            if (!discardPrevious) {
+              for (const [event, bytes] of pendingEvents) {
+                batch.events.set(event, bytes);
               }
-            } else {
-              await appendSqliteTrajectoryRuntimeEventsInWorker(
-                databaseOptions,
-                owner.database,
-                {
-                  events,
-                  discardPrevious: batch.discardPrevious,
-                  maxRuntimeBytes: params.maxRuntimeFileBytes,
-                  sessionId: marker.sessionId,
-                },
-                params.assertCommitAllowed,
-                (outcome) => {
-                  if (outcome === "committed") {
-                    inFlight = undefined;
-                  } else {
-                    unsettledAppend = new SqliteWorkerError(
-                      "Trajectory append outcome is unknown; pending events cannot be replayed",
-                      "outcome-unknown",
-                    );
-                  }
-                },
-              );
-            }
-          } finally {
-            if (inFlight === batch && !unsettledAppend) {
-              inFlight = undefined;
-              // A newer overflow already expires this failed prefix. Otherwise put
-              // it back before the newer queue and apply the same rolling window.
-              if (!discardPrevious) {
-                for (const [event, bytes] of pendingEvents) {
-                  batch.events.set(event, bytes);
-                }
-                pendingEvents = batch.events;
-                queuedBytes += batch.bytes;
-                discardPrevious = batch.discardPrevious;
-                trimPending();
-              }
+              pendingEvents = batch.events;
+              queuedBytes += batch.bytes;
+              discardPrevious = batch.discardPrevious;
+              trimPending();
             }
           }
-        };
-        if (incognito) {
-          await append({ incognito });
-        } else {
-          await withOpenClawAgentDatabaseRuntime(databaseOptions, (database) =>
-            append({ database }),
-          );
         }
       },
       true,
@@ -424,46 +404,16 @@ function buildSqliteTrajectoryRuntimeSink(
   };
 }
 
-function createTrajectoryDatabaseGuard(
-  options: OpenClawAgentDatabaseOptions,
-  database: OpenClawAgentDatabase,
-  assertCommitAllowed: (() => void) | undefined,
-): () => void {
-  return () => {
-    // Retention keeps source authority without capturing a completed append batch.
-    if (!database.db.isOpen || getOpenClawAgentDatabaseIfOpen(options)?.db !== database.db) {
-      throw new Error("Trajectory append lost its borrowed database owner");
-    }
-    assertCommitAllowed?.();
-  };
-}
-
 async function appendSqliteTrajectoryRuntimeEventsInWorker(
   options: OpenClawAgentDatabaseOptions,
-  database: OpenClawAgentDatabase,
   input: SqliteTrajectoryRuntimeAppend,
   assertCommitAllowed: (() => void) | undefined,
   settle: (outcome: "committed" | "unknown") => void,
 ): Promise<void> {
-  const identity = readOpenClawAgentDatabaseIdentity(database);
-  if (typeof identity.identity !== "string") {
-    throw new Error("Trajectory worker requires a durable database owner");
-  }
-  const execution = captureOpenClawAgentDatabaseExecution(options, {
-    expectedIdentity: {
-      kind: "file",
-      physicalIdentity: identity.identity,
-      nativeLocation: identity.filename,
-    },
-  });
-  const assertDatabaseCurrent = createTrajectoryDatabaseGuard(
-    options,
-    database,
-    assertCommitAllowed,
-  );
+  const execution = captureOpenClawAgentDatabaseExecution(options);
   const assertCurrent = () => {
     execution.assertCurrent();
-    assertDatabaseCurrent();
+    assertCommitAllowed?.();
   };
   let transaction:
     | { admission: SqliteWorkerOperationAdmission; retained: RetainedWorkerTransactionAdmission }
@@ -511,12 +461,15 @@ async function appendSqliteTrajectoryRuntimeEventsInWorker(
         throw new Error("Trajectory database disappeared before append");
       }
     });
-    void scheduleSqliteTrajectoryRuntimeRetention({
-      database,
-      options,
-      input,
-      assertCurrent: assertDatabaseCurrent,
-    });
+    const identity = execution.fileIdentity;
+    if (identity) {
+      void scheduleSqliteTrajectoryRuntimeRetention({
+        identity,
+        options,
+        input,
+        assertCurrent: assertCommitAllowed,
+      });
+    }
   } finally {
     await execution.release();
   }
