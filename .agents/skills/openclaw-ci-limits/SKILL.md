@@ -641,13 +641,13 @@ These are intentionally guarded by the `ci-workflow-guards`,
   stays on 8 unless the bounded hybrid plan admits it to hosted Ubuntu. The twelve-row 4:38 result in historical run 33695337496 used the
   32-class with eight reported CPUs; it does not prove timing on the current
   16-class route or refresh stale timing weights.
-- Eligible real-Gateway jobs retain the existing 32-class and two-row planner
-  split; ordinary PRs omit them. Their private preparation now builds runtime,
-  QA, and Control UI artifacts with SDK declaration generation disabled.
-  `build-artifacts` owns SDK declarations and validation. The old two-compiler
-  memory argument no longer establishes their runner requirement: qualify the
-  complete current job before downsizing, preserving browser workers, complete
-  inventory, build-before-test ordering, routing, deadlines, and caps.
+- Current-target real-Gateway jobs use the 16-class and existing two-row planner
+  split; frozen or unclassified targets retain the 32-class. Ordinary PRs omit
+  them. Private preparation builds runtime, QA, and Control UI artifacts with
+  SDK declaration generation disabled; `build-artifacts` owns SDK declarations
+  and validation. Preserve browser workers, complete inventory, build-before-test
+  ordering, routing, deadlines, and caps. Further sizing changes require complete
+  job qualification, including preparation and desktop transport proof.
 - Current-target `build-artifacts` uses the existing 16-class after a complete
   four-CPU/15.42-GiB compute proof, including the unchanged parallel verifier wave.
   SDK declaration generation uses one compiler program with its existing heap

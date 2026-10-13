@@ -477,7 +477,6 @@
 ["extensions/discord/src/monitor/message-handler.process.test-harness.ts","../send.js","ff256b4ac402bd1fb8ed7e2c4e74dbb713328152d4fa2d4838f78fff07590ac1",1]
 ["extensions/discord/src/monitor/message-handler.process.test-harness.ts","../send.shared.js","5330cd8277b4f89461fc815908b234b92a0b4dbaa025cf8f74886e39f3418519",1]
 ["extensions/discord/src/monitor/message-handler.process.test-harness.ts","./typing.js","3004e639ad770905bc723cd6828aa0e76cca8ef3f1b95a25cf52ffdf8880d3a7",1]
-["extensions/discord/src/monitor/message-handler.process.test-harness.ts","openclaw/plugin-sdk/reply-runtime","6b35b263af3237526c7f86701a305e8b4959a4c9374363de8a35bee2c3324bce",1]
 ["extensions/discord/src/monitor/message-handler.process.test-harness.ts","openclaw/plugin-sdk/session-transcript-runtime","56f910fc36ce7ac814101a78fdf9ebf98868b396d4c4ac2c78048116a92a710f",1]
 ["extensions/discord/src/monitor/native-command-reply.test.ts","openclaw/plugin-sdk/web-media","a2862c74bffa52e38f56429bd7f76ce19e17fd7ee0d3500ab6d236d98ba77e14",1]
 ["extensions/discord/src/monitor/native-command.options.test.ts","openclaw/plugin-sdk/agent-runtime","2ed6770756cd5069af9eee5e95a8ec5b0dd1f11bc42a80218a6607162b9965b3",1]

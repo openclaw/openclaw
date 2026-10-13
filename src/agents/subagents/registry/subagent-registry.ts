@@ -527,6 +527,7 @@ const subagentSweeper = createSubagentRegistrySweeper({
   startSubagentAnnounceCleanupFlow,
   completeCleanupBookkeeping,
   isCleanupOwnerCurrent: subagentLifecycleController.isCleanupOwnerCurrent,
+  isTerminalTailActive: subagentLifecycleController.isTerminalTailActive,
   sessionEffectsHostCurrent: (entry) =>
     subagentLifecycleController.sessionEffectsHostCurrent(entry),
   shouldSuppressSessionEffects: (entry, effects) =>
