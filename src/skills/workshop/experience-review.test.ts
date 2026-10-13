@@ -3,8 +3,14 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveAdmittedRunActiveAssertion } from "../../agents/admitted-run-context.js";
+import { runWithAgentToolSourceExecutionScope } from "../../agents/agent-tool-source-execution-guard.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import {
+  deleteSessionEntryLifecycle,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
   createOpenClawTestState,
@@ -54,6 +60,7 @@ describe("runSkillExperienceReview", () => {
       [{ role: "user", content: "Reconcile the budget.", timestamp: 1 }],
       { workspaceDir, modelId: "gpt-test" },
     );
+    setRuntimeConfigSnapshot(candidate.config);
     const committed: WorkshopChange = {
       id: "c1",
       agentId: "main",
@@ -82,35 +89,47 @@ describe("runSkillExperienceReview", () => {
     );
   });
 
-  it("checks source authority and its accepted anchor together after a later append", async () => {
+  it("keeps a later append live without MAIN SQL and denies unprepared use after revocation", async () => {
     const candidate = await createExperienceReviewCandidate(
       "review-append",
       [{ role: "user", content: "Remember the verified procedure.", timestamp: 1 }],
       { workspaceDir: state.workspaceDir, modelId: "gpt-test" },
     );
+    setRuntimeConfigSnapshot(candidate.config);
     mocks.runSkillWorkshopReview.mockImplementation(
       async (params: Parameters<typeof runSkillWorkshopReview>[0]) => {
         try {
           const admitted = await params.preparedRunAdmission.admit("embedded");
           const assertCurrent = resolveAdmittedRunActiveAssertion(admitted, params.abortSignal);
           expect(assertCurrent).toBeDefined();
-          assertCurrent!();
           const session = await SessionManager.openAsync(candidate.source, state.workspaceDir);
+          const sql = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+          try {
+            for (let index = 0; index < 5; index += 1) {
+              assertCurrent!();
+            }
+            expect(sql.queries).toEqual([]);
+          } finally {
+            sql.restore();
+          }
           await session.appendMessageWithTranscriptAnchorAsync(
             { role: "user", content: "Continue the foreground task.", timestamp: 2 },
             { config: candidate.config },
           );
-          const sql = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+          const refreshedSql = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
           try {
+            // The model response resumes before the next tool can prepare its source scope.
             assertCurrent!();
-            expect(
-              sql.queries.filter((query) =>
-                /\b(?:session_nodes|transcript_event_identities)\b/i.test(query),
-              ),
-            ).toHaveLength(1);
+            await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+              assertCurrent!();
+            });
+            expect(refreshedSql.queries).toEqual([]);
           } finally {
-            sql.restore();
+            refreshedSql.restore();
           }
+          await upsertSessionEntryCore(candidate.source, { permissionMode: "read-only" });
+          // Provider dispatch checks the admitted assertion without preparing another scope.
+          expect(() => assertCurrent!()).toThrow("no longer active");
           return { meta: { durationMs: 1 } };
         } finally {
           params.preparedRunAdmission.close();
@@ -121,7 +140,7 @@ describe("runSkillExperienceReview", () => {
     expect(mocks.runSkillWorkshopReview).toHaveBeenCalledOnce();
   });
 
-  it.each(["permission", "reset", "replacement", "deletion", "rewrite"] as const)(
+  it.each(["permission", "reset", "replacement", "deletion", "rewrite", "membership"] as const)(
     "refuses a Workshop file write after source %s during preparation",
     async (change) => {
       const candidate = await createExperienceReviewCandidate(
@@ -129,6 +148,7 @@ describe("runSkillExperienceReview", () => {
         [{ role: "user", content: "Remember the verified procedure.", timestamp: 1 }],
         { workspaceDir: state.workspaceDir, modelId: "gpt-test" },
       );
+      setRuntimeConfigSnapshot(candidate.config);
       await upsertSessionEntryCore(candidate.source, {
         permissionMode: "guarded",
         lifecycleRevision: "original",
@@ -147,43 +167,31 @@ describe("runSkillExperienceReview", () => {
           if (change === "rewrite") {
             const session = await SessionManager.openAsync(candidate.source, state.workspaceDir);
             await session.removeTrailingEntriesAsync((entry) => entry.type === "message");
+          } else if (change === "membership") {
+            await addSessionMember(candidate.source, {
+              identityId: "new-member",
+              addedBy: "owner",
+              expectedSessionId: candidate.source.sessionId,
+            });
+          } else if (change === "deletion") {
+            await deleteSessionEntryLifecycle({
+              agentId: "main",
+              storePath: candidate.source.storePath,
+              target: {
+                canonicalKey: candidate.source.sessionKey,
+                storeKeys: [candidate.source.sessionKey],
+              },
+              archiveTranscript: false,
+            });
           } else {
-            // Foreign commits bypass host publications after file preparation has yielded.
-            const { DatabaseSync } = requireNodeSqlite();
-            const writer = new DatabaseSync(candidate.source.storePath);
-            try {
-              if (change === "permission" || change === "reset") {
-                writer
-                  .prepare(
-                    "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
-                  )
-                  .run(
-                    change === "permission" ? "$.permissionMode" : "$.lifecycleRevision",
-                    change === "permission" ? "read-only" : "reset-revision",
-                    candidate.source.sessionKey,
-                  );
-              } else if (change === "deletion") {
-                writer
-                  .prepare("DELETE FROM session_nodes WHERE session_key = ?")
-                  .run(candidate.source.sessionKey);
-              } else {
-                const replacement = `${candidate.source.sessionId}:replacement`;
-                writer.exec("BEGIN IMMEDIATE");
-                writer
-                  .prepare(
-                    "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at) SELECT ?, session_key, session_scope, created_at, updated_at FROM session_windows WHERE session_id = ?",
-                  )
-                  .run(replacement, candidate.source.sessionId);
-                writer
-                  .prepare(
-                    "UPDATE session_nodes SET current_session_id = ?, entry_json = json_set(entry_json, '$.sessionId', ?) WHERE session_key = ?",
-                  )
-                  .run(replacement, replacement, candidate.source.sessionKey);
-                writer.exec("COMMIT");
-              }
-            } finally {
-              writer.close();
-            }
+            await upsertSessionEntryCore(
+              candidate.source,
+              change === "permission"
+                ? { permissionMode: "read-only" }
+                : change === "reset"
+                  ? { lifecycleRevision: "reset-revision" }
+                  : { sessionId: `${candidate.source.sessionId}:replacement` },
+            );
           }
         }
         return result;
@@ -195,15 +203,25 @@ describe("runSkillExperienceReview", () => {
             const assertLive = resolveAdmittedRunActiveAssertion(admitted, params.abortSignal);
             expect(assertLive).toBeDefined();
             await expect(
-              writeWorkshopSkillFile(
-                { ...context, assertLive },
-                {
-                  name: "procedure",
-                  filePath: "SKILL.md",
-                  content: original.replace("Original", "Changed"),
-                },
+              runWithAgentToolSourceExecutionScope(assertLive, () =>
+                writeWorkshopSkillFile(
+                  { ...context, assertLive },
+                  {
+                    name: "procedure",
+                    filePath: "SKILL.md",
+                    content: original.replace("Original", "Changed"),
+                  },
+                ),
               ),
             ).rejects.toThrow("no longer active");
+            await expect(
+              runWithAgentToolSourceExecutionScope(assertLive, () =>
+                writeWorkshopSkillFile(
+                  { ...context, assertLive },
+                  { name: "procedure", filePath: "SKILL.md", content: "must stay denied" },
+                ),
+              ),
+            ).rejects.toThrow();
             return { meta: { durationMs: 1 } };
           } finally {
             params.preparedRunAdmission.close();

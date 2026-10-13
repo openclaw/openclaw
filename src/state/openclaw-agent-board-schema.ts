@@ -1,4 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
+import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 
@@ -23,6 +25,11 @@ export const OPENCLAW_AGENT_SCHEMA_WITHOUT_BOARD_SQL = OPENCLAW_AGENT_SCHEMA_SQL
   OPENCLAW_AGENT_BOARD_SCHEMA_SQL,
   "",
 );
+
+const ensureBoardTables = createSqliteSchemaEnsurer(() => OPENCLAW_AGENT_BOARD_SCHEMA_SQL, {
+  tables: ["board_tabs", "board_widgets"],
+  indexes: ["idx_agent_board_widgets_tab_position"],
+});
 
 function canonicalBoardWidgetsCreateSql(): string {
   return extractSqliteTableSchema(OPENCLAW_AGENT_BOARD_SCHEMA_SQL, "board_widgets", {
@@ -59,14 +66,16 @@ export function ensureOpenClawAgentBoardSchemaInTransaction(db: DatabaseSync): v
   if (!db.isTransaction) {
     throw new Error("board schema ensure requires an active transaction");
   }
-  db.exec(OPENCLAW_AGENT_BOARD_SCHEMA_SQL); // sqlite-allow-raw -- Canonical DDL bootstrap for the lazy board schema.
-  const row = db // sqlite-allow-raw -- Inspect the table DDL before the bounded same-version migration.
-    .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'board_widgets'")
-    .get();
-  if (typeof row?.sql !== "string") {
+  ensureBoardTables(db);
+  const sql =
+    getAdmittedSqliteSchemaFacts(db)?.tableSql.get("board_widgets") ??
+    db // sqlite-allow-raw -- Unadmitted maintenance handles inspect the bounded same-version migration.
+      .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'board_widgets'")
+      .get()?.sql;
+  if (typeof sql !== "string") {
     throw new Error("OpenClaw agent board widget schema is missing after ensure.");
   }
-  const normalizedSchema = normalizeBoardWidgetsCreateSql(row.sql);
+  const normalizedSchema = normalizeBoardWidgetsCreateSql(sql);
   if (normalizedSchema === normalizeBoardWidgetsCreateSql(canonicalBoardWidgetsCreateSql())) {
     return;
   }

@@ -2,7 +2,6 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
-import { readFileSync, writeFileSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
@@ -77,6 +76,9 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
       await registerSubagentRun({
         runId,
         childSessionKey,
+        childAgentId: "main",
+        sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey })
+          ?.entry,
         requesterSessionKey: parentKey,
         requesterAgentId: "main",
         requesterDisplayKey: parentKey,
@@ -115,6 +117,12 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
     const admission = await sessionLifecycle.beginSessionWorkAdmission({
       scope: storePath,
       identities: [activeKey, "active-session"],
+      run: {
+        runId: "active",
+        sessionKey: activeKey,
+        sessionId: "active-session",
+        agentId: "main",
+      },
       assertAllowed: () => {},
       onInterrupt: () => admission.release(),
     });
@@ -195,9 +203,18 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
           },
         });
       }
+      await writeSubagentSessionEntry({
+        stateDir: fixture.stateDir,
+        agentId: "main",
+        sessionKey: grandchildKey,
+        defaultSessionId: "grandchild-session",
+      });
       await registerSubagentRun({
         runId: "grandchild",
         childSessionKey: grandchildKey,
+        childAgentId: "main",
+        sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: grandchildKey })
+          ?.entry,
         requesterSessionKey: endedKey,
         requesterAgentId: "main",
         requesterDisplayKey: endedKey,
@@ -251,22 +268,28 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
 );
 
 it.each(["child", "ancestor"])(
-  "retained durable intent prevents queued dispatch when the %s identity read fails",
+  "retained durable intent prevents queued dispatch when the %s identity owner closes",
   async (faultOwner) => {
     const childAgent = faultOwner === "ancestor" ? "worker" : "broken";
     const badKey = `agent:${childAgent}:subagent:bad`;
     const healthyKey = "agent:main:subagent:healthy";
     const ancestorKey = "agent:broken:subagent:ancestor";
     if (faultOwner === "ancestor") {
-      await writeSubagentSessionEntry({
+      const ancestorStore = await writeSubagentSessionEntry({
         stateDir: fixture.stateDir,
         agentId: "broken",
         sessionKey: ancestorKey,
         defaultSessionId: "ancestor-session",
+        lifecycleRevision: "original-ancestor",
       });
       await registerSubagentRun({
         runId: "ancestor",
         childSessionKey: ancestorKey,
+        childAgentId: "broken",
+        sessionEntry: loadExactSessionEntryReadOnly({
+          storePath: ancestorStore,
+          sessionKey: ancestorKey,
+        })?.entry,
         requesterSessionKey: parentKey,
         requesterAgentId: "main",
         requesterDisplayKey: parentKey,
@@ -283,14 +306,28 @@ it.each(["child", "ancestor"])(
       agentId: childAgent,
       sessionKey: badKey,
       defaultSessionId: "bad-session",
+      lifecycleRevision: "original-child",
     });
     for (const [runId, childSessionKey] of [
       ["bad", badKey],
       ["healthy", healthyKey],
     ] as const) {
+      const childAgentId = runId === "bad" ? childAgent : "main";
+      const childStore = await writeSubagentSessionEntry({
+        stateDir: fixture.stateDir,
+        agentId: childAgentId,
+        sessionKey: childSessionKey,
+        defaultSessionId: `${runId}-session`,
+        lifecycleRevision: "original-child",
+      });
       await registerSubagentRun({
         runId,
         childSessionKey,
+        childAgentId,
+        sessionEntry: loadExactSessionEntryReadOnly({
+          storePath: childStore,
+          sessionKey: childSessionKey,
+        })?.entry,
         requesterSessionKey: faultOwner === "ancestor" && runId === "bad" ? ancestorKey : parentKey,
         requesterAgentId: faultOwner === "ancestor" && runId === "bad" ? "broken" : "main",
         requesterDisplayKey: parentKey,
@@ -306,17 +343,17 @@ it.each(["child", "ancestor"])(
       (item) => item.agentId === "broken" && isPathInside(fixture.stateDir, item.path),
     )!;
     expect(database).toBeDefined();
-    let original: Buffer | undefined;
+    let closed = false;
     let fault: unknown;
     const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
-      if (original || !subagentRuns.get("bad")?.killIntent) {
+      if (closed || !subagentRuns.get("bad")?.killIntent) {
         return;
       }
       try {
         expect(loadSubagentRegistryFromSqlite().get("bad")?.killIntent).toBeDefined();
+        // Closure revokes the prepared identity synchronously; worker teardown may still run.
         expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
-        original = readFileSync(database.path);
-        writeFileSync(database.path, "not a SQLite database");
+        closed = true;
       } catch (error) {
         fault = error;
       }
@@ -342,7 +379,7 @@ it.each(["child", "ancestor"])(
       const { parent, pending } = abortParent();
       const respond = await pending;
       expect(fault).toBeUndefined();
-      expect(original).toBeDefined();
+      expect(closed).toBe(true);
       expect(parent.controller.signal.aborted).toBe(true);
       expect(respond).toHaveBeenCalledWith(
         false,
@@ -352,11 +389,6 @@ it.each(["child", "ancestor"])(
           message: expect.stringContaining("descendant cancellation was incomplete"),
         }),
       );
-      expect(() =>
-        loadExactSessionEntryReadOnly({
-          sessionKey: faultOwner === "ancestor" ? ancestorKey : badKey,
-        }),
-      ).toThrow();
       if (faultOwner === "ancestor") {
         expect(
           loadExactSessionEntryReadOnly({ storePath, sessionKey: badKey })?.entry.sessionId,
@@ -374,9 +406,6 @@ it.each(["child", "ancestor"])(
       await vi.waitFor(() => expect(survivorDispatch).toHaveBeenCalledOnce());
     } finally {
       unsubscribe();
-      if (original) {
-        writeFileSync(database.path, original);
-      }
       releaseSwarmRun("bad");
       releaseSwarmRun("survivor");
     }

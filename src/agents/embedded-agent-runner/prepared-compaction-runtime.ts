@@ -26,7 +26,7 @@ import {
   resolveBootstrapContextForRun,
   resolveContextInjectionMode,
 } from "../bootstrap-files.js";
-import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
+import { prepareConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { resolveOpenClawReferencePaths } from "../docs-path.js";
 import { prepareAgentMemoryPrompt } from "../memory-prompt-prepare.js";
 import {
@@ -277,7 +277,7 @@ export async function buildPreparedCompactionRuntime(
       spawnWorkspaceDir,
       skillsSnapshot: skillsSnapshotForRun,
     };
-    const runtimeCapabilityProfile = resolveConversationCapabilityProfile({
+    const runtimeCapabilityProfile = await prepareConversationCapabilityProfile({
       ...conversationContext,
       agentId: sandboxAgentId,
       conversationToolPolicy: params.conversationToolPolicy,
@@ -406,12 +406,17 @@ export async function buildPreparedCompactionRuntime(
     const promptAllowedToolNames = collectAllowedToolNames({ tools: promptTools });
     runtimePlan.tools.logDiagnostics(effectiveTools, runtimePlanModelContext);
     const machineName = await getMachineDisplayName();
-    const { runtimeChannel, runtimeCapabilities, reactionGuidance, messageToolHints } =
-      resolveRuntimeChannelPromptContext({
-        cfg: params.config,
-        channel: params.messageChannel ?? params.messageProvider,
-        accountId: params.agentAccountId,
-      });
+    const {
+      runtimeChannel,
+      runtimeCapabilities,
+      reactionGuidance,
+      messageToolHints,
+      customInlineButtonHint,
+    } = resolveRuntimeChannelPromptContext({
+      cfg: params.config,
+      channel: params.messageChannel ?? params.messageProvider,
+      accountId: params.agentAccountId,
+    });
 
     const runtimeInfo = {
       agentId: sessionAgentId,
@@ -426,6 +431,7 @@ export async function buildPreparedCompactionRuntime(
       channel: runtimeChannel,
       chatType: params.chatType,
       capabilities: runtimeCapabilities,
+      customInlineButtonHint,
       activeProcessSessions: listActiveProcessSessionReferences({
         scopeKey: resolveProcessToolScopeKey({
           sessionKey: params.sessionKey,

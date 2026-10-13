@@ -35,7 +35,6 @@ export async function backfillSessionRowTranscriptFields(
     ),
     async (owner) => {
       const { terminalModel, ...fields } = await owner.readRowBackfill(input);
-      owner.assertCurrent();
       const fallback =
         model &&
         readSessionFallbackModel({

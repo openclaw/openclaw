@@ -167,10 +167,16 @@ suite.define(() => {
             true,
           );
           await expect
-            .poll(() => group.locator(".sidebar-agent-roster__signals wa-tooltip[open]").count())
+            .poll(() =>
+              group
+                .locator(".sidebar-agent-roster__signals .tooltip-surface[popover]:popover-open")
+                .count(),
+            )
             .toBe(1);
           expect(
-            await group.locator(".sidebar-agent-roster__signals wa-tooltip[open]").textContent(),
+            await group
+              .locator(".sidebar-agent-roster__signals .tooltip-surface[popover]:popover-open")
+              .textContent(),
           ).toContain("Child session Review failed checks failed: Geometry mismatch");
           const attentionBounds = (await attention.boundingBox())!;
           const actionBounds = (await group
@@ -288,7 +294,7 @@ suite.define(() => {
           expect(await actions.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
           expect(await geometry()).toEqual(beforeFocus);
           expect(await add.getAttribute("href")).toBe("/new?agent=main");
-          await sidebar.locator(".sidebar-session-toolbar .sidebar-new-session").click();
+          await sidebar.locator(".sidebar-rail .sidebar-new-session").click();
           const menuFace = sidebar.locator(
             '.sidebar-new-session-menu [value="main"] .identity-avatar__agent-face',
           );

@@ -93,6 +93,7 @@ export type ChatRunRecord = assistantText.ChatRunBufferState & {
   registrations?: ChatRunEntry[];
   buffer?: string;
   bufferIsCurrent?: () => boolean;
+  releaseBufferAuthority?: () => void;
   /** Retire queued connection snapshots when this buffering generation is cleared. */
   liveTextGroup?: AbortController;
   liveTextEpoch?: object;
@@ -220,6 +221,8 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
     delete record.assistantItems;
     delete record.buffer;
     delete record.bufferIsCurrent;
+    record.releaseBufferAuthority?.();
+    delete record.releaseBufferAuthority;
     record.liveTextGroup?.abort();
     delete record.liveTextGroup;
     delete record.liveTextEpoch;
@@ -240,6 +243,7 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
   const clear = () => {
     for (const record of store.runs.values()) {
       clearPendingLiveTextFlushes(record);
+      record.releaseBufferAuthority?.();
       record.liveTextGroup?.abort();
     }
     store.runs.clear();
@@ -437,7 +441,9 @@ export type SessionMessageSubscriberRegistry = {
   get: (sessionKey: string) => ReadonlySet<string>;
   getApprovals: (sessionKey: string) => ReadonlySet<string>;
   getNarration: (sessionKey: string) => ReadonlySet<string>;
-  onChange: (listener: (sessionKey: string, connId: string) => void) => () => void;
+  onChange: (
+    listener: (sessionKey: string, connId: string, baselineOnly?: true) => void,
+  ) => () => void;
 };
 
 type SessionMessageSubscription = (() => void) & { commit: () => void };
@@ -493,7 +499,7 @@ export function createSessionMessageSubscriberRegistry(
   const connections = new Map<string, Map<string, SessionMessageSubscriptionOwners>>();
   const approvalSessionToConnIds = new Map<string, Set<string>>();
   const narrationSessionToConnIds = new Map<string, Set<string>>();
-  const changeListeners = new Set<(sessionKey: string, connId: string) => void>();
+  const changeListeners = new Set<Parameters<SessionMessageSubscriberRegistry["onChange"]>[0]>();
   const empty = new Set<string>();
   let subscriptionSequence = 0;
 
@@ -529,10 +535,9 @@ export function createSessionMessageSubscriberRegistry(
     setMembership(approvalSessionToConnIds, connId, sessionKey, mode?.includeApprovals === true);
     setMembership(narrationSessionToConnIds, connId, sessionKey, narration);
     if (changed) {
-      for (const listener of changeListeners) {
-        listener(sessionKey, connId);
-      }
+      changeListeners.forEach((listener) => listener(sessionKey, connId));
     }
+    return changed;
   };
   const updateSubscription = (
     connId: string,
@@ -558,7 +563,7 @@ export function createSessionMessageSubscriberRegistry(
         include(interest);
       }
     }
-    setSubscription(connId, sessionKey, mode);
+    return setSubscription(connId, sessionKey, mode);
   };
 
   const registry: SessionMessageSubscriberRegistry = {
@@ -643,7 +648,12 @@ export function createSessionMessageSubscriberRegistry(
       if (states?.size === 0) {
         connections.delete(normalizedConnId);
       }
-      updateSubscription(normalizedConnId, normalizedSessionKey, owners);
+      // Clients retire acknowledged baselines even when another observer keeps the stream live.
+      if (!updateSubscription(normalizedConnId, normalizedSessionKey, owners)) {
+        changeListeners.forEach((listener) =>
+          listener(normalizedSessionKey, normalizedConnId, true),
+        );
+      }
     },
     unsubscribeAll: (connId: string) => {
       const normalizedConnId = connId.trim();

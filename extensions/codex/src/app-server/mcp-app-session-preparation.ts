@@ -3,7 +3,7 @@ import {
   type AgentHarnessSessionPreparationV1,
   buildCodexUserMcpServersThreadConfigPatchForRuntime,
 } from "openclaw/plugin-sdk/codex-mcp-projection";
-import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { loadExecApprovalsReadOnlyAsync } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { z } from "zod";
 import { resolveCodexAppServerAuthProfileId } from "./auth-profile.js";
 import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
@@ -74,7 +74,8 @@ export async function prepareCodexMcpAppSession(params: {
       const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
         permissionMode: input.permissionMode,
         execOverrides: input.execOverrides,
-        approvals: input.permissionMode === "full" ? undefined : loadExecApprovals(),
+        approvals:
+          input.permissionMode === "full" ? undefined : await loadExecApprovalsReadOnlyAsync(),
         config: input.config,
         agentId: input.agentId,
       });

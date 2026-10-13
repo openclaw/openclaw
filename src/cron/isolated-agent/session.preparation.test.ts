@@ -10,6 +10,7 @@ import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { readSessionEntriesFromStoreInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
@@ -145,6 +146,8 @@ it("rejects a read revoked during dispatch and joins worker close", async () => 
   const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
   const sessionKey = "agent:main:cron:closed";
   writeSessionEntry(database, sessionKey, { sessionId: "closed-session", updatedAt: 1 });
+  // Exercise worker dispatch rather than the retained row-facts hit.
+  sessionChanges.invalidate({ sessionKey, storePath: database.path, factsInvalidated: true });
   let closing: Promise<boolean> | undefined;
   // The close comes from outside the read, not from the read's writer FIFO context.
   const runExternalClose = AsyncLocalStorage.snapshot();
@@ -158,6 +161,7 @@ it("rejects a read revoked during dispatch and joins worker close", async () => 
       env: state.env,
       storePath: database.path,
       sessionKeys: [sessionKey],
+      lifecycleSessionKey: sessionKey,
       projection: "full",
     }),
   ).rejects.toThrow(/revoked/);
@@ -177,6 +181,7 @@ it("rejects a configured alias redirected while its read is in flight", async ()
   const sessionKey = "agent:main:cron:alias";
   writeSessionEntry(database, sessionKey, { sessionId: "original-source", updatedAt: 1 });
   writeSessionEntry(replacement, sessionKey, { sessionId: "replacement-source", updatedAt: 1 });
+  sessionChanges.invalidate({ sessionKey, storePath: database.path, factsInvalidated: true });
   const alias = state.path("alias-full");
   fs.symlinkSync(state.stateDir, alias, "junction");
   observed.dispatch = () => {
@@ -190,6 +195,7 @@ it("rejects a configured alias redirected while its read is in flight", async ()
       env: state.env,
       storePath: path.join(alias, "agents", "main", "agent", "openclaw-agent.sqlite"),
       sessionKeys: [sessionKey],
+      lifecycleSessionKey: sessionKey,
       projection: "full",
     }),
   ).rejects.toThrow(/outside captured discovery custody/);

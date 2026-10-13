@@ -1,8 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import * as gitExec from "../../infra/git-exec.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
@@ -27,6 +31,14 @@ import {
   useManagedWorktreeTestRepository,
 } from "./service.test-support.js";
 import { hasTemplatesAsync } from "./template-registry-async.js";
+
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+});
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
 
 describe("worktree Git maintenance", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -564,6 +576,18 @@ describe("worktree Git maintenance", () => {
       );
       await requireGit(repo, ["multi-pack-index", "verify"]);
       expect(await fs.readFile(trace, "utf8")).not.toContain("upload-pack");
+      // A repeated transfer below the rewrite threshold must still retire its
+      // redundant pack, without letting ordinary copies displace promises.
+      const duplicate = await requireGit(repo, ["pack-objects", path.join(packDirectory, "pack")], {
+        input: `${objects[1]}\n`,
+      });
+      await fs.writeFile(path.join(packDirectory, `pack-${duplicate}.promisor`), "");
+      await createWorktreeGitMaintenance(env)({});
+      const afterDuplicate = await fs.readdir(packDirectory);
+      expect(afterDuplicate.filter((name) => name.endsWith(".pack"))).toHaveLength(3);
+      expect(afterDuplicate.filter((name) => name.endsWith(".promisor"))).toHaveLength(2);
+      expect(await requireGit(repo, ["cat-file", "-t", objects[1]!])).toBe("blob");
+      await requireGit(repo, ["multi-pack-index", "verify"]);
     } finally {
       vi.unstubAllEnvs();
     }

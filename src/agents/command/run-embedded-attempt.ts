@@ -1,5 +1,6 @@
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { applyModelRuntimeDirective } from "../../auto-reply/reply/directive-handling.model-runtime.js";
+import { formatThinkingLevelClampNotice } from "../../auto-reply/thinking.shared.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { clearAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal-writes.js";
@@ -310,6 +311,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
           agentId: sessionAgentId,
           sessionId,
           sessionKey: sessionKey ?? sessionId,
+          sessionLifecycleRevision: sessionEntry?.lifecycleRevision ?? null,
         },
         harness: {
           workspaceDir,
@@ -461,7 +463,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
               }).catalog;
             }
           }
-          const { level: candidateThinkLevel } = resolveThinkingSelection({
+          const { requestedLevel, level: candidateThinkLevel } = resolveThinkingSelection({
             cfg,
             agentId: sessionAgentId,
             provider: providerOverride,
@@ -472,7 +474,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
           });
           effectiveTurnThinkLevel = candidateThinkLevel;
           try {
-            return await attemptExecutionRuntime.runAgentAttempt({
+            const candidateResult = await attemptExecutionRuntime.runAgentAttempt({
               ...runOptions,
               preparedRunAdmission: params.preparedRunAdmission,
               providerOverride,
@@ -551,6 +553,26 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
               deferTerminalLifecycle: true,
               deferredLifecycle,
             });
+            const thinking = candidateResult.meta.requestShaping?.thinking ?? candidateThinkLevel;
+            const thinkingClamp = formatThinkingLevelClampNotice({
+              requested: requestedLevel,
+              effective: thinking,
+              provider: candidateResult.meta.agentMeta?.provider ?? providerOverride,
+              model: candidateResult.meta.agentMeta?.model ?? modelOverride,
+            });
+            return thinkingClamp
+              ? {
+                  ...candidateResult,
+                  meta: {
+                    ...candidateResult.meta,
+                    requestShaping: {
+                      ...candidateResult.meta.requestShaping,
+                      thinking,
+                      thinkingClamp,
+                    },
+                  },
+                }
+              : candidateResult;
           } finally {
             await candidateAccounting.finish(sessionEntry);
           }

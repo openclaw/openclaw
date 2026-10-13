@@ -16,7 +16,7 @@ export type TranscriptLayoutProps = {
   captureInteractionResize: (event: Event) => void;
   measureRowRefFor: (key: string) => (element?: Element) => void;
   measureRows: boolean;
-  initialPositionPending: boolean;
+  initialPositionPending: () => boolean;
   layout: TranscriptLayoutOwner;
   headerHeight: number;
   presented: PresentationValue;

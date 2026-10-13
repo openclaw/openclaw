@@ -23,10 +23,8 @@ import type {
 } from "./sqlite-worker-broker.types.js";
 import { SqliteWorkerError, type SqliteWorkerReply } from "./sqlite-worker-contract.js";
 import type { SqliteWorkerInputAdmission } from "./sqlite-worker-input-admission.js";
-import type { SqliteWorkerRuntimePreparation } from "./sqlite-worker-runtime-preparation.types.js";
+import { SqliteWorkerSlotCustody } from "./sqlite-worker-request-custody.js";
 import { createCpuTrackedWorker } from "./worker-cpu.js";
-
-type RuntimeSource = { moduleUrl: string; carrierUrl: URL; sourceLoaderUrl?: string };
 
 function cleanupFailures(results: PromiseSettledResult<unknown>[]): unknown[] {
   return results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
@@ -51,71 +49,6 @@ export function createSqliteWorkerLifecycle({
   ) => Promise<unknown>;
   fail: (slot: Slot, error: unknown) => void;
 }) {
-  const preparedRuntimes = new Map<
-    SqliteWorkerRuntimePreparation,
-    {
-      slot: Slot;
-      moduleUrl: string;
-      carrierUrl: string;
-      closeEpoch: number;
-      preempted?: Promise<void>;
-    }
-  >();
-  const reservedSlots = new Set<Slot>();
-  let closeEpoch = 0;
-  let completedCloseEpoch = 0;
-
-  function prepareRuntime(
-    source: RuntimeSource,
-    maxWorkers: number,
-    createReplyOwner: (slot: Slot) => SqliteWorkerReplyOwner,
-  ): SqliteWorkerRuntimePreparation | undefined {
-    if (slots.size >= maxWorkers) {
-      return undefined;
-    }
-    const slot = createSlot(source, false, createReplyOwner, source);
-    reservedSlots.add(slot);
-    let releasing: Promise<void> | undefined;
-    const prepared: SqliteWorkerRuntimePreparation = Object.freeze({
-      release() {
-        if (!preparedRuntimes.delete(prepared)) {
-          return releasing ?? Promise.resolve();
-        }
-        reservedSlots.delete(slot);
-        releasing = retire(slot);
-        return releasing;
-      },
-    });
-    preparedRuntimes.set(prepared, {
-      slot,
-      moduleUrl: source.moduleUrl,
-      carrierUrl: source.carrierUrl.href,
-      closeEpoch: closeEpoch + 1,
-    });
-    return prepared;
-  }
-
-  async function finishClose(epoch: number, succeeded: boolean): Promise<void> {
-    const results = await Promise.allSettled([
-      ...[...preparedRuntimes].flatMap(([prepared, runtime]) =>
-        succeeded && runtime.closeEpoch === epoch && (runtime.preempted || !runtime.slot.failed)
-          ? runtime.preempted
-            ? [runtime.preempted]
-            : []
-          : [prepared.release()],
-      ),
-      ...[...slots].filter((slot) => !reservedSlots.has(slot)).map(retireEmpty),
-    ]);
-    const errors = cleanupFailures(results);
-    if (errors.length) {
-      await Promise.allSettled([...preparedRuntimes.keys()].map((prepared) => prepared.release()));
-      throwSqliteLifecycleErrors(errors, "SQLite prepared runtime cleanup failed");
-    }
-    if (succeeded) {
-      completedCloseEpoch = epoch;
-    }
-  }
-
   async function closeHost({
     inputAdmission,
     operations,
@@ -125,7 +58,6 @@ export function createSqliteWorkerLifecycle({
     operations: Iterable<Promise<void>>;
     waiters: Iterable<Iterable<(error?: unknown) => void>>;
   }): Promise<void> {
-    const epoch = ++closeEpoch;
     // Seal clients and pending dispatch before the first await; accepted scopes still settle.
     for (const waiting of waiters) {
       for (const resume of waiting) {
@@ -147,84 +79,20 @@ export function createSqliteWorkerLifecycle({
     } catch (error) {
       errors.push(error);
     }
-    try {
-      await finishClose(epoch, errors.length === 0);
-    } catch (error) {
-      errors.push(error);
-    }
+    errors.push(...cleanupFailures(await Promise.allSettled([...slots].map(retireEmpty))));
     if (errors.length) {
       throw new AggregateError(errors, "SQLite worker host cleanup failed");
     }
   }
 
-  async function consumeRuntimePreparation(
-    options: PreparedSqliteWorkerOpen,
-    moduleUrl: string,
-  ): Promise<Slot | undefined> {
-    options.assertCurrent?.();
-    options.signal?.throwIfAborted();
-    const prepared = options.runtimePreparation;
-    const runtime = prepared ? preparedRuntimes.get(prepared) : undefined;
-    if (
-      !prepared ||
-      !runtime ||
-      options.target ||
-      options.runtimeGeneration ||
-      runtime.closeEpoch !== closeEpoch ||
-      completedCloseEpoch !== closeEpoch ||
-      runtime.moduleUrl !== moduleUrl ||
-      runtime.carrierUrl !== options.carrierUrl.href ||
-      (!runtime.preempted && (runtime.slot.failed || runtime.slot.retiring || runtime.slot.exited))
-    ) {
-      if (runtime && prepared) {
-        await racePromiseWithAbortSignal(
-          prepared.release(),
-          options.signal,
-          (signal) => signal.reason,
-        );
-      }
-      throw new SqliteWorkerError("SQLite prepared runtime is no longer available", "closed");
-    }
-    preparedRuntimes.delete(prepared);
-    reservedSlots.delete(runtime.slot);
-    if (runtime.preempted) {
-      await racePromiseWithAbortSignal(
-        runtime.preempted,
-        options.signal,
-        (signal) => signal.reason,
-      );
-      options.assertCurrent?.();
-      options.signal?.throwIfAborted();
-      if (runtime.closeEpoch !== closeEpoch || completedCloseEpoch !== closeEpoch) {
-        throw new SqliteWorkerError("SQLite prepared runtime close epoch changed", "closed");
-      }
-      return undefined;
-    }
-    runtime.slot.pendingOpens += 1;
-    return runtime.slot;
-  }
-
   async function acquireSlot(
     options: PreparedSqliteWorkerOpen,
-    moduleUrl: string,
     limits: { maxWorkers: number; maxStores: number },
     createReplyOwner: (slot: Slot) => SqliteWorkerReplyOwner,
   ): Promise<Slot> {
     options.signal?.throwIfAborted();
     options.assertCurrent?.();
     options.signal?.throwIfAborted();
-    if (options.runtimePreparation) {
-      const prepared = await consumeRuntimePreparation(options, moduleUrl);
-      return (
-        prepared ??
-        acquireSlot(
-          { ...options, runtimePreparation: undefined },
-          moduleUrl,
-          limits,
-          createReplyOwner,
-        )
-      );
-    }
     const shareWorkers = explicitSqliteCloseReleasesNativeResources;
     const hasEphemeral = Boolean(options.target) || [...slots].some((slot) => slot.ephemeral);
     const available = [...slots].filter(
@@ -232,7 +100,6 @@ export function createSqliteWorkerLifecycle({
         !slot.ephemeral &&
         !slot.failed &&
         !slot.retiring &&
-        !reservedSlots.has(slot) &&
         slot.runtimeGeneration === options.runtimeGeneration,
     );
     // A retained updater cannot borrow another generation's carrier or evict its actors.
@@ -249,21 +116,6 @@ export function createSqliteWorkerLifecycle({
       slots.size >= (shareWorkers || hasEphemeral ? limits.maxWorkers : limits.maxStores)
     ) {
       if (options.target || !available.length || !shareWorkers) {
-        const optional = [...preparedRuntimes.values()].find(
-          (runtime) =>
-            reservedSlots.has(runtime.slot) && !runtime.preempted && !runtime.slot.failed,
-        );
-        if (optional) {
-          // Accepted native work owns capacity before speculative code preparation.
-          reservedSlots.delete(optional.slot);
-          optional.preempted = retire(optional.slot);
-          await racePromiseWithAbortSignal(
-            optional.preempted,
-            options.signal,
-            (signal) => signal.reason,
-          );
-          return acquireSlot(options, moduleUrl, limits, createReplyOwner);
-        }
         const retiring = [...slots].filter((slot) => Boolean(slot.failed || slot.retiring));
         if (retiring.length > 0) {
           await racePromiseWithAbortSignal(
@@ -271,7 +123,7 @@ export function createSqliteWorkerLifecycle({
             options.signal,
             (signal) => signal.reason,
           );
-          return acquireSlot(options, moduleUrl, limits, createReplyOwner);
+          return acquireSlot(options, limits, createReplyOwner);
         }
         throw new SqliteWorkerError(
           `SQLite worker ${shareWorkers ? "runtime" : "store"} capacity reached`,
@@ -294,7 +146,6 @@ export function createSqliteWorkerLifecycle({
     >,
     borrowedGenerationSlot: boolean,
     createReplyOwner: (slot: Slot) => SqliteWorkerReplyOwner,
-    runtimeSource?: RuntimeSource,
   ): Slot {
     options.signal?.throwIfAborted();
     ensureSqliteLibrarySelected();
@@ -307,21 +158,12 @@ export function createSqliteWorkerLifecycle({
         resourceLimits: { maxOldGenerationSizeMb: 512 },
         env: resolveNodeCompileCacheEnv(),
         execArgv: resolveRuntimeWorkerThreadExecArgv(carrierUrl),
-        ...(runtimeSource
-          ? {
-              workerData: {
-                sqliteRuntimePreparation: {
-                  moduleUrl: runtimeSource.moduleUrl,
-                  sourceLoaderUrl: runtimeSource.sourceLoaderUrl,
-                },
-              },
-            }
-          : {}),
       }),
       exited: createDeferredCore(),
     }));
     trackSqliteDatabaseAdmissionWorker(worker);
     const slot: Slot = {
+      custody: new SqliteWorkerSlotCustody(),
       ...(options.target ? { ephemeral: true as const } : {}),
       runtimeGeneration: options.runtimeGeneration,
       ...(borrowedGenerationSlot ? { borrowedGenerationSlot: true as const } : {}),
@@ -331,7 +173,7 @@ export function createSqliteWorkerLifecycle({
       queue: [],
       exit: exited.promise,
       exited: false,
-      pendingOpens: runtimeSource ? 0 : 1,
+      pendingOpens: 1,
     };
     const replyOwner = createReplyOwner(slot);
     slots.add(slot);
@@ -494,6 +336,7 @@ export function createSqliteWorkerLifecycle({
   }
 
   function retire(slot: Slot): Promise<void> {
+    slot.custody.retire();
     slot.retiring ??= (async () => {
       const errors: unknown[] = [];
       if (!slot.exited) {
@@ -512,8 +355,6 @@ export function createSqliteWorkerLifecycle({
   }
 
   return {
-    prepareRuntime,
-    consumeRuntimePreparation,
     closeHost,
     acquireSlot,
     createSlot,

@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
@@ -57,11 +56,6 @@ import {
   assertAgentDatabaseResourceAdmission,
   registerOpenClawAgentDatabaseAsyncResource,
 } from "./openclaw-agent-db-resources.js";
-import {
-  assertExistingAgentSchemaOwner,
-  assertSupportedAgentSchemaVersion,
-  readExistingAgentSchemaMeta,
-} from "./openclaw-agent-db-schema-helpers.js";
 import { revalidateAgentDatabaseTerminalOpenAsync } from "./openclaw-agent-db-terminal.js";
 import {
   captureOpenClawAgentDatabaseAliasPublication,
@@ -79,7 +73,11 @@ import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js
 
 /** Denial still invokes run under admission, with a throwing authority check, to permit cleanup. */
 export type OpenClawAgentDatabaseWriteAdmission = <T>(
-  run: (assertCurrent: () => void, validation?: OpenClawAgentDatabaseValidation) => T | Promise<T>,
+  run: (
+    assertCurrent: () => void,
+    validation?: OpenClawAgentDatabaseValidation,
+    integrityRevoked?: boolean,
+  ) => T | Promise<T>,
 ) => Promise<T>;
 
 /** Refusal must unwind ownership without entering corruption repair or changing its caller error. */
@@ -422,13 +420,14 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     let suspended = false;
     try {
       while (true) {
-        const outcome = await withAdmission(async (assertCurrent, validation) => {
+        const outcome = await withAdmission(async (assertCurrent, validation, integrityRevoked) => {
           suspended = false;
           assertAgentDatabaseOpenAuthority(steps, () => {
             assertCurrent();
-            assertOpenClawAgentDatabaseAdmissionCurrent(options, pending, check?.database);
+            assertOpenClawAgentDatabaseAdmissionCurrent(options, pending);
           });
           pending.validation = validation;
+          pending.integrityRevoked = integrityRevoked;
           const step = failure ? steps.throw(failure.error) : steps.next();
           if (!step.done) {
             suspended = true;
@@ -536,7 +535,6 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
   function assertOpenClawAgentDatabaseAdmissionCurrent(
     options: OpenClawAgentDatabaseOptions,
     pending: PendingAgentDatabaseOpen,
-    database?: DatabaseSync,
   ): void {
     const pathname = pending.path;
     pending.controller.signal.throwIfAborted();
@@ -548,14 +546,6 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     assertAgentCreationClaimCurrent(options);
     getAgentDeletionDatabaseCleanup(options)?.assertCurrent();
     pending.assertHeld?.();
-    if (database) {
-      assertSupportedAgentSchemaVersion(database, pathname);
-      assertExistingAgentSchemaOwner(
-        readExistingAgentSchemaMeta(database),
-        pending.agentId,
-        pathname,
-      );
-    }
   }
 
   function startOpenClawAgentDatabaseAdmission(
@@ -573,7 +563,6 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
       assertAgentDatabaseOpenAuthority(operation, assertCurrent);
       let step = operation.next();
       while (!step.done) {
-        const database = step.value.database;
         let failure: unknown;
         let failed = false;
         try {
@@ -590,7 +579,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
         }
         // Throwing an integrity verdict into the generator can repair indexes too.
         assertAgentDatabaseOpenAuthority(operation, () => {
-          assertOpenClawAgentDatabaseAdmissionCurrent(options, pending, database);
+          assertOpenClawAgentDatabaseAdmissionCurrent(options, pending);
           assertCurrent?.();
         });
         // Resuming, or throwing into, the same owner preserves repair and unwind policy.

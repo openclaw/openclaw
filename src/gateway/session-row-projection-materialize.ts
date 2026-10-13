@@ -32,7 +32,9 @@ import type { SessionRepositoryWorkspaceRecord } from "../state/session-reposito
 import { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
+import { SessionRowFactsPending } from "./session-row-prepared-read.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
+import { createSessionRowCapabilityReader } from "./session-row-projection-identities.js";
 import * as records from "./session-row-projection-record.js";
 import { readSessionRowLookup, type prepareSessionRowScopes } from "./session-row-scope.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
@@ -338,7 +340,6 @@ export function readResidentSessionRow(
     // Incognito rows are transient exact reads and never enter the resident backfill queue.
     includeDerivedTitles: Boolean(source),
     includeLastMessage: Boolean(source),
-    skipTranscriptUsageFallback: true,
     includeSwarmChildren: true,
     childLinks: source || prepared ? undefined : params.links,
   });
@@ -390,6 +391,16 @@ export function readResidentSessionRow(
 }
 
 export function readSessionRowEntry(row: records.Row) {
+  if (!isIncognitoSessionKey(row.key)) {
+    const facts = row.pendingDatabaseFacts ?? row.retainedDatabaseFacts;
+    if (facts) {
+      return facts.entry;
+    }
+
+    // Durable reads reenter the existing worker preparation owner after invalidation.
+    const { key, agentId, storeTarget } = row;
+    throw new SessionRowFactsPending([{ key, agentId, storePath: storeTarget.storePath }]);
+  }
   const memory = captureSessionActorStorageOwner({ ...row.storeTarget, sessionKey: row.key });
   if (memory && isIncognitoSessionKey(row.key)) {
     return memory.owner?.readSession(row.key, memory.authority)?.entry;
@@ -523,6 +534,7 @@ export function createSessionRowLookup(owner: {
   runInOwner: <T>(consume: () => T) => T;
 }) {
   return {
+    readCapabilityEntry: createSessionRowCapabilityReader(owner),
     async readLookup(selection: Parameters<typeof readSessionRowLookup>[0], agentId?: string) {
       const selected = owner.state();
       const queries = await owner.runInOwner(() =>

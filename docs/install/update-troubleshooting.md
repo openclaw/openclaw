@@ -137,6 +137,14 @@ native output are excluded.
 
 ## Node and global install permissions
 
+If package recovery reports `nlink=2` (or another value above 1), let updater
+workers finish, then run `openclaw doctor --fix` from the affected installation.
+Doctor can reclaim an abandoned updater runtime, including one retained in an
+npm prefix's `lib/` directory, and release its extra journal link. Then retry
+the update. Do not weaken recovery permissions or delete the activation journal;
+if Doctor reports a live owner or cannot identify the runtime, follow that
+diagnostic before retrying.
+
 For `node-runtime-preflight`, upgrade the runtime named in the message to a
 version satisfying both the candidate's full engine range and the updater's
 supported Node range. The suggested version is the lowest supported release in

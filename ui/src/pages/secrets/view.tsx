@@ -1,6 +1,7 @@
-import { For, Show } from "solid-js";
+import { For, Show, createEffect, createSignal } from "solid-js";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../components/solid/icon.tsx";
+import { Menu, type MenuHandle } from "../../components/solid/menu.tsx";
 import "../../components/modal-dialog.ts";
 import {
   DocsLink,
@@ -9,7 +10,6 @@ import {
   SettingsPage,
   SettingsSection,
 } from "../../components/solid/settings-ui.tsx";
-import "../../components/web-awesome.ts";
 import { formatRelativeTimestamp } from "../../lib/reactive/format.ts";
 import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import type { SecretsStoreDraft } from "../../lib/secrets-store/index.ts";
@@ -106,38 +106,36 @@ function updatedLabel(entry: SecretStoreEntry): string {
 }
 
 function EntryMenu(props: { view: SecretsStoreViewProps; entry: SecretStoreEntry }) {
+  const [menu, setMenu] = createSignal<MenuHandle>();
+  createEffect(
+    () => [menu()?.overlay.trigger, t("secretsStore.actions")] as const,
+    ([trigger, title]) => trigger?.setAttribute("title", title),
+  );
   return (
     <Show when={props.view.canSet || props.view.canDelete}>
-      <wa-dropdown
+      <Menu
+        id={`secret-actions-${props.entry.name}`}
         class="secrets-store__menu"
         placement="bottom-end"
-        onWa-select={(event: CustomEvent<{ item: { value?: string } }>) => {
-          if (event.detail.item.value === "edit" && props.view.canSet) {
+        label={`${t("secretsStore.actions")}: ${props.entry.name}`}
+        triggerClass="btn btn--sm btn--ghost secrets-store__menu-trigger"
+        ref={setMenu}
+        trigger={<Icon name="moreHorizontal" />}
+        disabled={props.view.busy}
+        items={[
+          ...(props.view.canSet ? [{ id: "edit", label: t("secretsStore.edit") }] : []),
+          ...(props.view.canDelete
+            ? [{ id: "delete", label: t("common.delete"), variant: "danger" as const }]
+            : []),
+        ]}
+        onSelect={(item) => {
+          if (item.id === "edit" && props.view.canSet) {
             props.view.onOpenEdit(props.entry);
-          } else if (event.detail.item.value === "delete" && props.view.canDelete) {
+          } else if (item.id === "delete" && props.view.canDelete) {
             props.view.onDelete(props.entry);
           }
         }}
-      >
-        <button
-          slot="trigger"
-          type="button"
-          class="btn btn--sm btn--ghost secrets-store__menu-trigger"
-          aria-label={`${t("secretsStore.actions")}: ${props.entry.name}`}
-          title={t("secretsStore.actions")}
-          disabled={props.view.busy}
-        >
-          <Icon name="moreHorizontal" />
-        </button>
-        <Show when={props.view.canSet}>
-          <wa-dropdown-item value="edit">{t("secretsStore.edit")}</wa-dropdown-item>
-        </Show>
-        <Show when={props.view.canDelete}>
-          <wa-dropdown-item value="delete" prop:variant="danger">
-            {t("common.delete")}
-          </wa-dropdown-item>
-        </Show>
-      </wa-dropdown>
+      />
     </Show>
   );
 }

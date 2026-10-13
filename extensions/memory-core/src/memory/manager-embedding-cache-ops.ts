@@ -30,6 +30,12 @@ export type MemoryEmbeddingCacheCandidate = {
   source: MemorySource;
 };
 
+export type MemoryCachedEmbeddings = {
+  embeddings: number[][];
+  missing: number[];
+  missingCandidates: MemoryEmbeddingCacheCandidate[];
+};
+
 export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOps {
   protected abstract embedBatchWithRetry(
     inputs: Array<string | EmbeddingInput>,
@@ -95,11 +101,10 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     candidates: MemoryEmbeddingCacheCandidate[],
     generation: MemorySemanticProviderGeneration,
     maxTokens: number,
+    prepared?: MemoryCachedEmbeddings,
   ): Promise<number[][]> {
-    const { embeddings, missing, missingCandidates } = await this.collectCachedEmbeddings(
-      candidates,
-      generation,
-    );
+    const { embeddings, missing, missingCandidates } =
+      prepared ?? (await this.collectCachedEmbeddings(candidates, generation));
 
     if (missing.length === 0) {
       return embeddings;
@@ -150,17 +155,10 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
         }
       };
       // Rebuilds use a shadow index; cache writes retain the captured published owner.
-      await generation.database.mutateEmbeddingCache(
-        mutation,
-        assertCurrent,
-        () => {
-          assertCurrent();
-          return this.canWriteEmbeddingCache(generation) ? generation.databaseRevision : undefined;
-        },
-        () => {
-          generation.cacheWritesInvalidated = true;
-        },
-      );
+      await generation.database.mutateEmbeddingCache(mutation, assertCurrent, () => {
+        assertCurrent();
+        return this.canWriteEmbeddingCache(generation);
+      });
     });
   }
 

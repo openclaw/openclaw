@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
+import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
@@ -21,6 +22,9 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
+import { readOpenClawDatabaseQuarantineFailure } from "./openclaw-quarantine-store.js";
+import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import { resolveQuarantineStorePath } from "./openclaw-state-db.paths.js";
 
 const metadataSchema = `CREATE TABLE schema_meta (
   meta_key TEXT PRIMARY KEY, role TEXT, schema_version INTEGER,
@@ -128,13 +132,22 @@ it.each(["drop", "recreate"] as const)(
   },
 );
 
-it("reuses physical agent admission after reader opens and writer idle retirement", async () => {
+it("reuses live agent admission and its seal after writer idle retirement", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const options = { agentId: "main", env };
+    const shared = openOpenClawStateDatabase({ env });
+    using registry = openNodeSqliteDatabase(shared.path, { readOnly: true });
+    admitSqliteSchema(registry);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const first = openOpenClawAgentDatabase(options);
       const firstNative = first.db;
+      using quarantine = openNodeSqliteDatabase(resolveQuarantineStorePath(env), {
+        readOnly: true,
+      });
+      admitSqliteSchema(quarantine);
+      expect(readSqliteDatabaseCleanClose(first.path)).toBe(false);
+      expect(readOpenClawDatabaseQuarantineFailure("agent", first.path, { env })).toBeUndefined();
       const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
       try {
         const reader = openOpenClawAgentDatabaseReadOnly(options);
@@ -142,8 +155,10 @@ it("reuses physical agent admission after reader opens and writer idle retiremen
         if (reader.found) {
           reader.database.close();
         }
+        expect(validationStatements(observation.queries)).toEqual([]);
         vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
         expect(firstNative.isOpen).toBe(false);
+        expect(readSqliteDatabaseCleanClose(first.path)).toBe(true);
         const reopened = openOpenClawAgentDatabase(options);
         expect(reopened.db === firstNative).toBe(false);
         expect(reopened.db.isOpen).toBe(true);
@@ -157,12 +172,47 @@ it("reuses physical agent admission after reader opens and writer idle retiremen
   });
 });
 
+it("reuses closed-writer ownership for read-only admission until tracked schema changes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const options = { agentId: "main", env };
+    const owner = openOpenClawAgentDatabase(options);
+    await closeOpenClawAgentDatabaseByPathAsync(owner.path);
+    const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    let reader: ReturnType<typeof openOpenClawAgentDatabaseReadOnly> | undefined;
+    try {
+      reader = openOpenClawAgentDatabaseReadOnly(options);
+      expect(reader.found).toBe(true);
+      expect(observation.queries.filter((sql) => /\bFROM\s+"?schema_meta\b/iu.test(sql))).toEqual(
+        [],
+      );
+    } finally {
+      observation.restore();
+      if (reader?.found) {
+        reader.database.close();
+      }
+    }
+    using writer = openNodeSqliteDatabase(owner.path);
+    writer.exec("DROP TABLE session_canonical_validation_pending");
+    expect(() => openOpenClawAgentDatabaseReadOnly(options)).toThrow(
+      expect.objectContaining({
+        name: "SessionMetadataUnavailableError",
+        reason: "table-missing",
+        missingTables: ["session_canonical_validation_pending"],
+      }),
+    );
+  });
+});
+
 it("keeps a tracked sibling's committed catalog when reopening an admitted agent", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const options = { agentId: "main", env };
     const first = openOpenClawAgentDatabase(options);
+    using quarantine = openNodeSqliteDatabase(resolveQuarantineStorePath(env), { readOnly: true });
+    admitSqliteSchema(quarantine);
+    expect(readOpenClawDatabaseQuarantineFailure("agent", first.path, { env })).toBeUndefined();
     await closeOpenClawAgentDatabaseByPathAsync(first.path);
     using sibling = openNodeSqliteDatabase(first.path);
+    admitSqliteSchema(sibling);
     sibling.exec("CREATE TABLE adoption_probe (id INTEGER); INSERT INTO adoption_probe VALUES (1)");
     expect(getAdmittedSqliteSchemaFacts(sibling)?.tables.has("adoption_probe")).toBe(true);
     const reopened = openOpenClawAgentDatabase(options);
@@ -209,20 +259,23 @@ it.each(["tracked", "raw"] as const)(
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       const options = { agentId: "main", env };
       const first = openOpenClawAgentDatabase(options);
+      using quarantine = openNodeSqliteDatabase(resolveQuarantineStorePath(env), {
+        readOnly: true,
+      });
+      admitSqliteSchema(quarantine);
+      expect(readOpenClawDatabaseQuarantineFailure("agent", first.path, { env })).toBeUndefined();
       first.db.exec(`INSERT INTO auth_profile_state (state_key, state_json, updated_at)
         VALUES ('maintenance-handoff', '{"preserved":true}', 1)`);
       await closeOpenClawAgentDatabaseByPathAsync(first.path);
-      {
-        using database =
-          opener === "tracked"
-            ? openNodeSqliteDatabase(first.path)
-            : new (requireNodeSqlite().DatabaseSync)(first.path);
-        ensureOpenClawAgentDatabaseSchema(database, {
-          ...options,
-          path: first.path,
-          register: true,
-        });
-      }
+      using database =
+        opener === "tracked"
+          ? openNodeSqliteDatabase(first.path)
+          : new (requireNodeSqlite().DatabaseSync)(first.path);
+      ensureOpenClawAgentDatabaseSchema(database, {
+        ...options,
+        path: first.path,
+        register: true,
+      });
       expect(listOpenClawRegisteredAgentDatabases({ env })).toContainEqual(
         expect.objectContaining({ agentId: "main", path: first.path }),
       );
@@ -253,6 +306,13 @@ it("registers a new alias without repeating the physical database admission", as
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const options = { agentId: "main", env: state.env };
     const first = openOpenClawAgentDatabase(options);
+    using quarantine = openNodeSqliteDatabase(resolveQuarantineStorePath(state.env), {
+      readOnly: true,
+    });
+    admitSqliteSchema(quarantine);
+    expect(
+      readOpenClawDatabaseQuarantineFailure("agent", first.path, { env: state.env }),
+    ).toBeUndefined();
     const aliasDirectory = state.path("agent-alias");
     symlinkSync(path.dirname(first.path), aliasDirectory, "junction");
     const aliasPath = path.join(aliasDirectory, path.basename(first.path));

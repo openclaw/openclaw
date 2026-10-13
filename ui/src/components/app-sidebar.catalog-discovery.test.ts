@@ -22,11 +22,12 @@ import {
   type GatewayRequestHandler,
 } from "../test-helpers/gateway-client.ts";
 import "../test-helpers/app-sidebar-suite.ts";
+import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import "./app-sidebar.ts";
 
 async function settle(sidebar: SidebarLifecycleState) {
   await vi.advanceTimersByTimeAsync(0);
-  await sidebar.updateComplete;
+  await settleLitElement(sidebar);
 }
 
 function catalogParams(value: unknown) {
@@ -96,7 +97,7 @@ describe("AppSidebar hidden catalog discovery", () => {
           const gateway = discoveryGateway(currentRequest);
           provider.setContext(createContext(gateway.gateway, context.sessions, TWO_AGENTS));
         }
-        await sidebar.updateComplete;
+        await settleLitElement(sidebar);
         await vi.advanceTimersByTimeAsync(200);
         await settle(sidebar);
         expect(currentRequest).toHaveBeenCalledTimes(1);
@@ -153,7 +154,7 @@ describe("AppSidebar hidden catalog discovery", () => {
     await vi.advanceTimersByTimeAsync(300_000);
     expect(request).toHaveBeenCalledTimes(8);
     await sidebar.sessionData.refreshSessionCatalogs();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(sidebar.textContent).toContain("Discovered session");
     expect(request).toHaveBeenCalledTimes(16);
   });
@@ -240,7 +241,7 @@ describe("AppSidebar hidden catalog discovery", () => {
       expect(request).toHaveBeenCalledTimes(3);
 
       await sidebar.sessionData.refreshSessionCatalogs();
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
       const catalog = sidebar.sessionData.sessionCatalogs[0]!;
       const host = catalog.hosts[0]!;
       expect((catalog.error ?? host.error)?.code).toBe(
@@ -253,7 +254,7 @@ describe("AppSidebar hidden catalog discovery", () => {
 
       failing = false;
       await sidebar.sessionData.refreshSessionCatalogs();
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
       expect(requestedCursors(request).slice(-2)).toEqual([undefined, "page-3"]);
       expect(sidebar.textContent).toContain("Recovered discovery");
       expect(sidebar.sessionData.sessionCatalogs[0]!.hosts[0]!.error).toBeUndefined();
@@ -458,13 +459,13 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
       expect(observed.has(scrollBody!)).toBe(false);
       const timersAfterDetach = vi.getTimerCount();
       const observationsAfterDetach = observe.mock.calls.length;
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
       expect.soft(vi.getTimerCount()).toBe(timersAfterDetach);
       expect.soft(observe).toHaveBeenCalledTimes(observationsAfterDetach);
       expect.soft(observed.has(scrollBody!)).toBe(false);
 
       document.body.append(provider);
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
       await vi.advanceTimersByTimeAsync(200);
       await settle(sidebar);
       expect(observed.has(sidebar.querySelector(".sidebar-shell__body")!)).toBe(true);

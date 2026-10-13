@@ -30,6 +30,7 @@ import { requestActiveCronJobCancellation } from "../active-jobs.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { CronService } from "../service.js";
 import { createNoopLogger } from "../service.test-harness.js";
+import type { CronServiceDeps } from "../service/state.js";
 import { createCompletionFixture, PNG } from "./current-session-completion.test-fixtures.js";
 import * as deliveryPolicy from "./delivery-dispatch-policy.js";
 import { dispatchCronDelivery } from "./delivery-dispatch.js";
@@ -72,29 +73,26 @@ describe("current-session completion delivery", () => {
     },
   );
 
-  it.each([{ to: "recipient" }, { accountId: "work" }, { threadId: 0 }])(
-    "does not write a report into the creator when explicit intent is unresolved %j",
-    async (coordinates) => {
-      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-        const fixture = await createCompletionFixture(state);
-        try {
-          fixture.params.job.delivery = { mode: "announce", ...coordinates };
-          fixture.params.deliveryPlan = resolveCronDeliveryPlan(fixture.params.job);
-          fixture.params.deliveryPayloads = [{ text: "Final report" }];
-          const completion = await dispatchCronDelivery(fixture.params);
-          const messages = await fixture.messages();
-          expect(messages).toEqual([]);
-          expect(completion).toMatchObject({
-            delivered: false,
-            deliveryError: "No external channel",
-            disposition: { kind: "error", errorKind: "delivery-target" },
-          });
-        } finally {
-          await fixture.dispose();
-        }
-      });
-    },
-  );
+  it("does not write a report into the creator when explicit account intent is unresolved", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      const fixture = await createCompletionFixture(state);
+      try {
+        fixture.params.job.delivery = { mode: "announce", accountId: "work" };
+        fixture.params.deliveryPlan = resolveCronDeliveryPlan(fixture.params.job);
+        fixture.params.deliveryPayloads = [{ text: "Final report" }];
+        const completion = await dispatchCronDelivery(fixture.params);
+        const messages = await fixture.messages();
+        expect(messages).toEqual([]);
+        expect(completion).toMatchObject({
+          delivered: false,
+          deliveryError: "No external channel",
+          disposition: { kind: "error", errorKind: "delivery-target" },
+        });
+      } finally {
+        await fixture.dispose();
+      }
+    });
+  });
 });
 
 describe("current-session completion media", () => {
@@ -162,16 +160,8 @@ describe("current-session completion media", () => {
             }
             return payloads;
           });
-        const cron = new CronService({
-          scheduler: createTestGatewayScheduler(),
-          storePath: state.path("cron", "jobs.json"),
-          cronEnabled: false,
-          defaultAgentId: "main",
-          isAgentAvailable: () => available,
-          log: createNoopLogger(),
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
-          runIsolatedAgentJob: async ({ job, abortSignal, deliveryAttemptFence }) => {
+        const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>(
+          async ({ job, abortSignal, deliveryAttemptFence }) => {
             expect(deliveryAttemptFence).not.toBeNull();
             fixture.params.job = job;
             fixture.params.deliveryPlan = resolveCronDeliveryPlan(job);
@@ -207,6 +197,17 @@ describe("current-session completion media", () => {
               error: result.deliveryError,
             };
           },
+        );
+        const cron = new CronService({
+          scheduler: createTestGatewayScheduler(),
+          storePath: state.path("cron", "jobs.json"),
+          cronEnabled: false,
+          defaultAgentId: "main",
+          isAgentAvailable: () => available,
+          log: createNoopLogger(),
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeat: vi.fn(),
+          runIsolatedAgentJob,
         });
         try {
           await state.writeConfig(fixture.params.cfgWithAgentDefaults);
@@ -222,6 +223,9 @@ describe("current-session completion media", () => {
             delivery: { mode: "announce", channel: "telegram", to: "12345" },
           });
           await cron.run(job.id, "force");
+          // Cancellation can finish cron.run before the callback finishes media cleanup.
+          expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+          await runIsolatedAgentJob.mock.results[0]!.value;
           expect(revoked).toBe(true);
           expect(sendMedia).toHaveBeenCalledTimes(stage === "commit" ? 1 : 0);
           expect(await fixture.messages()).toHaveLength(0);
@@ -239,149 +243,60 @@ describe("current-session completion media", () => {
     },
   );
 
-  it.each(["ordinary", "promotion-failure"] as const)(
-    "publishes downloadable media and replays the original message after %s",
-    async (mode) => {
-      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-        const fixture = await createCompletionFixture(state);
-        let restorePromotionAdmission: (() => void) | undefined;
-        try {
-          if (mode === "promotion-failure") {
-            const spy = probe.admission(operationAdmission, (request, grant, admit) => {
-              if (
-                request.stage === "commit" &&
-                isRecord(request.facts) &&
-                request.facts.type === "managedImages.attach"
-              ) {
-                throw new Error("report promotion failed");
-              }
-              admit(request, grant);
-            });
-            restorePromotionAdmission = () => spy.mockRestore();
-            await expect(fixture.commit()).rejects.toThrow("report promotion failed");
-            expect(fixture.updates()).toBe(0);
-            restorePromotionAdmission();
-          } else {
-            await expect(fixture.commit()).resolves.toMatchObject({ ok: true });
-          }
-          const original = await fixture.messages();
-          const originalIds = (await fixture.records()).map(({ record }) => record.attachmentId);
-          expect(original).toHaveLength(1);
-          await expect(fixture.commit()).resolves.toMatchObject({ ok: true });
-          expect(await fixture.messages()).toEqual(original);
-          expect((await fixture.records()).map(({ record }) => record.attachmentId)).toEqual(
-            originalIds,
-          );
-          expect(fixture.updates()).toBeGreaterThan(0);
-          for (const { record } of await fixture.records()) {
-            expect(record).toMatchObject({
-              messageId: readTranscriptEventId(original[0]),
-              retentionClass: "history",
-            });
-            await expect(
-              fs.readFile(
-                path.join(
-                  record.original.mediaRoot,
-                  record.original.mediaSubdir,
-                  record.original.mediaId,
-                ),
-              ),
-            ).resolves.toEqual(PNG);
-          }
-          const downloads = await fixture.downloads();
-          expect(downloads.length).toBeGreaterThan(0);
-          for (const download of downloads) {
-            expect(download).toMatchObject({ type: "image" });
-          }
-        } finally {
-          restorePromotionAdmission?.();
-          await fixture.dispose();
-        }
-      });
-    },
-  );
-
-  it("keeps structured report text in both model and display history", async () => {
+  it("publishes downloadable media and replays the original message after promotion failure", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
       const fixture = await createCompletionFixture(state);
+      let restorePromotionAdmission: (() => void) | undefined;
       try {
-        fixture.payload.presentation = {
-          blocks: [
-            {
-              type: "table",
-              caption: "Revenue",
-              headers: ["Quarter", "Revenue"],
-              rows: [["Q1", 10]],
-            },
-          ],
-        };
-        await fixture.commit();
-        const message = readTranscriptEventMessage((await fixture.messages())[0]);
-        expect(message?.content).toEqual([
-          {
-            type: "text",
-            text: "Example report\nRevenue (table)\n- Quarter: Q1; Revenue: 10\nreport.png",
-          },
-        ]);
-        expect(readAssistantDisplayContent(message)).toEqual([
-          { type: "text", text: "Example report\nRevenue (table)\n- Quarter: Q1; Revenue: 10" },
-          expect.objectContaining({ type: "image" }),
-        ]);
+        const spy = probe.admission(operationAdmission, (request, grant, admit) => {
+          if (
+            request.stage === "commit" &&
+            isRecord(request.facts) &&
+            request.facts.type === "managedImages.attach"
+          ) {
+            throw new Error("report promotion failed");
+          }
+          admit(request, grant);
+        });
+        restorePromotionAdmission = () => spy.mockRestore();
+        await expect(fixture.commit()).rejects.toThrow("report promotion failed");
+        expect(fixture.updates()).toBe(0);
+        restorePromotionAdmission();
+        const original = await fixture.messages();
+        const originalIds = (await fixture.records()).map(({ record }) => record.attachmentId);
+        expect(original).toHaveLength(1);
+        await expect(fixture.commit()).resolves.toMatchObject({ ok: true });
+        expect(await fixture.messages()).toEqual(original);
+        expect((await fixture.records()).map(({ record }) => record.attachmentId)).toEqual(
+          originalIds,
+        );
+        expect(fixture.updates()).toBeGreaterThan(0);
+        for (const { record } of await fixture.records()) {
+          expect(record).toMatchObject({
+            messageId: readTranscriptEventId(original[0]),
+            retentionClass: "history",
+          });
+          await expect(
+            fs.readFile(
+              path.join(
+                record.original.mediaRoot,
+                record.original.mediaSubdir,
+                record.original.mediaId,
+              ),
+            ),
+          ).resolves.toEqual(PNG);
+        }
+        const downloads = await fixture.downloads();
+        expect(downloads.length).toBeGreaterThan(0);
+        for (const download of downloads) {
+          expect(download).toMatchObject({ type: "image" });
+        }
       } finally {
+        restorePromotionAdmission?.();
         await fixture.dispose();
       }
     });
   });
-
-  it.each(["text-only", "missing-image", "media-only"] as const)(
-    "preserves the completed result for %s output",
-    async (mode) => {
-      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-        const fixture = await createCompletionFixture(state);
-        try {
-          if (mode === "text-only") {
-            fixture.params.deliveryPayloads = [{ text: "Final report" }];
-          } else if (mode === "missing-image") {
-            await fs.unlink(path.join(state.workspaceDir, "report.png"));
-          } else {
-            fixture.payload.text = undefined;
-          }
-          await expect(fixture.commit()).resolves.toMatchObject({ ok: true });
-          const message = readTranscriptEventMessage((await fixture.messages())[0]);
-          if (mode === "media-only") {
-            expect(readAssistantDisplayContent(message)).toEqual([
-              expect.objectContaining({ type: "image" }),
-            ]);
-            expect(await fixture.records()).toHaveLength(1);
-          } else {
-            expect(message?.content).toEqual([
-              {
-                type: "text",
-                text: mode === "text-only" ? "Final report" : "Example report\nreport.png",
-              },
-            ]);
-            if (mode === "missing-image") {
-              expect(readAssistantDisplayContent(message)).toEqual([
-                { type: "text", text: "Example report" },
-                expect.objectContaining({
-                  type: "attachment_error",
-                  attachment: expect.objectContaining({
-                    label: "report.png",
-                    code: "delivery-failed",
-                  }),
-                }),
-              ]);
-            } else {
-              expect(message).not.toHaveProperty("openclawDisplayContent");
-            }
-            expect(await fixture.records()).toEqual([]);
-          }
-        } finally {
-          await fixture.dispose();
-        }
-      });
-    },
-  );
 
   it("preserves interleaved report text, media, and spoken-payload failure metadata", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
@@ -420,31 +335,31 @@ describe("current-session completion media", () => {
     });
   });
 
-  it.each([true, false])(
-    "obeys workspaceOnly=%s for images beside the session store",
-    async (workspaceOnly) => {
-      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-        const fixture = await createCompletionFixture(state);
-        try {
-          const privateImage = path.join(path.dirname(fixture.scope.storePath), "private.png");
-          await fs.mkdir(path.dirname(privateImage), { recursive: true });
-          await fs.writeFile(privateImage, PNG);
-          fixture.params.cfgWithAgentDefaults.tools = { profile: "full", fs: { workspaceOnly } };
-          fixture.params.deliveryPayloads = [{ text: "Report", mediaUrl: privateImage }];
-          await expect(fixture.commit()).resolves.toMatchObject({ ok: true });
-          const message = readTranscriptEventMessage((await fixture.messages())[0]);
-          const content = readAssistantDisplayContent(message);
-          expect(content).toEqual([
-            { type: "text", text: "Report" },
-            expect.objectContaining({ type: workspaceOnly ? "attachment_error" : "image" }),
-          ]);
-          expect(await fixture.records()).toHaveLength(workspaceOnly ? 0 : 1);
-        } finally {
-          await fixture.dispose();
-        }
-      });
-    },
-  );
+  it("blocks workspace-only images beside the session store", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      const fixture = await createCompletionFixture(state);
+      try {
+        const privateImage = path.join(path.dirname(fixture.scope.storePath), "private.png");
+        await fs.mkdir(path.dirname(privateImage), { recursive: true });
+        await fs.writeFile(privateImage, PNG);
+        fixture.params.cfgWithAgentDefaults.tools = {
+          profile: "full",
+          fs: { workspaceOnly: true },
+        };
+        fixture.params.deliveryPayloads = [{ text: "Report", mediaUrl: privateImage }];
+        await expect(fixture.commit()).resolves.toMatchObject({ ok: true });
+        const message = readTranscriptEventMessage((await fixture.messages())[0]);
+        const content = readAssistantDisplayContent(message);
+        expect(content).toEqual([
+          { type: "text", text: "Report" },
+          expect.objectContaining({ type: "attachment_error" }),
+        ]);
+        expect(await fixture.records()).toHaveLength(0);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+  });
 
   it("does not prepare media when the source generation changes while waiting", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {

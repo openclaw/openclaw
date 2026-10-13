@@ -283,21 +283,62 @@ it("keeps stored addresses and foreign lineage stable after main-alias changes",
       };
       for (const options of [{}, { agentId: "work" }]) {
         const expected = loadCombinedSessionStoreForGatewayCore(cfg, options);
-        const result = await loadCombinedSessionStoreForGatewayCoreAsync(cfg, options);
-        expect(result.store).toEqual(expected.store);
-        for (const [index, parent] of parents.entries()) {
-          const key = `agent:work:child-${index}`;
-          expect(result.store[key]).toMatchObject({
-            parentSessionKey: parent,
-            spawnedBy: parent,
-          });
-          expect(result.targetsBySessionKey.get(key)?.readSourceEntry(parent)).toMatchObject({
-            sessionId: `parent-${index}`,
-          });
-          if (!options.agentId) {
-            expect(result.store[parent]?.sessionId).toBe(`parent-${index}`);
+        const observed = observeHostDataSql();
+        try {
+          const result = await loadCombinedSessionStoreForGatewayCoreAsync(cfg, options);
+          expect(result.store).toEqual(expected.store);
+          for (const [index, parent] of parents.entries()) {
+            const key = `agent:work:child-${index}`;
+            expect(result.store[key]).toMatchObject({
+              parentSessionKey: parent,
+              spawnedBy: parent,
+            });
+            expect(result.targetsBySessionKey.get(key)?.readSourceEntry(parent)).toMatchObject({
+              sessionId: `parent-${index}`,
+            });
+            if (!options.agentId) {
+              expect(result.store[parent]?.sessionId).toBe(`parent-${index}`);
+            }
           }
+          expect(observed.queries).toEqual([]);
+        } finally {
+          observed.restore();
         }
+      }
+    }
+  });
+});
+
+it("refreshes foreign parent aliases after committed writes without host SQL", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: {}, work: {} } },
+      session: { scope: "global" },
+    };
+    const parent = "agent:main:main";
+    const key = "agent:work:child";
+    replaceSessionEntrySync(
+      { agentId: "work", sessionKey: key },
+      { sessionId: "child", updatedAt: 1, parentSessionKey: parent, spawnedBy: parent },
+    );
+    for (const model of ["before", "after"]) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: "global" },
+        { sessionId: "parent", updatedAt: 2, modelOverride: model },
+      );
+      const observed = observeHostDataSql();
+      try {
+        const result = await loadCombinedSessionStoreForGatewayCoreAsync(cfg, { agentId: "work" });
+        expect(result.store[key]).toMatchObject({
+          parentSessionKey: "global",
+          spawnedBy: "global",
+        });
+        expect(result.targetsBySessionKey.get(key)?.readSourceEntry(parent)?.modelOverride).toBe(
+          model,
+        );
+        expect(observed.queries).toEqual([]);
+      } finally {
+        observed.restore();
       }
     }
   });

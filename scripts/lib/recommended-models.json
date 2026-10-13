@@ -11,9 +11,9 @@
   "deepseek-v4-flash",
   "muse-spark-1.3",
   "hy4-preview",
+  "mimo-v2.6-pro",
   "gemini-3.8-flash",
   "qwen3.8-max",
-  "mistral-large-4",
   "glm-5.3",
   "gpt-6-luna",
   "claude-haiku-5.5",
@@ -22,8 +22,9 @@
   "step-5-preview",
   "glm-5.3-flash",
   "qwen3.8-27b",
+  "mistral-large-4",
   "minimax-m3",
-  "mimo-v2.6-pro",
   "nemotron-3-ultra-550b-a55b",
-  "nemotron-3-super-120b-a12b"
+  "nemotron-3-super-120b-a12b",
+  "muse-wonder-1"
 ]

@@ -124,9 +124,6 @@ const enNewSessionSetup = {
     worktreeBranchNote: "Creates branch {branch} in a separate checkout.",
     worktreeBranchFromTitleNote: "Creates a branch from the session title in a separate checkout.",
     worktreeNameInvalid: "Use lowercase letters, digits, and dashes.",
-    incognito: "Incognito",
-    incognitoDescription:
-      "Keep this session for 24 hours or until the Gateway restarts, whichever comes first",
     draft: "Draft",
     draftDescription: "Keep this session to yourself until you publish it",
     messagePlaceholder: "What should this session work on?",
@@ -213,6 +210,7 @@ const enNewSessionSetup = {
     noSessionHosts:
       "No devices have session hosting enabled. Connect a machine with session hosting enabled, or enable it on a paired device.",
     deviceUnavailable: "Device unavailable. Reconnect it and try again.",
+    environmentUnavailable: "Unavailable",
     sessionHostingDisabled:
       "Session hosting is disabled. On the paired device, run openclaw config set nodeHost.workerRuns.enabled true, then openclaw node install --force.",
     deviceCapacityUnavailable:

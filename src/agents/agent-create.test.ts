@@ -1,6 +1,47 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
-import { FsSafeError } from "../infra/fs-safe.js";
+import { FsSafeError, type ReadResult } from "../infra/fs-safe.js";
+
+function identityReadResult(content: string): ReadResult {
+  const buffer = Buffer.from(content);
+  return {
+    buffer,
+    containment: "best-effort",
+    realPath: "/tmp/work/IDENTITY.md",
+    exactIdentity: { dev: 1n, ino: 1n },
+    stat: {
+      dev: 1,
+      ino: 1,
+      mode: 0o100600,
+      nlink: 1,
+      uid: 0,
+      gid: 0,
+      rdev: 0,
+      size: buffer.byteLength,
+      blksize: 4096,
+      blocks: 0,
+      atimeMs: 0,
+      mtimeMs: 0,
+      ctimeMs: 0,
+      birthtimeMs: 0,
+      atime: new Date(0),
+      mtime: new Date(0),
+      ctime: new Date(0),
+      birthtime: new Date(0),
+      atimeInstant: undefined,
+      mtimeInstant: undefined,
+      ctimeInstant: undefined,
+      birthtimeInstant: undefined,
+      isFile: () => true,
+      isDirectory: () => false,
+      isBlockDevice: () => false,
+      isCharacterDevice: () => false,
+      isSymbolicLink: () => false,
+      isFIFO: () => false,
+      isSocket: () => false,
+    },
+  };
+}
 
 const mocks = vi.hoisted(() => ({
   config: {} as Record<string, unknown>,
@@ -11,7 +52,7 @@ const mocks = vi.hoisted(() => ({
   ensureAgentWorkspace: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
   resolveAgentDir: vi.fn(),
-  rootRead: vi.fn(),
+  rootRead: vi.fn<() => Promise<ReadResult>>(),
   rootWrite: vi.fn(),
   mkdir: vi.fn(),
   recordAgentProvenance: vi.fn(),
@@ -117,7 +158,7 @@ describe("createAgent", () => {
       dir,
       bootstrapPending: true,
     }));
-    mocks.rootRead.mockResolvedValue({ buffer: Buffer.from("") });
+    mocks.rootRead.mockResolvedValue(identityReadResult(""));
     mocks.rootWrite.mockResolvedValue(undefined);
     mocks.mkdir.mockResolvedValue(undefined);
     mocks.parseBindingSpecs.mockReturnValue({ bindings: [], errors: [] });
@@ -459,7 +500,7 @@ describe("createAgent", () => {
       beforePersistentApply.mockImplementation(() => {
         throw closed;
       });
-      return { buffer: Buffer.from("# Identity\n") };
+      return identityReadResult("# Identity\n");
     });
     const prepareConfigCommit = vi.fn();
 

@@ -5,8 +5,19 @@ import {
   installManagedGitHubProfile,
   resolveManagedGitHubProfileDir,
 } from "../../agents/github-tool-identity.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
+import { prepareGitHubPublicationFact } from "./worker-github-binding.js";
+
+async function prepareWorkerGitHubBinding(
+  params: Parameters<typeof prepareGitHubPublicationFact>[0],
+) {
+  setRuntimeConfigSnapshot(config);
+  return (await prepareGitHubPublicationFact(params))?.github;
+}
 
 const mocks = vi.hoisted(() => ({
   snapshot: vi.fn(),
@@ -111,7 +122,10 @@ describe("worker GitHub launch binding", () => {
       stderr: Buffer.alloc(0),
     });
   });
-  afterEach(() => vi.unstubAllEnvs());
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+    vi.unstubAllEnvs();
+  });
 
   it("binds the verified shared account and canonical HTTPS remote", async () => {
     await installProfile();
@@ -212,7 +226,7 @@ describe("worker GitHub launch binding", () => {
     },
   );
 
-  it("uses a refreshed profile on the next turn", async () => {
+  it("publishes a refreshed profile on the next background preparation", async () => {
     const profileDir = await installProfile();
     const first = await prepareWorkerGitHubBinding(session);
     await fs.rm(profileDir, { recursive: true });

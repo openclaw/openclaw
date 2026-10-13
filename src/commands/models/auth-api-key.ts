@@ -148,6 +148,7 @@ export async function saveModelProviderApiKey(params: {
     credential: { type: "api_key", provider, key },
     agentDir,
     preserveApiKeyMetadata: true,
+    resetFailureState: true,
     validateCurrentCredential: validateReplacement,
     assertCurrent: params.assertCurrent,
   });

@@ -5,8 +5,7 @@ import {
   updateConfigFormValue,
 } from "../lib/config/config-draft-model.ts";
 import { createInitialConfigState } from "../lib/config/config-state-model.ts";
-import { renderAnalyzedFormFixture } from "../test-helpers/config-form-fixtures.ts";
-import { ConfigFormCollectionDraft } from "./config-form-collection-draft.ts";
+import { renderAnalyzedFormFixture } from "../test-helpers/config-form-fixtures.tsx";
 import type { JsonSchema } from "./config-form.shared.ts";
 import { analyzeConfigSchema } from "./config-form.ts";
 
@@ -245,9 +244,7 @@ describe("config form map integrity", () => {
         expect(onPatch).not.toHaveBeenCalled();
 
         const draft = expectElement(
-          container.querySelector<ConfigFormCollectionDraft>(
-            "openclaw-config-form-collection-draft",
-          ),
+          container.querySelector("openclaw-config-form-collection-draft"),
           "map draft",
         );
         expectElement(

@@ -13,10 +13,14 @@ import {
   type UsageCacheStatus,
   type UsageDailyBucket,
 } from "../../infra/session-cost-usage.js";
+import { getActiveRemoteModelCatalog } from "../../model-catalog/remote-overlay.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { readSessionRowChangeRevision } from "../../sessions/session-row-changes.js";
+import { readSessionTranscriptUpdateVersion } from "../../sessions/transcript-events.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
 import { readUserProfileVersion } from "../../state/user-profile-events.js";
 import { listGatewayAgentsBasic } from "../agent-list.js";
+import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { loadUsageResultCached, type UsageCacheEntry } from "./usage-cache.js";
 import { mergeUsageCacheStatus, runUsageAgentTasks } from "./usage-session-loading.js";
 import type { UsageGroupingMode } from "./usage-session-selection.js";
@@ -33,7 +37,7 @@ function usageDayBucketCacheKey(dayBucket: UsageDailyBucket | undefined): string
 }
 
 type SessionsUsageCacheKeyParams = {
-  configRef: object;
+  configRef: OpenClawConfig;
   visibilityIdentity?: string;
   creatorKey?: string;
   agentId?: string;
@@ -46,6 +50,7 @@ type SessionsUsageCacheKeyParams = {
   groupingMode: UsageGroupingMode;
   specificKey: string | null;
   includeContextWeight: boolean;
+  overviewKey?: string;
 };
 
 // Revisions replace the value for a stable query instead of retaining every rollup.
@@ -61,6 +66,7 @@ function sessionsUsageCacheKey(params: SessionsUsageCacheKeyParams): string {
     params.specificKey,
     params.includeContextWeight,
     params.creatorKey,
+    params.overviewKey,
     ...(params.visibilityIdentity ? [params.visibilityIdentity] : []),
   ]);
 }
@@ -74,7 +80,8 @@ export async function loadSessionsUsageResultCached(
     cache: sessionsUsageCache,
     cacheKey: sessionsUsageCacheKey(params),
     configRef: params.configRef,
-    revision: `${readUserProfileVersion()}:${getSessionCostUsageUpdatedAt()}`,
+    revision: `${readUserProfileVersion()}:${getSessionCostUsageUpdatedAt()}:${readSessionRowChangeRevision()}:${readSessionTranscriptUpdateVersion()}:${readGatewayAccessRevision()}:${getActiveRemoteModelCatalog(params.configRef, false)?.revision ?? ""}`,
+    revisionOnly: params.overviewKey !== undefined,
     load: params.load,
     // Incomplete lower-cache snapshots must not acquire the outer freshness TTL.
     isComplete: (result) => !result.cacheStatus || result.cacheStatus.status === "fresh",

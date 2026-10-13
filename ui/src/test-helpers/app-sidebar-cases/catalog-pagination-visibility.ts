@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createGateway, createSessions, mountSidebar } from "../app-sidebar.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar catalog session visibility", () => {
@@ -37,7 +38,7 @@ describe("AppSidebar catalog session visibility", () => {
       },
     ];
     sidebar.sessionData.requestSessionDataUpdate();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     return sidebar;
   };
 
@@ -53,13 +54,13 @@ describe("AppSidebar catalog session visibility", () => {
     expect(pagingButton()?.getAttribute("aria-label")).toBe("Show more");
 
     pagingButton()?.click();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
 
     expect(rows()).toBe(7);
     expect(pagingButton()?.getAttribute("aria-label")).toBe("Show less");
 
     pagingButton()?.click();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
 
     expect(rows()).toBe(5);
     expect(pagingButton()?.getAttribute("aria-label")).toBe("Show more");

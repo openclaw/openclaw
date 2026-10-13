@@ -16,6 +16,7 @@ import {
   MAX_USER_PROFILE_AVATAR_BYTES,
   USER_PROFILE_AVATAR_MIME_TYPES,
 } from "../shared/avatar-limits.js";
+import { tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { CHANNEL_IDENTITY_PROVIDER } from "./user-channel-identities.js";
 import type { UserGitHubConnectionCommit } from "./user-github-connections.types.js";
 import { ensureUserPreferencesSchema } from "./user-preferences.store.js";
@@ -49,7 +50,6 @@ import { mergeUserProfiles } from "./user-profiles-merge.js";
 import {
   ensureUserProfileRoleSchema,
   ensureUserProfilesSchema,
-  hasEnsuredUserProfileRoleSchema,
   UserProfileMergeError,
   UserProfileNotFoundError,
   UserProfileOwnerError,
@@ -95,7 +95,7 @@ function selectUserProfileListItemById(db: DatabaseSync, profileId: string): Use
         "display_name",
         "avatar_mime",
         "merged_into",
-        ...(hasEnsuredUserProfileRoleSchema(db) ? (["role"] as const) : []),
+        ...(tableHasColumn(db, "user_profiles", "role") ? (["role"] as const) : []),
         "created_at",
         "updated_at",
         userProfileAvatarPresence,

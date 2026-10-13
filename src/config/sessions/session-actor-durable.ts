@@ -55,7 +55,6 @@ export function captureDurableSessionActor(params: {
           async (_execution, source) => {
             await execution.prepare(source);
             return operation({
-              captureGeneration: () => execution.captureGenerationClaim(),
               async execute(command) {
                 const result = await execution.runExisting(source, (worker) =>
                   worker.execute(command),

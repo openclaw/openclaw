@@ -346,10 +346,6 @@
   background: transparent;
 }
 
-.chat-image-frame--managed:not(.chat-image-frame--image) {
-  min-width: min(100%, calc(var(--chat-image-min-width) + var(--chat-image-gutter)));
-}
-
 .chat-image-skeleton.skeleton {
   --skeleton-base: transparent;
   --skeleton-highlight: color-mix(in srgb, var(--bg-hover) 45%, transparent);

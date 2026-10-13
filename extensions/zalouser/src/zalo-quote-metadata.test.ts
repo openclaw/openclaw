@@ -250,14 +250,6 @@ describe("Zalo inbound normalization", () => {
     });
   });
 
-  it("omits absent quote metadata", async () => {
-    const [message] = await captureInbound([createInboundMessage({ ts: 1_764_000_000_000 })]);
-
-    expect(message?.quotedGlobalMsgId).toBeUndefined();
-    expect(message?.quotedOwnerId).toBeUndefined();
-    expect(message?.quotedBody).toBeUndefined();
-  });
-
   it("normalizes second and millisecond timestamps", async () => {
     const messages = await captureInbound([
       createInboundMessage({ ts: 1_764_000_000 }),

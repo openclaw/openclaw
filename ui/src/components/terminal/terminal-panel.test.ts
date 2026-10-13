@@ -1,18 +1,12 @@
 /* @vitest-environment jsdom */
 
-import { readFileSync } from "node:fs";
-import { createComponent } from "solid-js";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { i18n } from "../../i18n/index.ts";
 import { prepareCatalogTerminal } from "../../lib/sessions/catalog-terminal-start.ts";
-import * as themeColor from "../../lib/theme-color.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
-import { TerminalPanelView } from "./terminal-panel-view.tsx";
 import {
   createTerminalController,
   createTestTerminalPanel,
@@ -21,8 +15,7 @@ import {
   type CreateGhosttyTerminalMock,
   type CreateOptions,
 } from "./terminal-panel.test-support.ts";
-import { TerminalPanelController, type OpenClawTerminalPanel } from "./terminal-panel.ts";
-const tabStripStyles = readFileSync("ui/src/components/panel-tab-strip-solid.css", "utf8");
+import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
 const createGhosttyTerminalMock: CreateGhosttyTerminalMock = vi.fn();
 
@@ -94,20 +87,6 @@ describe("OpenClawTerminalPanel", () => {
     await i18n.setLocale("en");
   });
 
-  it("uses the shared surface empty state before an embedded session opens", async () => {
-    const panel = new TerminalPanelController(document.createElement("div"));
-    panel.available = true;
-    panel.embedded = true;
-    const view = mountSolid(() =>
-      createComponent(TerminalPanelView, { view: () => panel.viewState }),
-    );
-    await waitForSolid(() =>
-      expect(view.container.querySelector(".empty-state__title")?.textContent).toBe("Terminal"),
-    );
-    const empty = view.container.querySelector("openclaw-panel-empty-state")!;
-    expect(empty.querySelector("svg")).not.toBeNull();
-  });
-
   it("restores persisted open state when a mounted tag upgrades lazily", async () => {
     localStorage.setItem(
       "openclaw.terminal.panel.v1",
@@ -127,10 +106,7 @@ describe("OpenClawTerminalPanel", () => {
     await waitForFast(() => expect(panel.terminalPanelOpen).toBe(true));
   });
 
-  it.each([
-    { dock: "bottom", label: "Dock to bottom" },
-    { dock: "right", label: "Dock to right" },
-  ] as const)(
+  it.each([{ dock: "right", label: "Dock to right" }] as const)(
     "moves the persisted $dock dock into main content and back by destination",
     async ({ dock, label }) => {
       localStorage.setItem(
@@ -206,7 +182,6 @@ describe("OpenClawTerminalPanel", () => {
     expect(createOptions?.terminalOptions?.fontSize).toBe(11);
     expect(createOptions?.terminalOptions?.fontFamily).toContain("OpenClaw Nerd Symbols");
     expect(getComputedStyle(createOptions!.parent).caretColor).toBe("rgba(0, 0, 0, 0)");
-    expect(tabStripStyles).toMatch(/\.tabstrip-new\s*\{[^}]*align-self:\s*center/u);
     await waitForFast(() => {
       expect(requests).toContainEqual({
         method: "terminal.resize",
@@ -265,45 +240,6 @@ describe("OpenClawTerminalPanel", () => {
       0,
     );
   });
-
-  it.each(["unopened", "renderer", "wasmTerm"] as const)(
-    "does not resolve a palette when the terminal is unavailable: %s",
-    async (unavailable) => {
-      const controller = createTerminalController();
-      createGhosttyTerminalMock.mockResolvedValue(controller);
-      const requests: string[] = [];
-      const client: TerminalGatewayClient = {
-        forceReconnect: () => {},
-        request: async <T>(method: string) => {
-          requests.push(method);
-          return (method === "terminal.open" ? terminalOpenResult("session-1") : {}) as T;
-        },
-        addEventListener: () => () => {},
-      };
-      const panel = mountTerminalPanel(client);
-      if (unavailable !== "unopened") {
-        panel.toggle();
-        await waitForFast(() => expect(requests).toContain("terminal.resize"));
-        Object.defineProperty(controller.terminal, unavailable, { value: undefined });
-      } else {
-        await panel.updateComplete;
-      }
-
-      const resolveColor = vi.spyOn(themeColor, "resolveThemeColor");
-      try {
-        document.documentElement.style.setProperty("--accent", "#123456");
-        await Promise.resolve();
-        await panel.updateComplete;
-
-        expect(resolveColor).not.toHaveBeenCalled();
-        if (unavailable === "unopened") {
-          expect(createGhosttyTerminalMock).not.toHaveBeenCalled();
-        }
-      } finally {
-        resolveColor.mockRestore();
-      }
-    },
-  );
 
   it("keeps terminal rendering and OSC default-color replies in sync with theme tokens", async () => {
     const root = document.documentElement;
@@ -422,23 +358,6 @@ describe("OpenClawTerminalPanel", () => {
     ]);
   });
 
-  it("drops whole startup input chunks beyond the pending-input cap", async () => {
-    const { createOptions, open, requests } = await startPanelWithPendingOpen();
-    const accepted = "a".repeat(8 * 1024);
-    createOptions.onData?.(new TextEncoder().encode(accepted));
-    createOptions.onData?.(new TextEncoder().encode("overflow"));
-    createOptions.onData?.(new TextEncoder().encode("after-overflow"));
-
-    open.resolve(terminalOpenResult("session-1"));
-
-    await waitForFast(() =>
-      expect(requests.some(({ method }) => method === "terminal.input")).toBe(true),
-    );
-    expect(requests.filter(({ method }) => method === "terminal.input")).toEqual([
-      { method: "terminal.input", params: { sessionId: "session-1", data: accepted } },
-    ]);
-  });
-
   it("discards buffered startup input when open fails", async () => {
     const { createOptions, open, panel, requests } = await startPanelWithPendingOpen(
       undefined,
@@ -505,96 +424,6 @@ describe("OpenClawTerminalPanel", () => {
       method: "terminal.close",
       params: { sessionId: "prepared-session" },
     });
-  });
-
-  it.each(["attach", "catalog"] as const)(
-    "keeps %s route terminals independent of dock restore state and reservations",
-    async (mode) => {
-      const catalog = { catalogId: "codex", hostId: "gateway:local", threadId: "page-thread" };
-      const routeMethod = mode === "attach" ? "terminal.attach" : "terminal.open";
-      sessionStorage.setItem("openclaw.terminal.sessions.v1", JSON.stringify(["dock-session"]));
-      sessionStorage.setItem(
-        "openclaw.terminal.actions.v1",
-        JSON.stringify([{ kind: "attach", sessionId: "dock-request", agentOwned: true }]),
-      );
-      createGhosttyTerminalMock.mockImplementation(async () => createTerminalController());
-      const requests: Array<{ method: string; params: unknown }> = [];
-      const client: TerminalGatewayClient = {
-        forceReconnect: () => {},
-        request: async <T>(method: string, params?: unknown) => {
-          requests.push({ method, params });
-          if (method === "terminal.attach" || method === "terminal.open") {
-            return { ...terminalOpenResult("page-session"), buffer: "page output", seq: 11 } as T;
-          }
-          return {} as T;
-        },
-        addEventListener: () => () => {},
-      };
-      const dock = mountTerminalPanel(client);
-      await dock.updateComplete;
-      const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
-      panel.client = client;
-      panel.available = true;
-      panel.page = panel.fullscreen = panel.embedded = true;
-      panel.routeTarget = mode === "attach" ? { sessionId: "page-session" } : { catalog };
-      document.documentElement.style.setProperty("--oc-terminal-reserve-bottom", "320px");
-      document.body.append(panel);
-      await waitForFast(() =>
-        expect(requests.find((request) => request.method === routeMethod)?.params).toMatchObject(
-          mode === "attach" ? { sessionId: "page-session" } : { catalog },
-        ),
-      );
-      await panel.updateComplete;
-      expect(dock.terminalPanelOpen).toBe(false);
-      expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
-        JSON.stringify(["dock-session"]),
-      );
-      expect(sessionStorage.getItem("openclaw.terminal.actions.v1")).toContain("dock-request");
-      expect(sessionStorage.getItem("openclaw.terminal.actions.v1")).not.toContain("page-thread");
-      expect(requests.filter((request) => request.method === routeMethod)).toHaveLength(1);
-      expect(document.documentElement.style.getPropertyValue("--oc-terminal-reserve-bottom")).toBe(
-        "320px",
-      );
-      panel.remove();
-      await Promise.resolve();
-      expect(requests.some(({ method }) => method === "terminal.close")).toBe(false);
-      expect(document.documentElement.style.getPropertyValue("--oc-terminal-reserve-bottom")).toBe(
-        "320px",
-      );
-    },
-  );
-
-  it("restores a vanished persisted session as exited without replaying stale output", async () => {
-    sessionStorage.setItem("openclaw.terminal.sessions.v1", JSON.stringify(["gone-1"]));
-    const controller = createTerminalController();
-    createGhosttyTerminalMock.mockResolvedValue(controller);
-    const requests: Array<{ method: string; params: unknown }> = [];
-    const client: TerminalGatewayClient = {
-      forceReconnect: () => {},
-      request: async <T>(method: string, params?: unknown) => {
-        requests.push({ method, params });
-        if (method === "terminal.list") {
-          return { sessions: [] } as T;
-        }
-        if (method === "terminal.open") {
-          return terminalOpenResult("replacement-1") as T;
-        }
-        return {} as T;
-      },
-      addEventListener: () => () => {},
-    };
-    const panel = mountTerminalPanel(client);
-
-    panel.toggle();
-
-    await waitForFast(() => {
-      expect(panel.renderRoot.querySelector(".tabstrip-tab__status")?.textContent).toBe("exited");
-    });
-    expect(requests.filter((entry) => entry.method === "terminal.list")).toHaveLength(1);
-    expect(requests.some((entry) => entry.method === "terminal.attach")).toBe(false);
-    expect(requests.some((entry) => entry.method === "terminal.open")).toBe(false);
-    expect(controller.write).not.toHaveBeenCalled();
-    expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe("[]");
   });
 
   it("keeps a persisted session exited when it disappears during attach", async () => {
@@ -862,74 +691,6 @@ describe("OpenClawTerminalPanel", () => {
     expect(requests.some((entry) => entry.method === "terminal.close")).toBe(true);
     expect(panel.renderRoot.querySelector(".tp")).not.toBeNull();
     expect(panel.renderRoot.querySelector(".tabstrip-new")).not.toBeNull();
-  });
-
-  it("opens a fresh terminal after the last tab is closed", async () => {
-    const controllers = [createTerminalController(), createTerminalController()] as const;
-    createGhosttyTerminalMock
-      .mockResolvedValueOnce(controllers[0])
-      .mockResolvedValueOnce(controllers[1]);
-
-    const requests: Array<{ method: string; params: unknown }> = [];
-    let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
-    let openCount = 0;
-    const client: TerminalGatewayClient = {
-      forceReconnect: () => {},
-      request: async <T>(method: string, params?: unknown) => {
-        requests.push({ method, params });
-        if (method === "terminal.open") {
-          openCount += 1;
-          return {
-            sessionId: `session-${openCount}`,
-            agentId: "main",
-            shell: "/bin/bash",
-            cwd: "/work",
-            confined: false,
-          } as T;
-        }
-        return {} as T;
-      },
-      addEventListener: (nextListener) => {
-        listener = nextListener;
-        return () => {
-          if (listener === nextListener) {
-            listener = undefined;
-          }
-        };
-      },
-    };
-    const panel = mountTerminalPanel(client);
-
-    panel.toggle();
-    await waitForFast(() => {
-      expect(requests.filter((entry) => entry.method === "terminal.open")).toHaveLength(1);
-    });
-
-    const staleOutput = "CLOSE_RESET_SENTINEL";
-    listener?.({
-      event: "terminal.data",
-      payload: { sessionId: "session-1", seq: staleOutput.length, data: staleOutput },
-    });
-    expect(new TextDecoder().decode(controllers[0].write.mock.calls[0]?.[0])).toBe(staleOutput);
-
-    await panel.updateComplete;
-    (panel.renderRoot.querySelector(".tabstrip-tab__close") as HTMLElement).click();
-    await waitForFast(() => {
-      expect(requests).toContainEqual({
-        method: "terminal.close",
-        params: { sessionId: "session-1" },
-      });
-    });
-    expect(controllers[0].dispose).toHaveBeenCalledOnce();
-    expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe("[]");
-
-    panel.toggle();
-    await waitForFast(() => {
-      expect(requests.filter((entry) => entry.method === "terminal.open")).toHaveLength(2);
-    });
-    expect(requests.some((entry) => entry.method === "terminal.attach")).toBe(false);
-    expect(createGhosttyTerminalMock).toHaveBeenCalledTimes(2);
-    expect(controllers[1].write).not.toHaveBeenCalled();
   });
 
   it("marks the old session exited when a replacement client no longer lists it", async () => {

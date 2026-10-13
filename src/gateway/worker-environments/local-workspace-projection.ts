@@ -11,8 +11,13 @@ import type {
 } from "../../agents/worktrees/types.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { isNativeSessionEntryRead } from "../../config/sessions/session-entry-read-request.js";
+import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import { projectionOperations } from "./local-workspace-state.js";
 import { withLocalWorkspaceStore, type LocalWorkspaceStore } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
@@ -263,7 +268,7 @@ export async function resolveLocalWorkspaceOwner(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
-}): Promise<LocalWorkspaceOwner | undefined> {
+}): Promise<(LocalWorkspaceOwner & Disposable) | undefined> {
   const context = captureWorktreeRunEndContext(params.env ?? process.env);
   const env = { ...(params.env ?? process.env), ...context.environment };
   const scope = {
@@ -275,52 +280,117 @@ export async function resolveLocalWorkspaceOwner(params: {
     }),
     env,
   };
-  const entry = loadSessionEntry(scope);
-  if (!entry?.worktree?.id) {
-    return undefined;
-  }
-  const accept = captureWorktreeRegistryReadGuard(context, "lifecycle");
-  const worktree = await readRegistryWorktree(context, entry.worktree.id);
-  const assertWorktreeCurrent = accept(worktree);
-  if (
-    !worktree ||
-    worktree.removedAt !== undefined ||
-    worktree.ownerKind !== "session" ||
-    worktree.ownerId !== params.sessionKey ||
-    worktree.repoRoot !== entry.worktree.repoRoot ||
-    worktree.branch !== entry.worktree.branch ||
-    (params.workspaceDir && !isPathInside(worktree.path, params.workspaceDir))
-  ) {
-    throw new Error("Local sandbox managed workspace owner changed");
-  }
-  const assertSessionCurrent = () => {
+  let active = true;
+  let retained: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
+  let unregister = () => {};
+  const release = () => {
+    if (!active) {
+      return;
+    }
+    active = false;
+    retained?.release();
+    unregister();
+  };
+  const assertActive = () => {
     params.assertCurrent?.();
-    const now = loadSessionEntry(scope);
-    if (
-      now?.sessionId !== entry.sessionId ||
-      now?.lifecycleRevision !== entry.lifecycleRevision ||
-      now?.archivedAt !== undefined ||
-      now?.worktree?.id !== worktree.id
-    ) {
+    if (!active) {
       throw new Error("Local sandbox workspace authority changed");
     }
   };
-  const assertCurrent = () => {
-    assertSessionCurrent();
-    assertWorktreeCurrent();
-  };
-  assertCurrent();
-  return {
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    sessionId: entry.sessionId,
-    lifecycleRevision: entry.lifecycleRevision ?? null,
-    worktree,
-    assertCurrent,
-    workerAuthority: {
-      assertCurrent: assertSessionCurrent,
-      predicates: [{ kind: "live-binding", record: worktree }],
-    },
-    env,
-  };
+  const metadata = captureSessionEntryMetadataRead(scope);
+  const native = isNativeSessionEntryRead(scope, params.agentId);
+  try {
+    let databaseIdentity: string | undefined;
+    const entry = await withSessionEntryReadOnlyInWorker(
+      scope,
+      assertActive,
+      async (read) => {
+        if (!read.ok) {
+          throw read.error;
+        }
+        const preparedEntry = read.value;
+        if (databaseIdentity && preparedEntry) {
+          retained = retainPreparedSessionEntryPredicate({
+            databaseIdentity,
+            sessionKey: scope.sessionKey,
+            entry: preparedEntry,
+            matches: (before, after) =>
+              after !== undefined &&
+              before?.sessionId === after.sessionId &&
+              before?.lifecycleRevision === after.lifecycleRevision &&
+              after.archivedAt === undefined &&
+              before?.worktree?.id === after.worktree?.id,
+          });
+        }
+        return preparedEntry;
+      },
+      (database, identity) => {
+        databaseIdentity = identity.key;
+        unregister = registerOpenClawAgentDatabaseAsyncResource({
+          agentId: database.agentId,
+          path: database.path,
+          revoke: release,
+          close: async () => release(),
+        });
+      },
+    );
+    if (!entry?.worktree?.id) {
+      release();
+      return undefined;
+    }
+    const accept = captureWorktreeRegistryReadGuard(context, "lifecycle");
+    const worktree = await readRegistryWorktree(context, entry.worktree.id);
+    const assertWorktreeCurrent = accept(worktree);
+    if (
+      !worktree ||
+      worktree.removedAt !== undefined ||
+      worktree.ownerKind !== "session" ||
+      worktree.ownerId !== params.sessionKey ||
+      worktree.repoRoot !== entry.worktree.repoRoot ||
+      worktree.branch !== entry.worktree.branch ||
+      (params.workspaceDir && !isPathInside(worktree.path, params.workspaceDir))
+    ) {
+      throw new Error("Local sandbox managed workspace owner changed");
+    }
+    const assertSessionCurrent = () => {
+      assertActive();
+      if (!native && !metadata) {
+        if (!retained?.isCurrent()) {
+          throw new Error("Local sandbox workspace authority changed");
+        }
+        return;
+      }
+      const now = metadata ? metadata.readCurrent() : loadSessionEntry(scope);
+      if (
+        now?.sessionId !== entry.sessionId ||
+        now?.lifecycleRevision !== entry.lifecycleRevision ||
+        now?.archivedAt !== undefined ||
+        now?.worktree?.id !== worktree.id
+      ) {
+        throw new Error("Local sandbox workspace authority changed");
+      }
+    };
+    const assertCurrent = () => {
+      assertSessionCurrent();
+      assertWorktreeCurrent();
+    };
+    assertCurrent();
+    return {
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionId: entry.sessionId,
+      lifecycleRevision: entry.lifecycleRevision ?? null,
+      worktree,
+      assertCurrent,
+      workerAuthority: {
+        assertCurrent: assertSessionCurrent,
+        predicates: [{ kind: "live-binding", record: worktree }],
+      },
+      env,
+      [Symbol.dispose]: release,
+    };
+  } catch (error) {
+    release();
+    throw error;
+  }
 }

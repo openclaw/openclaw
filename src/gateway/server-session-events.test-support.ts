@@ -75,6 +75,7 @@ const projection = {
     return { rowContext: { projectedAgentRuns: buildProjectedAgentRunIndex() } };
   },
   ensureMaterialized: async () => {},
+  ancestorRows: () => [],
   prepareMembership: async () => {},
   needsMembershipPreparation: () => false,
   withPreparedExactRows: (async (queries, consume) => {

@@ -9,6 +9,10 @@ import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { readCodexSessionContext } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   appendSessionTranscriptMessageByIdentity,
@@ -16,7 +20,7 @@ import {
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { runOpenClawAgentWriteAdmission } from "openclaw/plugin-sdk/sqlite-runtime";
 import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
 import { readCodexNativeHistory } from "./session-history-read.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
@@ -32,6 +36,9 @@ import {
 } from "./upstream-prompt-provenance.js";
 
 const { tempDirs, writeSession, writeSqliteSession } = setupSessionHistoryFixtures();
+
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(() => clearRuntimeConfigSnapshot());
 
 // Fixtures keep legacy string content on purpose: session ingest normalizes
 // assistant strings into [{ type: "text" }] blocks, so expectations below

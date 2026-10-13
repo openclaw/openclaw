@@ -28,10 +28,8 @@ export type OpenClawSharedToolsOptions = {
   /** Complete model-discoverable catalog, prepared by the current host. */
   installedSkills?: readonly InstalledSkill[];
   /**
-   * How this run shows a blocking question tool's prompt. Harnesses that run tools
-   * through the embedded tool lifecycle reserve the prompt themselves and leave this
-   * unset; harnesses that dispatch tools directly pass it so the question still
-   * reaches the person being asked.
+   * Overrides the originating-channel sender for blocking questions. An actual
+   * harness prompt reservation retains delivery ownership.
    */
   questionPrompt?: QuestionPromptDelivery;
   toolBindings?: Readonly<Record<string, unknown>>;

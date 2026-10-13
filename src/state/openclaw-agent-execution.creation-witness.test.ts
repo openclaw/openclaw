@@ -7,6 +7,10 @@ import {
   getRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import {
+  replaceSessionEntry,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import {
   createSqliteWorkerOperationAdmission,
@@ -625,19 +629,60 @@ it("reserves schema-missing first birth against a sibling captured before its wi
   }
 });
 
-it("refuses an absent witness when another logical owner was captured first", async () => {
+it("creates an absent target through its already captured logical owner", async () => {
   const options = fixture();
   const observed = readDatabasePathIdentitySync(options.path);
   const sibling = captureOpenClawAgentDatabaseExecution(options);
+  let creator: ReturnType<typeof captureOpenClawAgentDatabaseExecution> | undefined;
   try {
-    expect(() =>
-      captureOpenClawAgentDatabaseExecution(options, { expectedCreationIdentity: observed }),
-    ).toThrow(/originally observed target/);
-    expect(fs.existsSync(options.path)).toBe(false);
+    creator = captureOpenClawAgentDatabaseExecution(options, {
+      expectedCreationIdentity: observed,
+    });
+    await creator.prepare(source());
+    await sibling.prepare(source());
+    expect(creator.fileIdentity).toMatchObject({ kind: "file" });
+    expect(sibling.fileIdentity).toEqual(creator.fileIdentity);
   } finally {
-    await sibling.release();
+    await Promise.allSettled([creator?.release(), sibling.release()]);
   }
 });
+
+it.each([
+  { name: "replacement", write: replaceSessionEntry },
+  { name: "upsert", write: upsertSessionEntryCore },
+])(
+  "allows the first session $name while an ordinary owner is retained",
+  async ({ name, write }) => {
+    const options = fixture();
+    const sibling = captureOpenClawAgentDatabaseExecution(options);
+    const sessionKey = "agent:main:first-entry";
+    const entry = { sessionId: "first-session", updatedAt: 1 };
+    try {
+      expect(fs.existsSync(options.path)).toBe(false);
+      const writeStartedAt = Date.now();
+      const written = await write(
+        { agentId: options.agentId, env: options.env, storePath: options.path, sessionKey },
+        entry,
+      );
+      const writeFinishedAt = Date.now();
+      assert(written);
+      expect(written.sessionId).toBe(entry.sessionId);
+      if (name === "replacement") {
+        expect(written).toEqual({ ...entry, delivery: { kind: "none" } });
+      } else {
+        expect(written.updatedAt).toBeGreaterThanOrEqual(writeStartedAt);
+        expect(written.updatedAt).toBeLessThanOrEqual(writeFinishedAt);
+      }
+      const read = await sibling.runExisting(source(), (scope) =>
+        scope.execute({ type: "session.entry.read", input: { sessionKeys: [sessionKey] } }),
+      );
+      assert(read);
+      expect(read.entries).toEqual([{ sessionKey, entry: written }]);
+    } finally {
+      await sibling.release();
+    }
+  },
+);
 
 it("releases an unused creation reservation while a sibling remains", async () => {
   const options = fixture();

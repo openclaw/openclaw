@@ -1,5 +1,6 @@
 import type { Question } from "@openclaw/gateway-protocol";
-import { For } from "solid-js";
+import { createEffect, createSignal, createUniqueId, For } from "solid-js";
+import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 
 type QuestionOptionsProps = {
@@ -115,26 +116,53 @@ export function QuestionOptions(props: QuestionOptionsProps) {
 }
 
 function FreeTextControl(
-  props: QuestionFreeTextProps & { class: string; placeholder: string; label?: string },
+  props: QuestionFreeTextProps & {
+    class: string;
+    placeholder: string;
+    label?: string;
+    id?: string;
+  },
 ) {
+  const [revealed, setRevealed] = createSignal(false);
+  createEffect(
+    () => props.question.questionId,
+    () => {
+      setRevealed(false);
+    },
+  );
   const handleInput = (
     event: InputEvent & { currentTarget: HTMLInputElement | HTMLTextAreaElement },
   ) => props.onInput(event.currentTarget.value);
   return (
     <>
       {props.question.isSecret ? (
-        <input
-          class={props.class}
-          type="password"
-          autocomplete="off"
-          placeholder={props.placeholder}
-          aria-label={props.label}
-          value={props.value}
-          disabled={props.disabled}
-          onInput={handleInput}
-        />
+        <span class="chat-question-panel__secret">
+          <input
+            id={props.id}
+            class={props.class}
+            type={revealed() ? "text" : "password"}
+            autocomplete="off"
+            spellcheck="false"
+            placeholder={props.placeholder}
+            aria-label={props.label}
+            value={props.value}
+            disabled={props.disabled}
+            onInput={handleInput}
+          />
+          <button
+            class="chat-question-panel__secret-toggle"
+            type="button"
+            aria-label={t(revealed() ? "chat.questions.hideSecret" : "chat.questions.showSecret")}
+            aria-pressed={revealed() ? "true" : "false"}
+            disabled={props.disabled}
+            onClick={() => setRevealed((value) => !value)}
+          >
+            <Icon name={revealed() ? "eyeOff" : "eye"} />
+          </button>
+        </span>
       ) : (
         <textarea
+          id={props.id}
           class={`${props.class} chat-question-panel__textarea`}
           rows={1}
           placeholder={props.placeholder}
@@ -150,6 +178,7 @@ function FreeTextControl(
 }
 
 export function QuestionFreeText(props: QuestionFreeTextProps) {
+  const inputId = createUniqueId();
   const answerLabel = () => props.question.header || t("chat.questions.answer");
   return (
     <>
@@ -157,18 +186,21 @@ export function QuestionFreeText(props: QuestionFreeTextProps) {
         (props.question.options.length === 0 || props.question.isOther) && (
           <>
             {props.question.options.length === 0 ? (
-              <label class="field">
-                <span>{answerLabel()}</span>
+              <div class="field">
+                <label for={inputId}>
+                  <span>{answerLabel()}</span>
+                </label>
                 <FreeTextControl
                   {...props}
+                  id={inputId}
                   class="input"
                   placeholder={t("chat.questions.answerPlaceholder", {
                     label: props.question.secretStore?.name ?? answerLabel(),
                   })}
                 />
-              </label>
+              </div>
             ) : (
-              <label
+              <div
                 class={[
                   "chat-question-panel__option chat-question-panel__option--other",
                   { "chat-question-panel__option--selected": props.selected },
@@ -184,7 +216,7 @@ export function QuestionFreeText(props: QuestionFreeTextProps) {
                 {props.question.options.length < 9 && (
                   <Shortcut value={props.question.options.length + 1} />
                 )}
-              </label>
+              </div>
             )}
           </>
         )}

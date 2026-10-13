@@ -66,6 +66,8 @@ describe("ManagedWorktreeService sparse isolation", () => {
   });
 
   it("preserves isolated source and guarded fallback across sparse checkout changes", async () => {
+    // Sparse isolation must not depend on Btrfs checkout timing selection.
+    vi.spyOn(performance, "now").mockReturnValue(0);
     await fs.mkdir(path.join(repo, ".openclaw/worktree-profiles"), { recursive: true });
     await fs.mkdir(path.join(repo, "selected"), { recursive: true });
     await fs.mkdir(path.join(repo, "excluded"), { recursive: true });

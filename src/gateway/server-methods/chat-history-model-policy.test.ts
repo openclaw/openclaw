@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { contextBudgetStatusFixture } from "../../config/sessions/context-budget.test-support.js";
 import {
   appendTranscriptMessage,
@@ -11,9 +12,11 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import {
   prepareOperatorModelPresentation,
   projectOperatorModelRead,
@@ -57,6 +60,7 @@ function fixture() {
       },
     },
   };
+  setRuntimeConfigSnapshot(cfg);
   const client = identifiedClient(person.id);
   client.connect.scopes = ["operator.read"];
   return { cfg, client, person };
@@ -82,11 +86,14 @@ describe("historical model disclosure", () => {
   it("projects concrete tuples while preserving clearing facts, bookkeeping and content", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const f = fixture();
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      prepareGatewayRecipientProfile(f.client);
       expectDefined(f.cfg.gateway?.roles?.definitions.reader, "reader role").modelPolicy = {
         sourceAgent: "main",
         allow: ["example/allowed*"],
         deny: ["example/allowed-denied"],
       };
+      setRuntimeConfigSnapshot(f.cfg);
       const project = expectDefined(
         prepareOperatorModelPresentation({ cfg: f.cfg, policyConfig: f.cfg, client: f.client }),
         "restricted presentation",
@@ -237,6 +244,7 @@ describe("historical model disclosure", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const f = fixture();
       await state.writeConfig(f.cfg);
+      setRuntimeConfigSnapshot(f.cfg);
       let committed = f.cfg;
       const scope = {
         agentId: "main",

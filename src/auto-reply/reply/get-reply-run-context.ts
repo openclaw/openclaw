@@ -9,7 +9,6 @@ import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawn
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { copyChannelParticipantAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
@@ -87,7 +86,6 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     resetTriggered,
     systemSent,
     sessionKey,
-    storePath,
     workspaceDir: configuredWorkspaceDir,
     sessionEntryHandle,
     sessionStore,
@@ -388,16 +386,14 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
           ),
   });
   let { activeGoalContext, inboundUserContext } = buildInboundContextState();
-  const refreshInboundContextAfterAdmissionWait = async () => {
+  const refreshInboundContextAfterAdmissionWait = () => {
     if (isHeartbeat || isInternalEvent) {
       return;
     }
     inboundContextSessionEntry =
-      storePath && sessionKey
-        ? loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" })
-        : (sessionEntryHandle?.getCurrent() ??
-          (sessionKey !== undefined ? sessionStore?.[sessionKey] : undefined) ??
-          sessionEntry);
+      sessionEntryHandle?.getCurrent() ??
+      (sessionKey !== undefined ? sessionStore?.[sessionKey] : undefined) ??
+      sessionEntry;
     ({ activeGoalContext, inboundUserContext } = buildInboundContextState());
   };
   const inboundUserContextPromptJoiner = resolveInboundUserContextPromptJoiner(sessionCtx);

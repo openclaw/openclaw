@@ -33,7 +33,6 @@ import {
   setAuthProfileOrder,
   upsertAuthProfileWithLock,
 } from "./profiles.js";
-import { getRuntimeExternalCliProfileIds } from "./runtime-external-profile-references.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreCredentialsRevision,
@@ -460,7 +459,7 @@ describe("promoteAuthProfileInOrder", () => {
     });
   });
 
-  it("does not persist built-in CLI ownership metadata", async () => {
+  it("does not persist runtime-only external profiles", async () => {
     await withAuthProfileTestState("openclaw-auth-cli-provenance-", async ({ agentDir }) => {
       const profileId = "openai:default";
       const runtimeStore: RuntimeAuthProfileStore = {
@@ -474,14 +473,12 @@ describe("promoteAuthProfileInOrder", () => {
           }),
         },
         runtimeExternalProfileIds: [profileId],
-        runtimeExternalCliProfileIds: [profileId],
       };
       replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: runtimeStore }]);
 
       saveAuthProfileStore(runtimeStore, agentDir);
 
       const persisted = loadPersistedAuthProfileStore(agentDir);
-      expect(persisted).not.toHaveProperty("runtimeExternalCliProfileIds");
       expect(persisted?.profiles[profileId]).toBeUndefined();
     });
   });
@@ -1131,7 +1128,6 @@ describe("promoteAuthProfileInOrder", () => {
         runtimePersistedProfileIds: ["openrouter:oauth", "openrouter:api-key"],
         runtimeLocalProfileIds: ["openrouter:oauth", "openrouter:api-key"],
         runtimeExternalProfileIds: ["openrouter:oauth", "openrouter:api-key"],
-        runtimeExternalCliProfileIds: ["openrouter:oauth", "openrouter:api-key"],
       };
       saveAuthProfileStore(initialStore, agentDir);
 
@@ -1153,9 +1149,6 @@ describe("promoteAuthProfileInOrder", () => {
       expect(removedStore?.runtimePersistedProfileIds ?? []).not.toContain("openrouter:oauth");
       expect(removedStore?.runtimeLocalProfileIds ?? []).not.toContain("openrouter:oauth");
       expect(removedStore?.runtimeExternalProfileIds ?? []).not.toContain("openrouter:oauth");
-      expect(removedStore ? getRuntimeExternalCliProfileIds(removedStore) : []).not.toContain(
-        "openrouter:oauth",
-      );
     });
   });
 

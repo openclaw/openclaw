@@ -10,13 +10,14 @@ const mocks = vi.hoisted(() => ({
   supportsScopedPluginReviewers: { value: false },
 }));
 
+// mock-isolation: Custody tests supply account and approver fixtures without loading channel plugins.
 vi.mock("../channels/plugins/index.js", () => ({
-  getLoadedChannelPlugin: () => ({
-    config: {
-      listAccountIds: mocks.listAccountIds,
-      defaultAccountId: mocks.defaultAccountId,
-    },
-  }),
+  getLoadedChannelPlugin: (() => {
+    const plugin = {
+      config: { listAccountIds: mocks.listAccountIds, defaultAccountId: mocks.defaultAccountId },
+    };
+    return () => plugin;
+  })(),
   resolveChannelApprovalCapability: () =>
     mocks.hasApproverSettings.value
       ? {
@@ -58,7 +59,7 @@ describe("prepareApprovalChannelCustody", () => {
     mocks.supportsScopedPluginReviewers.value = false;
   });
 
-  it("selects source-bound, targeted, and uniquely authorized accounts", () => {
+  it("selects source-bound, targeted, and uniquely authorized accounts", async () => {
     const cases: {
       cfg?: OpenClawConfig;
       source?: { turnSourceChannel: string; turnSourceAccountId: string };
@@ -102,7 +103,7 @@ describe("prepareApprovalChannelCustody", () => {
       }));
       for (const [accountId, authorized] of Object.entries(expected)) {
         expect(
-          prepareApprovalChannelCustody({
+          await prepareApprovalChannelCustody({
             cfg,
             approvalKind: "exec",
             reviewer: reviewer(accountId),
@@ -113,7 +114,7 @@ describe("prepareApprovalChannelCustody", () => {
     }
   });
 
-  it("checks plugin reviewer custody against the pending request", () => {
+  it("checks plugin reviewer custody against the pending request", async () => {
     mocks.authorize.mockImplementation(({ request: pending }) => ({
       authorized: pending?.request.policySubject?.pluginKey === "calendar",
     }));
@@ -135,14 +136,14 @@ describe("prepareApprovalChannelCustody", () => {
       expiresAtMs: 2,
     });
 
-    expect(custody?.authorizes(pending("calendar"))).toBe(true);
-    expect(custody?.authorizes(pending("other"))).toBe(false);
+    expect(await custody?.authorizes(pending("calendar"))).toBe(true);
+    expect(await custody?.authorizes(pending("other"))).toBe(false);
     expect(mocks.authorize).toHaveBeenCalledWith(
       expect.objectContaining({ request: pending("calendar") }),
     );
   });
 
-  it("requires a channel capability to enforce configured plugin reviewers", () => {
+  it("requires a channel capability to enforce configured plugin reviewers", async () => {
     const cfg = {
       approvals: { plugin: { slack: { approvers: ["team:T11111111:user:U11111111"] } } },
     } as OpenClawConfig;
@@ -166,7 +167,7 @@ describe("prepareApprovalChannelCustody", () => {
 
     mocks.supportsScopedPluginReviewers.value = true;
     expect(
-      prepareApprovalChannelCustody({
+      await prepareApprovalChannelCustody({
         cfg,
         approvalKind: "plugin",
         reviewer: slackReviewer,
@@ -174,7 +175,7 @@ describe("prepareApprovalChannelCustody", () => {
     ).toBe(true);
   });
 
-  it("grants owner custody only for system changes on channels without approver settings", () => {
+  it("grants owner custody only for system changes on channels without approver settings", async () => {
     const ircSender = { channel: "irc", accountId: "default", senderId: "alice" };
     const cfg: OpenClawConfig = { commands: { ownerAllowFrom: ["irc:alice"] } };
     const change = request({ command: "set config logging.level to info" });
@@ -191,7 +192,7 @@ describe("prepareApprovalChannelCustody", () => {
         reviewer: { ...ircSender, senderId },
       });
       if (allowed) {
-        expect(custody?.authorizes(change)).toBe(true);
+        expect(await custody?.authorizes(change)).toBe(true);
       } else {
         expect(custody).toBeNull();
       }

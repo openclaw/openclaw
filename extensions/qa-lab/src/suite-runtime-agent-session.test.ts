@@ -4,6 +4,10 @@ import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
   loadTranscriptEventsSync,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -29,6 +33,7 @@ const { cleanup, makeTempDir } = createTempDirHarness({
 afterEach(() => {
   vi.useRealTimers();
   resetPluginStateStoreForTests({ closeDatabase: false });
+  clearRuntimeConfigSnapshot();
 });
 
 afterAll(cleanup);
@@ -43,6 +48,7 @@ describe("qa suite runtime agent session helpers", () => {
   } as never;
 
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     gatewayCall.mockReset();
   });
 

@@ -73,8 +73,8 @@ vi.mock("../../config/sessions.js", () => ({
 }));
 
 // mock-isolation: Skill-refresh cases control persistence acknowledgments without opening SQLite.
-vi.mock("../../config/sessions/session-accessor.js", () => ({
-  patchSessionEntryCore: (...args: unknown[]) => updateSessionEntryMock(...args),
+vi.mock("../../config/sessions/session-accessor.sqlite-entry.js", () => ({
+  applySessionEntryOperation: (...args: unknown[]) => updateSessionEntryMock(...args),
 }));
 
 const { ensureSkillSnapshot } = await import("./session-updates.js");
@@ -130,7 +130,7 @@ describe("ensureSkillSnapshot", () => {
         storePath: "/tmp/sessions.json",
         sessionKey,
       },
-      expect.any(Function),
+      expect.objectContaining({ kind: "fields" }),
       expect.any(Object),
     );
     expect(result.sessionEntry).toBeUndefined();
@@ -151,7 +151,7 @@ describe("ensureSkillSnapshot", () => {
         pinnedAt: 100,
       };
       const sessionStore = { [sessionKey]: sessionEntry };
-      updateSessionEntryMock.mockImplementationOnce(async (_scope, update) => {
+      updateSessionEntryMock.mockImplementationOnce(async (_scope, operation) => {
         const concurrentEntry = {
           sessionId: sessionEntry.sessionId,
           updatedAt: 20,
@@ -159,7 +159,7 @@ describe("ensureSkillSnapshot", () => {
           label: "After rename",
           sendPolicy: "deny",
         };
-        const patch = await update(concurrentEntry);
+        const patch = operation.patch;
         expect(patch).not.toHaveProperty("sessionId");
         if (isFirstTurnInSession) {
           expect(patch).toHaveProperty("systemSent", true);

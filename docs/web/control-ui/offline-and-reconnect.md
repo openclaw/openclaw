@@ -79,6 +79,12 @@ their header. Dashboard layouts restore before the pane renders, and embedded
 HTML widgets keep one loading surface while their board metadata and document
 arrive. Widget requests still require the current Gateway connection.
 
+Loading more sessions keeps the sidebar's warm-reload snapshot usable. The
+routing roster retains its first page; the sidebar separately keeps its visible
+rows, pinned destinations, and selected view for display while connecting. The
+Pages view saves and restores its dashboard catalog without waiting for the
+inactive Sessions roster.
+
 Boot and roster records retain the existing 30-day expiry, and transcripts keep
 their bounded cache limits. Clearing site data removes local recovery data.
 If browser storage is unavailable or no usable record exists, the connection
@@ -346,7 +352,9 @@ instead report missing attachments. Independent tabs do not share newly authored
 After connecting, chat waits for account-scoped recovery before accepting or sending ordinary
 messages. During this brief check, submitted text and attachments stay in the composer. Offline
 queues resume once recovery is ready, unless the session still owns an unresolved initial turn;
-resolve that turn with its **Retry** or **Check delivery** action first.
+resolve that turn with its **Retry** or **Check delivery** action first. While disconnected, a
+notice above the composer says the initial message is unresolved; the composer still accepts
+queued messages.
 If the initial message is waiting for recovery, its chat shows a loading placeholder
 until the message can be restored, rather than the empty new-chat welcome screen.
 Recovery notices appear below the composer and clear when the blocking condition resolves.

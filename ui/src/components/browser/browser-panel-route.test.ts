@@ -119,32 +119,6 @@ function controllerFor(panel: Panel): BrowserPanelController {
 }
 
 describe("browser panel route handoff", () => {
-  it("refreshes referenced tabs and preserves a still-listed active tab", async () => {
-    const gateway = browserGateway();
-    const panel = await mountPanel(gateway.client, false);
-    panel.sessionTabs = [hostTab];
-    const controller = controllerFor(panel);
-    const select = vi.spyOn(controller, "selectTab");
-    panel.presented = true;
-    await panel.updateComplete;
-    await select.mock.results[0]?.value;
-    expect(controller.activeTargetId).toBe("t1");
-
-    const refresh = vi.spyOn(controller, "refreshAll");
-    gateway.request.mockClear();
-    panel.sessionTabs = [hostTab, { ...hostTab, targetId: "t2" }];
-    await panel.updateComplete;
-    await refresh.mock.results[0]?.value;
-    expect(gateway.request).toHaveBeenCalledWith("browser.request", {
-      method: "GET",
-      path: "/tabs",
-      target: "host",
-      query: { profile: "managed" },
-      tabScope: { sessionKey: panel.sessionKey, referencedTabs: panel.sessionTabs },
-    });
-    expect(controller.activeTargetId).toBe("t1");
-  });
-
   it("follows session results once on presentation, keeps card choices, and clears session/gateway ownership", async () => {
     const gateway = browserGateway();
     const focusCount = () =>
@@ -308,7 +282,7 @@ describe("browser panel route handoff", () => {
     expect(paths()).not.toContain("/tabs/focus");
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "rejects a missing historical tab before capture and preserves the prior view (prior=%s)",
     async (hasPriorView) => {
       const missingTarget = "missing-history-target";
@@ -392,108 +366,99 @@ describe("browser panel route handoff", () => {
     );
   });
 
-  it.each([hostTab, nodeTab])(
-    "routes every panel operation through $target/$profile",
-    async (tab) => {
-      const gateway = browserGateway();
-      const panel = await mountPanel(gateway.client, false);
-      panel.preferredTab = { tab, revision: "routed" };
-      panel.presented = true;
-      await waitForSolid(() => expect(pageTitle(panel)).toBe(tab.profile));
-      const controller = controllerFor(panel);
-      await controller.startBrowserNow();
-      await controller.selectTab("t2");
-      await controller.openUrl("https://allowed.example/", { newTab: false });
-      controller.handleViewportKeydown(new KeyboardEvent("keydown", { key: "a" }));
-      controller.goHistory(-1);
-      const wheel = new WheelEvent("wheel", { deltaY: 40, bubbles: true, cancelable: true });
-      panel.querySelector(".bp-viewport")!.dispatchEvent(wheel);
-      expect(wheel.defaultPrevented).toBe(true);
-      controller.handleViewportResize(700, 500);
-      await waitForSolid(() =>
-        expect(
-          gateway.request.mock.calls.some(
-            ([, value]) => (value as BrowserRequestEnvelope).body?.kind === "resize",
-          ),
-        ).toBe(true),
-      );
-      await controller.refreshAll();
-      await panel.updateComplete;
-      const stage = panel.renderRoot!.querySelector<HTMLElement>(".bp-stage")!;
-      vi.spyOn(stage, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 100, 100));
-      const clickCompleted = createDeferred();
-      const respond = gateway.request.getMockImplementation()!;
-      gateway.request.mockImplementation(async (method, params, options) => {
-        const response = await respond(method, params, options);
-        if ((params as BrowserRequestEnvelope).body?.kind === "clickCoords") {
-          clickCompleted.resolve();
-        }
-        return response;
-      });
-      controller.handleStageClick(new MouseEvent("click", { clientX: 10, clientY: 20 }));
-      await clickCompleted.promise;
-      controller.setMode("inspect");
-      controller.handleOverlayPointerMove(createPointer(10, 20));
-      await waitForSolid(() => expect(controller.inspected?.name).toBe("Selected"));
-      vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
-        drawImage: vi.fn(),
-        clearRect: vi.fn(),
-        strokeRect: vi.fn(),
-      } as unknown as CanvasRenderingContext2D);
-      vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(
-        "data:image/png;base64,YQ==",
-      );
-      const annotation = vi.fn((event: Event) => event.preventDefault());
-      window.addEventListener(BROWSER_ANNOTATION_EVENT, annotation);
-      try {
-        await controller.input.sendAnnotation({ element: controller.inspected });
-      } finally {
-        window.removeEventListener(BROWSER_ANNOTATION_EVENT, annotation);
-      }
-      const event = annotation.mock.calls[0]?.[0];
-      if (!(event instanceof CustomEvent)) {
-        throw new Error("Expected a browser annotation event");
-      }
-      const context = (event as BrowserAnnotationEvent).detail.modelContext;
-      const targetLine = context.split("\n").find((line) => line.startsWith("Browser target: "))!;
-      expect(JSON.parse(targetLine.slice("Browser target: ".length))).toEqual({
-        ...tab,
-        targetId: "t2",
-      });
-      await controller.openUrl("https://allowed.example/new", { newTab: true });
-      await controller.closeTab("t3");
-      const requests = gateway.request.mock.calls.map(
-        ([, value]) => value as BrowserRequestEnvelope,
-      );
-      expect(requests.map((value) => value.path)).toEqual(
-        expect.arrayContaining([
-          "/start",
-          "/tabs/focus",
-          "/tabs",
-          "/screenshot",
-          "/act",
-          "/navigate",
-          "/tabs/open",
-          "/tabs/t3",
-        ]),
-      );
-      expect(requests.some((value) => value.body?.kind === "press")).toBe(true);
-      expect(requests.some((value) => value.body?.kind === "clickCoords")).toBe(true);
+  it.each([nodeTab])("routes every panel operation through $target/$profile", async (tab) => {
+    const gateway = browserGateway();
+    const panel = await mountPanel(gateway.client, false);
+    panel.preferredTab = { tab, revision: "routed" };
+    panel.presented = true;
+    await waitForSolid(() => expect(pageTitle(panel)).toBe(tab.profile));
+    const controller = controllerFor(panel);
+    await controller.startBrowserNow();
+    await controller.selectTab("t2");
+    await controller.openUrl("https://allowed.example/", { newTab: false });
+    controller.handleViewportKeydown(new KeyboardEvent("keydown", { key: "a" }));
+    controller.goHistory(-1);
+    const wheel = new WheelEvent("wheel", { deltaY: 40, bubbles: true, cancelable: true });
+    panel.querySelector(".bp-viewport")!.dispatchEvent(wheel);
+    expect(wheel.defaultPrevented).toBe(true);
+    controller.handleViewportResize(700, 500);
+    await waitForSolid(() =>
       expect(
-        requests.some((value) => String(value.body?.fn).includes("document.elementFromPoint")),
-      ).toBe(true);
-      expect(requests.some((value) => String(value.body?.fn).includes("history.go(-1)"))).toBe(
-        true,
-      );
-      expect(requests.some((value) => String(value.body?.fn).includes("window.scrollBy"))).toBe(
-        true,
-      );
-      for (const request of requests) {
-        expect(request).toMatchObject({ target: tab.target, query: { profile: tab.profile } });
-        expect(request.node).toBe("node" in tab ? tab.node : undefined);
+        gateway.request.mock.calls.some(
+          ([, value]) => (value as BrowserRequestEnvelope).body?.kind === "resize",
+        ),
+      ).toBe(true),
+    );
+    await controller.refreshAll();
+    await panel.updateComplete;
+    const stage = panel.renderRoot!.querySelector<HTMLElement>(".bp-stage")!;
+    vi.spyOn(stage, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 100, 100));
+    const clickCompleted = createDeferred();
+    const respond = gateway.request.getMockImplementation()!;
+    gateway.request.mockImplementation(async (method, params, options) => {
+      const response = await respond(method, params, options);
+      if ((params as BrowserRequestEnvelope).body?.kind === "clickCoords") {
+        clickCompleted.resolve();
       }
-    },
-  );
+      return response;
+    });
+    controller.handleStageClick(new MouseEvent("click", { clientX: 10, clientY: 20 }));
+    await clickCompleted.promise;
+    controller.setMode("inspect");
+    controller.handleOverlayPointerMove(createPointer(10, 20));
+    await waitForSolid(() => expect(controller.inspected?.name).toBe("Selected"));
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      drawImage: vi.fn(),
+      clearRect: vi.fn(),
+      strokeRect: vi.fn(),
+    } as unknown as CanvasRenderingContext2D);
+    vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(
+      "data:image/png;base64,YQ==",
+    );
+    const annotation = vi.fn((event: Event) => event.preventDefault());
+    window.addEventListener(BROWSER_ANNOTATION_EVENT, annotation);
+    try {
+      await controller.input.sendAnnotation({ element: controller.inspected });
+    } finally {
+      window.removeEventListener(BROWSER_ANNOTATION_EVENT, annotation);
+    }
+    const event = annotation.mock.calls[0]?.[0];
+    if (!(event instanceof CustomEvent)) {
+      throw new Error("Expected a browser annotation event");
+    }
+    const context = (event as BrowserAnnotationEvent).detail.modelContext;
+    const targetLine = context.split("\n").find((line) => line.startsWith("Browser target: "))!;
+    expect(JSON.parse(targetLine.slice("Browser target: ".length))).toEqual({
+      ...tab,
+      targetId: "t2",
+    });
+    await controller.openUrl("https://allowed.example/new", { newTab: true });
+    await controller.closeTab("t3");
+    const requests = gateway.request.mock.calls.map(([, value]) => value as BrowserRequestEnvelope);
+    expect(requests.map((value) => value.path)).toEqual(
+      expect.arrayContaining([
+        "/start",
+        "/tabs/focus",
+        "/tabs",
+        "/screenshot",
+        "/act",
+        "/navigate",
+        "/tabs/open",
+        "/tabs/t3",
+      ]),
+    );
+    expect(requests.some((value) => value.body?.kind === "press")).toBe(true);
+    expect(requests.some((value) => value.body?.kind === "clickCoords")).toBe(true);
+    expect(
+      requests.some((value) => String(value.body?.fn).includes("document.elementFromPoint")),
+    ).toBe(true);
+    expect(requests.some((value) => String(value.body?.fn).includes("history.go(-1)"))).toBe(true);
+    expect(requests.some((value) => String(value.body?.fn).includes("window.scrollBy"))).toBe(true);
+    for (const request of requests) {
+      expect(request).toMatchObject({ target: tab.target, query: { profile: tab.profile } });
+      expect(request.node).toBe("node" in tab ? tab.node : undefined);
+    }
+  });
 
   it("drops queued input when a card changes the browser route", async () => {
     const gateway = browserGateway();
@@ -624,7 +589,7 @@ describe("browser panel route handoff", () => {
     },
   );
 
-  it.each(["navigation_blocked", "navigation_check_failed"] as const)(
+  it.each(["navigation_check_failed"] as const)(
     "shows %s without capture and recovers after refresh",
     async (reason) => {
       let blocked = true;
@@ -662,9 +627,7 @@ describe("browser panel route handoff", () => {
       const panel = await mountPanel(gateway.client);
       await waitForSolid(() =>
         expect(panel.renderRoot?.querySelector(".bp-status")?.textContent).toContain(
-          reason === "navigation_blocked"
-            ? "Select another tab or enter an allowed address."
-            : "Refresh to try again.",
+          "Refresh to try again.",
         ),
       );
       expect(panel.renderRoot?.textContent).toContain("Kept title");

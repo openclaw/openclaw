@@ -70,6 +70,7 @@ export function fixture(options: {
   onCursor?: () => void;
   cfg?: OpenClawConfig;
   replyText?: string;
+  visibleSessionUrl?: string | null;
   /** Null models an older host without capability advertisement. */
   capabilities?: readonly string[] | null;
 }) {
@@ -112,13 +113,18 @@ export function fixture(options: {
   client.getXApi.mockResolvedValue(api);
   const resolveStable = vi.fn(resolveStableChannelMessageIngress);
   const dispatch = vi.fn(async (plan: Plan) => {
-    plan.replyOptions?.onVisibleWorkSessions?.([
-      {
-        sessionKey: "agent:maintainer:work:example",
-        url: "https://example.test/work/42",
-        label: "Work session",
-      },
-    ]);
+    await plan.replyOptions?.onVisibleWorkSessions?.(
+      options.visibleSessionUrl === null
+        ? []
+        : [
+            {
+              sessionKey: "agent:maintainer:work:example",
+              url: options.visibleSessionUrl ?? "https://example.test/work/42",
+              label: "Work session",
+            },
+          ],
+      { createdSessionKey: "agent:maintainer:work:example" },
+    );
     if (!plan.delivery.deliver) {
       throw new Error("Missing X text delivery adapter");
     }

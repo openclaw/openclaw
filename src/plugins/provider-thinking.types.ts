@@ -56,8 +56,8 @@ type ProviderThinkingLevel = {
    */
   label?: string;
   /**
-   * Relative strength used when downgrading a stored level that the selected
-   * model no longer supports.
+   * Relative strength used to clamp execution when the selected model does not
+   * support the requested level. The stored preference remains unchanged.
    */
   rank?: number;
 };

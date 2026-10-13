@@ -103,6 +103,7 @@ export async function prepareGitHubPublicationSource(params: {
   const pending = new Set<Promise<unknown>>();
   const releases: Array<() => void> = [];
   let releasing: Promise<void> | undefined;
+  let binding: SourceBinding | undefined;
   const revoke = () => closed.abort(new Error("GitHub publication source authority changed."));
   const drain = async () => {
     revoke();
@@ -152,8 +153,13 @@ export async function prepareGitHubPublicationSource(params: {
         revoke();
       }
     }),
-    githubPublicationReceipts.subscribeFacts((change) => {
+    githubPublicationReceipts.subscribeFacts((change, deletionPending) => {
       if (
+        // Once admitted, native source reservations protect the write through destination commit.
+        (change.kind === "pending" &&
+          deletionPending &&
+          change.identity === context.admission.identity.key &&
+          !binding?.admitted) ||
         (change.kind === "unknown" && change.identity === context.admission.identity.key) ||
         (change.kind === "committed" &&
           change.receipt.source.identity === context.admission.identity.key &&
@@ -190,7 +196,7 @@ export async function prepareGitHubPublicationSource(params: {
     params.assertCurrent();
     assertCurrent();
     const capability: GitHubPublicationSourceCapability = Object.freeze({ version: 1, release });
-    bindings.set(capability, {
+    binding = {
       context,
       predicate: { ...sourceRead, expected },
       source: {
@@ -206,7 +212,8 @@ export async function prepareGitHubPublicationSource(params: {
       destination: { identity: sourceRead.destination, signal, assertCurrent, retain },
       signal,
       admitted: false,
-    });
+    };
+    bindings.set(capability, binding);
     return capability;
   } catch (error) {
     await release();

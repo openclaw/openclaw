@@ -51,6 +51,7 @@ vi.mock("../../state/openclaw-agent-db.js", () => ({
 }));
 // mock-isolation: The capture producer reaches the worker boundary without acquiring real leases.
 vi.mock("../../state/openclaw-agent-execution.js", () => ({
+  captureOpenClawAgentDatabaseExecution: () => ({ release: async () => {} }),
   supportsOpenClawAgentDatabaseExecution: () => true,
 }));
 vi.mock("../future-version-guard.js", () => ({

@@ -1,4 +1,5 @@
 import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
+import { Portal } from "@solidjs/web";
 import { Show, createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -12,21 +13,33 @@ type Props = { props?: ChatDetailsProps; presented: boolean };
 export type ChatDetails = SolidBridgeElement<Props>;
 let nextId = 0;
 
-/** User-opened, pane-local presentation. Data and mutations remain with the pane. */
+const DETAILS_WIDTH = 352;
+// Preserve the 48rem reading column plus its gutters before offering automatic docking.
+const DETAILS_DOCK_MIN_WIDTH = 1200;
+
+/** Pane-local adaptive presentation. Data and mutations remain with the pane. */
 export const ChatDetails = defineSolidBridge<Props>(
   "openclaw-chat-details",
   (props, host) => {
-    const [opened, setOpened] = createSignal(false);
+    const [intent, setIntent] = createSignal<"auto" | "open" | "closed">("auto");
+    const [canDock, setCanDock] = createSignal(false);
+    const opened = () =>
+      props.presented && (intent() === "open" || (intent() === "auto" && canDock()));
+    const docked = () => opened() && canDock();
+    const surface = document.createElement("div");
+    surface.style.display = "contents";
+    let frame: HTMLElement | null = null;
     const panelId = `chat-details-${++nextId}`;
     let panel!: HTMLDivElement;
     let trigger!: HTMLButtonElement;
     const position = () => {
-      const frame =
-        host.closest(".chat-main__conversation-frame") ??
-        host.closest("openclaw-chat-pane")?.querySelector(".chat-main__conversation-frame");
       const footer = frame?.querySelector(".chat-footer");
       const bounds = frame?.getBoundingClientRect();
       if (!panel || !bounds) {
+        return;
+      }
+      setCanDock(bounds.width >= DETAILS_DOCK_MIN_WIDTH);
+      if (panel.classList.contains("chat-details--docked")) {
         return;
       }
       const viewport = window.visualViewport;
@@ -48,22 +61,22 @@ export const ChatDetails = defineSolidBridge<Props>(
         ? Math.max(triggerBounds.bottom, minimumTop + triggerBounds.height)
         : minimumTop + 28;
       const top = Math.max(minimumTop, Math.min(triggerBottom + 6, bottom - 120));
-      panel.style.left = `${Math.max(left, right - 352)}px`;
+      panel.style.left = `${Math.max(left, right - DETAILS_WIDTH)}px`;
       panel.style.top = `${top}px`;
-      panel.style.width = `${Math.max(0, Math.min(352, right - left))}px`;
+      panel.style.width = `${Math.max(0, Math.min(DETAILS_WIDTH, right - left))}px`;
       panel.style.maxHeight = `${Math.max(0, bottom - top)}px`;
     };
     const hide = () => {
-      for (const menu of host.querySelectorAll<WaDropdown>("wa-dropdown")) {
+      for (const menu of surface.querySelectorAll<WaDropdown>("wa-dropdown")) {
         menu.open = false;
       }
-      if (panel?.isConnected) {
+      if (panel?.matches(":popover-open")) {
         panel.hidePopover?.();
       }
     };
     const close = (restoreFocus = false) => {
       hide();
-      setOpened(false);
+      setIntent("closed");
       if (restoreFocus && host.isConnected) {
         trigger?.focus({ preventScroll: true });
       }
@@ -76,21 +89,26 @@ export const ChatDetails = defineSolidBridge<Props>(
       if (!props.presented) {
         return;
       }
-      position();
-      panel.showPopover?.();
-      setOpened(true);
+      setIntent("open");
     };
     const outside = (event: PointerEvent) => {
-      if (opened() && !event.composedPath().includes(host)) {
+      if (
+        opened() &&
+        !docked() &&
+        !event.composedPath().includes(host) &&
+        !event.composedPath().includes(panel)
+      ) {
         close();
       }
     };
     const escape = (event: KeyboardEvent) => {
+      // Dropdown properties change before Lit reflects their attributes.
       if (
         event.key === "Escape" &&
         opened() &&
+        (!docked() || panel.contains(document.activeElement)) &&
         !event.defaultPrevented &&
-        !host.querySelector("wa-dropdown[open]")
+        ![...surface.querySelectorAll<WaDropdown>("wa-dropdown")].some((menu) => menu.open)
       ) {
         event.preventDefault();
         close(true);
@@ -103,23 +121,51 @@ export const ChatDetails = defineSolidBridge<Props>(
         props.props?.selectedSession?.sessionId,
       ]),
     );
-    const presentation = createMemo(
-      () => [identity(), props.props?.gatewayScope, props.presented] as const,
-      {
-        equals: (before, after) => before.every((value, index) => value === after[index]),
-      },
-    );
+    const presentation = createMemo(() => [identity(), props.props?.gatewayScope] as const, {
+      equals: (before, after) => before.every((value, index) => value === after[index]),
+    });
     const scope = createMemo(() => ({ value: props.props?.gatewayScope }), {
       equals: (before, after) => before.value === after.value,
     });
     createEffect(
       () => presentation(),
-      () => close(),
+      () => {
+        setIntent("auto");
+      },
+    );
+    createEffect(
+      () => [props.presented, intent()] as const,
+      ([presented, choice]) => {
+        if (!presented && choice === "open") {
+          setIntent("auto");
+        }
+      },
+    );
+    createEffect(
+      () => [opened(), docked()] as const,
+      ([open, dock]) => {
+        hide();
+        panel.hidden = !open;
+        panel.popover = dock ? null : "manual";
+        panel.style.cssText = "";
+        panel.classList.toggle("chat-details--docked", dock);
+        frame?.style.setProperty("--chat-details-space", dock ? DETAILS_WIDTH + "px" : "0px");
+        if (open && !dock) {
+          position();
+          // Keep native Tab entry beside its header trigger after portaling the content.
+          panel.showPopover({ source: trigger });
+        }
+      },
     );
     onSettled(() => {
-      const frame =
-        host.closest(".chat-main__conversation-frame") ??
-        host.closest("openclaw-chat-pane")?.querySelector(".chat-main__conversation-frame");
+      frame =
+        host.closest<HTMLElement>(".chat-main__conversation-frame") ??
+        host
+          .closest("openclaw-chat-pane")
+          ?.querySelector<HTMLElement>(".chat-main__conversation-frame") ??
+        null;
+      // Keep one content tree across overlay/dock transitions, outside the header's clipping.
+      (frame ?? host).append(surface);
       const resize =
         typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(position);
       for (const element of [frame, frame?.querySelector(".chat-footer")]) {
@@ -137,6 +183,8 @@ export const ChatDetails = defineSolidBridge<Props>(
     document.addEventListener("keydown", escape);
     onCleanup(() => {
       hide();
+      frame?.style.removeProperty("--chat-details-space");
+      surface.remove();
       window.removeEventListener("resize", position);
       window.visualViewport?.removeEventListener("resize", position);
       window.visualViewport?.removeEventListener("scroll", position);
@@ -154,46 +202,48 @@ export const ChatDetails = defineSolidBridge<Props>(
           aria-label={t("chat.sessionDetails.title")}
           aria-controls={panelId}
           aria-expanded={opened() ? "true" : "false"}
-          aria-haspopup="dialog"
+          aria-haspopup={docked() ? undefined : "dialog"}
           onClick={toggle}
         >
           <Icon name="listChecks" />
           <span>{t("chat.sessionDetails.title")}</span>
         </button>
-        <div
-          ref={(element) => {
-            panel = element;
-          }}
-          class="chat-details"
-          id={panelId}
-          popover="manual"
-          role="dialog"
-          aria-label={t("chat.sessionDetails.title")}
-        >
-          <div class="chat-details__toolbar">
-            <span>{t("chat.sessionDetails.title")}</span>
-            <button
-              type="button"
-              aria-label={t("chat.sessionDetails.close")}
-              onClick={() => close(true)}
-            >
-              <Icon name="x" />
-            </button>
+        <Portal mount={surface}>
+          <div
+            ref={(element) => {
+              panel = element;
+            }}
+            class="chat-details"
+            id={panelId}
+            popover="manual"
+            role={docked() ? "complementary" : "dialog"}
+            aria-label={t("chat.sessionDetails.title")}
+          >
+            <div class="chat-details__toolbar">
+              <span>{t("chat.sessionDetails.title")}</span>
+              <button
+                type="button"
+                aria-label={t("chat.sessionDetails.close")}
+                onClick={() => close(true)}
+              >
+                <Icon name="x" />
+              </button>
+            </div>
+            <Show when={scope()} keyed>
+              {(_scope) => (
+                <>
+                  <ChatDetailsSession props={props.props} presented={props.presented && opened()} />
+                  <Show when={props.props?.progressCard || props.props?.progressCardInitialLoading}>
+                    <ChatDetailsProgress
+                      props={props.props}
+                      presented={props.presented && opened()}
+                    />
+                  </Show>
+                </>
+              )}
+            </Show>
           </div>
-          <Show when={scope()} keyed>
-            {(_scope) => (
-              <>
-                <ChatDetailsSession props={props.props} presented={props.presented && opened()} />
-                <Show when={props.props?.progressCard || props.props?.progressCardInitialLoading}>
-                  <ChatDetailsProgress
-                    props={props.props}
-                    presented={props.presented && opened()}
-                  />
-                </Show>
-              </>
-            )}
-          </Show>
-        </div>
+        </Portal>
       </>
     );
   },

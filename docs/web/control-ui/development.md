@@ -33,7 +33,7 @@ both builds contain route preload templates. Older builds report that comparison
 as unavailable, so use a cold-load network capture to compare their complete boot
 cost.
 
-Route boot JavaScript is limited to 35 requests per route, with three requests of headroom above the measured maximum, to catch facade regressions caused by top-level await disabling chunk optimization.
+Route boot JavaScript is limited to 35 requests per route to catch facade regressions caused by top-level await disabling chunk optimization. `pnpm ui:check-performance` enforces this limit locally and in CI; `pnpm ui:build` reports it without rejecting the build. Worker scripts and other URL assets remain available in the offline cache without being modulepreloaded into the document.
 
 After a Gateway update, already-open tabs reload the current build when they encounter a missing old asset. Reloading is automatic when no unsaved-work guard blocks it; otherwise, save or discard the protected work and use the **Reload** banner. The Gateway and service worker keep only the current build's assets.
 

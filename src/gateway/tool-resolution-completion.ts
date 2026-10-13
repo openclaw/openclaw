@@ -2,16 +2,14 @@ import {
   hasVerifiedRequesterCompletionHandoff,
   MAX_DELEGATION_LINEAGE_DEPTH,
 } from "../agents/requester-tool-policy.js";
-import type { SessionCapabilityLookup } from "../agents/subagents/spawn/subagent-session-store.js";
+import {
+  createMemorySessionCapabilityStore,
+  type SessionCapabilityLookup,
+} from "../agents/subagents/spawn/subagent-session-store.js";
 import { evaluateGatewayToolCallerReceiptAdmission } from "../agents/tools/gateway-caller-context.js";
 import type { GatewayToolCallerReceiptAdmission } from "../agents/tools/gateway-caller-receipt.types.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { readCommittedIncognitoSessionSharing } from "../config/sessions/session-accessor.sqlite-incognito-sharing.js";
-import {
-  captureSessionActorStorageOwner,
-  getSessionActorStorageBinding,
-} from "../config/sessions/session-actor-storage-binding.js";
-import { projectSessionEntryCapabilityFacts } from "../config/sessions/session-entry-capability-facts.js";
 import type {
   SessionEntryCurrentFacts,
   SessionEntryCurrentSource,
@@ -43,47 +41,6 @@ type CompletionGrantLineageParams = {
   >;
 };
 
-function createMemoryCompletionCapabilityStore(): SessionCapabilityLookup | undefined {
-  const memory = getSessionActorStorageBinding({});
-  if (!memory) {
-    return undefined;
-  }
-  const storage = memory.actor.storage!;
-  const owners = new Map<string, ReturnType<typeof captureSessionActorStorageOwner>>();
-  return {
-    authoritative: true,
-    get(sessionKey) {
-      const agentId = parseAgentSessionKey(sessionKey)?.agentId;
-      if (agentId === memory.agentId) {
-        const entry = storage.readCurrent(
-          { type: "session.entry.read", input: { sessionKey, projection: "list" } },
-          memory.authority,
-        );
-        return entry && projectSessionEntryCapabilityFacts(entry);
-      }
-      if (!agentId || !isIncognitoSessionKey(sessionKey)) {
-        throw new Error("Completion lineage requires its selected session actor owner");
-      }
-      if (!owners.has(agentId)) {
-        owners.set(agentId, captureSessionActorStorageOwner({ agentId, sessionActor: memory }));
-      }
-      const selected = owners.get(agentId);
-      const entry = selected?.owner?.readSession(sessionKey, selected.authority)?.entry;
-      return entry && projectSessionEntryCapabilityFacts(entry);
-    },
-    getById(sessionId) {
-      const row = storage.readCurrent(
-        {
-          type: "session.entry.readById",
-          input: { sessionId, projection: "list", currentOnly: true },
-        },
-        memory.authority,
-      );
-      return row && projectSessionEntryCapabilityFacts(row.entry);
-    },
-  };
-}
-
 /**
  * Whether a completion grant's requester lineage still verifies. Grants without a
  * handoff carry no lineage and are always current. The child entry can be removed or
@@ -103,7 +60,7 @@ function isCompletionGrantLineageCurrent(params: CompletionGrantLineageParams): 
       inputProvenance: context.inputProvenance,
       trustedInternalHandoff: context.trustedInternalHandoff,
       preparedSessionCapabilityStore:
-        params.preparedSessionCapabilityStore ?? createMemoryCompletionCapabilityStore(),
+        params.preparedSessionCapabilityStore ?? createMemorySessionCapabilityStore(),
     })
   );
 }
@@ -121,7 +78,7 @@ export function createCompletionGrantLineageAdmission(params: CompletionGrantLin
   if (!params.context.trustedInternalHandoff) {
     return { isCurrent: () => true, admission: undefined };
   }
-  const memoryStore = createMemoryCompletionCapabilityStore();
+  const memoryStore = createMemorySessionCapabilityStore();
   if (memoryStore) {
     const isCurrent = () => {
       try {
@@ -311,10 +268,15 @@ export function createCompletionGrantLineageAdmission(params: CompletionGrantLin
   };
   return {
     admission,
-    isCurrent: () =>
-      evaluateGatewayToolCallerReceiptAdmission(admission, () =>
-        isCompletionGrantLineageCurrent(params),
-      ),
+    isCurrent: () => {
+      try {
+        return evaluateGatewayToolCallerReceiptAdmission(admission, () =>
+          isCompletionGrantLineageCurrent(params),
+        );
+      } catch {
+        return false;
+      }
+    },
   };
 }
 

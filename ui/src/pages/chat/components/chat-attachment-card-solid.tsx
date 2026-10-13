@@ -1,15 +1,25 @@
+import { createMemo } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
-import { formatBytes } from "../../../lib/agents/display.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
   openAttachmentCardFromClick,
+  prepareAttachmentCardHeader,
   type AttachmentCardHeaderOptions,
 } from "./chat-attachment-card.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
-import { resolveAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
+
+export function AttachmentPreviewSkeleton() {
+  return (
+    <div class="sidebar-attachment-preview__loading" role="status" aria-label={t("common.loading")}>
+      <div class="skeleton skeleton-line" aria-hidden="true" />
+      <div class="skeleton skeleton-line skeleton-line--long" aria-hidden="true" />
+      <div class="skeleton skeleton-line skeleton-line--medium" aria-hidden="true" />
+    </div>
+  );
+}
 
 export function CompactAttachmentCard(props: AttachmentCardHeaderOptions) {
   return (
@@ -24,24 +34,8 @@ export function CompactAttachmentCard(props: AttachmentCardHeaderOptions) {
 }
 
 export function AttachmentCardHeader(props: AttachmentCardHeaderOptions) {
-  const compactPreview = () => props.visualMode === "preview-with-favicon";
-  const formattedSize = () =>
-    props.sizeBytes === undefined ? undefined : formatBytes(props.sizeBytes);
-  const typeLabel = () => {
-    if (props.kind === "audio") {
-      return t("chat.attachments.audio");
-    }
-    if (props.kind === "video") {
-      return t("chat.attachments.video");
-    }
-    if (props.kind === "image") {
-      return t("chat.attachments.attachedFile");
-    }
-    return resolveAttachmentFileIcon(props.label, props.mimeType).extensionLabel;
-  };
-  const downloadTitle = () => t("chat.mediaPlayer.download", { filename: props.label });
-  const expandLabel = () =>
-    props.expandLabel ?? t("chat.attachments.expand", { filename: props.label });
+  const view = createMemo(() => prepareAttachmentCardHeader(props, t));
+  const compactPreview = () => view().compactPreview;
   const downloadClass = () => [
     "chat-assistant-attachment-card__action chat-assistant-attachment-card__download chat-assistant-attachment-card__download--ghost",
     {
@@ -76,20 +70,18 @@ export function AttachmentCardHeader(props: AttachmentCardHeaderOptions) {
             {props.label}
           </span>
           {compactPreview() ? (
-            formattedSize() ? (
+            view().formattedSize ? (
               <>
                 <span class="chat-assistant-attachment-card__separator" aria-hidden="true">
                   ·
                 </span>
                 <span class={["chat-assistant-attachment-card__meta", { skeleton: props.loading }]}>
-                  {formattedSize()}
+                  {view().formattedSize}
                 </span>
               </>
             ) : null
           ) : (
-            <span class="chat-assistant-attachment-card__meta">
-              {[typeLabel(), formattedSize()].filter(Boolean).join(" · ")}
-            </span>
+            <span class="chat-assistant-attachment-card__meta">{view().metadata}</span>
           )}
         </span>
       </div>
@@ -102,8 +94,8 @@ export function AttachmentCardHeader(props: AttachmentCardHeaderOptions) {
             type="button"
             class={downloadClass()}
             disabled={props.downloadPending}
-            aria-label={downloadTitle()}
-            title={downloadTitle()}
+            aria-label={view().downloadTitle}
+            title={view().downloadTitle}
             onClick={() => props.onDownload?.()}
           >
             <Icon name="download" />
@@ -118,8 +110,8 @@ export function AttachmentCardHeader(props: AttachmentCardHeaderOptions) {
             download={props.label}
             target="_blank"
             rel="noreferrer"
-            aria-label={downloadTitle()}
-            title={downloadTitle()}
+            aria-label={view().downloadTitle}
+            title={view().downloadTitle}
           >
             <Icon name="download" />
           </a>
@@ -134,8 +126,8 @@ export function AttachmentCardHeader(props: AttachmentCardHeaderOptions) {
                 "chat-assistant-attachment-card__action--labeled": !compactPreview(),
               },
             ]}
-            aria-label={expandLabel()}
-            title={expandLabel()}
+            aria-label={view().expandLabel}
+            title={view().expandLabel}
             onClick={() => props.onExpand?.()}
           >
             {compactPreview() ? (

@@ -1,4 +1,3 @@
-import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
@@ -11,11 +10,7 @@ import { getSessionActorStorageBinding } from "./session-actor-storage-binding.j
 import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import type { PendingInputSourceRead } from "./session-pending-input-operations.types.js";
 import type { PendingInputScope } from "./session-pending-input-store.js";
-import {
-  assertSessionStoreReadCandidate,
-  captureSessionStoreCandidateIdentities,
-} from "./session-store-read-candidates.js";
-import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
+import { captureSessionStoreReadTarget } from "./session-store-read-target.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
@@ -116,37 +111,21 @@ export async function readPendingInputSource(
       assertCurrent,
     };
   }
-  const storePath =
-    logical.path ??
-    captured.storePath ??
-    resolveOpenClawAgentSqlitePath(toDatabaseOptions(logical));
-  const candidates = captureSessionStoreReadCandidates(storePath);
-  const identities = captureSessionStoreCandidateIdentities(candidates);
+  const target = captureSessionStoreReadTarget(
+    captured,
+    "Submitted input changed its captured database owner",
+  );
   const resolved = await prepareSqliteScope(captured);
-  const options = toDatabaseOptions(resolved);
-  const path = resolveOpenClawAgentSqlitePath(options);
-  const identity = identities.get(assertSessionStoreReadCandidate(path, candidates));
-  if (!identity) {
-    throw new Error("Submitted input changed its captured database owner");
-  }
+  const { options, identity, source, assertCurrent } = target.resolve(resolved);
   if (!identity.key.startsWith("file:")) {
     return undefined;
   }
-  const assertCurrent = () => {
-    assertSessionStoreReadCandidate(path, candidates);
-    assertExistingDatabaseIdentity(path, identity.key, identity.birthtime);
-  };
   assertCurrent();
-  const snapshot = await withSessionHistoryWorkerDatabase({ ...options, path }, (owner) =>
+  const snapshot = await withSessionHistoryWorkerDatabase(options, (owner) =>
     owner.readPendingInputSource({
       input: { ...input, sessionKey: resolved.sessionKey },
       env: captured.env,
-      source: {
-        agentId: options.agentId,
-        path,
-        databaseIdentity: identity.key.slice(5),
-        databaseBirthtime: identity.birthtime,
-      },
+      source,
     }),
   );
   assertCurrent();

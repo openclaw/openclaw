@@ -2,6 +2,10 @@
 import path from "node:path";
 import { setImmediate as yieldEventLoop } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerClient } from "./client.js";
@@ -56,11 +60,13 @@ setupRunAttemptTestHooks();
 
 describe("Codex app-server main thread cleanup", () => {
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     resetSharedCodexAppServerClientForTests();
   });
 
   afterEach(() => {
     resetSharedCodexAppServerClientForTests();
+    clearRuntimeConfigSnapshot();
   });
 
   it("keeps alternating conversations subscribed after one fails on their shared Codex client", async () => {

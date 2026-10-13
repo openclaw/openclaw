@@ -22,7 +22,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { stripPendingPluginInstallRecords } from "../plugins/install-record-commit.js";
 import { createPluginCache } from "../plugins/plugin-cache.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveUserPath } from "../utils.js";
 import { WizardCancelledError, WizardNavigationError } from "../wizard/prompts.js";
@@ -326,22 +326,25 @@ async function verifyAndActivateCandidate(
   const source = snapshot.sourceConfig;
   const readSnapshot =
     deps.readConfigFileSnapshot ?? (await import("../config/config.js")).readConfigFileSnapshot;
-  const catalogPreference = resolveSetupNativeSessionCatalogPreference({
-    consentRequired: requiresSetupNativeSessionCatalogConsent({
-      configExists: snapshot.exists,
-      config: source,
-      catalogs: listSetupNativeSessionCatalogs({ config: source, workspaceDir: ctx.workspace }),
-    }),
-    ...(params.nativeSessionCatalogsEnabled !== undefined
-      ? { requested: params.nativeSessionCatalogsEnabled }
-      : {}),
-  });
+  const catalogPreference = params.automaticSetup
+    ? false
+    : resolveSetupNativeSessionCatalogPreference({
+        consentRequired: requiresSetupNativeSessionCatalogConsent({
+          configExists: snapshot.exists,
+          config: source,
+          catalogs: listSetupNativeSessionCatalogs({ config: source, workspaceDir: ctx.workspace }),
+        }),
+        ...(params.nativeSessionCatalogsEnabled !== undefined
+          ? { requested: params.nativeSessionCatalogsEnabled }
+          : {}),
+      });
   const prepared =
     catalogPreference === undefined
       ? staged.config
       : applySetupNativeSessionCatalogPreference({
           config: staged.config,
           enabled: catalogPreference,
+          onlyUnset: params.automaticSetup === true,
           workspaceDir: ctx.workspace,
         });
   const providerPatch = createMergePatch(cfg, stripPendingPluginInstallRecords(prepared));
@@ -369,7 +372,7 @@ async function verifyAndActivateCandidate(
   };
   const candidate = buildCandidate(cfg);
   const sourceCandidate = buildCandidate(source);
-  const resolveMetadata = deps.resolvePluginMetadataSnapshot ?? resolvePluginMetadataSnapshot;
+  const resolveMetadata = deps.resolvePluginMetadataSnapshot ?? resolvePluginMetadataSnapshotAsync;
   await using cache = createPluginCache();
   const generation =
     staged.pendingPluginInstalls && Object.keys(staged.pendingPluginInstalls).length > 0
@@ -391,7 +394,7 @@ async function verifyAndActivateCandidate(
       : undefined;
   const metadata =
     generation?.metadataSnapshot ??
-    resolveMetadata({ config: candidate, workspaceDir: ctx.workspace, env: process.env });
+    (await resolveMetadata({ config: candidate, workspaceDir: ctx.workspace, env: process.env }));
   const routeDeps = {
     ...(staged.modelTarget ? { modelTarget: staged.modelTarget } : {}),
     pluginMetadataPlugins: metadata.plugins,
@@ -582,6 +585,7 @@ async function verifyAndActivateCandidate(
         baselineRoute.route ||
         resolveAgentEffectiveModelPrimary(cfg, routeAgentId),
       ),
+      requireApplied: params.automaticSetup,
       assertCurrent: () => throwIfSetupInferenceCancelled(params),
       activate: activateCredential,
       deferCompletion: params.onActivationCompletion,
@@ -603,7 +607,11 @@ async function verifyAndActivateCandidate(
         configPath: after?.path ?? snapshot.path,
         configHashBefore: hashConfigRaw(snapshot.raw),
         configHashAfter: after ? hashConfigRaw(after.raw) : null,
-        details: { modelRef: staged.modelRef, inferenceKind: params.kind },
+        details: {
+          modelRef: staged.modelRef,
+          inferenceKind: params.kind,
+          ...(params.automaticSetup ? { source: "automatic-setup" } : {}),
+        },
       });
     } catch (error) {
       const warning = `Inference was verified, but OpenClaw could not record its audit entry: ${formatErrorMessage(error)}`;

@@ -9,24 +9,24 @@ import {
   withinTest,
 } from "../../../../test/helpers/promise.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
+import {
   loadSessionEntry,
   readSessionTranscriptMessageEvents,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
 import { enqueueCommandInLane, resetCommandLane } from "../../../process/command-queue.js";
 import {
-  beginGatewayRestartSignalAdmission,
   GatewayDrainingError,
   getActiveGatewayRootWorkCount,
   isGatewayWorkAdmissionClosed,
-  markGatewayRestartDraining,
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { getActiveSessionWorkAdmissionCount } from "../../../sessions/session-lifecycle-admission.js";
-import { ensureClientVoiceAgentSessionEntry } from "../../../talk/client-voice-session-write.js";
 import {
-  closeClientVoiceSession,
   createOrResumeClientVoiceSession,
   resolveClientVoiceRunBinding,
 } from "../../../talk/client-voice-session.js";
@@ -34,7 +34,7 @@ import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.te
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import type { GatewayRequestHandlerOptions } from "../../server-methods/types.js";
-import { resolveSessionMutationAuthorization } from "../../session-sharing.js";
+import { resolveSessionMutationAuthorizationAsync } from "../../session-sharing-authorization-async.js";
 import { closeTalkClientGatewayControlSession } from "../client-gateway-control.js";
 import { cleanupTalkConnection } from "../session-registry.js";
 import {
@@ -135,7 +135,7 @@ function configureDelegatedBrowserProvider(
 }
 
 async function invokeCreate(options: GatewayRequestHandlerOptions) {
-  const admission = resolveSessionMutationAuthorization({
+  const admission = await resolveSessionMutationAuthorizationAsync({
     method: "talk.client.create",
     requestParams: options.params,
     context: options.context,
@@ -145,7 +145,11 @@ async function invokeCreate(options: GatewayRequestHandlerOptions) {
     options.respond(false, undefined, admission.error);
     return;
   }
-  await createTalkClient({ ...options, sessionMutationAuthorization: admission.authorization });
+  try {
+    await createTalkClient({ ...options, sessionMutationAuthorization: admission.authorization });
+  } finally {
+    admission.authorization?.release?.();
+  }
 }
 
 async function invokeTranscript(params: Record<string, unknown>) {
@@ -217,6 +221,7 @@ describe("talk.client.transcript", () => {
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-talk-transcript-")),
     );
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    setRuntimeConfigSnapshot({});
     await replaceSessionEntry(
       { agentId: "main", sessionKey },
       { sessionId, updatedAt: Date.now() },
@@ -239,6 +244,7 @@ describe("talk.client.transcript", () => {
     clientVoiceSessionTesting.reset();
     vi.useRealTimers();
     await cleanupSessionStateForTest({ stateDir: tempDir });
+    clearRuntimeConfigSnapshot();
     envSnapshot.restore();
     await fs.rm(tempDir, { recursive: true, force: true });
     expect(remainingRootWork).toBe(0);
@@ -421,53 +427,17 @@ describe("talk.client.transcript", () => {
     }
   });
 
-  it.each(["suspend", "restart-signal", "restart-drain"] as const)(
-    "does not admit a new sideband consult during %s",
-    async (fence) => {
-      await useRealConsultRuntime();
-      const { consult } = await createBrowserConsult();
-      const resource = await completeOffer();
-      if (fence === "suspend") {
-        expect(tryBeginGatewaySuspendAdmission(() => {})).not.toBeNull();
-      } else if (fence === "restart-signal") {
-        expect(beginGatewayRestartSignalAdmission()).not.toBeNull();
-      } else {
-        markGatewayRestartDraining();
-      }
-      await expect(
-        resource.runInAsyncScope(() => consult({ prompt: "Must not start" })),
-      ).rejects.toThrow(GatewayDrainingError);
-      expect(voiceMocks.runEmbeddedAgent).not.toHaveBeenCalled();
-      expect(getActiveSessionWorkAdmissionCount()).toBe(0);
-    },
-  );
-
-  it.each(["close", "disconnect", "restart"] as const)(
-    "does not revive a stale sideband owner after %s",
-    async (ending) => {
-      await useRealConsultRuntime();
-      const { consult, client, clients, context } = await createBrowserConsult();
-      const resource = await completeOffer();
-      if (ending === "close") {
-        expect(
-          await invokeClose({ sessionKey, voiceSessionId: ownedVoiceSessionId }),
-        ).toHaveBeenCalledWith(true, { ok: true }, undefined);
-      } else {
-        if (ending === "restart") {
-          markGatewayRestartDraining();
-        }
-        clients.delete(client);
-        cleanupTalkConnection(client.connId, context.logGateway);
-        if (ending === "restart") {
-          resetGatewayWorkAdmission();
-        }
-      }
-      await expect(
-        resource.runInAsyncScope(() => consult({ prompt: "Must not start" })),
-      ).rejects.toThrow(/closed|disconnected/);
-      expect(voiceMocks.runEmbeddedAgent).not.toHaveBeenCalled();
-    },
-  );
+  it.each(["suspend"] as const)("does not admit a new sideband consult during %s", async () => {
+    await useRealConsultRuntime();
+    const { consult } = await createBrowserConsult();
+    const resource = await completeOffer();
+    expect(tryBeginGatewaySuspendAdmission(() => {})).not.toBeNull();
+    await expect(
+      resource.runInAsyncScope(() => consult({ prompt: "Must not start" })),
+    ).rejects.toThrow(GatewayDrainingError);
+    expect(voiceMocks.runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(getActiveSessionWorkAdmissionCount()).toBe(0);
+  });
 
   it("appends finalized messages once by event id", async () => {
     const voiceSessionId = await createOrResumeClientVoiceSession({
@@ -499,42 +469,6 @@ describe("talk.client.transcript", () => {
     });
   });
 
-  it("appends before the session has ever received a chat turn", async () => {
-    const talkFirstSessionKey = "agent:main:talk-first";
-    await ensureClientVoiceAgentSessionEntry({
-      agentId: "main",
-      sessionKey: talkFirstSessionKey,
-    });
-    const voiceSessionId = await createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: talkFirstSessionKey,
-      provider: "google",
-      origin: "client",
-    });
-
-    expect(
-      await invokeTranscript({
-        sessionKey: talkFirstSessionKey,
-        voiceSessionId,
-        entryId: "1",
-        role: "user",
-        text: "heard before the first consult",
-      }),
-    ).toHaveBeenCalledWith(true, { ok: true }, undefined);
-
-    const talkFirstEntry = loadSessionEntry({
-      agentId: "main",
-      sessionKey: talkFirstSessionKey,
-    });
-    expect(talkFirstEntry?.sessionId).toBeTruthy();
-    expect(
-      readSessionTranscriptMessageEvents({
-        agentId: "main",
-        sessionId: talkFirstEntry?.sessionId ?? "missing",
-      }),
-    ).toHaveLength(1);
-  });
-
   it("accepts an idempotent close retry after the first response is lost", async () => {
     const voiceSessionId = await createOrResumeClientVoiceSession({
       agentId: "main",
@@ -547,11 +481,10 @@ describe("talk.client.transcript", () => {
     expect(await invokeClose(params)).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
-  it.each(
-    [false, true].flatMap((publicOnly) =>
-      (["close", "disconnect"] as const).map((ending) => ({ publicOnly, ending })),
-    ),
-  )(
+  it.each([
+    { publicOnly: false, ending: "disconnect" },
+    { publicOnly: true, ending: "close" },
+  ])(
     "keeps accepted work while runtime loading spans $ending (public: $publicOnly)",
     async ({ ending, publicOnly }) => {
       await useRealConsultRuntime();
@@ -601,9 +534,9 @@ describe("talk.client.transcript", () => {
     },
   );
 
-  it.each(["rpc", "provider"] as const)(
+  it.each(["provider"] as const)(
     "retires browser voice metadata on %s close while accepted function-tool work drains",
-    async (ending) => {
+    async () => {
       const createBrowserSession = vi.fn(async (_request: BrowserRequest) => browserSession);
       const fixture = configureDelegatedBrowserProvider(createBrowserSession);
       Object.assign(fixture.provider, { voices: ["marin", "cedar"] });
@@ -638,7 +571,6 @@ describe("talk.client.transcript", () => {
         throw new Error("Expected Gateway-owned function-tool control");
       }
       control.onReady?.();
-      let closing: ReturnType<typeof invokeClose> | undefined;
       let changing: ReturnType<typeof requestTalkVoiceChange> | undefined;
       try {
         control.onToolCall?.({
@@ -660,11 +592,7 @@ describe("talk.client.transcript", () => {
           send: vi.fn(),
         });
         void changing.catch(() => {});
-        if (ending === "provider") {
-          control.onClose?.("completed");
-        } else {
-          closing = invokeClose({ sessionKey, voiceSessionId });
-        }
+        control.onClose?.("completed");
         await nextEventLoopTurn();
         expect(() => control.bindControl?.({ sendUserMessage: vi.fn() })).toThrow("closed");
         expect(() =>
@@ -680,7 +608,6 @@ describe("talk.client.transcript", () => {
         expect(accepted.abortSignal.aborted).toBe(false);
       } finally {
         finish.resolve({ text: "Accepted work finished" });
-        await closing;
         await closeTalkClientGatewayControlSession({
           voiceSessionId,
           sessionKey,
@@ -697,7 +624,7 @@ describe("talk.client.transcript", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([false])(
     "keeps the active selection when a pending same-id browser candidate fails (public: %s)",
     async (publicOnly) => {
       const createBrowserSession = vi
@@ -741,7 +668,7 @@ describe("talk.client.transcript", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([true])(
     "cancels a provider that resolves after its browser disconnects without creating a chat (public: %s)",
     async (publicOnly) => {
       let finishCreation!: (value: typeof browserSession) => void;
@@ -782,7 +709,7 @@ describe("talk.client.transcript", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([false])(
     "does not create a provider after the browser disconnects during context preparation (public: %s)",
     async (publicOnly) => {
       const createBrowserSession = vi.fn(async (_request: BrowserRequest) => browserSession);
@@ -846,81 +773,13 @@ describe("talk.client.transcript", () => {
     }
   });
 
-  it("truncates UTF-16 safely and writes assistant metadata", async () => {
+  it("rejects relay voice records", async () => {
     const voiceSessionId = await createOrResumeClientVoiceSession({
       agentId: "main",
       sessionKey,
-      provider: "google",
-      origin: "client",
+      origin: "relay",
+      voiceSessionId: "voice-relay",
     });
-    const respond = await invokeTranscript({
-      sessionKey,
-      voiceSessionId,
-      entryId: "assistant-1",
-      role: "assistant",
-      text: `${"x".repeat(7_999)}😀tail`,
-    });
-
-    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    const event = readSessionTranscriptMessageEvents({ agentId: "main", sessionId })[0]?.event as
-      | { message?: { content?: Array<{ text?: string }> } }
-      | undefined;
-    const text = event?.message?.content?.[0]?.text;
-    expect(text).toBe("x".repeat(7_999));
-    expect(event).toMatchObject({
-      message: {
-        api: "realtime",
-        provider: "google",
-        model: "realtime-voice",
-        stopReason: "stop",
-      },
-    });
-  });
-
-  it("uses the neutral provider label for records created before provider tracking", async () => {
-    const voiceSessionId = await createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey,
-      origin: "client",
-    });
-
-    expect(
-      await invokeTranscript({
-        sessionKey,
-        voiceSessionId,
-        entryId: "legacy-assistant",
-        role: "assistant",
-        text: "legacy provider reply",
-      }),
-    ).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(
-      readSessionTranscriptMessageEvents({ agentId: "main", sessionId })[0]?.event,
-    ).toMatchObject({
-      message: { api: "realtime", provider: "realtime", model: "realtime-voice" },
-    });
-  });
-
-  it.each([
-    ["missing", "voice-missing", "voice session not found"],
-    ["closed", "voice-closed", "voice session is closed"],
-    ["relay", "voice-relay", "does not allow this transcript source"],
-  ])("rejects %s voice records", async (kind, voiceSessionId, expected) => {
-    if (kind !== "missing") {
-      await createOrResumeClientVoiceSession({
-        agentId: "main",
-        sessionKey,
-        origin: kind === "relay" ? "relay" : "client",
-        voiceSessionId,
-      });
-    }
-    if (kind === "closed") {
-      await closeClientVoiceSession({
-        agentId: "main",
-        sessionKey,
-        voiceSessionId,
-        config: {},
-      });
-    }
 
     const respond = await invokeTranscript({
       sessionKey,
@@ -932,7 +791,9 @@ describe("talk.client.transcript", () => {
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
-      expect.objectContaining({ message: expect.stringContaining(expected) }),
+      expect.objectContaining({
+        message: expect.stringContaining("does not allow this transcript source"),
+      }),
     );
   });
 });

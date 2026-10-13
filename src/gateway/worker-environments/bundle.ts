@@ -53,7 +53,9 @@ export type WorkerInstallationArtifact = WorkerBundleArtifact | WorkerNpmArtifac
 
 export type WorkerBundleProducer = {
   prepare: () => Promise<WorkerBundleArtifact>;
-  prune: (readRetainedBundleHashes: () => readonly string[]) => Promise<void>;
+  prune: (
+    readRetainedBundleHashes: () => readonly string[] | Promise<readonly string[]>,
+  ) => Promise<void>;
 };
 
 type WorkerBundleProducerOptions = {
@@ -346,7 +348,7 @@ async function writeTarball(params: {
 async function pruneWorkerBundleCache(params: {
   cacheDir: string;
   currentBundleHash: string;
-  readRetainedBundleHashes: () => readonly string[];
+  readRetainedBundleHashes: () => readonly string[] | Promise<readonly string[]>;
   onError?: (error: unknown) => void;
 }): Promise<void> {
   let entries: Dirent[];
@@ -375,7 +377,7 @@ async function pruneWorkerBundleCache(params: {
   }
   // Read current references only after this queued prune finds possible cleanup work.
   const retained = new Set(
-    [params.currentBundleHash, ...params.readRetainedBundleHashes()].filter((hash) =>
+    [params.currentBundleHash, ...(await params.readRetainedBundleHashes())].filter((hash) =>
       /^[a-f0-9]{64}$/u.test(hash),
     ),
   );

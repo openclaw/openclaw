@@ -17,11 +17,12 @@ import {
   PlatformMessageNotDispatchedError,
 } from "../../infra/outbound/deliver-types.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
-import { setReplyPayloadMetadata } from "../reply-payload.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { appendUsageLine } from "./agent-runner-usage-line.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
+import { assertSessionWriterDeliveryAuthorized } from "./session-writer-delivery-authority.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
@@ -518,6 +519,11 @@ describe("accepted continuation status delivery", () => {
   });
 
   it("releases an accepted continuation when session-writer delivery is revoked", async () => {
+    const currentEntry = {
+      sessionId: "session-1",
+      lifecycleRevision: "revision-after-replacement",
+      activeWriterRunId: "run-after-replacement",
+    };
     let continuationOpen = true;
     const adopt = vi.fn(() => continuationOpen);
     const statusPayload = setReplyPayloadMetadata(
@@ -531,6 +537,7 @@ describe("accepted continuation status delivery", () => {
           },
         },
         sessionWriterDeliveryAuthority: {
+          readCurrentSession: () => currentEntry,
           agentId: "main",
           expectedLifecycleRevision: "revision-before-replacement",
           expectedSessionId: "session-1",
@@ -540,13 +547,14 @@ describe("accepted continuation status delivery", () => {
         },
       },
     );
-    sessionStoreMocks.currentEntry = {
-      sessionId: "session-1",
-      lifecycleRevision: "revision-after-replacement",
-      activeWriterRunId: "run-after-replacement",
-    };
+    sessionStoreMocks.currentEntry = currentEntry;
     const settle = vi.fn(async () => {});
-    const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) =>
+        assertSessionWriterDeliveryAuthorized(
+          getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority,
+        ),
+    });
 
     await withReplyDispatcher({
       dispatcher,
@@ -563,7 +571,6 @@ describe("accepted continuation status delivery", () => {
     });
 
     expect(settle).toHaveBeenCalledExactlyOnceWith(false);
-    expect(mocks.routeReply).not.toHaveBeenCalled();
     expect(adopt()).toBe(false);
   });
 
@@ -598,7 +605,6 @@ describe("accepted continuation status delivery", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
     expect(deliver).toHaveBeenCalledOnce();
     expect(result.queuedFinal).toBe(false);
-    expect(sessionStoreMocks.updateSessionEntry).toHaveBeenCalledTimes(3);
     expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
   });
 });

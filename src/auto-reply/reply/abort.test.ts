@@ -11,6 +11,7 @@ import { rowToSubagentRunRecord } from "../../agents/subagents/registry/subagent
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  loadSessionEntry,
   markSessionAbortTarget,
   replaceSessionEntry,
   resolveSessionAbortTarget,
@@ -384,6 +385,13 @@ describe("abort detection", () => {
     const canonicalKey = "agent:main:telegram:group:-1001234567890:topic:99";
     const sessionId = "resolved-persistence-failure";
     const { root, cfg } = await createAbortConfig();
+    const operation = createReplyOperation({
+      agentId: "main",
+      sessionKey: canonicalKey,
+      sessionId,
+      resetTriggered: false,
+    });
+    operation.attachBackend({ kind: "embedded", cancel: () => {}, isStreaming: () => true });
     vi.mocked(markSessionAbortTarget).mockResolvedValueOnce({
       entry: {
         sessionId,
@@ -394,7 +402,7 @@ describe("abort detection", () => {
       sessionId,
       sessionKey: canonicalKey,
     });
-    vi.mocked(resolveSessionAbortTarget).mockReturnValueOnce({
+    vi.mocked(resolveSessionAbortTarget).mockResolvedValueOnce({
       entry: {
         sessionId,
         updatedAt: 10,
@@ -412,6 +420,7 @@ describe("abort detection", () => {
     });
 
     expect(result.handled).toBe(true);
+    expect(operation.abortSignal.aborted).toBe(true);
     expect(runtimeAbortMocks.abortEmbeddedAgentRun).toHaveBeenCalledWith(sessionId);
     expect(getFollowupQueueDepth(canonicalKey)).toBe(0);
     expectSessionLaneCleared(canonicalKey);
@@ -422,7 +431,7 @@ describe("abort detection", () => {
     const sessionKey = "telegram:missing-persistence-target";
     const { cfg } = await createAbortConfig();
     vi.mocked(markSessionAbortTarget).mockResolvedValueOnce(null);
-    vi.mocked(resolveSessionAbortTarget).mockReturnValueOnce(null);
+    vi.mocked(resolveSessionAbortTarget).mockResolvedValueOnce(null);
 
     const result = await runStopCommand({
       cfg,
@@ -440,12 +449,19 @@ describe("abort detection", () => {
     const childKey = "agent:main:subagent:slow-persistence-child";
     const sessionId = "session-slow-persistence";
     const childSessionId = "session-slow-persistence-child";
-    const { root, cfg } = await createAbortConfig({
+    const { root, storePath, cfg } = await createAbortConfig({
       sessionIdsByKey: {
         [childKey]: childSessionId,
         [sessionKey]: sessionId,
       },
     });
+    const operation = createReplyOperation({
+      agentId: "main",
+      sessionKey,
+      sessionId,
+      resetTriggered: false,
+    });
+    operation.attachBackend({ kind: "embedded", cancel: () => {}, isStreaming: () => true });
     let finishPersistence: (() => void) | undefined;
     const persistenceStarted = new Promise<void>((resolveStarted) => {
       vi.mocked(markSessionAbortTarget).mockImplementationOnce(
@@ -465,7 +481,7 @@ describe("abort detection", () => {
             };
           }),
       );
-      vi.mocked(resolveSessionAbortTarget).mockReturnValueOnce({
+      vi.mocked(resolveSessionAbortTarget).mockResolvedValueOnce({
         entry: {
           sessionId,
           updatedAt: 10,
@@ -475,9 +491,18 @@ describe("abort detection", () => {
       });
     });
     enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
+    await replaceSessionEntry(
+      { storePath, agentId: "main", sessionKey: childKey },
+      {
+        ...loadSessionEntry({ storePath, agentId: "main", sessionKey: childKey })!,
+        lifecycleRevision: "slow-persistence-child-revision",
+      },
+    );
     await addSubagentFixture({
       runId: "slow-child-run",
       childSessionKey: childKey,
+      childAgentId: "main",
+      sessionEntry: loadSessionEntry({ storePath, agentId: "main", sessionKey: childKey }),
       requesterSessionKey: sessionKey,
       requesterDisplayKey: sessionKey,
       task: "slow child",
@@ -493,6 +518,7 @@ describe("abort detection", () => {
     });
     await persistenceStarted;
 
+    expect(operation.abortSignal.aborted).toBe(true);
     expect(runtimeAbortMocks.abortEmbeddedAgentRun).toHaveBeenCalledWith(sessionId);
     expect(runtimeAbortMocks.abortEmbeddedAgentRun).toHaveBeenCalledWith(childSessionId);
     expect(await getSubagentRunByChildSessionKey(childKey)).toMatchObject({
@@ -572,6 +598,8 @@ describe("abort detection", () => {
         await registerSubagentRun({
           runId: "during-acp-wait",
           childSessionKey: "agent:main:subagent:during-acp-wait",
+          childAgentId: "main",
+          sessionEntry: { sessionId: "during-acp-wait-session" },
           requesterSessionKey: sessionKey,
           requesterAgentId: "main",
           requesterDisplayKey: sessionKey,
@@ -752,9 +780,26 @@ describe("abort detection", () => {
     const sessionKey = "telegram:persistence-failure-parent";
     const firstChildKey = "agent:main:subagent:persistence-failure-first";
     const secondChildKey = "agent:main:subagent:persistence-failure-second";
+    const { storePath, cfg } = await createAbortConfig({
+      sessionIdsByKey: {
+        [sessionKey]: "persistence-failure-parent",
+        [firstChildKey]: "run-persistence-failure-first",
+        [secondChildKey]: "run-persistence-failure-second",
+      },
+    });
+    for (const childSessionKey of [firstChildKey, secondChildKey]) {
+      const scope = { storePath, agentId: "main", sessionKey: childSessionKey };
+      const entry = loadSessionEntry(scope)!;
+      await replaceSessionEntry(scope, {
+        ...entry,
+        lifecycleRevision: `${entry.sessionId}-revision`,
+      });
+    }
     const run = (runId: string, childSessionKey: string): SubagentRunFixture => ({
       runId,
       childSessionKey,
+      childAgentId: "main",
+      sessionEntry: loadSessionEntry({ storePath, agentId: "main", sessionKey: childSessionKey }),
       requesterSessionKey: sessionKey,
       requesterDisplayKey: sessionKey,
       task: "stop despite persistence failure",
@@ -784,7 +829,7 @@ describe("abort detection", () => {
 
     await expect(
       stopSubagentsForRequester({
-        cfg: {} as OpenClawConfig,
+        cfg,
         requesterSessionKey: sessionKey,
       }),
     ).resolves.toEqual({ stopped: 1, failed: 1 });

@@ -1,6 +1,7 @@
 import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import {
   onInternalDiagnosticEvent,
   onTrustedInternalDiagnosticEvent,
@@ -71,11 +72,13 @@ describe("runEmbeddedAttempt tool boundaries", () => {
 
   beforeEach(() => {
     resetEmbeddedAttemptHarness();
+    setRuntimeConfigSnapshot({});
   });
 
   afterEach(async () => {
     await cleanupTempPaths(tempPaths);
     vi.restoreAllMocks();
+    clearRuntimeConfigSnapshot();
   });
 
   it.each([

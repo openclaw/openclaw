@@ -37,7 +37,11 @@ import { readWithCanonicalSessionAdmission } from "./session-canonical-key.js";
 import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import { getSessionInputActor } from "./session-input-actor.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
-import type { SessionSourceAssertion } from "./session-source-authority.js";
+import {
+  prepareSessionSourceAuthority,
+  releaseSessionSourceAuthorities,
+  type SessionSourceAssertion,
+} from "./session-source-authority.js";
 import { completeSessionTranscriptCommit } from "./session-transcript-commit-completion.js";
 import {
   assertLegacyTranscriptPreparation,
@@ -57,14 +61,45 @@ import type {
   SqliteSessionTurnOptions,
 } from "./session-turn.types.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
+import { captureOwnedTranscriptWriteAssertion } from "./transcript-write-context.js";
 
 /** Appends a guarded transcript turn and touches its session row in one queued write. */
 export async function appendExpectedSessionTranscriptTurn(
   scope: SessionTranscriptWriteScope,
   requestedOptions: SqliteSessionTurnOptions,
+  ownerScope: SessionTranscriptWriteScope = scope,
+): Promise<SqliteExpectedSessionTranscriptTurnResult> {
+  // Keep the admitted logical locator while the worker pins its physical database.
+  const assertOwnedWrite = captureOwnedTranscriptWriteAssertion({
+    ...ownerScope,
+    sessionId: requestedOptions.expectedSessionId,
+  });
+  if (requestedOptions.ownerSource) {
+    return appendPreparedSessionTranscriptTurn(scope, requestedOptions, assertOwnedWrite);
+  }
+  const ownerSource = await prepareSessionSourceAuthority(assertOwnedWrite);
+  const errors: unknown[] = [];
+  try {
+    return await appendPreparedSessionTranscriptTurn(
+      scope,
+      { ...requestedOptions, ownerSource },
+      assertOwnedWrite,
+    );
+  } catch (error) {
+    errors.push(error);
+    throw error;
+  } finally {
+    await releaseSessionSourceAuthorities([ownerSource], errors);
+  }
+}
+
+async function appendPreparedSessionTranscriptTurn(
+  scope: SessionTranscriptWriteScope,
+  requestedOptions: SqliteSessionTurnOptions,
+  assertOwnedWrite: SessionSourceAssertion,
   nativeReservation?: true,
 ): Promise<SqliteExpectedSessionTranscriptTurnResult> {
-  const options = nativeReservation
+  let options = nativeReservation
     ? requestedOptions
     : {
         ...requestedOptions,
@@ -122,6 +157,8 @@ export async function appendExpectedSessionTranscriptTurn(
   if (
     !nativeReservation &&
     independentPreparation &&
+    !options.ownerSource?.nativeSource &&
+    !options.ownerSource?.hasOpaqueCheck &&
     isMainThread &&
     (inputActor ||
       incognito ||
@@ -138,9 +175,10 @@ export async function appendExpectedSessionTranscriptTurn(
     })
   ) {
     return appendSessionTurnInWorker(resolved, options, context, (messages) =>
-      appendExpectedSessionTranscriptTurn(
+      appendPreparedSessionTranscriptTurn(
         { ...scope, storePath: resolved.path, env: resolved.env },
         { ...options, messages },
+        assertOwnedWrite,
         true,
       ),
     );
@@ -148,6 +186,20 @@ export async function appendExpectedSessionTranscriptTurn(
   if (incognito || inputActor) {
     throw new Error("Actor transcript turns require preparation outside the transaction");
   }
+  if (options.ownerSource?.checks.length) {
+    throw new Error(
+      "Prepared transcript owner authority requires worker-compatible message preparation",
+    );
+  }
+  const assertRequestedCurrent = options.assertCurrent;
+  options = {
+    ...options,
+    assertCurrent: () => {
+      assertOwnedWrite();
+      assertRequestedCurrent?.();
+    },
+  };
+  options.assertCurrent?.();
   if (options.acceptedResultGuard || options.sessionTurnMutation?.routingPredicate) {
     await prepareSessionTurnPredicates();
   }
@@ -157,10 +209,12 @@ export async function appendExpectedSessionTranscriptTurn(
   const rebound = new Error("Session changed before cold transcript restoration");
   let restoreEntry: ResolvedSessionEntryRow | undefined;
   try {
+    options.assertCurrent?.();
     await restoreSessionColdTranscript(
       { ...scope, sessionId: options.expectedSessionId },
       options.keyFormat === "agent-qualified"
         ? () => {
+            options.assertCurrent?.();
             options.sessionTurnMutation?.assertCurrent?.();
             const current = withOpenClawAgentDatabaseReadOnly(
               (database) =>
@@ -184,7 +238,7 @@ export async function appendExpectedSessionTranscriptTurn(
             }
             throw rebound;
           }
-        : undefined,
+        : options.assertCurrent,
     );
   } catch (error) {
     if (error !== rebound) {
@@ -200,6 +254,7 @@ export async function appendExpectedSessionTranscriptTurn(
     resolved,
     async () => {
       const mutation = options.sessionTurnMutation;
+      options.assertCurrent?.();
       mutation?.assertCurrent?.();
       const preparedDatabase = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
       prepareSessionTurnRouting(mutation?.routingPredicate, resolved.env)?.(preparedDatabase);

@@ -6,7 +6,7 @@ import {
   normalizeOptionalString,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
+import { readAcpSessionMetaForEntryAsync } from "../acp/runtime/session-meta-readonly.js";
 import { resolveSessionStorePathForAcp } from "../acp/runtime/session-meta.js";
 import { resolveCurrentSessionAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { resolveAgentConfig, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
@@ -273,14 +273,14 @@ function resolveSessionModelRef(
   );
 }
 
-function resolveSessionRuntime(params: {
+async function resolveSessionRuntime(params: {
   cfg: OpenClawConfig;
   entry?: SessionEntry;
   provider: string;
   model: string;
   agentId?: string;
   sessionKey: string;
-}): { id: string | undefined; label: string } {
+}): Promise<{ id: string | undefined; label: string }> {
   const acpSessionKey = params.agentId
     ? resolveStoredSessionKeyForAgentStore({
         cfg: params.cfg,
@@ -294,7 +294,7 @@ function resolveSessionRuntime(params: {
   });
   // The summary already captured the session generation. Rereading its store
   // could pair runtime metadata with a replacement row and reopen cold history.
-  const acpMeta = readAcpSessionMetaForEntry({
+  const acpMeta = await readAcpSessionMetaForEntryAsync({
     cfg: params.cfg,
     sessionKey: acpSessionKey,
     agentId: acpAgentId,

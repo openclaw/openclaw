@@ -907,7 +907,9 @@ openclaw-pending-session-create {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
+  gap: 5px;
+  width: auto;
+  white-space: nowrap;
   height: 24px;
   padding: 0;
   border-radius: var(--radius-full);
@@ -3078,9 +3080,9 @@ openclaw-chat-ci-details {
 
   .agent-chat__input--chat .context-ring {
     justify-content: center;
-    width: var(--chat-composer-control-size);
+    width: auto;
     height: var(--chat-composer-chip-height);
-    gap: 0;
+    gap: 5px;
     padding-inline: 0;
   }
 
@@ -3304,4 +3306,42 @@ openclaw-chat-ci-details {
 
 .chat-provider-review .chat-composer-neighbor-card__copy :is(strong, span) {
   white-space: normal;
+}
+
+.chat-pane__layout-trigger,
+.chat-pane__sharing-trigger,
+.chat-pane__subagents-running {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.chat-pane__layout-trigger {
+  padding: 5px 8px;
+  line-height: 1;
+}
+
+.chat-pane__layout-trigger svg,
+.chat-pane__sharing-trigger svg,
+.chat-pane__subagents-running svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.6px;
+}
+
+.chat-pane__header--stacked-status {
+  flex-wrap: wrap;
+  row-gap: 0;
+}
+
+.chat-pane__header--stacked-status > .chat-pane__header-leading {
+  flex: 1;
+}
+
+.chat-pane__header--stacked-status > .chat-pane__subagents-running {
+  flex-basis: 100%;
+  padding-bottom: 6px;
 }

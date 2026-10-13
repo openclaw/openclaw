@@ -5,6 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it } from "vitest";
 import { mergeChatStreamMessage } from "../../packages/gateway-client/src/chat-stream-message.js";
 import type { ChatEvent } from "../../packages/gateway-protocol/src/index.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
@@ -92,7 +93,7 @@ it(
   {
     timeout: 180_000,
   },
-  async () => {
+  async ({ signal }) => {
     const root = tempDirs.make("openclaw-xai-fallback-");
     const state = path.join(root, "state");
     const workspace = path.join(root, "workspace");
@@ -125,6 +126,8 @@ it(
     let scenario: Scenario = "fallback";
     let requests: string[] = [];
     const events: ChatEvent[] = [];
+    const terminalEvents = new Map<string, ReturnType<typeof createDeferred<void>>>();
+    const publishedMessages = new Map<string, unknown[]>();
     const fallbackEvents: unknown[] = [];
     const provider = createServer((request, response) => {
       void (async () => {
@@ -292,7 +295,26 @@ it(
         token: "xai-fallback-test",
         onEvent: (event) => {
           if (event.event === "chat") {
-            events.push(event.payload as ChatEvent);
+            const chatEvent = event.payload as ChatEvent;
+            events.push(chatEvent);
+            if (
+              chatEvent.state === "final" ||
+              chatEvent.state === "error" ||
+              chatEvent.state === "aborted"
+            ) {
+              terminalEvents.get(chatEvent.sessionKey)?.resolve();
+            }
+          }
+          if (
+            event.event === "session.message" &&
+            isRecord(event.payload) &&
+            typeof event.payload.sessionKey === "string" &&
+            isRecord(event.payload.message) &&
+            event.payload.message.role === "assistant"
+          ) {
+            const messages = publishedMessages.get(event.payload.sessionKey) ?? [];
+            messages.push(event.payload.message);
+            publishedMessages.set(event.payload.sessionKey, messages);
           }
           if (
             event.event === "agent" &&
@@ -314,6 +336,9 @@ it(
         requests = [];
         const rejection = rejections.get(scenario);
         const sessionKey = `agent:${scenario}:xai-fallback`;
+        const terminalReceived = createDeferred();
+        terminalEvents.set(sessionKey, terminalReceived);
+        await gateway.client.request("sessions.messages.subscribe", { key: sessionKey });
         const started = await gateway.client.request<{ runId: string }>("chat.send", {
           sessionKey,
           message: "Reply with the marker.",
@@ -322,6 +347,7 @@ it(
         });
         const completed = await gateway.client.request<{
           status: string;
+          error?: string;
           terminalReply?: { text?: string };
         }>(
           "agent.wait",
@@ -332,18 +358,37 @@ it(
           { timeoutMs: 65_000 },
         );
         expect(completed.status, scenario).not.toBe("timeout");
+        // Run completion can precede transcript-gated WebSocket publication.
+        await withinTest(terminalReceived.promise, signal);
         const history = await gateway.client.request<{
           messages: Array<{ role: string; content: unknown; stopReason?: string }>;
         }>("chat.history", { sessionKey, limit: 20 });
         const assistant = history.messages.findLast((message) => message.role === "assistant");
-        expect.soft(requests[0], scenario).toBe(primaryModel);
+        const runEvents = events.filter((event) => event.runId === started.runId);
+        expect
+          .soft(
+            requests[0],
+            requests[0] === primaryModel
+              ? scenario
+              : JSON.stringify({
+                  scenario,
+                  completedError: completed.error?.slice(0, 1000),
+                  chatErrors: runEvents
+                    .filter((event) => event.state === "error")
+                    .slice(-3)
+                    .map((event) => ({
+                      errorKind: event.errorKind,
+                      errorMessage: event.errorMessage?.slice(0, 1000),
+                    })),
+                }),
+          )
+          .toBe(primaryModel);
         expect
           .soft(
             requests.filter((requested) => requested === primaryModel),
             scenario,
           )
           .toHaveLength(rejection && rejection.reason !== "rate_limit" ? 1 : 2);
-        const runEvents = events.filter((event) => event.runId === started.runId);
         const terminal = runEvents
           .filter((event) => event.state === "final")
           .filter((event) => event.stopReason === "stop");
@@ -382,12 +427,16 @@ it(
         } else {
           expect.soft(completed.status, scenario).toBe("error");
           expect.soft(messageText(assistant), scenario).toBe(prefix);
+          expect
+            .soft(messageText(publishedMessages.get(sessionKey)?.at(-1)), scenario)
+            .toBe(prefix);
           const deltas = runEvents.filter((event) => event.state === "delta");
           const liveMessage = deltas.reduce<unknown>(
             (previous, event) => mergeChatStreamMessage(previous, event),
             undefined,
           );
-          expect.soft(messageText(liveMessage), scenario).toBe(prefix);
+          // Saved assistant content belongs to canonical publication, not the unsaved live tail.
+          expect.soft(messageText(liveMessage), scenario).toBe("");
           if (scenario === "no-fallback") {
             expect.soft(requests, scenario).not.toContain(fallbackModel);
           } else {

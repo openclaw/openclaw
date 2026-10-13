@@ -84,13 +84,14 @@ export type SessionsUsageAggregates = {
       sessionActivity: Array<{ dates: string[]; sessionCount: number }>;
     }
   >;
-  /** Full token/cost categories for every matched session, before the row limit. */
+  /** Full token/cost categories before the row limit. Overview keeps this calendar facet before selectedDays. */
   costDaily?: CostUsageSummary["daily"];
   latency?: SessionLatencyStats;
   dailyLatency?: SessionDailyLatency[];
   modelDaily?: SessionDailyModelUsage[];
   daily: Array<{
     date: string;
+    usageReport?: CostUsageSummary["totals"]["usageReport"];
     tokens: number;
     cost: number;
     messages: number;
@@ -112,4 +113,60 @@ export type SessionsUsageResult = {
   /** Visible candidate identities before applying the creator filter. */
   creatorOptions?: SessionUsageCreator[];
   cacheStatus?: CostUsageSummary["cacheStatus"];
+  overview?: SessionsUsageOverview;
+};
+
+export type UsageOverviewOptions = {
+  limit?: number;
+  offset?: number;
+  query?: string;
+  selectedDays?: string[];
+  selectedHours?: number[];
+  selectedSessions?: string[];
+  recentKeys?: string[];
+  sort?: "recent" | "tokens" | "cost" | "messages" | "errors";
+  sortDirection?: "asc" | "desc";
+};
+
+export type SessionsUsageOverview = {
+  /** Completeness of full-session chart sources before selected-day totals. */
+  usageReport?: CostUsageSummary["totals"]["usageReport"];
+  total: number;
+  unfilteredSessionCount: number;
+  /** Sessions with activity in the selected population; empty comparison rows do not count. */
+  selectedSessionCount: number;
+  /** Matching rows in the selected population, including empty sessions eligible for detail reads. */
+  selectedRowCount: number;
+  /** Explicitly selected matching rows, in selection order and independent of the table page. */
+  selectedRows: SessionUsageEntry[];
+  /** Comparison statistics before paging and the Recent roster selection. */
+  tableSessionCount: number;
+  tableTotals: {
+    tokens: number;
+    cost: number;
+    errors: number;
+    usageReport?: CostUsageSummary["totals"]["usageReport"];
+  };
+  offset: number;
+  limit: number;
+  queryWarnings: string[];
+  hourTokens: number[];
+  weekdayTokens: number[];
+  hasTimelineData: boolean;
+  durationMs: number;
+  durationCount: number;
+  hourlyMessages: number[];
+  hourlyErrors: number[];
+  filterOptions: Record<"agent" | "channel" | "provider" | "model" | "tool", string[]>;
+};
+
+/** Already-authorized metadata; the worker supplies usage from the owning store. */
+export type UsageOverviewSession = Omit<SessionUsageEntry, "usage" | "contextWeight"> & {
+  agentId: string;
+  instances: Array<{ sessionId?: string; sessionFile: string }>;
+};
+
+/** Aggregated report with one final, bounded comparison page. */
+export type UsageOverviewSlice = Pick<SessionsUsageResult, "sessions" | "totals" | "aggregates"> & {
+  overview: SessionsUsageOverview;
 };

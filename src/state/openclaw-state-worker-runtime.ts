@@ -11,7 +11,7 @@ import {
   isCronStateWorkerCommand,
   prepareCronStateWorkerCommand,
 } from "../cron/store/dispatch.worker.js";
-import { readPendingRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication.kernel.js";
+import { readPendingRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication-read.worker.js";
 import { mutateSessionGroupCatalogInDatabase } from "../gateway/session-group-catalog.kernel.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
@@ -30,6 +30,7 @@ import { executeSessionStateCommand } from "../sessions/session-state-events.wor
 import { listWatchedSessionUpstreamLinksInDatabase } from "../sessions/session-upstream-links.kernel.js";
 import { executeSessionUpstreamCommand } from "../sessions/session-upstream-links.worker.js";
 import { executeTranscriptRead } from "../transcripts/store-worker-read.js";
+import { TUI_LAST_SESSION_STATE_KEY_PREFIX } from "../tui/tui-last-session.contract.js";
 import { clearRetiredTuiPointers } from "../tui/tui-last-session.kernel.js";
 import { assertAgentDeletionRecoveryHoldPredicate } from "./agent-deletion-journal-recovery.kernel.js";
 import {
@@ -186,7 +187,11 @@ export function executeSharedStateCommand(
     ...stateOptions(),
   };
   if (command.type === "tui.lastSession.write") {
-    return writeConfigMachineState(command.input.stateKey, command.input.sessionKey, writeOptions);
+    return writeConfigMachineState(
+      `${TUI_LAST_SESSION_STATE_KEY_PREFIX}${command.input.scopeKey}`,
+      command.input.sessionKey,
+      writeOptions,
+    );
   }
   if (command.type === "sandboxRegistry.insertIfMissing") {
     return importSandboxRegistryRow(command.input, writeOptions);
@@ -266,7 +271,6 @@ export function executeSharedStateCommand(
     );
   }
   if (
-    command.type === "sessionUpstream.current" ||
     command.type === "sessionUpstream.settle" ||
     command.type === "sessionUpstream.upsert" ||
     command.type === "sessionUpstream.delete"

@@ -38,7 +38,7 @@ export function readSessionRowFacts(params: {
   activitySummaryEnabled?: boolean;
   databaseFacts?: Pick<SessionRowDatabaseFacts, "hasBoard" | "activitySummaryWatermark">;
 }) {
-  const { cfg, entry, placementFactsReader } = params;
+  const { cfg, entry, placementFactsReader, activitySummaryEnabled } = params;
   // The board callback shares a closure context with present; never capture a resident row.
   const { key, agentId, storeTarget } = params.target;
   const context = params.context ?? {};
@@ -86,17 +86,23 @@ export function readSessionRowFacts(params: {
     };
   };
   let placementFacts = readPlacementFacts();
-  const activitySummary = projectSessionActivitySummary({
-    key,
-    agentId,
-    storeTarget,
-    cfg,
-    entry,
-    enabled: params.activitySummaryEnabled,
-    watermark: params.databaseFacts?.activitySummaryWatermark,
-  });
+  let activitySummaryFacts = params.databaseFacts;
+  const readActivitySummary = () =>
+    projectSessionActivitySummary({
+      key,
+      agentId,
+      cfg,
+      entry,
+      enabled: activitySummaryEnabled,
+      watermark: activitySummaryFacts?.activitySummaryWatermark,
+    });
+  let activitySummary = readActivitySummary();
   return {
     hasBoard: params.databaseFacts?.hasBoard ?? readSessionRowHasBoard({ key, storeTarget }),
+    refreshActivitySummary(databaseFacts = activitySummaryFacts) {
+      activitySummaryFacts = databaseFacts;
+      activitySummary = readActivitySummary();
+    },
     present: () => {
       const currentSource = placementFactsReader?.getProjectionFacts(entry.sessionId);
       if (currentSource !== placementSource) {
@@ -129,6 +135,9 @@ export function readSessionRowFacts(params: {
                 workspaceResultReconciling,
                 retryOnSend,
                 {
+                  startStatus: placement.environmentId
+                    ? context.workerEnvironmentService?.get(placement.environmentId)?.startStatus
+                    : undefined,
                   workerRuntimeInstall: context.workerPlacementRuntimeInstallReader?.read(
                     placement,
                     environment ?? null,

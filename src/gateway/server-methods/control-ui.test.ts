@@ -620,6 +620,7 @@ describe("controlUi.sessionPullRequests.checks", () => {
     "rejects a %s without invoking the GitHub loader",
     async (missing) => {
       await withOpenClawTestState({ label: "ci-details-unavailable" }, async () => {
+        setRuntimeConfigSnapshot({});
         if (missing === "unavailable projection") {
           await replaceSessionEntry(
             { agentId: "main", sessionKey: params.sessionKey },
@@ -653,6 +654,7 @@ describe("controlUi.sessionPullRequests.checks", () => {
 
   it("binds the visible session generation and rechecks it before returning details", async () => {
     await withOpenClawTestState({ label: "ci-details-generation" }, async () => {
+      setRuntimeConfigSnapshot({});
       const session = {
         agentId: "main",
         sessionKey: params.sessionKey,
@@ -705,6 +707,7 @@ describe("controlUi.sessionPullRequests.checks", () => {
     "does not expose a hidden session to another profile: %j",
     async (hidden) => {
       await withOpenClawTestState({ label: "ci-details-hidden" }, async () => {
+        setRuntimeConfigSnapshot({});
         await replaceSessionEntry(
           { agentId: "main", sessionKey: params.sessionKey },
           {
@@ -737,6 +740,7 @@ describe("controlUi.sessionPullRequests.checks", () => {
         session: { scope: "global" },
         agents: { entries: { main: {}, research: {} } },
       };
+      setRuntimeConfigSnapshot(cfg);
       await replaceSessionEntry(
         { agentId: "research", sessionKey: "global" },
         { sessionId: "research-ci", updatedAt: 1 },

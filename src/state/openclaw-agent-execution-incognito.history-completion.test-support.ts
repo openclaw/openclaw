@@ -160,7 +160,7 @@ export function registerIncognitoCompletionTests(
   });
 
   it.each([true, false])(
-    "binds resumed command completion only with valid source input=%s",
+    "prepares resumed command completion only with valid source input=%s",
     async (validInput) => {
       const { actor } = fixture;
       const { claim, session, target } = await createIncognitoCompletionSource(
@@ -181,8 +181,8 @@ export function registerIncognitoCompletionTests(
       }
       await withIncognitoSessionActor(actor, async () => {
         let callerCurrent = true;
-        const binding = Promise.resolve().then(() =>
-          bindCommandHarnessCompletionAssertion({
+        const binding = Promise.resolve().then(() => {
+          const { opts } = bindCommandHarnessCompletionAssertion({
             claim,
             persisted: session.entry,
             sessionKey: target.sessionKey,
@@ -195,22 +195,22 @@ export function registerIncognitoCompletionTests(
                 }
               },
             },
-          }),
-        );
+          });
+          return prepareSessionSourceAuthority(opts.assertSourceCurrent);
+        });
         if (!validInput) {
           await expect(binding).rejects.toThrow(
             "Incognito harness completion source is no longer current",
           );
           return;
         }
-        const bound = await binding;
-        assert(bound.source);
+        const source = await binding;
         try {
-          bound.opts.assertSourceCurrent?.();
+          source.assertCurrent();
           callerCurrent = false;
-          expect(bound.opts.assertSourceCurrent).toThrow("command source caller revoked");
+          expect(source.assertCurrent).toThrow("command source caller revoked");
         } finally {
-          await bound.source.release();
+          await source.release?.();
         }
       });
     },

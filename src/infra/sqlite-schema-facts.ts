@@ -11,6 +11,7 @@ import {
   getSqliteDatabaseAdmission,
   getSqliteDatabaseSchemaRevision,
   finishSqliteDatabaseWrite,
+  releaseSqliteDatabaseAdmission,
   invalidateLocalSqliteSchemaAdmissions,
   publishSqliteDatabaseAdmission,
   publishSqliteDatabaseSchemaChange,
@@ -367,6 +368,7 @@ function trackSchemaChanges(
   });
   observeSqliteNativeClose(database, () => {
     finishSqliteDatabaseWrite(database);
+    releaseSqliteDatabaseAdmission(database);
   });
   owner.installTempTrackingSchema = (schema) => {
     const { sql, unexpected } = prepareSqliteTempTrackingSchema(database, schema);

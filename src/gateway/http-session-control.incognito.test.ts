@@ -15,6 +15,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 import { handleChannelAvatarHttpRequest } from "./channel-avatar-http.js";
@@ -382,6 +383,7 @@ it("carries configured-role authority into bound nested sessions_send and refuse
     },
   };
   const operator = ensureProfileForEmail("incognito-operator@example.test");
+  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
   const profile = {
     profileId: operator.id,
     displayName: operator.displayName,

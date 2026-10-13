@@ -8,6 +8,7 @@ import type { HealthCheck, OpenClawConfig } from "openclaw/plugin-sdk/health";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { assert, describe, expect, it, vi } from "vitest";
 import { registerCodexManagedAppServerDoctorChecks } from "./api.js";
@@ -58,6 +59,7 @@ describe("native profile recovery", () => {
     const state = await createOpenClawTestState({ label: "codex-native-profile-recovery" });
     const scheduler = createTestPluginServiceScheduler();
     try {
+      setRuntimeConfigSnapshot(config);
       const nativeHome = path.join(state.home, ".codex");
       await fs.mkdir(nativeHome, { recursive: true });
       const nativeAuth = JSON.stringify({

@@ -6,13 +6,16 @@ import {
   validateChatToolTitlesParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
+import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
   projectChatDisplayMessage,
   resolveEffectiveChatHistoryMaxChars,
 } from "../chat-display-projection.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { findCanonicalStoreMatch } from "../session-utils-store-selection.js";
+import { loadGatewaySessionEntryReadOnlyInWorker, loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
   resolveGlobalAwareNodeChatDeliveryKeys,
@@ -48,14 +51,36 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
     const sessionLoadOptions = { agentId: requestedAgent.agentId };
+    let retained: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
     const {
       agentId,
       storePath,
       entry,
       canonicalKey: sessionKey,
-    } = loadSessionEntry(rawSessionKey, sessionLoadOptions, cfg);
+    } = await loadGatewaySessionEntryReadOnlyInWorker({
+      excludeInternalEffects: true,
+      cfg,
+      key: rawSessionKey,
+      ...sessionLoadOptions,
+      onSelected: (target) => {
+        retained?.release();
+        const selected = findCanonicalStoreMatch(target.store, target.storeKeys)?.entry;
+        if (typeof target.capturedReadSource?.databaseIdentity === "string") {
+          retained = retainPreparedSessionEntryPredicate({
+            databaseIdentity: `file:${target.capturedReadSource.databaseIdentity}`,
+            sessionKey: target.canonicalKey,
+            entry: selected,
+            matches: (_before, after) => after?.sessionId === selected?.sessionId,
+          });
+        }
+      },
+    }).catch((error: unknown) => {
+      retained?.release();
+      throw error;
+    });
     const sessionId = entry?.sessionId;
     if (!sessionId || !storePath) {
+      retained?.release();
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "session not found"));
       return;
     }
@@ -63,17 +88,21 @@ export const chatHandlers: GatewayRequestHandlers = {
     let appended: Awaited<ReturnType<typeof appendInjectedAssistantMessageToTranscript>>;
     try {
       const admission = await beginSessionWorkAdmission({
+        agentId,
         scope: storePath,
         identities: [sessionKey, sessionId],
         assertAllowed: () => {
-          const latestEntry = loadSessionEntry(rawSessionKey, sessionLoadOptions).entry;
-          if (!latestEntry) {
-            throw new Error(`Session "${sessionKey}" was deleted while starting work. Retry.`);
-          }
-          if (latestEntry.sessionId !== sessionId) {
+          const current = retained?.readCurrent();
+          if (retained && !current) {
             throw new Error(`Session "${sessionKey}" changed while starting work. Retry.`);
           }
-          const archivedError = resolveSessionWorkStartError(sessionKey, latestEntry);
+          const currentEntry = isIncognitoSessionKey(sessionKey)
+            ? loadSessionEntry(rawSessionKey, sessionLoadOptions).entry
+            : (current?.entry ?? entry);
+          if (currentEntry?.sessionId !== sessionId) {
+            throw new Error(`Session "${sessionKey}" changed while starting work. Retry.`);
+          }
+          const archivedError = resolveSessionWorkStartError(sessionKey, currentEntry);
           if (archivedError) {
             throw new Error(archivedError);
           }
@@ -98,6 +127,8 @@ export const chatHandlers: GatewayRequestHandlers = {
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
       return;
+    } finally {
+      retained?.release();
     }
     if (!appended.ok || !appended.messageId || !appended.message) {
       respond(

@@ -151,7 +151,10 @@ export function createFixture(mocks: {
       hasDeliveredSourceReply: vi.fn(() => true),
       hookRunner,
       setActiveSessionSystemPrompt: vi.fn(),
-      settingsManager: { getCompactionReserveTokens: vi.fn(() => 1_000) },
+      settingsManager: {
+        getCompactionEnabled: () => true,
+        getCompactionReserveTokens: vi.fn(() => 1_000),
+      },
     },
     anthropicPayloadLogger: {},
     boundary: {

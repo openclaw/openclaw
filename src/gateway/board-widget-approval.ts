@@ -76,7 +76,7 @@ export function createBoardWidgetApprovalResolver() {
       cfg,
       agentId,
       sessionKey,
-      sessionEntry,
+      sessionEntry: sessionEntry ?? null,
       execApprovals: policy.file,
     }).mode;
     if (mode === "ask") {

@@ -4,6 +4,7 @@ import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-co
 import type { AssistantMessage, Model } from "../../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { makeZeroUsageSnapshot } from "../../usage.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
@@ -156,6 +157,20 @@ describe("installEmbeddedAttemptContextGuards", () => {
     guards.remove();
     expect(input.activeSession.agent.transformContext).toBe(originalTransform);
     expect(removeToolResultGuard).toHaveBeenCalledOnce();
+  });
+
+  it("defers local pressure recovery while the provider request boundary owns compaction", () => {
+    const input = createInput();
+    input.activeSession[agentSessionDeferThresholdCompaction] = true;
+    const guards = installEmbeddedAttemptContextGuards(input as never);
+    const request = {
+      context: { messages: [{ role: "user" as const, content: "x".repeat(8_000), timestamp: 1 }] },
+    };
+    expect(() => guards.checkMidTurnPrecheck(request)).not.toThrow();
+    expect(guards.takePendingMidTurnPrecheckRequest()).toBeNull();
+    input.activeSession[agentSessionDeferThresholdCompaction] = false;
+    expect(() => guards.checkMidTurnPrecheck(request)).toThrow(MidTurnPrecheckSignal);
+    guards.remove();
   });
 
   it("hydrates current images and their failure notice before context transforms", async () => {

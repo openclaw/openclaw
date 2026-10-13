@@ -16,6 +16,7 @@ export type ChatSendPreAdmissionParams = {
 export type ChatSendAdmissionParams = ChatSendPreAdmissionParams & {
   session: PreparedChatSendSession;
   withPreparedCurrent?: SessionMutationAuthorization["withPreparedCurrent"];
+  followRegistration?: SessionMutationAuthorization["followRegistration"];
   hasCurrentClientAuthority?: GatewayRequestHandlerOptions["hasCurrentClientAuthority"];
   onAdmissionOwned?: () => Promise<boolean>;
 };

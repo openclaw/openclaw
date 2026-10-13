@@ -8,6 +8,7 @@ import {
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import { resolveSessionPublicShare } from "../../config/sessions/session-public-share.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
@@ -37,7 +38,6 @@ import {
 import {
   prepareSessionWorktreeCreation,
   resolveSessionProjectRoot,
-  validateSessionWorktreeSelection,
 } from "../session-worktree-preparation.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { gatewayClientUploadPolicyError } from "../upload-policy.js";
@@ -58,6 +58,7 @@ import {
   prepareSessionRepositoryWorkspace,
   resolveSessionRepositoryCreation,
   validateSessionProjectPreparation,
+  validateSessionWorktreeSelection,
 } from "./session-create-project.js";
 import {
   assertRequiredWorkerSessionCreateCurrent,
@@ -71,6 +72,7 @@ import {
   resolveSessionCreateRootParameters,
 } from "./session-create-root.js";
 import {
+  reportCreatedVisibleSpawn,
   resolveSessionCreateSpawnContext,
   validateSessionCreateSpawnRequest,
 } from "./session-create-spawn.js";
@@ -279,7 +281,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, normalized.error));
         return;
       }
-      const eligible = context.mentionInbox?.validateRecipients(
+      const eligible = await context.mentionInbox?.validateRecipientsAsync(
         client,
         {
           agentId: explicitlyRequestedAgent.agentId,
@@ -378,6 +380,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     let sessionAgentId = catalogAgentId ?? explicitlyRequestedAgent.agentId;
     if (repository) {
+      // Mention validation and later creation must use the same real child target.
       sessionKey ??= buildDashboardSessionKey(sessionAgentId);
     }
     let preparedWorktree: PreparedGatewaySessionLifecycle | undefined;
@@ -572,6 +575,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         );
       },
       commitGuard,
+      bindSharingCreation: (operation) =>
+        sessionMutationAuthorization?.bindCreation?.(p, operation),
+      followSharingRegistration: sessionMutationAuthorization?.followRegistration,
       afterSessionCommitted: (entry, source) =>
         registerCommittedSessionCategory(
           entry.category === normalizeOptionalString(p.category) ? entry.category : undefined,
@@ -585,6 +591,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           sessionKey: committed.key,
           storePath: committed.storePath,
           sessionId: committed.entry.sessionId,
+          entry: committed.entry,
           lifecycleRevision: committed.entry.lifecycleRevision,
         });
         if ((hasInitialTurn || requiredProfile) && requestAuthority.family === "worker") {
@@ -602,8 +609,10 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           prepare: context.workerPlacementDispatchService?.withRequiredSession,
           session,
           assertCurrent: assertSessionCreateCurrent,
+          retainDispatch: sessionMutationAuthorization?.retain,
           signal,
         });
+        await reportCreatedVisibleSpawn(cfg, sessionCreation, session, publicRead);
         if (!hasInitialTurn) {
           scheduleCreatedDashboardSessionTitle(session, cfg, context, p.titleSource);
           return;
@@ -633,7 +642,10 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           },
           undefined,
         );
-        await handleDirectExternalChatSend(sendOptions);
+        // The initial child turn must acquire its own writer, not the spawning parent's.
+        await runWithoutOwnedSessionTranscriptWrites(() =>
+          handleDirectExternalChatSend(sendOptions),
+        );
       },
     };
     const created = await createGatewaySession(createParams).catch((error: unknown) => {

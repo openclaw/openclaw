@@ -10,6 +10,7 @@ import {
 } from "../config/config.js";
 import { maybeLoadDotEnvForConfig } from "../config/io.runtime-env.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import { loadPinnedRuntimeConfigAsync } from "../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import { configValidationIssuesToHealthFindings } from "../flows/doctor-config-validation-findings.js";
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
@@ -393,6 +394,7 @@ async function executeDoctorLint(
     };
   }
 
+  await loadPinnedRuntimeConfigAsync(async () => ({ config: snapshot.config }));
   const cfg = captureRuntimeConfig(snapshot.config);
   const sourceEnv = { ...stateView.sourceEnv };
   const defaultAgentId = tryResolveDefaultAgentId(cfg);

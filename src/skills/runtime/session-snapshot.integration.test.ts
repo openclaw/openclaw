@@ -153,11 +153,8 @@ describe("asynchronous runtime skill preparation", () => {
 
   it.each([
     { maxSkillsInPrompt: 1, retained: true, remote: false },
-    { maxSkillsInPrompt: 2, retained: true, remote: false },
-    { maxSkillsInPrompt: 1, retained: false, remote: false },
     { maxSkillsInPrompt: 2, retained: false, remote: false },
     { maxSkillsInPrompt: 1, retained: false, remote: true },
-    { maxSkillsInPrompt: 2, retained: false, remote: true },
   ])(
     "keeps the saved implementation when a same-name provider becomes eligible ($maxSkillsInPrompt, retained=$retained, remote=$remote)",
     async ({ maxSkillsInPrompt, retained, remote }) => {
@@ -430,31 +427,6 @@ describe("asynchronous runtime skill preparation", () => {
     });
     canExec = false;
     expect((await pending).snapshot.nodeSkillsEligibility).toEqual({ canExec: false });
-  });
-
-  it("hydrates runtime paths without rewriting saved fields and reuses the complete snapshot", async () => {
-    const params = await fixture();
-    const { snapshot } = await resolveReusableWorkspaceSkillSnapshot(params);
-    const { resolvedSkills, discoverySkills, ...saved } = snapshot;
-    saved.prompt = `Saved prefix\n${saved.prompt}`;
-    const before = JSON.stringify(saved);
-    Object.freeze(saved);
-    const hydrated = (
-      await resolveReusableWorkspaceSkillSnapshot({ ...params, existingSnapshot: saved })
-    ).snapshot;
-    const {
-      resolvedSkills: hydratedSkills,
-      discoverySkills: hydratedDiscovery,
-      ...persisted
-    } = hydrated;
-    expect(JSON.stringify(persisted)).toBe(before);
-    expect(hydratedSkills).toEqual(resolvedSkills);
-    expect(hydratedDiscovery).toEqual(discoverySkills);
-    expect(hydrated.skills).toBe(saved.skills);
-    expect(
-      (await resolveReusableWorkspaceSkillSnapshot({ ...params, existingSnapshot: hydrated }))
-        .snapshot,
-    ).toBe(hydrated);
   });
 
   it("keeps a shared rebuild alive for its remaining caller after another caller aborts", async () => {

@@ -27,7 +27,10 @@ suite.define(() => {
         ],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await page.getByText("Ready to prepare the release.").waitFor();
+      await page
+        .locator(".chat-text")
+        .getByText("Ready to prepare the release.", { exact: true })
+        .waitFor();
       await page.locator(".agent-chat__input textarea").fill("Prepare the release");
       await page.getByRole("button", { name: "Send message" }).click();
       const send = await gateway.waitForRequest("chat.send");
@@ -126,7 +129,10 @@ suite.define(() => {
       });
       await historyPage.goto(`${suite.server.baseUrl}chat`);
       await historyPage
-        .getByText("Received the subagent update. The validation command needs attention.")
+        .locator(".chat-text")
+        .getByText("Received the subagent update. The validation command needs attention.", {
+          exact: true,
+        })
         .waitFor();
       const group = historyPage.locator(".chat-activity-group__summary").first();
       expect(await group.textContent()).toContain("1 failed");

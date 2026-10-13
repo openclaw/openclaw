@@ -11,6 +11,11 @@ import {
   writeSubagentSessionEntry,
 } from "../src/agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../src/config/runtime-snapshot.js";
+import { loadSessionEntry } from "../src/config/sessions/session-accessor.js";
 import { getSessionKysely } from "../src/config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
@@ -62,6 +67,7 @@ afterEach(async () => {
     ...modelServers.splice(0).map((server) => server.close()),
   ]);
   const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+  clearRuntimeConfigSnapshot();
   if (errors.length > 0) {
     throw new AggregateError(errors, "Requester fixture cleanup failed");
   }
@@ -502,14 +508,16 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
     async () => {
       const modelServer = await startProofModelServer();
       modelServers.push(modelServer);
+      const config = createTestConfig(modelServer.url);
       const instance = await createOpenClawTestInstance({
         name: "requester-owner-legacy-unscoped-requester",
-        config: createTestConfig(modelServer.url),
+        config,
         env: { OPENCLAW_SKIP_PROVIDERS: undefined, OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
       });
       instances.push(instance);
 
       instance.state.applyEnv();
+      setRuntimeConfigSnapshot(config);
       const registry =
         await import("../src/agents/subagents/registry/subagent-registry.test-helpers.js");
       await runQaGatewayFixture(
@@ -538,7 +546,11 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
             requesterSessionKey: RESTORED_REQUESTER_KEY,
             requesterDisplayKey: RESTORED_REQUESTER_KEY,
             requesterAgentId: REQUESTER_AGENT_ID,
-            agentId: REQUESTER_AGENT_ID,
+            childAgentId: REQUESTER_AGENT_ID,
+            sessionEntry: loadSessionEntry({
+              agentId: REQUESTER_AGENT_ID,
+              sessionKey: childSessionKey,
+            }),
             task: "REQUESTER-OWNER legacy restored completion",
             cleanup: "keep",
             expectsCompletionMessage: true,

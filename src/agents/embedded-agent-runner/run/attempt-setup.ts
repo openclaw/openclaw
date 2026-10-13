@@ -33,6 +33,7 @@ import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
+import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
 import { resolveAttemptWorkspaceSandbox } from "../../workspace-sandbox.js";
@@ -346,8 +347,9 @@ export function installEmbeddedAttemptContextGuards(input: {
     ) => {
       // Compaction ownership does not waive host admission at the provider boundary.
       if (
-        !activeContextEngine?.info.ownsCompaction &&
-        attempt.config?.agents?.defaults?.compaction?.midTurnPrecheck?.enabled !== true
+        activeSession[agentSessionDeferThresholdCompaction] ||
+        (!activeContextEngine?.info.ownsCompaction &&
+          attempt.config?.agents?.defaults?.compaction?.midTurnPrecheck?.enabled !== true)
       ) {
         return;
       }

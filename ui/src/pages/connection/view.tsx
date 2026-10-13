@@ -4,6 +4,7 @@ import { Show, createMemo } from "solid-js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
+import { isRemoteControlUiIngress } from "../../app/remote-ingress.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import type { GatewayStatusSample } from "../../components/gateway-vitals.ts";
 import { GatewayVitals } from "../../components/solid/gateway-vitals.tsx";
@@ -161,6 +162,7 @@ function Ping(props: ConnectionProps) {
 }
 
 export function ConnectionView(props: ConnectionProps) {
+  const remoteIngress = isRemoteControlUiIngress();
   const connected = () => props.phase === "connected";
   const busy = () => ["connecting", "starting", "reconnecting"].includes(props.phase);
   const submitting = () => busy() && !props.dirty;
@@ -212,35 +214,39 @@ export function ConnectionView(props: ConnectionProps) {
         <Show when={connected()}>
           <Ping {...props} />
         </Show>
-        <SettingsRow
-          title={t("connection.access.gatewayUrl")}
-          description={t("connection.access.gatewayUrlHint")}
-          control={
-            <input
-              class="settings-input"
-              aria-label={t("connection.access.gatewayUrl")}
-              inputmode="url"
-              autocapitalize="none"
-              autocorrect="off"
-              autocomplete="off"
-              spellcheck="false"
-              value={props.settings.gatewayUrl}
-              onInput={(event) =>
-                props.onConnectionChange({ gatewayUrl: event.currentTarget.value })
-              }
-              placeholder="wss://gateway.example:443"
-            />
-          }
-        />
-        <Show
-          when={draftAuthMode() === "trusted-proxy"}
-          fallback={<SecretRow {...props} authMode={draftAuthMode()} />}
-        >
+        <Show when={!remoteIngress}>
           <SettingsRow
-            title={t("connection.access.secret")}
-            description={t("connection.access.trustedProxy")}
-            control={<SettingsStatus kind="ok" label={t("connection.access.trustedProxyStatus")} />}
+            title={t("connection.access.gatewayUrl")}
+            description={t("connection.access.gatewayUrlHint")}
+            control={
+              <input
+                class="settings-input"
+                aria-label={t("connection.access.gatewayUrl")}
+                inputmode="url"
+                autocapitalize="none"
+                autocorrect="off"
+                autocomplete="off"
+                spellcheck="false"
+                value={props.settings.gatewayUrl}
+                onInput={(event) =>
+                  props.onConnectionChange({ gatewayUrl: event.currentTarget.value })
+                }
+                placeholder="wss://gateway.example:443"
+              />
+            }
           />
+          <Show
+            when={draftAuthMode() === "trusted-proxy"}
+            fallback={<SecretRow {...props} authMode={draftAuthMode()} />}
+          >
+            <SettingsRow
+              title={t("connection.access.secret")}
+              description={t("connection.access.trustedProxy")}
+              control={
+                <SettingsStatus kind="ok" label={t("connection.access.trustedProxyStatus")} />
+              }
+            />
+          </Show>
         </Show>
         <Show when={!connected() && props.lastError}>
           <SettingsRow

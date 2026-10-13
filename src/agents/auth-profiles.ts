@@ -24,7 +24,9 @@ export {
 } from "./auth-profiles/order.js";
 export {
   resolveAuthStatePathForDisplay,
+  resolveAuthStatePathForDisplayAsync,
   resolveAuthStorePathForDisplay,
+  resolveAuthStorePathForDisplayAsync,
 } from "./auth-profiles/paths.js";
 export {
   dedupeProfileIds,
@@ -61,6 +63,7 @@ export {
   ensureAuthProfileStoreWithoutExternalProfiles,
   ensureAuthProfileStoreWithoutExternalProfilesAsync,
   loadAuthProfileStoreForSecretsRuntime,
+  loadAuthProfileStoreForSecretsRuntimeAsync,
   loadAuthProfileStoreWithoutExternalProfiles,
   loadAuthProfileStoreWithoutExternalProfilesAsync,
   loadAuthProfileStoreForRuntime,

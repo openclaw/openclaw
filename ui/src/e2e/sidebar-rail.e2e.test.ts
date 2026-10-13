@@ -38,7 +38,7 @@ suite.define(() => {
           ({ key }) =>
             localStorage.setItem(
               key,
-              JSON.stringify({ sidebarEntries: ["session:agent:main:design"] }),
+              JSON.stringify({ railShortcuts: ["session:agent:main:design"] }),
             ),
           { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl) },
         );
@@ -121,7 +121,7 @@ suite.define(() => {
           },
           "users.prefs.get": {
             status: "ok",
-            entries: { "ui.sidebarEntries": entries, "ui.themeMode": "dark" },
+            entries: { "ui.railShortcuts": entries, "ui.themeMode": "dark" },
           },
           "users.prefs.set": { status: "ok" },
           "sessions.describe": {
@@ -133,7 +133,7 @@ suite.define(() => {
         ({ key, entries: savedEntries }) =>
           localStorage.setItem(
             key,
-            JSON.stringify({ sidebarEntries: savedEntries, themeMode: "dark" }),
+            JSON.stringify({ railShortcuts: savedEntries, themeMode: "dark" }),
           ),
         { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), entries },
       );
@@ -143,6 +143,23 @@ suite.define(() => {
       const pins = rail.locator(".sidebar-rail__pin");
       const pinOrder = () =>
         pins.evaluateAll((rows) => rows.map((row) => row.getAttribute("data-sidebar-entry")));
+      let committedEntries = entries;
+      const changePins = async (action: () => Promise<void>, nextEntries: string[]) => {
+        const after = await gateway.deferNext("users.prefs.set");
+        await action();
+        const request = await gateway.waitForRequest("users.prefs.set", { after });
+        expect(request.params).toEqual({
+          entries: { "ui.railShortcuts": nextEntries },
+          expectedEntries: { "ui.railShortcuts": committedEntries },
+        });
+        // Post-commit profile reads must retain the accepted pin order.
+        await gateway.setMethodResponse("users.prefs.get", {
+          status: "ok",
+          entries: { "ui.railShortcuts": nextEntries, "ui.themeMode": "dark" },
+        });
+        await gateway.resolveDeferred("users.prefs.set");
+        committedEntries = nextEntries;
+      };
       await expect.poll(pinOrder).toEqual(entries);
       for (const row of unloaded) {
         const link = rail.getByRole("link", { name: row.label, exact: true });
@@ -183,24 +200,120 @@ suite.define(() => {
         throw new Error("Missing target pin bounds");
       }
       // Playwright drives native mouse drag/drop, beginning on the anchor itself.
-      await source.dragTo(target, { targetPosition: { x: box.width / 2, y: 2 } });
       const reordered = [entries[2]!, entries[0]!, entries[1]!, ...entries.slice(3)];
+      await changePins(
+        () => source.dragTo(target, { targetPosition: { x: box.width / 2, y: 2 } }),
+        reordered,
+      );
       await expect.poll(pinOrder).toEqual(reordered);
 
       const menu = page.locator(".sidebar-rail-pin-menu");
-      for (const key of ["Shift+F10", "ContextMenu"]) {
-        await source.focus();
-        await page.keyboard.press(key);
-        await menu.getByRole("menuitem", { name: "Move down", exact: true }).waitFor();
-        await expect
-          .poll(() =>
-            menu
-              .getByRole("menuitem", { name: "Move down", exact: true })
-              .evaluate((el) => el.matches(":focus-within")),
-          )
-          .toBe(true);
-        await page.keyboard.press("Escape");
-        await expect.poll(() => source.evaluate((el) => el === document.activeElement)).toBe(true);
+      const focusTrace = await source.evaluateHandle((sourceElement) => {
+        const lifetime = new AbortController();
+        let shortcut: string | null = null;
+        const describe = (eventTarget: EventTarget | null) =>
+          eventTarget instanceof Element
+            ? {
+                tag: eventTarget.localName,
+                class: eventTarget.getAttribute("class")?.slice(0, 160) ?? null,
+                connected: eventTarget.isConnected,
+              }
+            : null;
+        const snapshot = (phase: string, event?: Event) => {
+          const dropdown =
+            document.querySelector<HTMLElementTagNameMap["wa-dropdown"]>(".sidebar-rail-pin-menu");
+          const active: Array<ReturnType<typeof describe>> = [];
+          let element = document.activeElement;
+          while (element && active.length < 5) {
+            active.push(describe(element));
+            element = element.shadowRoot?.activeElement ?? null;
+          }
+          return {
+            shortcut,
+            phase,
+            event: event?.type ?? null,
+            key: event instanceof KeyboardEvent ? event.key : null,
+            defaultPrevented: event?.defaultPrevented ?? null,
+            target: describe(event?.composedPath()[0] ?? null),
+            source: describe(sourceElement),
+            sourceFocused: sourceElement === document.activeElement,
+            menu: dropdown ? { ...describe(dropdown), open: dropdown.open } : null,
+            active,
+          };
+        };
+        const events: Array<ReturnType<typeof snapshot>> = [];
+        const record = (phase: string, event: Event) => {
+          if (events.length === 100) {
+            events.shift();
+          }
+          events.push(snapshot(phase, event));
+        };
+        const keydown = (phase: string) => (event: KeyboardEvent) => {
+          if (event.key === "F10" && event.shiftKey) {
+            shortcut = "Shift+F10";
+          } else if (event.key === "ContextMenu") {
+            shortcut = "ContextMenu";
+          }
+          if (event.key === "Escape" || event.key === "ContextMenu" || event.key === "F10") {
+            record(phase, event);
+          }
+        };
+        window.addEventListener("keydown", keydown("window-capture"), {
+          capture: true,
+          signal: lifetime.signal,
+        });
+        document.addEventListener("keydown", keydown("document-bubble"), {
+          signal: lifetime.signal,
+        });
+        document.addEventListener("focusin", (event) => record("focusin", event), {
+          capture: true,
+          signal: lifetime.signal,
+        });
+        for (const type of ["wa-hide", "wa-after-hide"]) {
+          document.addEventListener(
+            type,
+            (event) => {
+              if (
+                event.target instanceof Element &&
+                event.target.matches(".sidebar-rail-pin-menu")
+              ) {
+                record(type, event);
+              }
+            },
+            { capture: true, signal: lifetime.signal },
+          );
+        }
+        return {
+          read: () => ({ events, final: snapshot("failure") }),
+          stop: () => lifetime.abort(),
+        };
+      });
+      try {
+        for (const key of ["Shift+F10", "ContextMenu"]) {
+          await source.focus();
+          await page.keyboard.press(key);
+          await menu.getByRole("menuitem", { name: "Move down", exact: true }).waitFor();
+          await expect
+            .poll(() =>
+              menu
+                .getByRole("menuitem", { name: "Move down", exact: true })
+                .evaluate((el) => el.matches(":focus-within")),
+            )
+            .toBe(true);
+          await page.keyboard.press("Escape");
+          await expect
+            .poll(() => source.evaluate((el) => el === document.activeElement))
+            .toBe(true);
+        }
+      } catch (error) {
+        await writeFile(
+          path.join(suite.artifactDir, "rail-keyboard-focus-failure.json"),
+          JSON.stringify(await focusTrace.evaluate((trace) => trace.read()), null, 2),
+        );
+        throw error;
+      } finally {
+        await focusTrace.evaluate((trace) => trace.stop());
+        await focusTrace.dispose();
       }
       await rail
         .getByRole("link", { name: "Release notes", exact: true })
@@ -217,10 +330,16 @@ suite.define(() => {
       await menu.getByRole("menuitem", { name: "Unpin", exact: true }).waitFor();
       await page.keyboard.press("Escape");
       await source.click({ button: "right" });
-      await menu.getByRole("menuitem", { name: "Move down", exact: true }).click();
+      await changePins(
+        () => menu.getByRole("menuitem", { name: "Move down", exact: true }).click(),
+        [entries[0]!, entries[2]!, entries[1]!, entries[3]!],
+      );
       await expect.poll(pinOrder).toEqual([entries[0], entries[2], entries[1], entries[3]]);
       await source.click({ button: "right" });
-      await menu.getByRole("menuitem", { name: "Unpin", exact: true }).click();
+      await changePins(
+        () => menu.getByRole("menuitem", { name: "Unpin", exact: true }).click(),
+        entries.filter((entry) => entry !== entries[2]),
+      );
       await expect.poll(pinOrder).toEqual(entries.filter((entry) => entry !== entries[2]));
       expect(await gateway.getRequests("sessions.patch")).toEqual([]);
     });
@@ -344,6 +463,11 @@ suite.define(() => {
         await expect
           .poll(async () => (await gateway.getRequests("users.prefs.set")).length)
           .toBeGreaterThan(0);
+        await expect
+          .poll(async () => (await gateway.getRequests("users.prefs.set")).at(-1)?.params)
+          .toMatchObject({
+            entries: { "ui.railShortcuts": rows.map((row) => `session:${row.key}`) },
+          });
         await page.reload();
         await gateway.waitForRequest("connect");
         await installProfilePreferences();

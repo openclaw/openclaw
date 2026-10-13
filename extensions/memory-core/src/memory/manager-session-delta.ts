@@ -9,8 +9,10 @@ export type PreparedMemoryIndexEntry = {
   source: MemorySource;
   /** Chunks to embed and write; a session delta leaves out retained chunks. */
   chunks: IndexedMemoryChunk[];
-  /** Indexed session chunks whose rows publication keeps in place. */
+  /** Retained chunks whose small metadata changed. */
   retained?: IndexedMemoryChunk[];
+  /** Present for incremental replacement, including when no rows were removed. */
+  removedIds?: string[];
   structuredInputBytes?: number;
 };
 
@@ -29,8 +31,7 @@ export async function assertMemorySessionNotForgotten(
   }
 }
 
-// Planning reads the current worker-owned index; publication revalidates the
-// retained rows under its write lock before changing any indexed content.
+// The index owner plans once; publication consumes the plan without rereading it.
 export async function retainIndexedSessionChunks(
   prepared: PreparedMemoryIndexEntry,
   database: MemoryIndexDatabase,
@@ -53,7 +54,9 @@ export async function retainIndexedSessionChunks(
   );
   // Rows without stored embeddings are rewritten once a provider is available.
   const semantic = generation?.kind === "semantic";
-  const keep = new Set(indexed.filter((row) => row.embedded || !semantic).map((row) => row.id));
+  const keep = new Map(
+    indexed.filter((row) => row.embedded || !semantic).map((row) => [row.id, row]),
+  );
   if (keep.size === 0) {
     return prepared;
   }
@@ -67,8 +70,26 @@ export async function retainIndexedSessionChunks(
     const id = memoryChunkRowId(source, entry.path, chunk, model);
     if (!planned.has(id)) {
       planned.add(id);
-      (keep.has(id) ? retained : written).push(chunk);
+      const current = keep.get(id);
+      if (!current) {
+        written.push(chunk);
+      } else if (
+        current.importance !== chunk.importance ||
+        current.triggers !== chunk.triggers ||
+        current.projectKey !== chunk.projectKey ||
+        current.originClass !== (chunk.provenance?.originClass ?? "untrusted") ||
+        current.sessionKind !== (chunk.provenance?.sessionKind ?? "unknown") ||
+        (chunk.provenance && current.observedAt !== chunk.provenance.observedAt) ||
+        current.supersedesKey !== (chunk.provenance?.supersedesKey ?? null)
+      ) {
+        retained.push(chunk);
+      }
     }
   }
-  return retained.length > 0 ? { ...prepared, chunks: written, retained } : prepared;
+  return {
+    ...prepared,
+    chunks: written,
+    retained,
+    removedIds: indexed.filter((row) => !planned.has(row.id)).map((row) => row.id),
+  };
 }

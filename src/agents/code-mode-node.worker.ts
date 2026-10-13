@@ -467,6 +467,11 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
       }
       if (failureJson !== undefined) {
         const failure = formatGuestFailure(current, failureJson);
+        channel?.notify({
+          status: "failure",
+          error: JSON.parse(failureJson),
+          failurePhase: failure.failurePhase ?? "guest",
+        });
         return failed(
           failure.code,
           boundCodeModeError(failure.error, config.maxOutputBytes),
@@ -487,6 +492,13 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
       };
     }
   } catch (error) {
+    channel?.notify({
+      status: "failure",
+      error: types.isNativeError(error)
+        ? { name: error.name, message: error.message, stack: error.stack }
+        : String(error),
+      failurePhase: "guest",
+    });
     const timeout = types.isNativeError(error) && error.message === "code mode timeout exceeded";
     if (cell && output.length === 0 && !timeout) {
       try {

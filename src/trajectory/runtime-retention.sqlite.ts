@@ -6,7 +6,10 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { readSqliteDatabaseSiblingWriteRevision } from "../infra/sqlite-database-admission.js";
+import {
+  readSqliteDatabaseSiblingWriteRevision,
+  withSqliteDatabaseWriteScope,
+} from "../infra/sqlite-database-admission.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { readSqliteNativeMutationRevision } from "../infra/sqlite-schema-facts.js";
@@ -338,12 +341,15 @@ export function deleteTrajectoryRuntimeRetention(
       invalidated++;
       break;
     }
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .deleteFrom("trajectory_runtime_events")
-        .where("session_id", "=", run.sessionId)
-        .where("run_id", run.runId === null ? "is" : "=", run.runId),
+    // Retention removes runtime events only; session/transcript facts remain current.
+    withSqliteDatabaseWriteScope(database.db, [], () =>
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .deleteFrom("trajectory_runtime_events")
+          .where("session_id", "=", run.sessionId)
+          .where("run_id", run.runId === null ? "is" : "=", run.runId),
+      ),
     );
     totalBytes -= run.bytes;
     expiredRuns -= Number(run.newest < sweep.plan.cutoff);

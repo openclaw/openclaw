@@ -245,6 +245,49 @@ describe("pending-final delivery completion", () => {
     expect(recoveryMocks.scheduleMainSessionRecoveryPendingTarget).not.toHaveBeenCalled();
   });
 
+  it("rolls back settled delivery and cleanup together without losing an intervening write", async () => {
+    const scope = { sessionKey, storePath };
+    const initial = loadSessionEntry(scope)!;
+    let writeBeforeCommand = true;
+    let failCommit = true;
+    const observed = observeActorCommands({
+      beforeCommand() {
+        if (writeBeforeCommand) {
+          writeBeforeCommand = false;
+          replaceSessionEntrySync(scope, { ...initial, label: "committed while delivery settled" });
+        }
+      },
+      beforeCommit() {
+        if (failCommit) {
+          throw new Error("synthetic crash before delivery cleanup commit");
+        }
+      },
+    });
+    const options = { preserveActivity: true, clearAfterSettled: {} };
+    try {
+      await expect(
+        settlePendingFinalDelivery(completion, "delivered", ["prepared"], options),
+      ).rejects.toThrow("synthetic crash before delivery cleanup commit");
+      expect(loadSessionEntry(scope)).toMatchObject({
+        label: "committed while delivery settled",
+        pendingFinalDelivery: initial.pendingFinalDelivery,
+        updatedAt: initial.updatedAt,
+      });
+      expect(recoveryMocks.scheduleMainSessionRecoveryPendingTarget).not.toHaveBeenCalled();
+
+      failCommit = false;
+      await expect(
+        settlePendingFinalDelivery(completion, "delivered", ["prepared"], options),
+      ).resolves.toEqual({ state: "delivered" });
+      const settled = loadSessionEntry(scope);
+      expect(settled?.pendingFinalDelivery).toBeUndefined();
+      expect(settled?.label).toBe("committed while delivery settled");
+      expect(settled?.updatedAt).toBe(initial.updatedAt);
+    } finally {
+      observed.restore();
+    }
+  });
+
   it("settles queued final custody through an actor rebase while participant writes queue", async () => {
     await settlePendingFinalDelivery(completion, "queued", ["prepared"]);
     const scope = { agentId: "main", sessionKey, storePath };

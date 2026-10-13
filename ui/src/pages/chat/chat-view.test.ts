@@ -82,7 +82,7 @@ import {
 import { renderChat } from "./chat-view.ts";
 import * as chatMessageConfirmation from "./components/chat-message-confirmation.ts";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
-import { renderChatModelControls } from "./components/chat-model-controls.ts";
+import { renderChatModelControls } from "./components/chat-model-controls.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import {
   resetThreadPresentation,

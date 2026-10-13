@@ -75,15 +75,14 @@ export async function prepareSqliteTargetFromSessionStorePath(
   signal?: AbortSignal,
 ): Promise<ResolvedSqliteStoreTarget> {
   signal?.throwIfAborted();
-  const pathname = path.resolve(storePath);
-  const unsuffixed = resolveUnsuffixedSqliteTargetFromSessionStorePath(pathname);
+  const unsuffixed = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
   if (unsuffixed.agentId) {
     return unsuffixed;
   }
   const env = captureSessionTranscriptStorageEnvironment(options.env ?? process.env);
   const registryRead = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env });
   const input = {
-    storePath: pathname,
+    storePath: path.resolve(storePath.trim()),
     agentId: options.agentId,
     defaultAgentId: options.defaultAgentId,
     env,

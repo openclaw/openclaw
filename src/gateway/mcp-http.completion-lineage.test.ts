@@ -13,6 +13,7 @@ import {
 } from "../agents/sessions/tools/file-mutation-queue.js";
 import { prepareGatewayToolCallerAssertion } from "../agents/tools/gateway-caller-context.js";
 import { callGatewayTool } from "../agents/tools/gateway.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import {
@@ -95,6 +96,9 @@ beforeAll(async () => {
     tools: { allow: ["write"] },
   };
   await state.writeConfig(config);
+  setRuntimeConfigSnapshot(config);
+  // Real Gateway startup owns shared state before serving loopback requests.
+  openOpenClawStateDatabase();
   await ensureMcpLoopbackServer();
 });
 

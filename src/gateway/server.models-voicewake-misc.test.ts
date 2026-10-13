@@ -1,14 +1,17 @@
 // Covers prepared model catalogs and voicewake RPC/event delivery.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { resetPreparedModelCatalogStateForTest } from "../agents/prepared-model-runtime.test-support.js";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import {
+  captureRuntimeConfigAsyncReader,
+  clearConfigCache,
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfig,
+} from "../config/config.js";
 import type { GatewayAgentRuntime } from "../shared/session-types.js";
-import { closeSkillsWatchers, registerSkillsChangeListener } from "../skills/runtime/refresh.js";
-import { createSkillsWatcherMock } from "../skills/runtime/refresh.watcher.test-support.js";
+import { closeSkillsWatchers, refreshSkillsDiscovery } from "../skills/runtime/refresh.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { publishConfiguredModelRuntimeSnapshots } from "./server-startup-model-runtime.js";
@@ -23,10 +26,6 @@ import {
   trackConnectChallengeNonce,
 } from "./test-helpers.js";
 
-const watchMock = vi.hoisted(() => vi.fn<typeof import("@openclaw/fs-safe/watch").watch>());
-vi.mock("@openclaw/fs-safe/watch", () => ({ watch: watchMock }));
-const skillsObserver = createSkillsWatcherMock();
-
 installGatewayTestHooks({ scope: "suite" });
 
 let server: Awaited<ReturnType<typeof startServerWithClient>>["server"];
@@ -36,13 +35,11 @@ let port: number;
 afterAll(async () => {
   ws.close();
   await server.close();
-  // Minimal test gateways skip the skills close hook; skills.status watchers stay open otherwise.
+  // Minimal test gateways skip the skills close hook; retire their discovery worker here.
   await closeSkillsWatchers(true);
 });
 
 beforeAll(async () => {
-  watchMock.mockImplementation(skillsObserver.watchMock);
-  await skillsObserver.trackPlanning();
   const started = await startConnectedServerWithClient();
   server = started.server;
   ws = started.ws;
@@ -173,9 +170,7 @@ describe("gateway server models + voicewake", () => {
     });
   });
 
-  test("prepared agent read RPCs preserve explicit and system owners without live fallback", async ({
-    signal,
-  }) => {
+  test("prepared agent read RPCs preserve explicit and system owners without live fallback", async () => {
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
     if (!configPath) {
       throw new Error("Missing OPENCLAW_CONFIG_PATH");
@@ -220,9 +215,8 @@ describe("gateway server models + voicewake", () => {
       await resetPreparedModelCatalogStateForTest();
       agentDiscoveryMock.enabled = true;
       agentDiscoveryMock.models = startupModels;
-      const { getRuntimeConfig } = await import("../config/io.js");
       await publishConfiguredModelRuntimeSnapshots({
-        cfg: getRuntimeConfig(),
+        cfg: await captureRuntimeConfigAsyncReader()(),
       });
     };
     const readMethods = [
@@ -317,42 +311,28 @@ describe("gateway server models + voicewake", () => {
           agentId: "ops",
           workspaceDir: path.join(workspaceRoot, "ops-workspace"),
         });
-        await withinTest(skillsObserver.readyAll(), signal);
         const opsWorkspace = path.join(workspaceRoot, "ops-workspace");
         const skillsRoot = path.join(opsWorkspace, "skills");
         const hotSkillDir = path.join(skillsRoot, "hot-status");
         const hotSkillFile = path.join(hotSkillDir, "SKILL.md");
-        const published = createDeferred();
-        const unsubscribe = registerSkillsChangeListener((event) => {
-          if (
-            event.workspaceDir === opsWorkspace &&
-            event.reason === "watch" &&
-            event.changedPath === hotSkillFile
-          ) {
-            published.resolve();
-          }
+        await fs.mkdir(hotSkillDir, { recursive: true });
+        await fs.writeFile(
+          hotSkillFile,
+          "---\nname: hot-status\ndescription: Hot status fixture\n---\n",
+          "utf8",
+        );
+        await refreshSkillsDiscovery({
+          workspaceDir: opsWorkspace,
+          config: getRuntimeConfig(),
         });
-        try {
-          await fs.mkdir(hotSkillDir, { recursive: true });
-          await fs.writeFile(
-            hotSkillFile,
-            "---\nname: hot-status\ndescription: Hot status fixture\n---\n",
-            "utf8",
-          );
-          // Drive only observation; the real Skills owner must publish before the RPC reads it.
-          skillsObserver.forRoot(skillsRoot).change(hotSkillFile);
-          await withinTest(published.promise, signal);
-          const refreshed = await rpcReq<{
-            skills?: Array<{ name?: string; eligible?: boolean }>;
-          }>(ws, "skills.status", {});
-          expect(
-            refreshed.payload?.skills?.some(
-              (skill) => skill.name === "hot-status" && skill.eligible === true,
-            ),
-          ).toBe(true);
-        } finally {
-          unsubscribe();
-        }
+        const refreshed = await rpcReq<{
+          skills?: Array<{ name?: string; eligible?: boolean }>;
+        }>(ws, "skills.status", {});
+        expect(
+          refreshed.payload?.skills?.some(
+            (skill) => skill.name === "hot-status" && skill.eligible === true,
+          ),
+        ).toBe(true);
         expect(memory.payload).toMatchObject({ agentId: "ops" });
         expect(health.ok, JSON.stringify(health)).toBe(true);
       } finally {

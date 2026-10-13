@@ -861,6 +861,7 @@ describe("plugin run context lifecycle", () => {
     });
 
     const resultPromise = runPluginHostCleanup({
+      cfg: {},
       reason: "disable",
       pluginId: "hung-cleanup-plugin",
       sessionStoreTargets: [],

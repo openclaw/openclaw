@@ -36,7 +36,6 @@ import type {
   SqliteArchiveOneShotWorkerData,
   SqliteArchiveSessionRequest,
   SqliteArchiveSessionResponse,
-  SessionHistoryEvictionArchivePlan,
   SessionTranscriptMaintenanceSizingInput,
   TranscriptArchivePageResult,
   TranscriptArchivePublishPlan,
@@ -190,91 +189,19 @@ async function encodeStagedTranscriptArchive(params: {
 }
 
 export async function materializeTranscriptArchiveInWorker(
-  plan: TranscriptArchiveWorkerPlan,
+  input: TranscriptArchiveWorkerPlan,
   env?: NodeJS.ProcessEnv,
 ): Promise<TranscriptArchiveWorkerResult> {
-  if ("historyEviction" in plan) {
-    return materializeHistoryEvictionArchiveInWorker(plan, env);
-  }
-  if (plan.snapshot.lastSeq === null) {
-    const opened = withFreshOpenClawAgentDatabaseReadOnly(
-      (database) => readSessionStateDeleteSnapshot(database.db, plan.sessionId),
-      { agentId: plan.agentId, path: plan.databasePath, env },
-    );
-    if (!opened.found) {
-      throw new Error(
-        `Cannot archive SQLite transcript ${plan.sessionId}: ${opened.reason.replaceAll("-", " ")}`,
-      );
+  const history = "historyEviction" in input ? input.historyEviction : undefined;
+  const assertSource = () => {
+    if (history) {
+      assertDatabasePathIdentity(input.databasePath, history.expectedIdentity);
     }
-    if (!sqliteSessionStateDeleteSnapshotsEqual(opened.value, plan.snapshot)) {
-      throw new Error(
-        `SQLite session state changed before archive materialization for ${plan.sessionId}`,
-      );
-    }
-    return { archive: null, sessionId: plan.sessionId };
-  }
-  fs.mkdirSync(plan.archiveDirectory, { recursive: true, mode: 0o700 });
-  const stagedPath = `${resolveSqliteTranscriptArchivePath({
-    archiveDirectory: plan.archiveDirectory,
-    generation: plan.snapshot.generation ?? undefined,
-    identityOwner: "registry",
-    reason: plan.reason,
-    sessionId: plan.sessionId,
-  })}.${randomUUID()}.jsonl-stage`;
-  try {
-    const opened = withFreshOpenClawAgentDatabaseReadOnly(
-      (database) =>
-        runSqliteDeferredTransactionSync(
-          database.db,
-          () => {
-            const snapshot = readSessionStateDeleteSnapshot(database.db, plan.sessionId);
-            if (!sqliteSessionStateDeleteSnapshotsEqual(snapshot, plan.snapshot)) {
-              throw new Error(
-                `SQLite session state changed before archive materialization for ${plan.sessionId}`,
-              );
-            }
-            return stageTranscriptArchiveContent(database.db, plan.sessionId, stagedPath);
-          },
-          { databaseLabel: database.path, operationLabel: "session.archive.materialize" },
-        ),
-      { agentId: plan.agentId, path: plan.databasePath, env },
-    );
-    if (!opened.found) {
-      throw new Error(
-        `Cannot archive SQLite transcript ${plan.sessionId}: ${opened.reason.replaceAll("-", " ")}`,
-      );
-    }
-    const generation = plan.snapshot.generation;
-    if (opened.value > 0 && !generation) {
-      throw new Error(
-        `Cannot archive SQLite transcript without a generation for ${plan.sessionId}`,
-      );
-    }
-    const archive =
-      opened.value > 0 && generation
-        ? await encodeStagedTranscriptArchive({
-            archiveDirectory: plan.archiveDirectory,
-            generation,
-            reason: plan.reason,
-            sessionId: plan.sessionId,
-            stagedPath,
-          })
-        : null;
-    return { archive, sessionId: plan.sessionId };
-  } finally {
-    fs.rmSync(stagedPath, { force: true });
-  }
-}
-
-async function materializeHistoryEvictionArchiveInWorker(
-  input: SessionHistoryEvictionArchivePlan,
-  env?: NodeJS.ProcessEnv,
-): Promise<TranscriptArchiveWorkerResult> {
-  const assertSource = () =>
-    assertDatabasePathIdentity(input.databasePath, input.historyEviction.expectedIdentity);
+  };
   assertSource();
   const stagedPath = `${resolveSqliteTranscriptArchivePath({
     archiveDirectory: input.archiveDirectory,
+    generation: "snapshot" in input ? (input.snapshot.generation ?? undefined) : undefined,
     identityOwner: "registry",
     reason: input.reason,
     sessionId: input.sessionId,
@@ -282,42 +209,63 @@ async function materializeHistoryEvictionArchiveInWorker(
   try {
     const opened = withFreshOpenClawAgentDatabaseReadOnly(
       (database) =>
-        runSqliteDeferredTransactionSync(database.db, () => {
-          assertSource();
-          if (
-            isRecentHistoricalSessionId({
-              database,
-              sessionId: input.sessionId,
-              preserveRecentMs: input.historyEviction.preserveRecentMs,
-            })
-          ) {
-            return null;
-          }
-          const plan = planSessionStateDeleteIfUnreferenced({
-            ...input,
-            database,
-            referencedSessionIds: new Set(),
-          });
-          if (!plan) {
-            return null;
-          }
-          let rows = 0;
-          if (plan.snapshot.lastSeq !== null) {
-            fs.mkdirSync(input.archiveDirectory, { recursive: true, mode: 0o700 });
-            rows = stageTranscriptArchiveContent(database.db, input.sessionId, stagedPath);
-          }
-          return { plan, rows };
-        }),
+        runSqliteDeferredTransactionSync(
+          database.db,
+          () => {
+            assertSource();
+            if (
+              history &&
+              isRecentHistoricalSessionId({
+                database,
+                sessionId: input.sessionId,
+                preserveRecentMs: history.preserveRecentMs,
+              })
+            ) {
+              return null;
+            }
+            const preparedPlan =
+              "snapshot" in input
+                ? undefined
+                : planSessionStateDeleteIfUnreferenced({
+                    ...input,
+                    database,
+                    referencedSessionIds: new Set(),
+                  });
+            const plan = "snapshot" in input ? input : preparedPlan;
+            if (!plan) {
+              return null;
+            }
+            if (
+              "snapshot" in input &&
+              !sqliteSessionStateDeleteSnapshotsEqual(
+                readSessionStateDeleteSnapshot(database.db, input.sessionId),
+                input.snapshot,
+              )
+            ) {
+              throw new Error(
+                `SQLite session state changed before archive materialization for ${input.sessionId}`,
+              );
+            }
+            let rows = 0;
+            if (plan.snapshot.lastSeq !== null) {
+              fs.mkdirSync(input.archiveDirectory, { recursive: true, mode: 0o700 });
+              rows = stageTranscriptArchiveContent(database.db, input.sessionId, stagedPath);
+            }
+            return { plan, rows, preparedPlan };
+          },
+          { databaseLabel: database.path, operationLabel: "session.archive.materialize" },
+        ),
       { agentId: input.agentId, path: input.databasePath, env },
     );
     assertSource();
     if (!opened.found) {
-      throw new Error(`Cannot archive SQLite transcript ${input.sessionId}: ${opened.reason}`);
+      const reason = history ? opened.reason : opened.reason.replaceAll("-", " ");
+      throw new Error(`Cannot archive SQLite transcript ${input.sessionId}: ${reason}`);
     }
     if (!opened.value) {
       return { archive: null, sessionId: input.sessionId, preparedPlan: null };
     }
-    const { plan, rows } = opened.value;
+    const { plan, rows, preparedPlan } = opened.value;
     const generation = plan.snapshot.generation;
     if (rows > 0 && !generation) {
       throw new Error(
@@ -329,9 +277,26 @@ async function materializeHistoryEvictionArchiveInWorker(
         ? await encodeStagedTranscriptArchive({ ...input, generation, stagedPath })
         : null;
     assertSource();
-    return { archive, sessionId: input.sessionId, preparedPlan: plan };
+    return { archive, sessionId: input.sessionId, ...(history ? { preparedPlan } : {}) };
   } finally {
     fs.rmSync(stagedPath, { force: true });
+  }
+}
+
+async function* materializeTranscriptArchiveBatch(
+  plans: readonly TranscriptArchiveWorkerPlan[],
+  env?: NodeJS.ProcessEnv,
+): AsyncGenerator<TranscriptArchiveWorkerResult> {
+  let bytes = 0;
+  for (const plan of plans) {
+    const result = await materializeTranscriptArchiveInWorker(plan, env);
+    bytes += result.archive?.bytes.byteLength ?? 0;
+    if (bytes > MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES) {
+      throw new Error(
+        `Archive batch exceeds ${MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES} bytes; use fewer sessions`,
+      );
+    }
+    yield result;
   }
 }
 
@@ -399,15 +364,7 @@ async function runArchiveSession(
     let response: SqliteArchiveSessionResponse;
     if (request.operation === "materialize") {
       const results: TranscriptArchiveWorkerResult[] = [];
-      let bytes = 0;
-      for (const plan of request.plans) {
-        const result = await materializeTranscriptArchiveInWorker(plan, env);
-        bytes += result.archive?.bytes.byteLength ?? 0;
-        if (bytes > MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES) {
-          throw new Error(
-            `Archive batch exceeds ${MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES} bytes; use fewer sessions`,
-          );
-        }
+      for await (const result of materializeTranscriptArchiveBatch(request.plans, env)) {
         results.push(result);
       }
       response = { type: "done", results };
@@ -501,15 +458,7 @@ if (isRecord(workerData) && workerData.type === "sqlite-transcript-archive-v2") 
         SqliteArchiveOneShotWorkerData,
         { operation: "materialize" }
       >;
-      let materializedBytes = 0;
-      for (const plan of data.plans) {
-        const result = await materializeTranscriptArchiveInWorker(plan);
-        materializedBytes += result.archive?.bytes.byteLength ?? 0;
-        if (materializedBytes > MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES) {
-          throw new Error(
-            `Archive batch exceeds ${MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES} bytes; use fewer sessions`,
-          );
-        }
+      for await (const result of materializeTranscriptArchiveBatch(data.plans)) {
         port.postMessage(
           { type: "done", results: [result] } satisfies TranscriptArchiveWorkerMessage,
           [],

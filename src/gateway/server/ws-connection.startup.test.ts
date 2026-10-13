@@ -17,6 +17,10 @@ import {
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   consumeDeviceBootstrapTokenWithSetupCompletion,
   ensureDevicePairSetupBootstrapToken,
   issueDevicePairSetupBootstrapToken,
@@ -111,6 +115,7 @@ async function drainStartupCleanups(owners: Set<() => Promise<void>>) {
 }
 
 function attachTrackedGatewayWs(params: Parameters<typeof attachGatewayWsForTest>[0]) {
+  setRuntimeConfigSnapshot({});
   const socket = params.socket ?? createGatewayWsTestSocket();
   const connectionWork = params.options?.connectionWork ?? new GatewayConnectionWork();
   let observedClose = false;
@@ -157,6 +162,7 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   resetGatewayWorkAdmission();
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
 });
 
 async function attachStartupNodeConnect(params: {

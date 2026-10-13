@@ -63,11 +63,12 @@ function isInterruptedTurnEntry(entry: SessionEntry, runId: string): boolean {
   }
   return (
     message.stopReason === "toolUse" ||
-    (message.stopReason === "aborted" &&
-      (message.errorCode !== undefined
-        ? message.errorCode === AGENT_RUN_RESTART_ABORT_ERROR_CODE
-        : message.errorMessage === AGENT_RUN_RESTART_ABORT_ERROR) &&
-      message.content.every((part) => part.type === "text" && part.text === ""))
+    ((message.stopReason === "aborted" || message.stopReason === "error") &&
+      (message.errorCode === AGENT_RUN_RESTART_ABORT_ERROR_CODE ||
+        (message.stopReason === "aborted" &&
+          message.errorCode === undefined &&
+          message.errorMessage === AGENT_RUN_RESTART_ABORT_ERROR &&
+          message.content.every((part) => part.type === "text" && part.text === ""))))
   );
 }
 
@@ -156,7 +157,6 @@ export function prepareInitialPersistedUserTurnCohort(params: {
     },
   };
   let initial: InitialPersistedUserTurn | undefined;
-  let messagePresence: boolean | undefined;
   return {
     selection,
     consume(
@@ -166,8 +166,6 @@ export function prepareInitialPersistedUserTurnCohort(params: {
     ) {
       assertOwned();
       owner.assertCurrent();
-      messagePresence =
-        prepared.kind === "bounded" ? prepared.transcript?.messagePresence : undefined;
       const selected = selectCurrentUserTurnFromCohort({
         sessionManager,
         message,
@@ -185,7 +183,6 @@ export function prepareInitialPersistedUserTurnCohort(params: {
       }
     },
     readInitial: () => initial,
-    readMessagePresence: () => messagePresence,
   };
 }
 

@@ -5,11 +5,13 @@ import type {
   SessionTranscriptAccessScope,
   SessionTranscriptWriteScope,
   TranscriptEvent,
+  TranscriptEventAppendOptions,
 } from "./session-accessor.sqlite-contract.js";
 import {
   captureLifecycleDatabaseScope,
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
+  type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
 import {
   assertLockedTranscriptWriteAllowed,
@@ -79,6 +81,21 @@ export async function appendPreparedTranscriptEvent(
       },
     });
   }
+  return appendTranscriptEventInWorker({ scope, event, fence: fenced, assertCurrent });
+}
+
+/** Raw and guarded event appends share the canonical transcript writer operation. */
+export async function appendTranscriptEventInWorker(params: {
+  scope: ResolvedTranscriptScope & { env: NodeJS.ProcessEnv; path: string };
+  event: TranscriptEvent;
+  appendIntent?: TranscriptEventAppendOptions["appendIntent"];
+  fence?: SessionTranscriptWriteScope;
+  assertCurrent?: () => void;
+}): Promise<boolean> {
+  const { scope, event, appendIntent, fence } = params;
+  const assertCurrent = params.assertCurrent ?? (() => undefined);
+  const database = { ...toDatabaseOptions(scope), path: scope.path };
+  const eventJson = JSON.stringify(event);
   return runSessionEntryWorkerOperation<SessionTranscriptEventCommitted, boolean>({
     database,
     agentId: scope.agentId,
@@ -87,7 +104,7 @@ export async function appendPreparedTranscriptEvent(
     prepareWorker: () => ({
       async prepare() {
         const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
-        await restoreSessionColdTranscript({ ...requested, env: scope.env }, assertCurrent);
+        await restoreSessionColdTranscript({ ...scope, storePath: scope.path }, assertCurrent);
       },
       beforeWrite: assertCurrent,
       async release() {},
@@ -96,7 +113,7 @@ export async function appendPreparedTranscriptEvent(
       commit(() =>
         executeSessionMessageRewriteOperation(worker, database.agentId, {
           type: "session.transcript.event.append",
-          input: { scope, eventJson, fence: fenced },
+          input: { scope, eventJson, appendIntent, fence },
         }),
       ),
     onCommitted: ({ appended, projectionNeedsReconcile }) => {

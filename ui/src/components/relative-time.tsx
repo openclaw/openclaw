@@ -5,7 +5,7 @@ import { i18nRevision } from "../lib/reactive/i18n.ts";
 import { useVisiblePoll } from "../lib/reactive/visible-poll.ts";
 import { defineSolidBridge } from "../lit/solid-bridge.ts";
 
-export const RelativeTime = defineSolidBridge<{ timestampMs: number | null }>(
+defineSolidBridge<{ timestampMs: number | null }>(
   "openclaw-relative-time",
   (props) => {
     const [tick, setTick] = createSignal(0);

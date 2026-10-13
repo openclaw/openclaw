@@ -1,5 +1,5 @@
 import {
-  readAcpSessionEntry,
+  readAcpSessionEntryAsync,
   prepareAcpSessionEntryRead,
   rethrowIncognitoSessionError,
   type AcpSessionEntryPreparer,
@@ -281,7 +281,7 @@ async function reconcileAcpThreadBindings(
       preparations.set(binding, prepared);
       prepared.assertCurrent();
     }
-    const session = prepared ? prepared.session : readAcpSessionEntry(input);
+    const session = prepared ? prepared.session : await readAcpSessionEntryAsync(input);
     // Session store read failures are transient; never auto-unbind on uncertain reads.
     if (session?.storeReadFailed) {
       continue;

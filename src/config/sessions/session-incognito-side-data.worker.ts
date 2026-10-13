@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { mutateAcpSessionEntryInWorker } from "../../acp/runtime/session-meta-entry.worker.js";
 import type { BoardWriteOperations } from "../../boards/sqlite-board-operations.js";
 import {
@@ -10,7 +9,6 @@ import { readSessionTitleFieldsFromTranscript } from "../../gateway/session-tran
 import type { HeartbeatOutcomeWorkerOperations } from "../../infra/heartbeat-outcome-store.worker.js";
 import type { MessageToolRunOutcomeWorkerOperations } from "../../infra/message-tool-run-outcome-store.worker.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import { takeSqliteWorkerOperationAdmissionAttachment } from "../../infra/sqlite-worker-operation-admission.js";
@@ -18,7 +16,6 @@ import { readSessionProgressCard } from "../../session-cards/progress-card-store
 import type { ProgressCardWorkerOperations } from "../../session-cards/progress-card-store.worker.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
-import { createAgentDatabaseDomainOwner } from "../../state/openclaw-agent-execution-domain.js";
 import { loadAgentReactionOperations } from "../../state/openclaw-agent-execution-operations.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import {
@@ -37,6 +34,7 @@ import {
 import { participantRecordsBySessionKey } from "./session-accessor.sqlite-participant-projection.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
 import { readSessionGroupCategoryKeys } from "./session-group-categories.read.js";
+import { createIncognitoDomainWorker } from "./session-incognito-domain.worker.js";
 import type { IncognitoSideDataOperations } from "./session-incognito-side-data-contract.js";
 import { readSessionMembershipRowsInDatabase } from "./session-membership-facts.js";
 import { listSessionReactionsInDatabase } from "./session-reaction-store.read.js";
@@ -67,13 +65,9 @@ export function createIncognitoSideDataWorker(
   let trajectoryRetention:
     | typeof import("../../trajectory/runtime-retention.sqlite.js")
     | undefined;
-  const domain = createAgentDatabaseDomainOwner({
-    databasePath: database.path,
-    assertCurrent: () => database.db,
-    assertCleanupCurrent() {},
-    admit: (stage) => admit(stage, keys),
-  });
-  let binding: { id: string; moduleUrl: string; input: undefined } | undefined;
+  const domain = createIncognitoDomainWorker<DomainOperations>(database, (stage) =>
+    admit(stage, keys),
+  );
   const reactions = createWorkerOperationRegistry<
     Pick<IncognitoSideDataOperations, "session.reaction.set">,
     AgentWorkerOperationContext,
@@ -130,38 +124,21 @@ export function createIncognitoSideDataWorker(
                   ? runtimeProcessEntrypoints.messageToolRunOutcomeStore
                   : undefined;
       if (module) {
-        binding = {
-          id: randomUUID(),
-          moduleUrl: resolveRuntimeWorkerUrl(module).href,
-          input: undefined,
-        };
-        await domain.prepare({ type: "database.domain.bind", input: binding });
+        await domain.prepare(module);
       }
       await reactions.prepare(command.type);
     },
     execute(command: Command, selectedKeys: string[]) {
       keys = selectedKeys;
-      const bound = binding;
       const result = <Value>(value: Value) => ({ value, keys });
       const executeDomain = <Key extends keyof DomainOperations>(inner: {
         type: Key;
         input: DomainOperations[Key]["input"];
       }): { value: DomainOperations[Key]["output"]; keys: string[] } => {
-        if (!bound) {
-          throw new Error("Incognito side-data domain was not prepared");
-        }
-        return result(
-          domain.execute({
-            type: "database.domain.execute",
-            input: { id: bound.id, command: inner },
-          }) as DomainOperations[Key]["output"], // SAFETY: the static domain owns this typed result.
-        );
+        return result(domain.execute(inner));
       };
-      try {
-        if (bound) {
-          domain.execute({ type: "database.domain.bind", input: bound });
-        }
-        return withSqlitePostCommitPublications(database.db, () => {
+      return domain.run(() =>
+        withSqlitePostCommitPublications(database.db, () => {
           switch (command.type) {
             case "session.trajectory.read": {
               if (!readTrajectory) {
@@ -406,19 +383,11 @@ export function createIncognitoSideDataWorker(
               return result(readSessionProgressCard(database.db, command.input.sessionKey));
           }
           throw new Error("Unsupported incognito side-data operation");
-        });
-      } finally {
-        if (bound) {
-          domain.assertSettled();
-          domain.execute({ type: "database.domain.close", input: { id: bound.id } });
-          binding = undefined;
-        }
-      }
+        }),
+      );
     },
     assertSettled() {
       domain.assertSettled();
-      // Admission/key validation may refuse after prepare without entering execute.
-      binding = undefined;
     },
     close: () => domain.close(),
   };

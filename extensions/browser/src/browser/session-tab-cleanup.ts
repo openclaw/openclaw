@@ -3,7 +3,7 @@ import {
   isCronSessionKey,
   isSubagentSessionKey,
 } from "openclaw/plugin-sdk/routing";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   resolveBrowserConfig,
   type ResolvedBrowserConfig,

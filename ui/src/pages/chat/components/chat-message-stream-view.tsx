@@ -49,6 +49,7 @@ type StreamMessageOptions = Pick<
   | "sessionKey"
   | "presented"
   | "boardProvider"
+  | "widgetLayout"
   | "agentId"
   | "runActive"
   | "asyncQuestions"
@@ -70,6 +71,7 @@ type StreamMessageOptions = Pick<
   | "githubRepo"
   | "githubRepositories"
   | "onOpenWorkspaceFile"
+  | "onPermissionRetry"
 >;
 
 export type StreamGroupOptions = StreamMessageOptions & {
@@ -83,23 +85,15 @@ export type StreamGroupOptions = StreamMessageOptions & {
   assistant?: Parameters<typeof renderChatAvatar>[1];
   showAssistantAvatar?: boolean;
   startupLabel?: string;
+  retryAt?: number;
   waitingApproval?: boolean;
   waitingSubagents?: ChatSubagentWait;
   runningSubagents?: number;
   subagentActivity?: LegacyTemplateResult;
-  onOpenSubagent?: (key: string) => void;
   onOpenSubagents?: () => void;
   runOutputTokens?: number | null;
   questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
 };
-
-export function renderSolidStreamGroupParts(
-  parts: StreamGroupPart[],
-  opts: StreamGroupOptions,
-  presentation: "standalone" | "continuation",
-) {
-  return <StreamGroupParts parts={parts} options={opts} presentation={presentation} />;
-}
 
 export function StreamGroupParts(props: {
   parts: StreamGroupPart[];
@@ -145,7 +139,7 @@ export function UnplacedSubagentWait(props: {
     {
       kind: "reading-indicator",
       key: `waiting-subagents:${props.sessionKey}`,
-      startedAt: props.wait.startedAt ?? 0,
+      startedAt: props.wait.startedAt,
       waitingOn: "subagents",
     },
   ]);
@@ -167,16 +161,7 @@ export function StreamPartView(props: {
 }) {
   const stream = () => (props.part.kind === "stream" ? props.part : undefined);
   return (
-    <Show
-      when={stream()}
-      fallback={
-        <NonstreamPart
-          part={props.part}
-          options={props.options}
-          presentation={props.presentation}
-        />
-      }
-    >
+    <Show when={stream()} fallback={<NonstreamPart {...props} />}>
       <StreamingMessage part={stream} options={props.options} />
     </Show>
   );
@@ -199,9 +184,9 @@ function NonstreamPart(props: {
           props.part.waitingOn === "subagents" ? props.options.waitingSubagents : undefined,
         runningSubagents: props.options.runningSubagents,
         subagentActivity: props.options.subagentActivity,
-        onOpenSubagent: props.options.onOpenSubagent,
         onOpenSubagents: props.options.onOpenSubagents,
         startupLabel: props.options.startupLabel,
+        retryAt: props.options.retryAt,
         outputTokens: props.options.runOutputTokens,
         presentation: props.presentation,
       });

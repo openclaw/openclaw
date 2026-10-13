@@ -197,8 +197,9 @@ vi.mock("../../web-search/runtime.js", () => ({
   hasUsableWebSearchProvider: hasUsableWebSearchProviderMock,
 }));
 
+// mock-isolation: Cron-run fixtures own skill snapshots and exclude filesystem scans and approval storage.
 vi.mock("../../skills/runtime/cron-snapshot.runtime.js", () => ({
-  resolveNodeExecEligibility: vi.fn(() => ({ canExec: false })),
+  resolveNodeExecEligibilityAsync: vi.fn(() => ({ canExec: false })),
   getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
   resolveEffectiveAgentSkillFilter: resolveAgentSkillsFilterMock,
   resolveReusableWorkspaceSkillSnapshot: (params: {

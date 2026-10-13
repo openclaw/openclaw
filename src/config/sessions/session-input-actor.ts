@@ -4,8 +4,10 @@ import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { captureSessionPendingInputWorkerCustody } from "./session-accessor.sqlite-pending-inputs.js";
-import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
+import { prepareSessionEntryReplacementDatabase } from "./session-accessor.sqlite-replacement-worker.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import type { SessionEntryTargetPatchScope } from "./session-accessor.types.js";
 import type {
@@ -53,10 +55,11 @@ export function bindUserTurnInputActor(
   bind(binding);
 }
 
-/** Acquire through the selected writer; never redirect an incognito target to a file. */
+/** Capture the selected owner; never redirect an incognito target to a file. */
 export async function acquireSessionInputActor(
   requestedTarget: SessionEntryTargetPatchScope,
   lifetime: SessionActorLifetime,
+  followRegistration?: AgentDatabaseRequestExecutionSource["onRegistryChange"],
 ): Promise<SessionInputActorAcquisition | undefined> {
   const agentId = requestedTarget.readSource?.agentId ?? requestedTarget.agentId;
   if (!agentId) {
@@ -134,37 +137,50 @@ export async function acquireSessionInputActor(
   if (typeof target.readSource?.databaseIdentity === "symbol") {
     throw new Error("Input actor lost its original native owner");
   }
-  return withSessionEntryWorker(
-    database,
-    target.readSource?.databaseIdentity,
-    () => lifetime.assertCurrent(),
-    async (execution, source) => {
-      await execution.prepare(source);
-      const identity = execution.fileIdentity;
-      if (!identity) {
-        throw new Error("Input actor has no admitted physical database");
-      }
-      const actor = await createSessionActorFactory(database).acquire(
-        { database: identity, sessionKey },
-        lifetime,
-      );
-      if ("kind" in actor) {
-        return undefined;
-      }
-      return {
-        actor,
-        target: {
-          ...target,
-          readSource: target.readSource ?? {
-            agentId: database.agentId,
-            path: database.path,
-            databaseIdentity: identity.physicalIdentity,
-            databaseBirthtime: identity.birthtime,
-          },
-        },
-      };
+  const execution = captureOpenClawAgentDatabaseExecution(database, {
+    expectedIdentity: target.readSource && {
+      kind: "file",
+      physicalIdentity: target.readSource.databaseIdentity,
+      birthtime: target.readSource.databaseBirthtime,
+      nativeLocation: database.path,
     },
-  );
+  });
+  try {
+    // Native receipts already identify the file; only cold owners need writer preparation.
+    if (!execution.fileIdentity) {
+      await prepareSessionEntryReplacementDatabase(
+        database,
+        () => lifetime.assertCurrent(),
+        execution,
+        followRegistration,
+      );
+    }
+    const identity = execution.fileIdentity;
+    if (!identity) {
+      throw new Error("Input actor has no admitted physical database");
+    }
+    const actor = await createSessionActorFactory(database).acquire(
+      { database: identity, sessionKey },
+      lifetime,
+    );
+    if ("kind" in actor) {
+      return undefined;
+    }
+    return {
+      actor,
+      target: {
+        ...target,
+        readSource: target.readSource ?? {
+          agentId: database.agentId,
+          path: database.path,
+          databaseIdentity: identity.physicalIdentity,
+          databaseBirthtime: identity.birthtime,
+        },
+      },
+    };
+  } finally {
+    await execution.release();
+  }
 }
 
 const inputActor = new AsyncLocalStorage<SessionInputActorBinding | undefined>();

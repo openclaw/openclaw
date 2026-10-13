@@ -644,6 +644,19 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     item: CodexThreadItem | undefined,
     notification?: { itemId: string | undefined },
   ): Promise<void> {
+    // Codex deltas are best-effort and completed item text is authoritative (the
+    // codex-rs TUI consolidates from it); without this a dropped final delta
+    // leaves live and terminal chat text silently short.
+    const streamed =
+      item?.type === "agentMessage"
+        ? this.assistantProjection.assistantTextByItem.get(item.id)
+        : undefined;
+    if (streamed && typeof item?.text === "string" && item.text.startsWith(streamed)) {
+      await this.assistantProjection.handleAssistantDelta({
+        itemId: item.id,
+        delta: item.text.slice(streamed.length),
+      });
+    }
     const asyncMessage = this.assistantProjection.recordItemCompleted(
       item,
       notification && { ...notification, activeItemIds: this.activeItemIds },

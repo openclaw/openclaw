@@ -2,13 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import type { ConfiguredModelRef } from "@openclaw/model-catalog-core/configured-model-refs";
+import {
+  collectConfiguredModelRefs,
+  type ConfiguredModelRef,
+} from "@openclaw/model-catalog-core/configured-model-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { stableStringify } from "@openclaw/normalization-core";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getPluginMetadataSnapshotCache, retainPluginCache } from "../plugins/plugin-cache.js";
@@ -27,7 +27,6 @@ import { prepareAmbientAgentCredentialsForDiscovery } from "./agent-auth-discove
 import { discoverModelsFromCapturedSources } from "./agent-model-discovery.js";
 import { withAgentRosterFactsBatch } from "./agent-scope-config.js";
 import { getPreparedRuntimeAuthProfileStoreSnapshotCore } from "./auth-profiles/runtime-snapshots.js";
-import { buildInlineProviderModels } from "./embedded-agent-runner/model.inline-provider.js";
 import {
   createBundledStaticCatalogModelResolver,
   loadBundledProviderStaticCatalogContextModels,
@@ -35,10 +34,7 @@ import {
 import { createStaticModelIdMatcher } from "./embedded-agent-runner/model.static-id.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { loadManifestModelProviderConfigs } from "./model-catalog-manifest.js";
-import {
-  buildConfiguredModelCatalog,
-  parseConfiguredModelVisibilityEntries,
-} from "./model-selection-shared.js";
+import { parseConfiguredModelVisibilityEntries } from "./model-selection-shared.js";
 import { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
 import { loadPersistedPluginModelCatalogs } from "./plugin-model-catalog-execution.js";
 import { resolvePluginModelCatalogOwnerPluginId } from "./plugin-model-catalog.js";
@@ -50,6 +46,7 @@ import type {
 } from "./prepared-model-runtime.catalog-contract.js";
 import { prepareCapturedRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
 import { completeConfiguredRuntimeModels } from "./prepared-model-runtime.configured-completion.js";
+import { prepareConfiguredModelFacts } from "./prepared-model-runtime.configured-facts.js";
 import {
   collectPreparedModelRuntimeConfiguredRefs,
   collectConfiguredProviderIdsNeedingStaticCatalog,
@@ -57,6 +54,7 @@ import {
   prepareConfiguredRuntimeModels,
   prepareRuntimeCapabilityModels,
 } from "./prepared-model-runtime.configured.js";
+import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.fingerprint.js";
 import {
   prepareWorkspacePluginRegistries,
   type PreparedInboundRegistryLoader,
@@ -94,21 +92,6 @@ export type PreparedConfiguredModelRegistries = Map<
   PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
   Map<string, PreparedConfiguredModelRegistry[]>
 >;
-
-export function prepareConfiguredModelFacts(
-  config: OpenClawConfig,
-  pluginMetadataSnapshot: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
-): Pick<PreparedModelRuntimePluginGeneration, "inlineProviderModels" | "configuredCatalogEntries"> {
-  return {
-    inlineProviderModels: buildInlineProviderModels(config.models?.providers ?? {}, {
-      providerMetadataOwners: pluginMetadataSnapshot.owners,
-    }),
-    configuredCatalogEntries: buildConfiguredModelCatalog({
-      cfg: config,
-      manifestPlugins: pluginMetadataSnapshot,
-    }),
-  };
-}
 
 export async function prepareWorkspaceBuildGroup(
   inputs: readonly PreparedModelRuntimeInput[],
@@ -559,9 +542,6 @@ export function captureModelsJsonContents(agentDir: string): string | null {
     throw error;
   }
 }
-export const fingerprintPreparedRuntimeFacts = (value: unknown): string =>
-  sha256Base64Url(stableStringify(value));
-
 /** Record discovery scope before config projection or auth-owner publication can replace it. */
 export function preparedModelInventoryKey(input: PreparedModelRuntimeInput): string {
   const { models, auth, env } = input.config;
@@ -572,6 +552,7 @@ export function preparedModelInventoryKey(input: PreparedModelRuntimeInput): str
   return fingerprintPreparedRuntimeFacts({
     ...input,
     config: { models, auth, env, plugins },
+    configuredModelRefs: collectConfiguredModelRefs(input.config),
     env: input.env ?? process.env,
     runtimePluginSelections: undefined,
     order:

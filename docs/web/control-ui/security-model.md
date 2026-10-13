@@ -65,7 +65,7 @@ no Gateway or session access.
 
 The public renderer includes only user messages and assistant final-answer text.
 It omits tools, reasoning, files, images, widgets, hidden messages, and internal
-metadata, and applies best-effort credential-pattern redaction. A restrictive
+metadata. Included text preserves credentials; review it before publishing. A restrictive
 content security policy permits only the fixed reader script; transcript HTML
 cannot execute. Responses retain `Cache-Control: no-store` and
 `Referrer-Policy: no-referrer`. Server-side representation reuse never substitutes

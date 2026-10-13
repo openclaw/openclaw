@@ -1,6 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV } from "../../commands/doctor/shared/update-phase.js";
+import {
+  UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV,
+  UPDATE_POST_ACTIVATION_INSPECTIONS_REPORT_MODE,
+} from "../../commands/doctor/shared/update-phase.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
@@ -150,7 +153,9 @@ export async function convergeUpdatePlugins(params: {
       ? { OPENCLAW_COMPATIBILITY_HOST_VERSION: compatibilityHostVersion }
       : {}),
     [UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV]:
-      params.deferPostActivationInspections === true ? "1" : "0",
+      params.deferPostActivationInspections === true
+        ? UPDATE_POST_ACTIVATION_INSPECTIONS_REPORT_MODE
+        : "0",
   };
   return await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, () =>
     withUpdateEnv(convergenceEnv, async () => {

@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveSessionThreadInfo } from "../../channels/plugins/session-conversation.js";
 import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
 import {
   captureIncognitoSessionSource,
@@ -80,6 +81,7 @@ export async function prepareSessionsSendCommunication(params: {
     : undefined;
   const targetAgentId = params.target.agentId;
   const targetSessionKey = params.target.sessionKey;
+  const targetsThread = Boolean(resolveSessionThreadInfo(targetSessionKey).threadId);
   const caller = getGatewayToolCallerIdentity();
   const assertCaller = captureGatewayToolCallerAssertion();
   const context = getInProcessGatewayToolContext();
@@ -130,6 +132,18 @@ export async function prepareSessionsSendCommunication(params: {
     if (currentPolicyConfig() !== currentConfig) {
       throw new Error("Communication policy changed; send the message again for a new decision.");
     }
+    // The tool preflight may have captured an older opt-in. Admission owns the
+    // current destination policy, including fallbacks and the final commit guard.
+    if (
+      targetsThread &&
+      policyConfigs.some(
+        (policyConfig) => policyConfig.tools?.sessions?.allowThreadTargets !== true,
+      )
+    ) {
+      throw new Error(
+        "sessions_send cannot target a thread session for inter-agent coordination. Use the parent channel session key instead, or enable tools.sessions.allowThreadTargets.",
+      );
+    }
   };
   const unsubscribe = sessionChanges.subscribeFacts((change) => {
     if (
@@ -172,7 +186,10 @@ export async function prepareSessionsSendCommunication(params: {
       return;
     }
     const facts = change.facts;
-    if (facts?.kind === "entry" && facts.communicationBinding !== undefined) {
+    if (
+      (facts?.kind === "entry" || facts?.kind === "replacement") &&
+      facts.communicationBinding !== undefined
+    ) {
       dirty ||= selected.some(
         (endpoint) => communicationEntryBinding(endpoint.entry) !== facts.communicationBinding,
       );

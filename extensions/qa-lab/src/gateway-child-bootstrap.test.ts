@@ -99,7 +99,10 @@ if (command === "descendant") {
     }
   } else if (current === "gateway") {
     fs.writeFileSync(path.join(process.env.OPENCLAW_STATE_DIR, "candidate-owner"), String(process.pid));
-    http.createServer((_request, response) => response.end("ok"))
+    http.createServer((request, response) => {
+  response.setHeader("content-type", "application/json");
+  response.end(JSON.stringify(request.url === "/readyz" ? { ready: true, agentDatabases: [] } : { ok: true }));
+})
       .listen(Number(args[args.indexOf("--port") + 1]), "127.0.0.1");
   } else if (current === "message") {
     const ownerPid = Number(fs.readFileSync(path.join(process.env.OPENCLAW_STATE_DIR, "candidate-owner"), "utf8"));

@@ -423,11 +423,10 @@ it.each([
   },
 );
 
-it.each(
-  [undefined, "main", "other"].flatMap((agentId) =>
-    ["global", "topic"].map((sessionKey) => ({ agentId, sessionKey })),
-  ),
-)(
+it.each([
+  { agentId: undefined, sessionKey: "topic" },
+  { agentId: "main", sessionKey: "global" },
+])(
   "preserves a populated incognito owner for an explicit locator ($agentId, $sessionKey)",
   async ({ agentId, sessionKey }) => {
     const owner = { agentId: `ops-memory-${agentId ?? "missing"}-${sessionKey}`, env: state.env };

@@ -3,7 +3,7 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { createCronServiceState, type CronServiceDeps } from "./service/state.js";
-import { runMissedJobs } from "./service/timer.js";
+import { runMissedJobs } from "./service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 

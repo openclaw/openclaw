@@ -129,6 +129,14 @@ export type CreateManagedWorktreeParams = {
   provisionIgnoredFiles?: boolean;
   signal?: AbortSignal;
   onProgress?: (phase: "checkout" | "setup") => void;
+  /** Committed prompt files are ready; workspace tools must still await creation. */
+  onPromptReady?: (facts: {
+    id: string;
+    path: string;
+    branch: string;
+    repoRoot: string;
+    commit: string;
+  }) => Promise<void>;
   /** Synchronous caller-authority guard checked at allocation commit boundaries. */
   commitGuard?: () => void;
   /** Revalidate the selected source for one operation without retaining its guard afterward. */
@@ -155,7 +163,6 @@ export type WorktreeCreationPublication = {
   id: string;
   pending?: ManagedWorktreeRecord;
   record?: ManagedWorktreeRecord;
-  cleanup?: (assertCurrent: () => void) => Promise<void>;
 };
 
 /** Exact retirement retains the original checkout, not merely its captured bytes. */

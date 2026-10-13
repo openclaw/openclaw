@@ -114,6 +114,8 @@ export async function tryDispatchAcpReplyHook(
     bypassForCommand,
     onReplyStart: ctx.onReplyStart,
     onAgentRunStart: ctx.onAgentRunStart,
+    onPreparedAgentRunStart: ctx.onPreparedAgentRunStart,
+    turnAdoption: ctx.turnAdoption,
     userTurnTranscriptRecorder: ctx.userTurnTranscriptRecorder,
     prepareAssistantTranscriptMessage: ctx.prepareAssistantTranscriptMessage,
     recordProcessed: ctx.recordProcessed,

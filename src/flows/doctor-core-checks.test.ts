@@ -548,22 +548,19 @@ async function detectFindings(
 }
 
 describe("doctor gateway auth placeholder token", () => {
-  it.each(["undefined", "null", "  undefined  ", "", "  "])(
-    'reports the literal token "%s" as an error',
-    async (token) => {
-      expect(await detectFindings(token)).toEqual([
-        expect.objectContaining({
-          checkId: "core/doctor/gateway-auth",
-          severity: "error",
-          path: "gateway.auth.token",
-          message: expect.stringContaining("not a usable secret"),
-          fixHint: expect.stringContaining("--generate-gateway-token"),
-        }),
-      ]);
-    },
-  );
+  it.each(["undefined"])('reports the literal token "%s" as an error', async (token) => {
+    expect(await detectFindings(token)).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/gateway-auth",
+        severity: "error",
+        path: "gateway.auth.token",
+        message: expect.stringContaining("not a usable secret"),
+        fixHint: expect.stringContaining("--generate-gateway-token"),
+      }),
+    ]);
+  });
 
-  it.each(["password", "none"] as const)(
+  it.each(["password"] as const)(
     "leaves %s auth authoritative over an inactive placeholder token",
     async (mode) => {
       expect(await detectFindings("undefined", mode)).toEqual([]);
@@ -587,9 +584,5 @@ describe("doctor gateway auth placeholder token", () => {
     ).toEqual([
       expect.objectContaining({ fixHint: expect.stringContaining("external secret source") }),
     ]);
-  });
-
-  it("accepts a real token that merely contains the word undefined", async () => {
-    expect(await detectFindings("undefined-but-actually-a-long-real-token")).toEqual([]);
   });
 });

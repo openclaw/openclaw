@@ -6,7 +6,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as modelThinkingDefault from "../agents/model-thinking-default.js";
 import { SessionManager } from "../agents/sessions/index.js";
 import * as thinking from "../auto-reply/thinking.js";
+import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
@@ -123,6 +125,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         },
       );
 
+      setRuntimeConfigSnapshot(cfg);
       const res = await runCronIsolatedAgentTurn({
         deliveryAttemptFence: null,
         cfg,
@@ -158,6 +161,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       await withTempHome(async (home) => {
         const storePath = await writeSessionStore(home, { delivery: { kind: "internal" } });
         const profile = ensureProfileForEmail("cron-creator@example.test");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const createdActor = { type: "human" as const, source, id: profile.id };
         const job: CronStoredJob = {
           ...makeJob({ kind: "agentTurn", message: "persist this turn" }),
@@ -179,6 +183,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
             },
           },
         });
+        setRuntimeConfigSnapshot(cfg);
         runEmbeddedAgentMock.mockImplementationOnce(async (input: Record<string, unknown>) => {
           const sessionKey = typeof input.sessionKey === "string" ? input.sessionKey : "";
           expect(sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
@@ -210,11 +215,10 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         });
         expect(res.status, res.status === "error" ? res.error : undefined).toBe("ok");
         expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-        for (const key of ["agent:main:cron:job-1", res.sessionKey!]) {
-          const entry = await readCronSessionEntry(storePath, key);
-          expect(entry).toMatchObject({ createdActor });
-          expect(entry?.sandbox).toBe("required");
-        }
+        const entry = await readCronSessionEntry(storePath, "agent:main:cron:job-1");
+        expect(entry).toMatchObject({ createdActor });
+        expect(entry?.sandbox).toBe("required");
+        await expect(readCronSessionEntry(storePath, res.sessionKey!)).resolves.toBeUndefined();
       });
     },
   );
@@ -251,9 +255,11 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         compactionTokensAfter: 42,
       });
 
+      const cfg = makeCfg(home, storePath);
+      setRuntimeConfigSnapshot(cfg);
       const res = await runCronIsolatedAgentTurn({
         deliveryAttemptFence: null,
-        cfg: makeCfg(home, storePath),
+        cfg,
         deps,
         job: currentBoundJob,
         message: DEFAULT_MESSAGE,

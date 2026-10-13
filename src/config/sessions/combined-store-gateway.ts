@@ -27,6 +27,7 @@ import { resolveSessionStoreCompatibilityAgentId } from "../legacy.default-agent
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   createSessionModelSources,
+  type GatewaySessionLineageReader,
   type GatewayStoredSessionTarget,
   type GatewayStoredSessionTargets,
 } from "./combined-store-model-sources.js";
@@ -57,6 +58,7 @@ import {
   listConfiguredSessionStoreAgentIds,
   listKnownSessionStoreAgentIds,
   resolveAgentSessionStoreTargetsSync,
+  resolveConfiguredAgentDatabaseCandidatePaths,
   resolveAllAgentSessionStoreTargetsSync,
   type SessionStoreTarget,
 } from "./targets.js";
@@ -489,13 +491,18 @@ export function applyGatewaySessionStoreAdmission(
   if (opts.agentId?.trim()) {
     assertAgentDatabaseAdmitted(opts.agentId, { env });
   }
+  const configuredTargets =
+    opts.preserveSentinelOwners === "physical" && getAgentDatabaseStartupAdmission()
+      ? resolveConfiguredAgentDatabaseCandidatePaths(cfg, { env }).map((pathname) => ({
+          path: pathname,
+        }))
+      : undefined;
   const admitted = (target: SessionStoreTarget): boolean => {
     const physical = resolved.physicalTargets.get(storeTargetKey(target));
     if (
-      opts.preserveSentinelOwners === "physical" &&
-      getAgentDatabaseStartupAdmission() &&
+      configuredTargets &&
       physical &&
-      !isConfiguredAgentDatabaseTarget(cfg, physical.agentId, physical.storePath, env)
+      !isConfiguredAgentDatabaseTarget(configuredTargets, physical.agentId, physical.storePath)
     ) {
       return false;
     }
@@ -566,6 +573,7 @@ export function mergeCombinedSessionStore(
   prepared: PreparedCombinedSessionStore,
   readEntries: (target: SessionStoreTarget) => SessionEntrySummary[],
   incognitoEntries?: (target: SessionStoreTarget) => SessionEntrySummary[],
+  preparedLineage?: GatewaySessionLineageReader,
 ): GatewayCombinedSessionStore {
   const env = opts.discovery?.env;
   // Store-wide metadata reads must not materialize saved prompts for every row.
@@ -589,7 +597,12 @@ export function mergeCombinedSessionStore(
   // must not re-admit a sentinel through public aliases or select a different store.
   const targetsBySessionKey = new Map<string, GatewayStoredSessionTarget>();
   const projectionDiagnostics = [...diagnostics];
-  const modelSources = createSessionModelSources(cfg, projectionDiagnostics, preparedAgentIds);
+  const modelSources = createSessionModelSources(
+    cfg,
+    projectionDiagnostics,
+    preparedAgentIds,
+    preparedLineage,
+  );
   for (const { target, storeTarget } of prepared.reads) {
     const agentId = target.agentId;
     const storePath = target.storePath;

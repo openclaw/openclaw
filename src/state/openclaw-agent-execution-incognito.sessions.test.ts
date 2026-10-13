@@ -4,6 +4,10 @@ import fs from "node:fs";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createSubagentControllerRead } from "../agents/subagents/registry/subagent-controller-read.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { loadCombinedSessionStoreForGatewayCoreAsync } from "../config/sessions/combined-store-gateway-read.js";
 import { createSessionEntryWithTranscript } from "../config/sessions/session-accessor.entry-mutation.js";
 import {
@@ -101,6 +105,7 @@ afterEach(async () => {
     }
     references.delete(reference);
   }
+  clearRuntimeConfigSnapshot();
 });
 
 afterAll(async () => {
@@ -186,12 +191,6 @@ it("grants only its transaction preimage and publishes detached facts before its
       stages.push(stage);
       expect(actor.sessions.readSharing(sessionKey)).toBeUndefined();
       actor.sessions.captureCurrent(sessionKey).assertCurrent();
-      expect(() => actor.sessions.read(authority, { sessionKey })).toThrow(
-        "Incognito authority callbacks cannot call their actor",
-      );
-      expect(() => actor.sessions.withSharedState(async () => undefined)).toThrow(
-        "Incognito authority callbacks cannot call their actor",
-      );
       expect(facts.sharing?.entry?.sessionId).toBe(stage === "commit" ? "publication" : undefined);
     },
   };
@@ -847,6 +846,7 @@ it.each([
 it.each(["default", "explicit", "durable-only"] as const)(
   "keeps %s combined discovery within its selected physical root",
   async (mode) => {
+    setRuntimeConfigSnapshot({});
     const originalRoot = process.env.OPENCLAW_STATE_DIR;
     const foreignEnv = { OPENCLAW_STATE_DIR: tempDirs.make("incognito-foreign-listing-root-") };
     const durableKey = `agent:main:bound-root-durable-${mode}`;

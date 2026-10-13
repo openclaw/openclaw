@@ -5,17 +5,15 @@ import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { readStartupRecoveryWarning } from "../agents/main-session-recovery/main-session-restart-recovery-diagnostics.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveProjectedSessionContextTokens } from "../config/sessions/context-token-provenance.js";
 import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import {
   hasSessionActiveAutoModelFallback,
   hasUserPinnedModelSelection,
 } from "../config/sessions/model-override-provenance.js";
-import {
-  loadExactSessionEntryReadOnly,
-  type SessionEntrySummary,
-} from "../config/sessions/session-accessor.js";
+import type { SessionEntrySummary } from "../config/sessions/session-accessor.js";
+import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
   resolveFreshSessionTotalTokens,
   resolveSessionTotalTokens,
@@ -211,7 +209,7 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
           (hasUserPinnedModelSelection(entry) || hasSessionActiveAutoModelFallback(entry));
         // Session rows show the live selected model and warn for user-pinned
         // differences as well as runtime fallback selections (#96126).
-        const runtime = resolveSessionRuntime({
+        const runtime = await resolveSessionRuntime({
           cfg,
           entry,
           provider: lookupModel.provider,
@@ -319,7 +317,7 @@ export async function getStatusSummary(
   } = {},
 ) {
   const { includeSensitive = true, includeChannelSummary = true } = options;
-  const cfg = options.config ?? getRuntimeConfig();
+  const cfg = options.config ?? (await captureRuntimeConfigAsyncReader()());
   const channelScopeConfig =
     options.sourceConfig === undefined
       ? { config: cfg }
@@ -349,8 +347,14 @@ export async function getStatusSummary(
     );
     return agentList.agents.map((agent, index) => {
       const summary = expectDefined(heartbeatSummaries[index], "heartbeat summary");
-      let waitingForRoute = false;
-      let ownerRoute: Parameters<typeof hasResolvableHeartbeatOwnerRoute>[0] | undefined;
+      let routeTarget:
+        | {
+            storePath: string;
+            sessionKey: string;
+            target: "last" | "owner";
+            heartbeat: Parameters<typeof hasResolvableHeartbeatOwnerRoute>[0]["heartbeat"];
+          }
+        | undefined;
       if (
         summary.enabled &&
         !agent.admissionRefusal &&
@@ -363,42 +367,80 @@ export async function getStatusSummary(
         );
         // Only these enabled targets consume the session route. Keep the probe
         // read-only so status cannot create, register, or migrate an absent store.
-        const entry = loadExactSessionEntryReadOnly({
-          agentId: agent.id,
+        routeTarget = {
           storePath: heartbeatSession.storePath,
           sessionKey: heartbeatSession.sessionKey,
-        })?.entry;
-        const route = deliveryContextFromSession(entry);
-        if (summary.target === "last") {
-          waitingForRoute = !(route?.channel && route.to);
-        } else {
-          ownerRoute = {
-            cfg,
-            agentId: agent.id,
-            entry,
-            heartbeat: {
-              ...cfg.agents?.defaults?.heartbeat,
-              ...resolveAgentConfig(cfg, agent.id)?.heartbeat,
-            },
-          };
-        }
+          target: summary.target,
+          heartbeat: {
+            ...cfg.agents?.defaults?.heartbeat,
+            ...resolveAgentConfig(cfg, agent.id)?.heartbeat,
+          },
+        };
       }
-      return {
-        status: {
-          agentId: agent.id,
-          enabled: summary.enabled && !agent.admissionRefusal,
-          every: summary.every,
-          everyMs: summary.everyMs,
-          waitingForRoute,
-        } satisfies HeartbeatStatus,
-        ownerRoute,
+      const status: HeartbeatStatus = {
+        agentId: agent.id,
+        enabled: summary.enabled && !agent.admissionRefusal,
+        every: summary.every,
+        everyMs: summary.everyMs,
+        waitingForRoute: false,
       };
+      return { status, routeTarget };
     });
   });
+  const heartbeatStores = new Map<
+    string,
+    { agentId: string; storePath: string; sessionKeys: string[] }
+  >();
+  for (const { status, routeTarget } of heartbeatInputs) {
+    if (!routeTarget) {
+      continue;
+    }
+    let store = heartbeatStores.get(routeTarget.storePath);
+    if (!store) {
+      store = { agentId: status.agentId, storePath: routeTarget.storePath, sessionKeys: [] };
+      heartbeatStores.set(routeTarget.storePath, store);
+    }
+    store.sessionKeys.push(routeTarget.sessionKey);
+  }
+  const heartbeatStoreInputs = [...heartbeatStores.values()];
+  const heartbeatEntries = heartbeatStoreInputs.length
+    ? await withSessionEntriesFromStoresInWorker(
+        heartbeatStoreInputs.map(({ agentId, storePath, sessionKeys }) => ({
+          agentId,
+          storePath,
+          sessionKeys,
+          projection: "exact",
+          snapshotFields: [],
+        })),
+        (reads) =>
+          new Map(
+            reads.flatMap(({ result }, index) =>
+              result.entries.map(
+                (row) =>
+                  [
+                    `${heartbeatStoreInputs[index]!.storePath}\0${row.sessionKey}`,
+                    row.entry,
+                  ] as const,
+              ),
+            ),
+          ),
+      )
+    : new Map<string, SessionEntry>();
   const heartbeatAgents: HeartbeatStatus[] = [];
-  for (const { status, ownerRoute } of heartbeatInputs) {
-    if (ownerRoute) {
-      status.waitingForRoute = !(await hasResolvableHeartbeatOwnerRoute(ownerRoute));
+  for (const { status, routeTarget } of heartbeatInputs) {
+    if (routeTarget) {
+      const entry = heartbeatEntries.get(`${routeTarget.storePath}\0${routeTarget.sessionKey}`);
+      if (routeTarget.target === "last") {
+        const route = deliveryContextFromSession(entry);
+        status.waitingForRoute = !(route?.channel && route.to);
+      } else {
+        status.waitingForRoute = !(await hasResolvableHeartbeatOwnerRoute({
+          cfg,
+          agentId: status.agentId,
+          entry,
+          heartbeat: routeTarget.heartbeat,
+        }));
+      }
     }
     heartbeatAgents.push(status);
   }

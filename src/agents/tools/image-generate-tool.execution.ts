@@ -8,7 +8,6 @@ import type {
 } from "../../image-generation/types.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { getImageMetadata } from "../../media/media-services.js";
-import { ToolInputError } from "./common.js";
 import { persistGeneratedMediaBuffers } from "./generated-media-batch-persistence.js";
 import type { MediaGenerationTaskHandle } from "./media-generate-background-shared.js";
 import { imageGenerationTaskLifecycle } from "./media-generate-background.js";
@@ -103,17 +102,4 @@ export async function inferImageGenerationResolution(
     return "2K";
   }
   return DEFAULT_RESOLUTION;
-}
-
-export function normalizeImageGenerationResolution(
-  raw: string | undefined,
-): ImageGenerationResolution | undefined {
-  const normalized = raw?.trim().toUpperCase();
-  if (!normalized) {
-    return undefined;
-  }
-  if (normalized === "1K" || normalized === "2K" || normalized === "4K") {
-    return normalized;
-  }
-  throw new ToolInputError("resolution must be one of 1K, 2K, or 4K");
 }

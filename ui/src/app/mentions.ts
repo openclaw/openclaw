@@ -12,6 +12,7 @@ import {
   type GatewayHelloOk,
 } from "../api/gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { resolveGatewayReadRetryDelayMs } from "../lib/gateway-availability.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGateway } from "./gateway.ts";
@@ -35,6 +36,8 @@ type MentionConnection = {
   dismissing: Set<string>;
   refreshRequested: boolean;
   refreshPromise: Promise<void> | null;
+  retryTimer?: ReturnType<typeof setTimeout>;
+  retryAttempt: number;
 };
 
 /** Owns one profile's temporary Inbox even when no Inbox presenter is mounted. */
@@ -80,6 +83,7 @@ export function createMentionsCapability(
         return;
       }
       owner.loaded = true;
+      owner.retryAttempt = 0;
       publish({ phase: "ready", items: result.items, error: null });
     } catch (error) {
       if (!isCurrent(owner)) {
@@ -90,8 +94,20 @@ export function createMentionsCapability(
         (error.gatewayCode === "FORBIDDEN" ||
           resolveGatewayErrorDetailCode(error) ===
             ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE);
-      if (accessLost) {
+      if (error instanceof GatewayRequestError && error.gatewayCode === "UNAVAILABLE") {
+        owner.refreshRequested = true;
+        if (owner.retryTimer === undefined) {
+          owner.retryTimer = setTimeout(
+            () => {
+              owner.retryTimer = undefined;
+              void refreshAutomatically(owner);
+            },
+            resolveGatewayReadRetryDelayMs(error, owner.retryAttempt++),
+          );
+        }
+      } else if (accessLost) {
         // Retire in-flight reads too; an earlier success cannot restore a revoked Inbox.
+        clearTimeout(owner.retryTimer);
         connection = null;
       }
       publish({
@@ -103,7 +119,7 @@ export function createMentionsCapability(
   };
 
   const refreshOwner = (owner: MentionConnection): Promise<void> => {
-    if (!isCurrent(owner)) {
+    if (!isCurrent(owner) || owner.retryTimer !== undefined) {
       return Promise.resolve();
     }
     owner.refreshRequested = true;
@@ -112,7 +128,7 @@ export function createMentionsCapability(
     }
     owner.refreshPromise = Promise.resolve().then(async () => {
       try {
-        while (isCurrent(owner) && owner.refreshRequested) {
+        while (isCurrent(owner) && owner.retryTimer === undefined && owner.refreshRequested) {
           owner.refreshRequested = false;
           publish({ phase: "loading", error: null });
           await requestSnapshot(owner, "mentions.list", {});
@@ -148,6 +164,7 @@ export function createMentionsCapability(
     if (connection && isCurrent(connection)) {
       return;
     }
+    clearTimeout(connection?.retryTimer);
     if (
       disposed ||
       next.phase !== "connected" ||
@@ -171,6 +188,7 @@ export function createMentionsCapability(
       dismissing: new Set(),
       refreshRequested: false,
       refreshPromise: null,
+      retryAttempt: 0,
     };
     connection = owner;
     publish({ phase: "loading", items: [], dismissing: [], error: null });
@@ -246,6 +264,7 @@ export function createMentionsCapability(
     subscribe: (listener: () => void) => registerListener(listeners, listener),
     dispose() {
       disposed = true;
+      clearTimeout(connection?.retryTimer);
       connection = null;
       stopGateway();
       stopEvents();

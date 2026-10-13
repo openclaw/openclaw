@@ -1,14 +1,12 @@
 import { html, render } from "lit";
+import { createComponent } from "solid-js";
 import { brandIcons } from "../components/brand-icons.ts";
 import { renderCopyButton } from "../components/copy-button.ts";
 import { icons } from "../components/icons.ts";
-import { kbdStyles } from "../components/kbd-styles.ts";
 import { renderKbd, renderKeyboardShortcut } from "../components/kbd.ts";
 import { renderAgentStartupState, renderLazyViewError } from "../components/lazy-view-error.ts";
 import { renderConnectingSplash } from "../components/loading-skeleton.ts";
 import { renderLoadingState } from "../components/loading-state.ts";
-import { renderPanelEmptyState } from "../components/panel-empty-state.ts";
-import { renderPanelIconButton } from "../components/panel-icon-button.ts";
 import {
   renderPanelLoadingSkeleton,
   type PanelLoadingSkeletonVariant,
@@ -20,11 +18,23 @@ import {
   resolveCloudProfileIcon,
 } from "../components/provider-icon.ts";
 import * as settings from "../components/settings-ui.ts";
-import { renderSettingsWorkspace } from "../components/settings-workspace.ts";
+import { Icon } from "../components/solid/icon.tsx";
+import { PanelIconButton } from "../components/solid/panel-icon-button.tsx";
+import {
+  SettingsLoadingSkeleton,
+  SettingsRow,
+  SettingsSection,
+  SettingsStatus,
+  SettingsSummary,
+} from "../components/solid/settings-ui.tsx";
+import "../components/solid/panel-empty-state.tsx";
+import { solidContent } from "../lit/solid-content.tsx";
 import { finishFixture, group, recordAction, root } from "./presentation-primitives-fixture.ts";
+import { renderSettingsWorkspace } from "./settings-workspace-lit.ts";
+import kbdStyles from "../components/kbd.css?inline";
 
 const keyboardStyles = document.createElement("style");
-keyboardStyles.textContent = kbdStyles.cssText;
+keyboardStyles.textContent = kbdStyles;
 document.head.append(keyboardStyles);
 let checked = false;
 let segment = "balanced";
@@ -43,6 +53,23 @@ function card(label: string, content: unknown, kind = "") {
     </div>
   </section>`;
 }
+function ServiceStatus() {
+  return createComponent(SettingsSection, {
+    title: "Service status",
+    carapace: true,
+    get children() {
+      return (["ok", "warn", "danger", "accent", "muted"] as const).map((kind) =>
+        createComponent(SettingsRow, {
+          title: kind,
+          carapace: true,
+          get control() {
+            return createComponent(SettingsStatus, { kind, label: kind, carapace: true });
+          },
+        }),
+      );
+    },
+  });
+}
 function settingsPage() {
   return settings.renderSettingsPage(
     [
@@ -51,10 +78,12 @@ function settingsPage() {
         subtitle: "Shared settings layout and controls.",
         actions: button("Save"),
       }),
-      settings.renderSettingsSummary([
-        { label: "Enabled", value: 3 },
-        { label: "Available", value: 12 },
-      ]),
+      solidContent(SettingsSummary, {
+        items: [
+          { label: "Enabled", value: 3 },
+          { label: "Available", value: 12 },
+        ],
+      }),
       settings.renderSettingsSection(
         {
           title: "General",
@@ -86,16 +115,7 @@ function settingsPage() {
           }),
         ],
       ),
-      settings.renderSettingsSection(
-        { title: "Service status", carapace: true },
-        (["ok", "warn", "danger", "accent", "muted"] as const).map((kind) =>
-          settings.renderSettingsRow({
-            title: kind,
-            carapace: true,
-            control: settings.renderSettingsStatus({ kind, label: kind, carapace: true }),
-          }),
-        ),
-      ),
+      solidContent(ServiceStatus, {}),
       settings.renderSettingsSection(
         { title: "Danger zone", danger: true },
         settings.renderSettingsRow({
@@ -105,7 +125,7 @@ function settingsPage() {
         }),
       ),
       settings.renderSettingsEmpty("No additional settings"),
-      settings.renderSettingsLoadingSkeleton({
+      solidContent(SettingsLoadingSkeleton, {
         label: "Loading settings",
         rows: 2,
         carapace: true,
@@ -207,12 +227,13 @@ function feedback() {
   return [
     card(
       "Empty with action",
-      renderPanelEmptyState({
-        icon: icons.folder,
-        heading: "No files",
-        description: "Add a file to begin working in this panel.",
-        action: button("Add file", "add-file"),
-      }),
+      html`<openclaw-panel-empty-state
+        .heading=${"No files"}
+        .description=${"Add a file to begin working in this panel."}
+      >
+        ${icons.folder}
+        <span slot="action">${button("Add file", "add-file")}</span>
+      </openclaw-panel-empty-state>`,
       "empty",
     ),
     card(
@@ -260,7 +281,7 @@ function feedback() {
     card(
       "Actions and shortcuts",
       html`<div class="presentation-fixture__inline">
-        ${renderCopyButton("synthetic clipboard text", "Copy text")}${renderCopyButton("", "Copy unavailable text")}${renderPanelIconButton({ label: "Refresh panel", icon: icons.refresh, className: "btn btn--icon", onClick: () => recordAction("refresh") })}${renderPanelIconButton({ label: "Busy panel", icon: icons.refresh, className: "btn btn--icon", onClick: () => recordAction("unexpected"), disabled: true, busy: true })}${renderKbd(["⌘", "↵"])}${renderKeyboardShortcut({ key: "k", modifiers: ["mod"] }, { applePlatform: false })}
+        ${renderCopyButton("synthetic clipboard text", "Copy text")}${renderCopyButton("", "Copy unavailable text")}${solidContent(PanelIconButton, { label: "Refresh panel", icon: createComponent(Icon, { name: "refresh" }), class: "btn btn--icon", onClick: () => recordAction("refresh") })}${solidContent(PanelIconButton, { label: "Busy panel", icon: createComponent(Icon, { name: "refresh" }), class: "btn btn--icon", onClick: () => recordAction("unexpected"), disabled: true, busy: true })}${renderKbd(["⌘", "↵"])}${renderKeyboardShortcut({ key: "k", modifiers: ["mod"] }, { applePlatform: false })}
       </div>`,
     ),
   ];

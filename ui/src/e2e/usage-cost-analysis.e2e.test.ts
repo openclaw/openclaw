@@ -2,8 +2,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI usage cost analysis mocked Gateway E2E",
@@ -913,30 +913,46 @@ suite.define(() => {
           .toContain("openai");
         const messagesHint = page.locator("#usage-summary-hint-messages");
         const messagesTooltipHost = messagesHint.locator("xpath=..");
-        const messagesTooltip = messagesTooltipHost.locator("wa-tooltip");
+        const messagesTooltip = messagesTooltipHost.locator(".tooltip-surface[popover]");
         await messagesHint.hover();
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
+        await expect
+          .poll(() => messagesTooltip.evaluate((surface) => surface.matches(":popover-open")))
+          .toBe(true);
         await page.mouse.move(1, 1);
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
+        await expect
+          .poll(() => messagesTooltip.evaluate((surface) => surface.matches(":popover-open")))
+          .toBe(false);
 
         await page.keyboard.press("Tab");
         await messagesHint.focus();
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
+        await expect
+          .poll(() => messagesTooltip.evaluate((surface) => surface.matches(":popover-open")))
+          .toBe(true);
         await page.getByRole("button", { name: "Cost", exact: true }).focus();
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
+        await expect
+          .poll(() => messagesTooltip.evaluate((surface) => surface.matches(":popover-open")))
+          .toBe(false);
 
         await messagesHint.click();
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
+        await expect
+          .poll(() => messagesTooltip.evaluate((surface) => surface.matches(":popover-open")))
+          .toBe(true);
         await expect
           .poll(() => messagesTooltipHost.locator('[slot="content"]').textContent())
           .toContain("Total user and assistant messages in range.");
         await page.getByRole("button", { name: "Cost", exact: true }).click();
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
+        await expect
+          .poll(() => messagesTooltip.evaluate((surface) => surface.matches(":popover-open")))
+          .toBe(false);
         await page.keyboard.press("Tab");
         await messagesHint.focus();
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
+        await expect
+          .poll(() => messagesTooltip.evaluate((surface) => surface.matches(":popover-open")))
+          .toBe(true);
         await messagesHint.press("Escape");
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
+        await expect
+          .poll(() => messagesTooltip.evaluate((surface) => surface.matches(":popover-open")))
+          .toBe(false);
         const providerCards = page.locator(".provider-usage-card");
         await expect.poll(() => providerCards.count()).toBe(3);
         await expect

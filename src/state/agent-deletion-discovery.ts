@@ -29,9 +29,6 @@ export async function listRetainedDeletedAgentIdsForCleanup(
     { env },
     { type: "agentDatabaseDeletion.snapshot", purpose: "runtime" },
   );
-  if (reply && (!reply.ok || reply.type !== "agentDatabaseDeletion.snapshot")) {
-    throw new Error("Retained agent deletion read failed during plugin cleanup.");
-  }
   const retained = reply?.snapshot.retainedDeletions;
   return new Set(
     retained?.status === "present" ? retained.entries.map((entry) => entry.agentId) : [],

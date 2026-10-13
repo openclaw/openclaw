@@ -4,10 +4,15 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -74,6 +79,7 @@ async function createRoleSuggestion(sessionKey: string): Promise<string> {
 }
 
 async function createTaskRoleScenario(role: TaskOperatorRole, ownsSource = false) {
+  setRuntimeConfigSnapshot(taskRoleConfig(role));
   const profile = ensureProfileForEmail(`task-${role}@example.test`);
   const owner = ownsSource ? profile : ensureProfileForEmail(`task-${role}-owner@example.test`);
   await upsertSessionEntryCore(
@@ -104,6 +110,7 @@ afterEach(async () => {
   await dismissPendingTaskSuggestions();
   vi.restoreAllMocks();
   closeOpenClawAgentDatabasesForTest();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("task suggestion gateway methods", () => {
@@ -115,6 +122,7 @@ describe("task suggestion gateway methods", () => {
           roleName,
           roleName === "restricted",
         );
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         if (roleName === "none") {
           const ownSessionKey = "agent:main:dashboard:own-task-source";
           await upsertSessionEntryCore(
@@ -524,6 +532,7 @@ describe("task suggestion gateway methods", () => {
 
   it("restores a session-mode suggestion after delivery failure without deleting its source", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: SOURCE_SESSION_KEY },
         { sessionId: "source-session", updatedAt: 1 },

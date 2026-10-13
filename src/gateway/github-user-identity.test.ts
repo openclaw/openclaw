@@ -8,6 +8,7 @@ import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { getUserProfileListItem } from "../state/user-profile-list-item.test-support.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
   setDisplayName,
   setUserProfileRole,
@@ -190,6 +191,7 @@ describe("authenticated GitHub identity sync", () => {
         const sync =
           provider === "access" ? cloudflareSync({}) : tailscaleSync("ada", initial ?? "");
         const result = await sync!();
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const display = getUserProfileDisplay(result.profileId);
         expect(display.displayName).toBe(expected);
         const presenceUser = buildAuthenticatedPresenceUser({
@@ -236,6 +238,7 @@ describe("authenticated GitHub identity sync", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const profile = ensureProfileForTailscaleIdentity({ login: "ada@github" });
       setDisplayName(profile.id, "Ada");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       let resolveLookup: ((response: Response) => void) | undefined;
       const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementationOnce(
         async () =>
@@ -487,6 +490,7 @@ describe("GitHub public identity metadata cache", () => {
         );
       stubIdentityFetch(metadata);
       const first = await createAccessSync()();
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const display = getUserProfileDisplay(first.profileId);
       const initialProfile = getUserProfileListItem(first.profileId);
       const changed = vi.fn();

@@ -1380,11 +1380,20 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["scripts/lib/bounded-command.mts"],
   },
   {
+    testFile: "test/scripts/run-vitest-bounded.test.ts",
+    watchGlobs: [
+      "package.json",
+      "scripts/lib/vitest-cli-bootstrap.mts",
+      "scripts/test-extension-batch.mts",
+    ],
+  },
+  {
     testFile: "test/scripts/vitest-report-owner.test.ts",
     watchGlobs: [
       "scripts/lib/vitest-report-capture.mts",
       "scripts/run-vitest.mts",
       "scripts/test-extension-batch.mts",
+      "scripts/test-extension-batch-run.mts",
       "scripts/test-projects-run.mts",
     ],
   },

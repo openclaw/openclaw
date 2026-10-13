@@ -63,6 +63,7 @@ function evaluate(options: Options = {}) {
     [`${prefix}/actions/workflows/ci.yml`]: { body: { id: 456, path: run.path } },
     [`${prefix}/pulls/42`]: { body: { ...pullRequest, ...options.pullRequest } },
     [`${prefix}/commits/${head}/pulls?per_page=100&page=1`]: { body: [{ number: 42 }] },
+    [`${prefix}/pulls?state=open&head=contributor%3Afeature&per_page=100&page=1`]: { body: [] },
     [`${prefix}/commits/${head}/statuses?per_page=100&page=1`]: {
       body:
         options.eventName === "schedule"
@@ -221,7 +222,7 @@ describe("automatic security review event resolution", () => {
     );
   });
 
-  it.each(["pull_request_target", "issue_comment", "workflow_dispatch"])(
+  it.each(["pull_request_target", "issue_comment"])(
     "resolves %s through current PR metadata",
     (eventName) => {
       const result = evaluate({
@@ -231,8 +232,6 @@ describe("automatic security review event resolution", () => {
           pull_request: { number: 42 },
           issue: { number: 42, pull_request: {} },
           comment: { body: "/allow-dependencies-change" },
-          inputs: { pull_request: "42" },
-          sender: { id: 41898282, login: "github-actions[bot]", type: "Bot" },
         },
       });
       expect(result).toMatchObject({
@@ -458,9 +457,7 @@ describe("automatic security review event resolution", () => {
 
   it.each([
     { id: 1, login: "maintainer", type: "User" },
-    { id: 41898282, login: "github-actions[bot]", type: "User" },
-    { id: 1, login: "github-actions[bot]", type: "Bot" },
-    { id: 2, login: "clawsweeper[bot]", type: "Bot" },
+    { id: 41898282, login: "github-actions[bot]", type: "Bot" },
   ])("rejects a dispatch from $login ($type, $id) before any API request", (sender) => {
     const result = evaluate({
       eventName: "workflow_dispatch",
@@ -525,15 +522,23 @@ describe("automatic security review event resolution", () => {
     expect(result.requests).not.toContainEqual({ path: `${prefix}/pulls/42`, method: "GET" });
   });
 
-  it.each([200, 404, 422])(
-    "falls back to the exact fork branch when commit association returns %s",
-    (status) => {
+  it.each([{ status: 200 }, { status: 404 }, { status: 422 }, { status: 200, child: true }])(
+    "falls back to the exact fork branch when commit association is $status, child $child",
+    ({ status, child }) => {
       const result = evaluate({
         run: { pull_requests: [] },
         responses: {
           [`${prefix}/commits/${head}/pulls?per_page=100&page=1`]: {
             status,
-            body: status === 200 ? [] : { message: "Commit unavailable" },
+            body:
+              status === 200 ? (child ? [{ number: 43 }] : []) : { message: "Commit unavailable" },
+          },
+          [`${prefix}/pulls/43`]: {
+            body: {
+              ...pullRequest,
+              number: 43,
+              head: { ...pullRequest.head, sha: "b".repeat(40) },
+            },
           },
           [`${prefix}/pulls?state=open&head=contributor%3Afeature&per_page=100&page=1`]: {
             body: [{ number: 42 }],

@@ -22,8 +22,8 @@ import { readTranscriptContextVersionInTransaction } from "./session-accessor.sq
 import {
   readPreparedSessionTranscriptChange,
   publishUnchangedSessionTranscriptAuthority,
-  type SessionTranscriptAuthority,
 } from "./session-transcript-authority.js";
+import type { SessionTranscriptAuthority } from "./session-transcript-authority.types.js";
 
 const rollbackFault = useSqliteWorkerFault([
   {
@@ -81,7 +81,11 @@ it.each(["native", "worker"] as const)(
       const manager =
         realm === "native" ? SessionManager.open(scope) : await SessionManager.openAsync(scope);
       const values = observe(scope.sessionKey);
-      const invoke = async (native: () => unknown, worker: () => Promise<unknown>) => {
+      const invoke = async (
+        native: () => unknown,
+        worker: () => Promise<unknown>,
+        lastMessagePreview?: string | null,
+      ) => {
         const count = values.length;
         if (realm === "native") {
           native();
@@ -95,10 +99,12 @@ it.each(["native", "worker"] as const)(
           sessionId: scope.sessionId,
           sessionKey: scope.sessionKey,
         });
+        expect(values.at(-1)?.lastMessagePreview).toBe(lastMessagePreview);
       };
       await invoke(
         () => manager.appendMessage({ role: "user", content: "seed", timestamp: 1 }),
         () => manager.appendMessageAsync({ role: "user", content: "seed", timestamp: 1 }),
+        "seed",
       );
       const seed = manager.getLeafId()!;
       await invoke(
@@ -114,6 +120,7 @@ it.each(["native", "worker"] as const)(
             content: "second",
             timestamp: 2,
           }),
+        "second",
       );
       await invoke(
         () => manager.appendCustomEntry("authority", { synthetic: true }),
@@ -201,6 +208,62 @@ it.each(["native", "worker"] as const)(
     });
   },
 );
+
+it("publishes bounded worker previews and clears them for nonprojectable and side appends", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:authority-preview",
+      sessionId: "authority-preview",
+      storePath: database.path,
+      env: state.env,
+    };
+    const manager = await SessionManager.openAsync(scope);
+    const values = observe(scope.sessionKey);
+    const atLimit = {
+      type: "message" as const,
+      id: "at-preview-limit",
+      parentId: manager.getLeafId(),
+      timestamp: new Date(1).toISOString(),
+      message: { role: "user" as const, content: "", timestamp: 1 },
+    };
+    atLimit.message.content = "x".repeat(
+      64 * 1024 - Buffer.byteLength(JSON.stringify(atLimit)) - 1,
+    );
+    await manager.persistAsync(atLimit);
+    expect(values.at(-1)?.lastMessagePreview).toBe(`${"x".repeat(237)}...`);
+
+    const overLimit = {
+      ...atLimit,
+      id: "over-preview-limit",
+      parentId: atLimit.id,
+      message: { ...atLimit.message, content: "" },
+    };
+    overLimit.message.content = "x".repeat(
+      64 * 1024 - Buffer.byteLength(JSON.stringify(overLimit)),
+    );
+    await manager.persistAsync(overLimit);
+    expect(values.at(-1)?.lastMessagePreview).toBeNull();
+
+    const hidden = {
+      ...atLimit,
+      id: "hidden-preview",
+      parentId: overLimit.id,
+      message: { ...atLimit.message, content: "hidden", display: false },
+    };
+    await manager.persistAsync(hidden);
+    expect(values.at(-1)?.lastMessagePreview).toBeUndefined();
+
+    await manager.persistAsync({
+      ...atLimit,
+      id: "side-preview",
+      parentId: atLimit.id,
+      message: { ...atLimit.message, content: "side branch" },
+    });
+    expect(values.at(-1)?.lastMessagePreview).toBeUndefined();
+  });
+});
 
 it("installs final transcript facts before entry observers and discards nested rollback contributions", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

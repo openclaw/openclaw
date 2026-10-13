@@ -191,7 +191,7 @@ it.each([
     const forgetCachedDatabase = () => {
       const cached = getOpenClawAgentDatabaseIfOpen(databaseOptions);
       if (cached) {
-        closeCachedOpenClawAgentDatabase(cached, { eviction: true });
+        closeCachedOpenClawAgentDatabase(cached);
       }
       clearOpenClawAgentDatabaseValidationCache(state.root);
       expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)).toBeUndefined();

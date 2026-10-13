@@ -13,7 +13,6 @@ import { withSessionManagerWrite } from "../agents/sessions/session-manager-writ
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
-import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
 import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
@@ -252,24 +251,18 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
     const assertSeedCurrent = () => {
       abortSignal.throwIfAborted();
       params.assertSourceCurrent?.();
-      const currentEntry = loadExactSessionEntry(target)?.entry;
-      if (
-        !currentEntry ||
-        currentEntry.sessionId !== target.sessionId ||
-        currentEntry.lifecycleRevision !== expectedSeedOwner.lifecycleRevision ||
-        currentEntry.activeWriterRunId !== expectedSeedOwner.activeWriterRunId
-      ) {
-        throw new Error("Session companion identity changed before history persistence");
-      }
     };
-    await withSessionTranscriptWriteAssertion(target, assertSeedCurrent, () =>
-      withSessionManagerWrite(sessionManager, async () => {
-        assertSeedCurrent();
-        for (const message of params.messages.slice(0, -1)) {
+    await withSessionTranscriptWriteAssertion(
+      { ...target, expectedOwner: expectedSeedOwner },
+      assertSeedCurrent,
+      () =>
+        withSessionManagerWrite(sessionManager, async () => {
           assertSeedCurrent();
-          await sessionManager.appendMessageAsync(toRunnerHistoryMessage(message, selectedModel));
-        }
-      }),
+          for (const message of params.messages.slice(0, -1)) {
+            assertSeedCurrent();
+            await sessionManager.appendMessageAsync(toRunnerHistoryMessage(message, selectedModel));
+          }
+        }),
     );
     abortSignal.throwIfAborted();
     params.assertInputCurrent?.();

@@ -39,7 +39,7 @@ import { resolveTextChunkLimit, type GetReplyOptions } from "openclaw/plugin-sdk
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   createRuntimeConfigReader,
-  getRuntimeConfig,
+  captureRuntimeConfigAsyncReader,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   createNonExitingRuntime,
@@ -197,7 +197,7 @@ const IMESSAGE_THROTTLED_DIAGNOSTIC_DROP_REASONS = new Set(["from me", "no menti
 export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promise<void> {
   const { scheduler } = opts;
   const runtime = opts.runtime ?? createNonExitingRuntime();
-  const cfg = opts.config ?? getRuntimeConfig();
+  const cfg = opts.config ?? (await captureRuntimeConfigAsyncReader()());
   const readConfig = createRuntimeConfigReader(cfg);
   const accountInfo = resolveIMessageAccount({
     cfg,

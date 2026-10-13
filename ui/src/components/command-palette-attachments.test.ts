@@ -1,18 +1,18 @@
 /* @vitest-environment jsdom */
 
-import { nothing, render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
-import {
-  CommandPaletteLoadingState,
-  renderCommandPaletteLoading,
-} from "../app/app-shell-command-palette-loading.ts";
+import { CommandPaletteLoading } from "../app/app-shell-command-palette-loading-view.tsx";
+import { CommandPaletteLoadingState } from "../app/app-shell-command-palette-loading.ts";
 import { createWebPushCapability } from "../app/web-push.ts";
 import * as toast from "../lib/toast.ts";
 import * as payloads from "../pages/chat/attachment-payload-store.ts";
 import { createDraftFixture } from "../pages/new-session/draft-submission-flow.test-support.ts";
 import { createApplicationGateway } from "../test-helpers/application-context.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import { mountPalette } from "./command-palette.test-support.ts";
 import "./command-palette.ts";
 
@@ -266,7 +266,7 @@ describe("command palette paste-only images", () => {
   ] as const)("settles a cold submit exactly once after %s preparation", async (outcome) => {
     const delayedPolicy = outcome === "policy-delayed" || outcome === "text-policy-delayed";
     const policy = createDeferred<{ sessionPlacement: Record<string, never> }>();
-    const { palette, context } = await mount(
+    const { palette, context, publish } = await mount(
       delayedPolicy ? { placementPolicy: () => policy.promise } : {},
     );
     palette.togglePalette();
@@ -282,10 +282,16 @@ describe("command palette paste-only images", () => {
     const state = new CommandPaletteLoadingState({ requestUpdate: () => {} });
     const loader = document.body.appendChild(document.createElement("div"));
     state.begin();
-    render(
-      renderCommandPaletteLoading(state, () => state.clear()),
-      loader,
+    const loadingView = mountSolid(
+      () =>
+        createComponent(CommandPaletteLoading, {
+          state,
+          revision: 0,
+          onClose: () => state.clear(),
+        }),
+      { container: loader },
     );
+    flush();
     const coldInput = loader.querySelector("textarea")!;
     if (outcome !== "ready" && outcome !== "policy-delayed") {
       coldInput.value = "Keep every image";
@@ -326,6 +332,8 @@ describe("command palette paste-only images", () => {
     if (delayedPolicy) {
       expect(context.sessions.createResult).not.toHaveBeenCalled();
       policy.resolve({ sessionPlacement: {} });
+      await context.agents.refreshList();
+      publish();
     }
     if (outcome === "oversized" || outcome === "partial") {
       // A valid text/remaining-image prompt could be sent explicitly, but the
@@ -362,6 +370,6 @@ describe("command palette paste-only images", () => {
     } else {
       expect(context.sessions.createResult).not.toHaveBeenCalled();
     }
-    render(nothing, loader);
+    loadingView.unmount();
   });
 });

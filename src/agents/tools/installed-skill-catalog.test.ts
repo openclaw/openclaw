@@ -165,7 +165,7 @@ describe("installed skill catalog", () => {
       );
       const result = await searchInstalledSkills(skills, query, 1);
       expect(result.skills[0]?.name).toBe(expected);
-      expect(await readInstalledSkill(skills, result.skills[0]?.name ?? "")).toBe(
+      expect((await readInstalledSkill(skills, result.skills[0]?.name ?? "")).content).toBe(
         `${expected} instructions`,
       );
     },
@@ -193,7 +193,9 @@ describe("installed skill catalog", () => {
     const guide = skill("guide", "A guide");
     guide.source.readContent = undefined;
     guide.reader = reader;
-    expect(await readInstalledSkill([guide], "guide")).toBe("# Guide\n\nRun this.\nTHE END");
+    expect((await readInstalledSkill([guide], "guide")).content).toBe(
+      "# Guide\n\nRun this.\nTHE END",
+    );
     expect(reader).toHaveBeenCalledWith({ location: guide.location, signal: undefined });
     await expect(readInstalledSkill([guide], "../hidden")).rejects.toThrow(
       "is not available to this agent",
@@ -238,7 +240,7 @@ describe("installed skill catalog", () => {
     expect(
       (await searchInstalledSkills(catalog, "hidden-tail", 5, undefined, () => true)).skills,
     ).toEqual([]);
-    expect(await readInstalledSkill(catalog, "guide")).toBe(instructions);
+    expect((await readInstalledSkill(catalog, "guide")).content).toBe(instructions);
     await fs.truncate(filePath, 256 * 1024 + 1);
     await expect(readInstalledSkill(catalog, "guide")).rejects.toThrow(/large|size|limit/i);
   });

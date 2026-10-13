@@ -6,7 +6,10 @@ import { normalizeGitPathForFilesystem, type GitCommandOptions } from "../../inf
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
 import type { WorktreeWaitBudget } from "./allocation.js";
-import { withWorktreeGitConfig, type WorktreeGitPolicy } from "./checkout-git-config.js";
+import { withWorktreeGitConfig } from "./checkout-git-config.js";
+import { prepareWorktreePromptFiles } from "./checkout-inputs.js";
+import { materializeManagedWorktree } from "./checkout-materialize.js";
+import { resolveWorktreeCheckoutKey } from "./checkout-policy-key.js";
 import type { WorktreeSourceProfile } from "./checkout-profiles.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
@@ -27,6 +30,10 @@ import {
 import { prepareWorktreeTemplate } from "./template-cache.js";
 
 const log = createSubsystemLogger("agents/worktrees");
+const btrfsCheckoutMeasurements = new Map<
+  string,
+  { commit: string; sourceOnly: boolean; gitMs?: number; useTemplate?: boolean }
+>();
 
 type CheckoutOptions = WorktreeFilesystemOptions & {
   waitBudget?: WorktreeWaitBudget;
@@ -42,9 +49,8 @@ type CheckoutOptions = WorktreeFilesystemOptions & {
   sourceProfile?: WorktreeSourceProfile;
   /** Hydrate the registered commit and return its estimated checkout bytes. */
   prepareCommit?: (commit: string) => Promise<number>;
+  onPromptReady?: (commit: string) => Promise<void>;
   rollbackGuard?: () => void;
-  /** Unwind source custody before the service reacquires allocation for an untouched registration. */
-  deferUnpreparedCleanup?: (cleanup: (assertCurrent: () => void) => Promise<void>) => void;
   /** Restore reuses a warm template, or materializes its snapshot after registration. */
   deferGitCheckout?: boolean;
   /** This source is consumed by a sandboxed session, never host filter programs. */
@@ -84,10 +90,6 @@ function checkoutGitOptions(options: CheckoutOptions, cloneBytes?: number): GitC
   };
 }
 
-function digest(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
 async function estimateTemplateCloneBytes(
   template: NonNullable<Awaited<ReturnType<typeof prepareTemplate>>>,
 ): Promise<number | undefined> {
@@ -115,114 +117,6 @@ async function estimateTemplateCloneBytes(
   }
 }
 
-// Path-dependent filters and sparse configuration need a fresh checkout.
-// Hash effective checkout configuration so policy changes retire the cache.
-async function checkoutKey(
-  options: CheckoutOptions,
-  commit: string,
-  git: WorktreeGitPolicy,
-): Promise<string | undefined> {
-  if (
-    [
-      "GIT_INDEX_FILE",
-      "GIT_WORK_TREE",
-      "GIT_DIR",
-      "GIT_COMMON_DIR",
-      "GIT_CONFIG",
-      "GIT_ATTR_SOURCE",
-    ].some((key) => process.env[key])
-  ) {
-    setWorktreePreparationTemplate("unavailable", { reason: "git-environment" });
-    return undefined;
-  }
-  const config = await git.require(
-    options.destination,
-    ["config", "--null", "--list"],
-    gitOptions(options),
-  );
-  const checkoutConfig: string[] = [];
-  for (const field of config.split("\0")) {
-    const key = field.split("\n", 1)[0]?.toLowerCase() ?? "";
-    // Branch settings govern tracking and merge behavior, not checkout contents.
-    // Registration adds remote/merge keys; deleting the branch removes them.
-    if (key.startsWith("branch.")) {
-      continue;
-    }
-    if (
-      /^(filter\.|includeif\.|core\.(attributesfile|worktree|sparsecheckout|splitindex)$|index\.sparse$)/u.test(
-        key,
-      )
-    ) {
-      setWorktreePreparationTemplate("unavailable", { reason: "checkout-configuration" });
-      return undefined;
-    }
-    checkoutConfig.push(field);
-  }
-  if (git.sourceOnly) {
-    // The isolated policy hides native config, but a sparse checkout can already
-    // have changed the retained index and files. Bind that worktree's config too.
-    const fields = (
-      await requireGit(
-        options.destination,
-        ["config", "--null", "--show-scope", "--list"],
-        gitOptions(options),
-      )
-    ).split("\0");
-    checkoutConfig.push(
-      ...fields.filter(
-        (field, index) =>
-          index % 2 === 1 && fields[index - 1] === "worktree" && !field.startsWith("branch."),
-      ),
-    );
-  }
-  // Outside-tree attributes can select transforms that depend on the checkout path.
-  // Leave those repositories with Git until a backend models that contract.
-  if (
-    !git.sourceOnly &&
-    (await worktreePathExists(path.join(options.commonDir, "info", "attributes")))
-  ) {
-    setWorktreePreparationTemplate("unavailable", { reason: "repository-attributes" });
-    return undefined;
-  }
-  // Join both probes before returning or throwing, including cancellation, so
-  // checkout cleanup cannot race an admitted Git process.
-  const attributePaths = await Promise.allSettled(
-    ["GIT_ATTR_GLOBAL", "GIT_ATTR_SYSTEM"].map((variable) =>
-      git.run(options.destination, ["var", variable], gitOptions(options)),
-    ),
-  );
-  for (const probe of attributePaths) {
-    if (probe.status === "rejected") {
-      throw probe.reason;
-    }
-    const result = probe.value;
-    // git var exits 1 without output for a known but disabled path (for example
-    // GIT_ATTR_NOSYSTEM=1). Unknown variables on older Git still report an error.
-    if (
-      result.termination === "exit" &&
-      result.code === 1 &&
-      !result.stdout.trim() &&
-      !result.stderr.trim()
-    ) {
-      continue;
-    }
-    // Older Git cannot report its attribute search paths: retain native checkout.
-    if (
-      result.termination !== "exit" ||
-      result.code !== 0 ||
-      result.stdoutTruncatedBytes ||
-      (result.stdout.trim() &&
-        (await worktreePathExists(normalizeGitPathForFilesystem(result.stdout.trim()))))
-    ) {
-      setWorktreePreparationTemplate("unavailable", {
-        reason: result.code === 0 ? "external-attributes" : "attributes-probe-failed",
-      });
-      return undefined;
-    }
-  }
-  return digest(`source-v2\n${git.sourceOnly}\n${commit}\n${checkoutConfig.join("\0")}`);
-}
-
 async function prepareTemplate(options: CheckoutOptions) {
   const backend = await detectWorktreeFilesystemBackend(path.dirname(options.destination), options);
   if (!backend) {
@@ -230,17 +124,26 @@ async function prepareTemplate(options: CheckoutOptions) {
   }
   // Registration already pinned this commit before template selection.
   const commit = options.base;
+  let gitMs: number | undefined;
   return await withWorktreeGitConfig(
     options.destination,
     options.sourceOnly === true,
     gitOptions(options),
     async (git) => {
       setWorktreePreparationTemplate("unavailable", { reason: "checkout-policy" });
-      const contentKey = await checkoutKey(options, commit, git);
+      const contentKey = await resolveWorktreeCheckoutKey({
+        commonDir: options.commonDir,
+        destination: options.destination,
+        commit,
+        gitOptions: gitOptions(options),
+        git,
+      });
       if (!contentKey) {
         return undefined;
       }
-      const cacheKey = digest(`${options.commonDir}\n${options.worktreeRoot}`);
+      const cacheKey = createHash("sha256")
+        .update(`${options.commonDir}\n${options.worktreeRoot}`)
+        .digest("hex");
       const record = await prepareWorktreeTemplate({
         env: options.env,
         now: options.now,
@@ -258,11 +161,14 @@ async function prepareTemplate(options: CheckoutOptions) {
           // --list includes this worktree's config.worktree when the extension is enabled.
           // A clean sparse template can otherwise look identical to a full checkout.
           if (
-            (await checkoutKey(
-              { ...options, ...templateOptions, destination: existing.path },
+            (await resolveWorktreeCheckoutKey({
+              ...options,
+              ...templateOptions,
+              destination: existing.path,
               commit,
               git,
-            )) !== contentKey
+              gitOptions: gitOptions({ ...options, ...templateOptions }),
+            })) !== contentKey
           ) {
             return false;
           }
@@ -294,20 +200,32 @@ async function prepareTemplate(options: CheckoutOptions) {
             checkoutGitOptions({ ...options, ...templateOptions }),
           );
           if (
-            (await checkoutKey(
-              { ...options, ...templateOptions, destination: preparing.path },
+            (await resolveWorktreeCheckoutKey({
+              ...options,
+              ...templateOptions,
+              destination: preparing.path,
               commit,
               git,
-            )) !== contentKey
+              gitOptions: gitOptions({ ...options, ...templateOptions }),
+            })) !== contentKey
           ) {
             throw new Error("Template and target checkout configurations differ");
           }
           setWorktreePreparationTemplate("cold", { reason: "template-checkout" });
+          const started = performance.now();
           await git.require(
             preparing.path,
             ["read-tree", "--reset", "--no-recurse-submodules", "-u", commit],
             checkoutGitOptions({ ...options, ...templateOptions }),
           );
+          gitMs = performance.now() - started;
+          if (backend.id === "btrfs") {
+            btrfsCheckoutMeasurements.set(preparing.cacheKey, {
+              commit,
+              sourceOnly: options.sourceOnly === true,
+              gitMs,
+            });
+          }
         },
       });
       try {
@@ -315,6 +233,7 @@ async function prepareTemplate(options: CheckoutOptions) {
           ? {
               record,
               backend,
+              gitMs,
               sourceIndex: await resolveGitMetadataPath(record.path, "index", gitOptions(options)),
             }
           : undefined;
@@ -415,7 +334,6 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
     throw new Error("Worktree registration changed during creation; preserve it for recovery.");
   }
   const options = { ...input, base: commit };
-  const destinationIdentity = await fs.lstat(options.destination);
   // Native PR owns its seed and partial checkout, including cancellation failures.
   let preserve = Boolean(existingBranch);
   let materializationStarted = false;
@@ -450,6 +368,10 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
     return result.code === 0 ? added : result;
   };
   let retainedTemplate: Awaited<ReturnType<typeof prepareTemplate>>;
+  const measurementKey = createHash("sha256")
+    .update(`${options.commonDir}\n${options.worktreeRoot}`)
+    .digest("hex");
+  let sampledGit: { gitMs?: number } | undefined;
   const prepare = async (): Promise<CheckoutResult> => {
     if (profile && commit !== profile.commit) {
       preserve = true;
@@ -460,21 +382,35 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
     const checkoutBytes = await options.prepareCommit?.(commit);
     let template: Awaited<ReturnType<typeof prepareTemplate>>;
     let cloneBytes: number | undefined;
+    let measurement = btrfsCheckoutMeasurements.get(measurementKey);
+    if (
+      measurement?.commit !== commit ||
+      measurement.sourceOnly !== (options.sourceOnly === true)
+    ) {
+      measurement = undefined;
+      btrfsCheckoutMeasurements.delete(measurementKey);
+    }
+    let templatePrepareMs = 0;
+    const measuredSlower = measurement?.useTemplate === false;
     setWorktreePreparationTemplate("unavailable", {
       reason: !options.enabled
         ? "disabled"
-        : checkoutBytes === 0
-          ? "empty-checkout"
-          : profile
-            ? "source-profile"
-            : "template-prepare",
+        : measuredSlower
+          ? "measured-git-faster"
+          : checkoutBytes === 0
+            ? "empty-checkout"
+            : profile
+              ? "source-profile"
+              : "template-prepare",
     });
-    if (options.enabled && checkoutBytes !== 0 && !profile) {
+    if (options.enabled && !measuredSlower && checkoutBytes !== 0 && !profile) {
       try {
+        const started = performance.now();
         template = retainedTemplate = await timeWorktreePreparationPhase("templatePrepare", () =>
           prepareTemplate(options),
         );
         cloneBytes = template ? await estimateTemplateCloneBytes(template) : undefined;
+        templatePrepareMs = performance.now() - started;
         if (template) {
           setWorktreePreparationTemplate(undefined, { reason: "ready", cloneBytes });
         }
@@ -488,6 +424,23 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
         });
         log.warn(`worktree acceleration unavailable; using Git checkout: ${String(error)}`);
       }
+    }
+    measurement = btrfsCheckoutMeasurements.get(measurementKey);
+    // The cold template's read-tree is a real Git checkout baseline. After a
+    // restart, use one requested checkout as the baseline rather than creating a probe tree.
+    const sampleGit =
+      template?.backend.id === "btrfs" &&
+      !measurement &&
+      template.gitMs === undefined &&
+      !options.deferGitCheckout;
+    if (sampleGit) {
+      // Reserve the sample; concurrent requests can still clone while it completes.
+      measurement = { commit, sourceOnly: options.sourceOnly === true };
+      sampledGit = measurement;
+      btrfsCheckoutMeasurements.set(measurementKey, measurement);
+      template = undefined;
+      cloneBytes = undefined;
+      setWorktreePreparationTemplate("unavailable", { reason: "measurement-git-baseline" });
     }
     assertOwned(options);
     try {
@@ -521,8 +474,41 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
       return result;
     }
     if (!template) {
-      return options.deferGitCheckout ? added : await checkout();
+      const started = performance.now();
+      if (
+        !options.deferGitCheckout &&
+        options.onPromptReady &&
+        (await withWorktreeGitConfig(
+          options.destination,
+          options.sourceOnly === true,
+          gitOptions(options),
+          (git) =>
+            prepareWorktreePromptFiles({
+              repoRoot: options.repoRoot,
+              commonDir: options.commonDir,
+              commit,
+              destination: options.destination,
+              git,
+              gitOptions: gitOptions(options),
+              checkoutOptions: checkoutGitOptions(options),
+              onMaterializationStart: () => {
+                materializationStarted = true;
+              },
+            }),
+        ))
+      ) {
+        await assertRegistration();
+        assertOwned(options);
+        await options.onPromptReady(commit);
+        assertOwned(options);
+      }
+      const result = options.deferGitCheckout ? added : await checkout();
+      if (sampleGit && measurement && result.code === 0) {
+        measurement.gitMs = performance.now() - started;
+      }
+      return result;
     }
+    const templateStarted = performance.now();
     const destinationIndex = path.resolve(
       options.repoRoot,
       normalizeGitPathForFilesystem(
@@ -643,6 +629,19 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
       return await checkout();
     }
     await assertRegistration();
+    if (
+      template.backend.id === "btrfs" &&
+      measurement?.gitMs !== undefined &&
+      measurement.useTemplate === undefined &&
+      template.gitMs === undefined
+    ) {
+      const templateMs = templatePrepareMs + performance.now() - templateStarted;
+      // A small absolute margin avoids selecting Git from timer noise on tiny trees.
+      measurement.useTemplate = templateMs <= measurement.gitMs + 250;
+      log.info(
+        `worktree checkout measured: using ${measurement.useTemplate ? "btrfs" : "Git"} (template=${Math.round(templateMs)}ms git=${Math.round(measurement.gitMs)}ms)`,
+      );
+    }
     return { ...added, templateCloned: true };
   };
   let outcome: { result: CheckoutResult } | { error: unknown };
@@ -650,6 +649,13 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
     outcome = { result: await prepare() };
   } catch (error) {
     outcome = { error };
+  }
+  if (
+    sampledGit &&
+    sampledGit.gitMs === undefined &&
+    btrfsCheckoutMeasurements.get(measurementKey) === sampledGit
+  ) {
+    btrfsCheckoutMeasurements.delete(measurementKey);
   }
   await retainedTemplate?.record.release("error" in outcome ? outcome.error : undefined);
   const failures = "error" in outcome ? [outcome.error] : [];
@@ -666,38 +672,8 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
       }
       await removeFailedCheckout({ ...options, signal: undefined, commitGuard: rollbackGuard });
     } catch (error) {
-      if (
-        materializationStarted ||
-        preserve ||
-        !options.deferUnpreparedCleanup ||
-        !(error instanceof OpenClawStateLeaseError) ||
-        error.code !== "OPENCLAW_STATE_LEASE_LOST"
-      ) {
-        failures.push(error);
-      } else {
-        options.deferUnpreparedCleanup(async (assertCurrent) => {
-          const current = await fs.lstat(options.destination);
-          if (
-            !current.isDirectory() ||
-            current.dev !== destinationIdentity.dev ||
-            current.ino !== destinationIdentity.ino
-          ) {
-            throw new Error("Worktree target changed before cleanup; checkout preserved.", {
-              cause: error,
-            });
-          }
-          const recoveryOptions = { beforeRun: assertCurrent, killProcessTree: true };
-          if (
-            (await resolveGitMetadataPath(options.destination, ".", recoveryOptions)) !== absolute
-          ) {
-            throw new Error("Worktree registration changed before cleanup; checkout preserved.", {
-              cause: error,
-            });
-          }
-          await assertUnprepared(recoveryOptions);
-          await removeFailedCheckout({ ...options, signal: undefined, commitGuard: assertCurrent });
-        });
-      }
+      // Lost cleanup authority leaves the registration for inspection, even when still empty.
+      failures.push(error);
     }
   }
   if (failures.length > 1) {
@@ -717,47 +693,6 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
     throw failures[0];
   }
   return outcome.result;
-}
-
-/** Materialization and restore share one filter-safe operation boundary. */
-export async function materializeManagedWorktree(
-  params: {
-    destination: string;
-    commit: string;
-    sourceOnly?: boolean;
-    resetIndexTo?: string;
-    removeExisting?: boolean;
-  },
-  options: GitCommandOptions,
-  indexOptions: GitCommandOptions = options,
-): Promise<GitResult> {
-  return await withWorktreeGitConfig(
-    params.destination,
-    params.sourceOnly === true,
-    indexOptions,
-    async (git) => {
-      if (params.removeExisting) {
-        await git.require(
-          params.destination,
-          ["rm", "-r", "--force", "--ignore-unmatch", "--", "."],
-          options,
-        );
-      }
-      const result = await git.run(
-        params.destination,
-        ["read-tree", "--reset", "--no-recurse-submodules", "-u", params.commit],
-        { ...options, env: { ...options.env, GIT_NO_LAZY_FETCH: "1" } },
-      );
-      if (result.code === 0 && params.resetIndexTo) {
-        await git.require(
-          params.destination,
-          params.sourceOnly ? ["read-tree", "--reset", params.resetIndexTo] : ["reset"],
-          indexOptions,
-        );
-      }
-      return result;
-    },
-  );
 }
 
 async function removeFailedCheckout(options: CheckoutOptions): Promise<void> {

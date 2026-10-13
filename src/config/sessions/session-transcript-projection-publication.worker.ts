@@ -18,8 +18,8 @@ import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-c
 import {
   publishUnchangedSessionTranscriptAuthority,
   readStagedSessionTranscriptAuthority,
-  type SessionTranscriptAuthorityReceipt,
 } from "./session-transcript-authority.js";
+import type { SessionTranscriptAuthorityReceipt } from "./session-transcript-authority.types.js";
 import {
   isSessionTranscriptIndexStatusClean,
   maintainSessionTranscriptIndexStatus,

@@ -2,6 +2,7 @@ import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dro
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { page } from "vitest/browser";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import type { ChatDetailsProgress } from "./chat-details-progress.tsx";
 import type { ChatDetailsSession } from "./chat-details-session.tsx";
@@ -35,13 +36,17 @@ function props(overrides: Partial<ChatDetailsProps> = {}): ChatDetailsProps {
     ...overrides,
   };
 }
-async function fixture(value = props()) {
+async function fixture(value = props(), width = 600) {
   const styles = document.createElement("style");
   styles.textContent = [baseStyles, progressStyles, detailsStyles].join("\n");
   document.head.append(styles);
   const frame = document.createElement("div");
   frame.className = "chat-main__conversation-frame";
-  frame.style.cssText = "position:relative;width:600px;height:560px;margin-left:20px";
+  frame.style.cssText = `position:relative;width:${width}px;height:560px;margin-left:20px`;
+  const conversation = document.createElement("div");
+  conversation.className = "chat-main__conversation";
+  conversation.style.cssText =
+    "position:absolute;inset-block:0;inset-inline-start:0;inset-inline-end:var(--chat-details-space,0px)";
   const footer = document.createElement("div");
   footer.className = "chat-footer";
   footer.style.cssText = "position:absolute;bottom:0;width:100%;height:100px";
@@ -50,11 +55,12 @@ async function fixture(value = props()) {
     container: frame,
   });
   const element = view.container.querySelector("openclaw-chat-details")!;
-  frame.append(footer);
+  conversation.append(footer);
+  frame.append(conversation);
   mounted.push(frame, styles);
   await element.updateComplete;
-  const session = element.querySelector<ChatDetailsSession>("openclaw-chat-details-session")!;
-  const progress = element.querySelector<ChatDetailsProgress>("openclaw-chat-details-progress")!;
+  const session = frame.querySelector<ChatDetailsSession>("openclaw-chat-details-session")!;
+  const progress = frame.querySelector<ChatDetailsProgress>("openclaw-chat-details-progress")!;
   await session.updateComplete;
   await progress?.updateComplete;
   return {
@@ -63,7 +69,8 @@ async function fixture(value = props()) {
     footer,
     session,
     progress,
-    panel: element.querySelector<HTMLElement>(".chat-details")!,
+    conversation,
+    panel: frame.querySelector<HTMLElement>(".chat-details")!,
     trigger: element.querySelector<HTMLButtonElement>(".chat-details-toggle")!,
   };
 }
@@ -81,6 +88,61 @@ afterEach(() => {
 });
 
 describe("chat Details presentation", () => {
+  it("automatically docks within the available pane, preserves intent, and releases its column", async () => {
+    await page.viewport(1700, 900);
+    const { element, frame, conversation, footer, trigger, panel, session } = await fixture(
+      props(),
+      1320,
+    );
+    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(panel.getAttribute("role")).toBe("complementary");
+    expect(panel.matches(":popover-open")).toBe(false);
+    expect(conversation.getBoundingClientRect().right).toBeLessThanOrEqual(
+      panel.getBoundingClientRect().left,
+    );
+    expect(footer.getBoundingClientRect().right).toBeLessThanOrEqual(
+      panel.getBoundingClientRect().left,
+    );
+    document.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    const disclosure = session.querySelector<HTMLDetailsElement>(".chat-details-session")!;
+    await toggle(disclosure);
+    // A side panel consumes pane width even when the desktop stays wide.
+    frame.style.width = "900px";
+    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(conversation.getBoundingClientRect().width).toBe(900);
+    frame.style.width = "1320px";
+    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(session.querySelector(".chat-details-session")).toBe(disclosure);
+    expect(disclosure.open).toBe(false);
+    panel.querySelector<HTMLButtonElement>("button")!.click();
+    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(conversation.getBoundingClientRect().width).toBe(1320);
+    element.props = { ...element.props!, progressCard: { ...card, revision: 4 } };
+    frame.style.width = "900px";
+    await element.updateComplete;
+    frame.style.width = "1320px";
+    element.presented = false;
+    await element.updateComplete;
+    element.presented = true;
+    await element.updateComplete;
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    trigger.click();
+    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+    frame.style.width = "600px";
+    await expect.poll(() => panel.matches(":popover-open")).toBe(true);
+    expect(panel.getAttribute("role")).toBe("dialog");
+    expect(conversation.getBoundingClientRect().width).toBe(600);
+    frame.style.width = "1320px";
+    await expect.poll(() => panel.getAttribute("role")).toBe("complementary");
+    expect(panel.matches(":popover-open")).toBe(false);
+    element.presented = false;
+    await element.updateComplete;
+    expect(panel.hidden).toBe(true);
+    expect(conversation.getBoundingClientRect().width).toBe(1320);
+  });
+
   it("starts closed, stays closed on revisions, and returns Escape focus to its labeled trigger", async () => {
     const { element, trigger, panel } = await fixture();
     expect(trigger.textContent).toContain("Details");
@@ -92,6 +154,24 @@ describe("chat Details presentation", () => {
     await element.updateComplete;
     expect(panel.matches(":popover-open")).toBe(true);
     panel.querySelector<HTMLButtonElement>("button")!.focus();
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    await element.updateComplete;
+    expect(panel.matches(":popover-open")).toBe(false);
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("closes Details when a child dropdown has already closed", async () => {
+    const { element, trigger, panel, progress } = await fixture();
+    trigger.click();
+    await element.updateComplete;
+    const menu = progress.querySelector<WaDropdown>("wa-dropdown")!;
+    menu.querySelector<HTMLButtonElement>("button")!.click();
+    await menu.updateComplete;
+    expect(menu.open).toBe(true);
+    menu.open = false;
+    expect(menu.hasAttribute("open")).toBe(true);
     document.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
     );

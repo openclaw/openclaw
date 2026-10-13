@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { BrowserProfileConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
@@ -79,7 +79,7 @@ vi.mock("openclaw/plugin-sdk/config-mutation", async (importOriginal) => {
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => {
   return {
     ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
-    getRuntimeConfig: configMocks.getRuntimeConfig,
+    readRuntimeConfig: configMocks.getRuntimeConfig,
     getRuntimeConfigSourceSnapshot: configMocks.getRuntimeConfigSourceSnapshot,
   };
 });

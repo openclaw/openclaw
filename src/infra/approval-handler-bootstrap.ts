@@ -54,7 +54,7 @@ export async function startChannelApprovalHandlerBootstrap(params: {
   logger?: ReturnType<typeof createSubsystemLogger>;
 }): Promise<() => Promise<void>> {
   const capability = resolveChannelApprovalCapability(params.plugin);
-  if (!capability?.nativeRuntime || !params.channelRuntime) {
+  if (!(capability?.nativeRuntimeAsync ?? capability?.nativeRuntime) || !params.channelRuntime) {
     return async () => {};
   }
 

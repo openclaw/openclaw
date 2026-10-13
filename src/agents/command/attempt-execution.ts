@@ -46,7 +46,7 @@ import {
   resolveCliSessionClearReason,
   shouldClearFailedCliSessionBinding,
 } from "../cli-session.js";
-import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
+import { prepareConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { resolveConversationToolPolicies } from "../conversation-tool-policy-pipeline.js";
 import { resolveDelegationCapability } from "../delegation-capability.js";
 import { withAdmittedCliCandidate } from "../embedded-agent-runner/run-entry-cli.js";
@@ -74,6 +74,7 @@ import {
   isSubagentAnnounceCompletionHandoff,
   isTrustedSubagentCompletionHandoffForRun,
 } from "../subagents/announce/subagent-announce-handoff.js";
+import { withPreparedSessionCapabilityRead } from "../subagents/spawn/subagent-session-store.js";
 import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../tool-policy-match.js";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "../tool-result-limits.js";
 import {
@@ -176,15 +177,17 @@ export async function runAgentAttempt(
   });
   const trustedSubagentCompletionHandoff =
     exactSubagentCompletionHandoff &&
-    hasVerifiedRequesterCompletionHandoff({
-      config: params.cfg,
-      sessionKey: params.sessionKey,
-      inputProvenance: params.opts.inputProvenance,
-      trustedInternalHandoff: params.opts.trustedInternalHandoff,
-      sessionId: params.sessionId,
-      modelProvider: params.providerOverride,
-      modelId: params.modelOverride,
-    });
+    (await withPreparedSessionCapabilityRead(() =>
+      hasVerifiedRequesterCompletionHandoff({
+        config: params.cfg,
+        sessionKey: params.sessionKey,
+        inputProvenance: params.opts.inputProvenance,
+        trustedInternalHandoff: params.opts.trustedInternalHandoff,
+        sessionId: params.sessionId,
+        modelProvider: params.providerOverride,
+        modelId: params.modelOverride,
+      }),
+    ));
   const trustedSubagentAnnounceHandoff =
     isSubagentAnnounceHandoff && trustedSubagentCompletionHandoff;
   const completionRequestsMessageDelivery =
@@ -197,10 +200,11 @@ export async function runAgentAttempt(
         cfg: params.cfg,
         sessionKey: params.sessionKey,
         agentId: params.sessionAgentId,
+        preparedSessionEntry: params.sessionEntry ?? null,
       })
     : undefined;
   const completionCapabilityProfile = completionRequestsMessageDelivery
-    ? resolveConversationCapabilityProfile({
+    ? await prepareConversationCapabilityProfile({
         config: params.cfg,
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
@@ -461,6 +465,8 @@ export async function runAgentAttempt(
       terminalReplyExpectation: replyExpectation,
       silentReplyPromptMode:
         params.opts.silentReplyPromptMode ?? (replyExpectation === "required" ? "none" : undefined),
+      bootstrapContextMode: params.opts.bootstrapContextMode,
+      bootstrapContextRunKind: params.opts.bootstrapContextRunKind,
       bootstrapPromptWarningSignaturesSeen,
       bootstrapPromptWarningSignature: bootstrapPromptWarningSignaturesSeen.at(-1),
     }) satisfies Partial<RunEmbeddedAgentInternalParams>;
@@ -804,8 +810,6 @@ export async function runAgentAttempt(
     suppressLiveStreamOutput:
       params.opts.sessionEffects === "internal" && params.opts.deliver !== true,
     abortSignal: params.opts.abortSignal,
-    bootstrapContextMode: params.opts.bootstrapContextMode,
-    bootstrapContextRunKind: params.opts.bootstrapContextRunKind,
     toolsAllow: runtimeToolsAllow,
     runtimePluginToolGrant: params.opts.runtimePluginToolGrant,
     trustedInternalHandoff: trustedSubagentCompletionHandoff

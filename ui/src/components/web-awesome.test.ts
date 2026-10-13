@@ -107,25 +107,22 @@ async function createSubmenuDropdown(itemLabel = "Specific owner") {
 afterEach(() => document.body.replaceChildren());
 
 describe("Web Awesome adapters", () => {
-  it.each(domRoots)("syncs an explicit menu label only while open in %s DOM", async (domRoot) => {
-    const { dropdown } = await createDropdown("Message actions", domRoot);
+  it.each(["shadow"] as const)(
+    "syncs an explicit menu label only while open in %s DOM",
+    async (domRoot) => {
+      const { dropdown } = await createDropdown("Message actions", domRoot);
 
-    expect(menuLabel(dropdown)).toBe("Message actions");
+      expect(menuLabel(dropdown)).toBe("Message actions");
 
-    dropdown.setAttribute("aria-label", "Updated actions");
-    await labelsSettled();
-    expect(menuLabel(dropdown)).toBe("Updated actions");
-    dispatchLifecycle(dropdown, "after-hide");
-    dropdown.setAttribute("aria-label", "Closed actions");
-    await Promise.resolve();
-    expect(menuLabel(dropdown)).toBe("Updated actions");
-  });
-
-  it("labels a dropdown menu from its trigger", async () => {
-    const { dropdown } = await createDropdown();
-
-    expect(menuLabel(dropdown)).toBe("Actions");
-  });
+      dropdown.setAttribute("aria-label", "Updated actions");
+      await labelsSettled();
+      expect(menuLabel(dropdown)).toBe("Updated actions");
+      dispatchLifecycle(dropdown, "after-hide");
+      dropdown.setAttribute("aria-label", "Closed actions");
+      await Promise.resolve();
+      expect(menuLabel(dropdown)).toBe("Updated actions");
+    },
+  );
 
   it("labels a submenu from its parent item", async () => {
     const { item } = await createSubmenuDropdown("Specific owner: Ada");
@@ -133,17 +130,21 @@ describe("Web Awesome adapters", () => {
     expect(menuLabel(item, true)).toBe("Specific owner: Ada");
   });
 
-  it.each(domRoots)("makes closing menus inert and restores them in %s DOM", async (domRoot) => {
-    const { dropdown } = await createDropdown(undefined, domRoot);
-    expectMenuInteractive(dropdown, true);
+  it.each(["shadow"] as const)(
+    "makes closing menus inert and restores them in %s DOM",
+    async (domRoot) => {
+      const { dropdown } = await createDropdown(undefined, domRoot);
+      expect(menuLabel(dropdown)).toBe("Actions");
+      expectMenuInteractive(dropdown, true);
 
-    dispatchLifecycle(dropdown, "hide", true);
+      dispatchLifecycle(dropdown, "hide", true);
 
-    await Promise.resolve();
-    expectMenuInteractive(dropdown, false);
-    dispatchLifecycle(dropdown, "show", true);
-    expectMenuInteractive(dropdown, true);
-  });
+      await Promise.resolve();
+      expectMenuInteractive(dropdown, false);
+      dispatchLifecycle(dropdown, "show", true);
+      expectMenuInteractive(dropdown, true);
+    },
+  );
 
   it("keeps a dropdown interactive when a later document listener cancels its hide", async () => {
     const { dropdown } = await createDropdown();
@@ -214,7 +215,6 @@ describe("Web Awesome popup lifecycle", () => {
   });
 
   it.each([
-    "mount",
     "overlapping anchor changes",
     "removal during reposition",
     "reconnection during reposition",

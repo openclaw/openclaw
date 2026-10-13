@@ -148,9 +148,13 @@ pin_worktree_bundled_plugins_dir() {
 resolve_pr_gates_remote_mode() {
   case "${OPENCLAW_PR_GATES_REMOTE:-}" in
     "")
-      printf 'local\n'
+      if [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
+        printf 'local\n'
+      else
+        printf 'github\n'
+      fi
       ;;
-    testbox|crabbox-aws|github)
+    local|testbox|crabbox-aws|github)
       if [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
         echo "OPENCLAW_PR_GATES_REMOTE=$OPENCLAW_PR_GATES_REMOTE conflicts with OPENCLAW_TESTBOX=1; select one gate mode." >&2
         echo "Unset OPENCLAW_TESTBOX to use $OPENCLAW_PR_GATES_REMOTE gates, or unset OPENCLAW_PR_GATES_REMOTE to use completed hosted proof." >&2
@@ -159,7 +163,7 @@ resolve_pr_gates_remote_mode() {
       printf '%s\n' "$OPENCLAW_PR_GATES_REMOTE"
       ;;
     *)
-      echo "Unsupported OPENCLAW_PR_GATES_REMOTE=${OPENCLAW_PR_GATES_REMOTE} (supported: testbox, crabbox-aws, github)." >&2
+      echo "Unsupported OPENCLAW_PR_GATES_REMOTE=${OPENCLAW_PR_GATES_REMOTE} (supported: local, testbox, crabbox-aws, github)." >&2
       return 1
       ;;
   esac

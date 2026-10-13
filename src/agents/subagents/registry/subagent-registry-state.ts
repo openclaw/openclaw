@@ -31,6 +31,7 @@ import {
   type SubagentRunsCache,
 } from "./subagent-registry-read-cache.js";
 import {
+  mergeSubagentRunReadScope,
   prepareSubagentRunReadSnapshot,
   prepareSubagentMaintenanceReadSnapshot,
   prepareSubagentSessionRunReadSnapshot,
@@ -417,6 +418,20 @@ export function getSubagentSessionListRunsSnapshotForRead(
     });
   }
   return getSubagentRunsSnapshot(inMemoryRuns, persistedSubagentSessionListRunsReadCache);
+}
+
+/** Current control facts reuse the same membership owner as asynchronous payload reads. */
+export function getSubagentControlRunsSnapshotForRead(
+  sessionKey: string,
+): Map<string, SubagentRunReadRecord> {
+  const cache = persistedSubagentSessionListRunsReadCache;
+  const compact = shouldReadPersistedSubagentRuns()
+    ? loadPersistedSubagentRunsForRead(cache)
+    : new Map<string, SubagentRunReadRecord>();
+  return mergeSubagentRunReadScope(subagentRuns, cache, compact, {
+    sessionKeys: [sessionKey],
+    descendants: false,
+  });
 }
 
 /** Exact rows share the owner snapshot while projecting only their complete requester trees. */

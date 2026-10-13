@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../../../src/config/runtime-snapshot.js";
 import { importSqliteSessionRows } from "../../../../src/config/sessions/session-accessor.sqlite-import.test-support.js";
 import {
   loadTranscriptEventsSync,
@@ -114,6 +115,7 @@ describe("memory synchronization of canonical SQLite transcripts", () => {
       },
     };
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     await importSqliteSessionRows({
       ...scope(),
       entry: { sessionId, updatedAt: 1 },

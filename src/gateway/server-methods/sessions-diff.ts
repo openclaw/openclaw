@@ -59,7 +59,7 @@ export async function loadSessionDiff(
       if (!entry?.sessionId || !storePath || !agentId) {
         return empty("unknown_session");
       }
-      const repository = await resolveRepositoryWorkspaceAccess({ ...loaded, agentId }, context);
+      using repository = await resolveRepositoryWorkspaceAccess({ ...loaded, agentId }, context);
       assertCurrent();
       if (repository) {
         if (repository.kind === "stored") {

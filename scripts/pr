@@ -70,7 +70,7 @@ pr_subcommand_classification() {
     ls | ci-dispatch)
       printf 'advisory\n'
       ;;
-    gc | lock-recover | review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-correction-init | prepare-correction-review-init | prepare-baseline-refresh | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover | merge-complete)
+    gc | lock-recover | review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-correction-init | prepare-correction-continue | prepare-correction-review-init | prepare-baseline-refresh | prepare-baseline-successor | prepare-baseline-signing-request | prepare-baseline-signing-continue | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover | merge-complete)
       printf 'landing\n'
       ;;
     *) return 1 ;;
@@ -467,7 +467,7 @@ readonly canonical_repo_root
 
 is_main_only_pr_command() {
   case "$1" in
-    prepare-init | prepare-correction-init | prepare-correction-review-init | prepare-baseline-refresh | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover) return 0 ;;
+    prepare-init | prepare-correction-init | prepare-correction-continue | prepare-correction-review-init | prepare-baseline-refresh | prepare-baseline-successor | prepare-baseline-signing-request | prepare-baseline-signing-continue | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -481,7 +481,7 @@ is_supervised_pr_process() {
 # The supervisor changes cwd to the canonical repo. Resolve explicit body and
 # evidence paths relative to the operator's caller before crossing that
 # boundary; do not read them.
-if [ "${1-}" = merge-run ] || [ "${1-}" = merge-recover ] || [ "${1-}" = prepare-baseline-refresh ]; then
+if [ "${1-}" = merge-run ] || [ "${1-}" = merge-recover ] || [ "${1-}" = prepare-baseline-refresh ] || [ "${1-}" = prepare-baseline-successor ] || [ "${1-}" = prepare-baseline-signing-request ] || [ "${1-}" = prepare-baseline-signing-continue ]; then
   merge_cli_args=() merge_cli_body_next=false
   for merge_cli_arg in "$@"; do
     if [ "$merge_cli_body_next" = true ] && [ -n "$merge_cli_arg" ]; then
@@ -489,7 +489,7 @@ if [ "${1-}" = merge-run ] || [ "${1-}" = merge-recover ] || [ "${1-}" = prepare
     fi
     merge_cli_args+=("$merge_cli_arg")
     merge_cli_body_next=false
-    if [ "$merge_cli_arg" = --body-file ] || [ "$merge_cli_arg" = --legacy-refusal ] || [ "$merge_cli_arg" = --pre-dispatch-refusal ] || [ "$merge_cli_arg" = --admin-evidence ] || [ "$merge_cli_arg" = --resolutions ]; then merge_cli_body_next=true; fi
+    if [ "$merge_cli_arg" = --body-file ] || [ "$merge_cli_arg" = --legacy-refusal ] || [ "$merge_cli_arg" = --pre-dispatch-refusal ] || [ "$merge_cli_arg" = --admin-evidence ] || [ "$merge_cli_arg" = --resolutions ] || [ "$merge_cli_arg" = --signed-commit ]; then merge_cli_body_next=true; fi
   done
   set -- "${merge_cli_args[@]}"
 fi
@@ -528,8 +528,12 @@ Usage:
   scripts/pr review-tests <PR> <test-file> [<test-file> ...]
   scripts/pr prepare-init <PR>
   scripts/pr prepare-correction-init <PR>
+  scripts/pr prepare-correction-continue <PR> --expected-head <SHA> --expected-tree <OID> --incoming-head <SHA> --incoming-review <OID> --publication-receipt <push|sync> --publication-oid <OID>
   scripts/pr prepare-correction-review-init <PR>
   scripts/pr prepare-baseline-refresh <PR> --expected-head <SHA> --baseline <SHA> [--resolutions <file>]
+  scripts/pr prepare-baseline-successor <PR> --expected-head <SHA> --expected-tree <OID> --expected-review <OID> --predecessor-head <SHA> --predecessor-binding <OID> --baseline <SHA> [--resolutions <file>]
+  scripts/pr prepare-baseline-signing-request <PR> --expected-head <SHA> --baseline <SHA> --signer <fingerprint> [--resolutions <file>] [successor identity options]
+  scripts/pr prepare-baseline-signing-continue <PR> --request <OID> --signed-commit <file>
   scripts/pr prepare-validate-commit <PR>
   scripts/pr prepare-gates <PR>
   scripts/pr prepare-push <PR> [--resume-crabbox-run <Actions run ID>]
@@ -549,7 +553,7 @@ Usage:
     Exact evidence is required; branch-caused failures, security checks, and enforced reviews remain blocking.
     This requires --confirmed-operator-admin and immediate squash without auto-merge.
     Repeated merge-run reconciles retained outcomes; it never retries an uncertain dispatch.
-  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA> --auto-merge] [--merged-head <SHA>] [--body-file <path>] [--legacy-refusal <evidence-directory>] [--pre-dispatch-refusal <evidence-directory>] [--admin-evidence <path> --confirmed-operator-admin]
+  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA> --auto-merge] [--merged-head <SHA>] [--cancel-auto [--observed-head <SHA>]] [--body-file <path>] [--legacy-refusal <evidence-directory>] [--pre-dispatch-refusal <evidence-directory>] [--admin-evidence <path> --confirmed-operator-admin]
     Explicitly authorize one new attempt after inspecting the retained outcome and remote history.
     Defaults to the retained head; replacement requires an explicitly selected full lowercase 40-character SHA,
     freshly authored exact-head review/preparation and completed CI proof. Standing landing authority covers
@@ -560,9 +564,11 @@ Usage:
     This reruns current admin admission and retains the original captures; other admin failures remain fenced.
     --replacement-head <SHA> --auto-merge retires an unaccepted prior-CI REST admin intent fenced by a different
     exact current head, then requests ordinary current-head auto-merge. It requires exact-head github_pending
-    preparation and all normal required-check and ClawSweeper gates; it never reuses prior admin evidence.
+    preparation and all normal required-check gates; it never reuses prior admin evidence.
     --cancel-auto instead retires the exact accepted or uncertain non-queue auto request before head repair.
     Cancels a matching active request once, or records an already absent request without sending cancellation.
+    --observed-head <SHA> selects a changed OPEN head whose accepted auto request is already absent.
+    It records retirement only after stable observations; armed requests and concurrent drift stay refused.
     Repeated cancellation reconciles only. Use its current outcome OID for later reviewed/prepared recovery.
     --merged-head <SHA> records the receipt of an accepted auto request that GitHub merged on a pushed descendant
     head after inspecting the PR timeline. It requires the exact authoritative merged head and never dispatches.
@@ -677,7 +683,7 @@ main() {
         [[ "$2" =~ ^[0-9a-f]{40}$ ]] && [ "$3" = --confirmed-operator-completion ] || { usage; exit 2; }
       ;;
     merge-run | merge-recover)
-      local merge_pr="${1-}" auto_merge=false recovery_oid="" merged_head="" replacement_head="" body_path="" legacy_directory="" cancel_auto=false refusal_directory="" admin_evidence="" confirmed_admin=false
+      local merge_pr="${1-}" auto_merge=false recovery_oid="" merged_head="" observed_head="" replacement_head="" body_path="" legacy_directory="" cancel_auto=false refusal_directory="" admin_evidence="" confirmed_admin=false
       [ -n "$merge_pr" ] || { usage; exit 2; }
       shift
       if [ "$cmd" = merge-recover ]; then
@@ -692,6 +698,12 @@ main() {
             [ "$cmd" = merge-recover ] && [ "$cancel_auto" = false ] || { usage; exit 2; }
             cancel_auto=true
             shift
+            ;;
+          --observed-head)
+            [ "$cmd" = merge-recover ] && [ "$#" -ge 2 ] &&
+              [[ "$2" =~ ^[0-9a-f]{40}$ ]] && [ -z "$observed_head" ] || { usage; exit 2; }
+            observed_head="$2"
+            shift 2
             ;;
           --admin-evidence)
             [ "$#" -ge 2 ] && [ -n "$2" ] && [ -z "$admin_evidence" ] || { usage; exit 2; }
@@ -757,6 +769,7 @@ main() {
       [ -z "$legacy_directory" ] || [ -n "$replacement_head" ] || { usage; exit 2; }
       [ -z "$refusal_directory" ] || [ -z "$legacy_directory" ] || { usage; exit 2; }
       [ "$cancel_auto" = false ] || [ -z "$replacement_head$body_path$legacy_directory$refusal_directory" ] || { usage; exit 2; }
+      [ -z "$observed_head" ] || [ "$cancel_auto" = true ] || { usage; exit 2; }
       set -- "$merge_pr"
       ;;
     prepare-push)
@@ -769,7 +782,7 @@ main() {
     ci-dispatch)
       [ "$#" -eq 1 ] || { [ "$#" -eq 3 ] && [ "$2" = --backend ] && [ "$3" = crabbox ]; } || { usage; exit 2; }
       ;;
-    review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | prepare-init | prepare-correction-init | prepare-correction-review-init | prepare-baseline-refresh | prepare-validate-commit | prepare-gates | prepare-sync-head | prepare-run | merge-verify)
+    review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | prepare-init | prepare-correction-init | prepare-correction-continue | prepare-correction-review-init | prepare-baseline-refresh | prepare-baseline-successor | prepare-baseline-signing-request | prepare-baseline-signing-continue | prepare-validate-commit | prepare-gates | prepare-sync-head | prepare-run | merge-verify)
       [ "$#" -ge 1 ] || { usage; exit 2; }
       ;;
     *)
@@ -866,6 +879,18 @@ main() {
     prepare-baseline-refresh)
       prepare_baseline_refresh "$@"
       ;;
+    prepare-baseline-successor)
+      prepare_baseline_successor "$@"
+      ;;
+    prepare-baseline-signing-request)
+      prepare_baseline_signing_request "$@"
+      ;;
+    prepare-baseline-signing-continue)
+      prepare_baseline_signing_continue "$@"
+      ;;
+    prepare-correction-continue)
+      prepare_correction_continue "$@"
+      ;;
     prepare-correction-review-init)
       [ "$#" -eq 1 ] || { usage; exit 2; }
       prepare_correction_review_init "$1"
@@ -912,7 +937,7 @@ main() {
       merge_verify "$pr" '{"replacementHead":"","autoMergeRequested":false,"qualifiedRefusal":false,"observation":null}'
       ;;
     merge-run | merge-recover)
-      merge_run "$merge_pr" "$auto_merge" "$recovery_oid" "$replacement_head" "$body_path" "$legacy_directory" "$cancel_auto" "$refusal_directory" "$admin_evidence" "$confirmed_admin" "$merged_head"
+      merge_run "$merge_pr" "$auto_merge" "$recovery_oid" "$replacement_head" "$body_path" "$legacy_directory" "$cancel_auto" "$refusal_directory" "$admin_evidence" "$confirmed_admin" "$merged_head" "$observed_head"
       ;;
     merge-complete)
       merge_complete "$1" "$2"

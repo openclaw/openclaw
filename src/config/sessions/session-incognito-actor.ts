@@ -84,8 +84,6 @@ export type IncognitoSessionActor = SessionActorLifetime & {
 export function createIncognitoSessionFacts(
   identity: AgentDatabaseIncognitoIdentity,
   assertActorCurrent: () => void,
-  withGrant: <T>(operation: () => T) => T,
-  assertOutsideGrant: () => void,
   invalidateActorSnapshots: (
     targets: readonly Pick<IncognitoSessionFacts, "sessionKey" | "sharing">[] | undefined,
   ) => void,
@@ -94,7 +92,7 @@ export function createIncognitoSessionFacts(
   const entries = new Map<string, IncognitoSessionFacts>();
   const pending = new Set<string>();
   const unavailable = new Set<string>();
-  const grants = createIncognitoSessionGrants(withGrant);
+  const grants = createIncognitoSessionGrants();
   let topologyRevision = 0;
   let snapshotRevision = 0;
   const current = (sessionKey: string) => {
@@ -126,7 +124,6 @@ export function createIncognitoSessionFacts(
       readSnapshotRevision: () => snapshotRevision,
       hasUnsettledFacts: () => pending.size > 0 || unavailable.size > 0,
       entries,
-      withGrant,
     });
   return {
     captureRead,
@@ -269,15 +266,13 @@ export function createIncognitoSessionFacts(
               const value = outcome.value;
               if (!changing) {
                 // Read results carry current worker facts, never authority captured before a wait.
-                withGrant(() => {
-                  authority.assertCurrent();
-                  assertActorCurrent();
-                  for (const facts of value.facts) {
-                    authorizeSessionFacts(authority, "commit", facts);
-                  }
-                  authority.assertCurrent();
-                  assertActorCurrent();
-                });
+                authority.assertCurrent();
+                assertActorCurrent();
+                for (const facts of value.facts) {
+                  authorizeSessionFacts(authority, "commit", facts);
+                }
+                authority.assertCurrent();
+                assertActorCurrent();
                 value.facts.forEach(install);
               }
               for (const key of targets) {
@@ -398,7 +393,6 @@ export function createIncognitoSessionFacts(
       };
       return {
         ...bindIncognitoSessionHistory({
-          assertOutsideGrant,
           assertBorrowed,
           assertActorCurrent,
           retain,
@@ -443,7 +437,6 @@ export function createIncognitoSessionFacts(
           ),
         /** Join a shared-owner composition without holding this actor's FIFO turn. */
         withSharedState<T>(operation: () => Promise<T>): Promise<T> {
-          assertOutsideGrant();
           assertBorrowed();
           return retain(operation);
         },
@@ -455,7 +448,6 @@ export function createIncognitoSessionFacts(
           signal?: AbortSignal,
           onRead?: (facts: readonly IncognitoSessionFacts[]) => void,
         ): Promise<T> => {
-          assertOutsideGrant();
           assertBorrowed();
           const capturedTarget = structuredClone(target);
           return retain(() =>

@@ -9,6 +9,7 @@ import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
 import { wrapToolWorkspaceRootGuardWithOptions } from "./agent-tools.read.js";
 import { isPrimaryBootstrapRun } from "./bootstrap-routing.js";
 import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
+import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import {
   isRuntimeToolAllowed,
@@ -58,7 +59,7 @@ export function applyNodesToolWorkspaceGuard(
   );
 }
 
-export function shouldIncludeProgressCardToolForOpenClawTools(params: {
+type ProgressCardToolRegistrationParams = {
   agentId?: string;
   agentSessionKey?: string;
   config?: OpenClawConfig;
@@ -66,7 +67,19 @@ export function shouldIncludeProgressCardToolForOpenClawTools(params: {
   modelProvider?: string;
   pluginToolDenylist?: string[];
   runtimeToolAllowlist?: string[];
-}): boolean {
+};
+
+export function prepareProgressCardToolForOpenClawTools(
+  params: ProgressCardToolRegistrationParams,
+) {
+  return withPreparedSessionCapabilityRead(() =>
+    shouldIncludeProgressCardToolForOpenClawTools(params),
+  );
+}
+
+export function shouldIncludeProgressCardToolForOpenClawTools(
+  params: ProgressCardToolRegistrationParams,
+): boolean {
   // `tools.updatePlan` is the shipped kill switch for the replacement progress_card tool.
   if (params.config?.tools?.updatePlan === false) {
     return false;

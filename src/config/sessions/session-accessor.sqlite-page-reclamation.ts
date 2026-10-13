@@ -4,13 +4,11 @@ import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
 } from "../../infra/sqlite-worker-identity.js";
-import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStore } from "../../infra/sqlite-worker-store.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type {
   AgentDatabaseExecutionFileIdentity,
   AgentDatabaseOperations,
@@ -35,6 +33,7 @@ import {
 import { captureIncognitoSessionSource } from "./session-incognito-binding.js";
 import { maintenanceLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+import { createSessionWorkerExecutionSource } from "./session-worker-execution-source.js";
 
 export type SqliteSessionPageReclaimer = (maxPages?: number) => Promise<SqliteWalReclamationResult>;
 
@@ -247,21 +246,10 @@ export async function withSqliteSessionPageReclamation<T>(
       assertExistingDatabaseIdentity(options.path, physical.key);
       assertExistingDatabaseIdentity(databaseOptions.path, physical.key);
     };
-    const source: AgentDatabaseRequestExecutionSource = {
-      assertCurrent: assertPruningCurrent,
-      createAdmission(binding) {
-        return () => ({
-          nativeLocations: binding.nativeLocations,
-          admission: createSqliteWorkerOperationAdmission((request, grant) => {
-            binding.authorize(request);
-            assertPruningCurrent();
-            if (!grant()) {
-              throw new Error("SQLite archive pruning authority expired");
-            }
-          }, binding.attachment),
-        });
-      },
-    };
+    const source = createSessionWorkerExecutionSource(
+      assertPruningCurrent,
+      "SQLite archive pruning authority expired",
+    );
     const write = async <Value>(
       operation: (
         worker: Pick<SqliteWorkerStore<AgentDatabaseOperations>, "execute">,

@@ -130,6 +130,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         ...mcpConfig,
         sessionId: params.attempt.sessionId,
         sessionKey: params.attempt.sessionKey,
+        agentId: params.setup.sessionAgentId,
         agentDir: params.agentDir,
         // senderId is only set from the verified inbound sender (sessionCtx.SenderId
         // or the triggering run's sender on follow-ups). Cron/subagent/heartbeat runs

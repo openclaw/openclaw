@@ -32,7 +32,7 @@ it("resolves a partitioned global session id with legacy ownership", async () =>
       );
     }
 
-    expect(resolveSessionKeyForRequestCore({ cfg, sessionId: "ops-session" })).toMatchObject({
+    expect(await resolveSessionKeyForRequestCore({ cfg, sessionId: "ops-session" })).toMatchObject({
       agentId: "ops",
       sessionKey,
       storePath,
@@ -57,10 +57,12 @@ it("keeps exact shared SQLite ownership separate from the scan agent and physica
       session: { store: storePath },
     };
 
-    expect(() =>
+    await expect(
       resolveSessionKeyForRequestCore({ cfg, sessionId: "unscoped-session" }),
-    ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
-    expect(resolveSessionKeyForRequestCore({ cfg, sessionId: "scoped-session" })).toMatchObject({
+    ).rejects.toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
+    expect(
+      await resolveSessionKeyForRequestCore({ cfg, sessionId: "scoped-session" }),
+    ).toMatchObject({
       agentId: "ops",
       sessionKey: "agent:ops:work",
       storePath,
@@ -71,12 +73,12 @@ it("keeps exact shared SQLite ownership separate from the scan agent and physica
         agents: { ...cfg.agents, defaults: { sessionStore: { agentId: owner } } },
       };
       if (owner === "retired") {
-        expect(() =>
+        await expect(
           resolveSessionKeyForRequestCore({ cfg: ownedCfg, sessionId: "unscoped-session" }),
-        ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
+        ).rejects.toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
       } else {
         expect(
-          resolveSessionKeyForRequestCore({ cfg: ownedCfg, sessionId: "unscoped-session" }),
+          await resolveSessionKeyForRequestCore({ cfg: ownedCfg, sessionId: "unscoped-session" }),
         ).toMatchObject({ agentId: "ops", sessionKey: "global", storePath });
       }
     }
@@ -190,8 +192,12 @@ it("does not provision a missing incognito lookup or select a hidden run-owned e
     const cfg = { agents: { defaults: {} }, session: { store: storePath } };
     const incognitoPath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
     expect(
-      resolveSessionKeyForRequestCore({ cfg, sessionKey: "agent:main:dashboard:incognito-missing" })
-        .sessionEntry,
+      (
+        await resolveSessionKeyForRequestCore({
+          cfg,
+          sessionKey: "agent:main:dashboard:incognito-missing",
+        })
+      ).sessionEntry,
     ).toBeUndefined();
     expect(isOpenClawAgentDatabaseOpen(incognitoPath)).toBe(false);
     expect(fs.existsSync(storePath)).toBe(false);
@@ -202,10 +208,10 @@ it("does not provision a missing incognito lookup or select a hidden run-owned e
       { sessionId: hidden.sessionId, updatedAt: Date.now() },
     );
     expect(
-      resolveSessionKeyForRequestCore({ cfg, sessionKey: hidden.sessionKey }).sessionEntry,
+      (await resolveSessionKeyForRequestCore({ cfg, sessionKey: hidden.sessionKey })).sessionEntry,
     ).toBeUndefined();
     expect(
-      resolveSessionKeyForRequestCore({ cfg, sessionKey: hidden.sessionKey.toUpperCase() })
+      (await resolveSessionKeyForRequestCore({ cfg, sessionKey: hidden.sessionKey.toUpperCase() }))
         .sessionEntry,
     ).toBeUndefined();
   });

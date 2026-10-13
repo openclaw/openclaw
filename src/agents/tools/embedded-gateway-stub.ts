@@ -183,10 +183,11 @@ async function handleChatHistory(params: Record<string, unknown>) {
   }
 
   const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
-  const { cfg, storePath, entry, canonicalKey } = rt.loadSessionEntry(
-    sessionKey,
-    sessionLoadOptions,
-  );
+  const { cfg, storePath, entry, canonicalKey } = await rt.loadGatewaySessionEntryReadOnlyInWorker({
+    cfg: rt.getRuntimeConfig(),
+    key: sessionKey,
+    ...sessionLoadOptions,
+  });
   const sessionAgentId = rt.resolveSessionAgentId({
     sessionKey,
     config: cfg,

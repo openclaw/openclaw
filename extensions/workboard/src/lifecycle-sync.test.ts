@@ -950,12 +950,11 @@ function createSessionReader(sessionKey: string, updatedAt: number) {
 }
 
 describe("Workboard lifecycle service", () => {
-  it("uses the active service reader from prepared hooks and fences replacement", async () => {
+  it("uses the active service reader from prepared hooks across replacement", async () => {
     const store = createWorkboardSqliteTestStore();
-    const delayed = createDeferred<{ sessions: []; complete: boolean }>();
     const original = createWorkboardLifecycleService({
       store,
-      readSessions: async () => delayed.promise,
+      readSessions: async () => ({ sessions: [], complete: true }),
     });
     const readReplacement = vi.fn(async () => ({ sessions: [], complete: true }));
     const replacement = createWorkboardLifecycleService({ store, readSessions: readReplacement });
@@ -968,11 +967,12 @@ describe("Workboard lifecycle service", () => {
     };
     try {
       await original.start(context);
-      const pending = prepared.readSessions({ includeUnknown: false });
+      await expect(prepared.readSessions({ includeUnknown: false })).resolves.toEqual({
+        sessions: [],
+        complete: true,
+      });
       original.stop();
       await replacement.start(context);
-      delayed.resolve({ sessions: [], complete: true });
-      await expect(pending).resolves.toEqual({ sessions: [], complete: false });
       original.stop();
       await expect(prepared.readSessions({ includeUnknown: false })).resolves.toEqual({
         sessions: [],
@@ -987,7 +987,6 @@ describe("Workboard lifecycle service", () => {
       });
       expect(readReplacement).toHaveBeenCalledOnce();
     } finally {
-      delayed.resolve({ sessions: [], complete: false });
       original.stop();
       replacement.onGatewayStop();
     }

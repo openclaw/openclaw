@@ -8,6 +8,7 @@ import { decodeOpenAICodexJwtPayload } from "openclaw/plugin-sdk/provider-oauth-
 import { readSecretFile } from "openclaw/plugin-sdk/secret-file";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexAppServerClient } from "../app-server/client.js";
+import { readCodexExperimentalFeature } from "../app-server/experimental-features.js";
 import type { CodexExperimentalFeatureListResponse } from "../app-server/protocol-control-plane.js";
 import type {
   CodexConfigReadResponse,
@@ -159,21 +160,13 @@ async function readNativeCredential(
   if (mode === "file") {
     record = await readAuthFile(home);
   } else if ((mode === "keyring" || mode === "auto") && process.platform === "darwin") {
-    let cursor: string | undefined;
-    let encrypted: boolean | undefined;
-    do {
-      const features = await client.request<CodexExperimentalFeatureListResponse>(
-        "experimentalFeature/list",
-        { limit: 100, cursor },
-        { signal },
-      );
-      const storage = features.data.find((feature) => feature.name === "secret_auth_storage");
-      if (storage) {
-        encrypted = storage.enabled;
-        break;
-      }
-      cursor = features.nextCursor ?? undefined;
-    } while (cursor);
+    const encrypted = await readCodexExperimentalFeature(
+      (params) =>
+        client.request<CodexExperimentalFeatureListResponse>("experimentalFeature/list", params, {
+          signal,
+        }),
+      "secret_auth_storage",
+    );
     if (encrypted !== false) {
       return undefined;
     }

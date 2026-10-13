@@ -1,5 +1,6 @@
 import { afterEach, expect, expectTypeOf, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import {
   replaceSessionEntry,
@@ -101,7 +102,7 @@ it("retains durable callback ordering and warns once per plugin across legacy wr
       }
       for (const [message] of warning.mock.calls) {
         expect(message).toContain("preparation.prepareMessage / preparation.source");
-        expect(message).toContain("next Plugin SDK major");
+        expect(message).toContain("later release after stable deprecation");
       }
     } finally {
       warning.mockRestore();
@@ -187,6 +188,7 @@ it("refuses legacy incognito callbacks while prepared unbound writes retain the 
 });
 
 async function seed(env: NodeJS.ProcessEnv) {
+  setRuntimeConfigSnapshot({});
   const target = {
     agentId: "main",
     sessionId: "append-session",

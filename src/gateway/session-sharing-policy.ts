@@ -6,7 +6,7 @@ import {
   type SessionVisibility,
 } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
-import { isSessionMember, type SessionEntry } from "../config/sessions.js";
+import type { SessionEntry } from "../config/sessions.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
@@ -31,6 +31,7 @@ import {
   captureIncognitoSessionMutationFacts,
   captureSessionActorMutationFacts,
   captureSessionSharingActorBinding,
+  SessionMutationFactsUnavailableError,
 } from "./session-sharing-incognito.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
@@ -127,6 +128,29 @@ function captureSessionSharingIncognitoTarget(params: {
   return binding && { kind: "native" as const, binding, canonicalKey };
 }
 
+export async function resolveSessionSharingTargetAsync(
+  params: Parameters<typeof resolveSessionSharingTarget>[0],
+): Promise<SessionSharingTarget | null> {
+  if (isIncognitoSessionKey(params.sessionKey)) {
+    return resolveSessionSharingTarget(params);
+  }
+  return withGatewaySessionStoreTarget(
+    {
+      cfg: params.cfg,
+      key: params.sessionKey,
+      agentId: params.agentId,
+      projection: "list",
+    },
+    (target) => {
+      if (target.capturedReadSource) {
+        params.onReadSource?.(target.capturedReadSource);
+      }
+      return toSessionSharingTarget(target);
+    },
+  );
+}
+
+/** Synchronous final-authority exception; ordinary reads use the worker-backed resolver. */
 export function resolveSessionSharingTarget(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -229,7 +253,7 @@ export async function withSessionSharingTarget<T>(
       env: retainedSelection.env,
       preparedSource: retainedSelection.source,
       includeMembership: true,
-      readOptions: { snapshotFields: [], lifecycleSessionKey: undefined },
+      readOptions: { snapshotFields: [] },
       consume: (target, membership, assertCurrent) =>
         read(target, membership, assertCurrent, [], retainedSelection),
     });
@@ -316,17 +340,10 @@ export function resolveSessionSharingRole(
   if (sessionCap === "none") {
     return "viewer";
   }
-  const member =
-    params.isMember ??
-    isSessionMember(
-      {
-        agentId: params.target.agentId,
-        sessionKey: params.target.storeKey,
-        storePath: params.target.storePath,
-      },
-      identity.id,
-    );
-  return member ? "member" : "viewer";
+  if (params.isMember === undefined) {
+    throw new SessionMutationFactsUnavailableError();
+  }
+  return params.isMember ? "member" : "viewer";
 }
 
 export function canManageSessionSharing(role: SessionSharingRole): boolean {
@@ -347,14 +364,14 @@ function isIncognitoSessionTarget(params: {
     : isIncognitoSessionKey(params.sessionKey);
 }
 
-export function isResolvedIncognitoSession(params: {
+export async function isResolvedIncognitoSessionAsync(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
-}): boolean {
+}): Promise<boolean> {
   return isIncognitoSessionTarget({
     sessionKey: params.sessionKey,
-    target: resolveSessionSharingTarget(params),
+    target: await resolveSessionSharingTargetAsync(params),
   });
 }
 
@@ -379,31 +396,34 @@ export function authorizeIncognitoSessionTarget(params: {
   return hiddenSessionNotFound(params.sessionKey, true);
 }
 
-export function canAccessIncognitoSession(params: {
+export async function authorizeResolvedSessionMutationAsync(params: {
   cfg: OpenClawConfig;
   client: GatewayClient | null;
   sessionKey: string;
   agentId?: string;
-}): boolean {
-  if (isGatewayAdmin(params.client)) {
-    return true;
+}): Promise<ErrorShape | null> {
+  if (isGatewayAdmin(params.client) && !params.cfg.gateway?.roles) {
+    return null;
   }
-  return (
-    authorizeIncognitoSessionTarget({
-      client: params.client,
-      sessionKey: params.sessionKey,
-      target: resolveSessionSharingTarget(params),
-    }) === null
-  );
-}
-
-export function authorizeResolvedSessionMutation(params: {
-  cfg: OpenClawConfig;
-  client: GatewayClient | null;
-  sessionKey: string;
-  agentId?: string;
-}): ErrorShape | null {
-  return authorizeSessionMutationTarget(params, () => resolveSessionSharingTarget(params));
+  if (isGatewayClientProfilePending(params.client)) {
+    return authenticatedProfileUnavailableError();
+  }
+  const { prepareSessionSharingProfiles, prepareProjectedSessionSharing } =
+    await import("./session-sharing-read.js");
+  const profiles = await prepareSessionSharingProfiles(params.client);
+  return withSessionSharingTarget(params, ({ target, members, assertCurrent }) => {
+    assertCurrent();
+    const sharing = prepareProjectedSessionSharing({
+      ...params,
+      profiles,
+      isMember: (_target, identityId) => members.some((member) => member.identityId === identityId),
+    });
+    return authorizePreparedSessionMutation(
+      params,
+      { target, membership: new Set(members.map((member) => member.identityId)) },
+      { policy: sharing.policy, aliases: profiles.readCurrent().profile?.aliases ?? new Set() },
+    );
+  });
 }
 
 export type PreparedSessionMutationFacts = {
@@ -413,7 +433,7 @@ export type PreparedSessionMutationFacts = {
 
 /** Prepared facts carry no decision; current caller and configuration still determine access. */
 export function authorizePreparedSessionMutation(
-  params: Parameters<typeof authorizeResolvedSessionMutation>[0],
+  params: Parameters<typeof authorizeResolvedSessionMutationAsync>[0],
   facts: PreparedSessionMutationFacts,
   prepared: {
     policy: GatewayOperatorRoleDefinition | undefined;
@@ -428,7 +448,7 @@ export function authorizePreparedSessionMutation(
 }
 
 function authorizeSessionMutationTarget(
-  params: Parameters<typeof authorizeResolvedSessionMutation>[0],
+  params: Parameters<typeof authorizeResolvedSessionMutationAsync>[0],
   readTarget: () => SessionSharingTarget | null,
   prepared?: {
     policy: GatewayOperatorRoleDefinition | undefined;

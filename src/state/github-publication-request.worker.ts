@@ -1,10 +1,10 @@
-import { insertPersonalGitHubPublicationInDatabase } from "../gateway/github-personal-publication-store.js";
+import { insertPersonalGitHubPublicationInDatabase } from "../gateway/github-personal-publication-store.worker.js";
 import { captureGitHubPublicationChanges } from "../gateway/github-publication-events.js";
 import {
   assertSharedGitHubPublicationClaimInDatabase,
   insertGitHubPublicationRequest,
-} from "../gateway/github-publication-store.js";
-import { insertRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication-store.js";
+} from "../gateway/github-publication-store.worker.js";
+import { insertRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication-store.worker.js";
 import { deferSqliteWorkerCommitReceipt } from "../infra/sqlite-worker-operation-admission.js";
 import type { RepositoryGitHubPublicationRow } from "./github-publication-read.types.js";
 import { captureGitHubPublicationWorkerReceipt } from "./github-publication-receipts.js";
@@ -21,6 +21,7 @@ import type {
   PublicationMutationResult,
 } from "./github-publication-worker.types.js";
 import type { PublicationWorkerOperations } from "./github-publication.worker-contract.js";
+import { ensureGitHubPublicationSchema } from "./openclaw-state-db-schema-additive.js";
 import type { WorkerOperationHandlers } from "./worker-operation-registry.js";
 
 function assertRepositoryClaim(
@@ -128,6 +129,9 @@ export const publicationRequestOperations = {
     { open },
   ): PublicationMutationReceipt => {
     const database = open();
+    if (input.kind === "shared") {
+      ensureGitHubPublicationSchema(database.db);
+    }
     const assertCurrent = () => assertGitHubPublicationWorkerSourceCurrent(database.db);
     assertCurrent();
     assertRequestedSource(input, input.source);

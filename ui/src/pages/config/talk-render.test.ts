@@ -1,13 +1,15 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
+import { createComponent } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { t } from "../../i18n/index.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { updatePickers, choosePickerValue } from "../../test-helpers/select-picker.ts";
-import { renderTalk, type TalkRealtimeProviderOption } from "./talk.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import { Talk, type TalkRealtimeProviderOption } from "./talk.tsx";
 
-type TalkProps = Parameters<typeof renderTalk>[0];
+type TalkProps = Parameters<typeof Talk>[0];
 
 function renderFixture(
   overrides: Partial<Omit<TalkProps, "selection" | "catalog">> & {
@@ -17,9 +19,8 @@ function renderFixture(
 ) {
   const { selection, provider, ...props } = overrides;
   const model = selection?.model ?? "gpt-live";
-  const container = document.createElement("div");
-  render(
-    renderTalk({
+  const view = mountSolid(() =>
+    createComponent(Talk, {
       selection: {
         provider: "openai",
         model,
@@ -51,12 +52,12 @@ function renderFixture(
       onProviderChange: vi.fn(),
       onModelChange: vi.fn(),
       onVoiceChange: vi.fn(),
-      editor: html``,
+      editor: null,
       ...props,
     }),
-    container,
   );
-  return container;
+  flush();
+  return view.container;
 }
 
 describe("renderTalk", () => {

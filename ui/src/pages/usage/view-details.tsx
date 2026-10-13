@@ -86,16 +86,15 @@ export function SessionDetailPanel(props: {
   const state = createMemo(() => {
     const session = props.session;
     const detail = props.detail;
-    const callbacks = props.callbacks;
-    const range = props.range;
-    const contextExpanded = props.contextExpanded;
-    const onClose = props.onClose;
     const label = session.label || session.key;
     const displayLabel = label.length > 50 ? truncateUtf16Safe(label, 50) + "…" : label;
     const usage = session.usage;
     const { timeSeriesCursorStart, timeSeriesCursorEnd } = detail;
 
-    const hasRange = timeSeriesCursorStart !== null && timeSeriesCursorEnd !== null;
+    const hasRange =
+      detail.timeSeries?.usageReport?.state !== "unavailable" &&
+      timeSeriesCursorStart !== null &&
+      timeSeriesCursorEnd !== null;
     const filteredUsage =
       hasRange && detail.timeSeries?.points && usage
         ? computeFilteredUsage(
@@ -124,18 +123,8 @@ export function SessionDetailPanel(props: {
       filteredLogs,
       displayLabel,
       cursorIndicator,
-      usage,
       headerStats,
-      onClose,
-      session,
       filteredUsage,
-      hasRange,
-      detail,
-      timeSeriesCursorStart,
-      timeSeriesCursorEnd,
-      callbacks,
-      range,
-      contextExpanded,
     };
   });
   return (
@@ -153,15 +142,26 @@ export function SessionDetailPanel(props: {
           </div>
         </div>
         <div class="session-detail-stats">
-          {state().usage ? (
+          {props.session.usage ? (
             <>
               <span>
-                <strong>{formatUsageTokens(state().headerStats.totalTokens)}</strong>{" "}
+                <strong>
+                  {formatUsageTokens(
+                    state().headerStats.totalTokens,
+                    props.session.usage?.usageReport,
+                  )}
+                </strong>{" "}
                 {normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
                 {state().cursorIndicator}
               </span>
               <span>
-                <strong>{formatUsageCost(state().headerStats.totalCost)}</strong>
+                <strong>
+                  {formatUsageCost(
+                    state().headerStats.totalCost,
+                    2,
+                    props.session.usage?.usageReport,
+                  )}
+                </strong>
                 {state().cursorIndicator}
               </span>
             </>
@@ -170,7 +170,7 @@ export function SessionDetailPanel(props: {
         <openclaw-tooltip prop:content={t("usage.details.close")}>
           <button
             class="btn btn--sm btn--ghost session-detail-close"
-            onClick={() => state().onClose()}
+            onClick={() => props.onClose()}
             aria-label={t("usage.details.close")}
           >
             <Icon name="x" />
@@ -185,22 +185,22 @@ export function SessionDetailPanel(props: {
         </div>
       ) : undefined}
       <div class="session-detail-content">
-        {renderSessionSummary(state().session, state().filteredUsage, state().filteredLogs)}
+        {renderSessionSummary(props.session, state().filteredUsage, state().filteredLogs)}
         <div class="session-detail-row">
           <TimeSeriesCompact
-            detail={state().detail}
-            callbacks={state().callbacks}
-            range={state().range}
+            detail={props.detail}
+            callbacks={props.callbacks}
+            range={props.range}
           />
         </div>
         <div class="session-detail-bottom">
-          <SessionLogs detail={state().detail} callbacks={state().callbacks} />
+          <SessionLogs detail={props.detail} callbacks={props.callbacks} />
           {
             <ContextPanel
-              context={state().detail.context}
-              usage={state().usage}
-              expanded={state().contextExpanded}
-              onToggleExpanded={state().callbacks.onToggleContextExpanded}
+              context={props.detail.context}
+              usage={props.session.usage}
+              expanded={props.contextExpanded}
+              onToggleExpanded={props.callbacks.onToggleContextExpanded}
             />
           }
         </div>
@@ -260,13 +260,6 @@ function LoadedContextPanel(props: {
   const state = createMemo(() => {
     const contextWeight = props.weight;
     const usage = props.usage;
-    const expanded = props.expanded;
-    const onToggleExpanded = props.onToggleExpanded;
-    const refreshStatus = renderUsageRefreshStatus(
-      props.status,
-      "usage.details.systemPromptBreakdown",
-      "context",
-    );
     const groups = [
       {
         className: "skills",
@@ -321,7 +314,10 @@ function LoadedContextPanel(props: {
       ...groups,
     ];
     const totalContextTokens = categories.reduce((sum, { tokens }) => sum + tokens, 0);
-    const inputTokens = usage && usage.totalTokens > 0 ? usage.input + usage.cacheRead : 0;
+    const inputTokens =
+      usage && usage.usageReport?.state !== "unavailable" && usage.totalTokens > 0
+        ? usage.input + usage.cacheRead
+        : 0;
     const contextDescription =
       inputTokens > 0
         ? `~${Math.min((totalContextTokens / inputTokens) * 100, 100).toFixed(0)}% ${t("usage.details.ofInput")}`
@@ -330,10 +326,7 @@ function LoadedContextPanel(props: {
     const hasMore = groups.some(({ entries }) => entries.length > defaultLimit);
 
     return {
-      refreshStatus,
       hasMore,
-      onToggleExpanded,
-      expanded,
       contextDescription,
       categories,
       totalContextTokens,
@@ -343,12 +336,12 @@ function LoadedContextPanel(props: {
   });
   return (
     <div class="context-details-panel">
-      {state().refreshStatus}
+      {renderUsageRefreshStatus(props.status, "usage.details.systemPromptBreakdown", "context")}
       <div class="context-breakdown-header">
         <div class="card-title usage-section-title">{t("usage.details.systemPromptBreakdown")}</div>
         <Show when={state().hasMore}>
-          <button class="btn btn--sm" onClick={() => state().onToggleExpanded()}>
-            {state().expanded ? t("usage.details.collapse") : t("usage.details.expandAll")}
+          <button class="btn btn--sm" onClick={() => props.onToggleExpanded()}>
+            {props.expanded ? t("usage.details.collapse") : t("usage.details.expandAll")}
           </button>
         </Show>
       </div>
@@ -382,7 +375,7 @@ function LoadedContextPanel(props: {
         <For each={state().groups.filter(({ entries }) => entries.length > 0)}>
           {({ labelKey, entries }) => {
             const visible = createMemo(() =>
-              state().expanded ? entries : entries.slice(0, state().defaultLimit),
+              props.expanded ? entries : entries.slice(0, state().defaultLimit),
             );
             const more = () => entries.length - visible().length;
             return (
@@ -450,11 +443,9 @@ function SessionLogs(props: {
   const expandedState = createMemo(() => props.detail.sessionLogsExpanded);
   const state = createMemo(() => {
     const detail = props.detail;
-    const callbacks = props.callbacks;
     const {
       sessionLogsLoading: loading,
       sessionLogsStatus: status,
-      sessionLogsExpanded: expandedAll,
       logFilters: filters,
       timeSeriesCursorStart: cursorStart,
       timeSeriesCursorEnd: cursorEnd,
@@ -498,13 +489,10 @@ function SessionLogs(props: {
     return {
       showLogData,
       displayedCount,
-      callbacks,
-      expandedAll,
       refreshStatus,
       roleSelected,
       toolOptions,
       toolSelected,
-      filters,
       filteredEntries,
       formatLogTimestamp,
       initialLoading,
@@ -526,9 +514,11 @@ function SessionLogs(props: {
             </span>
             <button
               class="btn btn--sm"
-              onClick={() => state().callbacks.onToggleSessionLogsExpanded()}
+              onClick={() => props.callbacks.onToggleSessionLogsExpanded()}
             >
-              {state().expandedAll ? t("usage.details.collapseAll") : t("usage.details.expandAll")}
+              {props.detail.sessionLogsExpanded
+                ? t("usage.details.collapseAll")
+                : t("usage.details.expandAll")}
             </button>
           </div>
           {state().refreshStatus}
@@ -538,7 +528,7 @@ function SessionLogs(props: {
               size="4"
               aria-label={t("usage.details.filterByRole")}
               onChange={(event) =>
-                state().callbacks.onLogFiltersChange({
+                props.callbacks.onLogFiltersChange({
                   roles: selectedLogFilterValues(event.currentTarget).filter(isSessionLogRole),
                 })
               }
@@ -559,7 +549,7 @@ function SessionLogs(props: {
               size="4"
               aria-label={t("usage.details.filterByTool")}
               onChange={(event) =>
-                state().callbacks.onLogFiltersChange({
+                props.callbacks.onLogFiltersChange({
                   tools: selectedLogFilterValues(event.currentTarget),
                 })
               }
@@ -578,9 +568,9 @@ function SessionLogs(props: {
             <label class="usage-filters-inline session-log-has-tools">
               <input
                 type="checkbox"
-                checked={state().filters.hasTools}
+                checked={props.detail.logFilters.hasTools}
                 onChange={(event) =>
-                  state().callbacks.onLogFiltersChange({ hasTools: event.currentTarget.checked })
+                  props.callbacks.onLogFiltersChange({ hasTools: event.currentTarget.checked })
                 }
               />
               {t("usage.details.hasTools")}
@@ -589,15 +579,15 @@ function SessionLogs(props: {
               type="text"
               placeholder={t("usage.details.searchConversation")}
               aria-label={t("usage.details.searchConversation")}
-              value={state().filters.query}
+              value={props.detail.logFilters.query}
               onInput={(event) =>
-                state().callbacks.onLogFiltersChange({ query: event.currentTarget.value })
+                props.callbacks.onLogFiltersChange({ query: event.currentTarget.value })
               }
             />
             <button
               class="btn btn--sm"
               onClick={() =>
-                state().callbacks.onLogFiltersChange({
+                props.callbacks.onLogFiltersChange({
                   roles: [],
                   tools: [],
                   hasTools: false,

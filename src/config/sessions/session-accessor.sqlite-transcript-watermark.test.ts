@@ -14,6 +14,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { captureRuntimeConfigAsyncReader } from "../io.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -56,6 +57,7 @@ describe("SQLite transcript watermark queries", () => {
 
   beforeEach(async () => {
     state = await createOpenClawTestState({ scenario: "minimal" });
+    await captureRuntimeConfigAsyncReader()();
     for (const [sessionId, count] of [
       ["first", 1],
       ["second", 2],

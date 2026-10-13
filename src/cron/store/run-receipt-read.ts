@@ -67,7 +67,7 @@ export function receiptHandle(receipt: CronRunReceipt): CronRunReceiptHandle {
   };
 }
 
-export function matchesCronRunReceiptOwner(
+function matchesCronRunReceiptOwner(
   current: CronRunReceiptHandle | undefined,
   expected: CronRunReceiptCurrentReadCommand["handle"],
 ): boolean {

@@ -3,11 +3,12 @@
 import { createCatalogIoCounters } from "./session-catalog.performance-counters.test-support.js";
 import type { HeapProfiler, Profiler } from "node:inspector";
 import { Session as InspectorSession } from "node:inspector/promises";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type {
   SessionCatalogHost,
   SessionsCatalogListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createComposedCatalogFixture } from "./session-catalog.performance.test-support.js";
 
@@ -64,13 +65,34 @@ it("measures 100 composed catalog lists against real session and plugin stores",
     { layout: "state-only", prefix: "composed-catalog-" },
     async (state) => {
       const counters = createCatalogIoCounters();
+      const nativeListEntered = createDeferredCore();
+      const releaseNativeList = createDeferredCore();
       let fixture: Awaited<ReturnType<typeof createComposedCatalogFixture>> | undefined;
       try {
         counters.begin();
-        fixture = await createComposedCatalogFixture(state, counters);
-        await fixture.setupList();
+        fixture = await createComposedCatalogFixture(state, counters, {
+          beforeNativeListResponse: async () => {
+            nativeListEntered.resolve();
+            await releaseNativeList.promise;
+          },
+        });
+        let first: SessionCatalogHost;
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        try {
+          const ready = fixture.setupList();
+          // Observe early rejection while the native producer is deliberately held.
+          void ready.catch(() => {});
+          await nativeListEntered.promise;
+          // Cold callers expire after five seconds without cancelling index-owned hydration.
+          await vi.advanceTimersByTimeAsync(5_000);
+          vi.useRealTimers();
+          releaseNativeList.resolve();
+          first = await ready;
+        } finally {
+          vi.useRealTimers();
+          releaseNativeList.resolve();
+        }
         const catalogNamespace = await counters.catalogPersisted;
-        const first = await fixture.setupList();
         expect(first.sessions.length).toBeGreaterThan(0);
         const sourceHomeId = first.sessions[0]?.sourceHomeId;
         if (!sourceHomeId) {
@@ -256,6 +278,8 @@ it("measures 100 composed catalog lists against real session and plugin stores",
         // composition CPU growth leaves exact SQL budgets green.
         expect(durations[49]).toBeLessThan(cpuReferenceP50Ms * 20);
       } finally {
+        vi.useRealTimers();
+        releaseNativeList.resolve();
         try {
           await fixture?.close();
         } finally {

@@ -122,12 +122,12 @@ function holdPreparedDocument() {
   const send = documentTransport.sendControlUiHtmlBody;
   const spy = vi
     .spyOn(documentTransport, "sendControlUiHtmlBody")
-    .mockImplementationOnce(async (req, res, body, isCurrent) => {
+    .mockImplementationOnce(async (req, res, body, isCurrent, staleRedirectPath) => {
       // Real file-worker read and index/path/CSP preparation have finished.
       // The production encoder and final live-authority check still own delivery.
       entered.resolve({ body, res, current: isCurrent?.() === true });
       await resume.promise;
-      await send(req, res, body, isCurrent);
+      await send(req, res, body, isCurrent, staleRedirectPath);
     });
   return { entered: entered.promise, resume: resume.resolve, restore: () => spy.mockRestore() };
 }
@@ -427,9 +427,13 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
         expect(prepared.res.headersSent).toBe(false);
         held.resume();
         const response = await pending;
-        expect(response.status).toBe(403);
+        expect(response.status).toBe(303);
+        expect(response.headers.location).toBe(privatePath);
+        expect(response.headers["cache-control"]).toBe("no-store");
         expect(response.headers["content-encoding"]).toBeUndefined();
-        expect(response.body).toBe("Session access changed. Reload the conversation.");
+        expect(response.headers["content-type"]).toBeUndefined();
+        expect(response.headers["content-security-policy"]).toBeUndefined();
+        expect(response.body).toBe("");
         expectNoApp(response);
       } finally {
         held.resume();

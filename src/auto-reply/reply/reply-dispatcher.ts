@@ -8,7 +8,6 @@ import {
   resolveDeliveryNotSentRetryability,
 } from "../../infra/delivery-recovery.shared.js";
 import { toErrorObject } from "../../infra/errors.js";
-import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -24,6 +23,7 @@ import {
 } from "../reply-payload.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { settleReplyPendingFinalDelivery } from "./dispatch-from-config.pending-final.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
 import {
   normalizeReplyPayloadOutcome,
@@ -373,14 +373,14 @@ export function createReplyDispatcher(
     let deliveryInput: ReplyDispatchOperation | null = input;
     let deliveryStarted = false;
     let pendingDelivery = false;
-    const custody = getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion;
+    const metadata = getReplyPayloadMetadata(payload);
+    const custody = metadata?.pendingFinalDeliveryCompletion;
     const settleCustody =
       custody &&
       ((
-        state: Parameters<typeof settlePendingFinalDelivery>[1],
-        expectedStates: Parameters<typeof settlePendingFinalDelivery>[2] = ["queued"],
-      ) =>
-        settlePendingFinalDelivery({ kind: "pending-final", ...custody }, state, expectedStates));
+        state: Parameters<typeof settleReplyPendingFinalDelivery>[1],
+        expectedStates: Parameters<typeof settleReplyPendingFinalDelivery>[2] = ["queued"],
+      ) => settleReplyPendingFinalDelivery(payload, state, expectedStates));
     const settleFailure = async (error: unknown): Promise<ReplyDispatchDeliveryOutcome> => {
       const retryableNoSend = isRetryableDeliveryNotSentError(error);
       const queueHeld = isDeliveryRecoveryOwnedRetry(error);
@@ -435,7 +435,7 @@ export function createReplyDispatcher(
         // means another owner already delivered, suppressed, or superseded this
         // final, so repeating the send would duplicate it.
         const claim = await settleCustody("queued", ["prepared"]);
-        if (claim.state !== "queued") {
+        if (claim?.state !== "queued") {
           deliveryInput = null;
         }
       }

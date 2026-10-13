@@ -5,7 +5,10 @@ import {
   type CodexSessionContextReader,
   type CodexSessionContextSnapshot,
 } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
-import * as transcriptRuntime from "openclaw/plugin-sdk/codex-session-transcript-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { appendSessionTranscriptMessagesByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   observeHostDataSql,
@@ -17,7 +20,10 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { projectCodexSettledHistoryInWorker } from "./session-history-worker-runtime.js";
 import { settledFixture } from "./src/app-server/session-history.test-support.js";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+  vi.restoreAllMocks();
+});
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 
 function actorHistoryFixture() {
@@ -66,29 +72,6 @@ function actorHistoryFixture() {
 }
 
 describe("Codex actor history adapter", () => {
-  it("captures its actor reader and projects full-fidelity evidence into native history", async () => {
-    const { target, reader, upstreamPrompt } = actorHistoryFixture();
-    vi.spyOn(transcriptRuntime, "captureCodexSessionContextReader").mockReturnValue(reader);
-
-    await expect(projectCodexSettledHistoryInWorker(target)).resolves.toEqual({
-      status: "ok",
-      value: [
-        {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: "Earlier synthetic context." }],
-        },
-        {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: upstreamPrompt }],
-        },
-        { type: "function_call", call_id: "sent", name: "message", arguments: "{}" },
-        { type: "function_call_output", call_id: "sent", output: "Synthetic update sent." },
-      ],
-    });
-  });
-
   it("passes the requested target to the bound capability before acquiring history", async () => {
     const { target, reader, owner } = actorHistoryFixture();
     const foreignTarget = {
@@ -133,6 +116,7 @@ describe("Codex actor history adapter", () => {
   });
 
   it("resolves marker-only history through the captured actor without host SQL", async () => {
+    setRuntimeConfigSnapshot({});
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("codex-marker-actor-") };
     const authority = { assertCurrent() {} };
     const actor = await openIncognitoTestActor(env, authority);

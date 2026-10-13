@@ -15,7 +15,7 @@ import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import {
   HumanMentionMenu,
   type HumanMentionMenuHost,
-} from "../pages/chat/components/chat-composer-mention-menu.ts";
+} from "../pages/chat/components/chat-composer-mention-menu.tsx";
 import { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
 import {
   PluginIconController,
@@ -286,7 +286,13 @@ export class PaletteController {
     this.publish();
   }
 
-  private readonly handleInputRef = (element: Element | undefined) => {
+  private readonly handleInputRef = (
+    element: Element | undefined,
+    previous?: HTMLTextAreaElement,
+  ) => {
+    if (previous && previous !== this.inputElement) {
+      return;
+    }
     this.inputElement?.removeEventListener("focus", this.adoptInitialInput);
     this.inputElement = element instanceof HTMLTextAreaElement ? element : undefined;
     this.inputElement?.addEventListener("focus", this.adoptInitialInput);

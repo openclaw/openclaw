@@ -26,20 +26,6 @@ type ResidentTimer =
   | "shellTimer"
   | "vigilTimer";
 
-export type LobsterPetProps = {
-  seed: number;
-  mode: contract.LobsterPetMode;
-  visitsEnabled: boolean;
-  residentEnabled: boolean;
-  critters: readonly string[] | undefined;
-  critterArtwork: ThemeArtwork["critters"];
-  floorEnabled: boolean;
-  runOutcome: contract.LobsterRunOutcome;
-  soundsEnabled: boolean;
-  gatewayVersion: string | null;
-  onVisitsDisabled: () => void;
-};
-
 /** Synchronous animation owner; Solid only observes committed scene snapshots. */
 export class LobsterPetController {
   seed = 0;
@@ -181,10 +167,10 @@ export class LobsterPetController {
     this.notify = () => {};
   }
 
-  update(props: LobsterPetProps) {
+  update(props: contract.LobsterPetProps) {
     const changed = new Map<string, unknown>();
     // SAFETY: the bridge supplies only the declared LobsterPetProps keys (plus unused children).
-    for (const key of Object.keys(props) as (keyof LobsterPetProps)[]) {
+    for (const key of Object.keys(props) as (keyof contract.LobsterPetProps)[]) {
       if (!Object.is(this[key], props[key])) {
         changed.set(key, this[key]);
       }

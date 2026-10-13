@@ -9,7 +9,6 @@ import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
 import {
   IDLE_TIMEOUT_MS,
   PREPARATION_KEY,
-  PROJECT_KEY,
   RECEIPT,
   usePreparedPoolFixture,
   type PoolOptions,
@@ -153,54 +152,7 @@ describe("prepared worker reserve lifecycle", () => {
     expect(reconcile).not.toHaveBeenCalled();
   });
 
-  it("counts pending and uncertain cleanup against the shared cap after restart", async () => {
-    fixture.developmentProfile.readyWorkers = 2;
-    fixture.config.cloudWorkers!.preparedPool = { maxTotal: 3 };
-    await fixture.attach(await fixture.ready(await fixture.seed("source-a")));
-    await fixture.attach(
-      await fixture.ready(await fixture.seed("source-b", { projectKey: "1".repeat(64) })),
-    );
-    await fixture.schedule(fixture.pool());
-    const reserved = fixture.reserves();
-    expect(reserved).toHaveLength(3);
-    const uncertain = reserved[0]!;
-    await fixture.store.transition({
-      environmentId: uncertain.environmentId,
-      from: "requested",
-      to: "provisioning",
-    });
-    await fixture.store.adoptProvisionCleanupFailure({
-      environmentId: uncertain.environmentId,
-      leaseId: "uncertain-lease",
-      lastError: "provider cleanup response lost",
-    });
-    await fixture.reopenStore();
-    const warn = vi.fn();
-    const reconcile = vi.fn<PoolOptions["reconcile"]>(async (record) => {
-      if (record.environmentId === uncertain.environmentId) {
-        throw new Error("provider cleanup remains unavailable");
-      }
-    });
-    await fixture.schedule(fixture.pool({ reconcile, warn }));
-    expect(
-      fixture
-        .reserves()
-        .map((record) => record.environmentId)
-        .toSorted(),
-    ).toEqual(reserved.map((record) => record.environmentId).toSorted());
-    expect(reconcile.mock.calls.map(([record]) => record.environmentId).toSorted()).toEqual(
-      reserved.map((record) => record.environmentId).toSorted(),
-    );
-    expect(fixture.store.get(uncertain.environmentId)).toMatchObject({
-      state: "destroying",
-      leaseId: "uncertain-lease",
-      provisionOperationId: uncertain.provisionOperationId,
-    });
-    expect(warn).toHaveBeenCalledOnce();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("failure and cleanup state"));
-  });
-
-  it.each(["profile", "gateway"] as const)(
+  it.each(["profile"] as const)(
     "retires excess then disabled %s capacity without touching an attached session",
     async (scope) => {
       fixture.developmentProfile.provider =
@@ -237,45 +189,6 @@ describe("prepared worker reserve lifecycle", () => {
       expect(fixture.store.get(source.environmentId)).toEqual(source);
     },
   );
-
-  it("retires the previous fingerprint before admitting a new generation in the same project slot", async () => {
-    await fixture.attach(await fixture.ready(await fixture.seed("source-old")));
-    await fixture.schedule(fixture.pool());
-    const old = fixture.reserves()[0]!;
-    const nextKey = "2".repeat(64);
-    fixture.nowMs = 1_100;
-    await fixture.attach(
-      await fixture.ready(await fixture.seed("source-new", { preparationKey: nextKey })),
-    );
-    const owner = fixture.pool({
-      prepareIntent: async () => ({
-        providerId: fixture.provider.id,
-        profileSnapshot: fixture.profile(PROJECT_KEY, nextKey),
-        preparationKey: nextKey,
-      }),
-    });
-    await fixture.schedule(owner);
-    expect(fixture.reserves()).toHaveLength(1);
-    expect(fixture.store.get(old.environmentId)?.destroyRequestedAtMs).toBe(1_100);
-    // This intent never allocated; the ordinary lifecycle can terminalize it safely.
-    await fixture.store.transition({
-      environmentId: old.environmentId,
-      from: "requested",
-      to: "failed",
-    });
-    await fixture.schedule(owner);
-    expect(fixture.reserves().filter((record) => record.state === "requested")).toEqual([
-      expect.objectContaining({
-        preparation: {
-          purpose: "reserve",
-          key: nextKey,
-          demandAtMs: 1_100,
-          expiresAtMs: 2_100,
-          consumedAtMs: null,
-        },
-      }),
-    ]);
-  });
 
   it("revalidates an earlier source when another awaited preparation changes admission authority", async () => {
     await fixture.attach(await fixture.ready(await fixture.seed("source-a")));

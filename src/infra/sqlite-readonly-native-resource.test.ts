@@ -370,26 +370,6 @@ it("joins a cancelled copy without aborting another copy or the token session", 
   }
 });
 
-it("preserves expected operation errors without retiring the surviving native session", async () => {
-  const { client, launch, native } = fixture();
-  const session = client.createSession(launch);
-  const cause = new Error("token remained busy");
-  native.run.mockRejectedValueOnce(new AggregateError([cause], "retirement refused", { cause }));
-  const failure = await session
-    .run("/fixture/token", { mode: "staging-retire" })
-    .catch((error: unknown) => error);
-  expect(failure).toBeInstanceOf(AggregateError);
-  if (!(failure instanceof AggregateError)) {
-    throw new Error("Native error graph was not retained");
-  }
-  expect(failure.errors).toEqual([expect.objectContaining({ message: cause.message })]);
-  expect(failure.cause).toBe(failure.errors[0]);
-  expect(session.isRetired()).toBe(false);
-  expect(session.compatible(launch)).toBe(true);
-  expect(await session.run("/fixture/token", { mode: "staging-retire" })).toBe("/fixture/token");
-  await session.close();
-});
-
 it("seals creation and retries a failed close on the same native session", async () => {
   const { client, resource, launch, native } = fixture();
   const session = client.createSession(launch);

@@ -1,7 +1,8 @@
+import "@awesome.me/webawesome/dist/components/option/option.js";
+import "@awesome.me/webawesome/dist/components/select/select.js";
 import { html, render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
 import { renderSidebarIdentityMenu } from "./app-sidebar-identity-menu.ts";
-import "./web-awesome-select.ts";
 import "./web-awesome-tabs.ts";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "../styles/base.css";

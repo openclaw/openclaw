@@ -15,8 +15,8 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import type { ApplicationRuntime } from "../app/bootstrap.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -216,7 +216,9 @@ async function send(
     throw new Error("Expected a send request");
   }
   expect(record(request.params)).toMatchObject({ sessionKey, message });
-  await expect.poll(() => observed.response(request.id)).toMatchObject({ ok: true });
+  await expect.poll(() => observed.response(request.id)).toBeDefined();
+  const response = observed.response(request.id);
+  expect(response, JSON.stringify(response)).toMatchObject({ ok: true });
   const runId = record(request.params)?.idempotencyKey;
   if (typeof runId !== "string") {
     throw new Error("Missing actual send run identity");
@@ -224,10 +226,8 @@ async function send(
   return { request, runId };
 }
 async function identity(page: Page) {
-  return page.evaluate(() => {
-    const snapshot = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
-      "openclaw-app",
-    )?.runtime?.context.gateway.snapshot;
+  return evaluateControlUiContext(page, (application) => {
+    const snapshot = application.gateway.snapshot;
     return {
       user: snapshot?.selfUser,
       connId: snapshot?.hello?.server?.connId,
@@ -356,20 +356,22 @@ suite.define(() => {
                 ).toBe(200);
                 await waitForControlUiGatewayReady(page);
                 if (index === 0) {
-                  proof.session = await page.evaluate(async (key) => {
-                    const client = document.querySelector<
-                      HTMLElement & { runtime?: ApplicationRuntime }
-                    >("openclaw-app")?.runtime?.context.gateway.snapshot.client;
-                    if (!client) {
-                      throw new Error("Authenticated reader client missing");
-                    }
-                    return await client.request("sessions.create", {
-                      key,
-                      agentId: "main",
-                      label: "Sender-local scroll proof",
-                      visibility: "shared",
-                    });
-                  }, sessionKey);
+                  proof.session = await evaluateControlUiContext(
+                    page,
+                    async (application, key) => {
+                      const client = application.gateway.snapshot.client;
+                      if (!client) {
+                        throw new Error("Authenticated reader client missing");
+                      }
+                      return await client.request("sessions.create", {
+                        key,
+                        agentId: "main",
+                        label: "Sender-local scroll proof",
+                        visibility: "shared",
+                      });
+                    },
+                    sessionKey,
+                  );
                 }
                 await page.goto(controlUiSessionUrl(urls[index]!, sessionKey));
                 await waitForControlUiGatewayReady(page);

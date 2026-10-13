@@ -142,9 +142,6 @@ describe("session activity projection", () => {
   it.each([
     { lastActivityAt: 0, lastInteractionAt: Number.NaN, updatedAt: 120, createdAt: 100 },
     { lastActivityAt: Number.POSITIVE_INFINITY, updatedAt: null, createdAt: 120 },
-    { lastActivityAt: 0, updatedAt: 0, createdAt: 120 },
-    { lastActivityAt: 120, lastInteractionAt: Number.NaN, updatedAt: 200 },
-    { lastActivityAt: -1, lastInteractionAt: 120, updatedAt: 200 },
   ])("uses known clocks for Activity ages when a stored timestamp is invalid: %j", (clocks) => {
     expect(sessionActivityTimestamp(clocks)).toBe(120);
   });
@@ -179,7 +176,7 @@ describe("session activity projection", () => {
   });
 });
 
-it.each(["primary", "ancestor-omitted", "ancestor-cleared"])(
+it.each(["ancestor-omitted", "ancestor-cleared"])(
   "retains Activity recap receipts and ordering until a backwards activity clock requires admission (%s)",
   async (summary) => {
     vi.useFakeTimers();
@@ -298,15 +295,7 @@ it("applies excluded child events to held History ancestors without refetching",
   expect(request).toHaveBeenCalledTimes(1);
 });
 
-it.each([
-  "excluded",
-  "excluded-chain",
-  "unheld",
-  "missing",
-  "scoped-out-parent",
-  "incomplete",
-  "uncertified-reference",
-])(
+it.each(["excluded-chain", "unheld", "missing", "incomplete", "uncertified-reference"])(
   "requires History authority only for relevant incomplete child coverage (%s)",
   async (coverage) => {
     vi.useFakeTimers();

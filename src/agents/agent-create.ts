@@ -206,7 +206,7 @@ function describeLegacySessionOutcome(outcome: LegacyMainSessionMigrationOutcome
   switch (outcome.kind) {
     case "divergent-aliases":
     case "divergent-canonical":
-      return `${outcome.kind} for ${outcome.canonicalKey ?? "the canonical session"}; preserved claims ${claims.join(", ") || "could not be reconciled"} must be quarantined`;
+      return `${outcome.kind} for ${outcome.canonicalKey ?? "the current session"}; preserved claims ${claims.join(", ") || "could not be reconciled"} must be quarantined`;
     case "legacy-json-store":
       return `legacy JSON session store ${outcome.paths?.join(", ") ?? "requires import"}`;
     case "store-unreadable":

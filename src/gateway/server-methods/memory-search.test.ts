@@ -5,6 +5,10 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   acquireGatewayLock,
@@ -113,6 +117,7 @@ describe("memory.search gateway method", () => {
       label: "gateway-memory-search",
       layout: "state-only",
     });
+    setRuntimeConfigSnapshot({});
     getActiveMemorySearchManagerCore.mockReset();
     resolveActiveMemoryBackendConfig.mockReset().mockReturnValue({ backend: "builtin" });
     isActiveMemoryProviderNative.mockReset().mockReturnValue(false);
@@ -121,10 +126,12 @@ describe("memory.search gateway method", () => {
 
   afterEach(async () => {
     await testState.cleanup();
+    clearRuntimeConfigSnapshot();
   });
 
   async function withOwner(cfg: OpenClawConfig, run: (ownerId: string) => Promise<void>) {
     await testState.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     const owner = await acquireGatewayLock({ allowInTests: true, timeoutMs: 0 });
     assert(owner, "Expected a Gateway owner");
     const ownerId = readLockPayloadSync(

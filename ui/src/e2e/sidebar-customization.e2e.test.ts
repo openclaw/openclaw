@@ -10,7 +10,6 @@ import {
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionPath,
-  controlUiSessionUrl,
   installMockGateway,
   waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
@@ -120,7 +119,7 @@ suite.define(() => {
                 key,
                 JSON.stringify({
                   sidebarAgentsMode: "roster",
-                  sidebarEntries: ["route:agents-home", leadEntry, "route:cron"],
+                  railShortcuts: ["route:agents-home", leadEntry, "route:cron"],
                 }),
               ),
             { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), leadEntry: entry },
@@ -752,30 +751,6 @@ suite.define(() => {
         );
       }
     }
-  });
-
-  it("opens the start screen from the sidebar action without carrying the active session", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1440 },
-      },
-      async ({ page }) => {
-        await installMockGateway(page);
-
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:work"));
-        await page
-          .locator("openclaw-app-sidebar .sidebar-session-toolbar .sidebar-new-session")
-          .click();
-
-        await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-        await expect.poll(() => new URL(page.url()).searchParams.get("agent")).toBe("main");
-        await expect.poll(() => new URL(page.url()).searchParams.has("session")).toBe(false);
-        await expect.poll(() => page.locator(".new-session-page").isVisible()).toBe(true);
-        await captureUiProof(page, "07-sidebar-start-screen.png");
-      },
-    );
   });
 
   it("keeps Home activity and unsent attention stable while rail controls appear", async () => {

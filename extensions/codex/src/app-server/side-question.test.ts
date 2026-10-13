@@ -19,9 +19,13 @@ import {
   useProviderToolSchemaRuntimeForTest,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ModelCompatConfig } from "openclaw/plugin-sdk/provider-model-types";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as clientCleanup from "./attempt-client-cleanup.js";
 import { codexTestTurnIds, nativeCommandItem } from "./codex-app-server.test-fixtures.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
@@ -34,6 +38,7 @@ import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
 import { createClientHarness, createCodexTestModel } from "./test-support.js";
 
 const {
+  codexHookCommand,
   readCodexAppServerBindingMock,
   isCodexAppServerNativeAuthProfileMock,
   getSharedCodexAppServerClientMock,
@@ -113,17 +118,9 @@ function flushDiagnosticEvents() {
   });
 }
 
-function codexHookCommand(config: unknown, key: string) {
-  const entries = (config as Record<string, unknown> | undefined)?.[key];
-  if (!Array.isArray(entries)) {
-    return undefined;
-  }
-  return (
-    entries as Array<{ hooks?: Array<{ command?: string; timeout?: number; type?: string }> }>
-  )
-    .at(0)
-    ?.hooks?.at(0);
-}
+beforeAll(() => setRuntimeConfigSnapshot({}));
+afterAll(() => clearRuntimeConfigSnapshot());
+beforeEach(() => setRuntimeConfigSnapshot({}));
 
 useProviderToolSchemaRuntimeForTest(["openai", "codex", "lmstudio"]);
 
@@ -175,7 +172,7 @@ describe("runCodexAppServerSideQuestion", () => {
       }),
       { bindingStore: persistedBindings },
     );
-    await expect(operation).rejects.toThrow("Codex session execution policy changed");
+    await expect(operation).rejects.toThrow("Codex session generation is no longer current");
     expect(client.request.mock.calls.some(([method]) => method === "thread/fork")).toBe(false);
     expect(persistedBindings.read(current)).toEqual(parent);
   });
@@ -850,7 +847,11 @@ describe("runCodexAppServerSideQuestion", () => {
         },
       };
       const savedAppConfig = structuredClone(nativeAppConfig);
-      const client = createFakeClient({ completeTurn: rejectsReplay });
+      const turnStarted = createDeferred<void>();
+      const client = createFakeClient({
+        completeTurn: rejectsReplay,
+        onTurnStart: () => turnStarted.resolve(),
+      });
       const baseRequest = client.request.getMockImplementation()!;
       client.request.mockImplementation(async (method: string, requestParams?: unknown) => {
         if (method === "app/installed") {
@@ -947,9 +948,12 @@ describe("runCodexAppServerSideQuestion", () => {
         expect(methods).not.toContain("thread/fork");
         return;
       }
-      await vi.waitFor(() =>
-        expect(client.request.mock.calls.map(([method]) => method)).toContain("turn/start"),
-      );
+      await Promise.race([
+        turnStarted.promise,
+        run.then(() => {
+          throw new Error("Side question finished before starting its turn");
+        }),
+      ]);
       try {
         await handleClientRequestWhenReady(client, {
           id: "side-approval-policy",

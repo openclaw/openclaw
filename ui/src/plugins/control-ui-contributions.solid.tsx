@@ -321,21 +321,17 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
   );
 }
 
-export const PluginContributions = defineSolidBridge<ContributionsProps>(
-  "openclaw-plugin-contributions",
-  PluginContributionsContent,
-  {
-    properties: {
-      kind: { default: "navigation", attribute: false },
-      sessionKey: { default: "", attribute: false },
-      agentId: { default: undefined, attribute: false },
-      navigationKey: { default: "", attribute: false },
-      navigationChildren: { default: true, type: Boolean },
-      navigationMenus: { default: undefined, attribute: false },
-      presented: { default: true, type: Boolean },
-    },
+defineSolidBridge<ContributionsProps>("openclaw-plugin-contributions", PluginContributionsContent, {
+  properties: {
+    kind: { default: "navigation", attribute: false },
+    sessionKey: { default: "", attribute: false },
+    agentId: { default: undefined, attribute: false },
+    navigationKey: { default: "", attribute: false },
+    navigationChildren: { default: true, type: Boolean },
+    navigationMenus: { default: undefined, attribute: false },
+    presented: { default: true, type: Boolean },
   },
-);
+});
 
 declare global {
   interface HTMLElementTagNameMap {

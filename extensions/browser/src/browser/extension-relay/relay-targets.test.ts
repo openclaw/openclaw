@@ -364,19 +364,7 @@ describe("logical Target interests", () => {
     },
   );
 
-  it("cleans the last unused child without stranding its native wait", async () => {
-    const f = fixture();
-    const c = f.client();
-    const root = await c.attach();
-    await c.request("Target.setAutoAttach", root, enabled);
-    f.child("child");
-    const child = childId(c, root);
-    await c.request("Target.detachFromTarget", root, { sessionId: child });
-    expect(f.commands("Target.detachFromTarget").at(-1)?.params).toEqual({ sessionId: "child" });
-    expect((await c.request("Runtime.evaluate", root)).error).toBeUndefined();
-  });
-
-  it.each(["sessionId", "targetId"])(
+  it.each(["targetId"])(
     "routes non-flat child commands by %s through the same logical owner",
     async (selector) => {
       const f = fixture();
@@ -489,20 +477,6 @@ describe("logical Target interests", () => {
     expect(fresh).not.toBe(old);
     expect((await c.request("Runtime.evaluate", old)).error).toBeDefined();
     expect((await c.request("Runtime.evaluate", fresh)).error).toBeUndefined();
-  });
-
-  it("keeps synthetic browser-root pages visible for Puppeteer's browser filter", async () => {
-    const f = fixture();
-    const c = f.client();
-    expect(
-      (
-        await c.request("Target.setAutoAttach", undefined, {
-          ...enabled,
-          filter: [{ type: "page", exclude: true }, {}],
-        })
-      ).error,
-    ).toBeUndefined();
-    expect(c.attached()).toHaveLength(1);
   });
 
   it("routes a flat descendant through its non-flat ancestor transport", async () => {

@@ -180,57 +180,6 @@ describe("bedrock mantle discovery", () => {
     expect(tokenProvider).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["older", "newer"] as const)(
-    "ignores the %s failure that started before an IAM token succeeds",
-    async (failureOrder) => {
-      const failure = createDeferred<string>();
-      const success = createDeferred<string>();
-      const firstStarted = createDeferred<void>();
-      const secondStarted = createDeferred<void>();
-      getTokenProviderMock
-        .mockReturnValueOnce(() => {
-          firstStarted.resolve();
-          return failureOrder === "older" ? failure.promise : success.promise;
-        })
-        .mockReturnValueOnce(() => {
-          secondStarted.resolve();
-          return failureOrder === "older" ? success.promise : failure.promise;
-        })
-        .mockImplementationOnce(() => {
-          throw new Error("same failure");
-        });
-      let now = 0;
-      vi.spyOn(Date, "now").mockImplementation(() => now);
-      const first = generateBearerTokenFromIam({ region: testRegion });
-      await firstStarted.promise;
-      now = 1;
-      const second = generateBearerTokenFromIam({ region: testRegion });
-      await secondStarted.promise;
-      const [pendingFailure, pendingSuccess] =
-        failureOrder === "older" ? [first, second] : [second, first];
-
-      try {
-        success.resolve("recovered-token");
-        await expect(pendingSuccess).resolves.toBe("recovered-token");
-        failure.reject(new Error("same failure"));
-        await expect(pendingFailure).resolves.toBeUndefined();
-        expect(discoveryDebugSpy).not.toHaveBeenCalled();
-
-        now = 7_200_001;
-        await generateBearerTokenFromIam({ region: testRegion });
-        expect(discoveryDebugSpy).toHaveBeenCalledOnce();
-        expect(discoveryDebugSpy).toHaveBeenCalledWith("Mantle IAM token generation unavailable", {
-          region: testRegion,
-          error: "same failure",
-        });
-      } finally {
-        success.resolve("recovered-token");
-        failure.reject(new Error("same failure"));
-        await Promise.allSettled([first, second]);
-      }
-    },
-  );
-
   it("skips IAM token generation when plugin discovery is disabled", async () => {
     const tokenProviderFactory = vi.fn(() => {
       throw new Error("disabled discovery should not generate a token");

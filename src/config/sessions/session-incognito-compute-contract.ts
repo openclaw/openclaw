@@ -66,6 +66,10 @@ type SessionComputeOperations = {
     input: IncognitoComputeTarget & { sourceId: string };
     output: MemoryTranscriptProjectionFrame;
   };
+  "session.compute.source.close": {
+    input: IncognitoComputeTarget & { sourceId: string };
+    output: void;
+  };
   "session.compute.source.release": {
     input: IncognitoComputeTarget & { sourceId: string };
     output: boolean;

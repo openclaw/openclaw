@@ -33,7 +33,6 @@ import {
   loadArchivedSessions,
   loadArchivedSessionsAsync,
   loadMemorySessionMetadata,
-  loadMemorySessionMetadataBatch,
   readTranscriptStatsBatchReadOnlySync,
   resolveMemorySessionTargets,
   resolveMemorySessionTargetsAsync,
@@ -171,7 +170,6 @@ it("wires Memory callbacks, corpus and reset recall through the captured actor w
     for (const read of [
       () => loadArchivedSessions({ ...scope, sessionIds: [scope.sessionId] }),
       () => loadMemorySessionMetadata(scope),
-      () => loadMemorySessionMetadataBatch({ ...scope, sessions: [scope] }),
       () => resolveMemorySessionTargets({ ...scope, sessionIds: [scope.sessionId] }),
       () => readTranscriptStatsBatchReadOnlySync([scope]),
       () => statSessionEntrySync("actor-memory", scope),
@@ -272,13 +270,13 @@ it("wires Memory callbacks, corpus and reset recall through the captured actor w
         }),
       );
     }
+    await expect(listSessionTranscriptCorpusEntriesForAgent("foreign", {}, reader)).rejects.toThrow(
+      "another agent",
+    );
   } finally {
     environment.mockRestore();
     config.mockRestore();
   }
-  await expect(listSessionTranscriptCorpusEntriesForAgent("foreign", {}, reader)).rejects.toThrow(
-    "another agent",
-  );
 });
 
 it("keeps selected Memory absence separate from a retained ended actor", async () => {

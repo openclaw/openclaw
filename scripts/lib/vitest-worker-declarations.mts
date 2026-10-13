@@ -15,6 +15,8 @@ export const runtimeProcessDeclarationEntries = {
     "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
 };
 export const vitestWorkerDeclarationEntries = {
+  "infra/postgres-sync/locks-runtime.test-support":
+    "src/infra/postgres-sync/locks-runtime.test-support.ts",
   "worker/native-worker-entrypoints.test-support":
     "src/worker/native-worker-entrypoints.test-support.ts",
   "extensions/acpx/src/runtime.admission-retention-entrypoint.test-support":
@@ -107,6 +109,8 @@ export const vitestWorkerDeclarationEntries = {
   // Codex is package-owned and excluded from the root runtime bundle.
   "extensions/codex/catalog-page-worker-entrypoint":
     "extensions/codex/catalog-page-worker-entrypoint.ts",
+  "extensions/codex/session-history-worker-entrypoint":
+    "extensions/codex/session-history-worker-entrypoint.ts",
   "extensions/memory-core/manager-publication-fault-entrypoint.test-support":
     "extensions/memory-core/src/memory/manager-publication-fault-entrypoint.test-support.ts",
   "extensions/memory-core/memory-forget-fault-entrypoint.test-support":

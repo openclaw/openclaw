@@ -1,9 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
@@ -27,6 +31,10 @@ import {
   runPluginDoctorStateMigrationPlans,
   runPostSessionPluginDoctorStateRepairs,
 } from "./state-migrations.plugin-doctor.js";
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
 
 describe("plugin doctor ingress authority", () => {
   it("rolls back a queued claim when the repair owner expires before native commit", async () => {
@@ -85,6 +93,8 @@ describe("plugin doctor session identity evidence", () => {
     await withOpenClawTestState(
       { label: "plugin-doctor-shared-id", applyEnv: false },
       async ({ env }) => {
+        const config: OpenClawConfig = {};
+        setRuntimeConfigSnapshot(config);
         for (const sessionKey of ["agent:main:main", "agent:main:other"]) {
           await replaceSessionEntry(
             { agentId: "main", env, sessionKey },
@@ -94,7 +104,7 @@ describe("plugin doctor session identity evidence", () => {
         const context = createPluginDoctorStateMigrationContext({
           pluginId: "codex",
           env,
-          config: {},
+          config,
         });
 
         await expect(

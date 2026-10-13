@@ -21,6 +21,7 @@ const cron = "ui/src/e2e/cron-descriptions.e2e.test.ts";
 const appearance = "ui/src/e2e/appearance-control-layout.e2e.test.ts";
 const unknown = "ui/src/e2e/new-unmapped-flow.e2e.test.ts";
 const staleBuild = "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts";
+const teamScale = "ui/src/e2e/team-scale-cold-load.e2e.test.ts";
 let fixtureCwd: string | undefined;
 
 function fixture() {
@@ -118,7 +119,7 @@ describe("Control UI PR owner selection", () => {
     });
     expect(groups.e2e.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
       [...new Set([...selection.files, ...uiE2eRealGatewayTestFiles])]
-        .filter((file) => file !== staleBuild)
+        .filter((file) => file !== staleBuild && file !== teamScale)
         .toSorted(),
     );
   });

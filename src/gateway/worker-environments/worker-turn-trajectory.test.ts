@@ -81,7 +81,7 @@ describe("worker turn trajectory authority", () => {
           const cached = getOpenClawAgentDatabaseIfOpen(options);
           assert(cached, "expected the turn's cached host database before eviction");
           // Evict the host handle without draining this callback's accepted turn custody.
-          closeCachedOpenClawAgentDatabase(cached, { eviction: true });
+          closeCachedOpenClawAgentDatabase(cached);
           expect(cached.db.isOpen).toBe(false);
           expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
 

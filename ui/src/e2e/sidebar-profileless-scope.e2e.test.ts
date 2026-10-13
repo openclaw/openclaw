@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { ApplicationRuntime } from "../app/bootstrap.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
@@ -44,7 +44,7 @@ suite.define(() => {
             "users.prefs.get": {
               status: "ok",
               entries: {
-                "ui.sidebarEntries": [],
+                "ui.railShortcuts": [],
                 "new-session.migration.v1": true,
               },
             },
@@ -80,12 +80,10 @@ suite.define(() => {
             frame.png,
           );
         }
-        const instanceId = await page
-          .locator("openclaw-app")
-          .evaluate(
-            (element: HTMLElement & { runtime: ApplicationRuntime }) =>
-              element.runtime.context.gateway.snapshot.client?.instanceId,
-          );
+        const instanceId = await evaluateControlUiContext(
+          page,
+          (context) => context.gateway.snapshot.client?.instanceId,
+        );
         expect(instanceId).toBeTruthy();
         await gateway.emitGatewayEvent("presence", {
           presence: [

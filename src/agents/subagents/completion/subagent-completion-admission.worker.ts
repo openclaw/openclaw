@@ -31,9 +31,9 @@ import {
 import {
   conflictingSubagentRunVersions,
   writeSubagentRunValuesInDatabase,
-  type SubagentRegistryWrite,
 } from "../registry/subagent-registry.store.kernel.js";
 import { readSubagentRunRow } from "../registry/subagent-registry.store.sqlite.js";
+import type { SubagentRegistryWrite } from "../registry/subagent-registry.store.types.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
 import {
@@ -115,6 +115,7 @@ export function admitSubagentCompletionInWorker(
     const originalRow = readSubagentRunRow(database, expected.runId);
     const current = originalRow && rowToSubagentRunRecord(originalRow);
     if (
+      !originalRow ||
       !current ||
       compareSubagentRunGeneration(current, expected) !== 0 ||
       current.childSessionKey !== expected.childSessionKey ||
@@ -137,12 +138,13 @@ export function admitSubagentCompletionInWorker(
       }
     }
     const claimed = upsertBoundDeliveryQueueEntryInDatabase(boundQueue, database);
-    const status =
-      getDeliveryQueueEntryOwnersInDatabase(
-        database,
-        [SESSION_DELIVERY_QUEUE_NAME],
-        queueEntry.id,
-      ).get(SESSION_DELIVERY_QUEUE_NAME)?.status ?? "pending";
+    const status = claimed
+      ? "pending"
+      : (getDeliveryQueueEntryOwnersInDatabase(
+          database,
+          [SESSION_DELIVERY_QUEUE_NAME],
+          queueEntry.id,
+        ).get(SESSION_DELIVERY_QUEUE_NAME)?.status ?? "pending");
     if (claimed) {
       writeSubagentRunValuesInDatabase(database, [boundSubagent], []);
     } else {
@@ -173,11 +175,11 @@ export function admitSubagentCompletionInWorker(
         throw new Error(`session delivery queue conflict for ${queueEntry.id}`);
       }
     }
-    const row = readSubagentRunRow(database, expected.runId);
-    if (!row) {
-      throw new Error("subagent completion owner disappeared during admission");
-    }
-    return { claimed, status, record: decodeSubagentCompletionRecord(row) };
+    return {
+      claimed,
+      status,
+      record: decodeSubagentCompletionRecord(claimed ? boundSubagent : originalRow),
+    };
   });
 }
 

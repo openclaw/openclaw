@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import test from "node:test";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { makeRehearsalSnapshotFixture } from "./rehearsal-snapshot.test-support.mjs";
+import { makeHandoffSnapshotFixture } from "./host-handoff.test-support.mjs";
 import { runOwner } from "./worker-config-owner-fixture.mjs";
 
 const library = new URL("./release-lib.mjs", import.meta.url).pathname;
@@ -14,7 +14,7 @@ const owner = readFileSync(new URL("./openclaw-release-deploy", import.meta.url)
 const sourceId = "a".repeat(32), targetId = "b".repeat(32), targetSha = "b".repeat(40);
 const linuxRoot = { skip: process.platform !== "linux" || process.getuid() !== 0 ? "requires disposable Linux root" : false };
 function fixture(t) {
-  const f = makeRehearsalSnapshotFixture(t);
+  const f = makeHandoffSnapshotFixture(t);
   writeFileSync(join(f.root, "etc/machine-id"), sourceId + "\n");
   const base = JSON.parse(readFileSync(f.configPath));
   base.agents.entries = { main: {}, "registered-only": {} };
@@ -215,7 +215,7 @@ test("default Node still reads retained handoff journals without runtime metadat
 });
 
 
-function targetFixture(t) {
+function targetFixture(t, candidateVersion = 1) {
   const f = fixture(t); f.begin(); f.stop();
   for (const agent of f.agents) agent.writer.close();
   const exported = JSON.parse(f.success(f.run("source-export")));
@@ -231,7 +231,13 @@ function targetFixture(t) {
   chmodSync(join(candidate, "package.json"), 0o644);
   const candidatePackage = JSON.parse(readFileSync(join(candidate, "package.json")));
   candidatePackage.exports = { "./plugin-sdk/core": "./fixture-sdk.cjs" };
+  candidatePackage.openclaw.schemaVersions = { state: candidateVersion, agent: candidateVersion };
   writeFileSync(join(candidate, "package.json"), JSON.stringify(candidatePackage));
+  const manifestPath = join(candidate, "deployment.json");
+  chmodSync(manifestPath, 0o644);
+  const deployment = JSON.parse(readFileSync(manifestPath));
+  deployment.schemaVersions = candidatePackage.openclaw.schemaVersions;
+  writeFileSync(manifestPath, JSON.stringify(deployment));
   writeFileSync(join(candidate, "fixture-sdk.cjs"), `module.exports={candidate:${JSON.stringify(targetSha)}};`);
   f.success(spawnSync(process.execPath, [library, "seal-tree", candidate], { env: f.env, encoding: "utf8" }));
   for (const snapshot of manifest.backups) {
@@ -305,6 +311,12 @@ test("imports one host into a disabled target and gates activation on Doctor and
   assert.doesNotMatch(readFileSync(f.eventlog, "utf8"), /service\.system\.(start|stop|restart|enable|disable)/);
   assert.equal(existsSync(f.permit), false);
   assert.notEqual(f.run("target-permit").status, 0);
+  // Doctor may refresh native maintenance receipts after the imported copy was verified.
+  for (const [path, role, agentId] of [[f.shared, "global", null], ...f.agents.map(agent => [agent.file, "agent", agent.id])]) {
+    const db = new DatabaseSync(path);
+    db.prepare("INSERT INTO schema_meta VALUES ('doctor-maintenance', ?, 1, ?)").run(role, agentId);
+    db.close();
+  }
   f.success(f.run("target-doctor"));
   f.success(f.run("target-doctor"));
   const verifiedJournal = readFileSync(f.journal);
@@ -346,7 +358,8 @@ test("imports one host into a disabled target and gates activation on Doctor and
 
 for (const interruption of ["journal", "previous", "current"]) {
   test(`import resumes after ${interruption} publication with the same journal and candidate SDK`, t => {
-    const f = targetFixture(t);
+    // The current-pointer case imports source-schema stores for a newer candidate before Doctor.
+    const f = targetFixture(t, interruption === "current" ? 2 : 1);
     const stopped = runImport(f, interruption);
     // Pointer publication reports the injected mv failure through the owner's error path.
     assert.equal(stopped.status, interruption === "journal" ? 73 : 1, stopped.stderr);

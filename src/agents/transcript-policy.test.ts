@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import {
   shouldAllowProviderOwnedThinkingReplay,
-  shouldMergeConsecutiveUserTurns,
+  shouldMergeConsecutiveTurns,
   validateAnthropicTurns,
 } from "./embedded-agent-helpers/turns.js";
 import type { AgentMessage } from "./runtime/index.js";
@@ -570,7 +570,7 @@ describe("resolveTranscriptPolicy", () => {
     ["claude-fable-5-1", true],
     ["claude-mythos-5-1", false],
     ["claude-fable-5", false],
-  ])("scopes persisted context and user-turn merging for %s", (modelId, appendOnly) => {
+  ])("scopes persisted context and consecutive-turn merging for %s", (modelId, appendOnly) => {
     const messages: AgentMessage[] = [
       { role: "user", content: "First request", timestamp: 1 },
       { role: "user", content: "Second request", timestamp: 2 },
@@ -580,7 +580,7 @@ describe("resolveTranscriptPolicy", () => {
         const policy = resolveTranscriptPolicy({ provider, modelId, modelApi });
         expect(policy.appendOnlyRuntimeContext).toBe(appendOnly);
         const replay = validateAnthropicTurns(messages, {
-          mergeConsecutiveUserTurns: shouldMergeConsecutiveUserTurns(policy, modelApi),
+          mergeConsecutiveTurns: shouldMergeConsecutiveTurns(policy, modelApi),
         });
         expect(replay).toEqual(
           appendOnly && modelApi === "anthropic-messages"

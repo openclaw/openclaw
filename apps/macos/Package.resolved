@@ -1,5 +1,5 @@
 {
-  "originHash" : "d9c25c26d99b82cec0d3e82e232a4c7798d71260c44cdb4a478c0e5d5111799c",
+  "originHash" : "2fc226742c2cde426e707d3d671841bf47a675f8cd66f4f16418f064154ba7cc",
   "pins" : [
     {
       "identity" : "axorcist",
@@ -51,8 +51,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/openclaw/Peekaboo.git",
       "state" : {
-        "revision" : "e060b6ba21792b327ce2a10368f57c8e569dc712",
-        "version" : "4.9.1"
+        "revision" : "959665e5f59358da5b15ddb726970d3e022efd41",
+        "version" : "4.9.2"
       }
     },
     {
@@ -123,8 +123,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/swiftlang/swift-subprocess.git",
       "state" : {
-        "revision" : "b3937ab85dd32f6e9435914599c1519074769c1a",
-        "version" : "1.0.0"
+        "revision" : "55d30558b8b12c0343793421328fe81a4919c776",
+        "version" : "1.0.1"
       }
     },
     {

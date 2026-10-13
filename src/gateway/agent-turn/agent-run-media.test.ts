@@ -12,6 +12,7 @@ import { createEmbeddedAttemptTranscriptLifecycle } from "../../agents/embedded-
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
   appendTranscriptMessageSync,
   loadTranscriptEventsSync,
@@ -95,6 +96,7 @@ async function runMediaTurn(
     plugins: { enabled: false },
   };
   await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
   const scope = {
     agentId: "main",
     sessionId,

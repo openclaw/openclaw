@@ -292,6 +292,7 @@ export function createCodexAppServerBindingStore(
   const lifecycle = createNativeSessionBindingLifecycleV2<StoredCodexAppServerBinding>(
     {
       lookup: (key) => state.asyncReads.lookup(key),
+      // Only custom legacy adapters use this; canonical worker stores publish pinned lease facts.
       assertLeaseCurrent: (key, token) => {
         const raw = state.lookup(key);
         const current = readStoredCodexAppServerBinding(raw);

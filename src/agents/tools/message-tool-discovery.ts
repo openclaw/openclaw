@@ -27,6 +27,7 @@ import { normalizeRouteBindingChannelId } from "../../routing/binding-scope.js";
 import {
   normalizeAccountId,
   normalizeAgentId,
+  parseAgentSessionKey,
   parseSessionDeliveryRoute,
 } from "../../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -39,7 +40,8 @@ export type MessageToolDiscoveryParams = {
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
-  currentPromptReaction?: boolean;
+  /** Stable source capability, independent of the current turn's authority. */
+  supportsPromptReactions?: boolean;
   currentAccountId?: string;
   sessionKey?: string;
   sessionId?: string;
@@ -170,6 +172,14 @@ function inferDeliveryFromSessionKey(
     threadId: route.threadId,
     to: formatSessionDeliveryTarget(channel, route.peerKind, peerId),
   };
+}
+
+/** Dashboard ingress stays local even when delivery resolves to an external conversation. */
+export function supportsMessageToolPromptReactions(options?: MessageToolCurrentContextOptions) {
+  return (
+    parseAgentSessionKey(options?.agentSessionKey)?.rest.startsWith("dashboard:") ||
+    normalizeMessageChannel(options?.currentChannelProvider) === INTERNAL_MESSAGE_CHANNEL
+  );
 }
 
 export function resolveEffectiveCurrentChannelContext(options?: MessageToolCurrentContextOptions) {
@@ -339,7 +349,7 @@ function* resolveMessageToolActionSchemaActionsSteps(
   params: MessageToolDiscoveryParams,
 ): MessageActionDiscoverySteps<string[]> {
   const discoveredActions = yield* resolveMessageToolSchemaActionsSteps(params);
-  if (params.currentPromptReaction && !discoveredActions.includes("react")) {
+  if (params.supportsPromptReactions && !discoveredActions.includes("react")) {
     discoveredActions.push("react");
   }
   const allowedActions = resolveAllowedMessageActions({
@@ -437,7 +447,7 @@ function* buildMessageToolSchemaSteps(
     includeDeliveryPin,
     includeBestEffort,
     extraProperties:
-      params.currentPromptReaction && actions.includes("react")
+      params.supportsPromptReactions && actions.includes("react")
         ? {
             ...extraProperties,
             emoji: Type.Optional(

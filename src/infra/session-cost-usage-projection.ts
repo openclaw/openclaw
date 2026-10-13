@@ -5,6 +5,7 @@ import {
   decodeUsageCostRollup,
   decodeUsageCostRollupEnvelope,
   isUsageCostRollupFresh,
+  type UsageCostRollupEntry,
 } from "./session-cost-usage-rollup-codec.js";
 import {
   addRollupToCostUsageSummary,
@@ -29,11 +30,12 @@ export type UsageCostRollupRowSource = {
   readRow: (filePath: string) => SessionCostUsageRollupRow | undefined;
   readBody: (row: SessionCostUsageRollupRow) => Uint8Array | null | Promise<Uint8Array | null>;
   onInvalidBody: (key: string) => void;
+  readEntry?: (row: SessionCostUsageRollupRow) => Promise<UsageCostRollupEntry | undefined>;
   /** Snapshot rows whose keys are absent from the resolved files. */
   remainingRows: Iterable<SessionCostUsageRollupRow>;
 };
 
-const createUsageDayKeyFormatter = (dayBucket?: UsageDailyBucket): UsageDayKeyFormatter => {
+export const createUsageDayKeyFormatter = (dayBucket?: UsageDailyBucket): UsageDayKeyFormatter => {
   if (dayBucket?.mode === "utc-offset") {
     return (date) =>
       formatUtcDayKey(new Date(date.getTime() + dayBucket.utcOffsetMinutes * 60 * 1000));
@@ -153,11 +155,13 @@ function createRollupProjectionReader(
         : [];
       const entry =
         row && usable.length > 0
-          ? decodeUsageCostRollup(
-              row.valueJson,
-              params.pricingFingerprint,
-              await params.readBody(row),
-            )
+          ? params.readEntry
+            ? await params.readEntry(row)
+            : decodeUsageCostRollup(
+                row.valueJson,
+                params.pricingFingerprint,
+                await params.readBody(row),
+              )
           : undefined;
       const invalidBody = Boolean(row && usable.length > 0 && !entry);
       if (invalidBody && row) {

@@ -16,7 +16,7 @@ import {
   type ApplicationContextProvider,
 } from "../../test-helpers/application-context.ts";
 import { CustodianSessionStore } from "./custodian-session-store.ts";
-import "./custodian-page.ts";
+import "./custodian-page.tsx";
 
 type TestCustodianPage = HTMLElement & {
   onboarding: boolean;

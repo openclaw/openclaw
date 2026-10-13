@@ -35,7 +35,7 @@ test("projects.list returns only the caller's deterministic resolved recents", a
     const actor = { type: "human" as const, source: "profile" as const, id: sourceProfile.id };
     const repository = await getSessionRepositoryWorkspaceStore().create({
       agentId: "main",
-      sessionKey: "agent:main:cloud",
+      sessionKey: "global",
       url: "https://github.com/octocat/hello-world.git",
       assertCurrent: () => {},
     });
@@ -49,7 +49,12 @@ test("projects.list returns only the caller's deterministic resolved recents", a
     }> = [
       { key: "agent:main:a", updatedAt: 500, projectId: project.id },
       { key: "agent:main:b", updatedAt: 500, projectId: project.id },
-      { key: "agent:main:cloud", updatedAt: 450, repositoryWorkspaceId: repository.workspaceId },
+      { key: "global", updatedAt: 450, repositoryWorkspaceId: repository.workspaceId },
+      {
+        key: "agent:main:wrong-owner",
+        updatedAt: 449,
+        repositoryWorkspaceId: repository.workspaceId,
+      },
       {
         key: "agent:main:c",
         updatedAt: 400,

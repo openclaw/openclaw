@@ -1,12 +1,19 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { SessionSharingIdentity } from "../../packages/gateway-protocol/src/index.js";
+import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { listOpenIncognitoAgentDatabases } from "../state/openclaw-agent-db.js";
-import { first, identity, type Row } from "./session-row-projection-record.js";
+import {
+  first,
+  identity,
+  type Lookup,
+  type Query,
+  type Row,
+} from "./session-row-projection-record.js";
 
 type Contribution = { key: string; storePath: string; actor: SessionSharingIdentity };
 const isSentinel = (key: string) => key === "global" || key === "unknown";
@@ -172,4 +179,45 @@ function listOpenIncognitoSessionCreators(
           : [],
     );
   });
+}
+
+/** Capability policy consumes only the receipt-updated metadata projection. */
+export function createSessionRowCapabilityReader(owner: {
+  state: () => { disposed: boolean; topologyDirty: boolean };
+  lookup: (query: Lookup) => Row | undefined;
+  matching: (query: Query, kind?: string) => Row[];
+}) {
+  return (
+    query: { agentId: string; storePath: string } & (
+      | { key: string; sessionId?: never }
+      | { sessionId: string; key?: never }
+    ),
+  ) => {
+    const state = owner.state();
+    if (state.disposed || state.topologyDirty) {
+      return undefined;
+    }
+    let row: Row | undefined;
+    if (query.key !== undefined) {
+      const candidate = owner.lookup(query);
+      row = candidate?.key === query.key ? candidate : undefined;
+    } else {
+      const sessionId = query.sessionId;
+      const scope = { agentId: query.agentId, storePath: query.storePath };
+      const exact = owner.matching({ ...scope, key: sessionId }, "id");
+      const candidates = (exact.length ? exact : owner.matching(scope))
+        .filter((candidate) => !isInternalSessionEffectsKey(candidate.key))
+        .toSorted((left, right) => (left.key < right.key ? -1 : left.key > right.key ? 1 : 0));
+      if (candidates.some((candidate) => !candidate.sharingEntry)) {
+        return undefined;
+      }
+      row =
+        candidates.find((candidate) => candidate.sharingEntry?.sessionId === sessionId) ??
+        candidates.find((candidate) => candidate.sharingEntry?.sessionId.trim() === sessionId);
+    }
+    // Known absence is authoritative. A row awaiting metadata preparation is not absent.
+    return row && (!row.storedEntry || row.sharingEntry !== row.storedEntry)
+      ? undefined
+      : { entry: row?.storedEntry };
+  };
 }

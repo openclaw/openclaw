@@ -24,6 +24,23 @@ export type DiagnosticWorkerRequestFields = {
   queueDepth: number;
   queueWaitMs?: number;
   durationMs?: number;
+  /** Monotonic process timestamps spanning the complete request, including transport frames. */
+  timing?: Partial<
+    Record<
+      | "enqueued"
+      | "dispatched"
+      | "posted"
+      | "postFinished"
+      | "received"
+      | "inputReady"
+      | "executeStarted"
+      | "executeFinished"
+      | "serialized"
+      | "replied"
+      | "replyReceived",
+      number
+    >
+  >;
 };
 
 export type DiagnosticAsyncQueueDroppedFields = {

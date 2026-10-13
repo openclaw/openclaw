@@ -1,6 +1,9 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import {
+  assertExistingDatabaseIdentity,
+  readDatabasePathIdentitySync,
+} from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-contract.js";
 import { retainOpenClawAgentDatabaseReadCandidates } from "../../state/openclaw-agent-db.js";
@@ -392,18 +395,21 @@ export async function withSessionEntriesFromStoresInWorker<T>(
 ): Promise<T> {
   const originalInputs = [...inputs];
   const capturedInputs: SessionEntryWorkerRead[] = originalInputs.map((input) => {
-    const captured = {
+    const captured: SessionEntryWorkerRead = {
+      ...input,
       env: cloneEnvWithPlatformSemantics(input.env ?? process.env),
       snapshotFields: input.snapshotFields?.slice(),
       preparedSource: input.preparedSource && { ...input.preparedSource },
     };
-    if (!input.selection) {
-      return { ...input, ...captured, sessionKeys: [...input.sessionKeys] };
+    if (captured.selection) {
+      captured.selection =
+        captured.selection.kind === "children"
+          ? { ...captured.selection, parentSessionKeys: [...captured.selection.parentSessionKeys] }
+          : { ...captured.selection };
+    } else {
+      captured.sessionKeys = [...captured.sessionKeys];
     }
-    if (input.projection === "list") {
-      return { ...input, ...captured, selection: { ...input.selection } };
-    }
-    return { ...input, ...captured, selection: { ...input.selection } };
+    return captured;
   });
   if (options?.ordered) {
     return withOrderedSessionEntriesInWorker(capturedInputs, consume, {
@@ -600,6 +606,14 @@ export async function withSessionStoreReaderInWorker<T>(
             reader.assertCurrent();
             continuation?.assertCurrent();
             route.assertCurrent();
+            // Discovery can yield before writable admission; retain its selected physical source.
+            if (sourceIdentity?.key.startsWith("file:")) {
+              assertExistingDatabaseIdentity(
+                database.path,
+                sourceIdentity.key,
+                sourceIdentity.birthtime,
+              );
+            }
           };
           if (dataOnly && (logical?.assertCurrent || preparedSource)) {
             assertFinalCurrent = assertCapturedCurrent;

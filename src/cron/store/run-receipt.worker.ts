@@ -1,16 +1,52 @@
 import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
+import {
+  bindExecutionOwnerLifecycleMetadata,
+  ensureExecutionOwnerLifecycleBindingSchema,
+} from "../../audit/execution-owner-lifecycle-binding-store.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
-import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { deleteStaleCronJobFamilyRows } from "./row-codec.js";
 import { markCronDeliveryStartedInDatabase } from "./run-receipt-delivery.js";
-import {
-  CronRunReceiptRevisionError,
-  finishCronRunReceiptInDatabase,
-} from "./run-receipt-store.js";
+import type { CronRunReceiptDatabase } from "./run-receipt-read.js";
+import { CronRunReceiptRevisionError } from "./run-receipt-store.js";
 import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 import type { CronRuntimeWorkerOperations } from "./runtime-worker.types.js";
+import type { CronStateWorkerOperations } from "./worker-contract.js";
+
+export function bindCronRunReceiptExecutionInWorker(
+  database: OpenClawStateDatabase,
+  input: CronStateWorkerOperations["cron.bindReceiptExecution"]["input"],
+): boolean {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const receipt = executeSqliteQueryTakeFirstSync(
+        db,
+        getNodeSqliteKysely<CronRunReceiptDatabase>(db)
+          .selectFrom("cron_run_receipts")
+          .select("receipt_id")
+          .where("receipt_id", "=", input.receiptId),
+      );
+      if (!receipt) {
+        return false;
+      }
+      if (!prepareCronRunReceiptWriteSchema(db).executionOwnerLifecycleBindings) {
+        ensureExecutionOwnerLifecycleBindingSchema(db);
+      }
+      return (
+        bindExecutionOwnerLifecycleMetadata({
+          db,
+          ownerKind: "cron",
+          ownerId: input.receiptId,
+          binding: input.binding,
+        }) !== "mismatch"
+      );
+    },
+    { database, path: database.path, env: getSqliteWorkerStateContext().environment },
+    { operationLabel: "cron.run-receipt.execution-binding" },
+  );
+}
 
 export function markCronDeliveryStartedInWorker(
   database: OpenClawStateDatabase,
@@ -22,7 +58,6 @@ export function markCronDeliveryStartedInWorker(
         throw new CronRunReceiptRevisionError(input.handle.receiptId);
       }
       const deletionBlocked = isAgentDeletionBlocked(input.handle.agentId, {}, db);
-      const preparation = input.snapshot;
       if (deletionBlocked) {
         throw new CronRunReceiptRevisionError(
           input.handle.receiptId,
@@ -33,31 +68,11 @@ export function markCronDeliveryStartedInWorker(
       markCronDeliveryStartedInDatabase({
         database: db,
         handle: input.handle,
-        allowMissingJob: preparation.allowMissingJob,
-        resolveAgentId: (job) => resolveCronJobEffectiveAgentId(job, preparation.defaultAgentId),
       });
       return { outcome: {} };
     },
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "cron.run-receipt.mark-delivery-started" },
-  );
-}
-
-export function finishCronReceiptInWorker(
-  database: OpenClawStateDatabase,
-  input: CronRuntimeWorkerOperations["cron.finishReceipt"]["input"],
-) {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      finishCronRunReceiptInDatabase({
-        database: db,
-        receiptSchema: prepareCronRunReceiptWriteSchema(db),
-        ...input.terminal,
-      });
-      return { outcome: {} };
-    },
-    { database, path: database.path, env: getSqliteWorkerStateContext().environment },
-    { operationLabel: "cron.run-receipt.finish" },
   );
 }
 

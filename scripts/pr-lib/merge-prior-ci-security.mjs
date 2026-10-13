@@ -219,13 +219,7 @@ export async function verifyPriorCiSecurity({
       run.status === "completed" &&
       run.conclusion === "success" &&
       run.path === workflowPath &&
-      // Approval-command activity now arrives as a dispatch from repository
-      // automation; issue_comment publishers predate that cutover and stay valid.
-      ["workflow_run", "schedule", "issue_comment", "workflow_dispatch"].includes(run.event) &&
-      (run.event !== "workflow_dispatch" ||
-        (run.actor?.id === 41898282 &&
-          run.actor?.login === "github-actions[bot]" &&
-          run.actor?.type === "Bot")) &&
+      ["workflow_run", "schedule", "issue_comment"].includes(run.event) &&
       run.head_branch === "main" &&
       oid.test(run.head_sha ?? "") &&
       run.repository?.id === repositoryId &&

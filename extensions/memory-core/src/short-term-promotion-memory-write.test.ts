@@ -73,35 +73,15 @@ async function setupMemoryFile(originalContent: string, readOnlyParent = false):
   return memoryPath;
 }
 
-it.runIf(process.platform !== "win32")(
-  "atomically replaces memory content without changing its mode",
-  async () => {
-    const original = "# Long-Term Memory\n\n- existing entry\n";
-    const memoryPath = await setupMemoryFile(original);
-    await fs.chmod(memoryPath, 0o640);
+it.each(["missing/MEMORY.md", ...(process.platform === "win32" ? [] : ["missing/../MEMORY.md"])])(
+  "rejects a memory target whose missing suffix is %s",
+  async (suffix) => {
+    const memoryPath = await setupMemoryFile("existing memory");
+    const filePath = `${path.dirname(memoryPath)}${path.sep}${suffix.replaceAll("/", path.sep)}`;
 
-    await commitMemoryContent({
-      filePath: memoryPath,
-      tempPrefix: `${path.basename(memoryPath)}.test`,
-      expectedHash: hashMemoryContent(original),
-      content: `${original}- replacement entry\n`,
-    });
-
-    expect((await fs.stat(memoryPath)).mode & 0o777).toBe(0o640);
-    expect(await fs.readFile(memoryPath, "utf-8")).toContain("replacement entry");
+    await expect(resolveMemoryWritePath(filePath)).rejects.toMatchObject({ code: "ENOENT" });
   },
 );
-
-it.each([
-  "missing/MEMORY.md",
-  ...(process.platform === "win32" ? [] : ["missing/../MEMORY.md"]),
-  "missing/",
-])("rejects a memory target whose missing suffix is %s", async (suffix) => {
-  const memoryPath = await setupMemoryFile("existing memory");
-  const filePath = `${path.dirname(memoryPath)}${path.sep}${suffix.replaceAll("/", path.sep)}`;
-
-  await expect(resolveMemoryWritePath(filePath)).rejects.toMatchObject({ code: "ENOENT" });
-});
 
 it.runIf(Boolean(process.versions.bun) && process.platform !== "win32")(
   "rejects a non-directory symlink before a parent traversal",

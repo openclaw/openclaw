@@ -53,6 +53,11 @@ import * as sqliteAdmission from "./sqlite-worker-operation-admission.js";
 import { runWithSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 import { readUpdateDatabaseGenerationsIsolated } from "./update-candidate-state.js";
 
+// mock-isolation: Count foreground auth reads; external file observation has separate coverage.
+vi.mock("./owned-directory-observation.js", () => ({
+  observeOwnedDirectory: () => ({ close() {} }),
+}));
+
 const PROVIDER = "auth-runtime-fixture";
 const PROFILE_ID = `${PROVIDER}:default`;
 const MODEL_ID = "fixture-model";

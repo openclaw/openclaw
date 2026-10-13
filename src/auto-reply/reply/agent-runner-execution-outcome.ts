@@ -8,6 +8,7 @@ import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status
 import type { AgentTurnExecutionResult, AgentTurnParams } from "./agent-runner-execution.types.js";
 import type { SessionEventExecution } from "./session-event-contract.js";
 import { getReplySystemEventContext } from "./system-event-session-key.js";
+import { withVisibleWorkSessionReporter } from "./visible-work-sessions.js";
 
 const messageToolOutcomeLog = createSubsystemLogger("auto-reply/message-tool-outcome");
 
@@ -28,7 +29,7 @@ async function recordAgentTurnExecutionOutcome(
       }
     }
     if (sessions.size > 0) {
-      params.opts.onVisibleWorkSessions([...sessions.values()]);
+      await params.opts.onVisibleWorkSessions([...sessions.values()]);
     }
   }
   const executionStatus = resolveAgentTurnExecutionStatus(result?.outcome);
@@ -120,7 +121,14 @@ export async function runAgentTurnWithOutcome(
           getReplySystemEventContext(params.opts)?.execRequestOwners,
         abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
       },
-      run,
+      () =>
+        withVisibleWorkSessionReporter(
+          {
+            requesterSessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
+            report: params.opts?.onVisibleWorkSessions,
+          },
+          run,
+        ),
     );
     await recordAgentTurnExecutionOutcome(params, result);
     terminalRecorded = true;

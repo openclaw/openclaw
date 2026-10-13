@@ -1,7 +1,6 @@
 import path from "node:path";
 import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
-import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import {
   isIncognitoSessionKey,
   LEGACY_IMPLICIT_AGENT_ID,
@@ -50,6 +49,7 @@ import {
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { withSessionStoreTarget } from "./session-store-target-runtime.js";
+import { createSessionWorkerExecutionSource } from "./session-worker-execution-source.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type SessionAdmissionEntryIdentity = Readonly<
@@ -96,6 +96,7 @@ export async function loadSessionEntryForAdmission(
   preparation: {
     signal?: AbortSignal;
     assertCurrent?: () => void;
+    onRegistryChange?: AgentDatabaseRequestExecutionSource["onRegistryChange"];
     incognito?: SessionCollaborationScope["incognito"];
   } = {},
 ): Promise<{ entry: SessionEntry | undefined; databaseClaim: SessionAdmissionDatabaseClaim }> {
@@ -317,19 +318,13 @@ export async function loadSessionEntryForAdmission(
               owner.assertCurrent();
             };
             const source: AgentDatabaseRequestExecutionSource = {
-              assertCurrent: assertSourceCurrent,
-              onRegistryChange: owner.onRegistryChange,
-              createAdmission(admissionBinding) {
-                return () => ({
-                  nativeLocations: admissionBinding.nativeLocations,
-                  admission: createSqliteWorkerOperationAdmission((request, grant) => {
-                    admissionBinding.authorize(request);
-                    assertSourceCurrent();
-                    if (!grant()) {
-                      throw new Error("Session admission authority expired");
-                    }
-                  }, admissionBinding.attachment),
-                });
+              ...createSessionWorkerExecutionSource(
+                assertSourceCurrent,
+                "Session admission authority expired",
+              ),
+              onRegistryChange(change) {
+                owner.onRegistryChange(change);
+                preparation.onRegistryChange?.(change);
               },
             };
             let transferred = false;

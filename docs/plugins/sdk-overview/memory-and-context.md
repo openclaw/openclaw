@@ -24,8 +24,8 @@ memory adapter contracts that sit on top of them. Part of the
 To participate in durable admitted turns, context engines must declare
 `currentTurnFence: "before-current-turn-entry-v1"` and
 `turnAdvancementIdempotency: "atomic-idempotent-v1"` under
-`info.transcriptSemantics`, then implement `commitTurn(...)` as an atomic,
-idempotent write keyed by `advancementKey`. OpenClaw supplies only the inclusive
+`info.transcriptSemantics`, then implement `commitTurn(...)` as an atomic
+write keyed by `advancementKey` that has no additional effect when repeated. OpenClaw supplies only the inclusive
 accepted turn, from its admitted user entry through its terminal entry; use the
 `readSessionTranscriptVisibleMessageDelta(...)` cursor API to bootstrap or
 rebuild earlier history. Without the full contract, OpenClaw uses the legacy
@@ -52,7 +52,7 @@ engine unchanged, and tries that engine again on the next logical turn.
   return that agent's own session hits and no other agent's. When a session
   caller carries a host-granted conversation recall pass, the host forwards it
   as `conversationRecall`; admit only the hits that pass allows. If the hook
-  is absent, OpenClaw fails closed by withholding session-source hits while
+  is absent, OpenClaw withholds session-source hits while
   retaining ordinary memory hits. Keep transcript identity and visibility
   policy in the owning memory plugin; callers must not infer authorization from
   paths or duplicate plugin-specific rules.
@@ -128,7 +128,7 @@ maintenance copy still has `senderIsOwner: false`; providers authorize memory
 access through the supplied audience and its current-authority check.
 
 Only tools-arm flush contexts include `memoryFlush: { flushId: string }` on
-`OpenClawPluginToolContext`. The host derives `flushId` deterministically from
+`OpenClawPluginToolContext`. The host computes `flushId` from
 the source session incarnation (its `sessionId` and lifecycle revision) and its
 pre-compaction `compactionCount` (zero when absent). The count advances after a
 completed compaction, so model fallback attempts and later retries within the

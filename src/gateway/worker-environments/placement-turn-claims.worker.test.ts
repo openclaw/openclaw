@@ -1,13 +1,14 @@
 import { DatabaseSync } from "node:sqlite";
 import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   resolveSessionPlacementForcedTerminalSettlement,
   resolveSessionPlacementTurnSettlementAssertion,
 } from "../../agents/session-placement-forced-terminal-settlement.js";
+import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import * as brokerReply from "../../infra/sqlite-worker-broker-reply.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -67,6 +68,7 @@ beforeAll(async () => {
   await placements.releaseTurn(warm);
 });
 
+beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => vi.restoreAllMocks());
 
 async function workerClaim(name: string) {
@@ -399,7 +401,10 @@ it.each(["committed", "unknown"] as const)(
       await expect(ack).rejects.toThrow();
     }
     expect(corrupted()).toBe(1);
-    expect(placements.get(claim.sessionId)?.lastLiveEventAckCursor).toBe(1);
+    if (outcome === "unknown") {
+      expect(() => placements.get(claim.sessionId)).toThrow("Await getAsync");
+    }
+    expect((await placements.getAsync(claim.sessionId))?.lastLiveEventAckCursor).toBe(1);
     expect(await placements.listPendingWorkspaceResultsAsync(claim.sessionId)).toMatchObject([
       { claimId: claim.claimId, gatewayInstanceId: placements.workspaceResultInstanceId() },
     ]);
@@ -440,6 +445,7 @@ it.each(["committed", "unknown"] as const)(
     const requested = input(`projection-${outcome}`);
     // The fault belongs to the claim admission, not the worker's first open admission.
     await placements.releaseTurn(await placements.claimTurn(requested));
+    await placements.readProjection([requested.sessionId]);
     const snapshots: ReturnType<typeof placements.readPublishedProjection>[] = [];
     const changes: SessionRowChange[] = [];
     const stop = sessionChanges.subscribeProjection((change) => {
@@ -518,7 +524,7 @@ it.each(["new local", "existing local", "worker"] as const)(
     await expect(placements.claimTurn(requested)).rejects.toThrow(
       "The session workspace is being published",
     );
-    expect(placements.get(requested.sessionId)?.turnClaim ?? null).toBeNull();
+    expect((await placements.getAsync(requested.sessionId))?.turnClaim ?? null).toBeNull();
     runOpenClawStateWriteTransaction(
       ({ db }) => {
         releaseOpenClawStateLeaseInTransaction(db, lease);
@@ -572,7 +578,7 @@ it("rolls back claim admission when live authority is revoked at commit", async 
     }),
   ).rejects.toThrow("synthetic placement admission revoked");
   expect(revoked).toBe(true);
-  expect(placements.get("placement-worker-refused")).toBeUndefined();
+  expect(await placements.getAsync("placement-worker-refused")).toBeUndefined();
 });
 
 it("fences retained authority before release commit and closes observers after settlement", async () => {

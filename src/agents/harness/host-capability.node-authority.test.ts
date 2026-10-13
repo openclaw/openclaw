@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { withIncognitoSessionActor } from "../../config/sessions/session-incognito-binding.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
@@ -34,6 +35,19 @@ import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 
 type HostAttempt = Parameters<typeof createAgentHarnessHostCapabilities>[0]["attempt"];
 const admissions: PreparedAgentRunAdmission[] = [];
+
+function assertWithoutHostSql(assertCurrent: () => void) {
+  const sql = observeHostDataSql();
+  try {
+    assertCurrent();
+  } finally {
+    try {
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+  }
+}
 
 async function admittedAttempt(
   runId: string,
@@ -162,7 +176,9 @@ it.each(["durable", "incognito"])(
                   },
                 };
                 expect(() =>
-                  placementGrantAuthority?.assertCurrent(placementGrantRequest),
+                  assertWithoutHostSql(() =>
+                    placementGrantAuthority?.assertCurrent(placementGrantRequest),
+                  ),
                 ).not.toThrow();
                 const ready = createDeferred();
                 const release = createDeferred();
@@ -175,7 +191,7 @@ it.each(["durable", "incognito"])(
                   async (assertCurrent) => {
                     ready.resolve();
                     await release.promise;
-                    assertCurrent();
+                    assertWithoutHostSql(assertCurrent);
                     return await dispatched();
                   },
                 );

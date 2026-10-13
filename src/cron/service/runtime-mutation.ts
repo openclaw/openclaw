@@ -6,7 +6,6 @@ import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-work
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import type {
   CronRuntimeMutationContracts,
-  CronReceiptRevisionRefusal,
   CronJobMutationRefusal,
   CronRuntimeMutationType,
   CronRuntimeWorkerOperations,
@@ -20,7 +19,6 @@ type CronRuntimeMutationParams<Type extends CronRuntimeMutationType> = {
   assertCurrent: () => void;
   publish: (outcome: CronRuntimeMutationContracts[Type]["outcome"]) => void;
   onSettled?: (outcome: "committed" | "not-committed" | "unknown") => void;
-  onRolledBackReceiptRevision?: (refusal: CronReceiptRevisionRefusal) => never;
   onRolledBackMutation?: (refusal: CronJobMutationRefusal) => never;
 };
 
@@ -58,9 +56,7 @@ export async function runCronRuntimeMutation<Type extends CronRuntimeMutationTyp
           return;
         }
         settled = "not-committed";
-        if ("receiptRevision" in result && params.onRolledBackReceiptRevision) {
-          params.onRolledBackReceiptRevision(result.receiptRevision);
-        } else if ("mutationRefusal" in result && params.onRolledBackMutation) {
+        if ("mutationRefusal" in result && params.onRolledBackMutation) {
           params.onRolledBackMutation(result.mutationRefusal);
         } else {
           throw new Error("Cron mutation returned an unexpected refusal");

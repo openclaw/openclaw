@@ -1,16 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import {
-  resolveOpenClawStateSqlitePath,
-  resolveQuarantineStorePath,
-} from "../../state/openclaw-state-db.paths.js";
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { runSessionsCleanup } from "./cleanup-service.js";
 import { replaceSessionEntrySync } from "./session-accessor.entry.js";
 import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
@@ -33,25 +34,58 @@ vi.mock("./store-maintenance-runtime.js", () => ({
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
+  maintenance.mode = "enforce";
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
 });
 
-function readMetadata() {
+it.each(["warn", "enforce"])(
+  "does not materialize session payloads for a no-op cleanup in %s mode",
+  async (mode) => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-cleanup-noop-"));
+    maintenance.mode = mode;
+    maintenance.maxDiskBytes = null;
+    maintenance.highWaterBytes = null;
+    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
+    for (let i = 0; i < 32; i++) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: `agent:main:noop-${i}`, storePath },
+        { sessionId: `noop-${i}`, updatedAt: Date.now(), incognito: true },
+      );
+    }
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+    const reads = trackSqliteStatementExecutions(database.db, ["payload"], (sql) =>
+      /\b(?:session_nodes|session_entry_snapshots)\b/i.test(sql) && /\bentry_json\b/i.test(sql)
+        ? "payload"
+        : null,
+    );
+    try {
+      const result = await runSessionsCleanup({
+        cfg: {},
+        opts: {},
+        targets: [{ agentId: "main", storePath }],
+      });
+      expect(result.appliedSummaries[0]).toMatchObject({
+        beforeCount: 32,
+        afterCount: 32,
+        wouldMutate: false,
+      });
+      expect(reads.textBytes.payload).toBe(0);
+    } finally {
+      reads.restore();
+    }
+  },
+);
+
+function readMetadata(sqlitePath: string) {
   const state = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath(), { readOnly: true });
-  const quarantine = openNodeSqliteDatabase(resolveQuarantineStorePath(process.env), {
-    readOnly: true,
-  });
   try {
     return {
       registry: state.prepare("SELECT * FROM agent_databases ORDER BY agent_id, path").all(),
-      integrity: quarantine
-        .prepare("SELECT * FROM agent_integrity_verifications ORDER BY path")
-        .all(),
+      seal: fs.existsSync(`${sqlitePath}.seal`) ? fs.readFileSync(`${sqlitePath}.seal`) : undefined,
     };
   } finally {
-    quarantine.close();
     state.close();
   }
 }
@@ -74,16 +108,16 @@ it.each([
     const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path;
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
-    clearOpenClawAgentIntegrityVerification(sqlitePath, process.env);
+    revokeSqliteDatabaseAdmissionsForPath(sqlitePath);
     const state = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath());
     try {
       state.exec("UPDATE agent_databases SET last_seen_at = 1");
     } finally {
       state.close();
     }
-    const metadata = readMetadata();
+    const metadata = readMetadata(sqlitePath);
     expect(metadata.registry).toHaveLength(1);
-    expect(metadata.integrity).toEqual([]);
+    expect(metadata.seal).toBeUndefined();
     const databaseBytes = fs.readFileSync(sqlitePath);
     maintenance.maxDiskBytes = diskBudget ? 1 : null;
     maintenance.highWaterBytes = diskBudget ? 1 : null;
@@ -101,7 +135,7 @@ it.each([
       wouldMutate: fixMissing,
     });
     expect(result.appliedSummaries).toEqual([]);
-    expect.soft(readMetadata()).toEqual(metadata);
+    expect.soft(readMetadata(sqlitePath)).toEqual(metadata);
     expect(fs.readFileSync(sqlitePath)).toEqual(databaseBytes);
   },
 );

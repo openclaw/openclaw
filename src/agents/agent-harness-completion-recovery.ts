@@ -1,10 +1,11 @@
+import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createSessionWorkStartChangedError } from "../config/sessions/lifecycle.js";
 import type {
   HarnessCompletionRecovery,
   RestartRecoveryTerminalDeliveryEvidence,
 } from "../config/sessions/restart-recovery-types.js";
-import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
+import { retainPreparedSessionEntryPredicate } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import {
   prepareSqliteScope,
   toDatabaseOptions,
@@ -27,26 +28,92 @@ import {
 } from "../config/sessions/session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "../config/sessions/session-store-target-inventory.js";
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
+import { withSessionTranscriptReadSource } from "../config/sessions/session-transcript-read-source.js";
 import { retainSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { sourceDeliveryTargetsMatch } from "../infra/outbound/source-delivery-plan.js";
+import {
+  readSqliteDatabaseScopedWriteTokenForPath,
+  sqliteSessionIdWriteScope,
+} from "../infra/sqlite-database-admission.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { normalizeInputProvenance } from "../sessions/input-provenance.js";
 import { rethrowIncognitoSessionError } from "../state/incognito-session-error.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { assertHarnessCompletionSourceAdmission } from "./agent-harness-completion-scope.js";
 
-export function readAdmittedHarnessCompletionInput(
+export async function readAdmittedHarnessCompletionInputAsync(
   params: Parameters<typeof readAdmittedHarnessCompletionInputFromSqlite>[0],
-): boolean {
+): Promise<boolean> {
   const memory = getSessionActorStorageBinding({
     sessionKey: params.claim.requesterSessionKey,
     agentId: params.claim.requesterAgentId,
     storePath: params.storePath,
   });
   if (!memory) {
-    return readAdmittedHarnessCompletionInputFromSqlite(params);
+    const binding = captureIncognitoSessionBinding({
+      agentId: params.claim.requesterAgentId,
+      sessionKey: params.claim.requesterSessionKey,
+      storePath: params.storePath,
+    });
+    if (binding) {
+      const snapshot = await binding.actor.sessions.history(
+        { assertCurrent: () => binding.actor.assertReadable() },
+        {
+          type: "session.history.harness-completion-source",
+          input: {
+            sessionKey: params.claim.requesterSessionKey,
+            sessionId: params.entry.sessionId,
+            lifecycleRevision: params.entry.lifecycleRevision,
+            claim: params.claim,
+            admission: resolveSessionTranscriptReadFence({
+              agentId: params.claim.requesterAgentId,
+              sessionId: params.claim.sessionId,
+            }),
+          },
+        },
+        binding.admissionSignal,
+      );
+      if (snapshot.readError) {
+        throw decodeSessionTranscriptWorkerReadError(snapshot.readError);
+      }
+      return snapshot.entry?.sessionId === params.claim.sessionId && snapshot.validInput;
+    }
+    return withSessionTranscriptReadSource(
+      {
+        agentId: params.claim.requesterAgentId,
+        sessionKey: params.claim.requesterSessionKey,
+        sessionId: params.entry.sessionId,
+        storePath: params.storePath,
+      },
+      () => readAdmittedHarnessCompletionInputFromSqlite(params),
+      async ({ owner, scope, expectedIdentity, assertCurrent }) => {
+        if (!expectedIdentity) {
+          return false;
+        }
+        const snapshot = await owner.readHarnessCompletionSource({
+          env: scope.env,
+          claim: params.claim,
+          source: {
+            agentId: scope.agentId,
+            path: scope.storePath,
+            databaseIdentity: expectedIdentity.key.slice(5),
+            databaseBirthtime: expectedIdentity.birthtime,
+          },
+          mode: "committed",
+          admission: resolveSessionTranscriptReadFence({
+            agentId: params.claim.requesterAgentId,
+            sessionId: params.claim.sessionId,
+          }),
+        });
+        assertCurrent();
+        if (snapshot.readError) {
+          throw decodeSessionTranscriptWorkerReadError(snapshot.readError);
+        }
+        return snapshot.entry?.sessionId === params.claim.sessionId && snapshot.validInput;
+      },
+    );
   }
   const snapshot = memory.actor.storage!.readCurrent(
     {
@@ -209,6 +276,7 @@ export function getOwedHarnessCompletionTask(
 export function createHarnessCompletionSourceAssertion(params: {
   claim: HarnessCompletionRecovery;
   storePath: string;
+  mode?: "admission" | "committed";
   priorAssertion?: SessionSourceAssertion;
 }): SessionSourceAssertion {
   const target = {
@@ -225,6 +293,7 @@ export function createHarnessCompletionSourceAssertion(params: {
           input: {
             sourceRunId: params.claim.sourceRunId,
             claim: params.claim,
+            mode: params.mode,
             admission: resolveSessionTranscriptReadFence({
               agentId: target.agentId,
               sessionId: params.claim.sessionId,
@@ -301,38 +370,50 @@ export function createHarnessCompletionSourceAssertion(params: {
   };
   const prepareSnapshot = (
     snapshot: HarnessCompletionSourceSnapshot,
-    source: CapturedSessionEntryReadSource,
+    source: CapturedSessionEntryReadSource & { databaseIdentity: string },
     assertStorageCurrent: () => void,
     release?: () => void | Promise<void>,
   ): PreparedSessionSourceAuthority => {
-    const assertCurrent = () => {
-      assertStorageCurrent();
-      if (!snapshot.entry || !getOwedHarnessCompletionTask(params.claim, snapshot.entry)) {
-        refuse();
-      }
-      if (snapshot.readError) {
-        throw decodeSessionTranscriptWorkerReadError(snapshot.readError);
-      }
-      if (!snapshot.validInput) {
-        refuse();
-      }
-    };
-    assertCurrent();
+    assertStorageCurrent();
+    if (!snapshot.entry || !getOwedHarnessCompletionTask(params.claim, snapshot.entry)) {
+      refuse();
+    }
+    if (snapshot.readError) {
+      throw decodeSessionTranscriptWorkerReadError(snapshot.readError);
+    }
+    if (!snapshot.validInput) {
+      refuse();
+    }
+    const fields = [
+      "sessionId",
+      "lifecycleRevision",
+      "restartRecoveryHarnessCompletion",
+      "restartRecoveryTerminalDeliveryEvidence",
+    ] as const;
+    const retained = retainPreparedSessionEntryPredicate({
+      databaseIdentity: `file:${source.databaseIdentity}`,
+      sessionKey: target.sessionKey,
+      entry: snapshot.entry,
+      matches: (before, after) =>
+        fields.every((field) => isDeepStrictEqual(before?.[field], after?.[field])),
+    });
     return {
-      assertCurrent,
+      assertCurrent() {
+        assertStorageCurrent();
+        if (
+          !retained.isCurrent() ||
+          !snapshot.entry ||
+          !getOwedHarnessCompletionTask(params.claim, snapshot.entry)
+        ) {
+          refuse();
+        }
+      },
       checks: [
         {
           predicate: {
             source,
             sessionKey: target.sessionKey,
-            fields: [
-              "sessionId",
-              "lifecycleRevision",
-              "restartRecoveryHarnessCompletion",
-              "restartRecoveryTerminalDeliveryEvidence",
-              "restartRecoveryDeliveryRunId",
-              "restartRecoveryRuns",
-            ],
+            fields: [...fields],
             expected: snapshot.entry,
             ...(snapshot.version
               ? { transcript: { sessionId: params.claim.sessionId, version: snapshot.version } }
@@ -341,7 +422,7 @@ export function createHarnessCompletionSourceAssertion(params: {
           refuse,
         },
       ],
-      release,
+      release: () => releaseSessionSourceAuthorities([retained, { release }]),
     };
   };
   const assertSource = () => {
@@ -352,86 +433,81 @@ export function createHarnessCompletionSourceAssertion(params: {
       if (entry.restartRecoveryDeliveryRunId !== params.claim.sourceRunId) {
         refuse();
       }
-      return;
     }
-    const current = loadExactSessionEntry({
-      ...target,
-      readConsistency: "latest",
+    // The durable requester receipt outlives the original source admission.
+    // Each effect scope prepares and validates that receipt before its callback.
+  };
+  const prepareSessionSource = async (
+    checkWriteToken = false,
+  ): Promise<PreparedSessionSourceAuthority> => {
+    const { claim } = params;
+    if (binding) {
+      return prepareIncognitoSource();
+    }
+    const env = captureSessionTranscriptStorageEnvironment(process.env);
+    const candidates = captureSessionStoreReadCandidates(params.storePath);
+    const identities = captureSessionStoreCandidateIdentities(candidates);
+    const admission = resolveSessionTranscriptReadFence({
+      agentId: claim.requesterAgentId,
+      sessionId: claim.sessionId,
     });
-    // The original host claim precedes transcript commit. A recovery attempt
-    // already has a committed source and must keep it valid in its read fence.
-    if (
-      !current ||
-      current.sessionKey !== params.claim.requesterSessionKey ||
-      !getOwedHarnessCompletionTask(params.claim, current.entry) ||
-      (current.entry.restartRecoveryDeliveryRunId !== params.claim.sourceRunId &&
-        !readAdmittedHarnessCompletionInput({
-          claim: params.claim,
-          entry: current.entry,
-          storePath: params.storePath,
-          operationalRunId: current.entry.restartRecoveryDeliveryRunId,
-        }))
-    ) {
-      throw createSessionWorkStartChangedError(params.claim.requesterSessionKey);
+    const resolved = await prepareSqliteScope({
+      agentId: claim.requesterAgentId,
+      sessionKey: claim.requesterSessionKey,
+      storePath: params.storePath,
+      env,
+    });
+    const options = toDatabaseOptions(resolved);
+    const path = resolveOpenClawAgentSqlitePath(options);
+    const identity = identities.get(assertSessionStoreReadCandidate(path, candidates));
+    if (!identity?.key.startsWith("file:")) {
+      return refuse();
+    }
+    const source = {
+      agentId: options.agentId,
+      path,
+      databaseIdentity: identity.key.slice(5),
+      databaseBirthtime: identity.birthtime,
+    };
+    const retained = retainSessionHistoryWorkerDatabase({ ...options, path });
+    try {
+      const writeScopes = [target.sessionKey, sqliteSessionIdWriteScope(params.claim.sessionId)];
+      const snapshot = await retained.owner.readHarnessCompletionSource({
+        env,
+        claim,
+        mode: params.mode,
+        source,
+        ...(admission ? { admission } : {}),
+      });
+      return prepareSnapshot(
+        snapshot,
+        source,
+        () => {
+          retained.owner.assertCurrent();
+          assertSessionStoreReadCandidate(path, candidates);
+          assertExistingDatabaseIdentity(path, identity.key, identity.birthtime);
+          // Worker mutations validate their predicates in the committing transaction.
+          // External effects instead consume the read receipt at their final callback.
+          if (
+            checkWriteToken &&
+            (snapshot.writeToken === undefined ||
+              readSqliteDatabaseScopedWriteTokenForPath(path, writeScopes) !== snapshot.writeToken)
+          ) {
+            refuse();
+          }
+        },
+        retained.release,
+      );
+    } catch (error) {
+      await releaseSessionSourceAuthorities([retained], [error]);
+      throw error;
     }
   };
   return composeSessionSourceAssertion([
     params.priorAssertion,
     Object.assign(assertSource, {
-      prepareSessionSourceScope: binding ? prepareIncognitoSource : undefined,
-      async prepareSessionSource() {
-        const { claim } = params;
-        if (binding) {
-          return prepareIncognitoSource();
-        }
-        const env = captureSessionTranscriptStorageEnvironment(process.env);
-        const candidates = captureSessionStoreReadCandidates(params.storePath);
-        const identities = captureSessionStoreCandidateIdentities(candidates);
-        const admission = resolveSessionTranscriptReadFence({
-          agentId: claim.requesterAgentId,
-          sessionId: claim.sessionId,
-        });
-        const resolved = await prepareSqliteScope({
-          agentId: claim.requesterAgentId,
-          sessionKey: claim.requesterSessionKey,
-          storePath: params.storePath,
-          env,
-        });
-        const options = toDatabaseOptions(resolved);
-        const path = resolveOpenClawAgentSqlitePath(options);
-        const identity = identities.get(assertSessionStoreReadCandidate(path, candidates));
-        if (!identity?.key.startsWith("file:")) {
-          return refuse();
-        }
-        const source = {
-          agentId: options.agentId,
-          path,
-          databaseIdentity: identity.key.slice(5),
-          databaseBirthtime: identity.birthtime,
-        };
-        const retained = retainSessionHistoryWorkerDatabase({ ...options, path });
-        try {
-          const snapshot = await retained.owner.readHarnessCompletionSource({
-            env,
-            claim,
-            source,
-            ...(admission ? { admission } : {}),
-          });
-          return prepareSnapshot(
-            snapshot,
-            source,
-            () => {
-              retained.owner.assertCurrent();
-              assertSessionStoreReadCandidate(path, candidates);
-              assertExistingDatabaseIdentity(path, identity.key, identity.birthtime);
-            },
-            retained.release,
-          );
-        } catch (error) {
-          await releaseSessionSourceAuthorities([retained], [error]);
-          throw error;
-        }
-      },
+      prepareSessionSourceScope: () => prepareSessionSource(true),
+      prepareSessionSource,
     }),
   ]);
 }

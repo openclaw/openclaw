@@ -1,6 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { MessageChannel } from "node:worker_threads";
-import { requestSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
+import {
+  deferSqliteWorkerCommitReceipt,
+  requestSqliteWorkerOperationAdmission,
+} from "../../infra/sqlite-worker-operation-admission.js";
+import { authProfileCredentialPublication } from "../../state/user-model-account-authority.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { isSameOAuthRefreshGeneration } from "./oauth-refresh-marker.js";
 import type { RuntimeExternalOAuthProfile } from "./oauth-shared.js";
@@ -12,11 +16,8 @@ import {
   createEmptyAuthProfileStore,
   markRuntimePersistedProfiles,
 } from "./runtime-snapshot-owner.js";
-import {
-  readAuthProfileJsonCellText,
-  writeAuthProfileJsonCell,
-  deleteAuthProfileJsonCell,
-} from "./sqlite-json.js";
+import { writeAuthProfileJsonCell, deleteAuthProfileJsonCell } from "./sqlite-json-write.js";
+import { readAuthProfileJsonCellText } from "./sqlite-json.js";
 import { coerceAuthProfileState } from "./state.js";
 import { prepareAuthProfileStoreMutation } from "./store-mutation.js";
 import {
@@ -34,16 +35,20 @@ import type { AuthProfileStore } from "./types.js";
 export type AuthStoreUpdatePrepared = {
   store: AuthProfileStore;
   mainStore: AuthProfileStore | null;
+  storePresent: boolean;
 };
 export type AuthStoreUpdateCommitted = {
   store: AuthProfileStore;
   publication: AuthStoreUpdatePublication;
+  credentialFacts?: ReturnType<typeof authProfileCredentialPublication.bound>;
 };
 export type AuthStoreUpdateResponse =
   | { save: false }
   | {
       save: true;
       store: AuthProfileStore;
+      /** Compensation may restore an originally absent credential row. */
+      deleteEmptyStore?: boolean;
       scopedSharedStore?: AuthProfileStore;
       externalProfiles: RuntimeExternalOAuthProfile[];
       runtimeStore?: AuthProfileStore;
@@ -138,6 +143,7 @@ export function updateAuthProfileStoreInDatabase(
         ? markRuntimePersistedProfiles(prepared.loaded ?? createEmptyAuthProfileStore())
         : createEmptyAuthProfileStore(),
       mainStore: prepared && !isMainStore ? prepared.mainStore : null,
+      storePresent: prepared?.existingRaw !== undefined,
     });
     requestSqliteWorkerOperationAdmission(
       {
@@ -171,8 +177,17 @@ export function updateAuthProfileStoreInDatabase(
       store: next,
       selectionProfiles: { ...mainStore?.profiles, ...response.store.profiles, ...next.profiles },
     });
+    let credentialFacts: AuthStoreUpdateCommitted["credentialFacts"];
     if (publication.credentialsChanged) {
-      writeAuthProfileJsonCell(database, "store", kind, payload);
+      const { receipt } = authProfileCredentialPublication.capture(database, () => {
+        if (response.deleteEmptyStore && Object.keys(payload.profiles).length === 0) {
+          deleteAuthProfileJsonCell(database, "store", kind);
+        } else {
+          writeAuthProfileJsonCell(database, "store", kind, payload);
+        }
+      });
+      credentialFacts = authProfileCredentialPublication.bound(receipt);
+      deferSqliteWorkerCommitReceipt(database, { authCredentials: credentialFacts });
     }
     if (publication.stateChanged) {
       if (statePayload) {
@@ -184,6 +199,7 @@ export function updateAuthProfileStoreInDatabase(
     sendAuthProfileUpdateValue(port1, {
       store: markRuntimePersistedProfiles(next),
       publication,
+      credentialFacts,
     } satisfies AuthStoreUpdateCommitted);
   } finally {
     port1.close();

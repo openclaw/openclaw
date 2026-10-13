@@ -291,6 +291,14 @@ describe("gateway chat metadata personal accounts", () => {
       async () => {
         const { harness, owner, alice, bob, aliceScope, bobScope } =
           await createPersonalChatMetadataFixture();
+        const readAliceDefaults = async () => {
+          const sql = forbidMainThreadSql("personal defaults queried host SQLite");
+          try {
+            return await harness.runtime.read(aliceScope);
+          } finally {
+            sql.restore();
+          }
+        };
         const shared = await harness.runtime.read({ agentId: "main" });
         expect(await harness.runtime.read(aliceScope)).toEqual(shared);
         const aliceAuthId = connectChatMetadataAccount(alice.id);
@@ -299,7 +307,7 @@ describe("gateway chat metadata personal accounts", () => {
             expect.objectContaining({ id: "gpt-5.6-luna", available: true }),
           ]),
         };
-        await expect(harness.runtime.read(aliceScope)).resolves.toMatchObject(available);
+        await expect(readAliceDefaults()).resolves.toMatchObject(available);
         for (const selector of [
           { sessionKey: "agent:main:existing", sessionEntry: { sessionId: randomUUID() } },
           { sessionKey: "agent:main:missing" },
@@ -348,7 +356,7 @@ describe("gateway chat metadata personal accounts", () => {
           source: "user-link",
         });
         clearUserProfileAuthLink({ profileId: alice.id, provider: "openai" });
-        expect(await harness.runtime.read(aliceScope)).toEqual(shared);
+        expect(await readAliceDefaults()).toEqual(shared);
         await expect(
           harness.runtime.read(createDraftChatMetadataScope(alice.id, aliceAuthId).params),
         ).resolves.toMatchObject({

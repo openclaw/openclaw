@@ -22,7 +22,7 @@ import {
 import { resolveGatewayService } from "../../daemon/service.js";
 import {
   formatDeferredPluginMigration,
-  readDeferredPluginMigrations,
+  readDeferredPluginMigrationsAsync,
 } from "../../infra/deferred-plugin-migrations.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readGatewayLastInstallationReplacement } from "../../infra/gateway-boot-lifecycle.js";
@@ -239,8 +239,8 @@ async function inspectUpdateStatus(opts: UpdateStatusOptions): Promise<void> {
   const migrationWarnings: string[] = [];
   const migrationWarningErrors: string[] = [];
   for (const readWarnings of [
-    () =>
-      readDeferredPluginMigrations().map((pending) =>
+    async () =>
+      (await readDeferredPluginMigrationsAsync()).map((pending) =>
         formatDeferredPluginMigration(
           pending,
           updateInProgress ? { ...process.env, OPENCLAW_UPDATE_IN_PROGRESS: "1" } : process.env,
@@ -249,7 +249,7 @@ async function inspectUpdateStatus(opts: UpdateStatusOptions): Promise<void> {
     () => readSessionSqliteMigrationWarnings(),
   ]) {
     try {
-      migrationWarnings.push(...readWarnings().map(safeMessage));
+      migrationWarnings.push(...(await readWarnings()).map(safeMessage));
     } catch (error) {
       migrationWarningErrors.push(safeMessage(formatErrorMessage(error)));
     }

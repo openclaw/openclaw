@@ -546,16 +546,17 @@ export async function loadProfileAppearancePrefs(
 function loadLocalNavigationPreferences(
   gatewayUrl: string,
   profileId?: string | null,
-): ReturnType<typeof profileNavigation> {
+): Pick<UiSettings, "sidebarEntries"> | null {
   if (!profileId) {
     // The connection owner has adopted profileless identity before reconciliation.
     return loadUiPreferences(gatewayUrl || undefined);
   }
   try {
-    return profileNavigation(
+    const navigation = profileNavigation(
       readSettingsForGateway(getSafeLocalStorage(), gatewayUrl)?.parsed,
       profileId,
     );
+    return navigation ? { sidebarEntries: navigation.railShortcuts } : null;
   } catch {
     return null;
   }

@@ -45,7 +45,7 @@ const mocks = vi.hoisted(() => ({
   listReadOnlyChannelPluginsForConfig: vi.fn(),
   buildChannelUiCatalog: vi.fn(),
   buildChannelAccountSnapshotFromAccount: vi.fn(),
-  getChannelActivity: vi.fn(),
+  getChannelActivity: vi.fn(() => ({ inboundAt: null, outboundAt: null })),
   callGateway: vi.fn(),
   note: vi.fn(),
 }));
@@ -53,6 +53,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../call.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../call.js")>()),
   callGateway: mocks.callGateway,
+}));
+
+// mock-isolation: Channel delivery starts after readiness, without inspecting host services.
+vi.mock("../../cli/daemon-cli/diagnostic-readiness.js", () => ({
+  waitForGatewayDiagnosticReadiness: vi.fn(async () => undefined),
 }));
 
 vi.mock("../../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
@@ -114,10 +119,6 @@ describe("channelsHandlers channels.status", () => {
     mocks.buildChannelAccountSnapshotFromAccount.mockResolvedValue({
       accountId: "default",
       configured: true,
-    });
-    mocks.getChannelActivity.mockReturnValue({
-      inboundAt: null,
-      outboundAt: null,
     });
     mocks.listChannelPlugins.mockReturnValue([createChannelPlugin()]);
     mocks.getRuntimeSnapshot.mockImplementation(() => ({

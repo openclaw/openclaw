@@ -13,6 +13,7 @@ import type { OpenClawRegisteredAgentDatabase } from "./openclaw-agent-db-contra
 import {
   assertCanonicalAgentDatabasesPrimaryKey,
   detectOpenClawStateDatabaseSchemaMigrationsFromDatabase,
+  STATE_SCHEMA_MIGRATION_READ_TABLES,
 } from "./openclaw-state-db-schema-repair.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { resolveOpenClawRegisteredAgentDatabasePath } from "./openclaw-state-db.paths.js";
@@ -22,7 +23,7 @@ type OpenClawAgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_da
 };
 
 // Admission owns schema revisions; current writers cannot reintroduce legacy migration rows.
-const migratedSchemas = new WeakSet<SqliteSchemaFacts>();
+const readableSchemas = new WeakSet<SqliteSchemaFacts>();
 
 /** Read durable registrations from an already opened live or captured database. */
 export function readOpenClawAgentDatabaseRegistryRows(database: DatabaseSync, pathname: string) {
@@ -74,14 +75,18 @@ export function readRegisteredAgentDatabaseRows(
     assertCanonicalAgentDatabasesPrimaryKey(database, pathname);
   } else {
     const schema = getAdmittedSqliteSchemaFacts(database);
-    if (!schema || !migratedSchemas.has(schema)) {
-      if (detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(database, pathname).length > 0) {
+    if (!schema || !readableSchemas.has(schema)) {
+      if (
+        detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(database, pathname).some(
+          ({ kind }) => STATE_SCHEMA_MIGRATION_READ_TABLES[kind].includes("agent_databases"),
+        )
+      ) {
         throw new Error(
           `OpenClaw state database ${pathname} has a legacy agent database registry schema; run openclaw doctor --fix to migrate it.`,
         );
       }
       if (schema) {
-        migratedSchemas.add(schema);
+        readableSchemas.add(schema);
       }
     }
   }

@@ -1,1 +1,1 @@
-export { NativeChromeSetup } from "./native-chrome-setup.tsx";
+import "./native-chrome-setup.tsx";

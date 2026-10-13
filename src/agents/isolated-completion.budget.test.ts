@@ -13,7 +13,7 @@ beforeEach(resetIsolatedCompletionTestState);
 
 describe("isolated completion token budgets", () => {
   it.each(["host-v1", "host-v2", "harness-v2", "cli"] as const)(
-    "reserves utility reasoning while preserving explicit limits through %s",
+    "reserves requested reasoning while preserving explicit limits through %s",
     async (route) => {
       const model = {
         provider: "openai",
@@ -44,6 +44,7 @@ describe("isolated completion token budgets", () => {
         { streamParams: { maxTokens: 100, temperature: 0.2 } },
         { answerTokenBudget: 300, streamParams: { maxTokens: 150, temperature: 0.2 } },
         {},
+        { answerTokenBudget: 300, thinkLevel: "off" as const },
       ]) {
         await runIsolatedCompletion({ ...isolatedRequest(), ...budget });
       }
@@ -57,6 +58,10 @@ describe("isolated completion token budgets", () => {
       expect(completion).toHaveBeenNthCalledWith(
         4,
         expect.objectContaining({ streamParams: undefined }),
+      );
+      expect(completion).toHaveBeenNthCalledWith(
+        5,
+        expect.objectContaining({ thinkLevel: "off", streamParams: { maxTokens: 300 } }),
       );
     },
   );

@@ -4,8 +4,9 @@ import { formatChatWorkContext } from "../../../../../src/chat/work-context.js";
 import { extractText } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { normalizeStoredQueueItem } from "../../../lib/chat/outbox-store-codec.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import { buildLocalUserMessage } from "../user-message-content.ts";
-import { renderMessageWorkContext } from "./chat-message-context.ts";
+import { MessageWorkContext } from "./chat-message-context-view.tsx";
 
 const container = document.createElement("div");
 afterEach(() => render(html``, container));
@@ -30,7 +31,7 @@ describe("attached message context", () => {
               content: text + "\n\n" + formatChatWorkContext(snapshot),
               ...(source === "history" ? { __openclaw: { workContext: { snapshot, text } } } : {}),
             };
-      render(renderMessageWorkContext(message), container);
+      render(solidContent(MessageWorkContext, { message }), container);
       if (source === "pasted") {
         expect(extractText(message)).toBe(text + "\n\n" + formatChatWorkContext(snapshot));
         expect(container.querySelector("details")).toBeNull();

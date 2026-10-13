@@ -108,7 +108,23 @@ it.each(["released", "interrupted", "undeclared", "caller", "wrong receipt"] as 
       }
       expect(captured[0]!.interrupt(createAgentRunDirectAbortError())).toBe(false);
       expect(onInterrupt).toHaveBeenCalledTimes(state === "wrong receipt" ? 1 : 0);
-      expect(capture()).toEqual([]);
+      const remaining = capture();
+      if (state === "interrupted" || state === "wrong receipt") {
+        expect(remaining).toHaveLength(1);
+        expect(remaining[0]!.interrupt(createAgentRunDirectAbortError())).toBe(false);
+        let released = false;
+        const completion = remaining[0]!.released.then(() => {
+          released = true;
+        });
+        await Promise.resolve();
+        expect(released).toBe(false);
+        admission.release();
+        await completion;
+        expect(released).toBe(true);
+        expect(capture()).toEqual([]);
+      } else {
+        expect(remaining).toEqual([]);
+      }
     } finally {
       admission.release();
     }
@@ -320,9 +336,10 @@ it("rejects arrivals during awaited cleanup and its final microtask, then reopen
   const entered = createDeferred();
   const release = createDeferred();
   const reason = createAgentRunDirectAbortError();
+  const onInterrupt = vi.fn();
   let lateResult: unknown;
   const late = () =>
-    beginSessionWorkAdmission({ scope, identities, assertAllowed: () => {} }).then(
+    beginSessionWorkAdmission({ scope, identities, assertAllowed: () => {}, onInterrupt }).then(
       (lease) => {
         lease.release();
         return "incorrectly admitted";
@@ -347,6 +364,7 @@ it("rejects arrivals during awaited cleanup and its final microtask, then reopen
   try {
     const whileAwaiting = await late();
     expect(whileAwaiting).toBe(reason);
+    expect(onInterrupt).toHaveBeenCalledExactlyOnceWith(reason);
     const other = await beginSessionWorkAdmission({
       scope,
       identities: ["other-session"],
@@ -356,8 +374,15 @@ it("rejects arrivals during awaited cleanup and its final microtask, then reopen
     release.resolve();
     await stop;
     expect(lateResult).toBe(reason);
-    const fresh = await beginSessionWorkAdmission({ scope, identities, assertAllowed: () => {} });
+    expect(onInterrupt).toHaveBeenCalledTimes(2);
+    const fresh = await beginSessionWorkAdmission({
+      scope,
+      identities,
+      assertAllowed: () => {},
+      onInterrupt,
+    });
     fresh.release();
+    expect(onInterrupt).toHaveBeenCalledTimes(2);
   } finally {
     release.resolve();
     await stop;

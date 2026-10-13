@@ -212,14 +212,15 @@ async function runCliShimInner(moduleUrl, options, nodeArgs) {
       process.kill(process.pid, result.signal);
       return;
     }
-    const exitCode = result.code ?? 1;
+    const exitCode = result.code ?? options.failureExitCode ?? 1;
     writeFailureTrailer(options.failureTool, exitCode);
     process.exitCode = exitCode;
   } catch (error) {
     cleanup();
     console.error(error);
-    writeFailureTrailer(options.failureTool, 1);
-    process.exitCode = 1;
+    const exitCode = options.failureExitCode ?? 1;
+    writeFailureTrailer(options.failureTool, exitCode);
+    process.exitCode = exitCode;
   }
 }
 
@@ -228,8 +229,9 @@ async function runCliShim(moduleUrl, options, nodeArgs) {
     await runCliShimInner(moduleUrl, options, nodeArgs);
   } catch (error) {
     console.error(error);
-    writeFailureTrailer(options.failureTool, 1);
-    process.exitCode = 1;
+    const exitCode = options.failureExitCode ?? 1;
+    writeFailureTrailer(options.failureTool, exitCode);
+    process.exitCode = exitCode;
   }
 }
 

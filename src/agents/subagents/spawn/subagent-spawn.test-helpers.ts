@@ -446,8 +446,11 @@ export async function loadSubagentSpawnModuleForTest(params: {
       params.resolveSandboxRuntimeStatus ?? (() => ({ sandboxed: false })),
   }));
 
+  // mock-isolation: Spawn fixtures supply caller depth without opening a session database.
   vi.doMock("./subagent-depth.js", () => ({
     getSubagentDepthFromSessionStore: params.getSubagentDepthFromSessionStore ?? (() => 0),
+    getSubagentDepthFromSessionStoreInWorker: async (key: string, opts?: unknown) =>
+      params.getSubagentDepthFromSessionStore?.(key, opts) ?? 0,
   }));
 
   vi.doMock("../registry/subagent-registry.js", () => ({

@@ -643,11 +643,15 @@ metadata:
     - **Download:** `url` (required), `sha256` (optional 64-character hexadecimal
       digest, verified after download and before the file is installed or extracted),
       `archive` (`tar.gz` | `tar.bz2` | `zip`), `extract` (default: auto when
-      archive detected), `stripComponents`, `targetDir` (default:
+      the recipe or URL identifies an archive), `stripComponents`, `targetDir` (default:
       `~/.openclaw/tools/<skillKey>`). Existing specs without `sha256` keep the
       previous download behavior. Response bodies are capped at 256 MiB; larger
       transfers are aborted while streaming, and partial staging data is removed.
       Archive extraction does not require a system `tar` command.
+      With `extract: true`, a valid `Content-Disposition` filename can identify
+      an archive served from an extensionless URL. Invalid or empty response
+      filenames fall back to the URL; response headers do not enable extraction
+      for recipes that omit `extract`.
   </Accordion>
   <Accordion title="Sandboxing notes">
     `requires.bins` is checked on the **host** at skill load time. If an agent
@@ -764,45 +768,32 @@ Managed library selections keep their exact revisions until an explicit
 attach or refresh, including across Gateway restarts. The refresh triggers
 below apply to ordinary file-backed skill roots.
 
-File-backed skills refresh mid-session when:
+One background worker discovers local file-backed skills across managed,
+bundled, plugin, personal, and workspace skill roots. With `skills.load.watch`
+enabled, it checks for passive on-disk changes about once per minute. Edits made
+outside OpenClaw may therefore take up to about a minute to appear, including
+adding or removing a skill and creating, removing, or replacing a skill root or
+workspace.
 
-- The skills watcher detects a `SKILL.md` change.
-- The Gateway restarts, including when `skills.load.watch` is `false`.
-- A new eligible remote node connects.
-- Native file-watch capacity is exhausted and the next agent turn starts.
-- A previously idle or evicted workspace resumes watching on its next agent turn.
+Explicit OpenClaw actions request an immediate rescan: installing, updating,
+uninstalling, or editing a skill; changing configuration that affects skills;
+and starting or restarting the Gateway. A new eligible remote node also refreshes
+skill eligibility. Remote workspace discovery stays with the host that owns
+those files. Configuration changes replace source plans and subscriptions on the
+healthy discovery worker; they do not wait for an unnecessary worker restart.
 
-The refreshed list is picked up on the next agent turn in the same session.
-If the effective agent allowlist changes, OpenClaw refreshes the snapshot to
-keep visible skills aligned.
+The worker publishes a complete snapshot after discovery. Existing sessions
+pick up changed file-backed skills on their next agent turn. If the effective
+agent allowlist changes, OpenClaw refreshes the snapshot to keep visible skills
+aligned.
 
-When native watch capacity is exhausted, OpenClaw logs one warning and stops
-the skills watchers. With watching enabled, later agent turns refresh file-backed
-skills through the existing snapshot preparation. Restart the Gateway after
-restoring watch capacity to enable native watching again.
-
-When native events are unavailable, skills polling runs every 30 seconds by
-default. A valid `CHOKIDAR_INTERVAL` overrides this default for automatic fallback
-and explicitly requested polling, with a 20 ms minimum. Shorter intervals increase
-background scanning cost, especially for large skill trees. Native event hints still
-trigger prompt refreshes with the normal debounce. Each watcher logs one warning
-when automatic selection falls back to polling, including the reported reason
-when available.
-
-Watcher subscriptions are retained for the 128 most recently used combinations of
-agent, configured workspace, and execution workspace. Subscriptions idle for an
-hour are also retired when another workspace prepares its skills. Shared skill
-roots remain watched while a retained subscription needs them. The next watching
-turn reacquires retired roots and refreshes file-backed skills before using them;
-managed library revisions remain pinned. This bounds retained subscriptions, not
-the total number of operating-system file watches.
+Set `skills.load.watch` to `false` to disable passive automatic rescans. Explicit
+OpenClaw actions and Gateway startup still refresh skills immediately.
 
 <AccordionGroup>
-  <Accordion title="Skills watcher">
-    By default, OpenClaw watches skill folders and bumps the snapshot when
-    `SKILL.md` files change, including skill roots first created after startup.
-    Removing and recreating a skill folder or its parent keeps discovery on the
-    configured path, including on Windows.
+  <Accordion title="Automatic skill refresh">
+    The background discovery worker scans configured skill roots, so ordinary
+    source edits elsewhere in a workspace do not trigger skill rescans.
     Configure under `skills.load`:
 
     ```json5
@@ -817,26 +808,10 @@ the total number of operating-system file watches.
     }
     ```
 
-    Watcher events use a built-in 250 ms debounce. Unrelated file writes are
-    ignored by snapshot refresh. Supporting-file events still invalidate sandbox
-    copies without rescanning skills or notifying chat metadata consumers.
-    Directory changes, installed source-origin metadata changes, and watcher
-    reconciliation recheck the resolved skills; unchanged names, configuration
-    keys, sources, precedence winners, and `SKILL.md` content
+    Passive edits are coalesced into the next periodic scan. Supporting-file
+    changes refresh sandbox copies without changing the skill catalog. Unchanged
+    names, configuration keys, sources, precedence winners, and `SKILL.md` content
     keep the same snapshot version and do not notify chat metadata consumers.
-    Idle worktree watcher cleanup does not invalidate other workspaces.
-    Unchanged roots reuse discovery records only while every watcher they depend on
-    is verified and unchanged: the root's own watch targets, plus the watched paths
-    holding every symlink discovery followed and every discovered skill directory.
-    Remote-node changes and events in other roots do not rescan them. A root whose
-    links pass through unwatched paths, or that contains a dangling link, is rescanned
-    whenever discovery runs, as are roots without verified watch coverage. Manual,
-    Workshop, and configuration refreshes still invalidate discovery. Changes the
-    watcher cannot observe are picked up on the next observed change, configuration
-    refresh, or restart. That includes skills created inside ignored build-output
-    directories (`build`, `dist`, `node_modules`, `.venv`, `.cache`) and directories
-    outside every configured root and allowed symlink target, such as the
-    destination of an escaped symlink.
     Copies with identical `SKILL.md` content and declared metadata do not produce
     precedence collision logs. Different content is summarized per ordered
     winner/loser discovery root and source kind. During a Gateway process,
@@ -889,7 +864,9 @@ and self-contained answers do not require discovery.
   and shortened descriptions, not instructions. `hasMore` indicates that additional
   matches exist.
 - `skills_read({ name })` loads the complete `SKILL.md` for an exact name.
-  Search is not required when the name is already known. Instructions omitted
+  The response includes the skill's location and any host-specific guidance, so
+  relative resource paths can be resolved without a preceding search. The
+  instruction body is unchanged. Instructions omitted
   from the prompt directory are limited to 256 KiB and rejected if larger, not
   truncated. Prompt-listed instructions retain the existing whole-read contract,
   including Code Mode's separate program-data limits.
@@ -906,7 +883,8 @@ in-flight indexing started under the previous grant.
 
 In OpenClaw Code Mode, use `await skills.search(query, limit)` and
 `await skills.read(name)`. These calls dispatch through the same tools and
-policies. `await skills.list(offset)` returns up to 20 directory entries;
+policies. The read returns a string with the same location context and complete
+instructions. `await skills.list(offset)` returns up to 20 directory entries;
 the default offset is 0. Codex receives the OpenClaw tools through its dynamic
 tool surface; these are distinct from Codex's native skill-resource tools.
 Codex refuses a skill read that exceeds the turn's dynamic-tool output budget

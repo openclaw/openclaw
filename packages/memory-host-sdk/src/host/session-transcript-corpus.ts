@@ -1,5 +1,5 @@
 // Accessor-backed transcript corpus discovery for memory session indexing.
-import fsSync, { type BigIntStats, type Dirent } from "node:fs";
+import type { BigIntStats, Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeAgentId } from "./config-utils.js";
@@ -42,14 +42,6 @@ export type {
   SessionTranscriptCorpusOptions,
 } from "./session-transcript-corpus.types.js";
 
-function fileContentRevision(filePath: string): string | undefined {
-  try {
-    return fileContentRevisionFromStat(fsSync.statSync(filePath, { bigint: true }));
-  } catch {
-    return undefined;
-  }
-}
-
 function fileContentRevisionFromStat(stat: BigIntStats): string | undefined {
   return stat.isFile()
     ? `file:${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`
@@ -62,6 +54,7 @@ function sqliteContentRevision(params: {
   sessionId: string;
   sessionKey?: string;
   storePath: string;
+  readOnly: boolean;
 }): string | undefined {
   try {
     return readTranscriptContentRevisionSync(params);
@@ -75,20 +68,6 @@ type SessionEntrySummary = {
   entry: SessionEntry;
 };
 
-function normalizeRealComparablePath(pathname: string): string {
-  try {
-    return normalizeComparablePath(fsSync.realpathSync(pathname));
-  } catch {
-    try {
-      return normalizeComparablePath(
-        path.join(fsSync.realpathSync(path.dirname(pathname)), path.basename(pathname)),
-      );
-    } catch {
-      return normalizeComparablePath(pathname);
-    }
-  }
-}
-
 async function normalizeRealComparablePathAsync(pathname: string): Promise<string> {
   try {
     return normalizeComparablePath(await fs.realpath(pathname));
@@ -100,22 +79,6 @@ async function normalizeRealComparablePathAsync(pathname: string): Promise<strin
     } catch {
       return normalizeComparablePath(pathname);
     }
-  }
-}
-
-function listSessionTranscriptArtifactFiles(sessionsDir: string): string[] {
-  try {
-    return sessionTranscriptArtifactPaths(
-      sessionsDir,
-      fsSync.readdirSync(sessionsDir, { withFileTypes: true }),
-    );
-  } catch (err) {
-    // A missing artifact directory is authoritatively empty. Other failures
-    // make the corpus incomplete, so destructive consumers must not proceed.
-    if (isFileMissingError(err) && err.code === "ENOENT") {
-      return [];
-    }
-    throw err;
   }
 }
 
@@ -147,9 +110,11 @@ function toArtifactCorpusEntry(
   };
 }
 
-function resolveSessionTranscriptCorpusScope(agentId: string): SessionTranscriptCorpusScope {
+function resolveSessionTranscriptCorpusScope(
+  agentId: string,
+  cfg: SessionTranscriptCorpusScope["cfg"],
+): SessionTranscriptCorpusScope {
   const normalizedAgentId = normalizeAgentId(agentId);
-  const cfg = getRuntimeConfig();
   const env = cloneEnvWithPlatformSemantics(process.env);
   const configuredStore = cfg.session?.store;
   const storePath = resolveStorePath(configuredStore, {
@@ -231,6 +196,7 @@ function projectSessionTranscriptCorpusEntries(
           sessionId,
           ...(transcriptKey ? { sessionKey: transcriptKey } : {}),
           storePath: databasePath,
+          readOnly: options.readOnly === true,
         })
       : undefined;
     return {
@@ -345,40 +311,6 @@ function projectSessionTranscriptCorpusEntries(
   return corpusEntries;
 }
 
-export function listSessionTranscriptCorpusEntriesForAgentSync(
-  agentId: string,
-  options: SessionTranscriptCorpusOptions = {},
-): SessionTranscriptCorpusEntry[] {
-  const scope = resolveSessionTranscriptCorpusScope(agentId);
-  const artifactDirs = new Map<string, string>();
-  for (const dir of scope.artifactDirs) {
-    artifactDirs.set(normalizeRealComparablePath(dir), dir);
-  }
-  const artifacts: SessionTranscriptCorpusArtifact[] = [];
-  const seen = new Set<string>();
-  for (const dir of artifactDirs.values()) {
-    for (const artifactPath of listSessionTranscriptArtifactFiles(dir)) {
-      const comparablePath = normalizeRealComparablePath(artifactPath);
-      if (!seen.has(comparablePath)) {
-        seen.add(comparablePath);
-        artifacts.push({
-          path: artifactPath,
-          contentRevision:
-            options.includeContentRevision !== false
-              ? fileContentRevision(artifactPath)
-              : undefined,
-        });
-      }
-    }
-  }
-  return projectSessionTranscriptCorpusEntries(
-    scope,
-    options,
-    artifacts,
-    readCorpusSessionEntries(scope, options),
-  );
-}
-
 function readCorpusSessionEntries(
   scope: SessionTranscriptCorpusScope,
   options: SessionTranscriptCorpusOptions,
@@ -456,8 +388,8 @@ export async function listSessionTranscriptCorpusEntriesForAgent(
     ): Promise<SessionTranscriptCorpusEntry[]>;
   },
 ): Promise<SessionTranscriptCorpusEntry[]> {
-  const scope = resolveSessionTranscriptCorpusScope(agentId);
-  const capturedOptions = { ...options };
+  const { config, ...capturedOptions } = options;
+  const scope = resolveSessionTranscriptCorpusScope(agentId, config ?? getRuntimeConfig());
   if (source) {
     return source.memoryCorpus(scope, capturedOptions);
   }
@@ -490,15 +422,12 @@ export function readSessionTranscriptCorpusInventory(
   databasePath: string,
   continuation?: CanonicalSessionReaderContinuation,
 ): SessionTranscriptCorpusEntry[] {
+  const readOnlyOptions = { ...options, readOnly: true };
   return projectSessionTranscriptCorpusEntries(
     scope,
-    options,
+    readOnlyOptions,
     artifacts,
-    readCorpusSessionEntries(
-      { ...scope, storePath: databasePath },
-      { ...options, readOnly: true },
-      continuation,
-    ),
+    readCorpusSessionEntries({ ...scope, storePath: databasePath }, readOnlyOptions, continuation),
     databasePath,
     continuation,
   );

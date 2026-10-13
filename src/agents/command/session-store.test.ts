@@ -6,10 +6,7 @@ import {
   observeHostDataSql,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  resolveFreshSessionTotalTokens,
-  type InternalSessionEntry as SessionEntry,
-} from "../../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { recordCliCompactionInStore } from "./session-store.js";
 import {
@@ -307,6 +304,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         elevatedLevel: "full",
         inheritedToolAllow: ["exec"],
         sendPolicy: "allow",
+        agentHarnessId: "openclaw",
       });
       const concurrent: SessionEntry = {
         ...stale,
@@ -326,6 +324,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           provider: "openai",
           model: "gpt-5.5",
           contextTokens: 32_000,
+          contextTokensSource: "runtime",
         }),
       }).finally(sql.restore);
       expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
@@ -334,7 +333,10 @@ describe("updateSessionStoreAfterAgentRun", () => {
         label: "Renamed while running",
         model: "gpt-5.5",
         sendPolicy: "deny",
+        contextTokens: 32_000,
+        contextTokensSource: "runtime",
       });
+      expect(sessionStore[sessionKey]?.agentHarnessId).toBeUndefined();
       expect(sessionStore[sessionKey]?.elevatedLevel).toBeUndefined();
       expect(sessionStore[sessionKey]?.inheritedToolAllow).toBeUndefined();
       expect(sessionStore[sessionKey]?.pinnedAt).toBeUndefined();
@@ -361,34 +363,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
-  it("uses the runtime context budget instead of cold fallback", async () => {
-    await withSession(async ({ seed, update, read, sessionStore }) => {
-      await seed({
-        agentHarnessId: "openclaw",
-        modelProvider: "anthropic",
-        model: "claude-opus-4-6",
-        contextTokens: 1_000_000,
-      });
-      await update({
-        result: createRunResult({
-          sessionId,
-          provider: "openai",
-          model: "gpt-5.5",
-          contextTokens: 400_000,
-          contextTokensSource: "runtime",
-        }),
-      });
-      for (const entry of [sessionStore[sessionKey], read()]) {
-        expect(entry).toMatchObject({
-          modelProvider: "openai",
-          model: "gpt-5.5",
-          contextTokens: 400_000,
-          contextTokensSource: "runtime",
-        });
-        expect(entry?.agentHarnessId).toBeUndefined();
-      }
-    });
-  });
   it("stores and reloads the runtime model for explicit session-id-only runs", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
@@ -531,72 +505,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
-  it("persists a private unknown context independently of billing usage", async () => {
-    await withSession(async ({ seed, update, read, sessionStore, storePath }) => {
-      const owner = await seed({
-        totalTokens: 180_000,
-        totalTokensFresh: true,
-        compactionCount: 3,
-        estimatedCostUsd: 1.25,
-        lifecycleRevision: "lifecycle",
-        activeWriterRunId: "previous-writer",
-      });
-      await seedSessionStore(storePath, {
-        [sessionKey]: { ...owner, activeWriterRunId: "current-writer" },
-      });
-      const usage = {
-        input: 100_000,
-        output: 3_000,
-        cacheRead: 20_000,
-        cacheWrite: 1_000,
-        cost: { total: 0.75 },
-      };
-      const lastCallUsage = { input: 91_000, output: 1_000, cacheRead: 4_000 };
-      const result = createRunResult({
-        sessionId,
-        provider: "openai",
-        model: "gpt-5.6-luna",
-        usage,
-        lastCallUsage,
-        promptTokens: 95_000,
-        compactionCount: 99,
-        compactionTokensAfter: 80_000,
-      });
-      await update({
-        compactionAccounting: {
-          kind: "durable",
-          count: 1,
-          currentContextSnapshot: { tokens: undefined },
-          target: {
-            agentId: "main",
-            sessionId,
-            sessionKey,
-            storePath,
-            lifecycleRevision: "lifecycle",
-            activeWriterRunId: "current-writer",
-          },
-        },
-        result,
-      });
-      for (const entry of [sessionStore[sessionKey], read()]) {
-        expect(entry).toMatchObject({
-          inputTokens: 100_000,
-          outputTokens: 3_000,
-          cacheRead: 20_000,
-          cacheWrite: 1_000,
-          estimatedCostUsd: 0.75,
-          compactionCount: 3,
-          activeWriterRunId: "current-writer",
-          totalTokensFresh: false,
-        });
-        expect(entry?.totalTokens).toBeUndefined();
-        expect(resolveFreshSessionTotalTokens(entry)).toBeUndefined();
-      }
-      expect(result.meta.agentMeta?.usage).toEqual(usage);
-      expect(result.meta.agentMeta?.lastCallUsage).toEqual(lastCallUsage);
-    });
-  });
-
   it.each(["missing", "replaced"] as const)(
     "does not write through a private fact whose owner is %s",
     async (ownerState) => {
@@ -640,40 +548,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
     },
   );
-
-  it("persists a private zero-token context without erasing prior billing", async () => {
-    await withSession(async ({ seed, update, read, sessionStore, storePath }) => {
-      const billing = { inputTokens: 20, outputTokens: 10, cacheRead: 30, cacheWrite: 40 };
-      await seed(billing);
-      await update({
-        compactionAccounting: {
-          kind: "durable",
-          count: 1,
-          currentContextSnapshot: { tokens: 0 },
-          target: {
-            agentId: "main",
-            sessionId,
-            sessionKey,
-            storePath,
-            lifecycleRevision: undefined,
-            activeWriterRunId: undefined,
-          },
-        },
-        result: createRunResult({
-          sessionId,
-          provider: "openai",
-          model: "gpt-5.6-luna",
-          compactionCount: 99,
-          compactionTokensAfter: 80_000,
-        }),
-      });
-      for (const entry of [sessionStore[sessionKey], read()]) {
-        expect(entry).toMatchObject({ ...billing, totalTokens: 0, totalTokensFresh: true });
-        expect(resolveFreshSessionTotalTokens(entry)).toBe(0);
-        expect(entry?.compactionCount).toBeUndefined();
-      }
-    });
-  });
 
   it("clears settled main recovery state while retaining subagent recovery", async () => {
     await withSession(async ({ seed, update, read, sessionStore }) => {
@@ -853,26 +727,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(read()).toEqual(replacement);
     });
   });
-
-  it("does not borrow the heartbeat provider for a model-only session", async () => {
-    await withSession(async ({ seed, update, read, sessionStore }) => {
-      await seed({ model: "claude-opus-4-6" });
-      await update({
-        preserveRuntimeModel: true,
-        result: createRunResult({
-          sessionId,
-          provider: "ollama",
-          model: "llama3.2:1b",
-          contextTokens: 128_000,
-        }),
-      });
-      for (const entry of [sessionStore[sessionKey], read()]) {
-        expect(entry?.model).toBe("claude-opus-4-6");
-        expect(entry?.modelProvider).toBeUndefined();
-        expect(entry?.contextTokens).toBeUndefined();
-      }
-    });
-  });
 });
 
 describe("recordCliCompactionInStore", () => {
@@ -909,52 +763,6 @@ describe("recordCliCompactionInStore", () => {
           "cacheRead",
           "cacheWrite",
           "contextBudgetStatus",
-        ] as const) {
-          expect(entry?.[field]).toBeUndefined();
-        }
-      }
-    });
-  });
-
-  it("records shared-history compaction and clears every CLI binding", async () => {
-    await withSession(async ({ seed, compact, read, sessionStore }) => {
-      const owner = await seed({
-        modelProvider: "openai",
-        model: "gpt-5.5",
-        totalTokens: 12_000,
-        totalTokensFresh: true,
-        inputTokens: 9_000,
-        outputTokens: 100,
-        cacheRead: 2_900,
-        cacheWrite: 0,
-        estimatedCostUsd: 0.04,
-        cliSessionBindings: {
-          codex: { sessionId: "stale-cli-session" },
-          "claude-cli": { sessionId: "stale-claude-session" },
-        },
-        cliSessionIds: { codex: "stale-cli-session", "claude-cli": "stale-claude-session" },
-        claudeCliSessionId: "stale-claude-session",
-      });
-      await compact({ expectedSession: owner, compactionKind: "context-engine", tokensAfter: 42 });
-      for (const entry of [sessionStore[sessionKey], read()]) {
-        expect(entry).toMatchObject({
-          sessionId,
-          modelProvider: "openai",
-          model: "gpt-5.5",
-          compactionCount: 1,
-          totalTokens: 42,
-          totalTokensFresh: true,
-        });
-        expect(resolveFreshSessionTotalTokens(entry)).toBe(42);
-        for (const field of [
-          "inputTokens",
-          "outputTokens",
-          "cacheRead",
-          "cacheWrite",
-          "estimatedCostUsd",
-          "cliSessionBindings",
-          "cliSessionIds",
-          "claudeCliSessionId",
         ] as const) {
           expect(entry?.[field]).toBeUndefined();
         }

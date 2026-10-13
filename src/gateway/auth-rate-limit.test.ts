@@ -443,6 +443,25 @@ describe("auth rate limiter", () => {
     expect(limiter.size()).toBe(0);
   });
 
+  it("sleeps with no history and resumes pruning without shortening lockouts", async () => {
+    createLimiter({ windowMs: 1_000, lockoutMs: 3_000, maxAttempts: 1, pruneIntervalMs: 1_000 });
+    expect(scheduler.nextWakeAtMs).toBeNull();
+
+    limiter.recordFailure("10.0.0.35");
+    expect(scheduler.nextWakeAtMs).toBe(2_000);
+    await clock.advanceBy(1_000);
+    expect(limiter.check("10.0.0.35").retryAfterMs).toBe(2_000);
+    expect(limiter.size()).toBe(1);
+
+    limiter.reset("10.0.0.35");
+    expect(scheduler.nextWakeAtMs).toBeNull();
+    limiter.recordFailure("10.0.0.36");
+    expect(scheduler.nextWakeAtMs).toBe(3_000);
+    await clock.advanceBy(3_000);
+    expect(limiter.size()).toBe(0);
+    expect(scheduler.nextWakeAtMs).toBeNull();
+  });
+
   // ---------- undefined / empty IP ----------
 
   it("normalizes undefined IP to 'unknown'", () => {

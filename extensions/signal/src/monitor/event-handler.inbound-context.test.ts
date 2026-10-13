@@ -6,9 +6,14 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSignalReplyContextWithPersistence } from "../reply-authors.js";
 import { resetSignalReplyAuthorsForTests } from "../reply-authors.test-helpers.js";
+import {
+  captureNextSignalDispatch,
+  type DispatchInboundMessageMockParams,
+} from "./event-handler.inbound-context.test-support.js";
 import type { TestDispatchResult } from "./event-handler.test-harness.js";
 import type {
   SignalDataMessage,
@@ -19,24 +24,6 @@ vi.useRealTimers();
 let createBaseSignalEventHandlerDeps: typeof import("./event-handler.test-harness.js").createBaseSignalEventHandlerDeps;
 let createSignalReceiveEvent: typeof import("./event-handler.test-harness.js").createSignalReceiveEvent;
 let createSignalEventHandler: typeof import("./event-handler.js").createSignalEventHandler;
-
-type DispatchInboundMessageMockParams = {
-  ctx: MsgContext;
-  cfg?: OpenClawConfig;
-  dispatcher?: {
-    sendFinalReply: (payload: { text: string; isError?: boolean }) => void;
-    markComplete: () => void;
-    waitForIdle: () => Promise<void>;
-  };
-  replyOptions?: {
-    allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
-    allowToolLifecycleWhenProgressHidden?: boolean;
-    onReplyStart?: () => void | Promise<void>;
-    onToolStart?: (payload: { name?: string }) => boolean | void | Promise<boolean | void>;
-    onCompactionStart?: () => boolean | void | Promise<boolean | void>;
-    onCompactionEnd?: () => boolean | void | Promise<boolean | void>;
-  };
-};
 
 const {
   sendTypingMock,
@@ -107,18 +94,6 @@ vi.mock("openclaw/plugin-sdk/channel-feedback", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/reply-runtime")>(
-    "openclaw/plugin-sdk/reply-runtime",
-  );
-  return {
-    ...actual,
-    dispatchInboundMessage: dispatchInboundMessageMock,
-    dispatchInboundMessageWithDispatcher: dispatchInboundMessageMock,
-    dispatchInboundMessageWithBufferedDispatcher: dispatchInboundMessageMock,
-  };
-});
-
 vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
     "openclaw/plugin-sdk/channel-inbound",
@@ -170,7 +145,9 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
           channel: resolved.channel,
           accountId: resolved.accountId,
           routeSessionKey: resolved.route.sessionKey,
-          storePath: "/tmp/openclaw/signal-sessions.json",
+          storePath: resolveStorePath(resolved.cfg.session?.store, {
+            agentId: resolved.route.agentId,
+          }),
           ctxPayload: resolved.ctxPayload,
           recordInboundSession: recordInboundSessionMock,
           afterRecord: resolved.afterRecord,
@@ -1046,6 +1023,7 @@ describe("signal createSignalEventHandler inbound context", () => {
   it("combines raw and command text across failed-media debounce batches", async () => {
     vi.useFakeTimers();
     try {
+      const dispatched = captureNextSignalDispatch(dispatchInboundMessageMock);
       const handler = createTestHandler({
         cfg: createDirectConfig({ messages: { inbound: { debounceMs: 10 } } }),
         ignoreAttachments: false,
@@ -1061,7 +1039,7 @@ describe("signal createSignalEventHandler inbound context", () => {
       await receiveMessage(handler, { message: "second request", attachments: [] });
       await vi.advanceTimersByTimeAsync(10);
 
-      const context = requireCapturedContext();
+      const context = await dispatched;
       expect(context.BodyForAgent).toContain("[signal attachment unavailable]");
       expect(context.RawBody).toBe("first request\nsecond request");
       expect(context.CommandBody).toBe("first request\nsecond request");

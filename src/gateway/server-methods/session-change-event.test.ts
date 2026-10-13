@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -8,6 +9,10 @@ import {
 import { resolveChatPaneDesktopTarget } from "../../../ui/src/pages/chat/chat-pane-placement.js";
 import { createTestGatewayClient } from "../../../ui/src/test-helpers/gateway-client.js";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildProjectedAgentRunIndex,
@@ -15,8 +20,10 @@ import {
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
+import { createSessionRowPlacementProjection } from "../session-row-placement-projection.js";
 import {
   bindSessionRowProjection,
   getSessionRowProjection,
@@ -79,6 +86,7 @@ function createContext(
   config: OpenClawConfig = {},
   chatAbortControllers: GatewayRequestContext["chatAbortControllers"] = new Map(),
 ) {
+  setRuntimeConfigSnapshot(config);
   const projection = {
     get state() {
       return { rowContext: { projectedAgentRuns: buildProjectedAgentRunIndex() } };
@@ -182,6 +190,7 @@ beforeEach((context) => {
 
 afterEach(async () => {
   await flushPendingSessionsChangedEvents();
+  clearRuntimeConfigSnapshot();
   vi.useRealTimers();
 });
 
@@ -307,6 +316,82 @@ describe("sessions.changed coalescing", () => {
       sessions.dispose();
     }
   });
+
+  it.each(["before", "during"])(
+    "publishes a 20-session burst when its producer drains %s preparation",
+    async (when) => {
+      mocks.warn.mockClear();
+      const context = createContext();
+      const cfg = context.getRuntimeConfig();
+      const keys = Array.from({ length: 20 }, (_, index) => `agent:main:burst-${index}`);
+      const projection = createSessionRowProjectionFixture({
+        cfg,
+        store: Object.fromEntries(
+          keys.map((key) => [key, { sessionId: key, updatedAt: 1, label: "committed" }]),
+        ),
+      });
+      bindSessionRowProjection(context, () => projection);
+      const entered = createDeferred();
+      const release = createDeferred();
+      let ready = false;
+      const preparation = release.promise.then(() => {
+        ready = true;
+      });
+      const binding = new AsyncLocalStorage<string>();
+      const preparationBindings = new Set<string | undefined>();
+      const placement = createSessionRowPlacementProjection(undefined, () => {
+        preparationBindings.add(binding.getStore());
+        entered.resolve();
+        return ready ? undefined : preparation;
+      });
+      projection.withPreparedExactRows = (queries, consume) =>
+        placement.withPreparedRows(
+          projection,
+          () => true,
+          (query) => projection.capture(query),
+          queries,
+          () => undefined,
+          consume,
+        );
+      const producer = new AsyncWorkScope();
+      try {
+        binding.run("publisher", () =>
+          producer.run(() => {
+            for (const sessionKey of keys) {
+              emitSessionsChanged(context, { reason: "patch", sessionKey });
+            }
+          }),
+        );
+        if (when === "during") {
+          await entered.promise;
+        }
+        await producer.drain();
+        release.resolve();
+        const drain = flushPendingSessionsChangedEvents(context);
+        await vi.runAllTimersAsync();
+        await drain;
+        expect(mocks.warn).not.toHaveBeenCalled();
+        expect(preparationBindings).toEqual(new Set(["publisher"]));
+        expect(
+          vi.mocked(context.broadcastToConnIds).mock.calls.map(([, payload]) => payload),
+        ).toEqual(
+          keys.map((sessionKey) =>
+            expect.objectContaining({
+              sessionKey,
+              session: expect.objectContaining({ key: sessionKey, label: "committed" }),
+            }),
+          ),
+        );
+      } finally {
+        release.resolve();
+        const drain = flushPendingSessionsChangedEvents(context);
+        await vi.runAllTimersAsync();
+        await drain;
+        placement.dispose();
+        projection.dispose();
+      }
+    },
+  );
 
   it("publishes an exact row while unrelated bulk preparation is blocked", async () => {
     const context = createContext();

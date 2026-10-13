@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
-import { realpathSync, statSync } from "node:fs";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -8,9 +7,7 @@ import { serialize } from "node:v8";
 import { getChildLogger } from "../logging/logger.js";
 import { INCOGNITO_AGENT_SQLITE_BASENAME } from "../state/openclaw-agent-db.paths.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
-import { assertStateDatabaseAccessAllowed } from "./gateway-state-owner.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
-import { runtimeNeedsTypeScriptLoader } from "./runtime-worker-url.js";
 import type {
   PreparedSqliteWorkerOpen,
   SqliteWorkerStoreOptions,
@@ -137,21 +134,6 @@ function validateSqliteWorkerModuleUrl(moduleUrl: URL): void {
   }
 }
 
-export function captureSqliteWorkerRuntime(moduleUrl: URL) {
-  validateSqliteWorkerModuleUrl(moduleUrl);
-  const modulePath = realpathSync(fileURLToPath(moduleUrl));
-  if (!/\.[cm]?[jt]s$/.test(modulePath) || !statSync(modulePath).isFile()) {
-    throw new Error("SQLite worker backend must identify a JavaScript or TypeScript file");
-  }
-  return {
-    moduleUrl: pathToFileURL(modulePath).href,
-    carrierUrl: resolveRuntimeProcessEntrypointUrl("sqliteStore"),
-    ...(runtimeNeedsTypeScriptLoader(modulePath)
-      ? { sourceLoaderUrl: import.meta.resolve("tsx/esm/api") }
-      : {}),
-  };
-}
-
 export async function prepareSqliteWorkerDatabaseAdmission(options: PreparedSqliteWorkerOpen) {
   validateSqliteWorkerModuleUrl(options.moduleUrl);
   const databasePath = path.resolve(options.databasePath);
@@ -218,6 +200,27 @@ export function retainSqliteWorkerAdmissionPathReferences(actor: Actor, paths: S
         actor.pathReferences.delete(pathname);
       }
     }
+  };
+}
+
+/** All clients of one shared actor suspend its timer while maintenance retains it. */
+export function suspendSqliteWorkerScheduledMaintenance(
+  actor: Actor,
+  maintenanceScope: PreparedSqliteWorkerOpen["maintenanceScope"],
+): (() => void) | undefined {
+  if (!actor.stateContext) {
+    return undefined;
+  }
+  const buffer = (actor.stateContext.scheduledMaintenanceSuspension ??= new SharedArrayBuffer(
+    Int32Array.BYTES_PER_ELEMENT,
+  ));
+  if (!maintenanceScope) {
+    return undefined;
+  }
+  const holds = new Int32Array(buffer);
+  Atomics.add(holds, 0, 1);
+  return () => {
+    Atomics.sub(holds, 0, 1);
   };
 }
 
@@ -309,15 +312,12 @@ export function assertSqliteWorkerActorReusable(
 export function prepareSqliteWorkerActorContext(actor: Actor | undefined, job: Job): void {
   const { request } = job;
   const stateContext = request.stateContext ?? actor?.stateContext;
-  // A drained actor retains native disposal custody after its caller loses admission.
-  if (actor && !actor.target && request.type !== "close") {
-    assertStateDatabaseAccessAllowed(actor.stateDatabasePath ?? actor.databasePath, {
-      maintenanceScope: job.maintenanceScope,
-    });
-  }
   if (actor && stateContext) {
     assertSqliteWorkerActorStateContext(actor, stateContext);
     request.stateDatabasePath = actor.stateDatabasePath ?? actor.databasePath;
-    request.stateContext = stateContext;
+    request.stateContext = {
+      ...stateContext,
+      scheduledMaintenanceSuspension: actor.stateContext?.scheduledMaintenanceSuspension,
+    };
   }
 }

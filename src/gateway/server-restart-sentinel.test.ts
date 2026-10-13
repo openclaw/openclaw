@@ -329,7 +329,10 @@ vi.mock("../config/sessions/main-session.js", async (importOriginal) => ({
 }));
 
 // mock-isolation: Restart fixtures publish their explicit config without loading a live config file.
-vi.mock("../config/io.js", () => ({ getRuntimeConfig: mocks.getRuntimeConfig }));
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: mocks.getRuntimeConfig,
+  getRuntimeConfigSnapshot: mocks.getRuntimeConfig,
+}));
 
 vi.mock("../channels/plugins/session-conversation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../channels/plugins/session-conversation.js")>()),
@@ -494,6 +497,11 @@ vi.mock("./server-restart-update-run.js", async () => {
 
 // mock-isolation: These producer tests use supplied rows; worker authority has its own boundary suite.
 vi.mock("./session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: async (params: {
+    key: string;
+    agentId?: string;
+    env?: NodeJS.ProcessEnv;
+  }) => mocks.loadSessionEntry(params.key, { agentId: params.agentId, env: params.env }),
   resolveGatewaySessionStoreTargetInWorker: mocks.resolveSessionTarget,
 }));
 

@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { Type } from "typebox";
 import { describe, expect, expectTypeOf, it, onTestFinished, vi } from "vitest";
 import { createOpenClawCodingTools as createCoreCodingTools } from "../agents/agent-tools.js";
 import type { EmbeddedRunAttemptParams as CoreAttempt } from "../agents/embedded-agent-runner/run/types.js";
@@ -11,6 +12,7 @@ import type {
 } from "./agent-harness-runtime.js";
 import {
   createAgentHarnessToolSurfaceRuntime,
+  createAgentHarnessToolSurfaceRuntimeAsync,
   type AgentHarnessToolSurfaceRuntime,
   type AgentHarnessToolSurfaceRuntimeParams,
 } from "./agent-harness-tool-runtime.js";
@@ -51,6 +53,9 @@ describe("agent harness private options", () => {
     expectTypeOf<AgentHarnessToolSurfaceRuntimeParams>().not.toHaveProperty(
       "forceCodeModeControls",
     );
+    expectTypeOf<AgentHarnessToolSurfaceRuntimeParams>().not.toHaveProperty(
+      "preparedToolOverrideAllowlist",
+    );
     expectTypeOf<AgentHarnessToolSurfaceRuntime>().not.toHaveProperty("plan");
     expectTypeOf<
       NonNullable<Parameters<AgentHarnessToolSurfaceRuntime["compactTools"]>[1]>
@@ -72,29 +77,59 @@ describe("agent harness private options", () => {
     expect(createOpenClawCodingTools).toBe(createCoreCodingTools);
   });
 
-  it("projects the public catalog without leaking private construction controls", () => {
-    using create = vi.spyOn(toolSurfaceCore, "createAgentHarnessToolSurfaceRuntimeCore");
-    const runtime = createAgentHarnessToolSurfaceRuntime({
+  it("preserves explicitly allowed tools in an asynchronously prepared lean surface", async () => {
+    const runtime = await createAgentHarnessToolSurfaceRuntimeAsync({
+      config: {
+        agents: { defaults: { experimental: { localModelLean: true } } },
+        tools: { allow: ["browser"], codeMode: false, toolSearch: false },
+      },
       modelToolsEnabled: true,
-      config: { tools: { toolSearch: true } },
       executeTool: async () => ({ content: [], details: {} }),
     });
     onTestFinished(runtime.cleanup);
-    const internal = expectDefined(create.mock.results[0]?.value, "constructed core tool surface");
-    using compact = vi.spyOn(internal, "compactTools");
-    const publicOptions = { hookContext: { agentId: "sdk-public" }, localModelLeanApplied: true };
-    const options = {
-      ...publicOptions,
-      prepared: { preserveToolNames: ["browser"] },
-    };
-    const result = runtime.compactTools([], options);
-    expect(runtime).not.toHaveProperty("plan");
-    expect(compact).toHaveBeenCalledExactlyOnceWith([], publicOptions);
-    expect(Object.keys(result)).toEqual(["tools", "promptToolPolicy"]);
-    expect(result.tools).toBe(compact.mock.results[0]?.value.tools);
-    expect(result.promptToolPolicy).toBe(compact.mock.results[0]?.value.promptToolPolicy);
-    for (const key of ["cleanup", "toolSearchCatalogRef", "toolSearchCatalogExecutor"] as const) {
-      expect(runtime[key]).toBe(internal[key]);
-    }
+    const tools = ["browser", "tts"].map((name) => ({
+      name,
+      label: name,
+      description: name,
+      parameters: Type.Object({}),
+      execute: async () => ({ content: [], details: {} }),
+    }));
+    expect(runtime.compactTools(tools).tools.map((tool) => tool.name)).toEqual(["browser"]);
   });
+
+  it.each(["sync", "async"] as const)(
+    "projects the %s public catalog without leaking private construction controls",
+    async (mode) => {
+      using create = vi.spyOn(toolSurfaceCore, "createAgentHarnessToolSurfaceRuntimeCore");
+      const params = {
+        modelToolsEnabled: true,
+        config: { tools: { toolSearch: true } },
+        executeTool: async () => ({ content: [], details: {} }),
+      };
+      const runtime =
+        mode === "async"
+          ? await createAgentHarnessToolSurfaceRuntimeAsync(params)
+          : createAgentHarnessToolSurfaceRuntime(params);
+      onTestFinished(runtime.cleanup);
+      const internal = expectDefined(
+        create.mock.results[0]?.value,
+        "constructed core tool surface",
+      );
+      using compact = vi.spyOn(internal, "compactTools");
+      const publicOptions = { hookContext: { agentId: "sdk-public" }, localModelLeanApplied: true };
+      const options = {
+        ...publicOptions,
+        prepared: { preserveToolNames: ["browser"] },
+      };
+      const result = runtime.compactTools([], options);
+      expect(runtime).not.toHaveProperty("plan");
+      expect(compact).toHaveBeenCalledExactlyOnceWith([], publicOptions);
+      expect(Object.keys(result)).toEqual(["tools", "promptToolPolicy"]);
+      expect(result.tools).toBe(compact.mock.results[0]?.value.tools);
+      expect(result.promptToolPolicy).toBe(compact.mock.results[0]?.value.promptToolPolicy);
+      for (const key of ["cleanup", "toolSearchCatalogRef", "toolSearchCatalogExecutor"] as const) {
+        expect(runtime[key]).toBe(internal[key]);
+      }
+    },
+  );
 });

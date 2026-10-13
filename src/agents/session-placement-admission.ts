@@ -17,8 +17,10 @@ import {
 import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
 import { retainQueuedAgentRunContext } from "../infra/agent-run-registry.js";
 import { enqueueCommandInLane, isCommandLaneTaskMarkerCurrent } from "../process/command-queue.js";
+import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveAdmittedRunActiveAssertion } from "./admitted-run-context.js";
+import { resolveSessionAgentIds } from "./agent-scope.js";
 import { resolveSessionLane } from "./embedded-agent-runner/lanes.js";
 import type { RunEmbeddedAgentInternalParams } from "./embedded-agent-runner/run/internal-params.js";
 import { resolveEmbeddedRunSessionLanePolicy } from "./embedded-agent-runner/run/lane-runtime.js";
@@ -227,6 +229,43 @@ function withPlacementTurnCallerScope<T>(
 }
 
 export async function withSessionPlacementTurnAdmission(
+  claim: LocalTurnPlacementClaim,
+  params: SessionPlacementTurnParams,
+  task: (signal: AbortSignal) => Promise<EmbeddedAgentRunResult>,
+  onAdmitted?: () => void,
+): Promise<EmbeddedAgentRunResult> {
+  const { sessionAgentId } = resolveSessionAgentIds({
+    config: params.config ?? getRuntimeConfig(),
+    sessionKey: claim.sessionKey,
+    agentId: claim.agentId,
+  });
+  const interrupted = new AbortController();
+  const signal = params.abortSignal
+    ? AbortSignal.any([params.abortSignal, interrupted.signal])
+    : interrupted.signal;
+  const admission = await beginSessionWorkAdmission({
+    agentId: sessionAgentId,
+    scope: `agent:${sessionAgentId}`,
+    identities: [claim.sessionKey, claim.sessionId, claim.runId],
+    signal,
+    assertAllowed: () => signal.throwIfAborted(),
+    onInterrupt: (reason) => interrupted.abort(reason),
+  });
+  try {
+    return await admission.run(() =>
+      executeAdmittedSessionPlacementTurn(
+        claim,
+        { ...params, abortSignal: signal },
+        () => task(signal),
+        onAdmitted,
+      ),
+    );
+  } finally {
+    admission.release();
+  }
+}
+
+async function executeAdmittedSessionPlacementTurn(
   claim: LocalTurnPlacementClaim,
   params: SessionPlacementTurnParams,
   task: () => Promise<EmbeddedAgentRunResult>,

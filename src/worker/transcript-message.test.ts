@@ -100,6 +100,20 @@ function assistantWithReplay(
 }
 
 describe("worker transcript provider replay", () => {
+  it.each(["available", "unavailable"] as const)(
+    "preserves %s usage through the closed worker contract",
+    (state) => {
+      const message = assistantWithReplay();
+      message.usage.usageReport = { state };
+      const projected = toWorkerTranscriptMessage(message, "transcript");
+      expect(projected?.kind).toBe("complete");
+      if (projected?.kind !== "complete") {
+        throw new Error("Expected complete worker projection");
+      }
+      expect(Value.Check(WorkerTranscriptMessageSchema, projected.message)).toBe(true);
+      expect(projected.message).toMatchObject({ usage: { usageReport: { state } } });
+    },
+  );
   it.each([true, false])(
     "correlates identical assistant occurrences through guarded persistence (previews=%s)",
     async (previews) => {

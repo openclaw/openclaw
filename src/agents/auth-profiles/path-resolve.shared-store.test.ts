@@ -76,7 +76,7 @@ describe("shared auth store path resolution", () => {
     });
   });
 
-  it("ignores runtime-only external CLI profiles when displaying store ownership", async () => {
+  it("ignores runtime-only external profiles when displaying store ownership", async () => {
     const env = makeStateEnv();
     writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env });
     const agentDir = path.join(env.OPENCLAW_STATE_DIR ?? "", "agents", "helper", "agent");
@@ -87,7 +87,6 @@ describe("shared auth store path resolution", () => {
         {
           ...persistedStore,
           runtimeExternalProfileIds: ["openai:test"],
-          runtimeExternalCliProfileIds: ["openai:test"],
         },
         agentDir,
       );

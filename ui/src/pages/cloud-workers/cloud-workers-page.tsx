@@ -4,13 +4,10 @@ import type { EnvironmentsListResult } from "../../../../packages/gateway-protoc
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import {
   DocsLink,
-  LearnMoreLink,
   SettingsEmpty,
-  SettingsPage,
   SettingsPageHeader,
   SettingsRow,
   SettingsSection,
-  SettingsSegmented,
   SettingsStatus,
   SettingsToggleRow,
   SettingsValue,
@@ -35,9 +32,7 @@ import {
   type CloudWorkerProfileDraft,
   type ConfiguredCloudWorkerProfile,
 } from "./cloud-worker-config.ts";
-import { CloudWorkerPool } from "./cloud-worker-pool.tsx";
-import { CloudWorkerRepositories } from "./cloud-worker-repositories.tsx";
-import { CloudWorkerSnapshots } from "./cloud-worker-snapshots.tsx";
+import { CloudWorkerEnvironments } from "./cloud-worker-environments.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
 const CLOUD_WORKERS_DOCS_URL = "https://docs.openclaw.ai/gateway/cloud-workers";
@@ -54,7 +49,6 @@ function formControlValue(event: Event): string {
 
 function CloudWorkersContent() {
   const context = useApplication();
-  const [tab, setTab] = createSignal<"profiles" | "pool" | "snapshots">("profiles");
   const [view, setView] = createStore<{ editor: EditorState; draft: CloudWorkerProfileDraft }>({
     editor: null,
     draft: createCloudWorkerDraft(),
@@ -547,81 +541,55 @@ function CloudWorkersContent() {
 
   return (
     <>
-      <SettingsPageHeader
-        title={t("tabs.cloudWorkers")}
-        subtitle={
-          <>
-            {t("cloudWorkersPage.intro")} <LearnMoreLink url={CLOUD_WORKERS_DOCS_URL} />
-          </>
-        }
-      />
+      <SettingsPageHeader title={t("tabs.cloudWorkers")} />
       <SettingsWorkspace>
-        <SettingsPage>
-          <SettingsSegmented
-            mode="buttons"
-            value={tab()}
-            ariaLabel={t("cloudWorkersPage.snapshots.viewLabel")}
-            options={[
-              { value: "profiles", label: t("cloudWorkersPage.sectionTitle") },
-              { value: "pool", label: t("cloudWorkersPage.pool.tab") },
-              { value: "snapshots", label: t("cloudWorkersPage.snapshots.title") },
-            ]}
-            onChange={setTab}
-          />
-        </SettingsPage>
-        <Show when={tab() === "profiles"}>
-          <SettingsPage>
-            <Show when={!hasManageAccess()}>
-              <div class="callout warning" role="note">
-                {t("cloudWorkersPage.adminRequired")}
-              </div>
-            </Show>
-            <Show when={catalog().error}>
-              <div class="callout warning" role="status">
-                {t("cloudWorkersPage.catalogFailed", { error: catalog().error ?? "" })}
-              </div>
-            </Show>
-            <Show when={saveState().error && !view.editor}>
-              <div class="callout warning" role="alert">
-                {saveState().error}
-              </div>
-            </Show>
-            <Show when={saveState().notice}>
-              <div class="callout" role="status">
-                {saveState().notice}
-              </div>
-            </Show>
-            <SettingsSection
-              title={t("cloudWorkersPage.sectionTitle")}
-              description={t("cloudWorkersPage.sectionDescription")}
-              count={profiles().length}
-              actions={
-                <Show when={canManage()}>
-                  <button class="btn btn--sm primary" type="button" onClick={() => openEditor()}>
-                    {t("cloudWorkersPage.addProfile")}
-                  </button>
-                </Show>
-              }
-            >
-              <For
-                each={profiles()}
-                fallback={<SettingsEmpty message={t("cloudWorkersPage.empty")} />}
+        <CloudWorkerEnvironments
+          machines={() => (
+            <>
+              <Show when={!hasManageAccess()}>
+                <div class="callout warning" role="note">
+                  {t("cloudWorkersPage.adminRequired")}
+                </div>
+              </Show>
+              <Show when={catalog().error}>
+                <div class="callout warning" role="status">
+                  {t("cloudWorkersPage.catalogFailed", { error: catalog().error ?? "" })}
+                </div>
+              </Show>
+              <Show when={saveState().error && !view.editor}>
+                <div class="callout warning" role="alert">
+                  {saveState().error}
+                </div>
+              </Show>
+              <Show when={saveState().notice}>
+                <div class="callout" role="status">
+                  {saveState().notice}
+                </div>
+              </Show>
+              <SettingsSection
+                title={t("cloudWorkersPage.environments.machines")}
+                count={profiles().length}
+                actions={
+                  <Show when={canManage()}>
+                    <button class="btn btn--sm primary" type="button" onClick={() => openEditor()}>
+                      {t("cloudWorkersPage.addProfile")}
+                    </button>
+                  </Show>
+                }
               >
-                {(profile) => renderProfile(profile)}
-              </For>
-            </SettingsSection>
-            <Show when={view.editor}>
-              <Editor />
-            </Show>
-            <CloudWorkerRepositories canManage={canManage()} />
-          </SettingsPage>
-        </Show>
-        <Show when={tab() === "pool"}>
-          <CloudWorkerPool />
-        </Show>
-        <Show when={tab() === "snapshots"}>
-          <CloudWorkerSnapshots />
-        </Show>
+                <For
+                  each={profiles()}
+                  fallback={<SettingsEmpty message={t("cloudWorkersPage.empty")} />}
+                >
+                  {(profile) => renderProfile(profile)}
+                </For>
+              </SettingsSection>
+              <Show when={view.editor}>
+                <Editor />
+              </Show>
+            </>
+          )}
+        />
       </SettingsWorkspace>
     </>
   );

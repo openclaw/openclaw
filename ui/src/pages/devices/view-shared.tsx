@@ -152,7 +152,7 @@ export function deviceIcon(source: DeviceIconSource): JSX.Element {
   }
 }
 
-/* Connectivity state lives in the row's renderSettingsStatus dot + text, so
+/* Connectivity state lives in the row's SettingsStatus dot + text, so
    the tile stays a purely decorative form-factor glyph. */
 export function DeviceTile(props: { icon: JSX.Element }) {
   return (

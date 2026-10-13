@@ -48,6 +48,7 @@ import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 import { refreshGatewayHealthSnapshot } from "./server/health-state.js";
 import { createSessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
 import { prepareTalkConnectionClose } from "./talk/session-registry.js";
+import { withAgentTerminalOpenAdmission } from "./terminal/open-admission.js";
 
 type GatewayRuntimePreparation = Awaited<ReturnType<typeof prepareGatewayKernelState>>;
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
@@ -75,6 +76,7 @@ export async function prepareGatewayLifecycle(params: {
     mentionInbox,
     broadcast,
     cfgAtStart,
+    cronStorePath,
     pluginRuntime,
     authRateLimiter,
     nodeReapprovalCoordinator,
@@ -211,6 +213,7 @@ export async function prepareGatewayLifecycle(params: {
     await import("./terminal/session-manager.js");
   const { createTerminalSessionTransport } = await import("./terminal/gateway-transport.js");
   const terminalSessions = new TerminalSessionManager({
+    withOpenAdmission: withAgentTerminalOpenAdmission,
     ...createTerminalSessionTransport(broadcastToConnIds, getBufferedAmount),
     detachGraceMs:
       (cfgAtStart.gateway?.terminal?.detachedSessionTimeoutSeconds ??
@@ -223,6 +226,7 @@ export async function prepareGatewayLifecycle(params: {
     hookClientIpConfig: initialHookClientIpConfig,
     cronState: createLazyGatewayCronState({
       scheduler: runtime.scheduler,
+      storePath: cronStorePath,
       cfg: cfgAtStart,
       deps,
       broadcast,
@@ -553,6 +557,7 @@ export async function prepareGatewayLifecycle(params: {
         await withPluginRuntimeRegistryScope(pluginRuntime.registry, () =>
           shutdownRuntime.completeGatewayClose(
             {
+              retainSharedState: optsValue?.retainSharedState,
               resolveGatewayContext: runtime.resolvePluginGatewayContext,
               closePluginRegistry: (onRetirement) => pluginRuntime.close(onRetirement),
               pluginMetadata: {

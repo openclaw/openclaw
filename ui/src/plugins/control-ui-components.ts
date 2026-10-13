@@ -160,8 +160,9 @@ export function createControlUiComponents(options: {
           );
         },
       ),
-    mountDialog: (container, props) =>
-      mount(
+    mountDialog: (container, props) => {
+      let content: HTMLElement | undefined;
+      return mount(
         container,
         props,
         async () => {
@@ -176,8 +177,14 @@ export function createControlUiComponents(options: {
           if (next.returnFocusTarget !== undefined) {
             element.setReturnFocusTarget(next.returnFocusTarget);
           }
-          if (element.firstChild !== next.content) {
-            element.replaceChildren(next.content);
+          if (content !== next.content) {
+            // The dialog owns its shell; the plugin owns only this content node.
+            if (content) {
+              content.replaceWith(next.content);
+            } else {
+              element.append(next.content);
+            }
+            content = next.content;
           }
         },
         (element, getProps) => {
@@ -189,7 +196,8 @@ export function createControlUiComponents(options: {
           element.addEventListener("modal-cancel", cancel);
           return () => element.removeEventListener("modal-cancel", cancel);
         },
-      ),
+      );
+    },
     mountAgentPicker: (container, props) =>
       mount(
         container,

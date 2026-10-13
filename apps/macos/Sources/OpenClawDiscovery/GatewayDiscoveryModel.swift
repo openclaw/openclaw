@@ -305,7 +305,7 @@ public final class GatewayDiscoveryModel {
 
     private func scheduleWideAreaFallback() {
         guard let domain = OpenClawBonjour.wideAreaGatewayServiceDomain else { return }
-        if Self.isRunningTests { return }
+        if OpenClawProcessInfo.isRunningTests { return }
         guard self.wideAreaFallbackTask == nil else { return }
         self.wideAreaFallbackTask = self.scheduleFallback(
             discover: { await WideAreaGatewayDiscovery.discover(timeoutSeconds: 2.0) },
@@ -315,7 +315,7 @@ public final class GatewayDiscoveryModel {
     }
 
     private func scheduleTailscaleServeFallback() {
-        if Self.isRunningTests { return }
+        if OpenClawProcessInfo.isRunningTests { return }
         guard self.tailscaleServeFallbackTask == nil else { return }
         self.tailscaleServeFallbackTask = self.scheduleFallback(
             discover: { await TailscaleServeGatewayDiscovery.discover(timeoutSeconds: 2.4) },
@@ -397,16 +397,6 @@ public final class GatewayDiscoveryModel {
         return deduped.sorted {
             $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
         }
-    }
-
-    private nonisolated static var isRunningTests: Bool {
-        // Keep discovery background work from running forever during SwiftPM test runs.
-        if Bundle.allBundles.contains(where: { $0.bundleURL.pathExtension == "xctest" }) { return true }
-
-        let env = ProcessInfo.processInfo.environment
-        return env["XCTestConfigurationFilePath"] != nil
-            || env["XCTestBundlePath"] != nil
-            || env["XCTestSessionIdentifier"] != nil
     }
 
     private func updateGatewaysForAllDomains() {

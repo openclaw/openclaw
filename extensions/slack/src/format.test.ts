@@ -187,6 +187,16 @@ describe("normalizeSlackOutboundText", () => {
     }
   });
 
+  it.each(["#installation", "!channel", "@U0123ABCD"])(
+    "renders control-sigil Markdown link destinations as labels: %s",
+    (href) => {
+      const markdown = `See [Install](${href})`;
+
+      expect(normalizeSlackOutboundText(markdown)).toBe("See Install");
+      expect(markdownToSlackMrkdwnChunks(markdown, 4_000)).toEqual(["See Install"]);
+    },
+  );
+
   it("handles nested list items", () => {
     const res = normalizeSlackOutboundText("- item\n  - nested");
     // markdown-it correctly parses this as a nested list

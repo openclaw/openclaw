@@ -68,6 +68,7 @@ describe("chat pane keyboard focus", () => {
         client: createGatewayBrowserClientFixture({ request }),
         sessions: createSessionCapabilityFixture(),
       });
+      vi.spyOn(pane.transcript, "isPositionSettled", "get").mockReturnValue(true);
       state.chatHistoryPagination = { hasMore: true, nextOffset: 2 };
       pane.historyAutoLoadBlocked = true;
       vi.stubGlobal("IntersectionObserver", undefined);
@@ -148,12 +149,14 @@ describe("chat pane keyboard focus", () => {
     const restoreDialogPolyfill = installDialogPolyfill();
     const { pane, focus } = createFocusedPane();
     const container = document.body.appendChild(document.createElement("div"));
-    const modal = container.appendChild(document.createElement("openclaw-modal-dialog"));
+    const shadow = container.attachShadow({ mode: "open" });
+    const modal = shadow.appendChild(document.createElement("openclaw-modal-dialog"));
     const cancel = modal.appendChild(document.createElement("button"));
 
     try {
-      const { dialog } = await getRenderedModalDialog(container);
+      const { dialog } = await getRenderedModalDialog(shadow);
       expect(dialog.open).toBe(true);
+      expect(dialog.getRootNode()).toBe(shadow);
       expect(document.querySelector("dialog[open]")).toBeNull();
       cancel.addEventListener("keydown", (event) => pane.handleDocumentKeydown(event));
 

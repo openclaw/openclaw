@@ -399,6 +399,45 @@ describe("Codex terminal dynamic-tool release", () => {
     },
   );
 
+  it.each(["reply", "sibling"] as const)(
+    "completes a delivered final reply after a failed sibling when %s settles first",
+    async (first) => {
+      const harness = createTerminalReleaseHarness();
+      await harness.observeResponse(["reply", "sibling"]);
+      harness.pendingOpenClawDynamicToolCompletionIds.add("reply");
+      harness.pendingOpenClawDynamicToolCompletionIds.add("sibling");
+      const results = {
+        reply: dynamicToolResult("reply", {
+          success: false,
+          terminate: true,
+          finalSourceReplyDelivered: true,
+        }),
+        sibling: dynamicToolResult("sibling", { success: false }),
+      };
+      try {
+        for (const name of [first, first === "reply" ? "sibling" : "reply"] as const) {
+          harness.pendingOpenClawDynamicToolCompletionIds.delete(name);
+          harness.controller.recordDynamicToolResult(results[name]);
+          harness.controller.scheduleTerminalDynamicToolReleaseCheck();
+          await yieldImmediate();
+          expect(harness.state.completed).toBe(
+            harness.pendingOpenClawDynamicToolCompletionIds.size === 0,
+          );
+        }
+        expect(harness.request).toHaveBeenCalledWith(
+          "turn/interrupt",
+          { threadId: "thread-1", turnId: "turn-1" },
+          expect.anything(),
+        );
+        expect(harness.resolveCompletion).toHaveBeenCalledOnce();
+        expect(harness.sourceReplies).toEqual([]);
+      } finally {
+        harness.completeTurn();
+        await yieldImmediate();
+      }
+    },
+  );
+
   it("keeps steering open when the yield result fails", async () => {
     const harness = createTerminalReleaseHarness();
 
@@ -419,7 +458,11 @@ function dynamicToolResult(
   callId: string,
   response: Pick<
     CodexDynamicToolRuntimeResponse,
-    "success" | "terminate" | "toolAuthoredSourceReply" | "asyncStarted"
+    | "success"
+    | "terminate"
+    | "toolAuthoredSourceReply"
+    | "asyncStarted"
+    | "finalSourceReplyDelivered"
   >,
 ) {
   return {

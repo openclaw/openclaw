@@ -328,14 +328,16 @@ function cliBoundSessionEntry(
 }
 
 async function resolveGatewaySessionStorePathForKey(key: string) {
-  const [{ getRuntimeConfig }, { resolveGatewaySessionStoreTarget }] = await Promise.all([
+  const [{ getRuntimeConfig }, { resolveGatewaySessionStoreTargetInWorker }] = await Promise.all([
     import("../config/config.js"),
-    import("./session-utils.js"),
+    import("./session-utils-store-worker.js"),
   ]);
-  return resolveGatewaySessionStoreTarget({
-    cfg: getRuntimeConfig(),
-    key,
-  }).storePath;
+  return (
+    await resolveGatewaySessionStoreTargetInWorker({
+      cfg: getRuntimeConfig(),
+      key,
+    })
+  ).storePath;
 }
 
 async function loadGatewaySessionStoreForKey(key: string) {

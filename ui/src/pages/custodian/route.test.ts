@@ -1,10 +1,12 @@
 /* @vitest-environment jsdom */
 
 import type { RouteLoaderOptions, RouteLocation } from "@openclaw/uirouter";
-import { render } from "lit";
+import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
+import { LitContent } from "../../lit/solid-content.tsx";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createContext as createCustodianContext } from "./custodian-page.test-harness.ts";
 import { renderCustodianRoute } from "./custodian-page.ts";
 import { page, type CustodianRouteData } from "./route.ts";
@@ -51,7 +53,21 @@ describe("custodian route", () => {
     const provider = createApplicationContextProvider(createContext());
     document.body.append(provider);
 
-    render(renderCustodianRoute({ onboarding: false, intent: null }), provider);
+    const [data, setData] = createSignal<CustodianRouteData>();
+    mountSolid(
+      () =>
+        createComponent(LitContent, {
+          get value() {
+            return renderCustodianRoute(data());
+          },
+        }),
+      { container: provider },
+    );
+    flush();
+    expect(provider.querySelector("openclaw-custodian-page")).toBeNull();
+
+    setData({ onboarding: false, intent: null });
+    flush();
     const normalPage = provider.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
       "openclaw-custodian-page",
     );
@@ -61,7 +77,8 @@ describe("custodian route", () => {
       "System setup and care.",
     );
 
-    render(renderCustodianRoute({ onboarding: true, intent: null }), provider);
+    setData({ onboarding: true, intent: null });
+    flush();
     const onboardingPage = provider.querySelector<
       HTMLElement & { updateComplete: Promise<boolean> }
     >("openclaw-custodian-page");

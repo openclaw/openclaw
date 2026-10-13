@@ -24,7 +24,7 @@ function write<Input, Output>(operation: (db: DatabaseSync, input: Input) => Out
 }
 
 export const deviceAuthWorkerOperations = {
-  "deviceAuth.prepare": (_input: undefined) => undefined,
+  "deviceAuth.prepare": (_input: undefined): void => undefined,
   "deviceAuth.read": read(deviceAuth.readDeviceAuthTokenObservationFromDatabase),
   "deviceAuth.readOrigin": read(deviceAuth.readOriginDeviceTokenObservationFromDatabase),
   "deviceAuth.list": (input: { deviceId: string }, { open }: WorkerOperationContext) =>
