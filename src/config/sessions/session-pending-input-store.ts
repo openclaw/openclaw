@@ -133,7 +133,7 @@ export async function preparePendingInputStore(
     return operation;
   };
   const nativeMutation = (
-    input: PendingInputMutation,
+    input: Extract<PendingInputMutation, { kind: "complete" }>,
     guard: (stage: "transaction" | "commit", facts?: PendingInputCustodyGrant) => void,
   ) => {
     assertOpen();
@@ -244,7 +244,7 @@ export async function preparePendingInputStore(
         })(),
       );
     },
-    // Released SDK completion retains immediate transaction semantics until the next major.
+    // Released SDK completion retains immediate transaction semantics; stage/finish use workers.
     nativeMutation,
     mutate(
       input: PendingInputMutation,

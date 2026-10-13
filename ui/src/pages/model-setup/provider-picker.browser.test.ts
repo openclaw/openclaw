@@ -3,12 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentSelectElement } from "../../components/agent-select.ts";
 import "../../components/agent-select-registration.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import "../../components/web-awesome.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import "../../test-helpers/load-styles.ts";
 import "../../styles/model-setup.css";
-import { duringElementAnimation } from "../../test-helpers/web-awesome-animation.ts";
 import { ManualProviderPicker } from "./provider-picker.tsx";
-import "@awesome.me/webawesome/dist/styles/themes/default.css";
 
 const disposals: (() => void)[] = [];
 
@@ -68,35 +66,41 @@ describe.runIf("__vitest_browser__" in globalThis)("selected dropdown opening", 
         expect(selected).toHaveBeenCalledExactlyOnceWith("last");
         return;
       }
-      const dropdown = host.querySelector("wa-dropdown")!;
-      await dropdown.updateComplete;
-      const items = Array.from(dropdown.querySelectorAll("wa-dropdown-item"));
-      await Promise.all(items.map((item) => item.updateComplete));
-      const menu = dropdown.shadowRoot!.querySelector<HTMLElement>('[part="menu"]')!;
+      const items = [...host.querySelectorAll<HTMLElement>("[data-manual-provider]")];
+      const menu = host.querySelector<HTMLElement>('[role="menu"]')!;
       menu.style.maxHeight = "160px";
       menu.style.overflow = "auto";
-      const trigger = dropdown.querySelector<HTMLButtonElement>('[slot="trigger"]')!;
+      const trigger = host.querySelector<HTMLButtonElement>(
+        ".model-setup-provider-select__trigger",
+      )!;
       const shown = new Promise<void>((resolve) => {
-        dropdown.addEventListener("wa-after-show", () => resolve(), { once: true });
+        menu.addEventListener("overlay-after-show", () => resolve(), { once: true });
       });
-      await duringElementAnimation(
-        menu,
-        "show",
-        () => page.elementLocator(trigger).click(),
-        async () => {
-          expect.soft(document.activeElement).toBe(items[28]);
-          const selectedBounds = items[28]!.getBoundingClientRect();
-          const menuBounds = menu.getBoundingClientRect();
-          expect.soft(selectedBounds.top).toBeGreaterThanOrEqual(menuBounds.top);
-          expect.soft(selectedBounds.bottom).toBeLessThanOrEqual(menuBounds.bottom);
-          await userEvent.keyboard("{End}");
-          expect(document.activeElement).toBe(items[29]);
-        },
-      );
+      const navigateDuringOpening = async () => {
+        expect.soft(document.activeElement).toBe(items[28]);
+        const selectedBounds = items[28]!.getBoundingClientRect();
+        const menuBounds = menu.getBoundingClientRect();
+        expect.soft(selectedBounds.top).toBeGreaterThanOrEqual(menuBounds.top);
+        expect.soft(selectedBounds.bottom).toBeLessThanOrEqual(menuBounds.bottom);
+        await userEvent.keyboard("{End}");
+        expect(document.activeElement).toBe(items[29]);
+      };
+      menu.style.setProperty("--oc-overlay-show-duration", "30s");
+      await page.elementLocator(trigger).click();
+      await expect.poll(() => menu.getAnimations().length).toBeGreaterThan(0);
+      const animations = menu.getAnimations();
+      for (const animation of animations) {
+        animation.pause();
+      }
+      expect(menu.dataset.phase).toBe("opening");
+      await navigateDuringOpening();
+      for (const animation of animations) {
+        animation.finish();
+      }
       await shown;
       expect.soft(document.activeElement).toBe(items[29]);
       await userEvent.keyboard("{Enter}");
-      expect(selected).toHaveBeenCalledExactlyOnceWith("last");
+      await waitForSolid(() => expect(selected).toHaveBeenCalledExactlyOnceWith("last"));
     },
   );
 });

@@ -406,9 +406,6 @@ export type LockedTranscriptMessageAppendOptions<TMessage> = Omit<
   prepareMessageAfterIdempotencyCheckAsync?: (message: TMessage) => Promise<TMessage | undefined>;
 };
 
-/** Canonical transcript identity owned by the transaction. */
-export type SessionTranscriptWriteTransactionContext = SessionTranscriptRuntimeTarget;
-
 export type SessionTranscriptTurnUpdateMode = "inline" | "file-only" | "none";
 
 export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<unknown> & {

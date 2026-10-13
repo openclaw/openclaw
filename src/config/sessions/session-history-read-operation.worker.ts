@@ -32,25 +32,14 @@ const historyReadKinds = [
 ] as const;
 const historyReadKindSet: ReadonlySet<string> = new Set(historyReadKinds);
 
-type DurableHistoryReadOperationRequest = Extract<
+export type SessionHistoryReadOperationRequest = Extract<
   SessionTranscriptWorkerInput,
   { kind: (typeof historyReadKinds)[number] }
 >;
 
-type BranchReadRequest = Extract<DurableHistoryReadOperationRequest, { kind: "branch-summaries" }>;
-export type SessionHistoryReadOperationRequest =
-  | Exclude<DurableHistoryReadOperationRequest, BranchReadRequest>
-  | {
-      kind: "branch-summaries";
-      database: BranchReadRequest["database"];
-      request: Omit<BranchReadRequest["request"], "databaseIdentity"> & {
-        databaseIdentity?: string;
-      };
-    };
-
 export function isSessionHistoryReadOperation(
   request: SessionTranscriptWorkerInput,
-): request is DurableHistoryReadOperationRequest {
+): request is SessionHistoryReadOperationRequest {
   return historyReadKindSet.has(request.kind);
 }
 
@@ -329,28 +318,21 @@ async function prepareHistoryRead(
     }
     case "branch-summaries": {
       const { readSessionBranchSnapshot, readSessionBranchSummariesInWorker } =
-        await import("./session-accessor.sqlite-branches.js");
+        await import("./session-accessor.sqlite-branches.worker.js");
       if (retainedDatabase) {
         return () => ({
           kind: request.kind,
           result: readSessionBranchSnapshot(retainedDatabase, {
             sessionKey: request.request.sessionKey,
-            sessionId: request.request.sessionId,
-            lifecycleRevision: request.request.lifecycleRevision,
             previous: request.request.previous,
           }),
         });
-      }
-      const databaseIdentity = request.request.databaseIdentity;
-      if (databaseIdentity === undefined) {
-        throw new Error("Durable branch reads require their captured database identity");
       }
       return () => ({
         kind: request.kind,
         result: readSessionBranchSummariesInWorker({
           ...request.request,
           database: request.database,
-          databaseIdentity,
         }),
       });
     }

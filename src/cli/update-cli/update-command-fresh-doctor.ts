@@ -4,6 +4,7 @@ import path from "node:path";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  isUpdateDoctorInspectionReportMode,
   UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV,
   UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
   UPDATE_POST_CORE_CONVERGENCE_ENV,
@@ -32,6 +33,7 @@ import {
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   UpdateDoctorError,
+  UpdateDoctorDeferredInspectionCheckIdsSchema,
   type UpdatePostInstallDoctorResult,
 } from "../../infra/update-doctor-result.js";
 import { createUpdateDoctorSectionTiming } from "../../infra/update-doctor-section-timing.js";
@@ -575,6 +577,7 @@ export async function completePostCorePluginUpdate(
   let pluginUpdate = params.pluginUpdate;
   let entryPath: string | undefined;
   let freshConfigValidation: PostPluginConfigValidation | undefined;
+  let includeOptionalInspections = false;
   if (pluginUpdate.status !== "error") {
     try {
       entryPath = await resolveGatewayInstallEntrypoint(params.root);
@@ -592,8 +595,15 @@ export async function completePostCorePluginUpdate(
       assertCurrent();
       if (freshDoctorRequired) {
         await params.beforeDoctor?.();
+        let inspectionCheckIds: string[] | null | undefined;
         const warning = await runUpdateFinalizationDoctorInFreshProcess({
           ...params,
+          onDoctorStep: (step) => {
+            if (step.deferredInspectionCheckIds !== undefined) {
+              inspectionCheckIds = step.deferredInspectionCheckIds;
+            }
+            params.onDoctorStep?.(step);
+          },
           assertCurrent,
           onAuthorityRefused: () => {
             authorityFailed = true;
@@ -601,6 +611,10 @@ export async function completePostCorePluginUpdate(
           entryPath,
           phase: "post-plugin",
         });
+        // A child without usable selectors cannot leave diagnostics for after ready.
+        includeOptionalInspections =
+          isUpdateDoctorInspectionReportMode(process.env) &&
+          !UpdateDoctorDeferredInspectionCheckIdsSchema.safeParse(inspectionCheckIds).success;
         if (warning) {
           pluginUpdate = {
             ...pluginUpdate,
@@ -705,6 +719,7 @@ export async function completePostCorePluginUpdate(
         entryPath,
         pluginUpdate,
         timeoutMs: checkTimeoutMs,
+        includeOptionalInspections,
         ...(params.nodeRunner ? { nodeRunner: params.nodeRunner } : {}),
       });
     }

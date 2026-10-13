@@ -64,7 +64,7 @@ function projectionTarget(input: SessionHistoryWorkerPreparedInput) {
 
 export function runSessionBranchSummaryWorkerRequest(
   request: SessionBranchSummaryReadRequest,
-  signal: AbortSignal,
+  signal?: AbortSignal,
 ) {
   const { database, ...read } = request;
   return withSessionHistoryWorkerDatabase(

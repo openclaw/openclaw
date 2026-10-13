@@ -91,6 +91,7 @@ function readReportBranch(database: OpenClawAgentDatabase, sessionId: string) {
   return navigation.facts();
 }
 
+// Only the report worker calls the selection and aborted-partial readers below.
 function readReportEvent(database: OpenClawAgentDatabase, sessionId: string, seq: number) {
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
