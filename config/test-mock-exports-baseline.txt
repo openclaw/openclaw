@@ -5415,7 +5415,6 @@
 ["src/commands/doctor-config-flow.test.ts","../channels/plugins/bootstrap-registry.js","42d18a5e6a51608a258807896c61d47ea970ca3c3d6c209fde1e5ffebecf6162",1]
 ["src/commands/doctor-config-flow.test.ts","../gateway/call.js","de083e8ea43d763ca19016b42b51fba574128150139fc2e7eb51e761bfa7e166",1]
 ["src/commands/doctor-config-flow.test.ts","../plugins/setup-registry.js","6676fdd47f53710346521b933d05785987dafd20845bb1de0e554d7107c3a9ec",1]
-["src/commands/doctor-config-flow.test.ts","./doctor-config-preflight.js","309755d5ec029ceb7a4b862b2107d68add0c9ebae7be1c4bb4b4c3f386d62bc8",1]
 ["src/commands/doctor-config-flow.test.ts","./doctor/shared/bundled-plugin-load-paths.js","69c6b2f34a8f54a0b726adeb07e45d975bc13e61e4e08383146597d4bc142242",1]
 ["src/commands/doctor-config-flow.test.ts","./doctor/shared/channel-legacy-config-migrate.js","e897410d0e9029e4e099e2f81f67232b8fc80a7181229172dfb581fa80a6d5bc",1]
 ["src/commands/doctor-config-flow.test.ts","./doctor/shared/context-engine-host-compat.js","52fc0c3806a78b1af64a0fcf0c3a6296c49ce58ca94d154511a81ac3e97ba0cb",1]
