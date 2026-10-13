@@ -77,6 +77,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   runtime?: RuntimeEnv;
   prompter?: DoctorPrompter;
 }) {
+  await using preparingResources = new AsyncDisposableStack();
   const shouldRepair = params.options.repair === true || params.options.yes === true;
   const preflight = await withProgress(
     {
@@ -107,13 +108,13 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       }),
   );
   const { snapshot, baseConfig: baseCfg } = preflight;
+  preparingResources.use(preflight.pluginCache);
   const referenceSource = prepareDoctorConfigReferenceSource(snapshot);
   const pluginMetadataSnapshotState: DoctorPluginMetadataSnapshotState = {
     current: preflight.pluginMetadataSnapshot,
   };
   const { createDoctorPluginMetadataSnapshotScope } =
     await import("./doctor/shared/plugin-metadata-snapshot-scope.js");
-  await using preparingResources = new AsyncDisposableStack();
   const pluginMetadataSnapshotScope = preparingResources.use(
     createDoctorPluginMetadataSnapshotScope({
       getBaseSnapshot: () => pluginMetadataSnapshotState.current,

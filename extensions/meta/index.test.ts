@@ -14,6 +14,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { streamSimple, type Context, type Model } from "openclaw/plugin-sdk/llm";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { buildOpenAICompatibleLiveModels } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildMetaProvider } from "./api.js";
@@ -91,6 +92,69 @@ describe("meta provider", () => {
     );
     expect(config.agents?.defaults?.models?.["meta/muse-spark-1.3"]).toEqual({
       alias: "Muse Spark 1.3",
+    });
+    expect(config.agents?.defaults?.models?.["meta/muse-wonder-1.0"]).toEqual({
+      alias: "Muse Wonder",
+    });
+  });
+
+  it("publishes Wonder Standard without inventing API-only Full or Contributor variants", () => {
+    const provider = buildMetaProvider();
+    expect(provider.models[0]).toMatchObject({
+      id: "muse-wonder-1.0",
+      name: "Muse Wonder",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_048_576,
+      maxTokens: 131_072,
+      thinkingLevelMap: { off: "minimal", max: "max" },
+      compat: {
+        supportsTools: true,
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["minimal", "low", "medium", "high", "xhigh", "max"],
+      },
+      cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 0 },
+    });
+    expect(provider.models.map((model) => model.id)).not.toContain("muse-wonder-full-1.0");
+    expect(provider.models.map((model) => model.id)).not.toContain("muse-wonder-1.0-contributor");
+  });
+
+  it("preserves an authored primary model and Wonder alias during setup", () => {
+    const config = applyMetaConfig({
+      agents: {
+        defaults: {
+          model: { primary: "meta/muse-spark-1.2" },
+          models: {
+            "meta/muse-wonder-1.0": { alias: "Wonder Work", params: { temperature: 0.7 } },
+          },
+        },
+      },
+    });
+    expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe(
+      "meta/muse-spark-1.2",
+    );
+    expect(config.agents?.defaults?.models?.["meta/muse-wonder-1.0"]).toEqual({
+      alias: "Wonder Work",
+      params: { temperature: 0.7 },
+    });
+  });
+
+  it("retains Wonder capabilities and prices when projecting authenticated catalog rows", () => {
+    const models = buildOpenAICompatibleLiveModels(
+      [
+        { id: "muse-wonder-1.0", object: "model", created: 2 },
+        { id: "muse-spark-1.3", object: "model", created: 1 },
+      ],
+      buildMetaProvider(),
+    );
+    // Shared discovery sorts IDs; it does not preserve Meta's newest-first wire order.
+    expect(models.map((model) => model.id)).toEqual(["muse-spark-1.3", "muse-wonder-1.0"]);
+    expect(models[1]).toMatchObject({
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_048_576,
+      thinkingLevelMap: { max: "max" },
+      cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 0 },
     });
   });
 
@@ -189,6 +253,51 @@ describe("meta provider", () => {
     },
   );
 
+  it.each([
+    { level: "off", wireEffort: "minimal" },
+    { level: "max", wireEffort: "max" },
+  ] as const)(
+    "sends Wonder $level as $wireEffort through the Responses transport",
+    async ({ level, wireEffort }) => {
+      const model = resolveCatalogModel("muse-wonder-1.0");
+      let requestBody: Record<string, unknown> | undefined;
+      let requestUrl: string | undefined;
+      const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+        const request = new Request(_url, init);
+        requestUrl = request.url;
+        requestBody = (await request.json()) as Record<string, unknown>;
+        return completedSseResponse();
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const streamFn = expectDefined(
+        captureCompletionWrapper()({
+          provider: "meta",
+          modelId: model.id,
+          model,
+          streamFn: streamSimple,
+        }),
+        "Wonder completion stream",
+      );
+      const stream = await streamFn(
+        model,
+        { messages: [{ role: "user", content: "Wonder reasoning probe", timestamp: 0 }] },
+        { apiKey: "unit-test-token", reasoning: level, maxTokens: 4096 },
+      );
+      const result = await stream.result();
+      expect(result.errorMessage).toBeUndefined();
+      expect(result.stopReason).toBe("stop");
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(requestUrl).toBe("https://api.meta.ai/v1/responses");
+      expect(requestBody).toMatchObject({
+        model: "muse-wonder-1.0",
+        reasoning: { effort: wireEffort },
+        max_output_tokens: 4096,
+        store: false,
+        include: ["reasoning.encrypted_content"],
+      });
+    },
+  );
+
   it("preserves Meta replay fields through canonical simple-completion aliases", async () => {
     const wrapStream = captureCompletionWrapper();
 
@@ -275,6 +384,7 @@ describe("meta provider", () => {
     );
     const reasoningModels = buildMetaProvider().models.filter((model) => model.reasoning);
     expect(reasoningModels.map((model) => model.id)).toEqual([
+      "muse-wonder-1.0",
       "muse-spark-1.3",
       "muse-spark-1.3-contributor",
       "muse-spark-1.2",
@@ -288,20 +398,40 @@ describe("meta provider", () => {
         reasoning: model.reasoning,
       });
       expect(profile?.defaultLevel).toBe("high");
-      expect(profile?.levels.map((level) => level.id)).toEqual([
+      const levels = [
         "off",
         "minimal",
         "low",
         "medium",
         "high",
         "xhigh",
-      ]);
-      expect(
-        resolveThinkingProfile({
-          provider: "meta",
-          modelId: model.id,
-        })?.defaultLevel,
-      ).toBe("high");
+        ...(["muse-wonder-1.0", "muse-spark-1.3"].includes(model.id) ? ["max"] : []),
+      ];
+      expect(profile?.levels.map((level) => level.id)).toEqual(levels);
+      const fallbackProfile = resolveThinkingProfile({
+        provider: "meta",
+        modelId: model.id,
+      });
+      expect(fallbackProfile?.defaultLevel).toBe("high");
+      expect(fallbackProfile?.levels.map((level) => level.id)).toEqual(levels);
+    }
+  });
+
+  it("respects an authored max-effort restriction", () => {
+    const resolveThinkingProfile = expectDefined(
+      captureProvider().resolveThinkingProfile,
+      "Meta thinking profile",
+    );
+    for (const overrides of [
+      { thinkingLevelMap: { max: null } },
+      { compat: { supportedReasoningEfforts: ["minimal", "low", "medium", "high", "xhigh"] } },
+    ]) {
+      const profile = resolveThinkingProfile({
+        provider: "meta",
+        modelId: "muse-wonder-1.0",
+        ...overrides,
+      });
+      expect(profile?.levels.map((level) => level.id)).not.toContain("max");
     }
   });
 

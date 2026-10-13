@@ -1,7 +1,9 @@
 import { nothing, render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
 import "../../styles.css";
+import { solidContent } from "../../lit/solid-content.tsx";
 import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
+import { ConnectMachineDialog } from "../new-session/connect-machine-dialog-view.tsx";
 import { ConnectMachineSetupState } from "../new-session/connect-machine-dialog.ts";
 import { cleanupSkillsViews, renderSkills } from "./view.solid.test-support.tsx";
 import { createProps, createSkill } from "./view.test-support.ts";
@@ -28,7 +30,10 @@ describe.runIf(browserMode)("skill reader shell", () => {
     );
     connection.start();
     render(
-      connection.render(true, () => undefined),
+      solidContent(
+        ConnectMachineDialog,
+        connection.view(true, () => undefined),
+      ),
       container,
     );
     const canonical = await getRenderedModalDialog(container);
