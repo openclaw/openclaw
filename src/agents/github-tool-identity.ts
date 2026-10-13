@@ -378,7 +378,7 @@ async function resolveGitHubIdentityFacts(
       : probe.status;
   const oauth =
     managed && identity.config.kind === "oauth"
-      ? inspectGitHubOAuthRecord(identity.config.profileId)
+      ? await inspectGitHubOAuthRecord(identity.config.profileId)
       : { state: "missing" as const };
   const oauthRecord = oauth.state === "valid" ? oauth.record : undefined;
   const refreshState =

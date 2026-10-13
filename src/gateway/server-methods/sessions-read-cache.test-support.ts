@@ -8,11 +8,7 @@ import {
 import { mergeSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onUserProfilesChanged } from "../../state/user-profile-events.js";
-import {
-  getUserProfileRole,
-  readUserProfileAliases,
-  resolveUserProfileId,
-} from "../../state/user-profiles.js";
+import { readUserProfileIdentity } from "../../state/user-profile-list.js";
 import {
   disposeSessionReadContexts,
   trackSessionReadProfileSubscription,
@@ -70,7 +66,9 @@ export function createSessionPlacementFactsReader(
 ): Pick<WorkerSessionPlacementStore, "readProjection"> {
   return {
     async readProjection(sessionIds) {
-      const records = placements.getMany(sessionIds);
+      const records = placements.getManyAsync
+        ? await placements.getManyAsync(sessionIds)
+        : placements.getMany(sessionIds);
       const environments = new Map();
       for (const placement of records.values()) {
         const environmentId = placement.environmentId;
@@ -116,12 +114,11 @@ export function identifiedClient(profileId: string): GatewayClient {
   };
   const refresh = () => {
     const identity = client.authenticatedUserProfile?.profileId ?? profileId;
-    const resolved = resolveUserProfileId(identity);
-    const canonical = resolved ?? identity;
+    const resolved = readUserProfileIdentity(identity);
     client.preparedSessionProfile = {
-      profileId: canonical,
-      aliases: readUserProfileAliases(canonical),
-      role: resolved ? getUserProfileRole(canonical) : null,
+      profileId: resolved?.profileId ?? identity,
+      aliases: resolved?.aliases ?? new Set([identity]),
+      role: resolved?.role ?? null,
     };
   };
   refresh();

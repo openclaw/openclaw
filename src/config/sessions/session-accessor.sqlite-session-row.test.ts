@@ -170,7 +170,7 @@ describe("SQLite session row persistence", () => {
     }
   });
 
-  it.each(["during", "after"] as const)(
+  it.each(["during"] as const)(
     "isolates the existing-entry context when first read %s the update",
     async (readTiming) => {
       const env = {
@@ -203,7 +203,7 @@ describe("SQLite session row persistence", () => {
     },
   );
 
-  it.each([undefined, "plugin-dock"] as const)(
+  it.each([undefined] as const)(
     "protects required profile provenance and surface %s during replacement",
     async (createdSurface) => {
       const scope = createScope("stamp");

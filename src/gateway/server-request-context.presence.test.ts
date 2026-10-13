@@ -5,12 +5,9 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { listSystemPresence } from "../infra/system-presence.js";
+import { readUserProfileIdentity } from "../state/user-profile-list.js";
 import { linkEmail } from "../state/user-profile-writes.worker.js";
-import {
-  ensureProfileForEmail,
-  getUserProfileDisplay,
-  resolveUserProfileId,
-} from "../state/user-profiles.js";
+import { ensureProfileForEmail, getUserProfileDisplay } from "../state/user-profiles.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -211,7 +208,7 @@ describe("createGatewayRequestContext presence", () => {
       const context = createGatewayRequestContext(params);
 
       const linked = linkEmail("merge-source@example.test", target.id);
-      expect(resolveUserProfileId(source.id)).toBe(target.id);
+      expect(readUserProfileIdentity(source.id)?.profileId).toBe(target.id);
       const display = getUserProfileDisplay(linked.id);
       context.refreshConnectedUserProfile?.({
         ...display,

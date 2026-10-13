@@ -39,6 +39,16 @@ databases for diagnosis. If restoration cannot complete, the Gateway stays
 stopped with the journal and backup intact; it never starts an old reader on
 newer state. A retained transaction resumes through `--recover`.
 
+For a retained native-update transaction, `--recover` first checks whether the
+selected candidate is already the running system Gateway. It binds that
+candidate's process generation and runs full deployment acceptance, including
+identity, RPC, health/startup/readiness, configured channels, and session
+continuity. Successful forward recovery records the verified candidate and
+retires the exact journal without draining, stopping, restarting, or restoring
+the Gateway. The native backup remains on disk. This also applies to
+`ROLLBACK_FAILED` with the candidate still selected. An absent or unverifiable
+candidate follows the existing compatibility-checked rollback path.
+
 An interruption while the native owner publishes restored database files can
 require explicit recovery of the retained backup and displaced files. Database
 publication is not resumable per file; recovery fails closed instead of starting

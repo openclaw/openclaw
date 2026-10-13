@@ -318,6 +318,7 @@ async function warmedPluginContext(
       }
     },
   );
+  context.params.timeoutMs = 60_000;
   const close = () => {
     liveHandle?.close("restart");
     admission.close();
@@ -601,7 +602,7 @@ describe("runCliAgent reliability", () => {
 
   it("preserves fresh retry for direct CLI callers without a pre-clear hook", async () => {
     // Image preparation must not consume this retry-policy fixture's budget.
-    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
     supervisorSpawnMock.mockResolvedValueOnce(
       makeManagedRun({
         exitCode: 1,

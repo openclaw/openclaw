@@ -271,12 +271,10 @@ describe("chat delivery watermark preparation", () => {
             const sql = observeHostDataSql();
             try {
               expect(await dispatch.resolveReplyDelivery()).toBe("delivered");
-              const watermarks = sql.queries.filter(
-                (query) =>
-                  query.includes('from "transcript_events"') &&
-                  query.includes('from "transcript_rewrite_watermarks"'),
+              const transcriptReads = sql.queries.filter((query) =>
+                /\bfrom\s+"?transcript_events\b/i.test(query),
               );
-              expect(watermarks.length > 0).toBe(incognito);
+              expect(transcriptReads.length > 0).toBe(incognito);
               const sessionReads = sql.queries.filter((query) =>
                 /\bfrom\s+"?session_(?:nodes|participants)\b/i.test(query),
               );

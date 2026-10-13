@@ -112,13 +112,13 @@ suite.define(() => {
             snapshotAt: now,
           },
         });
+        await page.clock.runFor(500);
         await expect.poll(() => sidebarRow.textContent()).toContain("Updated by certified event");
         if (route !== "chat") {
           await expect
             .poll(() => foreground.first().textContent())
             .toContain(route === "agents" ? "Main roster preview" : "Updated by certified event");
         }
-        await page.clock.runFor(500);
         await gateway.emitGatewayEvent("sessions.changed", {
           agentId: "main",
           sessionKey: key,
@@ -140,8 +140,8 @@ suite.define(() => {
             snapshotAt: now + 500,
           },
         });
-        await expect.poll(() => sidebarRow.textContent()).toContain("Updated with held ancestor");
         await page.clock.runFor(59_499);
+        await expect.poll(() => sidebarRow.textContent()).toContain("Updated with held ancestor");
         expect(await gateway.getRequests("sessions.list")).toEqual(before);
         for (const request of before) {
           const params = requireRecord(request.params);

@@ -6,6 +6,7 @@ import {
   type HelloOk,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import * as systemPresence from "../../../infra/system-presence.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { resolveGatewayAuth } from "../../auth-resolve.js";
 import { startGatewayTailscaleExposure } from "../../server-tailscale.js";
@@ -17,10 +18,12 @@ import type { GatewayWsClient } from "../ws-types.js";
 const {
   buildGatewaySnapshotMock,
   emitGatewayAuthSecurityEventMock,
+  getSessionRowProjectionMock,
   listControlUiPluginTabsMock,
   listControlUiPluginWidgetKindsMock,
 } = vi.hoisted(() => ({
   emitGatewayAuthSecurityEventMock: vi.fn(),
+  getSessionRowProjectionMock: vi.fn(),
   listControlUiPluginTabsMock: vi.fn((_scopes: readonly string[]) => []),
   listControlUiPluginWidgetKindsMock: vi.fn((_scopes: readonly string[]) => []),
   buildGatewaySnapshotMock: vi.fn((opts?: { includeUpdateDetails?: boolean }) => {
@@ -67,6 +70,11 @@ vi.mock("../health-state.js", () => ({
   buildGatewaySnapshot: buildGatewaySnapshotMock,
   getHealthCache: vi.fn(() => null),
   getHealthVersion: vi.fn(() => 1),
+}));
+
+vi.mock("../../session-row-projection-access.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../session-row-projection-access.js")>()),
+  getSessionRowProjection: getSessionRowProjectionMock,
 }));
 
 vi.mock("../../../state/user-profiles.js", () => ({
@@ -174,12 +182,109 @@ function expectRedactedHelloSnapshot(context: ReturnType<typeof makeContext>) {
 
 describe("sendGatewayHello update detail scope", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
+    getSessionRowProjectionMock.mockReset();
     prepareTailscalePublishedOrigin({ origin: "https://reset.test", mode: "serve" })();
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
   });
+
+  it.each([undefined, []])(
+    "sends hello without membership reads for idle presence (%j)",
+    async (watchedSessions) => {
+      const presence = vi
+        .spyOn(systemPresence, "listSystemPresence")
+        .mockReturnValue([{ text: "idle peer", ts: 1, watchedSessions }]);
+      const projection = {
+        needsMembershipPreparation: vi.fn(() => true),
+        prepareMembership: vi.fn(async () => {
+          throw new Error("unexpected membership read");
+        }),
+      };
+      getSessionRowProjectionMock.mockReturnValue(projection);
+      const context = makeContext("operator", ["operator.read"]);
+
+      await sendGatewayHello(
+        context as never,
+        makeState("operator", ["operator.read"]) as never,
+        {},
+      );
+
+      expect(presence).toHaveBeenCalledWith({ includeConnectionId: "conn-operator" });
+      expect(projection.needsMembershipPreparation).not.toHaveBeenCalled();
+      expect(projection.prepareMembership).not.toHaveBeenCalled();
+      expect(context.sendFrame).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("waits for watched-session membership before sending hello", async () => {
+    vi.spyOn(systemPresence, "listSystemPresence").mockReturnValue([
+      { text: "watching peer", ts: 1, watchedSessions: ["agent:main:watched"] },
+    ]);
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const projection = {
+      needsMembershipPreparation: vi
+        .fn()
+        .mockReturnValueOnce(true)
+        .mockReturnValueOnce(true)
+        .mockReturnValue(false),
+      prepareMembership: vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          entered.resolve();
+          await release.promise;
+        })
+        .mockResolvedValue(undefined),
+    };
+    getSessionRowProjectionMock.mockReturnValue(projection);
+    const context = makeContext("operator", ["operator.read"]);
+    const sending = sendGatewayHello(
+      context as never,
+      makeState("operator", ["operator.read"]) as never,
+      {},
+    );
+    try {
+      await entered.promise;
+      expect(buildGatewaySnapshotMock).not.toHaveBeenCalled();
+      expect(context.sendFrame).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await sending;
+    }
+    expect(projection.prepareMembership).toHaveBeenCalledTimes(2);
+    expect(context.sendFrame).toHaveBeenCalledOnce();
+  });
+
+  it.each(["closed", "invalidated"])(
+    "rejects a %s connection after watched-session preparation",
+    async (state) => {
+      vi.spyOn(systemPresence, "listSystemPresence").mockReturnValue([
+        { text: "watching peer", ts: 1, watchedSessions: ["agent:main:watched"] },
+      ]);
+      getSessionRowProjectionMock.mockReturnValue({
+        needsMembershipPreparation: () => true,
+        prepareMembership: async () => undefined,
+      });
+      const original = makeContext("operator", ["operator.read"]);
+      const context = {
+        ...original,
+        handler: {
+          ...original.handler,
+          isClosed: () => state === "closed",
+          getClient: () => (state === "invalidated" ? { invalidated: true } : null),
+        },
+      };
+
+      await expect(
+        sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {}),
+      ).rejects.toThrow("Gateway connection closed before hello");
+      expect(buildGatewaySnapshotMock).not.toHaveBeenCalled();
+      expect(context.sendFrame).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["write", "suggest", "view", "none", undefined] as const)(
     "projects the current operator session cap %s only when configured",

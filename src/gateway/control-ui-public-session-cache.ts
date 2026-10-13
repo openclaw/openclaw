@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getSecretRedactionRegistryRevision } from "../logging/secret-redaction-registry.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
@@ -17,7 +16,6 @@ type Entry = {
   sessionKey: string;
   config: OpenClawConfig;
   current: boolean;
-  redactionRevision: number;
   bytes: number;
   representation?: PublicSessionRepresentation;
 };
@@ -53,10 +51,7 @@ export function createPublicSessionRepresentationCache() {
       if (!active || !entry) {
         return undefined;
       }
-      if (
-        entry.config !== config ||
-        entry.redactionRevision !== getSecretRedactionRegistryRevision()
-      ) {
+      if (entry.config !== config) {
         remove(key, entry);
         return undefined;
       }
@@ -83,10 +78,8 @@ export function createPublicSessionRepresentationCache() {
         config,
         current: active,
         bytes: 0,
-        redactionRevision: getSecretRedactionRegistryRevision(),
       };
-      const isCurrent = () =>
-        active && entry.current && entry.redactionRevision === getSecretRedactionRegistryRevision();
+      const isCurrent = () => active && entry.current;
       if (active) {
         entries.set(key, entry);
       }

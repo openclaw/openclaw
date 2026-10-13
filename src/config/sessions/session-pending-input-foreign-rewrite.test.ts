@@ -13,7 +13,7 @@ import {
 } from "./session-accessor.pending-inputs.js";
 import { upsertSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.js";
-import { loadTranscriptEvents } from "./session-transcript-events.js";
+import { loadSessionTranscriptEvents as loadTranscriptEvents } from "./session-transcript-events.js";
 
 it.each([false, true])(
   "retains foreign input authority through transcript rewrite (revoked: %s)",

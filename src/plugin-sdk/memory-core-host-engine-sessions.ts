@@ -34,6 +34,11 @@ export type {
 export function loadArchivedSessions(
   params: Parameters<typeof listSessionTranscriptArchivesReadOnly>[0],
 ) {
+  warnPluginSdkDeprecation({
+    family: "memory-session-sync-inventory",
+    method: "loadArchivedSessions",
+    replacement: "loadArchivedSessionsAsync",
+  });
   assertBoundIncognitoMemorySyncAccess(params, "loadArchivedSessions", "loadArchivedSessionsAsync");
   return listSessionTranscriptArchivesReadOnly(params);
 }
@@ -198,6 +203,11 @@ export async function loadMemorySessionMetadataBatchAsync(
 
 /** @deprecated Use resolveMemorySessionTargetsAsync; removed at the next Plugin SDK major. */
 export function resolveMemorySessionTargets(params: MemorySessionSelectors): MemorySessionTarget[] {
+  warnPluginSdkDeprecation({
+    family: "memory-session-sync-inventory",
+    method: "resolveMemorySessionTargets",
+    replacement: "resolveMemorySessionTargetsAsync",
+  });
   assertBoundIncognitoMemorySyncAccess(
     params,
     "resolveMemorySessionTargets",

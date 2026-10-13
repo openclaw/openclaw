@@ -210,6 +210,7 @@ export function createCodexNativeHookRelay(params: {
     onCleanupFailure(error: Error): void;
   };
   assertCurrent?: () => void;
+  assertCurrentAsync?: () => Promise<void>;
   onPreToolUseFailure: (failure: CodexNativePreToolUseFailure) => void | Promise<void>;
 }): CodexNativeHookRelay | undefined {
   if (params.options?.enabled === false) {
@@ -359,6 +360,7 @@ export function createCodexNativeHookRelay(params: {
       params.hostCapabilities.assertActive();
       params.assertCurrent?.();
     },
+    assertActiveAsync: params.assertCurrentAsync,
     retention: {
       readClaim: readCodexNativeChildThreadId,
       // A child claim identifies the subject; successful parent finalization
@@ -457,6 +459,7 @@ export function createCodexNativeHookRelay(params: {
         params.hostCapabilities.assertActive();
         params.assertCurrent?.();
       },
+      assertCurrentAsync: params.assertCurrentAsync,
     });
     if (processAdmissionDisposed) {
       void remoteCredential.dispose();

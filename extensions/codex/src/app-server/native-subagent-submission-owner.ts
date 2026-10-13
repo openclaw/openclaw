@@ -157,10 +157,10 @@ export class CodexNativeSubagentSubmissionOwner {
     const custody = owner.completionCustody?.retain();
     try {
       const receipts = (await state.submissionStore?.read()) ?? [];
+      await state.submissionStore?.assertCurrentAsync();
       if (this.disposed || !this.isCurrent(state) || (custody && !custody.isCurrent())) {
         return;
       }
-      state.submissionStore?.assertCurrent();
       for (const receipt of receipts) {
         this.capture(state, receipt, undefined, false, custody);
       }

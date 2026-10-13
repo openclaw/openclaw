@@ -81,6 +81,7 @@ it("keeps queued signal cleanup on its captured store and removes newly committe
 }) => {
   const database = createDatabaseOptions();
   await seedChild(database);
+  const lateTarget = "agent:main:late-target";
   const { db } = openOpenClawStateDatabase(database);
   const entered = createDeferred();
   const release = createDeferred();
@@ -106,7 +107,7 @@ it("keeps queued signal cleanup on its captured store and removes newly committe
         .prepare(
           "INSERT INTO session_watch_cursors (watcher_session_key, target_session_key, updated_at) VALUES (?, ?, 0)",
         )
-        .run(watcher, "late-target");
+        .run(watcher, lateTarget);
     }
     for (const options of [database, replacement]) {
       expect(
@@ -127,10 +128,10 @@ it("keeps queued signal cleanup on its captured store and removes newly committe
     }
     release.resolve();
     await withinTest(Promise.all([blocking, resetting, deleting]), signal);
-    expect(readCursor(database, watcher, "late-target")).toBeUndefined();
+    expect(readCursor(database, watcher, lateTarget)).toBeUndefined();
     expect(await getSessionStateVersion(child, "main", database)).toBe(0);
     expect(readSessionUpstreamLinkInDatabase(db, child, "main")).toBeUndefined();
-    expect(readCursor(replacement, watcher, "late-target")).toBeDefined();
+    expect(readCursor(replacement, watcher, lateTarget)).toBeDefined();
     expect(readSessionUpstreamLinkInDatabase(replacementDb, child, "main")?.threadId).toBe(
       "late-link",
     );

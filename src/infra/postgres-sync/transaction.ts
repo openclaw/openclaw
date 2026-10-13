@@ -1,9 +1,5 @@
 import { assertSyncTransactionResult, assertPostgresTransactionUsable } from "../sql-connection.js";
 import type { PostgresSqlConnection } from "../sql-connection.js";
-import {
-  beginSqliteDatabaseWrite,
-  finishSqliteDatabaseWrite,
-} from "../sqlite-database-admission.js";
 import { withSqlitePostCommitPublications } from "../sqlite-post-commit.js";
 import {
   deferSqliteWorkerCommitReceipt,
@@ -59,11 +55,6 @@ export function runPostgresTransactionSync<T>(
             requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
           }
           db.exec("COMMIT");
-          if (!readOnly) {
-            // Confirmed commits advance the broker's anchor; definite rollback retains its token.
-            beginSqliteDatabaseWrite(db.anchor);
-            finishSqliteDatabaseWrite(db.anchor);
-          }
         };
         if (options?.withCommit) {
           assertSyncTransactionResult(options.withCommit(commit));

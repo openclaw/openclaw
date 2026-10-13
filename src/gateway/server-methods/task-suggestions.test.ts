@@ -8,6 +8,7 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -115,6 +116,7 @@ describe("task suggestion gateway methods", () => {
           roleName,
           roleName === "restricted",
         );
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         if (roleName === "none") {
           const ownSessionKey = "agent:main:dashboard:own-task-source";
           await upsertSessionEntryCore(

@@ -64,6 +64,20 @@ import type {
 
 const activePublicationExecutions = new Map<string, Promise<SessionGitHubPublicationResult>>();
 
+function refuseLegacyPublication(
+  method: string,
+  replacement: string,
+  guidance = "and await completion",
+): never {
+  warnPluginSdkDeprecation({
+    family: "github-publication",
+    compatibility: "This method no longer performs publication work; use its replacement.",
+    method,
+    replacement,
+  });
+  throw new Error(`Use ${replacement} ${guidance}.`);
+}
+
 function sameClaim(row: PublicationRow, claim: WorkerSessionTurnClaim): boolean {
   return (
     row.claim_id === claim.claimId &&
@@ -439,13 +453,11 @@ export function createGitHubPublicationCoordinator(params: {
     requestForClaim: async (
       _request: GitHubPublicationClaimRequest,
     ): Promise<SessionGitHubPublicationResult> => {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        compatibility: "This method no longer performs publication work; use its replacement.",
-        method: "requestForClaim",
-        replacement: "requestForClaimV2",
-      });
-      throw new Error("Use requestForClaimV2 with a host-prepared requester.");
+      return refuseLegacyPublication(
+        "requestForClaim",
+        "requestForClaimV2",
+        "with a host-prepared requester",
+      );
     },
     requestForClaimV2: async (request: GitHubPublicationClaimRequestV2) => {
       if (!isGitHubPublicationRequesterV2(request.requester)) {
@@ -471,13 +483,7 @@ export function createGitHubPublicationCoordinator(params: {
     },
     /** @deprecated Use deferClaimPreparationAsync; removed in the next Plugin SDK major. */
     deferClaimPreparation(_claim: WorkerSessionTurnClaim): void {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        compatibility: "This method no longer performs publication work; use its replacement.",
-        method: "deferClaimPreparation",
-        replacement: "deferClaimPreparationAsync",
-      });
-      throw new Error("Use deferClaimPreparationAsync and await completion.");
+      return refuseLegacyPublication("deferClaimPreparation", "deferClaimPreparationAsync");
     },
     async deferClaimPreparationAsync(claim: WorkerSessionTurnClaim) {
       await runGitHubPublicationMaintenanceAsync({ operation: "deferClaim", claim }, assertCurrent);
@@ -486,13 +492,11 @@ export function createGitHubPublicationCoordinator(params: {
     async requestForSession(
       _input: GitHubPublicationSessionRequest,
     ): Promise<SessionGitHubPublicationResult> {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        compatibility: "This method no longer performs publication work; use its replacement.",
-        method: "requestForSession",
-        replacement: "requestForSessionV2",
-      });
-      throw new Error("Use requestForSessionV2 with a host-prepared requester.");
+      return refuseLegacyPublication(
+        "requestForSession",
+        "requestForSessionV2",
+        "with a host-prepared requester",
+      );
     },
     async requestForSessionV2(input: Parameters<typeof methods.requestForSessionV2>[0]) {
       if (!isGitHubPublicationRequesterV2(input.requester)) {
@@ -516,13 +520,11 @@ export function createGitHubPublicationCoordinator(params: {
     async requestPersonalForSession(
       ..._args: Parameters<typeof personal.requestPersonalForSession>
     ): Promise<SessionGitHubPublicationResult> {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        compatibility: "This method no longer performs publication work; use its replacement.",
-        method: "requestPersonalForSession",
-        replacement: "requestPersonalForSessionV2",
-      });
-      throw new Error("Use requestPersonalForSessionV2 with a host-prepared action.");
+      return refuseLegacyPublication(
+        "requestPersonalForSession",
+        "requestPersonalForSessionV2",
+        "with a host-prepared action",
+      );
     },
     async requestPersonalForSessionV2(
       ...args: Parameters<typeof personal.requestPersonalForSessionV2>
@@ -542,13 +544,7 @@ export function createGitHubPublicationCoordinator(params: {
     personalStatus(
       ..._args: Parameters<typeof repository.personalStatusAsync>
     ): SessionGitHubStatusResult {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        compatibility: "This method no longer performs publication work; use its replacement.",
-        method: "personalStatus",
-        replacement: "personalStatusAsync",
-      });
-      throw new Error("Use personalStatusAsync and await completion.");
+      return refuseLegacyPublication("personalStatus", "personalStatusAsync");
     },
     async personalStatusAsync(...args: Parameters<typeof repository.personalStatusAsync>) {
       return (
@@ -563,13 +559,11 @@ export function createGitHubPublicationCoordinator(params: {
     confirmPersonal(
       ..._args: Parameters<typeof personal.confirmPersonal>
     ): Promise<SessionGitHubPublicationResult> {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        compatibility: "This method no longer performs publication work; use its replacement.",
-        method: "confirmPersonal",
-        replacement: "confirmPersonalV2",
-      });
-      throw new Error("Use confirmPersonalV2 with a host-prepared action.");
+      return refuseLegacyPublication(
+        "confirmPersonal",
+        "confirmPersonalV2",
+        "with a host-prepared action",
+      );
     },
     async confirmPersonalV2(...args: Parameters<typeof personal.confirmPersonalV2>) {
       return (await repository.hasRequestAsync(args[0].requestId))
@@ -599,13 +593,7 @@ export function createGitHubPublicationCoordinator(params: {
     },
     /** @deprecated Use deferOrphanedRequestsAsync; removed in the next Plugin SDK major. */
     deferOrphanedRequests(): void {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        compatibility: "This method no longer performs publication work; use its replacement.",
-        method: "deferOrphanedRequests",
-        replacement: "deferOrphanedRequestsAsync",
-      });
-      throw new Error("Use deferOrphanedRequestsAsync and await completion.");
+      return refuseLegacyPublication("deferOrphanedRequests", "deferOrphanedRequestsAsync");
     },
     async deferOrphanedRequestsAsync(): Promise<void> {
       await methods.deferOrphanedRequestsAsync();
@@ -618,13 +606,7 @@ export function createGitHubPublicationCoordinator(params: {
       agentId: string;
       result: SessionGitHubPublicationResult;
     }> {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        compatibility: "This method no longer performs publication work; use its replacement.",
-        method: "listUnreportedResults",
-        replacement: "listUnreportedResultsAsync",
-      });
-      throw new Error("Use listUnreportedResultsAsync and await completion.");
+      return refuseLegacyPublication("listUnreportedResults", "listUnreportedResultsAsync");
     },
     async listUnreportedResultsAsync() {
       return [
@@ -634,26 +616,14 @@ export function createGitHubPublicationCoordinator(params: {
     },
     /** @deprecated Use readAsync and await completion. */
     read(_requestId: string): SessionGitHubPublicationResult | undefined {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        compatibility: "This method no longer performs publication work; use its replacement.",
-        method: "read",
-        replacement: "readAsync",
-      });
-      throw new Error("Use readAsync and await completion.");
+      return refuseLegacyPublication("read", "readAsync");
     },
     async readAsync(requestId: string) {
       return (await repository.readAsync(requestId)) ?? methods.readAsync(requestId);
     },
     /** @deprecated Use markReportedAsync; removed in the next Plugin SDK major. */
     markReported(_requestId: string): void {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        compatibility: "This method no longer performs publication work; use its replacement.",
-        method: "markReported",
-        replacement: "markReportedAsync",
-      });
-      throw new Error("Use markReportedAsync and await completion.");
+      return refuseLegacyPublication("markReported", "markReportedAsync");
     },
     async markReportedAsync(requestId: string) {
       await runGitHubPublicationMaintenanceAsync({ operation: "report", requestId }, assertCurrent);

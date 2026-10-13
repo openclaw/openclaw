@@ -17,34 +17,16 @@ type NativeHookRelayBridgeDatabase = Pick<OpenClawStateKyselyDatabase, "native_h
 
 type NativeHookRelayBridgeRow = OpenClawStateKyselyDatabase["native_hook_relay_bridges"];
 
-export type NativeHookRelayBridgeSnapshot = {
-  record: NativeHookRelayBridgeRecord;
-  updatedAtMs: number;
-};
-
 export type NativeHookRelayBridgePruneCandidate = {
-  snapshot: NativeHookRelayBridgeSnapshot;
+  record: NativeHookRelayBridgeRecord;
   reason: NativeHookRelayBridgePruneResult["reason"];
 };
 
-function readNativeHookRelayBridgeSnapshot(
-  row: NativeHookRelayBridgeRow | undefined,
-): NativeHookRelayBridgeSnapshot | undefined {
-  const record = readNativeHookRelayBridgeRecordRow(row);
-  if (!record || !row || !Number.isSafeInteger(row.updated_at_ms)) {
-    return undefined;
-  }
-  return {
-    record,
-    updatedAtMs: row.updated_at_ms,
-  };
-}
-
-export function readNativeHookRelayBridgeSnapshotFromDatabase(params: {
+export function readNativeHookRelayBridgeRecordFromDatabase(params: {
   database: { db: DatabaseSync };
   relayId: string;
-}): NativeHookRelayBridgeSnapshot | undefined {
-  return readNativeHookRelayBridgeSnapshot(
+}): NativeHookRelayBridgeRecord | undefined {
+  return readNativeHookRelayBridgeRecordRow(
     readNativeHookRelayBridgeRow(params.database.db, params.relayId),
   );
 }
@@ -120,16 +102,16 @@ export function deleteNativeHookRelayBridgeRecordIfOwnedInDatabase(
   return result.numAffectedRows === 1n;
 }
 
-export function listNativeHookRelayBridgeSnapshotsInDatabase(database: {
+export function listNativeHookRelayBridgeRecordsInDatabase(database: {
   db: DatabaseSync;
-}): NativeHookRelayBridgeSnapshot[] {
+}): NativeHookRelayBridgeRecord[] {
   const db = getNodeSqliteKysely<NativeHookRelayBridgeDatabase>(database.db);
   return executeSqliteQuerySync(
     database.db,
     db.selectFrom("native_hook_relay_bridges").selectAll(),
   ).rows.flatMap((row) => {
-    const snapshot = readNativeHookRelayBridgeSnapshot(row);
-    return snapshot ? [snapshot] : [];
+    const record = readNativeHookRelayBridgeRecordRow(row);
+    return record ? [record] : [];
   });
 }
 
@@ -141,22 +123,16 @@ export function pruneNativeHookRelayBridgeRecordsInDatabase(
   const db = getNodeSqliteKysely<NativeHookRelayBridgeDatabase>(database.db);
   const pruned: NativeHookRelayBridgePruneResult[] = [];
   for (const candidate of candidates) {
-    const { record, updatedAtMs } = candidate.snapshot;
-    if (candidate.reason === "expired" && nowMs <= record.expiresAtMs) {
-      continue;
+    const { record } = candidate;
+    let deletion = db
+      .deleteFrom("native_hook_relay_bridges")
+      .where("relay_id", "=", record.relayId)
+      .where("pid", "=", record.pid)
+      .where("token", "=", record.token);
+    if (candidate.reason === "expired") {
+      deletion = deletion.where("expires_at_ms", "<", nowMs);
     }
-    const result = executeSqliteQuerySync(
-      database.db,
-      db
-        .deleteFrom("native_hook_relay_bridges")
-        .where("relay_id", "=", record.relayId)
-        .where("pid", "=", record.pid)
-        .where("hostname", "=", record.hostname)
-        .where("port", "=", record.port)
-        .where("token", "=", record.token)
-        .where("expires_at_ms", "=", record.expiresAtMs)
-        .where("updated_at_ms", "=", updatedAtMs),
-    );
+    const result = executeSqliteQuerySync(database.db, deletion);
     if (result.numAffectedRows === 1n) {
       pruned.push({
         relayId: record.relayId,

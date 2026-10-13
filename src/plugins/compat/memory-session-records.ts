@@ -14,7 +14,7 @@ export const MEMORY_SESSION_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-migration/compatibility-policy#memory-session-inventory-readers",
     surfaces: ["loadArchivedSessions", "resolveMemorySessionTargets"],
     diagnostics: [
-      "TypeScript @deprecated annotations and migration documentation; no runtime warnings",
+      "TypeScript @deprecated annotations, migration documentation, and a runtime warning once per plugin and family",
     ],
     tests: [
       "src/plugin-sdk/memory-core-host-engine-sessions.test.ts",

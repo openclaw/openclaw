@@ -357,39 +357,44 @@ describe("session status cost line", () => {
 });
 
 describe("buildStatusText thinking facts", () => {
-  it("keeps the prepared thinking level for a discovered Ollama reasoning model", async () => {
-    const text = await buildStatusText(
-      statusParams({
-        sessionEntry: {
-          sessionId: "wa-ollama-think",
-          updatedAt: 0,
-          thinkingLevel: "high",
-          modelOverride: "glm-5.2:cloud",
-          providerOverride: "ollama",
-        },
-        statusChannel: "whatsapp",
-        provider: "ollama",
-        model: "glm-5.2:cloud",
-        thinkingCatalog: [
-          {
-            provider: "ollama",
-            id: "glm-5.2:cloud",
-            reasoning: true,
+  it.each([
+    { reasoning: true, expected: "think high" },
+    { reasoning: false, expected: "think off (requested high; clamped)" },
+  ])(
+    "shows requested and effective thinking for an Ollama model (reasoning=$reasoning)",
+    async ({ reasoning, expected }) => {
+      const text = await buildStatusText(
+        statusParams({
+          sessionEntry: {
+            sessionId: "wa-ollama-think",
+            updatedAt: 0,
+            thinkingLevel: "high",
+            modelOverride: "glm-5.2:cloud",
+            providerOverride: "ollama",
           },
-        ],
-        resolvedThinkLevel: "high",
-        resolvedReasoningLevel: "on",
-        resolveDefaultThinkingLevel: async () => "high",
-        pluginHealthLineOverride: "Plugins: test",
-        primaryModelLabelOverride: "ollama/glm-5.2:cloud",
-        modelAuthOverride: "local",
-        activeModelAuthOverride: "local",
-      }),
-    );
+          statusChannel: "whatsapp",
+          provider: "ollama",
+          model: "glm-5.2:cloud",
+          thinkingCatalog: [
+            {
+              provider: "ollama",
+              id: "glm-5.2:cloud",
+              reasoning,
+            },
+          ],
+          resolvedThinkLevel: "high",
+          resolvedReasoningLevel: "on",
+          resolveDefaultThinkingLevel: async () => "high",
+          pluginHealthLineOverride: "Plugins: test",
+          primaryModelLabelOverride: "ollama/glm-5.2:cloud",
+          modelAuthOverride: "local",
+          activeModelAuthOverride: "local",
+        }),
+      );
 
-    expect(text).toContain("think high");
-    expect(text).not.toMatch(/think\s+off\b/);
-  });
+      expect(text).toContain(expected);
+    },
+  );
 });
 
 describe("buildStatusText lazy loader retry", () => {

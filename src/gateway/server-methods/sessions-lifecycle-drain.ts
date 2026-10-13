@@ -169,7 +169,7 @@ export async function prepareSessionLifecycleDrain(
         // cancellation completion here: it may need placement and lifecycle recovery.
         params.authorize?.();
         params.beforeCancel?.();
-        const workerStop = prepareSessionWorkerPlacementStop(params);
+        const workerStop = await prepareSessionWorkerPlacementStop(params);
         params.authorize?.();
         releaseAdmissions = closeSessionWorkAdmissions({
           scope: params.storePath,

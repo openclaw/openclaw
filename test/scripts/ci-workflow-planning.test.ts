@@ -69,6 +69,53 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+describe("PostgreSQL conformance selection", () => {
+  it.each([
+    ["src/infra/database-engine/open.ts", true],
+    ["src/infra/postgres-sync/locks.test.ts", true],
+    ["src/infra/sql-connection.ts", true],
+    ["src/infra/sql-query-compiler.ts", true],
+    ["src/infra/kysely-sync.ts", true],
+    ["src/infra/kysely-sync-queries.ts", true],
+    ["src/infra/sqlite-transaction.ts", true],
+    ["extensions/workboard/src/store.test.ts", true],
+    ["src/config/zod-schema.database.ts", true],
+    ["scripts/test-database-conformance.mjs", true],
+    ["scripts/test-database-conformance-preload.mjs", true],
+    ["src/infra/unrelated.ts", false],
+    ["docs/help/testing/suites.md", false],
+  ])("selects %s: %s", (file, selected) => {
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "pull_request",
+      changedPaths: [file],
+      targetFiles: ["scripts/test-database-conformance.mjs"],
+    });
+    expect(result.status, result.output).toBe(0);
+    expect(result.outputs.run_postgres_conformance).toBe(String(selected));
+  });
+
+  it.each([
+    ["schedule", [], true, true],
+    ["pull_request", null, true, true],
+    ["schedule", [], false, false],
+    ["push", ["extensions/workboard/src/store.ts"], true, false],
+  ] as const)(
+    "handles %s inventory and target capability",
+    (eventName, changedPaths, supported, selected) => {
+      const result = runCiManifestFixture({
+        bundledPlanner: true,
+        runNode: false,
+        eventName,
+        changedPaths: changedPaths && [...changedPaths],
+        targetFiles: supported ? ["scripts/test-database-conformance.mjs"] : [],
+      });
+      expect(result.status, result.output).toBe(0);
+      expect(result.outputs.run_postgres_conformance).toBe(String(selected));
+    },
+  );
+});
+
 function resolveSelectedUiIncludes(encoded: string): string[][] {
   const decoded = decodeNodeTestGroups(encoded);
   if (decoded.length === 0) {
@@ -11563,11 +11610,12 @@ describe("ci workflow guards", () => {
     ]);
   });
 
-  it("provisions ripgrep for filesystem and SQLite ratchet selections", () => {
+  it("provisions ripgrep for filesystem, SQLite ratchet, and PR successor selections", () => {
     const contract = "src/agents/filesystem-tools-output-contract.test.ts";
     const nativeTools = "src/agents/sessions/tools/index.test.ts";
     const bytePaths = "src/agents/sessions/tools/grep.byte-path.test.ts";
     const sqliteRatchet = "test/scripts/check-database-worker-ratchet.test.ts";
+    const prSuccessor = "test/scripts/pr-baseline-successor.test.ts";
     const unrelated = "src/agents/run-wait.test.ts";
     const selections = [
       { targets: [contract] },
@@ -11582,6 +11630,9 @@ describe("ci workflow guards", () => {
       { includePatterns: [sqliteRatchet] },
       { includePatterns: ["test/scripts/check-*-ratchet.test.ts"] },
       { groups: [{ shard_name: "core-tooling-1", includePatterns: [sqliteRatchet] }] },
+      { targets: [prSuccessor] },
+      { includePatterns: [prSuccessor] },
+      { groups: [{ shard_name: "core-tooling-12", includePatterns: [prSuccessor] }] },
       { includePatterns: [unrelated] },
       { shardName: "agentic-agents-core-runtime" },
       { shardName: "agentic-agents-support" },
@@ -11611,6 +11662,9 @@ describe("ci workflow guards", () => {
       expectDefined(result.outputs.checks_node_core_nondist_matrix, "non-dist Node matrix"),
     ) as { include: { requires_ripgrep?: boolean }[] };
     expect(matrix.include.map((row) => Boolean(row.requires_ripgrep))).toEqual([
+      true,
+      true,
+      true,
       true,
       true,
       true,
@@ -11729,6 +11783,7 @@ describe("ci workflow guards", () => {
       "android-access-native",
       "docker-seed-e2e",
       "published-driver-update",
+      "postgres-conformance",
       "pr-failure-report",
     ];
 

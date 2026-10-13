@@ -345,10 +345,8 @@ describe("createReplyRestartRecoveryClaimController", () => {
       await using fixture = await createPlacementAdmission();
       const hostSql = observeHostDataSql();
       try {
-        expect(fixture.service.getMany([fixture.entry.sessionId]).size).toBe(1);
-        expect(hostSql.queries.length).toBeGreaterThan(0);
-        hostSql.calls.forEach((call) => call.mockClear());
-        hostSql.queries.length = 0;
+        expect((await fixture.service.getManyAsync([fixture.entry.sessionId])).size).toBe(1);
+        expect(hostSql.queries).toEqual([]);
 
         await expect(fixture.controller.admitUserTurn(fixture.recorder)).resolves.toBe("admitted");
 

@@ -636,7 +636,14 @@ export function stageUserProfileCatalogChange(db: DatabaseSync, profileIds: stri
     stageSqliteTransactionState(db, {
       stage: () => {},
       rollback: () => {},
-      commit: () => rows.forEach(([id, row]) => catalog.set(id, row)),
+      commit: () => {
+        for (const id of profileIds) {
+          catalog.delete(id);
+        }
+        for (const [id, row] of rows) {
+          catalog.set(id, row);
+        }
+      },
     });
   }
 }

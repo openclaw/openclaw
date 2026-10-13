@@ -393,6 +393,8 @@ it("delivers nested event rows identical to the full list for each viewer and cl
       });
       for (const [index, peer] of peers.entries()) {
         const frame = JSON.parse(peer.send.mock.lastCall![0]);
+        expect(frame.event).toBe("sessions.changed");
+        expect(frame.payload.sessionKey).toBe(key);
         expect(frame.payload.childSessions).toEqual(expected[index]?.childSessions);
       }
     } finally {

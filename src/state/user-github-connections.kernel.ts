@@ -7,7 +7,7 @@ import {
   PersonalGitHubStateError,
   readPersonalGitHubSecret,
   writePersonalGitHubSecret,
-} from "../secrets/store/secret-store-hidden-github.js";
+} from "../secrets/store/secret-store-hidden-github.kernel.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import { stageUserGitHubConnectionCommit } from "./user-github-connection-events.js";

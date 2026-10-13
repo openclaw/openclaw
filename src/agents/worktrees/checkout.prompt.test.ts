@@ -116,7 +116,7 @@ it.each(["lf", "crlf"])(
   },
 );
 
-it.each([".gitattributes", ".codex/config.toml"])(
+it.each([".gitattributes", ".codex/config.toml", ".CODEX/config.toml"])(
   "retains ordinary materialization when %s can change prompt inputs",
   async (relative) => {
     await write(
@@ -130,6 +130,38 @@ it.each([".gitattributes", ".codex/config.toml"])(
     expect((await create(ready)).code).toBe(0);
     expect(ready).not.toHaveBeenCalled();
     await expect(fs.access(path.join(destination, "src/main.ts"))).resolves.toBeUndefined();
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "prepares mixed-case skills and raw prompt paths without scanning unrelated attributes",
+  async () => {
+    const inputs = [
+      "Skills/nested/example/SKILL.md",
+      ".agents/skills/tab\tname/SKILL.md",
+      "prompt\ninput.md",
+      "users/Extra_Profile/USER.md",
+    ];
+    for (const relative of inputs) {
+      await write(relative, `prompt ${relative}\n`);
+    }
+    await write("src/.GITATTRIBUTES", "*.ts text eol=lf\n");
+    await requireGit(repo, ["add", "."]);
+    await requireGit(repo, ["commit", "-qm", "selected prompt paths"]);
+    commit = await requireGit(repo, ["rev-parse", "HEAD"]);
+    const ready = vi.fn(async () => {
+      for (const relative of inputs) {
+        expect(await fs.readFile(path.join(destination, relative), "utf8")).toBe(
+          `prompt ${relative}\n`,
+        );
+      }
+      await expect(fs.access(path.join(destination, "src/main.ts"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    });
+    expect((await create(ready)).code).toBe(0);
+    expect(ready).toHaveBeenCalledOnce();
+    expect(await requireGit(destination, ["status", "--porcelain"])).toBe("");
   },
 );
 

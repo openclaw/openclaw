@@ -1,8 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
-import { redactTranscriptMessage } from "../agents/transcript-redact.js";
+import { sanitizeTranscriptMessage } from "../agents/transcript-sanitize.js";
 import type { SessionTranscriptAssistantMessage } from "../config/sessions/transcript.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readSessionTranscriptRunId } from "../sessions/transcript-events.js";
 import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import type { AgentMessage } from "./agent-core.js";
@@ -10,10 +9,9 @@ import type { AgentMessage } from "./agent-core.js";
 export function findLatestEquivalentAssistantMessageId(
   events: readonly unknown[],
   message: SessionTranscriptAssistantMessage,
-  config: OpenClawConfig | undefined,
   excludeDeliveryMirrors = false,
 ): string | undefined {
-  const expectedText = extractAssistantMirrorComparableText(message, config);
+  const expectedText = extractAssistantMirrorComparableText(message);
   if (!expectedText) {
     return undefined;
   }
@@ -35,7 +33,7 @@ export function findLatestEquivalentAssistantMessageId(
     ) {
       return undefined;
     }
-    return extractAssistantMirrorComparableText(candidate, config) === expectedText &&
+    return extractAssistantMirrorComparableText(candidate) === expectedText &&
       typeof event.id === "string" &&
       event.id
       ? event.id
@@ -47,10 +45,9 @@ export function findLatestEquivalentAssistantMessageId(
 export function findEquivalentAssistantMessageInRun(
   events: readonly unknown[],
   message: SessionTranscriptAssistantMessage,
-  config: OpenClawConfig | undefined,
   runId: string,
 ): string | undefined {
-  const expectedText = extractAssistantMirrorComparableText(message, config);
+  const expectedText = extractAssistantMirrorComparableText(message);
   if (!expectedText) {
     return undefined;
   }
@@ -76,7 +73,7 @@ export function findEquivalentAssistantMessageInRun(
       !isDeliveryMirrorAssistantMessage(candidate) &&
       readSessionTranscriptRunId(candidate) === runId &&
       !correlatedIds.has(event.id) &&
-      extractAssistantMirrorComparableText(candidate, config) === expectedText
+      extractAssistantMirrorComparableText(candidate) === expectedText
     ) {
       return event.id;
     }
@@ -86,13 +83,11 @@ export function findEquivalentAssistantMessageInRun(
 
 function extractAssistantMirrorComparableText(
   message: SessionTranscriptAssistantMessage,
-  config: OpenClawConfig | undefined,
 ): string | undefined {
-  const redacted = redactTranscriptMessage(
-    message as Parameters<typeof redactTranscriptMessage>[0], // SAFETY: this stored assistant has the redactor's message envelope.
-    config,
+  const normalized = sanitizeTranscriptMessage(
+    message as Parameters<typeof sanitizeTranscriptMessage>[0], // SAFETY: this stored assistant has the sanitizer's message envelope.
   );
-  return extractAssistantPhaseText(redacted)?.trim() || undefined;
+  return extractAssistantPhaseText(normalized)?.trim() || undefined;
 }
 
 export function isDeliveryMirrorAssistantMessage(

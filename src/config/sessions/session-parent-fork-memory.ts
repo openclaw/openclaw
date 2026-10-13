@@ -1,6 +1,7 @@
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { ForkSessionFromParentTranscriptParams } from "./session-accessor.types.js";
 import {
+  captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
   type SessionActorStorageBinding,
 } from "./session-actor-storage-binding.js";
@@ -31,16 +32,36 @@ export async function readMemoryParentForkSource(
           sessionActor: binding,
         })
       : undefined;
-  if (!selected) {
+  const captured = selected
+    ? undefined
+    : captureSessionActorStorageOwner({
+        agentId,
+        sessionKey,
+        storePath: input.storePath,
+        sessionActor: binding,
+      });
+  const actor =
+    selected?.actor ??
+    (await captured?.owner?.acquireExisting(sessionKey, {
+      assertCurrent: () => authority.assertCurrent(),
+      assertReadable: () => authority.assertCurrent(),
+    }));
+  if (!actor) {
     authority.assertCurrent();
     return undefined;
   }
-  const source = await selected.actor.storage.read(
-    {
-      type: "session.parentFork.source",
-      input: { sessionKey, sessionId: input.parentEntry.sessionId, forkFrom: input.forkFrom },
-    },
-    authority,
-  );
-  return { source, scope: { agentId, path: selected.path } };
+  try {
+    const source = await actor.storage!.read(
+      {
+        type: "session.parentFork.source",
+        input: { sessionKey, sessionId: input.parentEntry.sessionId, forkFrom: input.forkFrom },
+      },
+      authority,
+    );
+    return { source, scope: { agentId, path: selected?.path ?? captured!.path } };
+  } finally {
+    if (!selected) {
+      await actor.release();
+    }
+  }
 }

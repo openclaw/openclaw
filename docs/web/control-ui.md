@@ -43,6 +43,8 @@ After a Gateway restart, an agent may need a few minutes to prepare its database
 
 Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes.
 
+Saved pin labels remain visible while their details refresh, even when those sessions are outside the first list page. Unavailable pins disappear silently without removing their saved shortcuts. Sidebar session updates arriving within one display frame paint together.
+
 Inline widgets and MCP Apps reserve their last rendered height when a cached conversation reloads, so loading their content does not move the surrounding messages. New widgets use their declared size until the content reports its height. Changed content or a different window width can still resize a widget.
 
 Automatic read acknowledgements and identity refreshes pause while the Gateway reports a restart or suspension. Pending read acknowledgements are shared across repeated session updates. If an acknowledgement is rejected, later updates respect the server's retry delay and use randomized backoff instead of immediately sending another patch.

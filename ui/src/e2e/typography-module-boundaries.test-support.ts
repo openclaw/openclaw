@@ -38,11 +38,10 @@ export function defineTypographyModuleBoundaryTests(
           await page.keyboard.press("Escape");
           popupModule.release();
           await page.waitForFunction(() => Boolean(customElements.get("wa-tooltip")));
-          const popup = trigger.locator("..").locator("wa-tooltip");
           expect(
-            await popup.evaluate(async (element: WaTooltip) => {
-              await element.updateComplete;
-              return element.open;
+            await page.locator("wa-tooltip").evaluateAll(async (elements: WaTooltip[]) => {
+              await Promise.all(elements.map((element) => element.updateComplete));
+              return elements.some((element) => element.open);
             }),
           ).toBe(false);
         } finally {

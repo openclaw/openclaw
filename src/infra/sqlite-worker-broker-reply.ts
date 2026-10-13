@@ -624,6 +624,10 @@ export function settleSqliteWorkerJob(
   let failure = error ?? (admission?.failureSource === "domain" ? undefined : admission?.failure);
   const admissionCleanupFailures = job.operationAdmission?.admission.cleanupFailures ?? [];
   if (admissionCleanupFailures.length > 0) {
+    // Cleanup uncertainty supersedes the worker's pre-open refusal certificate.
+    if (job.dispatchState) {
+      job.dispatchState.openRefused = false;
+    }
     const cleanupError = new AggregateError(
       admissionCleanupFailures,
       "SQLite worker admission cleanup failed",

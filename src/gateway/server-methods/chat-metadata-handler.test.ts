@@ -14,6 +14,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import * as userModelAccounts from "../../state/user-model-accounts.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
@@ -268,6 +269,7 @@ describe("chat metadata ownership", () => {
     async (scope) => {
       await withOpenClawTestState({ layout: "state-only" }, async () => {
         const fixture = createPersonalMetadataFixture([scope]);
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const { owner, authProfileId, metadata, readChatMetadata } = fixture;
         userModelAccounts.clearUserProfileAuthLink({ profileId: owner.id, provider: "openai" });
         const before = userModelAccounts.readUserModelAuthProfile(authProfileId);
@@ -437,6 +439,7 @@ describe("chat metadata dispatch authority", () => {
   ] as const)("denies $name before preparing metadata", async ({ visibility, incognito }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const fixture = createPersonalMetadataFixture([SESSION_READ_SCOPE]);
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       fixture.role.sessions.others = "view";
       await state.writeConfig(fixture.config);
       const other = ensureProfileForEmail("metadata-foreign@example.test");
@@ -476,6 +479,7 @@ describe("chat metadata dispatch authority", () => {
     async ({ visibility, own, admin, incognito }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const fixture = createPersonalMetadataFixture([admin ? ADMIN_SCOPE : SESSION_READ_SCOPE]);
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         fixture.role.agents = ["main"];
         fixture.role.sessions.others = "view";
         await state.writeConfig(fixture.config);
@@ -516,6 +520,7 @@ describe("chat metadata dispatch authority", () => {
     async (selector) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const fixture = createPersonalMetadataFixture([SESSION_READ_SCOPE]);
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         fixture.role.agents = ["main"];
         fixture.role.sessions.others = "view";
         await state.writeConfig(fixture.config);
@@ -555,6 +560,7 @@ describe("chat metadata dispatch authority", () => {
     async ({ patch, current }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const fixture = createPersonalMetadataFixture([SESSION_READ_SCOPE]);
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         fixture.role.sessions.others = "view";
         await state.writeConfig(fixture.config);
         const other = ensureProfileForEmail("metadata-foreign@example.test");
@@ -599,6 +605,7 @@ describe("chat metadata dispatch authority", () => {
   it("refuses a missing saved row created during metadata preparation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const fixture = createPersonalMetadataFixture([SESSION_READ_SCOPE]);
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       await state.writeConfig(fixture.config);
       const sessionKey = "agent:main:metadata-created-during-read";
       fixture.readChatMetadata.mockImplementationOnce(async () => {
@@ -622,6 +629,7 @@ describe("chat metadata dispatch authority", () => {
   it("does not publish metadata after its logical store alias selects an identical replacement", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const fixture = createPersonalMetadataFixture([SESSION_READ_SCOPE]);
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const sessionKey = "agent:main:metadata-store-alias";
       const original = state.statePath("original", "catalog.sqlite");
       const replacement = state.statePath("replacement", "catalog.sqlite");
@@ -661,6 +669,7 @@ describe("chat metadata dispatch authority", () => {
     async (firstFailure) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const fixture = createPersonalMetadataFixture([SESSION_READ_SCOPE]);
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         await state.writeConfig(fixture.config);
         const sessionKey = "agent:main:metadata-cleanup";
         const sibling = { agentId: "main", sessionKey: "agent:main:metadata-cleanup-sibling" };
@@ -756,6 +765,7 @@ describe("chat metadata dispatch authority", () => {
     async (requestedKey) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const fixture = createPersonalMetadataFixture([ADMIN_SCOPE]);
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         await state.writeConfig(fixture.config);
         const target = {
           agentId: "main",
@@ -793,6 +803,7 @@ describe("chat metadata dispatch authority", () => {
     async (change) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const fixture = createPersonalMetadataFixture([SESSION_READ_SCOPE]);
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         await state.writeConfig(fixture.config);
         const entered = createDeferred();
         const release = createDeferred();

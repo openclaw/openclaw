@@ -69,11 +69,14 @@ it("revalidates the session after held publication preparation permits retiremen
     agentId: "main",
     sessionKey: rootKey,
     defaultSessionId: "prepared-publication-session",
+    lifecycleRevision: "prepared-publication-revision",
   };
-  await writeSubagentSessionEntry(target);
+  const storePath = await writeSubagentSessionEntry(target);
   await registerSubagentRun({
     runId: "prepared-publication",
     childSessionKey: rootKey,
+    childAgentId: "main",
+    sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: rootKey })?.entry,
     requesterSessionKey: "agent:main:main",
     requesterAgentId: "main",
     requesterDisplayKey: "main",
@@ -142,6 +145,11 @@ it.each([
     await registerSubagentRun({
       runId: "publication-b0",
       childSessionKey: rootKey,
+      childAgentId: "main",
+      sessionEntry: {
+        sessionId: "publication-root-session",
+        lifecycleRevision: "publication-root-revision",
+      },
       requesterSessionKey: "agent:main:main",
       requesterAgentId: "main",
       requesterDisplayKey: "main",
@@ -237,10 +245,13 @@ it.each([
         agentId: "main",
         sessionKey,
         defaultSessionId: `${runId}-session`,
+        lifecycleRevision: `${runId}-revision`,
       });
       await registerSubagentRun({
         runId,
         childSessionKey: sessionKey,
+        childAgentId: "main",
+        sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey })?.entry,
         requesterSessionKey: rootKey,
         requesterAgentId: "main",
         requesterDisplayKey: "main",

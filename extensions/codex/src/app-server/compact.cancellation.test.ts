@@ -207,13 +207,16 @@ describe("maybeCompactCodexAppServerSession", () => {
         await expect(pending).resolves.toMatchObject({
           ok: false,
           compacted: false,
-          reason: expect.stringContaining(
+          reason:
             rejection === "generation"
-              ? "Codex session generation is no longer current"
-              : rejection === "deadline"
-                ? "thread/compact/start timed out"
-                : "thread/compact/start aborted",
-          ),
+              ? expect.stringMatching(
+                  /Codex session (generation is no longer current|execution policy changed)/,
+                )
+              : expect.stringContaining(
+                  rejection === "deadline"
+                    ? "thread/compact/start timed out"
+                    : "thread/compact/start aborted",
+                ),
         });
         expect(closeAndWait).not.toHaveBeenCalled();
         expect(bindingStore.read(current)).toEqual(binding);

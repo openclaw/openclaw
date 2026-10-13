@@ -100,6 +100,8 @@ describe("pending spawn invocation authority", () => {
         await registerSubagentRun({
           runId: id,
           childSessionKey: key(id),
+          childAgentId: "main",
+          sessionEntry: { sessionId: `${id}-session`, lifecycleRevision: "original" },
           controllerSessionKey: id === "d" ? key("a") : parentSessionKey,
           requesterSessionKey: id === "d" ? key("a") : parentSessionKey,
           requesterAgentId: "main",

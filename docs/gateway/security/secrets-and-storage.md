@@ -71,12 +71,12 @@ Workspace `.env` files frequently live next to agent code, get committed by acci
 
 ### Logs and transcripts
 
-OpenClaw stores session transcripts on disk under `~/.openclaw/agents/<agentId>/sessions/*.jsonl` for session continuity and optional memory indexing - any process/user with filesystem access can read them. Treat disk access as the trust boundary and lock down `~/.openclaw` permissions; run agents under separate OS users or hosts for stronger isolation.
+OpenClaw stores session transcripts in the [per-agent SQLite database](/reference/database-schemas#database-layout) for session continuity and optional memory indexing - any process/user with filesystem access can read them. Treat disk access as the trust boundary and lock down `~/.openclaw` permissions; run agents under separate OS users or hosts for stronger isolation.
 
 Gateway logs may include tool summaries, errors, and URLs; session transcripts can include pasted secrets, file contents, command output, and links.
 
-- Log/transcript redaction is always on and cannot be disabled by config.
-- Add custom patterns for your environment via `logging.redactPatterns` (tokens, hostnames, internal URLs).
+- Logs, diagnostics, and support exports mask sensitive values. Session transcripts, tool arguments, tool results, and `.env` reads preserve their original text, including credentials.
+- Add custom patterns for logs and diagnostics via `logging.redactPatterns` (tokens, hostnames, internal URLs); these patterns do not alter model context or transcripts.
 - When sharing diagnostics, prefer `openclaw status --all` (pasteable, secrets redacted) over raw logs.
 - Prune old session transcripts and log files if you do not need long retention.
 

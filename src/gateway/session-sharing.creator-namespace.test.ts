@@ -48,6 +48,7 @@ describe("creator namespace authorization", () => {
   it("never turns matching attribution or responsibility into a profile creator grant", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const profile = ensureProfileForEmail("creator@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const client = {
         connect: { scopes: ["operator.read", "operator.write"] },
         authenticatedUserProfile: { profileId: profile.id },

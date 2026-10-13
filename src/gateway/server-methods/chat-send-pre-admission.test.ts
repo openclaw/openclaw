@@ -14,8 +14,9 @@ import {
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { readUserProfileIdentity } from "../../state/user-profile-list.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
-import { ensureProfileForEmail, resolveUserProfileId } from "../../state/user-profiles.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -616,7 +617,10 @@ describe("chat send retry identity", () => {
         });
         // Keep the selected ID exact: resolving both sides would silently follow a merge.
         params.assertCurrent = () => {
-          if (resolveUserProfileId(client.authenticatedUserProfile!.profileId) !== source.id) {
+          if (
+            readUserProfileIdentity(client.authenticatedUserProfile!.profileId)?.profileId !==
+            source.id
+          ) {
             throw mismatch;
           }
         };
@@ -640,7 +644,7 @@ describe("chat send retry identity", () => {
           expect(resolveDurableChatClaim).toHaveBeenCalledOnce();
           if (outcome !== "unchanged") {
             linkEmail(sourceEmail, target.id);
-            expect(resolveUserProfileId(source.id)).toBe(target.id);
+            expect(readUserProfileIdentity(source.id)?.profileId).toBe(target.id);
             expect(client.authenticatedUserProfile?.profileId).toBe(source.id);
           }
           if (outcome === "cached-success" || outcome === "cached-error") {

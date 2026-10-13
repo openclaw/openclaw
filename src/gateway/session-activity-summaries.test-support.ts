@@ -50,6 +50,7 @@ export const preparedActivityRecapModel = {
   agentId: "main",
   agentDir: "/tmp/unused",
   outputTextPolicy: "strict-visible" as const,
+  thinkLevel: "off" as const,
 };
 export const activityRecapResult = (text: string) => ({
   text,

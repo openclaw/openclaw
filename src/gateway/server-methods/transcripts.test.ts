@@ -18,6 +18,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   createOpenClawTestState,
@@ -232,6 +233,7 @@ describe("transcript Gateway read authorization and errors", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const { selector } = await seed(state.stateDir);
       const profile = ensureProfileForEmail("transcript-guest@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const cfg = roles("none");
       const queries: Array<[string, Record<string, unknown>]> = [
         ["transcripts.list", {}],
@@ -258,6 +260,7 @@ describe("transcript Gateway read authorization and errors", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const { selector } = await seed(state.stateDir);
       const profile = ensureProfileForEmail("transcript-reader@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const caller = client(profile.id);
       const [ok, payload] = await request(
         "transcripts.list",
@@ -325,6 +328,7 @@ describe("transcript Gateway read authorization and errors", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
         const { store } = await seed(stateDir);
         const profile = ensureProfileForEmail("public-page-reader@example.test");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const cancellation = new AbortController();
         let current = true;
         const cfg = roles("view");

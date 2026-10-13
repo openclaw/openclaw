@@ -1245,6 +1245,14 @@
     "./plugin-sdk/sqlite-worker-runtime": {
       "default": "./dist/plugin-sdk/sqlite-worker-runtime.js"
     },
+    "./plugin-sdk/database-engine-runtime": {
+      "types": "./dist/plugin-sdk/database-engine-runtime.d.ts",
+      "default": "./dist/plugin-sdk/database-engine-runtime.js"
+    },
+    "./plugin-sdk/database-engine-worker-runtime": {
+      "types": "./dist/plugin-sdk/database-engine-worker-runtime.d.ts",
+      "default": "./dist/plugin-sdk/database-engine-worker-runtime.js"
+    },
     "./plugin-sdk/session-transcript-hit": {
       "default": "./dist/plugin-sdk/session-transcript-hit.js"
     },
@@ -2277,7 +2285,7 @@
     "@modelcontextprotocol/sdk": "1.32.0",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.26.0",
+    "@openclaw/fs-safe": "0.26.2",
     "@openclaw/proc-safe": "0.2.0",
     "@openclaw/proxyline": "0.4.0",
     "@resvg/resvg-js": "2.6.2",

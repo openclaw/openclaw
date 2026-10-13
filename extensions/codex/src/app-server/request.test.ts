@@ -2,6 +2,7 @@
 import path from "node:path";
 import { isNativeError } from "node:util/types";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
 import {
   clearSessionStoreCacheForTest,
   upsertSessionEntry,
@@ -47,6 +48,51 @@ describe("requestCodexAppServerJson sandbox guard", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it("rejects a native write when the selected session changes during async admission", async () => {
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
+    const sessionKey = "agent:main:async-native-admission";
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath,
+      sessionKey,
+      entry: { sessionId: "first-session", updatedAt: 1 },
+    });
+    const selected = await captureSessionEntryCurrentCheckAsync({
+      agentId: "main",
+      storePath,
+      sessionKey,
+    });
+    const entered = createDeferred<void>();
+    const resume = createDeferred<void>();
+    const harness = createClientHarness();
+    try {
+      const request = requestCodexAppServerClientJson({
+        client: harness.client,
+        method: "thread/list",
+        requestParams: {},
+        assertCurrentAsync: async () => {
+          entered.resolve();
+          await resume.promise;
+          await selected.assertCurrent();
+        },
+      });
+      const rejected = expect(request).rejects.toThrow();
+      await entered.promise;
+      await upsertSessionEntry({
+        agentId: "main",
+        storePath,
+        sessionKey,
+        entry: { sessionId: "replacement-session", updatedAt: 2 },
+      });
+      resume.resolve();
+      await rejected;
+      expect(harness.writes).toEqual([]);
+    } finally {
+      resume.resolve();
+      harness.client.close();
+    }
   });
 
   it("fails closed before raw app-server bypass methods in sandboxed sessions", async () => {

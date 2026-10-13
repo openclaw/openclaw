@@ -67,12 +67,13 @@ Related model-config surfaces:
 
 Full key reference, defaults, and JSON5 examples: [Configuration reference](/gateway/config-agents#agent-defaults).
 
-Utility tasks reserve additional output tokens for reasoning-capable models,
-within the selected model's output limit, so reasoning can finish before the
-title, observer digest, or summary. Non-reasoning models keep the smaller task
-budget. This does not change the model's thinking settings or the task's timeout.
-For native Ollama, configured per-model `params.think`/`params.thinking` and
-`params.num_ctx` still apply; see [Ollama thinking control](/providers/ollama/advanced).
+Utility tasks request thinking off so their bounded output budgets go to the
+title, observer digest, or summary rather than hidden reasoning. This also
+overrides configured native Ollama `think`/`thinking` and OpenAI-compatible
+`enable_thinking` switches for these requests, without changing ordinary chat
+reasoning, other model parameters, or task timeouts. Providers that require
+reasoning still apply their supported minimum; see
+[Ollama thinking control](/providers/ollama/advanced).
 
 For the typed decision model class, available models, rubrics, and plugin API,
 see [Decision models](/concepts/decision-models).

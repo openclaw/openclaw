@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -9,7 +10,6 @@ import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import { resolveSessionStoreKey } from "../../gateway/session-store-key.js";
 import { shouldResumeParentSubagent } from "../../gateway/session-subagent-resume.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import {
   logSessionOwnershipLookupFailure,
   lookupFailedDenialMessage,

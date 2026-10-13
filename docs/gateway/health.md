@@ -130,7 +130,11 @@ resources requires the reported repair or retry before it can restart. See
 
 Detailed readiness can include the latest completed `eventLoop` diagnostic
 snapshot. The sampler owns observation windows; health reads do not reset a
-pending measurement. No snapshot is available until the first window completes. Its
+pending measurement. Native event-loop delay sampling runs at 20 ms resolution;
+the Gateway publishes completed observations once per second, without waking a
+JavaScript callback for every delay sample. Long blocking callbacks remain part
+of the observation even when they delay the publisher. No snapshot is available
+until the first window completes. Its
 `cpuCoreRatio` measures user and system CPU time across the whole Gateway process,
 including worker and native threads, divided by elapsed wall time. The unit is
 core equivalents: `1` means one CPU core fully occupied over the interval, and

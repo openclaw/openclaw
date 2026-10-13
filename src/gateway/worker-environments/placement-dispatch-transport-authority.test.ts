@@ -29,7 +29,7 @@ it.each(
   const root = tempDirs.make("placement-transport-authority-");
   const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
   const placements = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
-  const harness = createHarness(database, placements);
+  const harness = await createHarness(database, placements);
   const nodeBacked = scenario.carrier !== "ssh";
   const providerId = scenario.carrier === "device" ? "device" : "generic-cloud-node";
   const profileId = scenario.carrier === "device" ? "device:device-1" : "cloud-node";

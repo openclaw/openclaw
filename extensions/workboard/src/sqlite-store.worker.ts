@@ -1,8 +1,11 @@
+import {
+  runEngineWorkerWrite,
+  type DatabaseEngineInput,
+} from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import type {
   SqliteWorkerBackend,
   SqliteWorkerCommand,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
-import type { WorkboardDatabaseInput } from "./database-config.js";
 import type {
   WorkboardSqliteOperations,
   WorkboardSqliteWorkerOperations,
@@ -16,7 +19,7 @@ type ConnectionCommand = Exclude<
 >;
 
 export function createSqliteWorkerBackend(
-  input: WorkboardDatabaseInput,
+  input: DatabaseEngineInput,
   context: { databasePath: string },
 ): SqliteWorkerBackend<WorkboardSqliteWorkerOperations> {
   const initial = createWorkboardSqliteKernel(context.databasePath, undefined, input);
@@ -155,8 +158,12 @@ export function createSqliteWorkerBackend(
         ].includes(command.type);
         const kernel = connections.get(command.input.connection)?.kernel;
         const value =
-          input && !readOnly && kernel
-            ? kernel.withWriteTransaction(() => execute(command))
+          !readOnly && kernel
+            ? runEngineWorkerWrite(
+                input,
+                () => execute(command),
+                (operation) => kernel.withWriteTransaction(operation),
+              )
             : execute(command);
         return { ok: true, value };
       } catch (error) {

@@ -1,6 +1,9 @@
 import type { AsyncLocalStorage } from "node:async_hooks";
 import { readCommittedIncognitoSessionSharing } from "../config/sessions/session-accessor.sqlite-incognito-sharing.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import {
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { getOpenIncognitoAgentDatabase } from "../state/openclaw-agent-db-lifecycle.js";
@@ -58,12 +61,12 @@ export function createSessionRowRelationReads(owner: {
               return row?.key === storedKey ? row.sharingEntry : undefined;
             }
             if (memory) {
-              return agentId === memory.agentId
-                ? memory.actor.storage.readCurrent(
-                    { type: "session.entry.read", input: { sessionKey: storedKey } },
-                    memory.authority,
-                  )
-                : undefined;
+              const selected = captureSessionActorStorageOwner({
+                agentId,
+                sessionKey: storedKey,
+                sessionActor: memory,
+              })!;
+              return selected.owner?.readSession(storedKey, selected.authority)?.entry;
             }
             if (binding && binding.actor.agentId === agentId) {
               binding.admissionSignal?.throwIfAborted();

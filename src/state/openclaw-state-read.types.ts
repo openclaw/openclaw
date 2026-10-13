@@ -38,15 +38,11 @@ import type {
   CronRunReceiptCurrentReadCommand,
   CronRunReceiptOwnerObservation,
 } from "../cron/store/run-receipt.types.js";
-import type {
-  CronRunRecoveryReadCommand,
-  CronRunRecoveryObservation,
-} from "../cron/store/run-recovery-read.types.js";
 import type { CronQuarantinedJob } from "../cron/types-shared.js";
 import type {
   PlacementGrantReadInput,
   PlacementGrantRows,
-} from "../gateway/operator-approval-placement-grants.read.js";
+} from "../gateway/operator-approval-placement-grants.read.worker.js";
 import type {
   CronStandingGrantListing,
   CronStandingGrantLookupInput,
@@ -220,7 +216,6 @@ export type OpenClawStateReadCommand =
             >[];
           };
     }
-  | CronRunRecoveryReadCommand
   | CronRunReceiptCurrentReadCommand
   | CronScratchReadCommand
   | { type: "cron.activeReceiptOwners"; agentId: string }
@@ -427,10 +422,6 @@ export type OpenClawStateReadResult =
   | {
       type: "githubRepository.knownPullRequestUrls";
       urls: string[];
-    }
-  | {
-      type: "cron.observeRunRecovery";
-      observation: CronRunRecoveryObservation;
     }
   | { type: "cron.currentReceipt"; facts: CronRunReceiptCurrentFacts }
   | { type: "cron.quarantine"; entries: CronQuarantinedJob[] }

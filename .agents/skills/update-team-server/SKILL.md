@@ -79,7 +79,14 @@ The controller switches the release pointer only after migration succeeds,
 starts the candidate, and performs its existing readiness and session-continuity
 acceptance. Retain the original pre-cutover session witness.
 
-On failure, stop the owned candidate before invoking the same candidate's
+When recovering a retained native-update journal, first accept a selected,
+live migrated candidate through generation-bound full deployment verification.
+Record its verified marker and retire the exact journal without draining,
+restarting, or restoring; retain the native backup. This includes a selected
+candidate in `ROLLBACK_FAILED`. Only an absent or unverifiable candidate falls
+back to the existing compatibility-checked rollback.
+
+On activation failure, stop the owned candidate before invoking the same candidate's
 `update restore` with the original backup root. Restore the predecessor pointer
 and verify the predecessor only after native restoration succeeds. Retain the
 journal, backups, and displaced candidate state if recovery fails; never start

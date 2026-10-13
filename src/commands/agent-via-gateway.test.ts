@@ -25,6 +25,7 @@ import {
   createGatewayNormalCloseError,
   createGatewayTimeoutError,
   createLocalGatewayLockOptions,
+  createSignalProcess,
   settleGatewayAgentRequest,
 } from "./agent-via-gateway.test-support.js";
 import type { agentCommand as AgentCommand } from "./agent.js";
@@ -179,35 +180,6 @@ function requireFirstCallOrder(
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object-short");
-
-function createSignalProcess() {
-  type SignalName = "SIGINT" | "SIGTERM";
-  const listeners = new Map<SignalName, Set<() => void>>();
-  const processLike = {
-    exitCode: undefined as NodeJS.Process["exitCode"],
-    on(signal: SignalName, handler: () => void) {
-      const current = listeners.get(signal) ?? new Set<() => void>();
-      current.add(handler);
-      listeners.set(signal, current);
-      return processLike;
-    },
-    off(signal: SignalName, handler: () => void) {
-      listeners.get(signal)?.delete(handler);
-      return processLike;
-    },
-  };
-  return {
-    processLike,
-    emit(signal: SignalName) {
-      for (const handler of listeners.get(signal) ?? []) {
-        handler();
-      }
-    },
-    listenerCount(signal: SignalName) {
-      return listeners.get(signal)?.size ?? 0;
-    },
-  };
-}
 
 function rejectOnGatewayAbort(signal: AbortSignal | undefined, onAbort?: () => Promise<void>) {
   return new Promise<never>((_, reject) => {
@@ -370,6 +342,25 @@ describe("agentCliCommand", () => {
       },
       { agents: { ownership: "explicit", entries: { solo: {} } } },
     );
+  });
+
+  it("prints a Gateway thinking clamp without changing the assistant reply", async () => {
+    await withTempStore(async () => {
+      const thinkingClamp =
+        "Thinking level clamped to off for ollama/llama3.2 (requested high; preference retained).";
+      callGateway.mockResolvedValue({
+        ...gatewaySuccessReply("hello"),
+        result: {
+          payloads: [{ text: "hello" }],
+          meta: { requestShaping: { thinking: "off", thinkingClamp } },
+        },
+      });
+
+      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+      expect(runtime.log).toHaveBeenCalledWith(thinkingClamp);
+      expect(runtime.log).toHaveBeenCalledWith("hello");
+    });
   });
 
   it("keeps ordinary gateway URL override runs least-privilege", async () => {

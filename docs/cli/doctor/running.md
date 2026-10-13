@@ -94,7 +94,8 @@ and start the Gateway through its owning supervisor.
 
 After pre-repair backups complete, Doctor checks update conflicts against current
 committed rows through its retained read-only maintenance connection. These checks
-do not rescan the entire database for every repair when no cached writer is open.
+share Doctor's repair scope with managed-service continuation checks, avoiding
+repeated whole-database scans with or without a cached writer.
 Pre-repair inspections still preserve the source database and its sidecars.
 
 Before a Linux maintenance stop, Doctor backs up and refreshes outdated OpenClaw

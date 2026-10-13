@@ -191,12 +191,7 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
         context,
         async (scope) => {
           try {
-            const result = await scope.execute(captured);
-            if (captured.type === "bootstrap.prune" && result === 0) {
-              context.admission.assertCurrent();
-              options.assertCurrent?.();
-            }
-            return result;
+            return await scope.execute(captured);
           } finally {
             install();
           }

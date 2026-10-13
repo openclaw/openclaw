@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createTestApprovalManager } from "./exec-approval-manager.test-support.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
@@ -522,6 +523,7 @@ describe("invocation-owned session mutations", () => {
     async (changed) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const client = roleClient("view", "batch-owner");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         client.connect.scopes = ["operator.sessions.write"];
         const cfg = rolePolicyConfig();
         const entry = {

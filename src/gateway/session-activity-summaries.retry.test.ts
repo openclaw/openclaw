@@ -67,6 +67,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     authProfileId: undefined,
     agentDir: "/tmp/unused",
     outputTextPolicy: "strict-visible",
+    thinkLevel: "off",
   });
   const prepare = vi.fn<typeof defaultPrepareModel>();
   const changed = vi.fn();

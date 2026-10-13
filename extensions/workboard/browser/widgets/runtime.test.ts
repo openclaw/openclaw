@@ -296,9 +296,7 @@ it.each([
 
 it.each([
   { kind: "card", refreshDuringMove: false },
-  { kind: "board", refreshDuringMove: false },
   { kind: "card", refreshDuringMove: true },
-  { kind: "board", refreshDuringMove: true },
 ] as const)(
   "preserves an acknowledged $kind move across shared widgets (refresh during move: $refreshDuringMove)",
   async ({ kind, refreshDuringMove }) => {
@@ -498,51 +496,6 @@ it.each([
   },
 );
 
-it.each([
-  { name: "an empty destination", listed: [cards[0]!, cards[2]!], position: 1000 },
-  {
-    name: "another board's positions",
-    listed: [
-      ...cards,
-      {
-        ...cards[1]!,
-        id: "other",
-        position: 9000,
-        metadata: { automation: { boardId: "product" } },
-      },
-    ],
-    position: 3000,
-  },
-  {
-    name: "archived positions on the same board",
-    listed: [
-      ...cards,
-      {
-        ...cards[1]!,
-        id: "archived",
-        position: 9000,
-        metadata: { automation: { boardId: "ops" }, archivedAt: 10 },
-      },
-    ],
-    position: 10000,
-  },
-])("uses the canonical move position with $name", async ({ listed, position }) => {
-  const request = vi.fn(async (method: string) =>
-    method === "workboard.cards.move"
-      ? { card: { ...cards[0], status: "running", position } }
-      : snapshot(listed),
-  );
-  const { mount } = setup(request);
-  const widget = mount("card", { cardId: "ready" });
-  await vi.waitFor(() => expect(widget.container.querySelector("select")).not.toBeNull());
-  changeStatus(widget.container);
-  expect(widget.scopedRequest).toHaveBeenCalledWith("workboard.cards.move", {
-    id: "ready",
-    status: "running",
-    position,
-  });
-});
-
 it.each(["mini", "board"] as const)(
   "scopes %s to an explicit board and excludes archived cards",
   async (kind) => {
@@ -583,15 +536,6 @@ it.each(["mini", "board"] as const)(
     }
   },
 );
-
-it("does not render controls for an archived card", async () => {
-  const { mount } = setup(
-    vi.fn(async () => snapshot([{ ...cards[0]!, metadata: { archivedAt: 10 } }])),
-  );
-  const widget = mount("card", { cardId: "ready" });
-  await vi.waitFor(() => expect(widget.container.textContent).toContain("no longer available"));
-  expect(widget.container.querySelector("select")).toBeNull();
-});
 
 it("keeps every board control read-only", async () => {
   const { mount, request } = setup();

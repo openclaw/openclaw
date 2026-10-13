@@ -19,6 +19,7 @@ export async function cleanupRetiredAgentDatabaseLease(params: {
   stopped: Promise<void>;
   assertOwned(): void;
   lease: OpenClawAgentDatabaseWorkerLeaseReceipt;
+  refusedBeforeAgentOpen?: boolean;
   closed?: () => ReturnType<typeof readAgentDatabaseClosedReceipt>;
 }): Promise<void> {
   params.assertOwned();
@@ -35,7 +36,9 @@ export async function cleanupRetiredAgentDatabaseLease(params: {
   }
   params.assertOwned();
   // Uncertified retirement cannot lend proof while shared-state cleanup admission waits.
-  invalidateOpenClawAgentDatabaseValidation(params.lease.path);
+  if (!params.refusedBeforeAgentOpen) {
+    invalidateOpenClawAgentDatabaseValidation(params.lease.path);
+  }
   const context = {
     environment: params.context.environment,
     existingSchemaPath: params.context.existingSchemaPath,

@@ -129,13 +129,13 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
     : new Map<string, SubagentRunReadRecord>();
   const selected = select(withLiveFacts(compact));
   const scope = selectionScope(selected);
-  // Keep durable payloads separate: a live-only row may disappear before consumption.
+  // Committed resident rows already carry their full payload; publications supply later changes.
   let persisted = context ? acceptedFullSnapshot(fullCache, context) : undefined;
   if (!persisted) {
     persisted = new Map<string, SubagentRunRecord>();
     if (context) {
       const scopes = [
-        { kind: "ids" as const, runIds: [...scope.runIds] },
+        { kind: "ids" as const, runIds: [...scope.runIds].filter((id) => !inMemoryRuns.has(id)) },
         ...[...scope.sessionKeys].map((sessionKey) => ({ kind: "session" as const, sessionKey })),
       ];
       for (const payloadScope of scopes) {

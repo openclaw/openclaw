@@ -198,6 +198,11 @@ const sharedOwner = `
   /** @deprecated Use workers. */
   export function ${second}() { return readKernel(); }
 `;
+const receiverOwner = `
+  import { readKernel } from '../session-kernel.js';
+  /** @deprecated Use workers. */
+  export function ${second}() { return { read() { return readKernel(); } }; }
+`;
 
 it("proves a transitive mixed kernel with only worker and deprecated callers", () => {
   const result = inspect({
@@ -244,26 +249,248 @@ it.each(["register(readKernel)", "register(() => readKernel())"])(
   },
 );
 
-it("keeps kernels reached through returned methods live", () => {
+it.each([
+  ["object method", "{ read() { return readKernel(); } }"],
+  ["arrow property", "{ read: () => readKernel() }"],
+  ["function property", "{ read: function () { return readKernel(); } }"],
+  ["returned arrow", "() => readKernel()"],
+  ["returned function", "function () { return readKernel(); }"],
+])("proves kernels reached only through a deprecated factory's %s", (_label, value) => {
   const result = inspect({
     [secondFile]: `
       import { readKernel } from '../session-kernel.js';
       /** @deprecated Use workers. */
-      export function ${second}() { return { read() { return readKernel(); } }; }`,
+      export function ${second}() { return ${value}; }`,
     [kernelFile]: kernel,
   });
-  expect(result.operations.has(kernelFile)).toBe(false);
+  expect(result.violations).toEqual([]);
+  expect(result.operations.get(kernelFile)).toEqual(new Set(["readKernel"]));
+  expect(result.operations.get(secondFile)?.has(second)).toBe(true);
 });
 
-it("does not inherit a compatibility scope through callback arguments", () => {
+it.each([
+  [
+    "direct factory call",
+    `import { ${second} } from './sessions/session-upstream-links.js'; ${second}().read();`,
+  ],
+  [
+    "aliased factory call",
+    `import { ${second} as create } from './sessions/session-upstream-links.js'; create().read();`,
+  ],
+  [
+    "reexported factory call",
+    `import { create } from './plugin-sdk/receivers.js'; create().read();`,
+  ],
+  [
+    "SDK subpath factory call",
+    `import { create } from 'openclaw/plugin-sdk/receivers'; create().read();`,
+  ],
+  [
+    "scoped SDK subpath factory call",
+    `import { create } from '@openclaw/plugin-sdk/receivers'; create().read();`,
+  ],
+  [
+    "dynamic factory call",
+    `const { create } = await import('./plugin-sdk/receivers.js'); create().read();`,
+  ],
+  [
+    "returned object escape",
+    `import { ${second} } from './sessions/session-upstream-links.js'; register(${second}());`,
+  ],
+])("keeps a receiver family live after a bundled %s", (_label, consumer) => {
+  const result = inspect({
+    [secondFile]: receiverOwner,
+    [kernelFile]: kernel,
+    "src/plugin-sdk/receivers.ts": `export { ${second} as create } from '../sessions/session-upstream-links.js';`,
+    "src/consumer.ts": consumer,
+  });
+  expect(result.operations.has(kernelFile)).toBe(false);
+  expect(result.operations.has(secondFile)).toBe(false);
+  expect(result.violations).toEqual([expect.stringContaining("src/consumer.ts:")]);
+});
+
+it("keeps a returned callback live when bundled code registers it", () => {
   const result = inspect({
     [secondFile]: `import { readKernel } from '../session-kernel.js';
       /** @deprecated Use workers. */
-      export function ${second}() { register(() => readKernel()); }`,
+      export function ${second}() { return () => readKernel(); }`,
+    [kernelFile]: kernel,
+    "src/consumer.ts": `import { ${second} } from './sessions/session-upstream-links.js';
+      register(${second}());`,
+  });
+  expect(result.operations.has(kernelFile)).toBe(false);
+  expect(result.operations.has(secondFile)).toBe(false);
+  expect(result.violations).toEqual([expect.stringContaining("src/consumer.ts:")]);
+});
+
+it("keeps shared receiver methods live when an async factory also creates them", () => {
+  const result = inspect({
+    [secondFile]: `import { createReceiver } from '../receiver.js';
+      /** @deprecated Use workers. */
+      export function ${second}() { return createReceiver(); }`,
+    [kernelFile]: kernel,
+    "src/receiver.ts": `import { readKernel } from './session-kernel.js';
+      export function createReceiver() { return { read() { return readKernel(); } }; }
+      export async function createReceiverAsync() { return createReceiver(); }`,
+  });
+  expect(result.operations.has(kernelFile)).toBe(false);
+  expect(result.operations.has("src/receiver.ts")).toBe(false);
+  expect(result.operations.get(secondFile)).toEqual(new Set([second]));
+  expect(result.violations).toEqual([]);
+});
+
+it.each(["() => readKernel()", "function () { return readKernel(); }"])(
+  "keeps a function-valued receiver property live when it escapes: %s",
+  (value) => {
+    const result = inspect({
+      [secondFile]: `import { readKernel } from '../session-kernel.js';
+        /** @deprecated Use workers. */
+        export function ${second}() {
+          return { read: ${value}, start() { register(this.read); } };
+        }`,
+      [kernelFile]: kernel,
+    });
+    expect(result.operations.has(kernelFile)).toBe(false);
+    expect(result.operations.has(secondFile)).toBe(false);
+    expect(result.violations).toEqual([]);
+  },
+);
+
+it("keeps unregistered nondeprecated receiver factories live", () => {
+  const result = inspect({
+    [kernelFile]: kernel,
+    "src/receiver.ts": `import { readKernel } from './session-kernel.js';
+      export function createReceiver() { return { read() { return readKernel(); } }; }`,
+  });
+  expect(result.operations.has(kernelFile)).toBe(false);
+  expect(result.operations.has("src/receiver.ts")).toBe(false);
+  expect(result.violations).toEqual([]);
+});
+
+it("retains a receiver escaped by a deprecated wrapper without inventing a factory caller", () => {
+  const result = inspect({
+    [secondFile]: receiverOwner,
+    [kernelFile]: kernel,
+    [legacyFile]: `import { ${second} } from '../sessions/session-upstream-links.js';
+      /** @deprecated Use workers. */
+      export function ${first}() {
+        const receiver = ${second}();
+        register(receiver.read);
+      }`,
+  });
+  expect(result.operations.has(kernelFile)).toBe(false);
+  expect(result.operations.has(secondFile)).toBe(false);
+  expect(result.violations).toEqual([]);
+});
+
+it("proves kernels reached only through a deprecated class receiver", () => {
+  const result = inspect({
+    [secondFile]: `import { readKernel } from '../session-kernel.js';
+      /** @deprecated Use workers. */
+      export class ${second} {
+        constructor() { readKernel(); }
+        read() { return readKernel(); }
+      }`,
+    [kernelFile]: kernel,
+  });
+  expect(result.operations.get(kernelFile)).toEqual(new Set(["readKernel"]));
+  expect(result.operations.get(secondFile)?.has(second)).toBe(true);
+  expect(result.violations).toEqual([]);
+});
+
+it("rejects bundled construction of a deprecated class receiver", () => {
+  const result = inspect({
+    [secondFile]: `import { readKernel } from '../session-kernel.js';
+      /** @deprecated Use workers. */
+      export class ${second} { read() { return readKernel(); } }`,
+    [kernelFile]: kernel,
+    "src/consumer.ts": `import { ${second} as Receiver } from './sessions/session-upstream-links.js';
+      new Receiver().read();`,
+  });
+  expect(result.operations.has(kernelFile)).toBe(false);
+  expect(result.operations.has(secondFile)).toBe(false);
+  expect(result.violations).toEqual([expect.stringContaining("src/consumer.ts:")]);
+});
+
+it("keeps a deprecated receiver live when a bundled class extends it", () => {
+  const result = inspect({
+    [secondFile]: `import { readKernel } from '../session-kernel.js';
+      /** @deprecated Use workers. */
+      export class ${second} { read() { return readKernel(); } }`,
+    [kernelFile]: kernel,
+    "src/consumer.ts": `import { ${second} as Receiver } from './sessions/session-upstream-links.js';
+      export class ActiveReceiver extends Receiver {}`,
+  });
+  expect(result.operations.has(kernelFile)).toBe(false);
+  expect(result.operations.has(secondFile)).toBe(false);
+  expect(result.violations).toEqual([expect.stringContaining("src/consumer.ts:")]);
+});
+
+it.each([
+  ["inheritance", "extends Base", "read() { return readKernel(); }"],
+  ["field initializer", "", "read = () => readKernel();"],
+  ["computed member name", "", "[readKernel()]() { return readKernel(); }"],
+  ["static block", "", "static { readKernel(); } read() { return readKernel(); }"],
+  ["decorated member", "", "@decorate read() { return readKernel(); }"],
+  [
+    "decorated parameter",
+    "",
+    "constructor(@decorate value: unknown) {} read() { return readKernel(); }",
+  ],
+])("keeps deprecated classes with %s live", (_label, heritage, member) => {
+  const result = inspect({
+    [secondFile]: `import { readKernel } from '../session-kernel.js';
+      class Base {}
+      /** @deprecated Use workers. */
+      export class ${second} ${heritage} { ${member} }`,
     [kernelFile]: kernel,
   });
   expect(result.operations.has(kernelFile)).toBe(false);
+  expect(result.operations.has(secondFile)).toBe(false);
+  expect(result.violations).toEqual([]);
 });
+
+it("rejects a deprecated factory reached through a live receiver method", () => {
+  const result = inspect({
+    [secondFile]: `import { createReceiver } from '../receiver.js';
+      /** @deprecated Use workers. */
+      export function ${second}() { return createReceiver(); }`,
+    [kernelFile]: kernel,
+    "src/receiver.ts": `import { readKernel } from './session-kernel.js';
+      import { ${first} } from './plugin-sdk/sqlite-runtime-legacy.js';
+      export function createReceiver() {
+        return { read() { ${first}(); return readKernel(); } };
+      }
+      export async function createReceiverAsync() { return createReceiver(); }`,
+  });
+  expect(result.operations.has(legacyFile)).toBe(false);
+  expect(result.violations).toEqual([expect.stringContaining(`${legacyFile}:${first}:`)]);
+});
+
+it("records SQL inside a closed receiver method as compatibility-only", () => {
+  const result = inspect({
+    [secondFile]: `/** @deprecated Use workers. */
+export function ${second}() {
+  return { read() { return executeSqliteQuerySync(query); } };
+}`,
+  });
+  expect(result.operations.get(secondFile)?.has(`${second}.read`)).toBe(true);
+  expect(result.callLocations.get(secondFile)).toEqual(new Set(["3:28"]));
+  expect(result.violations).toEqual([]);
+});
+
+it.each(["register(() => readKernel())", "return register(() => readKernel())"])(
+  "does not inherit a compatibility scope through callback arguments: %s",
+  (registration) => {
+    const result = inspect({
+      [secondFile]: `import { readKernel } from '../session-kernel.js';
+      /** @deprecated Use workers. */
+      export function ${second}() { ${registration}; }`,
+      [kernelFile]: kernel,
+    });
+    expect(result.operations.has(kernelFile)).toBe(false);
+  },
+);
 
 it("rejects a reviewed API escaped by a discovered helper", () => {
   const result = inspect({

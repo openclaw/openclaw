@@ -262,6 +262,13 @@ seam, including its authoritative conflict check and post-commit effects. The
 lower-level `applyModelOverrideToSessionEntry(...)` helper is not a picker
 persistence API.
 
+Model selection preserves the saved thinking preference; execution clamps it to
+the selected model's supported levels. `thinkingRemap` is no longer emitted in
+the selection result. Its optional type remains deprecated until the next SDK
+major version. Session rows expose the saved request as `thinkingLevel`.
+`sessions.patch` returns that preference in `entry.thinkingLevel` and the
+execution level in `resolved.thinkingLevel`.
+
 Use `applyModelOverrideWithAuthProfileCompatibility(...)` only as the direct
 persistence fallback when a channel callback cannot enter the full live-session
 transaction and already owns an atomic canonical session-entry patch. Pass the

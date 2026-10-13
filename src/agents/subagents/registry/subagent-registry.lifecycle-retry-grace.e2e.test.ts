@@ -31,6 +31,7 @@ import {
   createLifecycleAgentCallWaits,
   createLifecycleWaits,
 } from "./subagent-registry.lifecycle-waits.test-support.js";
+import { createRequesterWakeSessionFixture } from "./subagent-registry.requester-wake-session.test-support.js";
 import * as mod from "./subagent-registry.test-helpers.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
@@ -149,31 +150,18 @@ describe("subagent registry lifecycle error grace", () => {
     agentCallGates = new Map();
     chatHistoryBySessionKey = new Map();
     transcriptEventsBySessionKey = new Map();
-    sessionStore = new Proxy<Record<string, SessionStoreEntry>>(
-      {
-        "agent:main:main": {
-          sessionId: "sess-main",
-          updatedAt: 1,
-          delivery: {
-            kind: "external",
-            route: { channel: "discord", accountId: "default", target: { to: "user-1" } },
-            context: { channel: "discord", to: "user-1", accountId: "default" },
-            origin: { provider: "discord", to: "user-1", accountId: "default" },
-          },
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: 1,
+        delivery: {
+          kind: "external",
+          route: { channel: "discord", accountId: "default", target: { to: "user-1" } },
+          context: { channel: "discord", to: "user-1", accountId: "default" },
+          origin: { provider: "discord", to: "user-1", accountId: "default" },
         },
       },
-      {
-        get(target, prop, receiver) {
-          if (typeof prop !== "string" || prop in target) {
-            return Reflect.get(target, prop, receiver);
-          }
-          return {
-            sessionId: `sess-${prop.replace(/[^a-z0-9]+/gi, "-")}`,
-            updatedAt: 1,
-          };
-        },
-      },
-    );
+    };
     await replaceSessionEntry(
       { storePath: sessionStorePath, sessionKey: MAIN_REQUESTER_SESSION_KEY },
       sessionStore[MAIN_REQUESTER_SESSION_KEY]!,
@@ -211,7 +199,6 @@ describe("subagent registry lifecycle error grace", () => {
       callGateway: callGatewayMock as typeof import("../../../gateway/call.js").callGateway,
       getRuntimeConfig: loadConfigMock,
       readSubagentSessionEntry: (_storePath, sessionKey) => sessionStore[sessionKey],
-      resolveAgentIdFromSessionKey: (key) => key?.match(/^agent:([^:]+)/)?.[1] ?? "main",
       resolveSessionStorePathCore: () => sessionStorePath,
     });
   });
@@ -254,17 +241,27 @@ describe("subagent registry lifecycle error grace", () => {
   const waitForCleanupHandledFalse = (runId: string) =>
     agentCallWaits.waitForCleanupHandledFalse(runId);
 
-  function registerCompletionRun(
+  const { prepareChildSession } = createRequesterWakeSessionFixture({
+    requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+    getSessionStore: () => sessionStore,
+    getSessionStorePath: () => sessionStorePath,
+  });
+
+  async function registerCompletionRun(
     runId: string,
     childSuffix: string,
     task: string,
     requesterTurnRunId?: string,
     expectsCompletionMessage = true,
   ) {
+    const childSessionKey = `agent:main:subagent:${childSuffix}`;
+    const sessionEntry = await prepareChildSession(childSessionKey, `sess-${runId}`);
     return mod.registerSubagentRun({
       runId,
       requesterTurnRunId,
-      childSessionKey: `agent:main:subagent:${childSuffix}`,
+      childSessionKey,
+      childAgentId: "main",
+      sessionEntry,
       requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
       requesterAgentId: "main",
       requesterDisplayKey: "main",
@@ -322,6 +319,7 @@ describe("subagent registry lifecycle error grace", () => {
     const requesterTurnRunId = "run-requester-visible-yield";
     const runId = "run-visible-yield";
     const childSessionKey = "agent:main:dashboard:visible-yield";
+    const sessionEntry = await prepareChildSession(childSessionKey, `sess-${runId}`);
     const spawnResult = await maybeSpawnVisibleSession({
       raw: { visible: true },
       task: "finish visible dashboard work",
@@ -339,6 +337,8 @@ describe("subagent registry lifecycle error grace", () => {
         },
         callGateway: vi.fn(async () => ({
           key: childSessionKey,
+          sessionId: sessionEntry.sessionId,
+          entry: sessionEntry,
           runStarted: true,
           runId,
         })) as never,

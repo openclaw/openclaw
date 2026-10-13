@@ -64,7 +64,7 @@ Dreaming runs three cooperative phases per sweep, in order: light -> REM -> deep
 
 <AccordionGroup>
   <Accordion title="Light phase">
-    - Reads recent short-term recall state, daily memory files, and redacted session transcripts when available.
+    - Reads recent short-term recall state, daily memory files, and session transcripts when available.
     - Dedupes signals and stages candidate lines.
     - Writes a managed `## Light Sleep` block when storage includes inline output.
     - Records reinforcement signals for later deep ranking.
@@ -91,7 +91,7 @@ Dreaming runs three cooperative phases per sweep, in order: light -> REM -> deep
 
 ## Session transcript ingestion
 
-Dreaming can ingest redacted session transcripts into the dreaming corpus. Only interactive sessions are eligible. Cron, heartbeat, subagent, and unknown sessions stay out of durable candidate ingestion. Personal and sensitive content is redacted before ingestion, and runtime-marked recalled context is removed so recalled snippets cannot be learned again as new memory.
+Dreaming can ingest session transcripts into the dreaming corpus. Only interactive sessions are eligible. Cron, heartbeat, subagent, and unknown sessions stay out of durable candidate ingestion. Transcript text is not secret-masked before ingestion. Runtime-marked recalled context is removed so recalled snippets cannot be learned again as new memory.
 
 Two operator controls exclude sessions from automatic ingestion, each with a recorded reason: the [memory admission policy](/concepts/memory-provenance#admission-keeping-sources-out-of-memory) matches retained hook-source, channel, or chat-type metadata, and [`memory forget`](/cli/memory#memory-forget) records selected session IDs as `forgotten` for future scans. Policy changes do not erase existing candidates or prevent direct file writes. Manual session backfill applies both controls in preview, REM, and apply modes, and preserves source-session origins when staging candidates.
 

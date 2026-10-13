@@ -17,12 +17,13 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import { resolveCronJobConfigRevision } from "./config-revision.js";
 import { CronService } from "./service.js";
-import { setupCronServiceSuite } from "./service.test-harness.js";
-import { stop } from "./service/ops-lifecycle.js";
-import { requestCronRuns } from "./service/run-queue.js";
-import { createCronServiceState } from "./service/state.js";
-import { ensureLoaded } from "./service/store.js";
-import { onTimer } from "./service/timer-scheduler.js";
+import {
+  createCronServiceWithStateForTest,
+  setupCronServiceSuite,
+} from "./service.test-harness.js";
+import { drainCronRunQueue } from "./service/run-queue.js";
+import { runCronSchedulerMaintenance } from "./service/scheduler-maintenance.js";
+import { onTimer } from "./service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import { cronStreamScheduleKey } from "./stream-schedule.js";
 import type { CronJob } from "./types.js";
@@ -41,13 +42,118 @@ function commandJob(id: string, nextRunAtMs = NOW + 60_000): CronJob {
   };
 }
 
-it("keeps owned running work out of watchdog database polling", async () => {
+it.for(["complete", "cancel", "lost-result"] as const)(
+  "handles a same-store on-exit predecessor without joining unrelated work: %s",
+  async (outcome, { signal }) => {
+    const { storePath } = await makeStorePath();
+    const schedule = { kind: "on-exit", command: "synthetic-exit" } as const;
+    const job = { ...commandJob("exit-wait"), schedule };
+    const unrelated = commandJob("unrelated-wait");
+    await saveCronStore(storePath, { version: 1, jobs: [job, unrelated] });
+    const targetEntered = createDeferred();
+    const unrelatedEntered = createDeferred();
+    const releaseTarget = createDeferred();
+    const releaseUnrelated = createDeferred();
+    const accepted = createDeferred();
+    let targetRuns = 0;
+    const runCommandJob = vi.fn(async ({ job: current }: { job: CronJob }) => {
+      if (current.id === unrelated.id) {
+        unrelatedEntered.resolve();
+        await releaseUnrelated.promise;
+      } else if (++targetRuns === 1) {
+        targetEntered.resolve();
+        await releaseTarget.promise;
+      }
+      return { status: "ok" as const };
+    });
+    const createService = () =>
+      new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => NOW,
+        storePath,
+        cronEnabled: true,
+        defaultAgentId: "main",
+        log: logger,
+        enqueueSystemEvent() {},
+        requestHeartbeat() {},
+        runIsolatedAgentJob: async () => ({ status: "ok" }),
+        runCommandJob,
+      });
+    const cron = createService();
+    const sibling = createService();
+    const controller = new AbortController();
+    const pending: Array<Promise<unknown>> = [];
+    let restoreFinalization: (() => void) | undefined;
+    try {
+      const first = cron.run(job.id, "force");
+      void first.catch(() => {});
+      const other = cron.run(unrelated.id, "force");
+      pending.push(first, other);
+      await withinTest(Promise.all([targetEntered.promise, unrelatedEntered.promise]), signal);
+      if (outcome === "lost-result") {
+        const execute = stateWorker.executeOpenClawStateWorker;
+        const finalization = vi
+          .spyOn(stateWorker, "executeOpenClawStateWorker")
+          .mockImplementation((context, command) =>
+            command.type === "cron.finalizeRuns"
+              ? Promise.reject(new Error("synthetic terminal write failure"))
+              : execute(context, command),
+          );
+        restoreFinalization = () => finalization.mockRestore();
+      }
+      const exit = sibling.runOnExit(job.id, {
+        schedule,
+        signal: controller.signal,
+        commitGuard() {},
+        onReserved: () => accepted.resolve(),
+      });
+      pending.push(exit);
+      if (outcome === "cancel") {
+        controller.abort();
+        await expect(withinTest(exit, signal)).resolves.toMatchObject({
+          ok: true,
+          ran: false,
+          reason: "stopped",
+        });
+        releaseTarget.resolve();
+        await withinTest(first, signal);
+        expect(targetRuns).toBe(1);
+      } else if (outcome === "lost-result") {
+        releaseTarget.resolve();
+        await expect(withinTest(first, signal)).rejects.toThrow("synthetic terminal write failure");
+        await expect(withinTest(exit, signal)).resolves.toMatchObject({
+          ok: true,
+          ran: false,
+          reason: "already-running",
+        });
+        expect(targetRuns).toBe(1);
+      } else {
+        releaseTarget.resolve();
+        await withinTest(accepted.promise, signal);
+        await expect(withinTest(exit, signal)).resolves.toMatchObject({ ok: true, ran: true });
+        expect(targetRuns).toBe(2);
+      }
+      expect((await cron.readJob(unrelated.id))?.state.runningAtMs).toBeDefined();
+    } finally {
+      controller.abort();
+      restoreFinalization?.();
+      releaseTarget.resolve();
+      releaseUnrelated.resolve();
+      await Promise.allSettled(pending);
+      cron.stop();
+      sibling.stop();
+      await Promise.all([cron.waitForIdle(), sibling.waitForIdle()]);
+    }
+  },
+);
+
+it("keeps owned running work out of recovery and queue database polling", async ({ signal }) => {
   const { storePath } = await makeStorePath();
-  const job = commandJob("owned-running", NOW);
+  const job = commandJob("owned-running");
   const entered = createDeferred();
   const release = createDeferred();
   await saveCronStore(storePath, { version: 1, jobs: [job] });
-  const state = createCronServiceState({
+  const { cron, state } = createCronServiceWithStateForTest({
     scheduler: createTestGatewayScheduler(),
     nowMs: () => NOW,
     storePath,
@@ -65,16 +171,26 @@ it("keeps owned running work out of watchdog database polling", async () => {
   });
   let completion: Promise<unknown> | undefined;
   try {
-    await ensureLoaded(state);
-    const [request] = await requestCronRuns(state, [job]);
-    completion = request!.completion;
-    await entered.promise;
+    await cron.start();
+    completion = cron.run(job.id, "force");
+    await withinTest(
+      awaitGateBeforeSettlement(entered.promise, completion, "owned run did not start"),
+      signal,
+    );
+    await cron.start();
+    const running = await cron.readJob(job.id);
+    expect(running).toMatchObject({
+      state: { runningAtMs: NOW },
+    });
+    expect(running?.state.lastError).toBeUndefined();
     // Consume the queue's committed publication once, then the loaded owner is current.
-    await onTimer(state);
+    await runCronSchedulerMaintenance(state);
+    await drainCronRunQueue(state);
     const reads = vi.spyOn(stateRead, "executeExistingOpenClawStateRead");
     const writes = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
     try {
-      await onTimer(state);
+      await runCronSchedulerMaintenance(state);
+      await drainCronRunQueue(state);
       expect(reads).not.toHaveBeenCalled();
       expect(writes).not.toHaveBeenCalled();
     } finally {
@@ -84,8 +200,70 @@ it("keeps owned running work out of watchdog database polling", async () => {
   } finally {
     release.resolve();
     await completion;
-    stop(state);
-    await state.schedulerDrain;
+    cron.stop();
+    await cron.waitForIdle();
+  }
+});
+
+it("joins a running job before restarting after scheduler cleanup fails", async ({ signal }) => {
+  const { storePath } = await makeStorePath();
+  const job = commandJob("restart-after-cleanup");
+  await saveCronStore(storePath, { version: 1, jobs: [job] });
+  const entered = createDeferred();
+  const release = createDeferred();
+  const cleanupFailed = createDeferred();
+  const runCommandJob = vi.fn(async () => {
+    entered.resolve();
+    await release.promise;
+    return { status: "ok" as const };
+  });
+  const { cron, state } = createCronServiceWithStateForTest({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => NOW,
+    storePath,
+    cronEnabled: true,
+    defaultAgentId: "main",
+    log: logger,
+    enqueueSystemEvent() {},
+    requestHeartbeat() {},
+    runIsolatedAgentJob: async () => ({ status: "ok" }),
+    runCommandJob,
+  });
+  const pending: Array<Promise<unknown>> = [];
+  let restoreStop: (() => void) | undefined;
+  try {
+    await cron.start();
+    const running = cron.run(job.id, "force");
+    pending.push(running);
+    await withinTest(entered.promise, signal);
+    const stopScope = state.schedulerScope.stop.bind(state.schedulerScope);
+    const stop = vi.spyOn(state.schedulerScope, "stop").mockImplementationOnce(async () => {
+      await stopScope();
+      cleanupFailed.resolve();
+      throw new Error("synthetic scheduler cleanup failure");
+    });
+    restoreStop = () => stop.mockRestore();
+    cron.stop();
+    const restarting = cron.start();
+    pending.push(restarting);
+    void restarting.catch(() => {});
+    await withinTest(cleanupFailed.promise, signal);
+    expect(state.stopped).toBe(true);
+    release.resolve();
+    await withinTest(Promise.all([running, restarting]), signal);
+    expect(await cron.readJob(job.id)).toMatchObject({ state: { lastRunStatus: "ok" } });
+    expect(logger.warn).toHaveBeenCalledWith(
+      { errors: ["Error: synthetic scheduler cleanup failure"] },
+      "cron: shutdown left work for recovery",
+    );
+    await expect(cron.run(job.id, "force")).resolves.toEqual({ ok: true, ran: true });
+    expect(runCommandJob).toHaveBeenCalledTimes(2);
+  } finally {
+    release.resolve();
+    restoreStop?.();
+    await Promise.allSettled(pending);
+    cron.stop();
+    await cron.waitForIdle();
   }
 });
 
@@ -180,7 +358,7 @@ it("shares capacity across sibling services for timer, manual, stream, and consu
   });
   const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
   const createService = () =>
-    new CronService({
+    createCronServiceWithStateForTest({
       scheduler: createTestGatewayScheduler(clock.clock),
       nowMs: clock.clock.now,
       storePath,
@@ -192,12 +370,12 @@ it("shares capacity across sibling services for timer, manual, stream, and consu
       runCommandJob,
       runIsolatedAgentJob,
     });
-  const cron = createService();
-  const sibling = createService();
+  const { cron, state } = createService();
+  const { cron: sibling } = createService();
   sibling.pauseScheduling();
   const pending: Array<Promise<unknown>> = [];
-  const stopObserving = observeCronJobCommits(timed.id, (state) => {
-    if (state.queuedAtMs !== undefined) {
+  const stopObserving = observeCronJobCommits(timed.id, (runtime) => {
+    if (runtime.queuedAtMs !== undefined) {
       timerRequested.resolve();
     }
   });
@@ -206,7 +384,8 @@ it("shares capacity across sibling services for timer, manual, stream, and consu
     pending.push(...blockers.map((job) => cron.run(job.id, "force")));
     await withinTest(capacityFilled.promise, signal);
 
-    const tick = Promise.resolve(clock.advanceBy(10_000));
+    await clock.advanceBy(10_000);
+    const tick = onTimer(state);
     pending.push(tick);
     await withinTest(
       awaitGateBeforeSettlement(timerRequested.promise, tick, "timer did not queue its due job"),
@@ -253,9 +432,10 @@ it("shares capacity across sibling services for timer, manual, stream, and consu
 
     const queued = (await loadCronStore(storePath)).jobs;
     for (const job of [manual, timed, stream, exit]) {
-      expect(queued.find((candidate) => candidate.id === job.id)?.state.queuedAtMs).toEqual(
-        expect.any(Number),
-      );
+      expect(
+        queued.find((candidate) => candidate.id === job.id)?.state.queuedAtMs,
+        `${job.id}: queued run remains behind shared capacity`,
+      ).toEqual(expect.any(Number));
     }
     expect(queued.find((job) => job.id === exit.id)?.enabled).toBe(false);
     expect(executed).toEqual([]);

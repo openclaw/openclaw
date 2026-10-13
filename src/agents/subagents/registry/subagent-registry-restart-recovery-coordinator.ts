@@ -5,6 +5,10 @@ import {
 } from "../../../infra/agent-events.js";
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
+import {
+  resolveSubagentChildAuthority,
+  warnLegacySubagentAuthority,
+} from "./subagent-child-owner-match.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { SubagentRegistryMutationRejectedError } from "./subagent-registry-persistence.js";
 import { getLatestSubagentRunForChild } from "./subagent-registry-queries.js";
@@ -36,6 +40,7 @@ export function createInterruptedRecoveryCoordinator(params: {
     retained?: Extract<RestartRecoveryResult, { status: "handled" }>["retained"];
   };
   let attempts = new Map<string, Attempt>();
+  let warnedRetainedOwners = new WeakSet<object>();
   let unsubscribe: (() => void) | undefined;
   const invalidate = (entry: SubagentRunRecord) => {
     if (attempts.delete(entry.runId)) {
@@ -95,8 +100,23 @@ export function createInterruptedRecoveryCoordinator(params: {
       unsubscribe?.();
       unsubscribe = undefined;
       attempts = new Map();
+      warnedRetainedOwners = new WeakSet();
     },
     async recover(runId: string, entry: SubagentRunRecord): Promise<boolean> {
+      const authority = resolveSubagentChildAuthority(entry);
+      if (authority.status === "mismatch") {
+        const owner = getSubagentRunRuntimeKey(entry);
+        if (!warnedRetainedOwners.has(owner)) {
+          warnedRetainedOwners.add(owner);
+          params.warn("retained subagent record cannot be recovered", {
+            runId,
+            childSessionKey: entry.childSessionKey,
+            error: new Error(authority.error),
+          });
+        }
+        return true;
+      }
+      warnLegacySubagentAuthority(entry, params.warn);
       if (
         entry.execution.restartRecovery === undefined &&
         entry.terminalOwner !== "interrupted-recovery" &&

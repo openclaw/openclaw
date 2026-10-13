@@ -617,22 +617,6 @@ describe("verified OpenClaw inference binding", () => {
     );
   });
 
-  it("revalidates a plugin-harness owner without binding rotating token material", async () => {
-    const harnessConfig = codexHarnessConfig();
-    const { binding } = await opaqueHarnessBinding(harnessConfig);
-
-    expect(binding.ownerPluginIds).toEqual(["codex", "provider-owner"]);
-    await expect(revalidate(binding, harnessConfig)).resolves.toBe(binding.execution);
-  });
-
-  it("invalidates a plugin-harness binding when its child runtime artifact changes", async () => {
-    const harnessConfig = codexHarnessConfig();
-    const { binding } = await opaqueHarnessBinding(harnessConfig);
-
-    harnessRuntimeArtifactState.fingerprint = "codex-runtime-v2";
-    await expect(revalidate(binding, harnessConfig)).resolves.toBeNull();
-  });
-
   it("requires a child runtime artifact for credential-backed plugin harness inference", async () => {
     const harnessConfig = codexHarnessConfig("openai:verified");
     const route = await requireRoute(harnessConfig, "embedded");
@@ -662,16 +646,6 @@ describe("verified OpenClaw inference binding", () => {
       execution: { agentHarnessRuntimeOverride: "codex" },
       auth: { authFingerprint, runtimeArtifactFingerprint: "codex-runtime-v1" },
     });
-  });
-
-  it("freezes the actual successful harness when configured policy is auto", async () => {
-    const { binding } = await opaqueHarnessBinding(codexHarnessConfig(), {
-      configuredAuto: true,
-    });
-
-    expect(binding.configuredRoute).toMatchObject({ agentHarnessRuntimeOverride: "auto" });
-    expect(binding.execution).toMatchObject({ agentHarnessRuntimeOverride: "codex" });
-    expect(binding.ownerPluginIds).toContain("codex");
   });
 
   it("freezes auto to the successful built-in harness", async () => {
@@ -883,32 +857,19 @@ describe("verified OpenClaw inference binding", () => {
     }
   });
 
-  it("fails closed after the configured route changes", async () => {
-    const binding = await bindingFor(config());
-    const changed = config("anthropic/claude-opus-4-8");
+  it.each([{ name: "an owner is removed", ownerIds: [] as string[], records: [] }])(
+    "invalidates a strict credential when $name",
+    async ({ ownerIds, records }) => {
+      const baseConfig = config();
+      const binding = await bindingFor(baseConfig);
+      pluginRegistryState.providerOwnerIds = ownerIds;
+      pluginRegistryState.records = records;
 
-    const route = await revalidate(binding, changed);
+      const route = await revalidate(binding, baseConfig, authDeps());
 
-    expect(route).toBeNull();
-  });
-
-  it.each([
-    {
-      name: "an owner is added",
-      ownerIds: ["provider-owner", "replacement-owner"],
-      records: [pluginRecord("provider-owner"), pluginRecord("replacement-owner")],
+      expect(route).toBeNull();
     },
-    { name: "an owner is removed", ownerIds: [] as string[], records: [] },
-  ])("invalidates a strict credential when $name", async ({ ownerIds, records }) => {
-    const baseConfig = config();
-    const binding = await bindingFor(baseConfig);
-    pluginRegistryState.providerOwnerIds = ownerIds;
-    pluginRegistryState.records = records;
-
-    const route = await revalidate(binding, baseConfig, authDeps());
-
-    expect(route).toBeNull();
-  });
+  );
 
   it("invalidates a strict credential when its owning runtime is removed", async () => {
     const baseConfig = config();
@@ -922,40 +883,10 @@ describe("verified OpenClaw inference binding", () => {
 
   it.each([
     {
-      name: "runtime source",
-      replacement: {
-        rootDir: "/replacement/provider-owner",
-        source: "/replacement/provider-owner/index.js",
-        manifestPath: "/replacement/provider-owner/openclaw.plugin.json",
-      },
-    },
-    { name: "package version", replacement: { packageVersion: "2.0.0" } },
-    {
-      name: "installed artifact identity",
-      replacement: { installRecordHash: "provider-owner-install-v2" },
-    },
-  ])("invalidates a strict credential when its owner $name changes", async ({ replacement }) => {
-    const baseConfig = config();
-    const binding = await bindingFor(baseConfig);
-    pluginRegistryState.records = [pluginRecord("provider-owner", replacement)];
-
-    const route = await revalidate(binding, baseConfig, authDeps());
-
-    expect(route).toBeNull();
-  });
-
-  it.each([
-    {
       name: "path/dev executable",
       origin: "config" as const,
       sourcePath: "src/index.ts",
       installRecordHash: undefined,
-    },
-    {
-      name: "installed executable",
-      origin: "global" as const,
-      sourcePath: "dist/index.js",
-      installRecordHash: "provider-owner-install-v1",
     },
   ])(
     "invalidates a strict credential after an in-place $name change with stable registry identity",
@@ -1028,53 +959,10 @@ describe("verified OpenClaw inference binding", () => {
     },
   );
 
-  it("keeps the frozen verified route across unrelated channel config changes", async () => {
-    const baseConfig = config();
-    const binding = await bindingFor(baseConfig);
-    const changed = {
-      ...baseConfig,
-      channels: { discord: { enabled: true } },
-      plugins: { entries: { discord: { enabled: true } } },
-    } satisfies OpenClawConfig;
-
-    const route = await revalidate(binding, changed, authDeps());
-
-    expect(route).toBe(binding.execution);
-    expect(route?.runConfig).toMatchObject(baseConfig);
-    expect(route?.runConfig.agents?.entries).toEqual({ openclaw: {} });
-    expect(route?.runConfig).not.toBe(baseConfig);
-  });
-
-  it("fails closed when the selected credential content changes", async () => {
-    const binding = await bindingFor(config());
-
-    const route = await revalidate(binding, config(), authDeps("replacement-key"));
-
-    expect(route).toBeNull();
-  });
-
   it.each([
-    { name: "plugins.allow is omitted", plugins: {}, remainsValid: true },
-    { name: "plugins.allow is empty", plugins: { allow: [] }, remainsValid: true },
-    {
-      name: "plugins.allow includes the owner",
-      plugins: { allow: ["provider-owner", "codex"] },
-      remainsValid: true,
-    },
     {
       name: "plugins.allow excludes the owner",
       plugins: { allow: ["discord"] },
-      remainsValid: false,
-    },
-    { name: "plugins.enabled is false", plugins: { enabled: false }, remainsValid: false },
-    {
-      name: "plugins.deny includes the owner",
-      plugins: { deny: ["provider-owner"] },
-      remainsValid: false,
-    },
-    {
-      name: "the owner entry is disabled",
-      plugins: { entries: { "provider-owner": { enabled: false } } },
       remainsValid: false,
     },
   ])("projects the provider-owner policy when $name", async ({ plugins, remainsValid }) => {

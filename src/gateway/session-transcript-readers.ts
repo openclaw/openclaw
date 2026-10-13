@@ -7,7 +7,10 @@ import { withCurrentProjectionSnapshot } from "../config/sessions/session-access
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
 import type { SessionTranscriptBoundedMessageTailOptions } from "../config/sessions/session-accessor.sqlite-projection-read.js";
 import { bindSessionTranscriptStoreScope } from "../config/sessions/session-accessor.transcript-target.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import {
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { captureSessionActorTranscriptRead } from "../config/sessions/session-actor-transcript-read.js";
 import { readRestoredSessionTranscript } from "../config/sessions/session-cold-storage-read.js";
 import { captureIncognitoSessionHistoryBinding } from "../config/sessions/session-incognito-binding.js";
@@ -530,42 +533,33 @@ export async function readSessionMessageCountAsync(
 export async function readSessionReactionsAsync(scope: SessionTranscriptReadScope) {
   const selected = getSessionActorStorageBinding({});
   if (selected && (!scope.sessionKey || isIncognitoSessionKey(scope.sessionKey))) {
-    const agentId =
-      scope.agentId ??
-      (scope.sessionKey ? resolveAgentIdFromSessionKey(scope.sessionKey) : selected.agentId);
-    if (agentId !== selected.agentId) {
-      return {};
-    }
-    getSessionActorStorageBinding({ ...scope, sessionKey: undefined });
+    const namespace = captureSessionActorStorageOwner(scope)!;
     const sessionKey =
       scope.sessionKey ??
-      selected.actor.storage.readCurrent(
-        { type: "session.entry.readById", input: { sessionId: scope.sessionId } },
-        selected.authority,
-      )?.sessionKey;
+      (namespace.agentId === selected.agentId
+        ? selected.actor.storage!.readCurrent(
+            { type: "session.entry.readById", input: { sessionId: scope.sessionId } },
+            selected.authority,
+          )?.sessionKey
+        : namespace.owner?.readSessionById(scope.sessionId, namespace.authority)?.sessionKey);
     if (!sessionKey) {
       return {};
     }
-    const direct = sessionKey === selected.actor.target.sessionKey;
-    if (
-      !direct &&
-      !selected.actor.storage.readCurrent(
-        { type: "session.entry.read", input: { sessionKey } },
-        selected.authority,
-      )
-    ) {
-      return {};
-    }
+    const direct =
+      namespace.agentId === selected.agentId && sessionKey === selected.actor.target.sessionKey;
     const actor = direct
       ? selected.actor
-      : await selected.actor.storage.acquire(sessionKey, {
+      : await namespace.owner?.acquireExisting(sessionKey, {
           assertCurrent: () => selected.actor.assertReadable(),
           assertReadable: () => selected.actor.assertReadable(),
         });
+    if (!actor) {
+      return {};
+    }
     try {
       return await actor.storage!.read(
         { type: "session.reactions.read", input: { sessionId: scope.sessionId } },
-        selected.authority,
+        namespace.authority,
       );
     } finally {
       if (!direct) {

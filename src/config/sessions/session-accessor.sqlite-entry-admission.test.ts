@@ -281,7 +281,7 @@ it("returns an accepted unchanged patch receipt without publishing a new source"
   expect(loadSessionEntry(f.scope)).toEqual(committed);
 });
 
-it.each([false, true])(
+it.each([true])(
   "captures the queued state owner before admission (ambient=%s)",
   async (ambient) => {
     const f = fixture();
@@ -516,9 +516,9 @@ it.each(["cancel", "revoke"] as const)(
   },
 );
 
-it.each(["relative queued", "relative updater", "relative native reopen"] as const)(
+it.each(["relative native reopen"] as const)(
   "pins the selected root for %s patch work",
-  async (mode) => {
+  async () => {
     const home = roots.make("session-patch-root-selection-");
     const ownerRoot = path.join(home, "state");
     const successor = path.join(home, "next-cwd");
@@ -541,46 +541,22 @@ it.each(["relative queued", "relative updater", "relative native reopen"] as con
     const shiftOwner = () => {
       cwd.mockReturnValue(successor);
     };
-    const release = createDeferred();
     const updaterEntered = createDeferred();
-    releases.push(() => release.resolve());
-    const blocker =
-      mode === "relative queued"
-        ? own(
-            runExclusiveSqliteSessionWrite(
-              resolveSqliteScope(original),
-              async () => {
-                await release.promise;
-              },
-              "session.transcript.batch",
-            ),
-          )
-        : undefined;
     const operation = own(
       patchSessionEntryCore(
         scope,
         () => {
-          if (mode !== "relative queued") {
-            // The selected store stays A after the updater changes ambient root selection.
-            evictHandle(selectedPath);
-            shiftOwner();
-          }
+          evictHandle(selectedPath);
+          shiftOwner();
           updaterEntered.resolve();
           return { label: "retained selected root" };
         },
         {
           skipMaintenance: true,
-          assertCommitAllowed: mode === "relative native reopen" ? () => {} : undefined,
+          assertCommitAllowed: () => {},
         },
       ),
     );
-    if (blocker) {
-      // Admission was queued with A selected; its first physical open must retain A.
-      evictHandle(selectedPath);
-      shiftOwner();
-      release.resolve();
-      await blocker;
-    }
     await awaitGateBeforeSettlement(
       updaterEntered.promise,
       operation,

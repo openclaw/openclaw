@@ -953,7 +953,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
   });
 
-  it("remaps unsupported stored thinking levels when persisting a model switch", async () => {
+  it("preserves unsupported stored thinking levels when persisting a model switch", async () => {
     const sessionEntry = createSessionEntry({ thinkingLevel: "adaptive" });
     const { persisted } = await persistModelDirectiveForTest({
       command: "/model openai/gpt-4o",
@@ -961,10 +961,8 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       sessionEntry,
     });
 
-    expect(sessionEntry.thinkingLevel).toBe("medium");
-    expect(persisted.directiveAck?.text).toContain(
-      "Thinking level set to medium (adaptive not supported for openai/gpt-4o).",
-    );
+    expect(sessionEntry.thinkingLevel).toBe("adaptive");
+    expect(persisted.directiveAck?.text).not.toContain("Thinking level set to");
   });
 
   it("suppresses model side effects when a concurrent switch wins", async () => {
@@ -1088,7 +1086,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     }
   });
 
-  it("rejects a grouped directive when its implicit thinking remap conflicts", async () => {
+  it("preserves a concurrent thinking preference while applying an unrelated directive", async () => {
     setDirectiveTestProviders([
       {
         id: "anthropic",
@@ -1116,11 +1114,12 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
         storePath,
       });
 
-      expect(result?.text).toContain("Session settings were not applied");
-      expect(result?.isError).toBe(true);
-      expect(sessionEntry).toMatchObject({ thinkingLevel: "low" });
-      expect(sessionEntry.fastMode).toBeUndefined();
-      expect(loadSessionEntry({ sessionKey, storePath })).toEqual(concurrentEntry);
+      expect(result?.isError).not.toBe(true);
+      expect(sessionEntry).toMatchObject({ thinkingLevel: "low", fastMode: true });
+      expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+        thinkingLevel: "low",
+        fastMode: true,
+      });
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }

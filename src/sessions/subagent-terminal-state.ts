@@ -1,7 +1,6 @@
 import type { AcpSessionControlConstraint } from "../acp/runtime/session-meta-control.types.js";
 import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
 import { captureSessionWatcherStorePaths } from "../config/sessions/session-store-path.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { recordSessionStateEventAsync } from "./session-state-events.js";
 import type { SessionStateWorkerOperations } from "./session-state-events.worker-contract.js";
 
@@ -16,7 +15,7 @@ const SUBAGENT_TERMINAL_SUMMARY: Record<SubagentTerminalStatus, string> = {
 
 type SubagentTerminalState = {
   childSessionKey: string;
-  agentId?: string;
+  agentId: string;
   runId: string;
   requesterSessionKey: string;
   outcomeStatus: SubagentTerminalStatus;
@@ -37,7 +36,7 @@ export function prepareSubagentTerminalState(
     input: {
       event: {
         sessionKey: params.childSessionKey,
-        agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.childSessionKey),
+        agentId: params.agentId,
         kind: params.outcomeStatus === "ok" ? "run_completed" : "run_failed",
         actorType: "system",
         runId: params.runId,

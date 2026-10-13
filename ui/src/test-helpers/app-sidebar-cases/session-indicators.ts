@@ -4,6 +4,7 @@ import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../lib/session-pull-requests.ts";
 import { reconcileSessionChanged } from "../../lib/sessions/reconcile.ts";
 import { createGatewayHarness, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import { waitForFast } from "../wait-for.ts";
 import { settleRoster } from "./roster.test-support.ts";
 
@@ -27,7 +28,7 @@ describe("AppSidebar session indicators", () => {
         color: "purple",
       }).result,
     });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(row()?.classList.contains("sidebar-recent-session--colored")).toBe(true);
     expect(row()?.style.getPropertyValue("--session-color")).toBe("var(--session-color-purple)");
     sessions.publish({
@@ -36,7 +37,7 @@ describe("AppSidebar session indicators", () => {
         color: null,
       }).result,
     });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(row()?.classList.contains("sidebar-recent-session--colored")).toBe(false);
     expect(row()?.style.getPropertyValue("--session-color")).toBe("");
   });
@@ -83,7 +84,7 @@ describe("AppSidebar session indicators", () => {
         icon: null,
       }).result,
     });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(svgRow()?.querySelector(".session-glyph__icon")).toBeNull();
   });
 
@@ -484,7 +485,7 @@ describe("AppSidebar session indicators", () => {
         ],
       },
     });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
     await waitForFast(() =>
       expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(4),

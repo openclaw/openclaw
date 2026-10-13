@@ -125,10 +125,15 @@ it.each(["none", "middleware", "handler"] as const)(
     const telegramTransport = { fetch, sourceFetch: fetch, close: async () => {} };
     let monitor: ReturnType<typeof createTelegramTransportIngressMonitor> | undefined;
     let menuSync: Promise<void> | undefined;
-    const readHandlerAnswer = vi.spyOn(
-      callbackQueryAnswerState,
-      "getTelegramCallbackQueryAnswerPromise",
-    );
+    const handlerAnswerRead = Promise.withResolvers<void>();
+    const getHandlerAnswer = callbackQueryAnswerState.getTelegramCallbackQueryAnswerPromise;
+    const readHandlerAnswer = vi
+      .spyOn(callbackQueryAnswerState, "getTelegramCallbackQueryAnswerPromise")
+      .mockImplementation((ctx) => {
+        const answer = getHandlerAnswer(ctx);
+        handlerAnswerRead.resolve();
+        return answer;
+      });
     try {
       server.listen(0, "127.0.0.1");
       await once(server, "listening");
@@ -220,8 +225,8 @@ it.each(["none", "middleware", "handler"] as const)(
         sendResult(heldMenuResponse!, menu);
         heldMenuResponse = undefined;
         if (recovery === "handler") {
-          // Let the real router consume the pending admission answer before rejecting it.
-          await vi.waitFor(() => expect(readHandlerAnswer).toHaveBeenCalled(), { interval: 10 });
+          // Wait for the router, not a polling deadline, before rejecting its pending answer.
+          await handlerAnswerRead.promise;
           const firstResponse = heldAnswerResponses.shift();
           expect(firstResponse).toBeDefined();
           firstResponse!.writeHead(503, { "content-type": "application/json" });

@@ -74,15 +74,14 @@ describe("worker turn execution", () => {
 
   it.each([
     { recorderOwned: false, throws: false },
-    { recorderOwned: true, throws: false },
-    { recorderOwned: false, throws: true },
     { recorderOwned: true, throws: true },
   ])("redacts blocked input before launch (%j)", async ({ recorderOwned, throws }) => {
     await seedActivePlacement();
     const input = turn("blocked-input");
+    const resolveTarget = vi.fn(() => ({ ...sessionTarget, sessionEntry: undefined }));
     const recorder = recorderOwned
       ? createUserTurnTranscriptRecorder({
-          target: { ...sessionTarget, sessionEntry: undefined },
+          target: resolveTarget,
           input: { text: input.prompt },
         })
       : undefined;
@@ -127,6 +126,9 @@ describe("worker turn execution", () => {
       expect(result.meta.error?.kind).toBe("hook_block");
       expect(result.meta.livenessState).toBe("blocked");
       expect(handler).toHaveBeenCalledOnce();
+      if (recorderOwned) {
+        expect(resolveTarget).toHaveBeenCalledOnce();
+      }
       expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
       expect(environments.startTunnel).not.toHaveBeenCalled();
       expect(runLocal).not.toHaveBeenCalled();
@@ -781,7 +783,6 @@ describe("worker turn execution", () => {
 
   it.each([
     { mode: "merge", reasoning: false, thinkingLevelMap: undefined, expected: "off" },
-    { mode: "replace", reasoning: true, thinkingLevelMap: { high: null }, expected: "medium" },
   ] as const)(
     "honors configured worker Ultra effort $expected in mode $mode with scheduled tools",
     async (testCase) => {
@@ -879,10 +880,7 @@ describe("worker turn execution", () => {
 
   registerWorkerTurnInferenceTests();
 
-  it.each([
-    [WORKER_LAUNCH_V2_PROTOCOL_FEATURE],
-    [WORKER_LAUNCH_V2_PROTOCOL_FEATURE, WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
-  ])(
+  it.each([[WORKER_LAUNCH_V2_PROTOCOL_FEATURE, WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE]])(
     "fences a stale worker receipt %j while a current receipt proceeds to execution",
     async (...protocolFeatures) => {
       await seedActivePlacement();

@@ -553,13 +553,13 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
                   },
                 }
               : {}),
-            isAuthorized: () => {
+            isAuthorized: Object.assign(() => {
               if (!dispatchReady) {
                 // Publish expiry through the signal; a guard throw can orphan the invoke promise.
                 availabilityDeadline.remainingMs();
               }
               return stableRequest.isDispatchAuthorized();
-            },
+            }, stableRequest.isDispatchAuthorized),
             deadline: dispatchDeadline,
             ...(!pollStatus
               ? {

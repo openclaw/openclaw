@@ -434,11 +434,11 @@ suite.define(() => {
     await expectBrowser(row.locator("openclaw-session-owner-chip")).toHaveCount(0);
     // Cross the event window and deliver the nested mock response timer.
     await currentPage.clock.runFor(2);
-    await expectBrowser(row.locator("openclaw-session-owner-chip")).toHaveCount(1);
     expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(
       initialRequests + 1,
     );
     await currentPage.clock.resume();
+    await expectBrowser(row.locator("openclaw-session-owner-chip")).toHaveCount(1);
     await captureSessionOwnerProof(suite, currentPage, "multiple-humans.png");
   });
 

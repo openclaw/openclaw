@@ -112,6 +112,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     const storePath = path.join(sessionsDir, "sessions.json");
     const sessionKey = "agent:main:chat:sqlite-live:heartbeat";
     const sessionId = "sqlite-live";
+    const sourceText = `API_TOKEN = computeToken() sk-${"a".repeat(48)}`;
     const updatedAt = Date.parse("2026-06-25T12:00:00.000Z");
     fsSync.mkdirSync(sessionsDir, { recursive: true });
 
@@ -126,7 +127,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
           {
             message: {
               role: "user",
-              content: "Live SQLite transcript text",
+              content: sourceText,
               timestamp: updatedAt,
             },
           },
@@ -198,13 +199,11 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     } finally {
       sql.restore();
     }
-    expect(messages).toEqual([
-      expect.objectContaining({ role: "user", content: "Live SQLite transcript text" }),
-    ]);
+    expect(messages).toEqual([expect.objectContaining({ role: "user", content: sourceText })]);
     const archiveEntry = requireSessionEntry(await buildSessionEntry(archivePath));
 
     expect(liveEntry.path).toBe("sessions/main/sqlite-live.jsonl");
-    expect(liveEntry.content).toBe("User: Live SQLite transcript text");
+    expect(liveEntry.content).toBe(`User: ${sourceText}`);
     expect(liveState).toEqual({
       absPath: sessionKey,
       path: liveEntry.path,

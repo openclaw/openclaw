@@ -16,6 +16,7 @@ import {
   tryResolveAgentOperationAgentId,
   tryResolveSoleAgentId,
 } from "../agents/agent-scope-config.js";
+import type { EmbeddedAgentRunMeta } from "../agents/embedded-agent-runner/types.js";
 import { measureAgentStartup } from "../agents/startup-timing.js";
 import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
 import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
@@ -72,7 +73,7 @@ type AgentGatewayResult = {
     mediaUrls?: string[];
   }>;
   deliveryStatus?: unknown;
-  meta?: unknown;
+  meta?: EmbeddedAgentRunMeta;
 };
 
 type GatewayAgentResponse = {
@@ -384,19 +385,13 @@ async function formatPayloadForLog(payload: {
   mediaUrl?: string | null;
 }) {
   const { resolveSendableOutboundReplyParts } = await import("openclaw/plugin-sdk/reply-payload");
+  const { formatOutboundPayloadLog } = await import("../infra/outbound/payloads.js");
   const parts = resolveSendableOutboundReplyParts({
     text: payload.text,
     mediaUrls: payload.mediaUrls,
     mediaUrl: typeof payload.mediaUrl === "string" ? payload.mediaUrl : undefined,
   });
-  const lines: string[] = [];
-  if (parts.text) {
-    lines.push(parts.text.trimEnd());
-  }
-  for (const url of parts.mediaUrls) {
-    lines.push(`Attachment: ${url}`);
-  }
-  return lines.join("\n").trimEnd();
+  return formatOutboundPayloadLog(parts).trimEnd();
 }
 
 function isCompactControlCommand(message: string): boolean {
@@ -992,6 +987,9 @@ async function agentViaGatewayCommand(
   }
 
   const payloads = response.result?.payloads ?? [];
+  if (response.result?.meta?.requestShaping?.thinkingClamp) {
+    runtime.log(response.result.meta.requestShaping.thinkingClamp);
+  }
 
   if (response.reason === "input_withdrawn_before_turn") {
     runtime.error?.(response.summary);

@@ -23,7 +23,7 @@ export function observeCronStoreCommits(storePath: string, observer: () => void)
 }
 
 export function loseFirstCronMutationReply(
-  type: keyof CronStateWorkerOperations = "cron.repairRun",
+  type: keyof CronStateWorkerOperations = "cron.recoverRuns",
 ) {
   let target: { worker: Worker; requestId: number } | undefined;
   let stopped: Promise<number> | undefined;

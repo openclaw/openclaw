@@ -10,6 +10,7 @@ import type { ExecApprovalRequestPayload } from "../../infra/exec-approvals.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -82,6 +83,7 @@ describe("approval authority boundaries", () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const profile = ensureProfileForEmail("approval-guest@example.test", databaseOptions);
       setUserProfileRole(profile.id, "guest", databaseOptions);
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog(databaseOptions)).release };
       const ownerKey = "agent:main:approval-owned";
       const foreignKey = "agent:main:approval-foreign";
       for (const [sessionKey, creatorId] of [

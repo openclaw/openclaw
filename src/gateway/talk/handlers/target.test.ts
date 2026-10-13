@@ -10,6 +10,7 @@ import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
+import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import * as clientVoiceSession from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
@@ -76,6 +77,7 @@ const browserSession = {
 };
 
 let state: OpenClawTestState;
+let releaseProfileCatalog: (() => void) | undefined;
 let config: OpenClawConfig;
 let client: ReturnType<typeof sharingPolicyClient> & { connId: string };
 const createBrowserSession = vi.fn<
@@ -123,6 +125,7 @@ beforeEach(async () => {
     ...sharingPolicyClient({ user: ensureProfileForEmail("listener@example.test").id }),
     connId: "talk-target-test",
   };
+  releaseProfileCatalog = (await prepareUserProfileCatalog()).release;
   config = {
     agents: { ownership: "explicit", entries: { primary: {}, voice: {} } },
     talk: { agentId: "voice" },
@@ -157,6 +160,8 @@ afterEach(async () => {
     vi.restoreAllMocks();
     clientVoiceSessionTesting.reset();
     setActivePluginRegistry(createEmptyPluginRegistry());
+    releaseProfileCatalog?.();
+    releaseProfileCatalog = undefined;
     await state.cleanup();
   }
 });

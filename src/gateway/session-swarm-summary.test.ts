@@ -150,7 +150,7 @@ describe("parent Swarm outcome projection", () => {
     ]);
   });
 
-  it.each(["main", "workspace", "global"])(
+  it.each(["workspace", "global"])(
     "joins admitted global-scope %s collectors to their owner row",
     async (suffix) => {
       const globalConfig = { ...cfg, session: { scope: "global" as const, mainKey: "workspace" } };

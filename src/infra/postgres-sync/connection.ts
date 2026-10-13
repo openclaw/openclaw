@@ -3,9 +3,16 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import {
   MessageChannel,
   receiveMessageOnPort,
+  threadId,
   Worker,
   type MessagePort,
 } from "node:worker_threads";
+import { observeDatabaseOperation } from "../database-engine/observation.js";
+import {
+  POSTGRES_CONNECT_TIMEOUT_MS,
+  POSTGRES_LOCK_TIMEOUT_MS,
+  POSTGRES_STATEMENT_TIMEOUT_MS,
+} from "../database-engine/policy.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../runtime-process-url.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../runtime-worker-url.js";
 import type { PostgresSqlConnection, SqlStatement } from "../sql-connection.js";
@@ -44,14 +51,32 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     readonly schema: string,
     readonly anchor: DatabaseSync,
     storeId: string,
+    options?: {
+      purpose?: "admission" | "migration";
+      lockTimeoutMs?: number;
+      statementTimeoutMs?: number;
+    },
   ) {
+    if (threadId === 0 && !options?.purpose) {
+      throw new Error(
+        "PostgreSQL connections must open in a worker; only admission and migrations may open on the main thread",
+      );
+    }
     Object.defineProperty(this, Symbol.for("openclaw.postgres-sync-connection"), { value: true });
     this.advisoryLockKey = createHash("sha256").update(storeId).digest().readBigInt64BE();
     const { port1, port2 } = new MessageChannel();
     this.port = port1;
     const workerUrl = resolveRuntimeProcessEntrypointUrl("postgresBridge");
     this.worker = new Worker(workerUrl, {
-      workerData: { port: port2, signal: this.control.buffer, url, schema },
+      workerData: {
+        port: port2,
+        signal: this.control.buffer,
+        url,
+        schema,
+        connectTimeoutMs: POSTGRES_CONNECT_TIMEOUT_MS,
+        lockTimeoutMs: options?.lockTimeoutMs ?? POSTGRES_LOCK_TIMEOUT_MS,
+        statementTimeoutMs: options?.statementTimeoutMs ?? POSTGRES_STATEMENT_TIMEOUT_MS,
+      },
       transferList: [port2],
       execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
     });
@@ -124,6 +149,9 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       throw this.loseConnection();
     }
     if ("error" in reply) {
+      if (request.operation === "connect") {
+        throw decodePostgresError(reply.error);
+      }
       if (isPostgresConnectionError(reply.error.code)) {
         throw this.loseConnection();
       }
@@ -136,6 +164,12 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   }
 
   query(sql: string, parameters: readonly SQLInputValue[] = [], readBigInts = false) {
+    return observeDatabaseOperation("postgres", "statement", sql, () =>
+      this.execute(sql, parameters, readBigInts),
+    );
+  }
+
+  private execute(sql: string, parameters: readonly SQLInputValue[], readBigInts: boolean) {
     this.assertOpen();
     validatePostgresBindings(parameters);
     const rewrittenSql = rewritePostgresPlaceholders(sql);
@@ -148,26 +182,26 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       { operation: "query", sql: rewrittenSql, parameters },
       !wasTransaction || /^\s*COMMIT\b/i.test(sql),
     );
-    if (
-      !wasTransaction &&
-      /^(?:INSERT|UPDATE|DELETE|MERGE|CREATE|ALTER|DROP|TRUNCATE|COMMENT|GRANT|REVOKE)$/.test(
-        result.command ?? "",
-      )
-    ) {
-      // Autocommit writes publish the same anchor receipt as explicit transactions.
-      withSqlitePostCommitPublications(this.anchor, () => {
-        beginSqliteDatabaseWrite(this.anchor);
-        finishSqliteDatabaseWrite(this.anchor);
-        if (currentSqliteWorkerOperationAdmission.getStore()?.active) {
-          deferSqliteWorkerCommitReceipt(this.anchor, {});
-        }
-      });
-    }
     if (/^\s*(?:COMMIT|ROLLBACK)\s*;?\s*$/i.test(sql)) {
       this.isTransaction = false;
       if (/^\s*COMMIT\b/i.test(sql) && result.command !== "COMMIT") {
         throw new Error("PostgreSQL transaction rolled back instead of committing");
       }
+    }
+    const autocommitWrite =
+      !wasTransaction &&
+      /^(?:INSERT|UPDATE|DELETE|MERGE|CREATE|ALTER|DROP|TRUNCATE|COMMENT|GRANT|REVOKE)$/.test(
+        result.command ?? "",
+      );
+    if (result.command === "COMMIT" || autocommitWrite) {
+      // All confirmed commits advance the anchor, including callers using raw SQL.
+      withSqlitePostCommitPublications(this.anchor, () => {
+        beginSqliteDatabaseWrite(this.anchor);
+        finishSqliteDatabaseWrite(this.anchor);
+        if (autocommitWrite && currentSqliteWorkerOperationAdmission.getStore()?.active) {
+          deferSqliteWorkerCommitReceipt(this.anchor, {});
+        }
+      });
     }
     this.outcomeUnknown = !this.isTransaction;
     return {

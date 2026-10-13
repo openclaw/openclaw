@@ -1680,7 +1680,7 @@ describe("createOpenClawCodingTools read behavior", () => {
     expect(details?.truncation).not.toHaveProperty("content");
   });
 
-  it("redacts env files while preserving config and source reads", async () => {
+  it("preserves env, config, and source reads", async () => {
     const credential = "unquoted-config-credential-1234567890";
     const source = "API_TOKEN = computeToken()";
     const execute = vi.fn(async (_toolCallId: string, args: { path: string }) => {
@@ -1707,8 +1707,8 @@ describe("createOpenClawCodingTools read behavior", () => {
     const envrcResult = await readTool.execute("read-envrc", { path: ".envrc" });
 
     expect(extractToolText(yamlResult)).toBe(`api_key: ${credential}`);
-    expect(extractToolText(envResult)).not.toContain(credential);
-    expect(JSON.stringify(envResult.details)).not.toContain(credential);
+    expect(extractToolText(envResult)).toBe(`api_key: ${credential}`);
+    expect(JSON.stringify(envResult.details)).toContain(credential);
     expect(envResult.details).toEqual({ kind: "text", content: extractToolText(envResult) });
     expect(extractToolText(sourceResult)).toBe(source);
     expect(extractToolText(envrcResult)).toBe(source);

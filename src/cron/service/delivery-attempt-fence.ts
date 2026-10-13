@@ -59,7 +59,7 @@ export function createCronCompletionDeliveryFence(params: {
           type: "cron.markDeliveryStarted",
           input: { storeKey: handle.storeKey, handle: { ...handle } },
           assertCurrent,
-          snapshot: { allowMissingJob: allowMissingJob(), defaultAgentId: admittedDefaultAgentId },
+          snapshot: {},
           publish() {
             committed = true;
           },

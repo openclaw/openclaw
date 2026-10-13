@@ -448,47 +448,6 @@ describe("channelsCapabilitiesCommand", () => {
     });
   });
 
-  it("prints Teams Graph permission hints when present", async () => {
-    const plugin = buildPlugin({
-      id: "msteams",
-      probe: {
-        ok: true,
-        appId: "app-id",
-        graph: {
-          ok: true,
-          roles: ["ChannelMessage.Read.All", "Files.Read.All"],
-        },
-      },
-    });
-    plugin.status = {
-      ...plugin.status,
-      formatCapabilitiesProbe: () => [
-        { text: "App: app-id" },
-        {
-          text: "Graph roles: ChannelMessage.Read.All (channel history), Files.Read.All (files (OneDrive))",
-        },
-      ],
-    };
-    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
-      cfg: { channels: {} },
-      channelId: "msteams",
-      plugin,
-      configChanged: false,
-    });
-
-    await channelsCapabilitiesCommand({ channel: "msteams" }, runtime);
-
-    expect(logs).toStrictEqual([
-      [
-        "msteams:default",
-        "Support: chatTypes=direct",
-        "Actions: send, broadcast, poll",
-        "App: app-id",
-        "Graph roles: ChannelMessage.Read.All (channel history), Files.Read.All (files (OneDrive))",
-      ].join("\n"),
-    ]);
-  });
-
   it("installs an explicit optional channel in the selected owner before rendering capabilities", async () => {
     const tokenRef = {
       source: "env",

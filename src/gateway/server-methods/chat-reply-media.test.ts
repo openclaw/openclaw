@@ -138,7 +138,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     cfg: OpenClawConfig;
     payloads: ReplyMediaPayloads;
   }) {
-    const scope = captureWebchatReplyMediaScope({
+    const scope = await captureWebchatReplyMediaScope({
       cfg: params.cfg,
       sessionKey: TEST_SESSION_KEY,
       agentId: "main",

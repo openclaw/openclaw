@@ -590,7 +590,7 @@ describe("repository checkpoint GitHub publication", () => {
             owner: { kind: "local", environmentId: "pending-publication-worker", ownerEpoch: 7 },
           });
           await blocked.placements.markWorkspaceResultPending(pendingClaim);
-          expect(blocked.placements.clearLocalTurnClaimsAfterRestart()).toBe(1);
+          expect(await blocked.placements.clearLocalTurnClaimsAfterRestartAsync()).toBe(1);
           expect(blocked.placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
           expect(await blocked.placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
         } else if (blocker === "reservation") {

@@ -1,9 +1,7 @@
-import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
-  resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -26,7 +24,7 @@ import type {
   SessionTranscriptRuntimeScope,
   SessionTranscriptRuntimeTarget,
 } from "./session-accessor.types.js";
-import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { captureSessionActorTranscriptRead } from "./session-actor-transcript-read.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import { readRetainedSessionEntryFacts } from "./session-entry-read-facts.js";
@@ -40,25 +38,10 @@ export function bindSessionTranscriptStoreScope<
 >(scope: T, config?: OpenClawConfig): T & { storePath: string } {
   const memory =
     !scope.sessionKey || isIncognitoSessionKey(scope.sessionKey)
-      ? getSessionActorStorageBinding({})
+      ? captureSessionActorStorageOwner(scope)
       : undefined;
   if (memory) {
-    const agentId =
-      scope.agentId ??
-      (scope.sessionKey ? resolveAgentIdFromSessionKey(scope.sessionKey) : memory.agentId);
-    if (agentId === memory.agentId) {
-      getSessionActorStorageBinding({ ...scope, sessionKey: undefined });
-    }
-    return {
-      ...scope,
-      storePath:
-        agentId === memory.agentId
-          ? memory.path
-          : resolveIncognitoOpenClawAgentSqlitePath({
-              agentId,
-              env: { OPENCLAW_STATE_DIR: path.resolve(memory.path, "../../../..") },
-            }),
-    };
+    return { ...scope, storePath: memory.path };
   }
   return {
     ...scope,
@@ -274,10 +257,10 @@ export function resolveSessionTranscriptDatabasePath(
   target: SessionTranscriptRuntimeTarget,
 ): string {
   const memory = isIncognitoSessionKey(target.sessionKey)
-    ? getSessionActorStorageBinding({})
+    ? captureSessionActorStorageOwner(target)
     : undefined;
   if (memory) {
-    return bindSessionTranscriptStoreScope(target).storePath;
+    return memory.path;
   }
   const resolved = resolveSqliteTranscriptScope(target);
   return resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved));

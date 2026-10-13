@@ -31,6 +31,7 @@ import {
 } from "../../sessions/session-participant-input.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as chatAttachments from "../chat-attachments.js";
@@ -250,6 +251,7 @@ describe("prepareChatSendUserTurn", () => {
         const profile = systemActor
           ? ensureGatewayOwnerProfile("Gateway Owner")
           : ensureProfileForEmail("chat-sandbox-creator@example.com");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const { controller } = createUserTurnInputController();
         const prepared = prepareChatSendUserTurn({
           request: {

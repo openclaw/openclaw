@@ -103,11 +103,19 @@ export function createAgentDatabaseNativeGeneration(
   let nativeIdentity: AgentDatabaseFileExecutionIdentity | undefined;
   let nativeStopped: Promise<void> | undefined;
   let readCloseReceipt: (() => SqliteWorkerCloseReceipt | undefined) | undefined;
+  let readOpenRefused: (() => boolean) | undefined;
   let lease: OpenClawAgentDatabaseWorkerLeaseReceipt | undefined;
   let integrityCheckPending: "quick" | "full" | undefined;
   let assertIntegrityVerifierCurrent: (() => void) | undefined;
   let preparationPublished = false;
 
+  // The actor retains this observer; keep it outside the opening caller's scope.
+  const onNativeLost = () => {
+    // Before the lease handoff this generation has borrowed no validation.
+    if (lease) {
+      invalidateOpenClawAgentDatabaseValidation(pathname);
+    }
+  };
   const assertCurrent = () => {
     assertLogicalCurrent();
     if (retiring) {
@@ -334,10 +342,8 @@ export function createAgentDatabaseNativeGeneration(
             assertSourceCurrent();
             const creating =
               !nativeIdentity &&
-              (creatingIdentity
-                ? creatingIdentity.key.startsWith("path:")
-                : !expectedIdentity &&
-                  readDatabasePathIdentitySync(pathname).key.startsWith("path:"));
+              !expectedIdentity &&
+              readDatabasePathIdentitySync(pathname).key.startsWith("path:");
             if (creating) {
               if (
                 !lease &&
@@ -412,12 +418,12 @@ export function createAgentDatabaseNativeGeneration(
               openingAdmission = { admission: captured.admission, settled: operation.settled };
               return captured;
             },
-            onNativeStopped: (stopped, readReceipt) => {
+            onNativeStopped: (stopped, readReceipt, readRefused) => {
               nativeStopped = stopped;
               readCloseReceipt = readReceipt;
+              readOpenRefused = readRefused;
             },
-            // The actor outlives the caller; bind the path and preserve default identity lookup.
-            onNativeLost: invalidateOpenClawAgentDatabaseValidation.bind(null, pathname, undefined),
+            onNativeLost,
           },
         );
         return openedStore;
@@ -659,6 +665,7 @@ export function createAgentDatabaseNativeGeneration(
               stopped: nativeStopped,
               assertOwned: assertCleanupOwned,
               lease,
+              refusedBeforeAgentOpen: readOpenRefused?.(),
               closed: () =>
                 storeClosed
                   ? readAgentDatabaseClosedReceipt(readCloseReceipt?.(), nativeIdentity, lease)

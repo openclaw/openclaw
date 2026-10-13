@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Worker } from "node:worker_threads";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { openFixtureReceiptChannel } from "../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles.js";
@@ -79,6 +80,7 @@ function pauseIntegrityInspections(params: {
   pausePaths?: string[];
   pausePreparation?: boolean;
   pauseSchema?: boolean;
+  preparationReceiptBroadcastName?: string;
 }) {
   const releasePath = path.join(params.root, "release-inspection");
   const enteredPaths = params.paths.map((_, index) =>
@@ -95,7 +97,10 @@ function pauseIntegrityInspections(params: {
     `
 const fs = require('node:fs'), path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
-const { isMainThread, threadId } = require('node:worker_threads');
+const { BroadcastChannel, isMainThread, threadId } = require('node:worker_threads');
+const receiptBroadcastName = ${JSON.stringify(params.preparationReceiptBroadcastName)};
+const receipts = !isMainThread && receiptBroadcastName ? new BroadcastChannel(receiptBroadcastName) : undefined;
+receipts?.unref();
 const paths = ${JSON.stringify(params.paths.map((pathname) => fs.realpathSync.native(pathname)))};
 const paused = ${JSON.stringify(params.paths.map((pathname) => pausedPaths.includes(pathname)))};
 const preparation = ${params.pausePreparation === true} && (!isMainThread || process.argv[1]?.includes('sqlite-integrity.worker'));
@@ -118,6 +123,7 @@ DatabaseSync.prototype.prepare = function(sql) {
     if (!isMainThread) fs.writeFileSync(marker + '.thread', String(threadId));
     fs.writeFileSync(pendingMarker, String(process.pid));
     fs.renameSync(pendingMarker, marker);
+    receipts?.postMessage({ source: marker, line: 'entered' });
     const pause = new Int32Array(new SharedArrayBuffer(4));
     const deadline = Date.now() + 60000;
     while (paused[index] && !fs.existsSync(release) && !fs.existsSync(releases[index])) {
@@ -258,6 +264,10 @@ it.for([
       await closeStateDatabaseForTest();
     }
     const agentBytes = fs.readFileSync(agentPath);
+    const handoffReceipts = outcome === "handoff" ? await openFixtureReceiptChannel() : undefined;
+    if (handoffReceipts) {
+      onTestFinished(() => handoffReceipts.close());
+    }
     const paused = outcome !== "corrupt" && outcome !== "physical-corrupt" && outcome !== "fast";
     const pause = paused
       ? pauseIntegrityInspections({
@@ -265,6 +275,7 @@ it.for([
           paths: [agentPath],
           pausePreparation: outcome === "shutdown-preparation" || outcome === "handoff",
           pauseSchema: outcome !== "handoff",
+          preparationReceiptBroadcastName: handoffReceipts?.broadcastName,
         })
       : undefined;
     const releasePath = pause?.releasePath ?? path.join(root, "release-inspection");
@@ -466,9 +477,9 @@ it.for([
         if (outcome === "handoff") {
           // Old startup blocks in full-file preflight before claiming its writable lease.
           expect(fs.existsSync(enteredPath)).toBe(false);
-          await vi.waitFor(() =>
-            expect(fs.existsSync(pause!.preparationEnteredPaths[0]!)).toBe(true),
-          );
+          const preparationMarker = pause!.preparationEnteredPaths[0]!;
+          await withinTest(handoffReceipts!.waitFor(preparationMarker, "entered"), signal);
+          expect(fs.existsSync(preparationMarker)).toBe(true);
         } else {
           await vi.waitFor(() => expect(fs.existsSync(enteredPath)).toBe(true));
         }

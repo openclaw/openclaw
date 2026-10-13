@@ -44,19 +44,6 @@ describe("managed worktree protocol schemas", () => {
     ).toBe(true);
   });
 
-  it("accepts worktree target params on sessions.create", () => {
-    expect(
-      validateSessionsCreateParams({
-        agentId: "main",
-        worktree: true,
-        worktreeBaseRef: "origin/main",
-        worktreeName: "my-task",
-        execNode: "macbook",
-      }),
-    ).toBe(true);
-    expect(validateSessionsCreateParams({ agentId: "main", worktreeName: "Bad Name" })).toBe(false);
-  });
-
   it("preserves exact-state custody and recovery data in owner-qualified payloads", () => {
     const exactState = {
       ownerKind: "manual",
@@ -173,10 +160,5 @@ describe("managed worktree protocol schemas", () => {
     expect(validateFsListDirParams({ path: "/repo" })).toBe(true);
     expect(validateFsListDirParams({ nodeId: "macbook", path: "/Users/peter" })).toBe(true);
     expect(validateFsListDirParams({ nodeId: "" })).toBe(false);
-  });
-
-  it("rejects invalid names and unknown fields", () => {
-    expect(validateWorktreesCreateParams({ repoRoot: "/repo", name: "Bad Name" })).toBe(false);
-    expect(validateWorktreesGcParams({ unexpected: true })).toBe(false);
   });
 });

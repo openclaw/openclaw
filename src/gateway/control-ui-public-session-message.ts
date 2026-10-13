@@ -3,7 +3,6 @@ import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/hea
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-text-sanitize.js";
 import { stripUserEnvelopeForDisplay } from "../auto-reply/reply/user-envelope-display.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { splitMediaOutput } from "../media/parse-output.js";
 import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../sessions/input-provenance.js";
 import { extractAssistantTranscriptSourceText } from "../shared/chat-message-content.js";
@@ -91,7 +90,5 @@ export function publicSessionMessageText(entry: Record<string, unknown>): string
   if (entry.role === "assistant") {
     text = stripSuppressedControlReplyToken(text);
   }
-  return redactToolPayloadText(
-    splitMediaOutput(text, { extractAudioDirectives: false }).text,
-  ).trim();
+  return splitMediaOutput(text, { extractAudioDirectives: false }).text.trim();
 }

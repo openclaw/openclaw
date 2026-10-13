@@ -84,7 +84,7 @@ describe("managed worktree creation groups", () => {
       if (args[0] === "fetch") {
         fetches++;
       }
-      if (args[0] === "status") {
+      if (args[0] === "status" && path.resolve(cwd) === path.resolve(repo)) {
         statusReads++;
       }
       return await execute(cwd, args, options);

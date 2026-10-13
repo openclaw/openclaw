@@ -93,7 +93,15 @@ type CompatibilityOperation = {
   name: string;
   valid: boolean;
   reviewed: boolean;
-  node: ts.FunctionDeclaration;
+  node:
+    | ts.FunctionDeclaration
+    | ts.FunctionExpression
+    | ts.ArrowFunction
+    | ts.MethodDeclaration
+    | ts.ConstructorDeclaration
+    | ts.GetAccessorDeclaration
+    | ts.SetAccessorDeclaration
+    | ts.ClassDeclaration;
 };
 
 /** Classify only deprecated operations with no bundled runtime callers or escaped references. */
@@ -156,6 +164,8 @@ export function inspectDatabaseWorkerCompatibility(
   };
   const registered = new Map<Symbol, CompatibilityOperation>();
   const declarations = new Map<ts.Node, CompatibilityOperation>();
+  const declarationNames = new Set<ts.Node>();
+  const families = new Map<CompatibilityOperation, Set<CompatibilityOperation>>();
   const names = new Set([...reviewed.values()].flat());
   const sources = [...sourceTexts.keys()].map((file) => {
     const source = program.getSourceFile(path.resolve(root, file));
@@ -164,10 +174,10 @@ export function inspectDatabaseWorkerCompatibility(
     }
     for (const name of reviewed.get(file) ?? []) {
       const node = source.statements.find(
-        (statement): statement is ts.FunctionDeclaration =>
-          ts.isFunctionDeclaration(statement) &&
+        (statement): statement is ts.FunctionDeclaration | ts.ClassDeclaration =>
+          (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) &&
           statement.name?.text === name &&
-          Boolean(statement.body),
+          (ts.isClassDeclaration(statement) || Boolean(statement.body)),
       );
       if (!node?.name) {
         continue;
@@ -183,13 +193,64 @@ export function inspectDatabaseWorkerCompatibility(
       const operation = { file, name, valid, reviewed: true, node };
       registered.set(symbol, operation);
       declarations.set(node, operation);
+      declarationNames.add(node.name);
     }
     return { file, source };
   });
   // Follow named kernels from the reviewed boundaries. A symbol reference from
   // outside this closure (or an escaped callback) will make that kernel live.
-  // Returned methods are deliberately not candidates: their receiver escapes
-  // require a stronger proof than a direct function's declaration identity.
+  // A returned receiver exists only through its factory. Keep its methods in
+  // the same reachability family; a live factory or escaped member retires it.
+  const operationName = (node: ts.Node) => {
+    const parts: string[] = [];
+    for (let parent: ts.Node | undefined = node; parent; parent = parent.parent) {
+      if (
+        (ts.isFunctionDeclaration(parent) ||
+          ts.isFunctionExpression(parent) ||
+          ts.isMethodDeclaration(parent)) &&
+        parent.name &&
+        ts.isIdentifier(parent.name)
+      ) {
+        parts.unshift(parent.name.text);
+      } else if (
+        (ts.isVariableDeclaration(parent) || ts.isPropertyAssignment(parent)) &&
+        parent.initializer &&
+        (ts.isArrowFunction(parent.initializer) || ts.isFunctionExpression(parent.initializer)) &&
+        ts.isIdentifier(parent.name)
+      ) {
+        parts.unshift(parent.name.text);
+      }
+    }
+    return parts.join(".");
+  };
+  const addMember = (owner: CompatibilityOperation, node: CompatibilityOperation["node"]) => {
+    let member = declarations.get(node);
+    if (!member) {
+      member = { file: owner.file, name: operationName(node), valid: true, reviewed: false, node };
+      declarations.set(node, member);
+      const name =
+        (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) &&
+        ts.isPropertyAssignment(node.parent)
+          ? node.parent.name
+          : "name" in node
+            ? node.name
+            : undefined;
+      if (name) {
+        declarationNames.add(name);
+      }
+      const symbol = name ? resolveSymbol(checker.getSymbolAtLocation(name)) : undefined;
+      if (symbol) {
+        registered.set(symbol, member);
+        if (name && ts.isIdentifier(name)) {
+          names.add(name.text);
+        }
+      }
+    }
+    const family = families.get(owner) ?? new Set<CompatibilityOperation>();
+    family.add(member);
+    families.set(owner, family);
+    return member;
+  };
   const primitives = new Set([
     "executeSqliteQuerySync",
     "executeSqliteQueryTakeFirstSync",
@@ -198,6 +259,7 @@ export function inspectDatabaseWorkerCompatibility(
     "withOpenClawAgentDatabaseReadOnly",
   ]);
   const examined = new Set<Symbol>();
+  const expandedMembers = new Set<ts.Node>();
   let pending = [...registered.values()];
   while (pending.length > 0) {
     const references: ts.Node[] = [];
@@ -205,15 +267,97 @@ export function inspectDatabaseWorkerCompatibility(
       if (ts.isTypeNode(node)) {
         return;
       }
-      if (ts.isCallExpression(node)) {
+      if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
         references.push(node.expression);
       }
       node.forEachChild(visit);
     };
+    const members: CompatibilityOperation[] = [];
     for (const operation of pending) {
-      operation.node.body?.forEachChild(visit);
+      const node = operation.node;
+      const returned = (value: ts.Expression) => {
+        if (
+          ts.isParenthesizedExpression(value) ||
+          ts.isAsExpression(value) ||
+          ts.isSatisfiesExpression(value)
+        ) {
+          returned(value.expression);
+        } else if (ts.isObjectLiteralExpression(value)) {
+          for (const property of value.properties) {
+            if (
+              ts.isMethodDeclaration(property) ||
+              ts.isGetAccessorDeclaration(property) ||
+              ts.isSetAccessorDeclaration(property)
+            ) {
+              members.push(addMember(operation, property));
+            } else if (
+              ts.isPropertyAssignment(property) &&
+              (ts.isArrowFunction(property.initializer) ||
+                ts.isFunctionExpression(property.initializer))
+            ) {
+              members.push(addMember(operation, property.initializer));
+            }
+          }
+        } else if (ts.isArrowFunction(value) || ts.isFunctionExpression(value)) {
+          members.push(addMember(operation, value));
+        }
+      };
+      const findReturns = (child: ts.Node) => {
+        if (ts.isFunctionLikeDeclaration(child)) {
+          return;
+        }
+        if (ts.isReturnStatement(child) && child.expression) {
+          returned(child.expression);
+        }
+        child.forEachChild(findReturns);
+      };
+      if (ts.isClassDeclaration(node)) {
+        // Class-definition effects run without constructing a receiver. Inherited
+        // or field-bearing instances also need a separate ownership proof.
+        if (
+          node.heritageClauses?.length ||
+          node.modifiers?.some((modifier) => ts.isDecorator(modifier)) ||
+          node.members.some(
+            (member) =>
+              ts.isPropertyDeclaration(member) ||
+              ts.isClassStaticBlockDeclaration(member) ||
+              ((ts.isConstructorDeclaration(member) ||
+                ts.isMethodDeclaration(member) ||
+                ts.isGetAccessorDeclaration(member) ||
+                ts.isSetAccessorDeclaration(member)) &&
+                ((!ts.isConstructorDeclaration(member) && ts.isComputedPropertyName(member.name)) ||
+                  member.modifiers?.some((modifier) => ts.isDecorator(modifier)) ||
+                  member.parameters.some((parameter) =>
+                    parameter.modifiers?.some((modifier) => ts.isDecorator(modifier)),
+                  ))),
+          )
+        ) {
+          operation.valid = false;
+        } else {
+          for (const member of node.members) {
+            if (
+              ts.isConstructorDeclaration(member) ||
+              ts.isMethodDeclaration(member) ||
+              ts.isGetAccessorDeclaration(member) ||
+              ts.isSetAccessorDeclaration(member)
+            ) {
+              members.push(addMember(operation, member));
+            }
+          }
+        }
+      } else if (node.body) {
+        if (ts.isBlock(node.body)) {
+          node.body.forEachChild(findReturns);
+        } else {
+          returned(node.body);
+        }
+        visit(node.body);
+      }
     }
-    pending = [];
+    pending = members.filter((member) => !expandedMembers.has(member.node));
+    for (const member of pending) {
+      expandedMembers.add(member.node);
+    }
     const symbols = checker.getSymbolAtLocation(references);
     for (const raw of symbols) {
       const symbol = resolveSymbol(raw);
@@ -225,39 +369,26 @@ export function inspectDatabaseWorkerCompatibility(
         continue;
       }
       const node = symbol.valueDeclaration?.resolve();
-      if (!node || !ts.isFunctionDeclaration(node) || !node.name || !node.body) {
+      if (
+        !node ||
+        !(ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) ||
+        !node.name ||
+        (ts.isFunctionDeclaration(node) && !node.body)
+      ) {
         continue;
       }
       const file = path.relative(root, node.getSourceFile().fileName).split(path.sep).join("/");
       if (!sourceTexts.has(file)) {
         continue;
       }
-      const parents: string[] = [node.name.text];
-      for (let parent = node.parent; parent; parent = parent.parent) {
-        if (
-          (ts.isFunctionDeclaration(parent) ||
-            ts.isFunctionExpression(parent) ||
-            ts.isMethodDeclaration(parent)) &&
-          parent.name &&
-          ts.isIdentifier(parent.name)
-        ) {
-          parents.unshift(parent.name.text);
-        } else if (
-          (ts.isVariableDeclaration(parent) || ts.isPropertyAssignment(parent)) &&
-          parent.initializer &&
-          (ts.isArrowFunction(parent.initializer) || ts.isFunctionExpression(parent.initializer)) &&
-          ts.isIdentifier(parent.name)
-        ) {
-          parents.unshift(parent.name.text);
-        }
-      }
-      const name = parents.join(".");
+      const name = operationName(node);
       if (isNonRuntime(file, name)) {
         continue;
       }
       const operation = { file, name, valid: true, reviewed: false, node };
       registered.set(symbol, operation);
       declarations.set(node, operation);
+      declarationNames.add(node.name);
       names.add(node.name.text);
       pending.push(operation);
     }
@@ -292,7 +423,15 @@ export function inspectDatabaseWorkerCompatibility(
     }
     const found = new Set<CompatibilityOperation>();
     contained.set(symbol, found);
-    const direct = registered.get(symbol);
+    // Instantiated receiver properties retain their declaration, but get a new symbol.
+    const declaration = symbol.valueDeclaration?.resolve();
+    const direct =
+      registered.get(symbol) ??
+      (declaration
+        ? declarations.get(
+            ts.isPropertyAssignment(declaration) ? declaration.initializer : declaration,
+          )
+        : undefined);
     if (direct) {
       found.add(direct);
     } else if (symbol.flags & SymbolFlags.Module) {
@@ -372,6 +511,20 @@ export function inspectDatabaseWorkerCompatibility(
     }
   }
   const edges = new Map<CompatibilityOperation, Set<CompatibilityOperation>>();
+  const callerEdges = new Map<CompatibilityOperation, Set<CompatibilityOperation>>();
+  const runtimeReferences = new Set<CompatibilityOperation>();
+  for (const [owner, members] of families) {
+    const outgoing = edges.get(owner) ?? new Set<CompatibilityOperation>();
+    for (const member of members) {
+      outgoing.add(member);
+    }
+    edges.set(owner, outgoing);
+    for (const member of members) {
+      const memberEdges = edges.get(member) ?? new Set<CompatibilityOperation>();
+      memberEdges.add(owner);
+      edges.set(member, memberEdges);
+    }
+  }
   const accessSymbol = (expression: ts.Expression): Symbol | undefined => {
     const known = resolveSymbol(checker.getSymbolAtLocation(expression));
     if (known) {
@@ -388,6 +541,16 @@ export function inspectDatabaseWorkerCompatibility(
   for (const { file, source } of sources) {
     const references: ts.Node[] = [];
     const visit = (node: ts.Node) => {
+      // `extends` is a runtime reference even though its AST wrapper is a type.
+      if (
+        ts.isExpressionWithTypeArguments(node) &&
+        ts.isHeritageClause(node.parent) &&
+        node.parent.token === ts.SyntaxKind.ExtendsKeyword &&
+        (ts.isClassDeclaration(node.parent.parent) || ts.isClassExpression(node.parent.parent))
+      ) {
+        visit(node.expression);
+        return;
+      }
       if (ts.isTypeNode(node) || ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
         return;
       }
@@ -397,6 +560,7 @@ export function inspectDatabaseWorkerCompatibility(
             ts.isCallExpression(node.parent) &&
             node.parent.expression.kind === ts.SyntaxKind.ImportKeyword &&
             !handledImports.has(node.parent))) &&
+        !declarationNames.has(node) &&
         !declarations.has(node.parent) &&
         !(ts.isBindingElement(node.parent) && node.parent.name === node) &&
         !(ts.isVariableDeclaration(node.parent) && node.parent.name === node)
@@ -461,11 +625,15 @@ export function inspectDatabaseWorkerCompatibility(
             ? node.parent
             : node;
         const directCall =
-          ts.isCallExpression(expression.parent) && expression.parent.expression === expression;
+          (ts.isCallExpression(expression.parent) || ts.isNewExpression(expression.parent)) &&
+          expression.parent.expression === expression;
         if (owner && directCall) {
           const outgoing = edges.get(owner) ?? new Set<CompatibilityOperation>();
           outgoing.add(callee);
           edges.set(owner, outgoing);
+          const calls = callerEdges.get(owner) ?? new Set<CompatibilityOperation>();
+          calls.add(callee);
+          callerEdges.set(owner, calls);
         } else {
           let nonRuntime = false;
           if (!callee.reviewed && directCall && !unprovenCallback) {
@@ -491,6 +659,7 @@ export function inspectDatabaseWorkerCompatibility(
             );
           }
           callee.valid = false;
+          runtimeReferences.add(callee);
         }
       }
     }
@@ -510,10 +679,16 @@ export function inspectDatabaseWorkerCompatibility(
       }
     }
   }
-  for (const operation of registered.values()) {
+  // An unproven member keeps its family live, but does not establish a factory caller.
+  for (const caller of runtimeReferences) {
+    for (const callee of [...(callerEdges.get(caller) ?? []), ...(families.get(caller) ?? [])]) {
+      runtimeReferences.add(callee);
+    }
+  }
+  for (const operation of declarations.values()) {
     if (
       operation.reviewed &&
-      !operation.valid &&
+      runtimeReferences.has(operation) &&
       !violations.some((violation) => violation.includes(`${operation.file}:${operation.name}`))
     ) {
       violations.push(

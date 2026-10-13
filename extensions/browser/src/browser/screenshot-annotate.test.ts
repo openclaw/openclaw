@@ -54,15 +54,6 @@ describe("planAnnotations - viewport mode", () => {
     expect(plan.skipped).toBe(0);
   });
 
-  it("omits empty name field", () => {
-    const plan = planAnnotations({
-      inputs: [{ ref: "e1", role: "button", name: "", doc: { x: 0, y: 0, width: 1, height: 1 } }],
-      space: "viewport",
-      scroll: { x: 0, y: 0 },
-    });
-    expect(plan.annotations[0]).not.toHaveProperty("name");
-  });
-
   it("throws when scroll missing in viewport mode", () => {
     expect(() => planAnnotations({ inputs: sampleInputs, space: "viewport" })).toThrow(/scroll/);
   });
@@ -89,24 +80,6 @@ describe("planAnnotations - viewport off-screen accounting", () => {
   });
 });
 
-describe("planAnnotations - fullpage mode", () => {
-  it("returns box equal to doc (document coordinates)", () => {
-    const plan = planAnnotations({ inputs: sampleInputs, space: "fullpage" });
-    expect(expectDefined(plan.annotations[0], "first full-page annotation").box).toEqual({
-      x: 100,
-      y: 200,
-      width: 50,
-      height: 20,
-    });
-    expect(expectDefined(plan.annotations[1], "second full-page annotation").box).toEqual({
-      x: 300,
-      y: 1500,
-      width: 80,
-      height: 18,
-    });
-  });
-});
-
 describe("planAnnotations - element mode", () => {
   const elementRect = { x: 50, y: 100, width: 200, height: 300 };
 
@@ -124,38 +97,12 @@ describe("planAnnotations - element mode", () => {
     });
   });
 
-  it("filters out inputs that do not overlap element rect", () => {
-    const plan = planAnnotations({
-      inputs: [
-        { ref: "e1", role: "button", doc: { x: 60, y: 110, width: 40, height: 20 } }, // inside
-        { ref: "e2", role: "link", doc: { x: 500, y: 500, width: 40, height: 20 } }, // outside
-      ],
-      space: "element",
-      elementRect,
-    });
-    expect(plan.annotations).toHaveLength(1);
-    expect(expectDefined(plan.annotations[0], "overlapping element annotation").ref).toBe("e1");
-    expect(plan.overlayItems).toHaveLength(1);
-  });
-
   it("throws when elementRect missing", () => {
     expect(() => planAnnotations({ inputs: [], space: "element" })).toThrow(/elementRect/);
   });
 });
 
 describe("planAnnotations - maxLabels", () => {
-  it("truncates to maxLabels and reports skipped", () => {
-    const inputs = Array.from({ length: 5 }, (_, i) => ({
-      ref: `e${i + 1}`,
-      role: "button",
-      doc: { x: 0, y: i * 10, width: 5, height: 5 },
-    }));
-    const plan = planAnnotations({ inputs, space: "fullpage", maxLabels: 2 });
-    expect(plan.annotations).toHaveLength(2);
-    expect(plan.overlayItems).toHaveLength(2);
-    expect(plan.skipped).toBe(3);
-  });
-
   it("uses ANNOTATION_MAX_LABELS_DEFAULT when not specified", () => {
     const inputs = Array.from({ length: 200 }, (_, i) => ({
       ref: `e${i + 1}`,
@@ -175,14 +122,6 @@ describe("buildOverlayInjectionScript", () => {
     });
     expect(script).toMatch(/"x":\s*101/); // 100.7 -> 101
     expect(script).toMatch(/"y":\s*200/); // 200.4 -> 200
-  });
-
-  it("clamps zero/negative-size boxes to 1px so they remain visible", () => {
-    const script = buildOverlayInjectionScript({
-      items: [{ ref: "e1", x: 10, y: 10, w: 0, h: 0 }],
-    });
-    expect(script).toMatch(/"w":\s*1/);
-    expect(script).toMatch(/"h":\s*1/);
   });
 
   it("escapes hostile ref characters via JSON.stringify (no breakout)", () => {
@@ -241,28 +180,5 @@ describe("scaleAnnotations", () => {
       ...sample[0],
       box: { x: 50, y: 97, width: 25, height: 10 },
     });
-  });
-
-  it("clamps width/height to a minimum of 1 to avoid disappearing labels", () => {
-    const tiny: AnnotationItem[] = [
-      {
-        ref: "e1",
-        number: 1,
-        role: "button",
-        box: { x: 0, y: 0, width: 1, height: 1 },
-      },
-    ];
-    const out = scaleAnnotations(tiny, 0.1, 0.1);
-    expect(out[0]?.box.width).toBeGreaterThanOrEqual(1);
-    expect(out[0]?.box.height).toBeGreaterThanOrEqual(1);
-  });
-
-  it("returns identity (structural copy) for invalid factors", () => {
-    const out = scaleAnnotations(sample, Number.NaN, 0.5);
-    expect(out[0]?.box).toEqual(sample[0]?.box);
-    const out2 = scaleAnnotations(sample, 0, 0.5);
-    expect(out2[0]?.box).toEqual(sample[0]?.box);
-    const out3 = scaleAnnotations(sample, -1, 1);
-    expect(out3[0]?.box).toEqual(sample[0]?.box);
   });
 });

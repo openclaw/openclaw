@@ -25,10 +25,10 @@ import { LitContent, type LegacyTemplateResult } from "../../../lit/solid-conten
 import { isChatBubbleMode, setChatBubbleMode } from "../chat-bubble-mode.ts";
 import {
   canManageChatSessionSharing,
-  renderChatSessionSharing,
+  ChatSessionSharing,
   selectChatSessionSharingItem,
   type ChatSessionSharingProps,
-} from "./chat-session-sharing.ts";
+} from "./chat-session-sharing.solid.tsx";
 
 export type HeaderMenuAction =
   | SessionManagementAction
@@ -393,7 +393,7 @@ function ChatHeaderSessionMenuContent(
             ) : current === "layout" ? (
               <QuickActions group="layout" entries={props.layoutActions} inline />
             ) : current === "sharing" && props.sharing ? (
-              <LitContent value={renderChatSessionSharing(props.sharing, true)} />
+              <ChatSessionSharing {...props.sharing} inline />
             ) : (
               <ViewOptions inline />
             )}

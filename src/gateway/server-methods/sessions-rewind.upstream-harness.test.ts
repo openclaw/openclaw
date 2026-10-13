@@ -9,6 +9,7 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
@@ -228,6 +229,7 @@ describe("upstream session message-cut methods", () => {
     async (contract) => {
       const profile = ensureProfileForEmail(`sandbox-required-${contract}-fork@example.com`);
       setUserProfileRole(profile.id, "guest");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const client = {
         connect: { scopes: ["operator.write"] },
         authenticatedUserProfile: {

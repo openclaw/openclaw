@@ -967,6 +967,11 @@ export const en: TranslationMap & {
     unread: "Unread",
     automationAttached: "Automation attached",
     incognito: "Incognito session",
+    incognitoLabel: "Incognito",
+    incognitoDescription:
+      "Incognito session. History expires 24 hours after creation or when the Gateway restarts, whichever comes first.",
+    incognitoLimits:
+      "Your model provider still processes messages. Tools, plugins, and uploads may save data.",
     cloudWorkerPlacement: "Placement: {state}",
     placementWorkspaceConflict: "{placement} · 1 workspace conflict",
     placementWorkspaceConflicts: "{placement} · {count} workspace conflicts",
@@ -3071,7 +3076,6 @@ export const en: TranslationMap & {
       copyPath: "Copy path",
       copyBranch: "Copy branch name",
       copied: "Copied",
-      incognito: "Incognito session",
       branches: "Versions",
       versionsHelpLabel: "About versions",
       versionsHelp:
@@ -3498,6 +3502,8 @@ export const en: TranslationMap & {
       draftConflict: "This question was edited in another tab. Copy your answer before reloading.",
     },
     questions: {
+      showSecret: "Show secret",
+      hideSecret: "Hide secret",
       resourcePreview: "Preview resource",
       addResources: "Add resources",
       resourceUploadTooLarge: "Selected resources exceed the upload limits.",

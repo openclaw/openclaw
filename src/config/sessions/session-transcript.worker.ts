@@ -349,7 +349,8 @@ serveOwnedWorkerTasks(
         };
       }
       if (request.kind === "session-entry-current") {
-        const { readSessionEntryCurrentFacts } = await import("./session-entry-read.worker.js");
+        const { readSessionEntryCurrentFacts } =
+          await import("./session-entry-current-admission.worker.js");
         return readSessionEntryCurrentFacts(request);
       }
       if (request.kind === "session-row-backfill") {
@@ -639,12 +640,7 @@ serveOwnedWorkerTasks(
           }
           const { buildSessionEntryInProcess, readSessionEntryResetRecallCutoff } =
             await import("../../../packages/memory-host-sdk/src/host/session-files.js");
-          const { createSensitiveTextRedactor } = await import("../../logging/redact.js");
-          const entry = await buildSessionEntryInProcess(
-            request.absPath,
-            request.options,
-            createSensitiveTextRedactor(request.redaction),
-          );
+          const entry = await buildSessionEntryInProcess(request.absPath, request.options);
           return {
             entry,
             resetRecallCutoff: entry

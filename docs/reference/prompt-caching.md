@@ -43,8 +43,8 @@ necessarily delete the provider's older cache entry before its normal expiry.
 
 OpenClaw applies the same tool-result text cap before the first model request
 and when persisting the result. Subsequent turns therefore replay the same
-bounded text instead of introducing a different truncation notice. Redaction
-still runs before model-visible output is recorded. Large batches can exceed
+bounded text instead of introducing a different truncation notice. Tool text
+is preserved without secret masking. Large batches can exceed
 the aggregate result budget when reducing them would rewrite already-sent
 history; session pruning and compaction remain the owners of intentional
 history changes.

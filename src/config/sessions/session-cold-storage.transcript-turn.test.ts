@@ -224,8 +224,8 @@ describe("selected transcript turn cold restoration", () => {
     },
   );
 
-  it.for(["prepared source", "optional writer fence"] as const)(
-    "keeps a locked read cold when its %s changes during restoration admission",
+  it.for(["prepared source", "turn source", "optional writer fence"] as const)(
+    "keeps history cold when its %s changes during restoration admission",
     async (guard, { signal }) => {
       const fixture = await createFixture();
       const sourceScope = {
@@ -268,6 +268,7 @@ describe("selected transcript turn cold restoration", () => {
       });
       const scope = {
         ...fixture.scope,
+        ...(guard === "turn source" ? { sessionKey: "agent:main:global" } : {}),
         ...(guard === "optional writer fence"
           ? { expectedOwner: { lifecycleRevision: "selected", activeWriterRunId: undefined } }
           : {}),
@@ -298,21 +299,23 @@ describe("selected transcript turn cold restoration", () => {
         locked.readEvents(),
       );
       const pending = withSessionTranscriptWriteAssertion(scope, assertion, () =>
-        guard === "optional writer fence"
-          ? withTranscriptWriteLock(scope, callback)
-          : withSessionTranscriptWriteLock(scope, callback),
+        guard === "turn source"
+          ? fixture.append()
+          : guard === "optional writer fence"
+            ? withTranscriptWriteLock(scope, callback)
+            : withSessionTranscriptWriteLock(scope, callback),
       );
       try {
         await withinTest(
           awaitGateBeforeSettlement(
             requested.promise,
             pending,
-            "Locked read settled before cold restoration admission",
+            "History access settled before cold restoration admission",
           ),
           signal,
         );
         expect(assertion.prepareSessionSource).toHaveBeenCalled();
-        if (guard === "prepared source") {
+        if (guard !== "optional writer fence") {
           replaceSessionEntrySync(sourceScope, {
             sessionId: sourceScope.sessionId,
             updatedAt: 2,
@@ -327,7 +330,7 @@ describe("selected transcript turn cold restoration", () => {
           });
         }
         resume.resolve();
-        if (guard === "prepared source") {
+        if (guard !== "optional writer fence") {
           await expect(pending).rejects.toThrow("Prepared cold source changed");
         } else {
           await expect(pending).rejects.toMatchObject({
@@ -336,6 +339,7 @@ describe("selected transcript turn cold restoration", () => {
           });
         }
         expect(callback).not.toHaveBeenCalled();
+        expect(fixture.prepareMessage).not.toHaveBeenCalled();
         expect(readSessionColdTranscript(fixture.database(), historicalId)).toEqual(
           fixture.descriptor,
         );

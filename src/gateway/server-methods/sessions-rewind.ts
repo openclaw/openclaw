@@ -16,6 +16,7 @@ import type {
 } from "../../config/sessions/session-accessor.js";
 import { mutateSessionAtMessageWithPreconditions } from "../../config/sessions/session-accessor.sqlite-message-cut.js";
 import {
+  captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
   runWithSessionActorStorage,
 } from "../../config/sessions/session-actor-storage-binding.js";
@@ -50,7 +51,10 @@ import { SessionMutationAuthorizationChangedError } from "../session-sharing.js"
 import { withGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
 import type { loadGatewaySessionEntryReadOnly } from "../session-utils-store.js";
 import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
-import { resolveSessionWorkerPlacementMutationError } from "../worker-environments/session-placement-lifecycle.js";
+import {
+  readSessionWorkerPlacementAsync,
+  resolveSessionWorkerPlacementMutationError,
+} from "../worker-environments/session-placement-lifecycle.js";
 import { forkSessionRepositoryWorkspace } from "../worker-environments/session-repository-checkpoints.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -281,6 +285,7 @@ async function mutatePreparedSessionAtMessage({
         reject(message);
         return;
       }
+      await readSessionWorkerPlacementAsync({ context, sessionId: current.entry.sessionId });
       const placementError = resolveSessionWorkerPlacementMutationError({
         action,
         context,
@@ -426,12 +431,10 @@ async function mutatePreparedSessionAtMessage({
         sessionKey: current.canonicalKey,
         storePath: current.storePath,
       });
+      const memoryOwner = memory && captureSessionActorStorageOwner(memory);
       const readRepositoryEntry = (key: string) => {
         if (memory) {
-          return memory.actor.storage.readCurrent(
-            { type: "session.entry.read", input: { sessionKey: key } },
-            memory.authority,
-          );
+          return memoryOwner?.owner?.readSession(key, memory.authority)?.entry;
         }
         if (repositoryEntrySource) {
           if (key === current.canonicalKey) {

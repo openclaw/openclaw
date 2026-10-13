@@ -5,10 +5,18 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as configEnv from "../config/config-env-vars.js";
+import {
+  createSessionEntryWithTranscript,
+  prepareSessionEntryMutationDatabases,
+} from "../config/sessions/session-accessor.entry-mutation.js";
+import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-store.js";
+import { retireSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-resources.js";
+import { closeAgentWorkAdmissions } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseAsync,
@@ -33,6 +41,7 @@ import {
   prepareSessionCostUsageRefreshLock,
 } from "./session-cost-usage-cache.sqlite.js";
 import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
+import { withSessionCostUsageWorkerDatabases } from "./session-cost-usage-worker-scope.js";
 import * as integrityWorker from "./sqlite-integrity-worker.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -323,7 +332,7 @@ it("reads the committed refresh lock while acquisition waits for the writer rese
 });
 
 it.each([false, true])(
-  "releases a committed lock after a delayed reply (lost=%s)",
+  "releases a committed lock through the deletion fence after a delayed reply (lost=%s)",
   async (lost) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const agentId = "usage-delayed-lock";
@@ -355,9 +364,15 @@ it.each([false, true])(
         (error: unknown) => ({ error }),
       );
       let releasing: Promise<void> | undefined;
+      let reopen: (() => void) | undefined;
       try {
         await awaitGateBeforeSettlement(committed.promise, acquiring, "Acquisition did not commit");
         expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(true);
+        const refusal = new Error("Agent deletion is draining active work");
+        reopen = closeAgentWorkAdmissions({ agentId, env: state.env, reason: refusal });
+        expect(() =>
+          prepareSessionCostUsageRefreshLock(agentId, database.path, { env: state.env }),
+        ).toThrow(refusal);
         releasing = owner.release();
         reply.resolve();
         expect(await outcome).toEqual(
@@ -367,9 +382,149 @@ it.each([false, true])(
         expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(false);
       } finally {
         reply.resolve();
-        await outcome;
-        await releasing;
-        await owner.release();
+        try {
+          await outcome;
+          await releasing;
+          await owner.release();
+        } finally {
+          reopen?.();
+        }
+      }
+    });
+  },
+);
+
+it.each([false, true])(
+  "recovers retired lock cleanup only through open admission (fenced=%s)",
+  async (fenced) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const agentId = "usage-retired-lock";
+      const databasePath = openOpenClawAgentDatabase({ agentId, env: state.env }).path;
+      const owner = prepareSessionCostUsageRefreshLock(agentId, databasePath, { env: state.env });
+      expect(await owner.acquire()).toBe(true);
+      await closeOpenClawAgentDatabaseByPathAsync(databasePath, agentId);
+      const refusal = new Error("Agent deletion is draining active work");
+      const reopen = fenced
+        ? closeAgentWorkAdmissions({ agentId, env: state.env, reason: refusal })
+        : undefined;
+      try {
+        if (fenced) {
+          await expect(owner.release()).rejects.toBe(refusal);
+        } else {
+          await expect(owner.release()).resolves.toBeUndefined();
+        }
+        expect(await isSessionCostUsageRefreshRunning(agentId, databasePath)).toBe(fenced);
+      } finally {
+        reopen?.();
+        await Promise.allSettled([owner.release()]);
+      }
+    });
+  },
+);
+
+it.each([false, true])(
+  "drains retained usage cleanup by captured path before physical retirement (retry=%s)",
+  async (retry) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const agentId = "usage-deletion";
+      const selected = openOpenClawAgentDatabase({ agentId, env: state.env });
+      const otherEnv = { ...state.env, OPENCLAW_STATE_DIR: state.path("other-state") };
+      const other = openOpenClawAgentDatabase({ agentId, env: otherEnv });
+      const aliasDirectory = state.path("selected-agent");
+      fs.symlinkSync(path.dirname(selected.path), aliasDirectory, "junction");
+      const alias = path.join(aliasDirectory, path.basename(selected.path));
+      const finish = createDeferredCore();
+      const ready = createDeferredCore();
+      let cleaned = 0;
+      let otherCleaned = false;
+      const failure = new Error("Refresh cleanup temporarily failed");
+      let cleanupFailure = retry ? failure : undefined;
+      const readingFromOtherState = withSessionCostUsageWorkerDatabases(
+        [{ agentId, path: selected.path, env: otherEnv }],
+        async () => await finish.promise,
+      );
+      const read = Promise.allSettled([readingFromOtherState]);
+      const target = { agentId, path: selected.path, env: state.env, requestedPaths: [alias] };
+      const holding = withSessionCostUsageWorkerDatabases([target], async (scope) => {
+        const lock = prepareSessionCostUsageRefreshLock(agentId, selected.path, { env: state.env });
+        scope.retainCleanup(async () => {
+          if (cleanupFailure) {
+            throw cleanupFailure;
+          }
+          await lock.release();
+          cleaned++;
+        });
+        expect(await lock.acquire()).toBe(true);
+        ready.resolve();
+        await finish.promise;
+      });
+      const held = Promise.allSettled([holding]);
+      const otherReady = createDeferredCore();
+      const holdingOther = withSessionCostUsageWorkerDatabases(
+        [{ agentId, path: other.path, env: otherEnv }],
+        async (scope) => {
+          scope.retainCleanup(async () => {
+            otherCleaned = true;
+          });
+          otherReady.resolve();
+          await finish.promise;
+        },
+      );
+      const otherHeld = Promise.allSettled([holdingOther]);
+      let reopen: (() => void) | undefined;
+      try {
+        await awaitGateBeforeSettlement(ready.promise, holding, "Usage lock did not acquire");
+        await awaitGateBeforeSettlement(
+          otherReady.promise,
+          holdingOther,
+          "Sibling scope did not open",
+        );
+        reopen = closeAgentWorkAdmissions({
+          agentId,
+          env: state.env,
+          reason: new Error("Agent deletion is draining active work"),
+        });
+        const selection = {
+          agentId,
+          paths: [alias, selected.path, alias],
+        };
+        if (retry) {
+          await expect(retireSessionHistoryWorkerDatabases(selection)).rejects.toMatchObject({
+            errors: [failure],
+          });
+          await expect(
+            withSessionCostUsageWorkerDatabases([target], async () => undefined),
+          ).rejects.toThrow("Session database work is still draining");
+          cleanupFailure = undefined;
+        }
+        await retireSessionHistoryWorkerDatabases(selection);
+        expect(cleaned).toBe(1);
+        expect(otherCleaned).toBe(false);
+        expect(
+          selected.db
+            .prepare("SELECT key FROM cache_entries WHERE scope = ? AND key = ?")
+            .get("session-cost-usage", "refresh-lock"),
+        ).toBeUndefined();
+        await closeOpenClawAgentDatabaseByPathAsync(selected.path, agentId);
+        expect(otherCleaned).toBe(false);
+        finish.resolve();
+        await expect(holding).rejects.toThrow("Session usage database work was revoked");
+        await expect(readingFromOtherState).rejects.toThrow(
+          "Session usage database work was revoked",
+        );
+        await expect(holdingOther).resolves.toBeUndefined();
+        expect(otherCleaned).toBe(true);
+        expect(cleaned).toBe(1);
+        await expect(
+          withSessionCostUsageWorkerDatabases([target], async () => undefined),
+        ).resolves.toBeUndefined();
+      } finally {
+        cleanupFailure = undefined;
+        finish.resolve();
+        await held;
+        await read;
+        await otherHeld;
+        reopen?.();
       }
     });
   },
@@ -627,6 +782,40 @@ it("keeps a queued usage lock and release in its mixed-case Windows state root",
         await closeOpenClawAgentDatabasesAsync();
         await closeOpenClawStateDatabaseAsync();
       }
+    }
+  });
+});
+
+it("allows first session creation while a fresh usage refresh awaits acquisition", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "main";
+    const storePath = state.statePath("fresh-usage.sqlite");
+    const scope = { agentId, sessionKey: `agent:${agentId}:first`, storePath, env: state.env };
+    const lock = prepareSessionCostUsageRefreshLock(agentId, storePath, { env: state.env });
+    try {
+      await using preparation = prepareSessionEntryMutationDatabases(
+        [{ scope, assertCurrent() {} }],
+        Promise.resolve(),
+      );
+      const storage = await preparation.preparations[0]!;
+      const created = await createSessionEntryWithTranscript(
+        scope,
+        () => ({ ok: true, entry: { sessionId: "created-during-refresh", updatedAt: 1 } }),
+        { commitGuard: storage.assertCurrent },
+      );
+      expect(created).toMatchObject({
+        ok: true,
+        entry: { sessionId: "created-during-refresh" },
+      });
+      expect(await lock.acquire()).toBe(true);
+      const database = openOpenClawAgentDatabase({ agentId, path: storePath, env: state.env });
+      expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry.sessionId).toBe(
+        "created-during-refresh",
+      );
+      await lock.release();
+      expect(await isSessionCostUsageRefreshRunning(agentId, storePath)).toBe(false);
+    } finally {
+      await lock.release();
     }
   });
 });

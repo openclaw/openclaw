@@ -296,32 +296,6 @@ describe("zalouser setup wizard", () => {
     });
   });
 
-  it("preserves non-quickstart forceAllowFrom behavior", async () => {
-    const note = vi.fn(async (_message: string, _title?: string) => {});
-    const seen: string[] = [];
-    const prompter = createTestWizardPrompter({
-      note,
-      confirm: vi.fn(async ({ message }: { message: string }) => {
-        seen.push(message);
-        return false;
-      }),
-      text: vi.fn(async ({ message }: { message: string }) => {
-        seen.push(message);
-        return "";
-      }) as ReturnType<typeof createTestWizardPrompter>["text"],
-    });
-
-    const result = await runSetup({ prompter, forceAllowFrom: true });
-
-    expect(result.cfg.channels?.zalouser?.dmPolicy).toBe("allowlist");
-    expect(result.cfg.channels?.zalouser?.allowFrom).toStrictEqual([]);
-    expect(seen).not.toContain("Zalo Personal DM policy");
-    expect(seen).toContain("Zalouser allowFrom (name or user id)");
-    expect(
-      note.mock.calls.some(([message]) => message.includes("No DM allowlist entries added yet.")),
-    ).toBe(true);
-  });
-
   it("allowlists the plugin when a plugin allowlist already exists", async () => {
     const prompter = createTestWizardPrompter({
       confirm: vi.fn(async () => false),

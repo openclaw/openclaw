@@ -3,7 +3,8 @@ import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_MESSAGE,
 } from "openclaw/plugin-sdk/model-session-runtime";
-import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
+import type { PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
+import { composeSessionEntryCommitGuards } from "openclaw/plugin-sdk/session-binding-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeCodexStartupClientBestEffort } from "./app-server/attempt-client-cleanup.js";
@@ -35,7 +36,7 @@ import {
   withCodexConversationThreadActivity,
   withExclusiveCodexAppServerThread,
 } from "./app-server/thread-ownership.js";
-import { assertCodexHostOwnerCurrent } from "./command-authorization.js";
+import { assertCodexHostOwnerCurrent, type CodexCommandContext } from "./command-authorization.js";
 import { formatCodexDisplayText, formatThreads } from "./command-formatters.js";
 import {
   parseBindArgs,
@@ -49,6 +50,7 @@ import {
   resolveCodexConversationControlScope,
   resolveCommandAppServerScope,
 } from "./command-handler-scope.js";
+import type { CodexControlRequestOptions } from "./command-rpc.js";
 import {
   createCodexCliNodeConversationBindingData,
   createCodexConversationBindingData,
@@ -58,7 +60,7 @@ import { formatPermissionsMode } from "./conversation-control.js";
 import { formatCodexCliSessions } from "./node-cli-sessions.js";
 
 export async function isCurrentSessionModelSelectionLocked(
-  ctx: PluginCommandContext,
+  ctx: CodexCommandContext,
 ): Promise<boolean> {
   const sessionKey = ctx.sessionKey?.trim();
   if (!sessionKey) {
@@ -81,7 +83,7 @@ export async function isCurrentSessionModelSelectionLocked(
 
 export async function bindConversation(
   deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
+  ctx: CodexCommandContext,
   pluginConfig: unknown,
   args: string[],
 ): Promise<PluginCommandResult> {
@@ -153,6 +155,7 @@ export async function bindConversation(
     },
   });
   const threadLabel = parsed.threadId ?? "a new thread";
+  await ctx.assertNativePolicyCurrent?.();
   assertCodexHostOwnerCurrent(ctx);
   const request = await ctx.requestConversationBinding({
     summary: `Codex app-server thread ${formatCodexDisplayText(threadLabel)} in ${formatCodexDisplayText(workspaceDir)}`,
@@ -174,7 +177,7 @@ export async function bindConversation(
 
 export async function detachConversation(
   deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
+  ctx: CodexCommandContext,
 ): Promise<string> {
   if (await isCurrentSessionModelSelectionLocked(ctx)) {
     return MODEL_SELECTION_LOCKED_MESSAGE;
@@ -228,13 +231,14 @@ export async function detachConversation(
       return detachedPublicConversation!;
     });
   }
+  await ctx.assertNativePolicyCurrent?.();
   assertCodexHostOwnerCurrent(ctx);
   return await detachPublicConversation();
 }
 
 export async function describeConversationBinding(
   deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
+  ctx: CodexCommandContext,
 ): Promise<string> {
   const current = await ctx.getCurrentConversationBinding();
   const data = readCodexConversationBindingData(current);
@@ -284,7 +288,7 @@ export async function describeConversationBinding(
 
 export async function buildThreads(
   deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
+  ctx: CodexCommandContext,
   pluginConfig: unknown,
   filter: string,
 ): Promise<string> {
@@ -320,7 +324,7 @@ export async function buildCodexCliSessions(
 
 export async function resumeThread(
   deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
+  ctx: CodexCommandContext,
   pluginConfig: unknown,
   args: string[],
 ): Promise<string> {
@@ -377,7 +381,12 @@ export async function resumeThread(
         const commitResumedThread = async (
           value: unknown,
           client: CodexAppServerClient,
-          { authProfileId, assertCurrent }: { authProfileId?: string; assertCurrent: () => void },
+          {
+            authProfileId,
+            assertCurrent,
+            assertCurrentAsync,
+            source,
+          }: Parameters<NonNullable<CodexControlRequestOptions["onResponse"]>>[2],
         ) => {
           const response = assertCodexThreadResumeResponse(value);
           const effectiveThreadId = response.thread.id;
@@ -417,6 +426,7 @@ export async function resumeThread(
               (!sameThreadBinding?.dynamicToolsFingerprint ||
                 !sameThreadBinding.webSearchThreadConfigFingerprint ||
                 sameThreadBinding.pendingResumeConfiguration === true);
+            await assertCurrentAsync?.();
             assertCurrent();
             assertCodexThreadAcceptsDirectInput(response.thread);
             knownOwnership = sameOwner
@@ -437,6 +447,11 @@ export async function resumeThread(
               // is gone; otherwise another session can claim and lose it.
               await releaseCodexAppServerBindingSubscription(bindingBeforeCommit, {
                 assertCurrent,
+                withCurrent: async (write) => {
+                  await assertCurrentAsync?.();
+                  assertCurrent();
+                  write();
+                },
                 retainedClientId: clientId,
               });
             }
@@ -458,7 +473,7 @@ export async function resumeThread(
                   historyCoveredThrough: new Date().toISOString(),
                 },
               },
-              assertCurrent,
+              composeSessionEntryCommitGuards([assertCurrent, source, ctx.nativePolicySource]),
             );
             if (!committed) {
               throw new Error("Codex thread binding changed while attaching the resumed thread.");
@@ -500,6 +515,7 @@ export async function resumeThread(
             sessionId: ctx.sessionId,
             storePath: ctx.sessionTarget?.storePath,
             assertCurrent: assertHostGeneration,
+            assertCurrentAsync: ctx.assertNativePolicyCurrent,
             assertOwnerCurrent: () => assertCodexHostOwnerCurrent(ctx),
             beforeRequest: async (request) => {
               const { thread } = await request<{ thread: CodexThread }>({
@@ -520,7 +536,7 @@ export async function resumeThread(
 
 async function bindCodexCliNodeSession(
   deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
+  ctx: CodexCommandContext,
   parsed: ParsedResumeArgs,
 ): Promise<string> {
   if (!parsed.threadId || !parsed.host || parsed.bindHere !== true) {
@@ -560,6 +576,7 @@ async function bindCodexCliNodeSession(
     cwd: resolved.session?.cwd,
   });
   const summary = `Codex CLI session ${formatCodexDisplayText(parsed.threadId)} on ${formatCodexDisplayText(nodeId)}`;
+  await ctx.assertNativePolicyCurrent?.();
   assertCodexHostOwnerCurrent(ctx);
   const request = await ctx.requestConversationBinding({
     summary,

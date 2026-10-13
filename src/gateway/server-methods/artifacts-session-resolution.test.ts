@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { SessionRowProjection } from "../session-row-projection.js";
@@ -167,6 +168,7 @@ describe("artifact session authorization", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const viewerProfile = ensureProfileForEmail("viewer@example.com");
         const ownerProfile = ensureProfileForEmail("owner@example.com");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const sessionKey = "agent:main:foreign-artifacts";
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey },
