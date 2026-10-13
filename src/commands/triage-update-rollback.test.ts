@@ -111,7 +111,13 @@ describe("rollback-readable update diagnostics", () => {
         {
           env,
           ...(errorCount === 40
-            ? { outputPath: path.join(tempDirs.make("update-detached-"), "failure.json") }
+            ? {
+                outputPath: path.join(
+                  tempDirs.make("update-detached-"),
+                  "detached-diagnostics-".repeat(5),
+                  "failure.json",
+                ),
+              }
             : {}),
         },
       );
