@@ -224,11 +224,12 @@ describe("createCopilotClientPool", () => {
 
     expect(sdkFactory.mock.calls.length).toBe(1);
 
+    const stop = vi.fn(async () => []);
     const client = {
       id: 1,
       copilotHome: "copilot-home",
       start: vi.fn(async () => undefined),
-      stop: vi.fn(async () => []),
+      stop,
       createSession: vi.fn(async () => ({})),
       disconnect: vi.fn(),
     } as unknown as CopilotClient;
@@ -239,11 +240,11 @@ describe("createCopilotClientPool", () => {
     expect(sdkFactory.mock.calls.length).toBe(1);
     await pool.release(first);
     await vi.runAllTimersAsync();
-    expect(client.stop).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
 
     await pool.release(second);
     await vi.runAllTimersAsync();
-    expect(client.stop).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledOnce();
   });
 
   it("synchronous constructor failure is not cached", async () => {
