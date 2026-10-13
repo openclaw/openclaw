@@ -65,11 +65,11 @@ describe("Matrix crypto-store ownership across processes", () => {
     const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
       try {
         return await open(...args);
-      } catch (error) {
+      } finally {
+        // Native exclusive create reports contention before opening the existing lock for reading.
         if (args[0] === `${snapshotPath}.owner.lock`) {
           contention.resolve();
         }
-        throw error;
       }
     });
     try {
