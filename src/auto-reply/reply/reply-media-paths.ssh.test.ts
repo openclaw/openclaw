@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SandboxFsBridge } from "../../agents/sandbox/fs-bridge.types.js";
 import type { SandboxContext } from "../../agents/sandbox/types.js";
 import { WEBCHAT_LOCAL_MEDIA_MAX_BYTES } from "../../media/configured-max-bytes.js";
+import { saveMediaBuffer } from "../../media/store.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import {
   createOpenClawTestState,
@@ -88,7 +89,13 @@ describe("SSH reply media", () => {
 
   function normalizer(options: Partial<Parameters<typeof createReplyMediaPathNormalizer>[0]> = {}) {
     return createReplyMediaPathNormalizer({
-      cfg: { agents: { defaults: { sandbox: { mode: "all", backend: "ssh" } } } },
+      cfg: {
+        agents: {
+          defaults: {
+            sandbox: { mode: "all", backend: "ssh", workspaceAccess: sandbox.workspaceAccess },
+          },
+        },
+      },
       sessionKey: sandbox.sessionKey,
       agentId: "main",
       workspaceDir: sandbox.workspaceDir,
@@ -116,7 +123,8 @@ describe("SSH reply media", () => {
       expect(readFile).toHaveBeenCalledWith({
         filePath: path.join(sandbox.workspaceDir, "notes/draft.md"),
         cwd: sandbox.workspaceDir,
-        maxBytes: 5 * 1024 * 1024,
+        // The media loader reserves 24 MiB of source-read headroom for image optimization.
+        maxBytes: 24 * 1024 * 1024,
       });
       expect(dispose).toHaveBeenCalledOnce();
     },
@@ -150,14 +158,20 @@ describe("SSH reply media", () => {
     expect(readFile).not.toHaveBeenCalled();
   });
 
-  it("keeps reply text and HTTP attachments when SSH preparation fails", async () => {
+  it("keeps reply text, managed media and HTTP attachments when SSH preparation fails", async () => {
+    const managed = await saveMediaBuffer(
+      Buffer.from([0xff, 0xfb, 0x90, 0x00]),
+      "audio/mpeg",
+      "tool-speech-synthesis",
+    );
     sandboxMocks.resolveSandboxContext.mockRejectedValue(new Error("SSH unavailable"));
+    sandboxMocks.ensureSandboxWorkspaceForSession.mockRejectedValue(new Error("SSH unavailable"));
     const result = await normalizer()({
       text: "Draft attached",
-      mediaUrls: ["notes/draft.md", "https://example.com/image.png"],
+      mediaUrls: ["notes/draft.md", managed.path, "https://example.com/image.png"],
     });
     expect(result.text).toContain("Draft attached");
-    expect(result.mediaUrls).toEqual(["https://example.com/image.png"]);
+    expect(result.mediaUrls).toEqual([managed.path, "https://example.com/image.png"]);
     expect(getReplyPayloadMetadata(result)?.assistantMediaFailures).toHaveLength(1);
     expect(readFile).not.toHaveBeenCalled();
   });

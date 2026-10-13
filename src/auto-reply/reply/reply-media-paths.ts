@@ -440,6 +440,12 @@ export function createReplyMediaSourcePreparer(
           sandbox?.[Symbol.dispose]?.();
           assertCurrent();
           return prepareSources(sources, async (source) => {
+            const managedPath = await resolveAllowedManagedMediaPath(
+              (await resolveInboundMediaReference(source))?.physicalPath ?? source,
+            );
+            if (managedPath) {
+              return prepareLocalReplyMedia(managedPath);
+            }
             if (isLikelyLocalMediaSource(source)) {
               throw error;
             }
