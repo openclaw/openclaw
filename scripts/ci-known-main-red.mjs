@@ -35,7 +35,10 @@ function staticCheck(jobName, stepName, requireComplete = false) {
   return null;
 }
 
-function client({ repository, token }) {
+function client({ repository, token, api }) {
+  if (api) {
+    return api;
+  }
   if (repository !== "openclaw/openclaw" || !token) {
     throw new Error("Invalid main CI evidence context");
   }

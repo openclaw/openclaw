@@ -9,7 +9,7 @@ import {
   renderCloudChoiceMenuItems,
   renderCloudProfileMenuItems,
   renderSessionMenuItem,
-} from "../pages/new-session/cloud-target.ts";
+} from "../pages/new-session/cloud-target-view.tsx";
 import type { DevicePlacementOption } from "../pages/new-session/device-placement.ts";
 import type { DraftCloudProfile } from "../pages/new-session/discovery.ts";
 import { DraftCloudMachineState } from "../pages/new-session/draft-cloud-machine-state.ts";

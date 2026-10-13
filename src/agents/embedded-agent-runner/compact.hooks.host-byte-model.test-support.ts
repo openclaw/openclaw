@@ -433,6 +433,7 @@ export function registerCodexHostByteModelTests(fixture: {
         expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
       } else {
         expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledOnce();
+        const nativeOptions = expectedNativeCompactionOptions("after_context_engine");
         expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledWith(
           expect.objectContaining({
             provider: "openai",
@@ -441,8 +442,8 @@ export function registerCodexHostByteModelTests(fixture: {
             authProfileId: "openai:source",
           }),
           {
-            ...expectedNativeCompactionOptions("after_context_engine"),
-            sourceAuthority: { assertActive: expect.any(Function), operatorAuthority },
+            ...nativeOptions,
+            sourceAuthority: { ...nativeOptions.sourceAuthority, operatorAuthority },
           },
         );
       }

@@ -31,7 +31,6 @@ import {
   cacheClawInstallSchemaVersion,
   captureClawInstallSchemaVersionFacts,
   deleteCachedClawInstallSchemaVersion,
-  initializeCachedClawInstallSchemaVersions,
   prepareClawInstallSchemaVersions,
   readCachedClawInstallSchemaVersions,
   withClawInstallSchemaVersionFacts,
@@ -76,16 +75,15 @@ describe("asynchronous Claw consent preparation", () => {
       const captured = AsyncLocalStorage.snapshot();
       readAfterScope = () => captured(() => readCachedClawInstallSchemaVersions(options));
       for (let tick = 0; tick < 5; tick++) {
-        initializeCachedClawInstallSchemaVersions(options);
         expect(readCachedClawInstallSchemaVersions(options)).toEqual({
           kind: "ready",
           schemaVersions: schemaVersions("original"),
         });
         await Promise.resolve();
       }
-      expect(() =>
-        initializeCachedClawInstallSchemaVersions({ path: `${options.path}-other` }),
-      ).toThrow("outside their captured state scope");
+      expect(() => readCachedClawInstallSchemaVersions({ path: `${options.path}-other` })).toThrow(
+        "outside their captured state scope",
+      );
     });
     expect(readAfterScope).toThrow("outside their captured state scope");
     expect(readCachedClawInstallSchemaVersions(options)).toBe(current);
@@ -111,7 +109,6 @@ describe("asynchronous Claw consent preparation", () => {
       const facts = structuredClone(captureClawInstallSchemaVersionFacts(options));
       worker.read.mockClear();
       await withClawInstallSchemaVersionFacts(facts, async () => {
-        initializeCachedClawInstallSchemaVersions(options);
         const snapshot = readCachedClawInstallSchemaVersions(options);
         if (state === "invalid-row") {
           expect(snapshot.kind).toBe("ready");

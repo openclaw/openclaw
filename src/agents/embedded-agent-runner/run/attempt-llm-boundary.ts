@@ -1,5 +1,9 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
+import {
+  runWithSessionSourceScope,
+  type SessionSourceAssertion,
+} from "../../../config/sessions/session-source-authority.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import {
   hasLegacyRuntimeContextEnvelope,
@@ -390,7 +394,7 @@ export function installModelPromptProjection(params: {
   recorder?: UserTurnTranscriptRecorder;
   getUserTranscriptContexts?: () => readonly UserTranscriptContext[] | undefined;
   withTranscriptWrite?: <T>(write: () => Promise<T>) => Promise<T>;
-  assertCurrent?: () => void;
+  assertCurrent?: SessionSourceAssertion;
 }): () => void {
   if (
     !params.recorder?.captureModelPromptProjection &&
@@ -406,120 +410,129 @@ export function installModelPromptProjection(params: {
   let promptOwner:
     | NonNullable<ReturnType<typeof resolveRuntimeContextPromptOwner>>["owner"]
     | undefined;
-  agent.transformContext = async (messages, signal) => {
-    let promptMessages = messages;
-    const assertCurrent = () => {
-      signal?.throwIfAborted();
-      params.assertCurrent?.();
-    };
-    if (params.shouldCapturePrompt()) {
-      await params.recorder?.waitForRuntimePersistence();
-      assertCurrent();
-      const recorded = params.recorder?.getPersistedMessage?.();
-      if (!targetPrompt) {
-        const retained = resolveRuntimeContextPromptOwner(messages);
-        const key = recorded?.idempotencyKey;
-        const paired = params
-          .getUserTranscriptContexts?.()
-          ?.find(
-            ({ transcriptMessage }) =>
-              transcriptMessage === recorded ||
-              (key && Reflect.get(transcriptMessage, "idempotencyKey") === key),
-          )?.runtimeMessage;
-        targetPrompt = params.recorder
-          ? messages.find(
-              (message) =>
-                message === paired ||
-                message === recorded ||
-                (key && message.role === "user" && Reflect.get(message, "idempotencyKey") === key),
-            )
-          : messages[retained?.userIndex ?? findActiveUserMessageIndex(messages)];
-        promptOwner = retained?.owner;
-      }
-      const canonicalPrompt = recorded ?? promptOwner?.transcriptUser ?? targetPrompt;
-      const key = asOptionalObjectRecord(canonicalPrompt)?.idempotencyKey;
-      const target = messages.find(
-        (message) =>
-          message === targetPrompt ||
-          message === canonicalPrompt ||
-          (key && message.role === "user" && Reflect.get(message, "idempotencyKey") === key),
-      );
-      if (target?.role === "user") {
-        const firstText =
-          typeof target.content === "string"
-            ? target.content
-            : target.content.find(isTextContentBlock)?.text;
-        const targetProjection = readModelPromptProjection(target);
-        const frozen = readModelPromptProjection(canonicalPrompt) ?? targetProjection;
-        let text =
-          frozen ??
-          (firstText === undefined
-            ? undefined
-            : params.modelPrompt?.trim() && firstText === params.transcriptPrompt
-              ? params.modelPrompt
-              : composeModelPromptContext({
-                  prompt: firstText,
-                  prependContext: params.prependContext,
-                  appendContext: params.appendContext,
-                }));
-        // Inter-session input keeps its stored source-provenance envelope as the model-facing
-        // text, now and in history. A shorter routed body would either drop that safety text
-        // from replayed history or make the next request rewrite this turn's bytes. Comparing
-        // the whole stored text also covers forwarded bodies that carry their own envelope.
-        if (
-          frozen === undefined &&
-          text !== undefined &&
-          firstText?.startsWith(INTER_SESSION_PROMPT_PREFIX_BASE) === true &&
-          !text.includes(firstText)
-        ) {
-          text = firstText;
-        }
-        if (
-          text !== undefined &&
-          (frozen !== undefined ||
-            text !== firstText ||
-            (params.recorder?.captureModelPromptProjection &&
-              !firstText?.startsWith(INTER_SESSION_PROMPT_PREFIX_BASE)))
-        ) {
-          const captureProjection = params.recorder?.captureModelPromptProjection;
-          if (frozen === undefined && captureProjection) {
-            const pendingText = text;
-            const capture = () => captureProjection(pendingText, assertCurrent);
-            const captured = await (params.withTranscriptWrite
-              ? params.withTranscriptWrite(capture)
-              : capture());
-            assertCurrent();
-            text = readModelPromptProjection(captured);
-            if (text === undefined) {
-              throw new Error("Transcript recorder did not capture the model prompt projection");
+  agent.transformContext = async (messages, signal) =>
+    runWithSessionSourceScope(
+      params.assertCurrent,
+      async () => {
+        let promptMessages = messages;
+        const assertCurrent = () => {
+          signal?.throwIfAborted();
+          params.assertCurrent?.();
+        };
+        if (params.shouldCapturePrompt()) {
+          await params.recorder?.waitForRuntimePersistence();
+          assertCurrent();
+          const recorded = params.recorder?.getPersistedMessage?.();
+          if (!targetPrompt) {
+            const retained = resolveRuntimeContextPromptOwner(messages);
+            const key = recorded?.idempotencyKey;
+            const paired = params
+              .getUserTranscriptContexts?.()
+              ?.find(
+                ({ transcriptMessage }) =>
+                  transcriptMessage === recorded ||
+                  (key && Reflect.get(transcriptMessage, "idempotencyKey") === key),
+              )?.runtimeMessage;
+            targetPrompt = params.recorder
+              ? messages.find(
+                  (message) =>
+                    message === paired ||
+                    message === recorded ||
+                    (key &&
+                      message.role === "user" &&
+                      Reflect.get(message, "idempotencyKey") === key),
+                )
+              : messages[retained?.userIndex ?? findActiveUserMessageIndex(messages)];
+            promptOwner = retained?.owner;
+          }
+          const canonicalPrompt = recorded ?? promptOwner?.transcriptUser ?? targetPrompt;
+          const key = asOptionalObjectRecord(canonicalPrompt)?.idempotencyKey;
+          const target = messages.find(
+            (message) =>
+              message === targetPrompt ||
+              message === canonicalPrompt ||
+              (key && message.role === "user" && Reflect.get(message, "idempotencyKey") === key),
+          );
+          if (target?.role === "user") {
+            const firstText =
+              typeof target.content === "string"
+                ? target.content
+                : target.content.find(isTextContentBlock)?.text;
+            const targetProjection = readModelPromptProjection(target);
+            const frozen = readModelPromptProjection(canonicalPrompt) ?? targetProjection;
+            let text =
+              frozen ??
+              (firstText === undefined
+                ? undefined
+                : params.modelPrompt?.trim() && firstText === params.transcriptPrompt
+                  ? params.modelPrompt
+                  : composeModelPromptContext({
+                      prompt: firstText,
+                      prependContext: params.prependContext,
+                      appendContext: params.appendContext,
+                    }));
+            // Inter-session input keeps its stored source-provenance envelope as the model-facing
+            // text, now and in history. A shorter routed body would either drop that safety text
+            // from replayed history or make the next request rewrite this turn's bytes. Comparing
+            // the whole stored text also covers forwarded bodies that carry their own envelope.
+            if (
+              frozen === undefined &&
+              text !== undefined &&
+              firstText?.startsWith(INTER_SESSION_PROMPT_PREFIX_BASE) === true &&
+              !text.includes(firstText)
+            ) {
+              text = firstText;
+            }
+            if (
+              text !== undefined &&
+              (frozen !== undefined ||
+                text !== firstText ||
+                (params.recorder?.captureModelPromptProjection &&
+                  !firstText?.startsWith(INTER_SESSION_PROMPT_PREFIX_BASE)))
+            ) {
+              const captureProjection = params.recorder?.captureModelPromptProjection;
+              if (frozen === undefined && captureProjection) {
+                const pendingText = text;
+                const capture = () => captureProjection(pendingText, assertCurrent);
+                const captured = await (params.withTranscriptWrite
+                  ? params.withTranscriptWrite(capture)
+                  : capture());
+                assertCurrent();
+                text = readModelPromptProjection(captured);
+                if (text === undefined) {
+                  throw new Error(
+                    "Transcript recorder did not capture the model prompt projection",
+                  );
+                }
+              }
+              // Replay snapshots are immutable. Publish the same recorded fact on
+              // the runtime view without changing its original transcript text.
+              if (targetProjection !== text) {
+                const projectedTarget = {
+                  ...target,
+                  __openclaw: {
+                    ...asOptionalObjectRecord(Reflect.get(target, "__openclaw")),
+                    modelPromptProjection: { version: 1, text },
+                  },
+                };
+                promptMessages = messages.map((message) =>
+                  message === target ? projectedTarget : message,
+                );
+                if (agent.state) {
+                  agent.state.messages = agent.state.messages.map((message) =>
+                    message === target ? projectedTarget : message,
+                  );
+                }
+              }
             }
           }
-          // Replay snapshots are immutable. Publish the same recorded fact on
-          // the runtime view without changing its original transcript text.
-          if (targetProjection !== text) {
-            const projectedTarget = {
-              ...target,
-              __openclaw: {
-                ...asOptionalObjectRecord(Reflect.get(target, "__openclaw")),
-                modelPromptProjection: { version: 1, text },
-              },
-            };
-            promptMessages = messages.map((message) =>
-              message === target ? projectedTarget : message,
-            );
-            if (agent.state) {
-              agent.state.messages = agent.state.messages.map((message) =>
-                message === target ? projectedTarget : message,
-              );
-            }
-          }
         }
-      }
-    }
-    return originalTransformContext
-      ? await originalTransformContext.call(agent, promptMessages, signal)
-      : promptMessages;
-  };
+        return originalTransformContext
+          ? await originalTransformContext.call(agent, promptMessages, signal)
+          : promptMessages;
+      },
+      { checkAfter: false },
+    );
   return () => {
     agent.transformContext = originalTransformContext;
   };

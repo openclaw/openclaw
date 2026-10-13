@@ -17,7 +17,7 @@ import {
   matchesCurrentGitHubPublicationIdentity,
   prepareCurrentGitHubPublicationIdentity,
   readGitHubPublicationWorktreeOwner,
-  prepareGitHubPublicationWorkspaceOwner,
+  hasGitHubPublicationRepositoryWorkspace,
 } from "./github-publication-availability.js";
 import {
   createGitHubPublicationCoordinatorMethods,
@@ -122,6 +122,8 @@ export function createGitHubPublicationCoordinator(params: {
       sessionKey: request.sessionKey,
       agentId: request.agentId,
     });
+    using _ = { [Symbol.dispose]: () => admitted.release() };
+
     assertRequester();
     const identity = await prepareCurrentGitHubPublicationIdentity(request.agentId);
     assertRequester();
@@ -464,13 +466,11 @@ export function createGitHubPublicationCoordinator(params: {
         throw new Error("GitHub publication requires a host-prepared V2 requester.");
       }
       assertCurrent();
-      return (
-        await prepareGitHubPublicationWorkspaceOwner({
-          sessionId: request.claim.sessionId,
-          sessionKey: request.sessionKey,
-          agentId: request.agentId,
-        })
-      ).initial.kind === "repository"
+      return (await hasGitHubPublicationRepositoryWorkspace({
+        sessionId: request.claim.sessionId,
+        sessionKey: request.sessionKey,
+        agentId: request.agentId,
+      }))
         ? repository.requestForClaimV2(request)
         : requestForClaim(request);
     },
@@ -529,7 +529,7 @@ export function createGitHubPublicationCoordinator(params: {
     async requestPersonalForSessionV2(
       ...args: Parameters<typeof personal.requestPersonalForSessionV2>
     ) {
-      return (await prepareGitHubPublicationWorkspaceOwner(args[1])).initial.kind === "repository"
+      return (await hasGitHubPublicationRepositoryWorkspace(args[1]))
         ? repository.requestPersonalForSessionV2(...args)
         : personal.requestPersonalForSessionV2(...args);
     },

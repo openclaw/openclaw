@@ -55,6 +55,7 @@ import {
   preparePostCorePluginConfig,
   persistValidatedDowngradeConfig,
   readPostCorePreUpdateSourceConfig,
+  readUpdateConfigFileSnapshot,
 } from "./update-command-config.js";
 import {
   completePostCorePluginUpdate,
@@ -195,7 +196,7 @@ export async function updateFinalizeCommand(
                 error instanceof DoctorMaintenanceRefusalError &&
                 error.refusal.kind === "deferred"
               ) {
-                const nextAction = `Stop the Gateway through its service owner, stop other OpenClaw processes using this state, then rerun \`${formatCliCommand("openclaw update repair")}\`.`;
+                const nextAction = `Stop the Gateway through its service owner (\`${formatCliCommand("openclaw gateway stop --force")}\` for the managed service), stop other OpenClaw processes using this state, then rerun \`${formatCliCommand("openclaw update repair")}\`.`;
                 const warnings = normalizeUpdatePostInstallDoctorWarnings([
                   `Doctor and plugin maintenance remain pending. ${nextAction} ${error.message}`,
                 ]);
@@ -217,6 +218,10 @@ export async function updateFinalizeCommand(
                   );
                 }
                 lifecycle.complete(0, nextAction);
+                // Keep the pending receipt; an older driver still owns its update's exit status.
+                if (recoveryRunIds !== undefined && lifecycle.ownsUpdateRun) {
+                  exitCode = 2;
+                }
                 return;
               }
               if (!lifecycle.completed) {
@@ -263,7 +268,7 @@ async function prepareUpdateFinalization(
   await assertOpenClawStateWriteAllowedAtPath({
     databasePath: resolveOpenClawStateSqlitePath(process.env),
   });
-  const configSnapshot = await readConfigFileSnapshot({
+  const configSnapshot = await readUpdateConfigFileSnapshot({
     skipPluginValidation: true,
     observe: false,
   });
@@ -294,7 +299,10 @@ async function prepareUpdateFinalization(
   const channel = requestedChannel ?? storedChannel ?? effectiveChannel ?? DEFAULT_PACKAGE_CHANNEL;
   if (requestedChannel) {
     await withPluginLifecycleLease(phase, async () => {
-      const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true, observe: false });
+      const snapshot = await readUpdateConfigFileSnapshot({
+        skipPluginValidation: true,
+        observe: false,
+      });
       return await persistRequestedUpdateChannel({
         configSnapshot: snapshot,
         requestedChannel,

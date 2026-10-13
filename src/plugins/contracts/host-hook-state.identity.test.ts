@@ -185,7 +185,7 @@ describe("next-turn injection identity", () => {
           injection: { sessionKey, agentId: "ops", text: `ops ${sessionKey}` },
         });
       }
-      const selected = resolveSessionEntryAccessTarget(
+      const selected = await resolveSessionEntryAccessTarget(
         { cfg: activeCfg, sessionKey: "global" },
         { keyFormat: "agent-qualified" },
       );
@@ -252,7 +252,6 @@ describe("next-turn injection identity", () => {
           injection: { sessionKey: "global", agentId, text: agentId },
         });
       }
-      const qaBefore = loadSessionEntryReadOnly(scope("qa"));
       const betaBefore = loadSessionEntryReadOnly(scope("beta"));
       const literal = { ...scope("qa"), sessionKey: "agent:qa:global" };
       if (collision) {
@@ -263,15 +262,11 @@ describe("next-turn injection identity", () => {
         agentId: "qa",
         sessionKey: "global",
       });
-      if (collision) {
-        await expect(drain).rejects.toThrow("ambiguous stored identity");
-        expect(loadSessionEntryReadOnly(scope("qa"))).toEqual(qaBefore);
-        expect(loadSessionEntryReadOnly(literal)?.sessionId).toBe("separate-literal");
-      } else {
-        await expect(drain).resolves.toMatchObject({ prependContext: "qa" });
-        expect(loadSessionEntryReadOnly(scope("qa"))?.pluginNextTurnInjections).toBeUndefined();
-        expect(loadSessionEntryReadOnly(literal)).toBeUndefined();
-      }
+      await expect(drain).resolves.toMatchObject({ prependContext: "qa" });
+      expect(loadSessionEntryReadOnly(scope("qa"))?.pluginNextTurnInjections).toBeUndefined();
+      expect(loadSessionEntryReadOnly(literal)?.sessionId).toBe(
+        collision ? "separate-literal" : undefined,
+      );
       expect(loadSessionEntryReadOnly(scope("beta"))).toEqual(betaBefore);
     },
   );

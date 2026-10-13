@@ -44,6 +44,20 @@ export const StateDatabaseAdmissionPendingError = resolveGlobalSingleton(
     },
 );
 
+/** A live foreign process holds offline-maintenance custody of this database. */
+export const StateDatabaseOfflineMaintenanceError = resolveGlobalSingleton(
+  Symbol.for("openclaw.stateDatabaseOfflineMaintenanceError"),
+  () =>
+    class extends Error {
+      constructor(
+        readonly databasePath: string,
+        message: string,
+      ) {
+        super(message);
+      }
+    },
+);
+
 /** Persisted ownership can identify a holder but cannot lend this process maintenance authority. */
 export function assertPersistedStateDatabaseAccessAllowed(params: {
   databasePath: string;
@@ -51,7 +65,7 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
   assertMaintenance: () => void;
 }): void {
   const { databasePath, ownerPath, assertMaintenance } = params;
-  const unavailable = `OpenClaw state ownership at ${databasePath} could not be verified; retry after maintenance finishes.`;
+  const unavailable = `OpenClaw state ownership at ${databasePath} could not be verified from ${ownerPath}; restart the Gateway.`;
   let raw: string;
   try {
     raw = fs.readFileSync(ownerPath, "utf8");
@@ -92,7 +106,7 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
   if (owner.stateOwnerKind === "schema" && owner.role === "sqlite-maintenance") {
     throw new StateDatabaseAdmissionPendingError(databasePath, maintenancePending);
   }
-  throw new Error(maintenancePending);
+  throw new StateDatabaseOfflineMaintenanceError(databasePath, maintenancePending);
 }
 
 export function defaultPayload(databasePath: string): LockPayload {

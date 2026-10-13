@@ -85,11 +85,12 @@ prepare_baseline_successor() (
 )
 
 prepare_baseline_refresh() { prepare_baseline_materialize initial "$@"; }
+prepare_baseline_signing_request() { prepare_baseline_materialize request "$@"; }
 
 prepare_baseline_materialize() (
   local admission="$1"
   shift
-  local pr="$1" expected="" baseline="" resolutions="" option
+  local pr="$1" expected="" baseline="" resolutions="" option signer=""
   local expected_tree="" expected_review="" predecessor_head="" predecessor_binding=""
   local successor=false
   [ "$admission" != successor ] || successor=true
@@ -101,14 +102,19 @@ prepare_baseline_materialize() (
       --expected-head) [ -z "$expected" ] || return 2; expected="$2" ;;
       --baseline) [ -z "$baseline" ] || return 2; baseline="$2" ;;
       --resolutions) [ -z "$resolutions" ] || return 2; resolutions="$2" ;;
-      --expected-tree) [ "$successor" = true ] && [ -z "$expected_tree" ] || return 2; expected_tree="$2" ;;
-      --expected-review) [ "$successor" = true ] && [ -z "$expected_review" ] || return 2; expected_review="$2" ;;
-      --predecessor-head) [ "$successor" = true ] && [ -z "$predecessor_head" ] || return 2; predecessor_head="$2" ;;
-      --predecessor-binding) [ "$successor" = true ] && [ -z "$predecessor_binding" ] || return 2; predecessor_binding="$2" ;;
+      --signer) [ "$admission" = request ] && [ -z "$signer" ] || return 2; signer="$2" ;;
+      --expected-tree) { [ "$successor" = true ] || [ "$admission" = request ]; } && [ -z "$expected_tree" ] || return 2; expected_tree="$2" ;;
+      --expected-review) { [ "$successor" = true ] || [ "$admission" = request ]; } && [ -z "$expected_review" ] || return 2; expected_review="$2" ;;
+      --predecessor-head) { [ "$successor" = true ] || [ "$admission" = request ]; } && [ -z "$predecessor_head" ] || return 2; predecessor_head="$2" ;;
+      --predecessor-binding) { [ "$successor" = true ] || [ "$admission" = request ]; } && [ -z "$predecessor_binding" ] || return 2; predecessor_binding="$2" ;;
       *) return 2 ;;
     esac
     shift 2
   done
+  if [ "$admission" = request ]; then
+    [ -n "$signer" ] || return 2
+    [ -z "$expected_tree$expected_review$predecessor_head$predecessor_binding" ] || successor=true
+  fi
   [[ "$expected" =~ ^[0-9a-f]{40}$ ]] && [[ "$baseline" =~ ^[0-9a-f]{40}$ ]] || return 2
   if [ "$successor" = true ]; then
     for option in "$expected_tree" "$expected_review" "$predecessor_head" "$predecessor_binding"; do
@@ -125,6 +131,7 @@ prepare_baseline_materialize() (
   source_directory=$(pwd -P) || return 1
   root=$(repo_root) || return 1
   helper="$(dirname "$(review_artifacts_helper_path)")/baseline-refresh.mjs"
+  node "$helper" check-signing-source "$expected" || return 1
   snapshot=$(correction_review_snapshot "$pr") || return 1
   observation=$(cat .local/pr-meta.json) || return 1
   [ -n "$snapshot" ] && [ -n "$PR_MAIN_SHA" ] || return 1
@@ -155,7 +162,20 @@ prepare_baseline_materialize() (
     create_command=create-successor
     set -- "$@" "$predecessor_head" "$predecessor_binding" "$expected_review" "$expected_tree"
   fi
+  if [ "$admission" = request ]; then
+    create_command=create-signing-request
+    set -- "$@" "$signer"
+  fi
   prepared=$(node "$helper" "$create_command" "$@") || return 1
+  if [ "$admission" = request ]; then
+    require_baseline_source || return 1
+    local request_oid
+    request_oid=$(printf '%s' "$prepared" | node "$helper" save-signing-request \
+      "$pr" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID") || return 1
+    echo "Awaiting signature: request=$request_oid file=.local/prepare-baseline-signing.$request_oid.json"
+    echo "Preparation authority and branch remain unchanged. Return the complete signed Git commit."
+    return 0
+  fi
   target=$(printf '%s' "$prepared" | jq -er .target) || return 1
   binding=$(printf '%s' "$prepared" | jq -er .binding) || return 1
   require_no_ignored_transition_paths "$pr" "$expected" "$target" || return 1
@@ -164,6 +184,46 @@ prepare_baseline_materialize() (
   recover_review_transition "$pr" || return 1
   echo "Refreshed candidate $target; prior proof retained at $PREP_RETIRED_EVIDENCE."
   printf '%s' "$prepared" | jq -r '.resolutions[] | "Resolved \(.path): \(if .resolved == null then "deleted" else .resolved.mode + " " + .resolved.oid end)"' || return 1
+  echo "Fresh exact-candidate correction review and native gate qualification are required."
+)
+
+prepare_baseline_signing_continue() (
+  local pr="$1" request="" commit="" option
+  shift
+  while [ "$#" -gt 0 ]; do
+    option="$1"
+    [ "$#" -ge 2 ] && [ -n "$2" ] || return 2
+    case "$option" in
+      --request) [ -z "$request" ] || return 2; request="$2" ;;
+      --signed-commit) [ -z "$commit" ] || return 2; commit="$2" ;;
+      *) return 2 ;;
+    esac
+    shift 2
+  done
+  [[ "$request" =~ ^[0-9a-f]{40}$ ]] && [ -n "$commit" ] || return 2
+  # Inspect the exact request/response before entry can recover any journal.
+  enter_worktree "$pr" false true || return 1
+  local helper root prepared target source binding state observation incoming head_ref
+  helper="$(dirname "$(review_artifacts_helper_path)")/baseline-refresh.mjs"
+  root=$(repo_root) || return 1
+  mark_pr_operation_side_effects_started
+  prepared=$(node "$helper" continue-signing "$pr" "$request" "$commit") || return 1
+  target=$(printf '%s' "$prepared" | jq -er .target) || return 1
+  source=$(printf '%s' "$prepared" | jq -er .source) || return 1
+  binding=$(printf '%s' "$prepared" | jq -er .binding) || return 1
+  state=$(printf '%s' "$prepared" | jq -er .state) || return 1
+  observation=$(cat .local/pr-meta.json) || return 1
+  incoming=$(printf '%s' "$observation" | jq -er .headRefOid) || return 1
+  head_ref=$(printf '%s' "$observation" | jq -er .headRefName) || return 1
+  revalidate_pr_publication "$pr" "$observation" "$head_ref" "$incoming" "$incoming" || return 1
+  require_no_ignored_transition_paths "$pr" "$source" "$target" || return 1
+  printf '%s' "$prepared" | node "$helper" check-signing \
+    "$pr" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" || return 1
+  if [ "$state" = source ]; then
+    write_review_transition_journal "$pr" "$source" "$target" prep "pr-$pr-prep" "$binding" || return 1
+  fi
+  recover_review_transition "$pr" || return 1
+  echo "Signed baseline candidate $target installed for request $request."
   echo "Fresh exact-candidate correction review and native gate qualification are required."
 )
 

@@ -1,7 +1,10 @@
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import { getRuntimeConfigSourceSnapshot } from "../config/runtime-snapshot.js";
-import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
+import {
+  isConfiguredAgentDatabaseTarget,
+  resolveConfiguredAgentDatabaseTargets,
+} from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -16,16 +19,8 @@ function assertAgentDatabaseConfiguration(
   paths: readonly string[],
   env: NodeJS.ProcessEnv,
 ) {
-  const configuredPaths = resolveConfiguredAgentDatabaseTargets(cfg, { env }).filter(
-    (target) => target.agentId === agentId,
-  );
-  if (
-    configuredPaths.length === 0 ||
-    paths.some(
-      (pathname) =>
-        !configuredPaths.some((target) => isSameOpenClawAgentDatabasePath(target.path, pathname)),
-    )
-  ) {
+  const targets = resolveConfiguredAgentDatabaseTargets(cfg, { env });
+  if (paths.some((pathname) => !isConfiguredAgentDatabaseTarget(targets, agentId, pathname))) {
     throw new Error(`Agent ${agentId} database configuration changed during startup inspection`);
   }
 }
@@ -34,6 +29,7 @@ function assertAgentDatabaseConfiguration(
 export function activateGatewayAgentDatabaseStartup(params: {
   admission: ReturnType<typeof getAgentDatabaseStartupAdmission>;
   preparationReady: Promise<void>;
+  waitForPostReadyWork: () => Promise<void>;
   getConfig: () => OpenClawConfig;
   getPluginRegistry: () => PluginRegistry;
   getPluginMetadataSnapshot: () => PluginMetadataSnapshot | undefined;
@@ -87,7 +83,7 @@ export function activateGatewayAgentDatabaseStartup(params: {
       }),
     migrateAgent: ({ agentId, paths, env, signal, assertCurrent }) =>
       runWithSpawnBroker(broker, async () => {
-        const { prepareGatewayStartupSessions, runGatewaySessionStartupMaintenance } =
+        const { prepareGatewayStartupSessions } =
           await import("./server-startup-session-migration.js");
         const assertMigrationCurrent = createPreparationGuard(
           agentId,
@@ -103,13 +99,23 @@ export function activateGatewayAgentDatabaseStartup(params: {
           assertCurrent: assertMigrationCurrent,
           log: params.log,
         });
-        await runGatewaySessionStartupMaintenance({
-          databases,
-          assertCurrent: assertMigrationCurrent,
-          signal,
-          log: params.log,
-        });
         assertMigrationCurrent();
+        return {
+          maintain: () =>
+            runWithSpawnBroker(broker, async () => {
+              await params.waitForPostReadyWork();
+              const { runGatewaySessionStartupMaintenance } =
+                await import("./server-startup-session-migration.js");
+              await runGatewaySessionStartupMaintenance({
+                databases,
+                signal,
+                assertCurrent: createPreparationGuard(agentId, paths, env, signal, () =>
+                  signal.throwIfAborted(),
+                ),
+                log: params.log,
+              });
+            }),
+        };
       }),
     publishAgent: ({ agentId, paths, env, signal, assertCurrent, phase }) =>
       runWithSpawnBroker(broker, async () => {

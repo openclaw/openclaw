@@ -17,13 +17,13 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { OLLAMA_INCOMPLETE_STREAM_ERROR } from "./stream-contract.js";
 import { convertToOllamaMessages } from "./stream-messages.js";
+import { parseNdjsonStream } from "./stream-ndjson.js";
 import {
   buildOllamaChatRequest,
   createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
   createOllamaStreamFn,
   buildAssistantMessage,
-  parseNdjsonStream,
 } from "./stream.runtime.js";
 
 type GuardedFetchCall = Parameters<typeof fetchWithSsrFGuard>[0];
@@ -1757,23 +1757,29 @@ describe("createConfiguredOllamaStreamFn", () => {
     },
   );
 
-  it("does not acquire or fetch when payload preparation rejects", async () => {
-    const acquire = vi.fn();
+  it.each(["hook rejection", "serialization failure"] as const)(
+    "does not acquire or fetch after payload %s",
+    async (failure) => {
+      const acquire = vi.fn(async () => ({ release: vi.fn() }));
 
-    const events = await collectStreamEvents(
-      await createManagedOllamaTestStream({
-        options: {
-          onPayload: () => {
-            throw new Error("payload rejected");
+      const events = await collectStreamEvents(
+        await createManagedOllamaTestStream({
+          options: {
+            onPayload: () => {
+              if (failure === "hook rejection") {
+                throw new Error("payload rejected");
+              }
+              return { value: 1n };
+            },
           },
-        },
-        acquire,
-      }),
-    );
+          acquire,
+        }),
+      );
 
-    expect(events).toMatchObject([{ type: "error", reason: "error" }]);
-    expect(acquire).not.toHaveBeenCalled();
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-  });
+      expect(events).toMatchObject([{ type: "error", reason: "error" }]);
+      expect(acquire).not.toHaveBeenCalled();
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    },
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

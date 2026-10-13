@@ -9,6 +9,7 @@ import {
   searchInstalledSkills,
   type InstalledSkill,
 } from "../installed-skill-catalog.js";
+import { formatSkillInstructions } from "../skill-instruction-result.js";
 import {
   asToolParamsRecord,
   jsonResult,
@@ -71,8 +72,11 @@ export function createInstalledSkillTools(skills: readonly InstalledSkill[]): An
         execute: async (_id, args, signal) => {
           const params = asToolParamsRecord(args);
           const name = readToolStringParam(params, "name", { required: true });
-          const content = await readInstalledSkill(skills, name, signal);
-          return { content: [{ type: "text", text: content }], details: { name, content } };
+          const instructions = await readInstalledSkill(skills, name, signal);
+          return {
+            content: [{ type: "text", text: formatSkillInstructions(instructions) }],
+            details: instructions,
+          };
         },
       },
       readerBinding,

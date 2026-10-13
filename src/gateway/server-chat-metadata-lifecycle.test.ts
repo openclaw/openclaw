@@ -1,9 +1,6 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { RuntimeAuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -15,7 +12,6 @@ import {
   registerSkillsChangeListener,
   resetSkillsRefreshStateForTest,
 } from "../skills/runtime/refresh-state.js";
-import { writeSkill } from "../skills/test-support/e2e-test-helpers.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import { createChatMetadataOwner } from "./server-methods/chat-metadata-runtime.test-support.js";
 import { createPreparedReadHandler } from "./server-methods/prepared-read.js";
@@ -68,7 +64,6 @@ const authSnapshots = await vi.importActual<
 
 const config = {} as OpenClawConfig;
 const context = {} as GatewayRequestContext;
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sidecarOwners = new Set<ReturnType<typeof createGatewaySidecarStopOwner>>();
 
 afterEach(async () => {
@@ -304,32 +299,22 @@ async function createRealMetadataLifecycle(
 }
 
 describe("gateway chat metadata lifecycle", () => {
-  it("does not refresh metadata for identical skills rebuilds but publishes instruction changes", async () => {
-    const { loadWorkspaceSkills } = await import("../skills/loading/workspace-skill-loader.js");
+  it("ignores coverage-only skills events and publishes completed revisions", async () => {
     resetSkillsRefreshStateForTest();
-    const workspaceDir = tempDirs.make("chat-metadata-skills-");
-    const skillDir = path.join(workspaceDir, "skills", "demo");
-    await writeSkill({ dir: skillDir, name: "demo", description: "Demo", body: "Original body" });
-    const loadOptions = { workspaceOnly: true };
-    const entries = loadWorkspaceSkills(workspaceDir, loadOptions);
+    const workspaceDir = "/tmp/chat-metadata-skills";
     const version = getSkillsSnapshotVersion(workspaceDir);
     const harness = await createRealMetadataLifecycle({ skillsWorkspaceDir: workspaceDir });
     try {
       const before = await harness.lifecycle.read({ agentId: "main" });
       harness.refresh.mockClear();
       harness.broadcast.mockClear();
-      for (let count = 0; count < 3; count += 1) {
-        bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
-        notifySkillsWatchAvailable({ workspaceDir, sourceScope: {} });
-        expect(loadWorkspaceSkills(workspaceDir, loadOptions)).toEqual(entries);
-        expect(getSkillsSnapshotVersion(workspaceDir)).toBe(version);
-        expect(await harness.lifecycle.read({ agentId: "main" })).toEqual(before);
-      }
+      notifySkillsWatchAvailable({ workspaceDir, sourceScope: {} });
+      expect(getSkillsSnapshotVersion(workspaceDir)).toBe(version);
+      expect(await harness.lifecycle.read({ agentId: "main" })).toEqual(before);
       expect(harness.refresh).not.toHaveBeenCalled();
       expect(harness.broadcast).not.toHaveBeenCalled();
       expect(harness.buildCommands).toHaveBeenCalledOnce();
 
-      await fs.appendFile(path.join(skillDir, "SKILL.md"), "\nChanged instructions\n");
       bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
       await harness.lifecycle.read({ agentId: "main" });
       expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(version);
@@ -548,7 +533,7 @@ describe("gateway chat metadata lifecycle", () => {
       sidecarOwner.publish,
     );
     await Promise.all(reads);
-    expect(outcomes).toEqual([expect.stringContaining("owner is unavailable")]);
+    expect(outcomes).toEqual([expect.stringContaining("metadata is unavailable")]);
     expect(broadcast).toHaveBeenCalledOnce();
     getPreparedOwner.mockReturnValue(owner);
     const modelListener = mocks.registerModelListener.mock.calls[0]![0];

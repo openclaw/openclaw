@@ -42,6 +42,15 @@ export function getAgentDeletionJournalStatus(
   return getSqliteDatabaseAdmission(database, statusKey(agentId)) ?? undefined;
 }
 
+/** Synchronous guards consume the same committed fact as asynchronous turn admission. */
+export function getOrLoadAgentDeletionJournalStatus(
+  statePath: string,
+  agentId: string,
+  load: () => AgentDeletionJournalStatus | undefined,
+): AgentDeletionJournalStatus | undefined {
+  return getOrLoadSqliteDatabaseAdmissionForPath(statePath, statusKey(agentId), load) ?? undefined;
+}
+
 const pendingLoads = resolveGlobalSingleton(
   Symbol.for("openclaw.agentDeletionJournalStatusLoads"),
   () => new Map<string, Promise<AgentDeletionJournalStatus>>(),
@@ -54,7 +63,7 @@ export async function loadAgentDeletionJournalStatus(
   load: () => Promise<AgentDeletionJournalStatus>,
 ): Promise<AgentDeletionJournalStatus> {
   const key = statusKey(agentId);
-  const cached = getOrLoadSqliteDatabaseAdmissionForPath(statePath, key, () => undefined);
+  const cached = getOrLoadAgentDeletionJournalStatus(statePath, agentId, () => undefined);
   if (cached) {
     return cached;
   }
@@ -64,7 +73,7 @@ export async function loadAgentDeletionJournalStatus(
     pending = (async () => {
       const loaded = await load();
       // A deletion committed during the read owns the newer fact.
-      return getOrLoadSqliteDatabaseAdmissionForPath(statePath, key, () => loaded) ?? loaded;
+      return getOrLoadAgentDeletionJournalStatus(statePath, agentId, () => loaded) ?? loaded;
     })();
     pendingLoads.set(pendingKey, pending);
   }

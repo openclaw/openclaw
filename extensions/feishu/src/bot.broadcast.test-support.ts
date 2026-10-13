@@ -84,17 +84,10 @@ export function setupFeishuBroadcastTestHarness() {
   const mockGetChatInfo = vi.fn();
   const mockShouldComputeCommandAuthorized = vi.fn(() => false);
   const resolvedTurnCalls: Array<Record<string, unknown>> = [];
-  const mockSaveMediaBuffer = vi.fn().mockResolvedValue({
-    path: "/tmp/inbound-clip.mp4",
-    contentType: "video/mp4",
-  });
   const mockCurrentConfig = vi.fn(() => createBroadcastConfig());
   const runtimeStub = {
     config: {
       current: mockCurrentConfig,
-    },
-    system: {
-      enqueueSystemEvent: vi.fn(),
     },
     channel: {
       routing: {
@@ -104,13 +97,8 @@ export function setupFeishuBroadcastTestHarness() {
         resolveStorePath: mockResolveStorePath,
         recordInboundSession: mockRecordInboundSession,
       },
-      reply: {},
       commands: {
         shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
-        resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
-      },
-      media: {
-        saveMediaBuffer: mockSaveMediaBuffer,
       },
       inbound: {
         ingress: createPluginRuntimeMock().channel.inbound.ingress,
@@ -163,11 +151,7 @@ export function setupFeishuBroadcastTestHarness() {
       pairing: {
         readAllowFromStore: vi.fn().mockResolvedValue([]),
         upsertPairingRequest: vi.fn().mockResolvedValue({ code: "ABCDEFGH", created: false }),
-        buildPairingReply: vi.fn(() => "Pairing response"),
       },
-    },
-    media: {
-      detectMime: vi.fn(async () => "application/octet-stream"),
     },
   } as unknown as PluginRuntime;
 

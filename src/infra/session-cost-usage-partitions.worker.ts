@@ -102,6 +102,58 @@ export function readSessionCostUsagePartitionsInDatabase(
   );
 }
 
+export function readSessionCostUsageRollupWithPartitionsInDatabase(
+  db: DatabaseSync,
+  snapshot: { key: string; updatedAt: number; valueJson: string | Uint8Array },
+): { blob: Uint8Array | null; partitions: UsageCostPartition[] } | undefined {
+  assertUsagePartitionWorker();
+  const expression = expressionBuilder<CacheDatabase, "cache_entries">();
+  const valueJson =
+    typeof snapshot.valueJson === "string"
+      ? snapshot.valueJson
+      : expression.cast<string>(expression.val(snapshot.valueJson), "text");
+  const rows = executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<CacheDatabase>(db)
+      .selectFrom("cache_entries")
+      .select(["scope", "key", "value_json", "blob"])
+      .where((eb) =>
+        eb.or([
+          eb.and([
+            eb("scope", "=", USAGE_COST_ROLLUP_SCOPE),
+            eb("key", "=", snapshot.key),
+            eb("updated_at", "=", snapshot.updatedAt),
+            eb("value_json", "=", valueJson),
+          ]),
+          eb.and([
+            eb("scope", "=", USAGE_COST_PARTITION_SCOPE),
+            eb("key", ">=", `${snapshot.key}\0`),
+            eb("key", "<", `${snapshot.key}\u0001`),
+          ]),
+        ]),
+      )
+      .orderBy("key", "asc"),
+  ).rows;
+  const body = rows.find((row) => row.scope === USAGE_COST_ROLLUP_SCOPE);
+  if (!body) {
+    return undefined;
+  }
+  return {
+    blob: body.blob,
+    partitions: rows.flatMap((row) =>
+      row.scope === USAGE_COST_PARTITION_SCOPE && row.value_json !== null && row.blob !== null
+        ? [
+            {
+              date: row.key.slice(snapshot.key.length + 1),
+              valueJson: row.value_json,
+              blob: row.blob,
+            },
+          ]
+        : [],
+    ),
+  };
+}
+
 export function pruneSessionCostUsagePartitionsInDatabase(
   db: DatabaseSync,
   existing: readonly { key: string; valueJson: string | Uint8Array; updatedAt: number }[],

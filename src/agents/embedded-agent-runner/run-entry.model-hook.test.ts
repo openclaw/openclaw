@@ -35,6 +35,20 @@ it.each([
     locked: false,
   },
   {
+    name: "null",
+    fallbacksOverride: null as unknown as string[],
+    expected: ["local"],
+    succeeds: false,
+    locked: false,
+  },
+  {
+    name: "bare string",
+    fallbacksOverride: "fixture/local-backup" as unknown as string[],
+    expected: ["local"],
+    succeeds: false,
+    locked: false,
+  },
+  {
     name: "omitted",
     fallbacksOverride: undefined,
     expected: ["primary", "configured-backup"],

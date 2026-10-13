@@ -1,10 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { SecureFileReadResult } from "@openclaw/fs-safe/secure-file";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
-const permissions = vi.hoisted(() => ({ inspect: vi.fn(), read: vi.fn() }));
+const permissions = vi.hoisted(() => ({
+  inspect: vi.fn(),
+  read: vi.fn<() => Promise<SecureFileReadResult>>(),
+}));
 vi.mock("@openclaw/fs-safe/permissions", () => ({ inspectPathPermissions: permissions.inspect }));
 vi.mock("../infra/fs-safe.js", () => ({ readSecureFile: permissions.read }));
 
@@ -31,10 +35,12 @@ beforeEach(async () => {
     mode: 0o600,
   });
   permissions.inspect.mockReset().mockResolvedValue(privateAcl);
+  const identity = await fs.stat(hosts, { bigint: true });
   permissions.read.mockReset().mockResolvedValue({
     buffer: Buffer.from("github.com:\n  oauth_token: synthetic-windows-token\n"),
     realPath: hosts,
     stat: await fs.stat(hosts),
+    exactIdentity: { dev: identity.dev, ino: identity.ino },
   });
   platformMock = mockProcessPlatform("win32");
 });

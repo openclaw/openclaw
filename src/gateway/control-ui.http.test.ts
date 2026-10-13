@@ -742,6 +742,26 @@ describe("handleControlUiHttpRequest", () => {
     },
   );
 
+  it("embeds authorized display preferences without config credentials in the document", async () => {
+    const tmp = await createControlUiRoot("<html><head></head><body>Control UI</body></html>");
+    const config: OpenClawConfig = {
+      ui: { prefs: { locale: "de", themeMode: "light" } },
+      mcp: { servers: { fixture: { url: "https://example.test/mcp?api_key=synthetic-secret" } } },
+    };
+    const response = await runControlUiRequest(tmp, "/", {
+      config,
+      auth: tokenAuth,
+      headers: { authorization: "Bearer test-token" },
+    });
+    expect(response.res.statusCode).toBe(200);
+    const body = responseBody(response.end);
+    expect(body).toContain("data-openclaw-bootstrap-config=");
+    expect(body).toContain("&quot;locale&quot;:&quot;de&quot;");
+    expect(body).toContain("&quot;themeMode&quot;:&quot;light&quot;");
+    expect(body).not.toContain("synthetic-secret");
+    expect(response.setHeader).toHaveBeenCalledWith("Cache-Control", "private, no-store");
+  });
+
   it("exposes only the environment identity on public HTML while bootstrap stays authenticated", async () => {
     const tmp = await createControlUiRoot("<html><head></head><body>Hello</body></html>\n");
 

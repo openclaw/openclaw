@@ -4,7 +4,7 @@ import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { peekChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
-import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   buildFallbackSlashCommands,
   buildSlashCommandsFromEntries,
@@ -303,6 +303,7 @@ export async function dispatchChatSlashCommand(
   host: ChatCommandHost,
   name: string,
   args: string,
+  attachments?: readonly ChatAttachment[],
 ): Promise<ChatCommandDispatchResult> {
   switch (name) {
     case "stop":
@@ -374,6 +375,7 @@ export async function dispatchChatSlashCommand(
   try {
     result = await executeSlashCommand(target.client, target.sessionKey, name, args, {
       sessions: host.sessions,
+      attachments,
       sessionAccessSnapshot: currentSessionAccessSnapshot(host),
       readSessionAccessSnapshot: () => currentSessionAccessSnapshot(host),
       isCurrent: targetIsCurrent,

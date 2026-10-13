@@ -132,7 +132,7 @@ describe("worker placement cancellation and reclaim authority", () => {
       expect(settled).not.toHaveBeenCalled();
       expect(harness.environments.destroy).not.toHaveBeenCalled();
       expect(harness.log).not.toContain("activation");
-      await expect(fs.access(knownHostsPath)).resolves.toBeUndefined();
+      await fs.access(knownHostsPath);
     } finally {
       childClosed.resolve({
         ...success(),

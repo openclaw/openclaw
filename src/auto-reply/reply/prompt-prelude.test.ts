@@ -1,8 +1,13 @@
 // Tests prompt prelude construction for sender, routing, and context metadata.
 import { describe, expect, it } from "vitest";
+import { buildCurrentInboundPrompt } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
+import { CURRENT_MESSAGE_MARKER } from "./history.js";
 import { finalizeInboundContext } from "./inbound-context.js";
-import { buildInboundUserContextPrefix } from "./inbound-meta.js";
+import {
+  buildInboundUserContextPrefix,
+  resolveInboundUserContextPromptJoiner,
+} from "./inbound-meta.js";
 import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
 
 function countOccurrences(text: string | undefined, needle: string): number {
@@ -36,6 +41,55 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.currentInboundContext).toBeUndefined();
   });
 
+  it.each([
+    { systemEventBlocks: [], sourceReplyDeliveryMode: "automatic" },
+    { systemEventBlocks: ["System: Scheduled digest."], sourceReplyDeliveryMode: "automatic" },
+    { systemEventBlocks: [], sourceReplyDeliveryMode: "message_tool_only" },
+    {
+      systemEventBlocks: ["System: Scheduled digest."],
+      sourceReplyDeliveryMode: "message_tool_only",
+    },
+  ] as const)("keeps Telegram reply text beside its marker: %j", (extra) => {
+    const sessionCtx = finalizeInboundContext({
+      Body: "Tldr",
+      Provider: "telegram",
+      ChatType: "group",
+      MessageSid: "42",
+      ReplyToId: "41",
+      ReplyToBody: "The restore finished.",
+      ReplyToSender: "Example Bot",
+    });
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "Tldr",
+      hasUserBody: true,
+      inboundUserContext: buildInboundUserContextPrefix(sessionCtx),
+      inboundUserContextPromptJoiner: resolveInboundUserContextPromptJoiner(sessionCtx),
+      isBareSessionReset: false,
+      startupAction: "new",
+      inboundEventKind: "user_request",
+      sourceReplyDeliveryMode: extra.sourceReplyDeliveryMode,
+      systemEventBlocks: [...extra.systemEventBlocks],
+    });
+    const prompt = buildCurrentInboundPrompt({
+      context: envelope.currentInboundContext,
+      prompt: envelope.prefixedCommandBody,
+    });
+    expect(prompt).toContain('[Replying to: "The restore finished."]\n#42: Tldr');
+    expect(envelope.transcriptCommandBody).toBe("Tldr");
+    for (const event of extra.systemEventBlocks) {
+      expect(prompt).toContain(event);
+      expect(prompt.indexOf(event)).toBeLessThan(prompt.indexOf("Current message:"));
+    }
+    if (extra.sourceReplyDeliveryMode === "message_tool_only") {
+      expect(prompt).toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
+      expect(prompt.indexOf(MESSAGE_TOOL_ONLY_DELIVERY_HINT)).toBeLessThan(
+        prompt.indexOf("Current message:"),
+      );
+    }
+  });
+
   it("adds one message-tool delivery hint to user-request runtime context only", () => {
     const sessionCtx = finalizeInboundContext({
       Body: "@bot what changed?",
@@ -64,6 +118,48 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.prefixedCommandBody).toBe("what changed?");
     expect(envelope.transcriptCommandBody).toBe("what changed?");
     expect(envelope.transcriptCommandBody).not.toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
+    expect(envelope.currentInboundContext?.text).not.toContain(CURRENT_MESSAGE_MARKER);
+  });
+
+  it.each(["starter", "history"])("labels the current message after thread %s", (kind) => {
+    const threadNote = `[Thread ${kind} - for context]\nPlanning the picnic next month.`;
+    const sessionCtx = finalizeInboundContext({
+      Body: "Can you pick a date?",
+      BodyStripped: "Can you pick a date?",
+      Provider: "discord",
+      ChatType: "channel",
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "Can you pick a date?",
+      hasUserBody: true,
+      inboundUserContext: "Conversation info:\nchat_id=123",
+      isBareSessionReset: false,
+      startupAction: "new",
+      threadContextNote: threadNote,
+      systemEventBlocks: ["System: reaction added"],
+    });
+
+    const prompt = buildCurrentInboundPrompt({
+      context: envelope.currentInboundContext,
+      prompt: envelope.prefixedCommandBody,
+    });
+    expect(prompt).toBe(
+      [
+        "Conversation info:\nchat_id=123",
+        threadNote,
+        "System: reaction added",
+        "[Current message - respond to this]",
+        "Can you pick a date?",
+      ].join("\n\n"),
+    );
+    expect(envelope.currentInboundContext?.fragments).toContainEqual({
+      kind: "runtime-instruction",
+      text: CURRENT_MESSAGE_MARKER,
+    });
+    expect(envelope.transcriptCommandBody).toBe("Can you pick a date?");
   });
 
   it.each(["pending", "recent"] as const)(
@@ -110,6 +206,7 @@ describe("buildReplyPromptEnvelope", () => {
         expect(text).toContain("Thread note");
         expect(text).toContain("System event");
         expect(text).not.toContain("Current room event");
+        expect(text).not.toContain(CURRENT_MESSAGE_MARKER);
       }
       expect(envelope.currentInboundContext?.fragments).toEqual(
         expect.arrayContaining([

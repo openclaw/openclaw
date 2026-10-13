@@ -251,8 +251,11 @@ async function resolveUpdateInstallOwnership(
     return { installKind: "host", installOwner };
   }
   const { inspectImmutableInstall } = await import("./update-immutable-install.js");
-  const immutable = await inspectImmutableInstall(root);
+  const immutable = await inspectImmutableInstall(root, { allowExternalOwner: true });
   if (immutable) {
+    if (immutable.installOwner) {
+      return { installKind: "host", installOwner: immutable.installOwner };
+    }
     return { installKind: "immutable", immutable };
   }
   // An exact checkout root needs a marker unless Git ownership is supplied

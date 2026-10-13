@@ -40,7 +40,7 @@ import {
   authorizeIncognitoSessionTarget,
   canManageSessionSharing,
   prepareProjectedSessionSharing,
-  resolveSessionSharingTarget,
+  resolveSessionSharingTargetAsync,
   resolveSessionVisibility,
 } from "../session-sharing.js";
 import { resolveSessionSubscriptionKeys as subscriptionKeys } from "../session-subscription-keys.js";
@@ -66,7 +66,7 @@ import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from ".
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 function protocolSuggestion(
-  target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>,
+  target: NonNullable<Awaited<ReturnType<typeof resolveSessionSharingTargetAsync>>>,
   suggestion: StoredSessionSuggestion,
 ): SessionSuggestion {
   return {
@@ -86,7 +86,7 @@ function protocolSuggestion(
 
 function publishSuggestion(
   context: GatewayRequestContext,
-  target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>,
+  target: NonNullable<Awaited<ReturnType<typeof resolveSessionSharingTargetAsync>>>,
   requestedSessionKey: string,
   action: SessionSuggestionEvent["action"],
   stored: StoredSessionSuggestion,
@@ -125,7 +125,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     "session.suggestions.add",
     validateSessionSuggestionsAddParams,
     async ({ params, respond, client, context, signal, sessionMutationAuthorization }) => {
-      const target = requireSuggestionTarget({ context, ...params, respond });
+      const target = await requireSuggestionTarget({ context, ...params, respond });
       const author = gatewayClientSessionCreator(client);
       if (!target) {
         return;
@@ -316,7 +316,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       signal,
       sessionMutationAuthorization,
     }) => {
-      const target = requireSuggestionTarget({ context, ...params, respond });
+      const target = await requireSuggestionTarget({ context, ...params, respond });
       if (!target) {
         return;
       }

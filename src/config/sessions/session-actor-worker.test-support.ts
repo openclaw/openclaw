@@ -15,10 +15,11 @@ import {
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import type {
   SessionActorHotState,
-  SessionActorOperations,
   SessionActorTarget,
+  SessionActorOperations,
 } from "./session-actor-contract.js";
 import { createSessionActorWorker } from "./session-actor.worker.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
@@ -27,6 +28,28 @@ import { commitSessionEntryPatch } from "./session-entry-patch.worker.js";
 
 type Command = SqliteWorkerCommand<SessionActorOperations>;
 export type Mutation = Exclude<Command, { type: "session.actor.read" }>;
+
+export const SESSION_ACTOR_TRANSFER_TEST_MESSAGE_COUNT = 34_000;
+
+export function seedSessionActorOutcomeTransferTranscript(
+  fixture: Pick<ReturnType<typeof createSessionCompoundWorkerFixture>, "database" | "scope">,
+): void {
+  const keyPayload = "k".repeat(512);
+  const events = Array.from({ length: SESSION_ACTOR_TRANSFER_TEST_MESSAGE_COUNT }, (_, index) => ({
+    type: "message",
+    id: `bounded-message-${String(index).padStart(5, "0")}`,
+    parentId: index === 0 ? null : `bounded-message-${String(index - 1).padStart(5, "0")}`,
+    timestamp: "2026-01-01T00:00:01Z",
+    message: {
+      role: "user",
+      content: "Synthetic retained transcript identity for receipt transport coverage.",
+      idempotencyKey: `${String(index).padStart(5, "0")}:${keyPayload}`,
+    },
+  }));
+  runSqliteImmediateTransactionSync(fixture.database.db, () =>
+    appendTranscriptEventsInTransaction(fixture.database, fixture.scope, events),
+  );
+}
 
 function createFixture() {
   const seed = createSessionCompoundWorkerFixture();

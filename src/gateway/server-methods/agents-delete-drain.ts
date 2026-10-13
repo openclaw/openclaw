@@ -15,6 +15,7 @@ import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-c
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { readSessionEntrySummariesInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentRunContext, listLiveAgentRunIds } from "../../infra/agent-run-registry.js";
 import { parseAgentSessionKey, toAgentStoreSessionKey } from "../../routing/session-key.js";
@@ -47,7 +48,12 @@ export async function drainAgentDeletionRuns(
   const unkeyedRuns: EmbeddedRunDrainTarget[] = [];
   const mcpSessionIds = new Set<string>();
   const targets = new Map<string, Parameters<typeof prepareSessionLifecycleDrain>[0]>();
-  const add = (sessionKey: string, sessionId?: string, scope = storePath) => {
+  const add = (
+    sessionKey: string,
+    sessionId?: string,
+    scope = storePath,
+    entry?: InternalSessionEntry,
+  ) => {
     const canonicalKey = resolveSessionStoreIdentity({ cfg, sessionKey, agentId }).canonicalKey;
     const keys = [...new Set([sessionKey, canonicalKey])];
     const scoped = [...admissions].find(
@@ -74,6 +80,18 @@ export async function drainAgentDeletionRuns(
       sessionKey: canonicalKey,
       sessionKeys,
       sessionId,
+      session: entry
+        ? {
+            ok: true,
+            value: {
+              cfg,
+              storePath: selectedScope,
+              entry,
+              canonicalKey,
+              agentId,
+            },
+          }
+        : existing?.session,
       embeddedRun: sessionId ? (embeddedRuns.get(sessionId) ?? null) : null,
       lifecycleIdentities: sessionId ? [...sessionKeys, sessionId] : sessionKeys,
     });
@@ -125,7 +143,7 @@ export async function drainAgentDeletionRuns(
         (parseAgentSessionKey(sessionKey)?.agentId ??
           (owner.kind === "none" ? agentId : owner.agentId)) === agentId
       ) {
-        add(sessionKey, entry.sessionId);
+        add(sessionKey, entry.sessionId, storePath, entry);
       }
     }
     // Inventory resolves key-only admissions into their physical session drains.

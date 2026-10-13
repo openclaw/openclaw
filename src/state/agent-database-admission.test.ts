@@ -26,7 +26,9 @@ import {
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import { readAgentDeletionJournalStatusInDatabase } from "./agent-deletion-journal.read.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import { invalidateOpenClawAgentDatabaseIntegrityBeforeMutation } from "./openclaw-agent-db-lease.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
@@ -102,8 +104,9 @@ describe("agent database admission", () => {
     };
     openOpenClawAgentDatabase({ agentId: "main", env });
     const pathname = openOpenClawAgentDatabase({ agentId: "worker", env }).path;
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawStateDatabaseForTest();
+    invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
     const database = new (requireNodeSqlite().DatabaseSync)(pathname);
     database.exec("UPDATE schema_meta SET agent_id = NULL WHERE meta_key = 'primary'");
     database.close();

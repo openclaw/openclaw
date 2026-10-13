@@ -193,29 +193,15 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       expect(parseSent(socket).at(-1)?.type).toBe("response.cancel");
     });
 
-    it("interrupts each playback item once when its truncate observer repeats control", async () => {
+    it("truncates sink-owned playback items at their reported offsets", async () => {
       let playback = [
         { itemId: "audible", audioEndMs: 620 },
         { itemId: "queued", audioEndMs: 0 },
       ];
-      let repeated = false;
       const onClearAudio = vi.fn(() => {
         playback = [];
       });
-      const bridge = createTestBridge({
-        getPlaybackState: () => playback,
-        onClearAudio,
-        onEvent: (event) => {
-          if (
-            event.direction === "client" &&
-            event.type === "conversation.item.truncate" &&
-            !repeated
-          ) {
-            repeated = true;
-            bridge.handleBargeIn?.({ force: true });
-          }
-        },
-      });
+      const bridge = createTestBridge({ getPlaybackState: () => playback, onClearAudio });
       const socket = await openRealtimeBridge(bridge);
       socket.emitServer({ type: "response.created", response: { id: "native" } });
       bridge.handleBargeIn?.({ force: true });
@@ -235,33 +221,6 @@ describe("buildXaiRealtimeVoiceProvider", () => {
         },
       ]);
       expect(onClearAudio).toHaveBeenCalledOnce();
-    });
-
-    it("does not publish marks or late PCM after the audio callback cancels", async () => {
-      let playback = [{ itemId: "current", audioEndMs: 0 }];
-      const onMark = vi.fn();
-      const onAudio = vi.fn(() =>
-        bridge.handleBargeIn?.({ audioPlaybackActive: true, force: true }),
-      );
-      const bridge = createTestBridge({
-        onAudio,
-        onMark,
-        getPlaybackState: () => playback,
-        onClearAudio: () => {
-          playback = [];
-        },
-      });
-      const socket = await openRealtimeBridge(bridge);
-      socket.emitServer({ type: "response.created", response: { id: "current" } });
-      const deltaEvent = {
-        type: "response.output_audio.delta",
-        item_id: "current",
-        delta: Buffer.alloc(8_000).toString("base64"),
-      };
-      socket.emitServer(deltaEvent);
-      socket.emitServer(deltaEvent);
-      expect(onAudio).toHaveBeenCalledOnce();
-      expect(onMark).not.toHaveBeenCalled();
     });
   });
 

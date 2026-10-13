@@ -1,7 +1,7 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
+import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
@@ -47,16 +47,18 @@ export type SessionTranscriptContextProjectionSource = {
   physicalSource?: { expectedIdentity: DatabaseFileIdentity | undefined };
 };
 
-export type PreparedSessionTranscriptModelContext = {
-  context: SessionTranscriptModelContext;
-  writeToken: string;
-};
-
 function assertCurrentInputAnchor(
   admission: UserTurnTranscriptAdmissionReceipt,
   current: TranscriptEntryAnchor | undefined,
 ): void {
-  if (!sameTranscriptEntryAnchor(admission, current)) {
+  // The retained reader may use an alias of the admission owner's physical store.
+  const admittedCurrent =
+    current &&
+    current.storePath !== admission.storePath &&
+    isSameOpenClawAgentDatabasePath(admission.storePath, current.storePath)
+      ? { ...current, storePath: admission.storePath }
+      : current;
+  if (!sameTranscriptEntryAnchor(admission, admittedCurrent)) {
     throw new SessionTranscriptReadFenceError("Current-turn transcript admission changed");
   }
 }
@@ -140,7 +142,6 @@ export function readSessionTranscriptModelContextAsync<T>(
   limits?: SessionModelContextLimits,
   suppliedIncognito?: IncognitoSessionHistoryBinding,
   consumeSynchronously = false,
-  preparedContext?: PreparedSessionTranscriptModelContext,
 ): Promise<T> {
   const capturedTarget = { ...target };
   const capturedAdmission = admission ? structuredClone(admission) : undefined;
@@ -294,20 +295,14 @@ export function readSessionTranscriptModelContextAsync<T>(
           async (_identity, assertOwner) => {
             assertCurrent();
             const assertNative = captureSessionEntryNativeMutationWitness([database]);
-            const context =
-              preparedContext &&
-              !capturedAdmission &&
-              !capturedThrough &&
-              preparedContext.writeToken === readSqliteDatabaseWriteTokenForPath(database.path)
-                ? preparedContext.context
-                : await readSessionTranscriptModelContextInWorker(
-                    captured,
-                    capturedAdmission,
-                    signal,
-                    capturedThrough,
-                    capturedLimits,
-                    expectedIdentity,
-                  );
+            const context = await readSessionTranscriptModelContextInWorker(
+              captured,
+              capturedAdmission,
+              signal,
+              capturedThrough,
+              capturedLimits,
+              expectedIdentity,
+            );
             signal?.throwIfAborted();
             assertOwner();
             assertCurrent();
@@ -342,9 +337,11 @@ export function readSessionTranscriptModelContextAsync<T>(
         assertCurrent,
         undefined,
         capturedAdmission,
-        capturedAdmission ? readSource : undefined,
+        capturedAdmission || capturedThrough ? readSource : undefined,
       );
     },
     signal,
+    undefined,
+    capturedThrough?.storePath,
   );
 }

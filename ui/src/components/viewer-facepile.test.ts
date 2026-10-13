@@ -1,5 +1,5 @@
 import { ContextProvider, createContext } from "@lit/context";
-import { render } from "lit";
+import { createComponent } from "solid-js";
 /* @vitest-environment jsdom */
 import { afterEach, expect, it, vi } from "vitest";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
@@ -14,10 +14,12 @@ import {
   type PresenceViewer,
 } from "../lib/presence-users.ts";
 import { profileDirectory } from "../lib/profile-directory.ts";
+import { LitContent } from "../lit/solid-content.tsx";
 import { renderChatAuthorAvatar } from "../pages/chat/components/chat-author-avatar.ts";
 import { createApplicationGateway } from "../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import "./viewer-facepile.ts";
 
 afterEach(() => {
@@ -53,7 +55,13 @@ it("uses the same user initials and identity hue in the roster and attributed ch
 
   const chat = document.createElement("div");
   document.body.append(chat);
-  render(renderChatAuthorAvatar({ id: user.id, name: user.name, username: user.email }), chat);
+  mountSolid(
+    () =>
+      createComponent(LitContent, {
+        value: renderChatAuthorAvatar({ id: user.id, name: user.name, username: user.email }),
+      }),
+    { container: chat },
+  );
 
   const expected = resolveAvatarInitials({
     id: user.id,
@@ -444,5 +452,37 @@ it.each([true])(
     expect(fetchAvatar.mock.calls.at(-1)?.[0]).toBe(
       "https://gateway.example.test/api/users/teammate/avatar?v=8",
     );
+  },
+);
+
+it.each([false, true])(
+  "retains a participant avatar through metadata updates (linked: %s)",
+  async (linked) => {
+    const facepile = document.createElement("openclaw-viewer-facepile");
+    const navigate = vi.fn();
+    if (linked) {
+      facepile.personActivity = { basePath: "", navigate };
+    }
+    facepile.staticParticipants = [
+      { identity: { type: "profile", id: "profile-ada" }, label: "Ada" },
+    ];
+    document.body.append(facepile);
+    await facepile.updateComplete;
+    const avatar = facepile.querySelector("openclaw-viewer-avatar")!;
+    const initials = avatar.querySelector(".viewer-avatar__initials")!;
+    const link = facepile.querySelector<HTMLAnchorElement>("a");
+    link?.focus();
+    facepile.staticParticipants = [
+      { identity: { type: "profile", id: "profile-ada" }, label: "Ada King" },
+    ];
+    await facepile.updateComplete;
+    expect(facepile.querySelector("openclaw-viewer-avatar")).toBe(avatar);
+    expect(avatar.querySelector(".viewer-avatar__initials")).toBe(initials);
+    expect(avatar.querySelector(".viewer-avatar")?.getAttribute("aria-label")).toBe("Ada King");
+    if (link) {
+      expect(document.activeElement).toBe(link);
+      link.click();
+      expect(navigate).toHaveBeenCalledExactlyOnceWith("profile-ada", "Ada King");
+    }
   },
 );

@@ -8,7 +8,9 @@ export async function openChatDetails(page: Page | Locator): Promise<Locator> {
   if ((await trigger.getAttribute("aria-expanded")) !== "true") {
     await trigger.click();
   }
-  const details = page.getByRole("dialog", { name: "Details", exact: true });
+  const details = page
+    .getByRole("dialog", { name: "Details", exact: true })
+    .or(page.getByRole("complementary", { name: "Details", exact: true }));
   await details.waitFor();
   return details;
 }

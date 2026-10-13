@@ -647,7 +647,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
   });
 }
 
-function ChatModelControls(props: ChatModelControlsProps) {
+export function ChatModelControls(props: ChatModelControlsProps) {
   const controls = createChatModelControls(props);
   return (
     <div class="chat-controls__session chat-controls__model chat-controls__model-settings">

@@ -159,6 +159,10 @@ it.each(["delivered", "lost during close"] as const)(
       }
       expect(observed).toEqual(["guest"]);
       vi.restoreAllMocks();
+      if (reply === "lost during close") {
+        release();
+        release = (await prepareUserProfileCatalog()).release;
+      }
       expect(readUserProfileIdentity(profile.id)?.role).toBe("guest");
       expect(getUserProfileListItem(profile.id).role).toBe("guest");
     } finally {

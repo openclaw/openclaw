@@ -4,16 +4,18 @@ import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.j
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
+import { prepareSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 import { readSqliteSchemaCookie } from "../infra/sqlite-schema-contract.js";
-import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
+import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import {
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
 } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { truncateSqliteWal } from "../infra/sqlite-wal-checkpoint.js";
 import { configureSqlitePreSchemaPragmas } from "../infra/sqlite-wal.js";
 import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
 import {
@@ -143,6 +145,16 @@ function ensureStartupMigrationCheckpointSchema(
 }
 
 function hasStartupMigrationCheckpointSchema(db: DatabaseSync): boolean {
+  const schema = getAdmittedSqliteSchemaFacts(db);
+  if (schema) {
+    return (
+      schema.tables.has("schema_meta") &&
+      schema.tables.has("state_leases") &&
+      schema.indexes.has("idx_state_leases_expiry") &&
+      schema.indexes.has("idx_state_leases_owner") &&
+      tableHasColumn(db, "schema_meta", "app_version")
+    );
+  }
   const objects = db // sqlite-allow-raw -- Checkpoint open admission distinguishes row access from additive schema repair.
     .prepare(`SELECT type, name FROM sqlite_schema WHERE name IN (
       'schema_meta', 'state_leases', 'idx_state_leases_expiry', 'idx_state_leases_owner'
@@ -190,6 +202,7 @@ export function withOpenClawStateStartupCheckpointConnection<T>(
     const db = openNodeSqliteDatabase(existing ? resolveExistingSqliteFileUri(pathname) : pathname);
     let ownershipAdmitted = false;
     let result: { value: T } | undefined;
+    let seal: ReturnType<typeof prepareSqliteDatabaseCleanClose> | undefined;
     try {
       setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
       if (getStateRuntimeSchemaAdmission(db) || checkpointAdmission.get(db)) {
@@ -260,8 +273,20 @@ export function withOpenClawStateStartupCheckpointConnection<T>(
           db.exec("PRAGMA foreign_keys = ON;");
         }
       }
+      if (result) {
+        // This private connection closes below; carry its proof across metadata retirement.
+        // A blocked checkpoint merely leaves the next boot to validate normally.
+        try {
+          truncateSqliteWal(db, pathname);
+          seal = prepareSqliteDatabaseCleanClose(db);
+        } catch (error) {
+          process.emitWarning(`Shared-state clean-close checkpoint failed: ${String(error)}`);
+        }
+      }
     } finally {
+      using closingSeal = seal;
       db.close();
+      closingSeal?.publish();
       if (ownershipAdmitted) {
         ensureOpenClawStatePermissions(pathname, env);
       }

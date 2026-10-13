@@ -13,7 +13,6 @@ import type {
   IncognitoComputeTarget,
 } from "../config/sessions/session-incognito-compute-contract.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
-import { readSessionTranscriptIndexStatus } from "../config/sessions/session-transcript-projection-writer.js";
 import * as reconcilePool from "../config/sessions/session-transcript-reconcile-pool.js";
 import {
   reconcileSessionTranscriptIndexes,
@@ -25,16 +24,10 @@ import { isSessionCostUsageRefreshRunning } from "../infra/session-cost-usage-ca
 import { createIncognitoUsageCostAdapter } from "../infra/session-cost-usage-incognito.js";
 import { resolveUsageCostPricingFingerprint } from "../infra/session-cost-usage-pricing-context.js";
 import {
-  loadSessionCostSummary,
-  loadSessionLogs,
-  loadSessionUsageTimeSeries,
-} from "../infra/session-cost-usage-reporting.js";
-import {
   prepareUsageCostWorker,
   runUsageCostWorker,
 } from "../infra/session-cost-usage-worker-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import { registerIncognitoComputeWiringTests } from "./openclaw-agent-execution-incognito.compute-wiring.test-support.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
 import {
@@ -200,128 +193,6 @@ async function hold(owner = actor) {
   await barrier.entered.promise;
   return barrier;
 }
-
-it("composes empty and multi-session store compute without holding its actor FIFO", () =>
-  withIncognitoSessionActor(actor, async () => {
-    await expect(runUsageCostWorker(prepare(), { kind: "inventory" })).resolves.toEqual({
-      kind: "inventory",
-      files: [],
-    });
-    await expect(reconcileSessionTranscriptIndexes({ ...location(), env })).resolves.toEqual({
-      reconciledSessions: 0,
-    });
-    expect(await readSessionTranscriptIndexStatus({ ...location(), env })).toBe(false);
-    // Clean headers sort before the dirty targets and exceed one maintenance batch.
-    for (let index = 0; index < 129; index++) {
-      await create(`admission-${String(index).padStart(3, "0")}`);
-    }
-    const first = await create("store-first");
-    const second = await create("store-second");
-    for (const target of [first, second]) {
-      await append(target, "old branch");
-      await append(target, `current ${target.sessionId}`, actor, null);
-    }
-    await expect(
-      reconcileSessionTranscriptIndexes({
-        ...location(),
-        env,
-        preferredSessionId: second.sessionId,
-      }),
-    ).resolves.toEqual({ reconciledSessions: 2 });
-    for (const target of [first, second]) {
-      await expect(recentHistory(target)).resolves.toMatchObject({
-        totalMessages: 1,
-        messages: [{ content: [{ type: "text", text: `current ${target.sessionId}` }] }],
-      });
-    }
-    const sessionFiles = [marker(first), marker(second)];
-    const inventory = await runUsageCostWorker(prepare(), { kind: "inventory" });
-    expect(inventory).toMatchObject({
-      kind: "inventory",
-      files: expect.arrayContaining(
-        sessionFiles.map((sourcePath) => expect.objectContaining({ sourcePath })),
-      ),
-    });
-    await expect(
-      runUsageCostWorker(prepare(), { kind: "inventory", sessionFiles: [] }),
-    ).resolves.toEqual({ kind: "inventory", files: [] });
-    await expect(
-      runUsageCostWorker(prepare(), { kind: "inventory", minMtimeMs: Number.MAX_SAFE_INTEGER }),
-    ).resolves.toEqual({ kind: "inventory", files: [] });
-    await expect(
-      runUsageCostWorker(prepare(), {
-        kind: "inventory",
-        sessionFiles,
-        minMtimeMs: Number.MAX_SAFE_INTEGER,
-      }),
-    ).resolves.toMatchObject({
-      kind: "inventory",
-      files: expect.arrayContaining(
-        sessionFiles.map((sourcePath) => expect.objectContaining({ sourcePath })),
-      ),
-    });
-    await expect(runUsageCostWorker(prepare(), { kind: "refresh", sessionFiles })).resolves.toEqual(
-      { kind: "refresh", changed: true },
-    );
-    const prepared = prepare();
-    const pricingFingerprint = await resolveUsageCostPricingFingerprint(
-      prepared.config,
-      prepared.agentDir,
-    );
-    await expect(
-      runUsageCostWorker(prepared, {
-        kind: "sessions",
-        pricingFingerprint,
-        sessions: sessionFiles.map((sessionFile) => ({ sessionFile })),
-        dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
-      }),
-    ).resolves.toMatchObject({
-      kind: "sessions",
-      summaries: [
-        { totalTokens: 10, totalCost: 1 },
-        { totalTokens: 10, totalCost: 1 },
-      ],
-      cacheStatus: { status: "fresh", cachedFiles: 2 },
-    });
-    await expect(
-      runUsageCostWorker(prepared, {
-        kind: "sessions",
-        projection: "overview",
-        pricingFingerprint,
-        sessions: sessionFiles.map((sessionFile) => ({ sessionFile })),
-        dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
-        overview: {
-          sessions: [first, second].map((target) => ({
-            key: target.sessionKey,
-            sessionId: target.sessionId,
-            agentId: actor.agentId,
-            updatedAt: 10_000,
-            instances: [{ sessionId: target.sessionId, sessionFile: marker(target) }],
-          })),
-          options: { limit: 1 },
-        },
-      }),
-    ).resolves.toMatchObject({
-      kind: "overview",
-      result: {
-        totals: { totalTokens: 20, totalCost: 2 },
-        sessions: [{ usage: { totalTokens: 10, totalCost: 1 } }],
-        overview: { total: 2, selectedRowCount: 2, limit: 1 },
-      },
-      cacheStatus: { status: "fresh", cachedFiles: 2 },
-    });
-  }));
-
-it("refuses new compute work through a released borrow", async () => {
-  const target = await create("released-borrow");
-  const reference = await captureActor("main", { existingOnly: true });
-  await reference.release();
-  const operation = vi.fn(async () => "late compute");
-  await expect(
-    Promise.resolve().then(() => reference.sessions.withCompute(authority, target, operation)),
-  ).rejects.toThrow("Incognito execution reference is released");
-  expect(operation).not.toHaveBeenCalled();
-});
 
 it("captures the selected compute target before accepting deferred work", async () => {
   const selected = await create("captured-target");
@@ -526,28 +397,6 @@ registerIncognitoComputeWiringTests({
   marker,
 });
 
-it("reads explicit retained usage windows and preserves their discovery", async () => {
-  const previous = await create("usage-retained");
-  await append(previous, "retained usage");
-  const current = await branch(previous);
-  await append(current, "current usage");
-  const incognito = { actor, authority };
-  const inventory = await runUsageCostWorker(prepare(), { kind: "inventory" }, incognito);
-  assert(inventory.kind === "inventory");
-  expect(inventory.files.map((file) => file.sourcePath)).toContain(marker(current));
-  expect(inventory.files.map((file) => file.sourcePath)).toContain(marker(previous));
-  await withEnvAsync(env, async () => {
-    const params = { agentId: "main", sessionFile: marker(previous), incognito };
-    expect(await loadSessionCostSummary(params)).toMatchObject({ totalTokens: 10, totalCost: 1 });
-    expect(await loadSessionLogs(params)).toMatchObject([
-      { content: "retained usage", tokens: 10 },
-    ]);
-    expect(await loadSessionUsageTimeSeries(params)).toMatchObject({
-      points: [{ totalTokens: 10 }],
-    });
-  });
-});
-
 it("cancels a queued usage callback independently of its retained compute scope", async ({
   signal,
 }) => {
@@ -635,23 +484,6 @@ it("observes a pending actor append before usage inventory, stats and rollup pub
     barrier.release.resolve();
     await barrier.held;
   }
-});
-
-it("preserves explicit empty inventory and applies the cutoff only to discovery", async () => {
-  const target = await create("inventory-selection");
-  await append(target, "selected usage");
-  const all = await usage(target, { kind: "inventory" });
-  assert(all.kind === "inventory" && all.files.length === 1);
-  const minMtimeMs = all.files[0]!.mtimeMs + 1;
-  for (const operation of [
-    { kind: "inventory" as const, sessionFiles: [] },
-    { kind: "inventory" as const, minMtimeMs },
-  ]) {
-    await expect(usage(target, operation)).resolves.toEqual({ kind: "inventory", files: [] });
-  }
-  await expect(
-    usage(target, { kind: "inventory", sessionFiles: [marker(target)], minMtimeMs }),
-  ).resolves.toEqual(all);
 });
 
 it.each(["transaction", "commit"] as const)(

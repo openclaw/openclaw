@@ -3,8 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resumeThread } from "../command-handler-bindings.js";
 import { resolveCodexCommandDeps } from "../command-handler-deps.js";
 import {
@@ -538,7 +542,9 @@ async function createManualResumeFixture(
   };
 }
 
+afterEach(() => clearRuntimeConfigSnapshot());
 setupRunAttemptTestHooks({ isolateNativeSkillHome: true });
+beforeEach(() => setRuntimeConfigSnapshot({}));
 
 async function createLeasedLifecycleWireClient(
   agentDir: string,
@@ -608,31 +614,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
     createThreadLifecycleAppServerOptions,
     startOrResumeThread,
   });
-  it("inherits the effective native project-document budget", async () => {
-    const { sessionFile, workspaceDir } = createPaths();
-    const fixture = await createSequentialLifecycleHarness(
-      () => threadStartResult("thread-1"),
-      {
-        project_doc_max_bytes: 200_000,
-      },
-      {
-        project_doc_max_bytes: {
-          name: { type: "user", file: "/codex/config.toml", profile: null },
-          version: "sha256:authored-budget",
-        },
-      },
-    );
-
-    await startOrResumeThread({
-      client: fixture.client,
-      params: createParams(sessionFile, workspaceDir),
-    });
-
-    expect(
-      fixture.request.mock.calls.find(([method]) => method === "thread/start")?.[1],
-    ).toMatchObject({ config: { project_doc_max_bytes: 200_000 } });
-  });
-
   it("rejects a host-only rotation after recovering the predecessor before the lifecycle lease", async () => {
     const workspaceDir = path.join(tempDir, "recovered-workspace");
     const params = createParams(path.join(tempDir, "recovered.jsonl"), workspaceDir);

@@ -87,6 +87,7 @@ export function createRequiredWorkerSessionPreparation(options: {
           authorizeDispatch: assertPolicyCurrent,
           signal: source.signal,
           waitForReady: preparation?.waitForReady,
+          retainDispatch: preparation?.retainDispatch,
           prepareWorkspace: (canPrepare) =>
             ensureSessionWorkspaceForPlacement({
               cfg: options.getConfig(),

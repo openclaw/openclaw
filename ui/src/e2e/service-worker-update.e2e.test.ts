@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { cp, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +8,7 @@ import { chromium, webkit, type Browser, type Page } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   buildProductionControlUiE2e,
   createControlUiMockBootstrapConfig,
@@ -65,20 +66,17 @@ async function stageBuildB(destination: string): Promise<void> {
 }
 
 async function findBuildAsset(buildId: string, buildDir = outDir): Promise<BuildAsset> {
-  const assetsDir = path.join(buildDir, "assets");
-  for (const fileName of await readdir(assetsDir)) {
-    if (!fileName.endsWith(".js")) {
-      continue;
-    }
-    const source = await readFile(path.join(assetsDir, fileName));
-    if (source.includes(Buffer.from(buildId))) {
-      return {
-        path: `assets/${fileName}`,
-        sha256: createHash("sha256").update(source).digest("hex"),
-      };
-    }
+  const html = await readFile(path.join(buildDir, "index.html"), "utf8");
+  expect(html).toContain(`"buildId":${JSON.stringify(buildId)}`);
+  const assetPath = html.match(/<script\b[^>]*\bsrc="\.\/(assets\/[^"?]+\.js)"/u)?.[1];
+  if (!assetPath) {
+    throw new Error(`Production Control UI output has no entry script for ${buildId}`);
   }
-  throw new Error(`Production Control UI output did not contain build id ${buildId}`);
+  const source = await readFile(path.join(buildDir, assetPath));
+  return {
+    path: assetPath,
+    sha256: createHash("sha256").update(source).digest("hex"),
+  };
 }
 
 async function readBuildCacheName(buildId: string, buildDir = outDir): Promise<string> {
@@ -315,9 +313,13 @@ describe("Control UI service-worker production update E2E", () => {
     });
     try {
       expect((await page.goto(`${server.baseUrl}chat/research`))?.status()).toBe(200);
-      await page.waitForFunction(() => Boolean(customElements.get("openclaw-app")), undefined, {
-        timeout: controlUiE2eWaitTimeoutMs,
-      });
+      await page.waitForFunction(
+        () => window.openclawControlUi?.snapshot().ready === true,
+        undefined,
+        {
+          timeout: controlUiE2eWaitTimeoutMs,
+        },
+      );
     } catch (error) {
       if (error instanceof Error) {
         await captureControlUiE2eFailureDiagnostics(page, {
@@ -566,23 +568,15 @@ describe("Control UI service-worker production update E2E", () => {
       await expect
         .poll(
           async () =>
-            page.evaluate(() => {
+            evaluateControlUiContext(page, (application) => {
               const panel = document.querySelector("openclaw-terminal-panel") as
                 | (HTMLElement & { available: boolean })
                 | null;
-              const shell = document.querySelector("openclaw-app-shell") as HTMLElement & {
-                runtime?: {
-                  context?: {
-                    config: { current: { terminalEnabled: boolean } };
-                    gateway: { snapshot: { phase: string; hello: unknown } };
-                  };
-                };
-              };
               return {
                 available: panel?.available ?? null,
-                phase: shell?.runtime?.context?.gateway.snapshot.phase ?? null,
-                terminalEnabled: shell?.runtime?.context?.config.current.terminalEnabled ?? null,
-                hasHello: shell?.runtime?.context?.gateway.snapshot.hello != null,
+                phase: application.gateway.snapshot.phase,
+                terminalEnabled: application.config.current.terminalEnabled,
+                hasHello: application.gateway.snapshot.hello !== null,
               };
             }),
           { timeout: controlUiE2eWaitTimeoutMs },
@@ -610,8 +604,7 @@ describe("Control UI service-worker production update E2E", () => {
       await holdReplacementWorkerInstalling(nextOutDir, installGate.url);
       const cacheB = await readBuildCacheName(buildB, nextOutDir);
       const assetB = await findBuildAsset(buildB, nextOutDir);
-      expect(assetB.path).not.toBe(assetA.path);
-      expect(assetB.sha256).not.toBe(assetA.sha256);
+      expect(assetB).toEqual(assetA);
 
       await page.evaluate(() => {
         localStorage.setItem(
@@ -710,11 +703,11 @@ describe("Control UI service-worker production update E2E", () => {
         controllerState: "activated",
         sha256: assetB.sha256,
       });
-      expect(refreshedAsset.sha256).not.toBe(initialAsset.sha256);
+      expect(refreshedAsset.sha256).toBe(initialAsset.sha256);
       await expect
         .poll(() =>
           page.evaluate(
-            async ({ assetPath, previousAssetPath, cacheName }) => {
+            async ({ assetPath, currentBuildId, previousBuildId, cacheName }) => {
               const registration = await navigator.serviceWorker.getRegistration();
               if (!registration) {
                 return null;
@@ -725,16 +718,27 @@ describe("Control UI service-worker production update E2E", () => {
               const html = shell ? await shell.text() : "";
               return {
                 currentAsset: html.includes(assetPath),
-                previousAsset: html.includes(previousAssetPath),
+                currentBuild: html.includes(`"buildId":${JSON.stringify(currentBuildId)}`),
+                previousBuild: html.includes(`"buildId":${JSON.stringify(previousBuildId)}`),
                 documentRootCached: Boolean(
                   await caches.match(new URL("./", registration.scope), { cacheName }),
                 ),
               };
             },
-            { assetPath: assetB.path, previousAssetPath: assetA.path, cacheName: cacheB },
+            {
+              assetPath: assetB.path,
+              currentBuildId: buildB,
+              previousBuildId: buildA,
+              cacheName: cacheB,
+            },
           ),
         )
-        .toEqual({ currentAsset: true, previousAsset: false, documentRootCached: false });
+        .toEqual({
+          currentAsset: true,
+          currentBuild: true,
+          previousBuild: false,
+          documentRootCached: false,
+        });
 
       if (captureUiProof) {
         await page.screenshot({

@@ -182,7 +182,7 @@ async function receiveStream(
   let receiveError: Error | undefined;
   let wakeReader: (() => void) | undefined;
   let wakeConsumer: (() => void) | undefined;
-  const charges = new Set<Promise<void>>();
+  let chargesSettled = Promise.resolve();
   const batches: { events: unknown[]; charged: Promise<void> }[] = [];
   const cancelOnAbort = () => {
     void reader?.cancel().catch(() => {});
@@ -295,16 +295,10 @@ async function receiveStream(
         }
         const cost = events.reduce<number>((total, event) => total + xActivityCost(event), 0);
         const charged = cost ? options.api.spend.charge(cost) : Promise.resolve();
-        charges.add(charged);
-        void charged.then(
-          () => {
-            charges.delete(charged);
-          },
-          (error: unknown) => {
-            charges.delete(charged);
-            fail(error);
-          },
-        );
+        if (cost) {
+          // The spend owner serializes charges; its latest receipt joins every earlier charge.
+          chargesSettled = charged.catch(fail);
+        }
         batches.push({ events, charged });
         wakeConsumer?.();
       }
@@ -466,7 +460,7 @@ async function receiveStream(
     signal.removeEventListener("abort", cancelOnAbort);
     await reader?.cancel().catch(() => {});
     await receiver;
-    await Promise.allSettled(charges);
+    await chargesSettled;
     reader?.releaseLock();
     options.onStatus?.({
       streamConnected: false,

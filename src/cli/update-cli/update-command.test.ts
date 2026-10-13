@@ -7,6 +7,7 @@ import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as nativeLaunchAgentRecovery from "../daemon-cli/launchd-recovery.js";
@@ -25,6 +26,7 @@ import {
   recoverLaunchAgentAndRecheckGatewayHealth,
 } from "./update-command-service-recovery.js";
 import { resolveUpdatedGatewayRestartPort } from "./update-command-service.js";
+import { verifyUpdatedGateway } from "./update-command-verification.js";
 
 const tempDirs = createTempDirTracker();
 afterEach(() => {
@@ -193,6 +195,24 @@ describe("formatPostUpdateGatewayRecoveryInstructions", () => {
 describe("recoverInstalledLaunchAgentAfterUpdate", () => {
   beforeEach(() => mockProcessPlatform("darwin"));
   afterEach(() => vi.restoreAllMocks());
+  it("does not recover a loaded LaunchAgent", async () => {
+    const service = createMockGatewayService();
+    vi.spyOn(gatewayService, "readGatewayServiceState").mockResolvedValue({
+      installed: true,
+      loadState: { status: "loaded" },
+      running: false,
+      env: {},
+      command: null,
+    });
+    const recover = vi
+      .spyOn(nativeLaunchAgentRecovery, "recoverInstalledLaunchAgent")
+      .mockResolvedValue(null);
+
+    await expect(
+      launchAgentRecovery.recoverInstalledLaunchAgentAfterUpdate({ service }),
+    ).resolves.toEqual({ status: "not-needed" });
+    expect(recover).not.toHaveBeenCalled();
+  });
   it.each(["recovered", "failed", "system owner"] as const)(
     "reports installed-but-not-loaded LaunchAgent recovery: %s",
     async (outcome) => {
@@ -226,10 +246,9 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
         }),
       ).resolves.toEqual(
         outcome === "recovered"
-          ? { attempted: true, recovered: true, message }
+          ? { status: "recovered", message }
           : {
-              attempted: true,
-              recovered: false,
+              status: "failed",
               detail:
                 outcome === "system owner"
                   ? guidance
@@ -249,6 +268,70 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
     );
   });
   afterEach(() => vi.restoreAllMocks());
+  it.each(["rejected", "unknown"] as const)(
+    "reports and records an uninspectable LaunchAgent without repairing it (%s)",
+    async (probe) => {
+      mockProcessPlatform("darwin");
+      const env = { OPENCLAW_STATE_DIR: tempDirs.make("update-probe-failure-") };
+      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+      const service = createMockGatewayService();
+      const readState = vi.spyOn(gatewayService, "readGatewayServiceState");
+      const reason = "launchctl denied";
+      if (probe === "rejected") {
+        readState.mockRejectedValue(new Error(reason));
+      } else {
+        readState.mockResolvedValue({
+          installed: true,
+          loadState: { status: "unknown", detail: reason },
+          running: false,
+          env,
+          command: null,
+        });
+      }
+      const recover = vi
+        .spyOn(nativeLaunchAgentRecovery, "recoverInstalledLaunchAgent")
+        .mockResolvedValue(null);
+      const start = vi.fn();
+      const output = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const result: UpdateRunResult = { status: "ok", mode: "npm", steps: [], durationMs: 0 };
+      const verification = await verifyUpdatedGateway({
+        result,
+        opts: { json: true, run },
+        serviceEnv: env,
+        gatewayPort: 18790,
+        health: {
+          runtime: { status: "stopped" },
+          portUsage: { port: 18790, status: "free", listeners: [], hints: [] },
+          healthy: false,
+          staleGatewayPids: [],
+          waitOutcome: "stopped-free",
+        },
+        recoverHealth: (health, _reinspect, assertCurrent) =>
+          recoverLaunchAgentAndRecheckGatewayHealth({
+            updateRun: run,
+            health,
+            service,
+            port: 18790,
+            env,
+            assertCurrent,
+            onGatewayStartAttempted: start,
+          }),
+      });
+      expect(verification.ok).toBe(false);
+      expect(getUpdateRun(run.runId, { env })?.repair).toEqual([
+        expect.objectContaining({
+          status: "failed",
+          summary: expect.stringContaining(`LaunchAgent state could not be inspected: ${reason}`),
+        }),
+      ]);
+      expect(output.mock.calls.flat().join("\n")).toContain(
+        `LaunchAgent state could not be inspected: ${reason}`,
+      );
+      expect(output.mock.calls.flat().join("\n")).toContain("openclaw gateway status --deep");
+      expect(recover).not.toHaveBeenCalled();
+      expect(start).not.toHaveBeenCalled();
+    },
+  );
   it.each(["recovered", "failed"] as const)(
     "records only attempted native repair before rechecking update health (%s)",
     async (outcome) => {
@@ -278,10 +361,10 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
         "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.";
       const recovery =
         outcome === "recovered"
-          ? ({ attempted: true, recovered: true, message } as const)
+          ? ({ status: "recovered", message } as const)
           : outcome === "failed"
-            ? ({ attempted: true, recovered: false, detail: "Bootstrap failed." } as const)
-            : ({ attempted: false, recovered: false } as const);
+            ? ({ status: "failed", detail: "Bootstrap failed." } as const)
+            : ({ status: "not-needed" } as const);
       vi.spyOn(launchAgentRecovery, "recoverInstalledLaunchAgentAfterUpdate").mockResolvedValue(
         recovery,
       );
@@ -354,8 +437,7 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
       waitOutcome: "timeout",
     } as never;
     vi.spyOn(launchAgentRecovery, "recoverInstalledLaunchAgentAfterUpdate").mockResolvedValue({
-      attempted: true as const,
-      recovered: true as const,
+      status: "recovered",
       message: "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
     });
     vi.spyOn(restartHealth, "waitForGatewayHealthyRestart").mockResolvedValue(stillUnhealthy);
@@ -368,7 +450,6 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
     });
     expect(result.health.healthy).toBe(false);
     expect(result.health.waitOutcome).toBe("timeout");
-    expect(result.launchAgentRecovery?.attempted).toBe(true);
-    expect(result.launchAgentRecovery?.recovered).toBe(true);
+    expect(result.launchAgentRecovery?.status).toBe("recovered");
   });
 });

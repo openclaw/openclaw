@@ -14,6 +14,7 @@ import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js"
 import { isRestartEnabled } from "../config/commands.flags.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveCronJobsStorePathFromConfigAsync } from "../cron/store/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import { setGatewayRestartPolicy } from "../infra/restart.js";
@@ -145,19 +146,21 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       | { previous: GatewayCronExitWatcherHandoff; next: GatewayCronExitWatcherHandoff }
       | undefined;
     if (plan.restartCron) {
-      const { buildGatewayCronService } = await import("./server-cron.js");
+      const [{ buildGatewayCronService }, storePath] = await Promise.all([
+        import("./server-cron.js"),
+        resolveCronJobsStorePathFromConfigAsync(nextConfig, publication?.runtimeEnv ?? process.env),
+      ]);
       assertCronReloadCurrent();
       nextState.cronState = buildGatewayCronService({
         scheduler: params.scheduler,
         cfg: nextConfig,
+        storePath,
         deps: params.deps,
         broadcast: params.broadcast,
         env: publication?.runtimeEnv ?? process.env,
         // Without this a cron hot reload silently drops scheduler gateway
         // context, so scheduled runs regress to contextless after any reload.
-        ...(params.resolveGatewayContext
-          ? { resolveGatewayContext: params.resolveGatewayContext }
-          : {}),
+        resolveGatewayContext: params.resolveGatewayContext,
         resolvePluginRegistry: params.getPluginRegistry,
       });
       if (
@@ -359,12 +362,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         return;
       }
       // Only accepted runtime state may own monitor writes and emitted events.
-      if (
-        plan.reconcileSystemJobs &&
-        (await nextState.cronState.reconcileSystemJobs().catch(failConfigCommit)) ===
-          "retry-scheduled"
-      ) {
-        failConfigCommit(new GatewayHotReloadRecoveryError("cron monitor"));
+      if (plan.reconcileSystemJobs) {
+        const result = await nextState.cronState.reconcileSystemJobs().catch(failConfigCommit);
+        if (result === "retry-scheduled") {
+          params.logReload.warn("cron system jobs pending; continuing hot reload with cron retry");
+        }
       }
       if (plan.restartCron && ownsCron()) {
         startGatewayCronWithLogging({
@@ -488,9 +490,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           {
             retainDebtAcrossConfigChanges: true,
             debtConfig: publication?.sourceConfig ?? nextConfig,
-            ...(publication?.prepareRestartRuntimeConfig
-              ? { prepareRuntimeConfig: publication.prepareRestartRuntimeConfig }
-              : {}),
+            prepareRuntimeConfig: publication?.prepareRestartRuntimeConfig,
           },
         );
         settleRecoveryRestart(restartTransaction, surface);

@@ -75,6 +75,7 @@ function skipRequest(
     database: db,
     receiptSchema,
     handle,
+    pendingReceiptId: job?.state.runningAtMs === undefined ? undefined : job.state.runningReceiptId,
     status,
     finishedAtMs: nowMs,
     error,
