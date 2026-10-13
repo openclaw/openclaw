@@ -267,13 +267,13 @@ describe("createTtsDirectiveTextStreamCleaner", () => {
   });
 
   it.each([
-    [["```\n", "[[tts:literal", " speech]]\n", "```\n"], "```\n\n```\n"],
-    [["Use `", "[[tts:literal", " speech]]", "` here."], "Use `` here."],
-    [["~~~\n~~~ [[note]]\n[[tts:Literal speech]]\n~~~"], "~~~\n~~~ [[note]]\n\n~~~"],
-    [["~~~\n~~~ [[tts:voice=alloy]]\n[[tts:Literal speech]]\n~~~"], "~~~\n~~~ \n\n~~~"],
-  ] as const)("does not recover code literals as prose: %j", (chunks, expected) => {
+    ["```\n", "[[tts:literal", " speech]]\n", "```\n"],
+    ["Use `", "[[tts:literal", " speech]]", "` here."],
+    ["~~~\n~~~ [[note]]\n[[tts:Literal speech]]\n~~~"],
+    ["~~~\n~~~ [[tts:voice=alloy]]\n[[tts:Literal speech]]\n~~~"],
+  ])("preserves code literals across chunks: %j", (...chunks) => {
     const cleaner = createTtsDirectiveTextStreamCleaner();
-    expect(chunks.map((chunk) => cleaner.push(chunk)).join("")).toBe(expected);
+    expect(chunks.map((chunk) => cleaner.push(chunk)).join("")).toBe(chunks.join(""));
     expect(cleaner.push("\n[[tts:Visible speech]]")).toBe("\nVisible speech");
     expect(cleaner.flush()).toBe("");
   });
