@@ -139,7 +139,7 @@ describe("cron.update scheduled policy adoption", () => {
     "other account",
     "borrowed capture",
     "no capture",
-  ] as const)("replaces app authority only for the authenticated owner: %s", async (caller) => {
+  ] as const)("captures owner authority and preserves manager cap edits: %s", async (caller) => {
     const storePath = path.join(expectDefined(stateDir, "test state"), "cron", "jobs.json");
     const service = new CronService({
       scheduler: createTestGatewayScheduler(),
@@ -160,6 +160,12 @@ describe("cron.update scheduled policy adoption", () => {
           : sessionKey,
       accountId: caller === "other account" ? "personal" : accountId,
     };
+    const runtimeAuthority = {
+      version: 1 as const,
+      runtimeId: "codex",
+      namespace: "codex.apps",
+      payload: { apps: [{ id: "calendar" }] },
+    };
     const created = await service.add(
       {
         name: "App automation",
@@ -168,7 +174,11 @@ describe("cron.update scheduled policy adoption", () => {
         agentId: "main",
         sessionTarget: "isolated",
         wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "Check calendar", toolsAllow: ["read"] },
+        payload: {
+          kind: "agentTurn",
+          message: "Check calendar",
+          toolsAllow: ["read", "calendar_search"],
+        },
         delivery: { mode: "none" },
         owner,
       },
@@ -179,6 +189,7 @@ describe("cron.update scheduled policy adoption", () => {
           ownerSessionKey: owner.sessionKey,
           ownerAccountId: owner.accountId,
         },
+        captureRuntimeAuthority: () => runtimeAuthority,
       },
     );
     const before = (await loadCronStore(storePath)).jobs;
@@ -188,12 +199,6 @@ describe("cron.update scheduled policy adoption", () => {
       getRuntimeConfig: () => cfg,
       validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
     });
-    const runtimeAuthority = {
-      version: 1 as const,
-      runtimeId: "codex",
-      namespace: "codex.apps",
-      payload: { apps: [{ id: "calendar" }] },
-    };
     await withAgentManagement(async (identity, _management, capability) => {
       const tool = createCronTool(
         {
@@ -261,10 +266,10 @@ describe("cron.update scheduled policy adoption", () => {
         jobId: created.id,
         job: { payload: { toolsAllow: ["calendar_search"] } },
       });
-      if (caller === "owner" || caller === "known tool") {
-        await expect(update).resolves.toMatchObject({ details: { id: created.id } });
-      } else {
+      if (caller === "no capture") {
         await expect(update).rejects.toThrow(/calendar_search.*[Rr]ecreate/);
+      } else {
+        await expect(update).resolves.toMatchObject({ details: { id: created.id } });
       }
     }, true);
     const stored = (await loadCronStore(storePath)).jobs;
@@ -275,8 +280,15 @@ describe("cron.update scheduled policy adoption", () => {
         payload: { toolsAllow: ["calendar_search"] },
       });
       expect(stored[0]?.runtimeAuthorityRecoveryRequired).toBeUndefined();
-    } else {
+    } else if (caller === "no capture") {
       expect(stored).toEqual(before);
+    } else {
+      expect(stored[0]).toMatchObject({
+        owner,
+        payload: { toolsAllow: ["calendar_search"] },
+        runtimeAuthorityRecoveryRequired: true,
+      });
+      expect(stored[0]?.runtimeAuthority).toBeUndefined();
     }
   });
 

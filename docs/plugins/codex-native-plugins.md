@@ -236,11 +236,11 @@ accepted without a fresh authenticated Codex authority capture, it clears that
 authority; the next run reports that app access requires reauthorization.
 An update from a fresh authenticated owner turn can instead capture and store a
 new app ceiling for the updated job. The caller must match the job's original
-owner session and account, and explicitly replace `toolsAllow`. Management access
-alone cannot supply another owner's app authority: such cap replacements fail
-with the requested tool names and instructions to recreate the automation from
-a fresh authenticated owner turn. Ordinary management edits still preserve the
-existing app ceiling.
+owner session and account, and explicitly replace `toolsAllow`. An owner update
+without a fresh capture fails with the requested tool names and instructions to
+recreate the automation. Managers can still replace another owner's tool cap;
+that clears captured app authority, and the next run reports that app access
+requires reauthorization.
 
 ## Manage plugins from chat
 
