@@ -43,7 +43,6 @@ import {
   isOpenClawCliImageCachePath,
   resolveMediaFactLocalRef,
   type MediaFileRef,
-  type MediaImageRef,
 } from "./images.media-refs.js";
 import {
   type ImageFactIndex,
