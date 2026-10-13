@@ -3,7 +3,6 @@ import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
-import { isUpdatePackageSwapInProgress } from "../commands/doctor/shared/update-phase.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
@@ -29,6 +28,7 @@ import {
   deferredPluginMigrationSchema,
   type DeferredPluginMigration,
 } from "./deferred-plugin-migrations.contract.js";
+import { isTruthyEnvValue } from "./env.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
@@ -402,9 +402,11 @@ export function formatDeferredPluginMigration(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   const retry = pending.command === "openclaw doctor --fix" ? "" : ', then "openclaw doctor --fix"';
-  // Post-core convergence is the update's last migration pass; only an
-  // in-flight package swap has later passes that can still finish this.
-  const next = isUpdatePackageSwapInProgress(env)
+  // This formatter also ships in the minimal PR bootstrap, without Doctor command modules.
+  const packageSwap =
+    isTruthyEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS) &&
+    !isTruthyEnvValue(env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE);
+  const next = packageSwap
     ? `Let the current update or repair finish. If this warning remains afterward, run "${pending.command}"${retry} to retry the upgrade.`
     : `Run "${pending.command}"${retry} to retry the upgrade.`;
   return `Plugin "${pending.pluginId}" data/settings upgrade is unfinished: ${pending.reason} Your existing data and settings have been kept. ${next}`;

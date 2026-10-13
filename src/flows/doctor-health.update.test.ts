@@ -310,12 +310,9 @@ describe("runDoctorHealthFlow update outcomes", () => {
     },
   );
 
-  it.each([
-    ["one plugin still pending", ["codex"]],
-    ["every plugin settled", []],
-  ])(
-    "drops plugin migration warnings settled later in the same Doctor pass (%s)",
-    async (_, stillPendingIds) => {
+  it.each(["partial", "all", "unreadable"] as const)(
+    "publishes current plugin migration warnings after Doctor (%s)",
+    async (settlement) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const resultPath = createUpdatePostInstallDoctorResultPath();
         vi.stubEnv(UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV, resultPath);
@@ -324,9 +321,9 @@ describe("runDoctorHealthFlow update outcomes", () => {
           reason: "The installed plugin has not confirmed its saved data and settings.",
           command: "openclaw doctor --fix",
         });
-        // Config preflight reported both before post-session repair settled them.
-        const reported = [pending("acpx"), pending("codex")];
-        for (const plugin of reported) {
+        const [settled, stillPending] = [pending("acpx"), pending("codex")];
+        // Config preflight reported both before post-session repair settled acpx.
+        for (const plugin of [settled, stillPending]) {
           mocks.stateMigrationReceipts.push({
             id: `plugin:${plugin.pluginId}`,
             phase: "final",
@@ -339,17 +336,29 @@ describe("runDoctorHealthFlow update outcomes", () => {
             warnings: [formatDeferredPluginMigration(plugin)],
           });
         }
-        // The ledger as the pass leaves it.
-        const stillPending = reported.filter((plugin) => stillPendingIds.includes(plugin.pluginId));
-        mocks.pendingPluginMigrations.mockResolvedValue(stillPending);
+        if (settlement === "unreadable") {
+          mocks.pendingPluginMigrations.mockRejectedValue(
+            new Error("migration ledger unavailable"),
+          );
+        } else {
+          mocks.pendingPluginMigrations.mockResolvedValue(
+            settlement === "all" ? [] : [stillPending],
+          );
+        }
         const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
         try {
           await runDoctorHealthFlow(runtime, { nonInteractive: true });
           const result = await consumeUpdatePostInstallDoctorResult(resultPath);
-          expect(result).not.toBeNull();
+          const expected =
+            settlement === "unreadable"
+              ? [settled, stillPending]
+              : settlement === "all"
+                ? []
+                : [stillPending];
+          expect(result).toMatchObject({ status: "ok" });
           expect(result?.warnings ?? []).toEqual(
-            stillPending.map((plugin) => formatDeferredPluginMigration(plugin)),
+            expected.map((plugin) => formatDeferredPluginMigration(plugin)),
           );
         } finally {
           await consumeUpdatePostInstallDoctorResult(resultPath);
