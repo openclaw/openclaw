@@ -45,6 +45,18 @@ describe("AppSidebar session sort persistence", () => {
 });
 
 describe("AppSidebar session pagination", () => {
+  it("does not show pagination controls at the ten-session boundary", async () => {
+    const keys = [
+      "agent:main:session-0",
+      ...Array.from({ length: 9 }, (_, index) => `agent:main:session-${index + 1}`),
+    ];
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", keys));
+
+    expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(10);
+    expect(sidebar.querySelector(".sidebar-session-pagination")).toBeNull();
+  });
+
   it("keeps visible sessions when a newer session enters the created-sort page", async () => {
     const olderKeys = Array.from({ length: 10 }, (_, index) => `agent:main:older-${index}`);
     const gateway = createGateway({} as GatewayBrowserClient);
@@ -214,6 +226,28 @@ describe("AppSidebar session source lifecycle", () => {
       forkFrom: "last-completed",
       agentId: "main",
     });
+  });
+
+  it("resets per-agent cached results when the sessions source changes", async () => {
+    const client = {} as GatewayBrowserClient;
+    const gateway = createGateway(client);
+    const { provider, sidebar } = await mountSidebar(
+      gateway,
+      createSessions("first", ["first-a", "first-b"]),
+    );
+
+    expect(Object.keys(sidebar.sessionData.sessionResultsByAgent)).toEqual(["first"]);
+
+    // The Gateway and its client stay unchanged while the sessions capability is replaced.
+    provider.setContext(createContext(gateway, createSessions("second", ["second-b", "second-a"])));
+    await sidebar.updateComplete;
+
+    expect(Object.keys(sidebar.sessionData.sessionResultsByAgent)).toEqual(["second"]);
+    expect(sidebar.sessionData.sessionsAgentId).toBe("second");
+    expect(sidebar.sessionData.sessionsResult?.sessions.map((row) => row.key)).toEqual([
+      "second-b",
+      "second-a",
+    ]);
   });
 
   it("preserves the scoped result through a disconnect on the same Gateway client", async () => {

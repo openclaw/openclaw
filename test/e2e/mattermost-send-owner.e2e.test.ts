@@ -100,6 +100,11 @@ function createMattermostHttpHandler(params: {
       response.end(JSON.stringify({ id: BOT_ID }));
       return;
     }
+    if (requestPath === "/api/v4/users/username/alice") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ id: USER_ID }));
+      return;
+    }
     if (requestPath === "/api/v4/channels/direct") {
       const result = await params.directChannelResponse?.();
       response.writeHead(result?.status ?? 201, { "content-type": "application/json" });
@@ -138,7 +143,7 @@ function createMattermostHttpHandler(params: {
   };
 }
 
-function registerMattermostRuntime(params: { sequence?: string[] }) {
+function registerMattermostRuntime(params: { sequence?: string[]; activityError?: Error }) {
   expect(mattermostPlugin).toBe(mattermostPublicApi.mattermostPlugin);
   // Bootstrap must use the same entry-owned instance as delivery and runtime setup.
   vi.spyOn(bootstrapRegistry, "getBootstrapChannelPlugin").mockImplementation((id) =>
@@ -147,6 +152,9 @@ function registerMattermostRuntime(params: { sequence?: string[] }) {
   const runtime = createPluginRuntimeMock();
   vi.spyOn(runtime.channel.activity, "record").mockImplementation(() => {
     params.sequence?.push("bookkeeping:activity");
+    if (params.activityError) {
+      throw params.activityError;
+    }
   });
   runtimeStore.setRuntime(runtime);
   setActivePluginRegistry(
@@ -287,7 +295,6 @@ describe("Mattermost canonical message action delivery", () => {
                 result: {
                   kind: "send",
                   handledBy: "core",
-                  to: `user:${USER_ID}`,
                   sendResult: { deliveryStatus: "sent", result: { messageId: "post-1" } },
                 },
               });
@@ -382,6 +389,77 @@ describe("Mattermost canonical message action delivery", () => {
     });
   });
 
+  it.each([
+    ["channel", `channel:${CHANNEL_ID}`],
+    ["explicit user", `user:${USER_ID}`],
+    ["username", "@alice"],
+  ])("keeps the original %s target after provider resolution", async (_name, target) => {
+    const requests: CapturedRequest[] = [];
+
+    await withServer(createMattermostHttpHandler({ requests }), async (baseUrl) => {
+      registerMattermostRuntime({});
+      const result = await runMessageAction({
+        cfg: createMattermostConfig(baseUrl),
+        action: "send",
+        params: {
+          channel: "mattermost",
+          target,
+          message: "target proof",
+        },
+        conversationReadOrigin: "direct-operator",
+        skipQueue: true,
+      });
+
+      expect(result).toMatchObject({
+        kind: "send",
+        handledBy: "core",
+        to: target,
+        sendResult: {
+          deliveryStatus: "sent",
+          result: { messageId: "post-1" },
+        },
+      });
+    });
+
+    expect(requests.at(-1)).toMatchObject({
+      method: "POST",
+      path: "/api/v4/posts",
+      jsonBody: { channel_id: CHANNEL_ID, message: "target proof" },
+    });
+  });
+
+  it("uses the generic replyTo parameter when no thread is provided", async () => {
+    const requests: CapturedRequest[] = [];
+
+    await withServer(createMattermostHttpHandler({ requests }), async (baseUrl) => {
+      registerMattermostRuntime({});
+      const result = await runMessageAction({
+        cfg: createMattermostConfig(baseUrl),
+        action: "send",
+        params: {
+          channel: "mattermost",
+          target: `channel:${CHANNEL_ID}`,
+          message: "reply proof",
+          replyTo: "reply-root",
+        },
+        conversationReadOrigin: "direct-operator",
+        skipQueue: true,
+      });
+
+      expect(result).toMatchObject({
+        kind: "send",
+        handledBy: "core",
+        sendResult: { deliveryStatus: "sent", result: { messageId: "post-1" } },
+      });
+    });
+
+    expect(requests.at(-1)?.jsonBody).toMatchObject({
+      channel_id: CHANNEL_ID,
+      message: "reply proof",
+      root_id: "reply-root",
+    });
+  });
+
   it("preserves media, presentation, thread, receipt, and progress ordering", async () => {
     const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "mattermost-send-")));
     const file = path.join(directory, "report.txt");
@@ -468,5 +546,44 @@ describe("Mattermost canonical message action delivery", () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+
+  it("returns partial delivery evidence when bookkeeping fails after the post", async () => {
+    const requests: CapturedRequest[] = [];
+    const sequence: string[] = [];
+    const onDeliveryResult = vi.fn((result: { messageId?: string }) => {
+      sequence.push(`progress:${result.messageId}`);
+    });
+
+    await withServer(createMattermostHttpHandler({ requests, sequence }), async (baseUrl) => {
+      registerMattermostRuntime({
+        sequence,
+        activityError: new Error("activity store unavailable"),
+      });
+      await expect(
+        runMessageAction({
+          cfg: createMattermostConfig(baseUrl),
+          action: "send",
+          params: {
+            channel: "mattermost",
+            target: `channel:${CHANNEL_ID}`,
+            message: "partial proof",
+          },
+          conversationReadOrigin: "direct-operator",
+          onDeliveryResult,
+          skipQueue: true,
+        }),
+      ).rejects.toThrow("activity store unavailable");
+    });
+
+    expect(onDeliveryResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "mattermost",
+        messageId: "post-1",
+        receipt: expect.objectContaining({ parts: expect.any(Array) }),
+      }),
+    );
+    expect(requests.filter((request) => request.path === "/api/v4/posts")).toHaveLength(1);
+    expect(sequence).toEqual(["http:post", "progress:post-1", "bookkeeping:activity"]);
   });
 });

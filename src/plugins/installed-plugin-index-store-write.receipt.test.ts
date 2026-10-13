@@ -115,6 +115,25 @@ function readRow(databasePath: string) {
 }
 
 describe("installed plugin index mutation receipts", () => {
+  it("collects only committed index writes and their owned compensation", async () => {
+    const env = makeEnv();
+    await withEnvAsync(env, () =>
+      withPluginLifecycleLease({}, async (lease) => {
+        const failure = new Error("source changed after index publication");
+        await expect(
+          commitPluginInstallRecordsOnly({
+            nextInstallRecords: {},
+            nextConfig: {},
+            verifyConfigFresh: async () => {
+              throw failure;
+            },
+          }),
+        ).rejects.toBe(failure);
+        expect(readRow(lease.databasePath)).toBeNull();
+      }),
+    );
+  });
+
   it("compensates an acknowledged index commit when caller authority ends before its reply", async () => {
     const env = makeEnv();
     const configPath = path.join(env.OPENCLAW_STATE_DIR, "openclaw.json");
@@ -231,100 +250,103 @@ describe("installed plugin index mutation receipts", () => {
     });
   });
 
-  it.each(["true"])("retains exact predecessor and committed row for %s", async (valueJson) => {
-    const env = makeEnv();
-    const otherEnv = makeEnv();
-    await withPluginLifecycleLease({ env }, async (lease) => {
-      if (valueJson !== null) {
+  it.each([null, priorJson, "true"])(
+    "retains exact predecessor and committed row for %s",
+    async (valueJson) => {
+      const env = makeEnv();
+      const otherEnv = makeEnv();
+      await withPluginLifecycleLease({ env }, async (lease) => {
+        if (valueJson !== null) {
+          runOpenClawStateWriteTransaction(
+            ({ db }) => {
+              db.prepare(
+                "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
+              ).run(stateKey, valueJson, 9_007);
+            },
+            { path: lease.databasePath, env },
+          );
+        }
+        const before = readRow(lease.databasePath);
+        const assertCurrent = vi.fn();
+        const receipt = await withoutMainThreadSql(() =>
+          writePersistedInstalledPluginIndexInstallRecordsWithLease(
+            {},
+            {
+              env: otherEnv,
+              filePath: lease.databasePath,
+              candidates: [],
+              lease,
+              assertCurrent,
+            },
+          ),
+        );
+        // Preparation, transaction, commit and disclosure each check current authority once.
+        expect(assertCurrent).toHaveBeenCalledTimes(4);
+        const after = readRow(lease.databasePath);
+        expect(receipt.mutation).toEqual({ databasePath: lease.databasePath, before, after });
+        expect(receipt.mutation.before).toEqual(
+          valueJson === null
+            ? null
+            : {
+                state_key: stateKey,
+                value_json: valueJson,
+                updated_at_ms: 9_007,
+              },
+        );
+        expect(receipt.mutation.after.updated_at_ms).toBe(receipt.revision);
+        expect(JSON.parse(receipt.mutation.after.value_json).revision).toBe(receipt.revision);
+        expect(receipt.previous?.policyHash ?? null).toBe(valueJson === priorJson ? "prior" : null);
+        expect(lease.databasePath).toBe(
+          path.join(env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite"),
+        );
+        const captured = JSON.stringify(receipt.mutation);
+        // The host connection is a foreign writer to the already-open metadata worker.
         runOpenClawStateWriteTransaction(
           ({ db }) => {
             db.prepare(
-              "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
-            ).run(stateKey, valueJson, 9_007);
-          },
-          { path: lease.databasePath, env },
-        );
-      }
-      const before = readRow(lease.databasePath);
-      const assertCurrent = vi.fn();
-      const receipt = await withoutMainThreadSql(() =>
-        writePersistedInstalledPluginIndexInstallRecordsWithLease(
-          {},
-          {
-            env: otherEnv,
-            filePath: lease.databasePath,
-            candidates: [],
-            lease,
-            assertCurrent,
-          },
-        ),
-      );
-      // Preparation, transaction, commit and disclosure each check current authority once.
-      expect(assertCurrent).toHaveBeenCalledTimes(4);
-      const after = readRow(lease.databasePath);
-      expect(receipt.mutation).toEqual({ databasePath: lease.databasePath, before, after });
-      expect(receipt.mutation.before).toEqual(
-        valueJson === null
-          ? null
-          : {
-              state_key: stateKey,
-              value_json: valueJson,
-              updated_at_ms: 9_007,
-            },
-      );
-      expect(receipt.mutation.after.updated_at_ms).toBe(receipt.revision);
-      expect(JSON.parse(receipt.mutation.after.value_json).revision).toBe(receipt.revision);
-      expect(receipt.previous?.policyHash ?? null).toBe(valueJson === priorJson ? "prior" : null);
-      expect(lease.databasePath).toBe(
-        path.join(env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite"),
-      );
-      const captured = JSON.stringify(receipt.mutation);
-      // The host connection is a foreign writer to the already-open metadata worker.
-      runOpenClawStateWriteTransaction(
-        ({ db }) => {
-          db.prepare(
-            `UPDATE config_machine_state
+              `UPDATE config_machine_state
                   SET value_json = json_set(value_json, '$.index.policyHash', 'foreign', '$.revision', ?),
                       updated_at_ms = ?
                 WHERE state_key = ?`,
-          ).run(receipt.revision + 1, receipt.revision + 1, stateKey);
-        },
-        { path: lease.databasePath, env },
-      );
-      const foreign = readRow(lease.databasePath);
-      const successor = await withoutMainThreadSql(() =>
-        writePersistedInstalledPluginIndexInstallRecordsWithLease(
-          {},
-          {
-            env,
-            filePath: lease.databasePath,
-            candidates: [],
-            lease,
+            ).run(receipt.revision + 1, receipt.revision + 1, stateKey);
           },
-        ),
-      );
-      expect(successor.mutation.before).toEqual(foreign);
-      expect(successor.previous?.policyHash).toBe("foreign");
-      expect(readRow(lease.databasePath)).not.toEqual(after);
-      expect(JSON.stringify(receipt.mutation)).toBe(captured);
-      await expect(
-        withoutMainThreadSql(() =>
-          restorePersistedInstalledPluginIndexIfCurrent(receipt.previous, receipt.revision, {
-            env,
-            lease,
-          }),
-        ),
-      ).resolves.toBe(false);
-      await expect(
-        withoutMainThreadSql(() =>
-          restorePersistedInstalledPluginIndexIfCurrent(successor.previous, successor.revision, {
-            env,
-            lease,
-          }),
-        ),
-      ).resolves.toBe(true);
-    });
-  });
+          { path: lease.databasePath, env },
+        );
+        const foreign = readRow(lease.databasePath);
+        const successor = await withoutMainThreadSql(() =>
+          writePersistedInstalledPluginIndexInstallRecordsWithLease(
+            {},
+            {
+              env,
+              filePath: lease.databasePath,
+              candidates: [],
+              lease,
+            },
+          ),
+        );
+        expect(successor.mutation.before).toEqual(foreign);
+        expect(successor.previous?.policyHash).toBe("foreign");
+        expect(readRow(lease.databasePath)).not.toEqual(after);
+        expect(JSON.stringify(receipt.mutation)).toBe(captured);
+        await expect(
+          withoutMainThreadSql(() =>
+            restorePersistedInstalledPluginIndexIfCurrent(receipt.previous, receipt.revision, {
+              env,
+              lease,
+            }),
+          ),
+        ).resolves.toBe(false);
+        await expect(
+          withoutMainThreadSql(() =>
+            restorePersistedInstalledPluginIndexIfCurrent(successor.previous, successor.revision, {
+              env,
+              lease,
+            }),
+          ),
+        ).resolves.toBe(true);
+      });
+    },
+  );
 
   it.each([
     { operation: "refresh", stage: "transaction" },

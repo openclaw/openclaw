@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type {
   InternalSessionEntry as SessionEntry,
   MainRestartRecoveryState,
@@ -86,6 +87,27 @@ function projectLifecycle(
 }
 
 describe("main session recovery state", () => {
+  it("reserves an interrupted outcome from its recovery cycle without persisted liveness", () => {
+    const entry = interruptedEntry({ status: "interrupted" });
+    const view = observe(entry, "generation-1");
+    expect(view.status).toBe("recoverable");
+    if (view.status !== "recoverable") {
+      throw new Error("expected recoverable claim");
+    }
+    expect(
+      transitionMainSessionRecovery(entry, {
+        kind: "prepare_attempt",
+        attempt: view.nextAttempt,
+        lifecycleGeneration: "generation-1",
+        now: 200,
+        observation: view.observation,
+        runId: "recovery-1",
+        executionIdentity: { state: "disabled" },
+      }).kind,
+    ).toBe("reserved");
+    expect(entry.status).toBe("interrupted");
+  });
+
   it("allows rollover until the tombstone records its successor", () => {
     expect(
       inspectMainRestartRecoveryRolloverEligibility(
@@ -189,7 +211,7 @@ describe("main session recovery state", () => {
     expect(entry.lastRunId).toBeUndefined();
   });
 
-  it.each([true])("clears only fences with terminal evidence (terminal=%s)", (terminal) => {
+  it.each([false, true])("clears only fences with terminal evidence (terminal=%s)", (terminal) => {
     const entry = interruptedEntry({
       status: undefined,
       abortedLastRun: false,
@@ -244,6 +266,43 @@ describe("main session recovery state", () => {
         tokens: ["foreground-1"],
       },
     });
+  });
+
+  it("keeps lifecycle fences while a recovery delivery owner remains", () => {
+    const entry = interruptedEntry({
+      abortedLastRun: false,
+      mainRestartRecovery: undefined,
+      restartRecoveryDeliveryRunId: "active-recovery",
+      restartRecoveryRuns: [{ runId: "active-recovery", lifecycleGeneration: "generation-1" }],
+    });
+    const before = structuredClone(entry);
+
+    expect(claimForeground(entry)).toEqual({ kind: "no_change" });
+    expect(entry).toEqual(before);
+  });
+
+  it("retires a stale reservation before granting foreground ownership", () => {
+    const entry = interruptedEntry({
+      mainRestartRecovery: recoveryState({
+        revision: 3,
+        chargedAttempts: 1,
+        reservation: {
+          attempt: 1,
+          lifecycleGeneration: "previous-generation",
+          runId: "stale-recovery",
+        },
+      }),
+    });
+
+    expect(claimForeground(entry)).toMatchObject({ kind: "foreground_claimed" });
+    expect(entry.mainRestartRecovery).toMatchObject({
+      chargedAttempts: 1,
+      foregroundClaims: {
+        lifecycleGeneration: "generation-1",
+        tokens: ["foreground-1"],
+      },
+    });
+    expect(entry.mainRestartRecovery?.reservation).toBeUndefined();
   });
 
   it("moves a reservation into the lifecycle fence during Gateway admission", () => {
@@ -472,6 +531,51 @@ describe("main session recovery state", () => {
     expect(entry.mainRestartRecovery?.reservation).toBeUndefined();
   });
 
+  it("preserves stored execution identity when a new lifecycle rotates the recovery run", () => {
+    const storedToken = createExecutionIdentityAdmissionToken("recovery-old", {
+      contextId: "context-1",
+      executionId: "execution-1",
+      now: 123,
+    });
+    const entry = interruptedEntry({
+      mainRestartRecovery: recoveryState({ executionIdentity: storedToken }),
+    });
+
+    const prepared = transitionMainSessionRecovery(entry, {
+      kind: "prepare_attempt",
+      attempt: 1,
+      lifecycleGeneration: "generation-new",
+      now: 200,
+      observation: { sessionId: "session-1", cycleId: "cycle-1", revision: 1 },
+      runId: "recovery-new",
+      executionIdentity: { state: "enabled" },
+    });
+
+    expect(prepared.kind).toBe("reserved");
+    expect(entry.mainRestartRecovery?.executionIdentity).toBe(storedToken);
+
+    expect(
+      transitionMainSessionRecovery(entry, {
+        kind: "admit_recovery",
+        lifecycleGeneration: "generation-new",
+        now: 201,
+        runId: "recovery-new",
+        sessionId: "session-1",
+      }),
+    ).toMatchObject({ kind: "admitted_recovery" });
+    expect(
+      transitionMainSessionRecovery(entry, {
+        kind: "bind_admitted_execution_identity",
+        attempt: 1,
+        cycleId: "cycle-1",
+        lifecycleGeneration: "generation-new",
+        runId: "recovery-new",
+        sessionId: "session-1",
+        token: storedToken,
+      }),
+    ).toEqual({ kind: "no_change" });
+  });
+
   it("rejects an old observation after a healthy clear and a new interrupted cycle", () => {
     const entry = interruptedEntry();
     const oldObservation = { sessionId: "session-1", cycleId: "cycle-1", revision: 1 };
@@ -493,6 +597,30 @@ describe("main session recovery state", () => {
         executionIdentity: { state: "disabled" },
       }),
     ).toEqual({ kind: "rejected", reason: "stale_cycle" });
+  });
+
+  it("preserves the charged cycle when an accepted recovery is interrupted again", () => {
+    const entry = interruptedEntry({
+      abortedLastRun: false,
+      mainRestartRecovery: recoveryState({
+        revision: 3,
+        chargedAttempts: 1,
+      }),
+    });
+
+    transitionMainSessionRecovery(entry, {
+      kind: "mark_interrupted",
+      cycleId: "replacement-cycle",
+      now: 300,
+    });
+
+    expect(entry.abortedLastRun).toBe(true);
+    expect(entry.mainRestartRecovery).toEqual(
+      recoveryState({
+        revision: 3,
+        chargedAttempts: 1,
+      }),
+    );
   });
 
   it("tombstones an exhausted cycle and exposes only the Doctor repair action", () => {
@@ -792,6 +920,28 @@ describe("main session recovery state", () => {
     ).toEqual({
       action: "apply",
       patch: { status: "done", abortedLastRun: false },
+    });
+  });
+
+  it("retires a normal start fence without clearing a killed run's aborted outcome", () => {
+    expect(
+      projectLifecycle(
+        { restartRecoveryRuns: [{ runId: "ordinary-run", lifecycleGeneration: "generation-1" }] },
+        {
+          runId: "ordinary-run",
+          lifecycleGeneration: "generation-1",
+          data: { phase: "error", stopReason: "user" },
+        },
+        { status: "killed", abortedLastRun: true },
+      ),
+    ).toEqual({
+      action: "apply",
+      patch: {
+        status: "killed",
+        abortedLastRun: true,
+        restartRecoveryRuns: undefined,
+        mainRestartRecovery: undefined,
+      },
     });
   });
 

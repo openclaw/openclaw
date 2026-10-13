@@ -53,6 +53,15 @@ export function registerCronCreatorSessionTests(fixture: {
   it.each([
     {
       caller: "agent-runtime",
+      payload: { kind: "agentTurn", message: "report", toolsAllow: ["*"] },
+    },
+    { caller: "operator", payload: { kind: "agentTurn", message: "report", toolsAllow: ["*"] } },
+    {
+      caller: "agent-runtime",
+      payload: { kind: "script", script: "return { notify: 'report' };", toolsAllow: [] },
+    },
+    {
+      caller: "operator",
       payload: { kind: "script", script: "return { notify: 'report' };", toolsAllow: [] },
     },
     { caller: "operator", payload: { kind: "command", argv: ["echo", "report"] } },
@@ -97,6 +106,51 @@ export function registerCronCreatorSessionTests(fixture: {
       expect(resolveCronDeliveryPreview).toHaveBeenCalledWith(
         expect.objectContaining({ job: expect.objectContaining({ sourceConversation }) }),
       );
+      expectCronSuccess(respond);
+    },
+  );
+
+  it.each([undefined, "missing-conversation"])(
+    "leaves isolated jobs unbound without an existing creating session: %s",
+    async (sessionKey) => {
+      const { context, respond } = await invokeCron(
+        "cron.add",
+        agentTurnCronParams({ sessionKey }),
+      );
+      const options = requireRecord(context.cron.add.mock.calls[0]?.[1], "cron.add options");
+      expect(options).not.toHaveProperty("sourceConversation");
+      expectCronSuccess(respond);
+    },
+  );
+
+  it.each(["unknown"] as const)(
+    "retains %s creator provenance through agent-created cron jobs",
+    async (source) => {
+      loadGatewaySessionEntry.mockReturnValue({
+        canonicalKey: "agent:ops:main",
+        entry: {
+          sessionId: "session-ops-main",
+          createdActor: { type: "human", source, id: "profile-ada", label: "Ada" },
+        },
+      });
+      const client = callerClient("ops");
+      client.internal!.agentRuntimeIdentity!.sessionSpawnContext = {
+        inheritedToolPolicy: { version: 1, allow: ["*"], deny: [] },
+      };
+
+      const { context, respond } = await invokeCron("cron.add", agentTurnCronParams(), {
+        client,
+      });
+
+      const options = requireRecord(context.cron.add.mock.calls[0]?.[1], "cron.add options");
+      expect(options.createdActor).toEqual({
+        type: "human",
+        source,
+        id: "profile-ada",
+        label: "Ada",
+      });
+      expect(loadGatewaySessionEntry).toHaveBeenCalledWith("agent:ops:main", { agentId: "ops" });
+      expect(requireCronAddPayload(context)).not.toHaveProperty("createdActor");
       expectCronSuccess(respond);
     },
   );

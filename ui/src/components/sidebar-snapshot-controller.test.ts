@@ -252,9 +252,9 @@ describe("sidebar snapshot lifecycle", () => {
     expect(sessions.state.result).toBeNull();
   });
 
-  it.each(["after"] as const)(
+  it.each(["before", "after"] as const)(
     "rejects another agent's chip snapshot when selection changes %s restoration",
-    async () => {
+    async (timing) => {
       const store = new SessionSnapshotStore();
       store.connect();
       disposers.push(() => store.disconnect());
@@ -271,19 +271,36 @@ describe("sidebar snapshot lifecycle", () => {
         }),
       };
       await store.writeSidebar(sidebarSnapshotScopeKey(scope), chip, parseSidebarSnapshot);
-      const test = fixture("main");
+      const test = fixture(timing === "before" ? "other" : "main");
       disposers.push(
         admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
         () => test.controller.disconnect(),
       );
       test.controller.connect();
-      await test.restored;
-      expect(test.host.sidebarSnapshot).toEqual(chip);
-      test.selectAgent("other");
+      if (timing === "before") {
+        await new Promise<void>((resolve) => {
+          const stop = test.controller.subscribe(() => {
+            if (!test.controller.pending) {
+              stop();
+              resolve();
+            }
+          });
+        });
+      } else {
+        await test.restored;
+        expect(test.host.sidebarSnapshot).toEqual(chip);
+        test.selectAgent("other");
+      }
       expect(test.host.sidebarSnapshot).toBeNull();
       expect(test.controller.saved).toBe(false);
     },
   );
+
+  it("keeps the multi-agent roster snapshot across agent selection", async () => {
+    const test = await warmFixture();
+    test.selectAgent("other");
+    expect(test.host.sidebarSnapshot).toEqual(model);
+  });
 
   it("releases a stalled boot read when the live sidebar settles", async () => {
     const stalled = createDeferred<SidebarSnapshotModel | null>();
@@ -303,26 +320,54 @@ describe("sidebar snapshot lifecycle", () => {
     expect(test.host.sidebarSnapshot).toBeNull();
   });
 
-  it.each(["after"] as const)(
+  it.each(["before", "after"] as const)(
     "rejects a Pages snapshot when its agent filter changes %s restoration",
-    async () => {
+    async (timing) => {
       const store = new SessionSnapshotStore();
       store.connect();
       disposers.push(() => store.disconnect());
       const pages = { ...model, navigationView: "pages" as const, pageScopeId: "main" };
       await store.writeSidebar(sidebarSnapshotScopeKey(scope), pages, parseSidebarSnapshot);
-      const test = fixture("main", "main");
+      const test = fixture("main", timing === "before" ? "other" : "main");
       disposers.push(
         admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
         () => test.controller.disconnect(),
       );
       test.controller.connect();
-      await test.restored;
-      test.selectPageScope("other");
+      if (timing === "before") {
+        await new Promise<void>((resolve) => {
+          const stop = test.controller.subscribe(() => {
+            if (!test.controller.pending) {
+              stop();
+              resolve();
+            }
+          });
+        });
+      } else {
+        await test.restored;
+        test.selectPageScope("other");
+      }
       expect(test.host.sidebarSnapshot).toBeNull();
       expect(test.controller.saved).toBe(false);
     },
   );
+
+  it("keeps an all-agent Pages snapshot when only the selected chat agent changes", async () => {
+    const store = new SessionSnapshotStore();
+    store.connect();
+    disposers.push(() => store.disconnect());
+    const pages: SidebarSnapshotModel = { ...model, navigationView: "pages", pageScopeId: null };
+    await store.writeSidebar(sidebarSnapshotScopeKey(scope), pages, parseSidebarSnapshot);
+    const test = fixture();
+    disposers.push(
+      admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
+      () => test.controller.disconnect(),
+    );
+    test.controller.connect();
+    await test.restored;
+    test.selectAgent("other");
+    expect(test.host.sidebarSnapshot).toEqual(pages);
+  });
 
   it("restores before hello and saves only after rendering the settled live projection", async () => {
     const test = await warmFixture();
@@ -405,7 +450,7 @@ describe("sidebar snapshot lifecycle", () => {
     },
   );
 
-  it.each(["account", "cache-eviction"] as const)(
+  it.each(["account", "session", "cache-eviction"] as const)(
     "applies shared %s invalidation to the displayed projection",
     async (kind) => {
       const test = await warmFixture();
@@ -493,5 +538,24 @@ describe("sidebar snapshot lifecycle", () => {
     expect(
       await test.store.readSidebar(sidebarSnapshotScopeKey(scope), parseSidebarSnapshot),
     ).toEqual(model);
+  });
+
+  it("does not hold a cold render and can save again after remount", async () => {
+    const test = fixture();
+    disposers.push(() => test.controller.disconnect());
+    test.controller.connect();
+    expect(test.controller.pending).toBe(false);
+    test.controller.disconnect();
+    test.controller.connect();
+    test.publish();
+    const saved = test.settle();
+    test.controller.capture();
+    await saved;
+    const store = new SessionSnapshotStore();
+    store.connect();
+    disposers.push(() => store.disconnect());
+    expect(await store.readSidebar(sidebarSnapshotScopeKey(scope), parseSidebarSnapshot)).toEqual(
+      model,
+    );
   });
 });

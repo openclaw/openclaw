@@ -1,13 +1,17 @@
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_BACKGROUND_PREFERENCE } from "../../packages/gateway-protocol/src/schema/background-preferences.js";
+import {
+  DEFAULT_BACKGROUND_PREFERENCE,
+  type BackgroundPreference,
+} from "../../packages/gateway-protocol/src/schema/background-preferences.js";
 import type { UsersBackgroundResult } from "../../packages/gateway-protocol/src/schema/users-background.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { FIRST_USE_STATE_TABLES, FIRST_USE_STATE_INDEXES } from "./openclaw-state-db-contract.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
@@ -68,7 +72,7 @@ function expected(result: UsersBackgroundResult) {
 
 describe("private profile backgrounds", () => {
   it("runs background reads and writes off the caller's SQLite handle", async () => {
-    const { options, first, second, db } = setup();
+    const { options, first, db } = setup();
     await getUserBackground(first, options);
     const native = vi.spyOn(db, "prepare");
     try {
@@ -79,9 +83,6 @@ describe("private profile backgrounds", () => {
       expect((await getUserBackgroundImage(first, uploaded.asset!.assetId, options)).image).toEqual(
         new Uint8Array(normalized.image),
       );
-      expect(
-        (await getUserBackgroundImage(second, uploaded.asset!.assetId, options)).image,
-      ).toBeUndefined();
       const head = await getUserBackgroundImage(first, uploaded.asset!.assetId, {
         ...options,
         includeBytes: false,
@@ -96,6 +97,152 @@ describe("private profile backgrounds", () => {
       native.mockRestore();
     }
   });
+
+  it("retains one private image while hidden, replaces atomically, and removes selection coherently", async () => {
+    const { options, first, second, db, setBackground } = setup();
+    expect(await getUserBackground(first, options)).toEqual({
+      status: "ok",
+      asset: null,
+      preference: null,
+    });
+    expect(tableExists(db, "user_background_images")).toBe(false);
+    const initial = snapshot(
+      await uploadUserBackground(first, { ...empty, imageBase64: "fixture" }, options),
+    );
+    const assetId = initial.asset!.assetId;
+    expect(initial.preference).toEqual({
+      ...DEFAULT_BACKGROUND_PREFERENCE,
+      showInSessions: false,
+      source: { kind: "custom", assetId },
+    });
+    expect((await getUserBackgroundImage(second, assetId, options)).image).toBeUndefined();
+    expect([...(await getUserBackgroundImage(first, assetId, options)).image!]).toEqual([
+      ...normalized.image,
+    ]);
+    const hidden = { ...initial.preference!, source: { kind: "none" } };
+    expect(setBackground(first, hidden, initial.preference).ok).toBe(true);
+    expect(snapshot(await getUserBackground(first, options)).asset?.assetId).toBe(assetId);
+    expect(
+      await uploadUserBackground(first, { ...expected(initial), imageBase64: "stale" }, options),
+    ).toEqual({ status: "conflict" });
+    const replacement = snapshot(
+      await uploadUserBackground(
+        first,
+        { ...expected(await getUserBackground(first, options)), imageBase64: "new" },
+        options,
+      ),
+    );
+    expect(replacement.asset?.assetId).not.toBe(assetId);
+    expect((await getUserBackgroundImage(first, assetId, options)).image).toBeUndefined();
+    expect(db.prepare("SELECT COUNT(*) AS count FROM user_background_images").get()?.count).toBe(1);
+    expect(await removeUserBackground(first, expected(initial), options)).toEqual({
+      status: "conflict",
+    });
+    const removed = snapshot(await removeUserBackground(first, expected(replacement), options));
+    expect(removed.asset).toBeNull();
+    expect(removed.preference?.source).toEqual({ kind: "none" });
+    expect(
+      (await getUserBackgroundImage(first, replacement.asset!.assetId, options)).image,
+    ).toBeUndefined();
+  });
+
+  it.each(["theme", "none"] as const)(
+    "first upload opts into New Session only after an existing %s selection",
+    async (kind) => {
+      const { options, first, setBackground } = setup();
+      const previous = {
+        ...DEFAULT_BACKGROUND_PREFERENCE,
+        source: { kind },
+        showOnNewSession: false,
+        showInSessions: true,
+      };
+      expect(setBackground(first, previous, null).ok).toBe(true);
+      const initial = snapshot(
+        await uploadUserBackground(
+          first,
+          { expectedAssetId: null, expectedPreference: previous, imageBase64: "fixture" },
+          options,
+        ),
+      );
+      expect(initial.preference).toMatchObject({
+        source: { kind: "custom" },
+        showOnNewSession: true,
+        showInSessions: false,
+      });
+      const explicit = { ...initial.preference!, showOnNewSession: false, showInSessions: true };
+      expect(setBackground(first, explicit, initial.preference).ok).toBe(true);
+      const replacement = snapshot(
+        await uploadUserBackground(
+          first,
+          {
+            expectedAssetId: initial.asset!.assetId,
+            expectedPreference: explicit,
+            imageBase64: "replacement",
+          },
+          options,
+        ),
+      );
+      expect(replacement.preference).toMatchObject({
+        showOnNewSession: false,
+        showInSessions: true,
+      });
+    },
+  );
+
+  it.each([undefined, "faded", "full-bleed"] as const)(
+    "retains presentation %s through preference writes, upload, replacement, and removal",
+    async (presentation) => {
+      const { options, first, setBackground } = setup();
+      const previous: BackgroundPreference = {
+        ...DEFAULT_BACKGROUND_PREFERENCE,
+        ...(presentation ? { presentation } : {}),
+      };
+      expect(setBackground(first, previous, null).ok).toBe(true);
+      expect(getUserPreferences(first, ["ui.background"], options)).toStrictEqual({
+        "ui.background": previous,
+      });
+      expect(snapshot(await getUserBackground(first, options)).preference).toStrictEqual(previous);
+
+      const uploaded = snapshot(
+        await uploadUserBackground(
+          first,
+          { expectedAssetId: null, expectedPreference: previous, imageBase64: "fixture" },
+          options,
+        ),
+      );
+      expect(uploaded.preference).toStrictEqual({
+        ...previous,
+        showOnNewSession: true,
+        showInSessions: false,
+        source: { kind: "custom", assetId: uploaded.asset!.assetId },
+      });
+      const replacement = snapshot(
+        await uploadUserBackground(
+          first,
+          { ...expected(uploaded), imageBase64: "replacement" },
+          options,
+        ),
+      );
+      expect(replacement.preference).toStrictEqual({
+        ...uploaded.preference,
+        source: { kind: "custom", assetId: replacement.asset!.assetId },
+      });
+      const theme = { ...replacement.preference!, source: { kind: "theme" } };
+      expect(setBackground(first, theme, replacement.preference).ok).toBe(true);
+      const unselected = snapshot(await getUserBackground(first, options));
+      expect(unselected.preference).toStrictEqual(theme);
+      expect(unselected.asset).toStrictEqual(replacement.asset);
+      expect(setBackground(first, replacement.preference, theme).ok).toBe(true);
+      const removed = snapshot(await removeUserBackground(first, expected(replacement), options));
+      expect(removed.preference).toStrictEqual({
+        ...replacement.preference,
+        source: { kind: "none" },
+      });
+      expect(getUserPreferences(first, ["ui.background"], options)).toStrictEqual({
+        "ui.background": removed.preference,
+      });
+    },
+  );
 
   it("keeps absent and explicit readable snapshots distinct for authoritative comparisons", async () => {
     const { options, first, setBackground } = setup();
@@ -268,6 +415,32 @@ describe("private profile backgrounds", () => {
     }
     expect(await getUserBackground(first, options)).toEqual(initial);
   });
+
+  it.each([false, true])(
+    "merges retained uploads with target precedence (target present: %s)",
+    async (targetPresent) => {
+      const { options, first, second, db } = setup();
+      const source = await uploadUserBackground(
+        first,
+        { ...empty, imageBase64: "source" },
+        options,
+      );
+      const target = targetPresent
+        ? await uploadUserBackground(second, { ...empty, imageBase64: "target" }, options)
+        : undefined;
+      await linkEmail("first@example.test", second, options);
+      const merged = snapshot(await getUserBackground(second, options));
+      expect(merged.asset).toEqual(snapshot(target ?? source).asset);
+      expect(merged.preference).toEqual(snapshot(target ?? source).preference);
+      expect(db.prepare("SELECT COUNT(*) AS count FROM user_background_images").get()?.count).toBe(
+        1,
+      );
+      db.prepare("DELETE FROM user_profiles WHERE id = ?").run(second);
+      expect(db.prepare("SELECT COUNT(*) AS count FROM user_background_images").get()?.count).toBe(
+        0,
+      );
+    },
+  );
 
   it("keeps same-version older readers safe and preserves the retained image on candidate reopen", async () => {
     const { options, first, db } = setup();

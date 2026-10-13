@@ -5,6 +5,7 @@ import { prepareCodexInferenceThreadConfig } from "./inference-routing.js";
 import {
   getLeasedSharedCodexAppServerClient,
   readCodexAppServerClientDesktopGeneration,
+  releaseLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
@@ -12,11 +13,23 @@ import { CODEX_APP_SERVER_VERSION } from "./version.js";
 /** Registers startup qualification under the suite's shared auth and generation fixtures. */
 export function registerSharedClientInferenceTests(
   configureNativeStart: (generation: CodexDesktopGeneration, command: string) => void,
+  sendInitializeResult: (
+    harness: ReturnType<typeof createClientHarness>,
+    userAgent: string,
+  ) => Promise<void>,
 ): void {
   it.each([
     {
       label: "managed Desktop",
       command: "/Applications/ChatGPT.app/Contents/Resources/codex",
+      commandSource: "managed",
+      transport: "stdio",
+      args: ["app-server"],
+      ownsInference: true,
+    },
+    {
+      label: "generation-bound package",
+      command: "/cache/openclaw/codex",
       commandSource: "managed",
       transport: "stdio",
       args: ["app-server"],
@@ -136,5 +149,31 @@ export function registerSharedClientInferenceTests(
     });
     await client.closeAndWait();
     expect(() => prepared.route.context.prepare(request)).toThrow("closed");
+  });
+
+  it("generation-binds an explicit desktop client while Computer Use is disabled", async () => {
+    const generation = { epoch: 1, fingerprint: "desktop-x" };
+    configureNativeStart(generation, "/Applications/ChatGPT.app/Contents/Resources/codex");
+    const harness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
+
+    const clientPromise = getLeasedSharedCodexAppServerClient({
+      config: {},
+      pluginConfig: { computerUse: { enabled: false } },
+      agentDir: "/tmp/openclaw-agent",
+      startOptions: {
+        transport: "stdio",
+        homeScope: "agent",
+        command: "/Applications/ChatGPT.app/Contents/Resources/codex",
+        commandSource: "config",
+        args: ["app-server"],
+        headers: {},
+      },
+    });
+    await sendInitializeResult(harness, "openclaw/0.149.0 (macOS; test)");
+    const client = await clientPromise;
+
+    expect(readCodexAppServerClientDesktopGeneration(client)).toEqual(generation);
+    expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(true);
   });
 }

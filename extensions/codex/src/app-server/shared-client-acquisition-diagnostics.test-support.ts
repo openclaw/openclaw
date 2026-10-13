@@ -2,6 +2,7 @@ import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import * as diagnostics from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it, vi } from "vitest";
+import * as catalogEvents from "../session-catalog-events.js";
 import * as authBridge from "./auth-bridge.js";
 import type { CodexAppServerAuthHandoff } from "./auth-types.js";
 import { CodexAppServerClient } from "./client.js";
@@ -35,86 +36,116 @@ export function registerSharedClientAcquisitionDiagnosticsTests({
   ) => Promise<void>;
 }) {
   const getLeasedSharedCodexAppServerClient = sharedClient.getLeasedSharedCodexAppServerClient;
-  it.each(["context", "transport-registration", "runtime-binding"] as const)(
-    "reports the real shared acquisition boundary %s",
-    async (boundary) => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-      vi.spyOn(diagnostics, "areDiagnosticsEnabledForProcess").mockReturnValue(true);
-      vi.spyOn(embeddedAgentLog, "isEnabled").mockReturnValue(true);
-      vi.mocked(embeddedAgentLog.warn).mockClear();
-      const entered = createDeferred<void>();
-      const finish = createDeferred<void>();
-      const park = async () => {
-        entered.resolve();
-        await finish.promise;
-      };
-      const harness = createInitializingClientHarness();
-      vi.spyOn(CodexAppServerClient, "start").mockImplementation(async () => {
-        if (boundary === "transport-registration") {
+  it.each([
+    "context",
+    "entry-selection",
+    "transport-registration",
+    "initialize",
+    "catalog-observation",
+    "runtime-binding",
+    "auth-handoff",
+  ] as const)("reports the real shared acquisition boundary %s", async (boundary) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    vi.spyOn(diagnostics, "areDiagnosticsEnabledForProcess").mockReturnValue(true);
+    vi.spyOn(embeddedAgentLog, "isEnabled").mockReturnValue(true);
+    vi.mocked(embeddedAgentLog.warn).mockClear();
+    const entered = createDeferred<void>();
+    const finish = createDeferred<void>();
+    const park = async () => {
+      entered.resolve();
+      await finish.promise;
+    };
+    const harness =
+      boundary === "initialize" ? createClientHarness() : createInitializingClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockImplementation(async () => {
+      if (boundary === "transport-registration") {
+        await park();
+      }
+      return harness.client;
+    });
+    if (boundary === "context") {
+      vi.mocked(authBridge.bridgeCodexAppServerStartOptions).mockImplementationOnce(
+        async ({ startOptions }) => {
           await park();
-        }
-        return harness.client;
-      });
-      if (boundary === "context") {
-        vi.mocked(authBridge.bridgeCodexAppServerStartOptions).mockImplementationOnce(
-          async ({ startOptions }) => {
-            await park();
-            return startOptions;
-          },
-        );
-      } else if (boundary === "runtime-binding") {
-        const runtimeArtifact = await import("./runtime-artifact.js");
-        vi.spyOn(sharedClient, "getLeasedSharedCodexAppServerClient").mockImplementation(
-          (options) =>
-            getLeasedSharedCodexAppServerClient({ ...options, runtimeArtifactMode: "capture" }),
-        );
-        vi.spyOn(
-          runtimeArtifact,
-          "captureCodexAppServerRuntimeArtifactBeforeStart",
-        ).mockResolvedValue({
-          kind: "configured-connection",
-          transport: "websocket",
-          selectionFingerprint: "synthetic-selection",
-        });
-        vi.spyOn(runtimeArtifact, "finalizeCodexAppServerRuntimeArtifact").mockImplementationOnce(
-          async () => {
-            await park();
-            return { id: "synthetic-artifact", fingerprint: "synthetic-fingerprint" };
-          },
-        );
-      }
-      const run = vi.fn(async () => undefined);
-      const result = withCodexAppServerJsonClient({ timeoutMs: 50 }, run).catch(
-        (error: unknown) => error,
+          return startOptions;
+        },
       );
-      await entered.promise;
-      await vi.advanceTimersByTimeAsync(50);
-      expect(await result).toMatchObject({ message: "codex app-server request timed out" });
-      const warning = vi
-        .mocked(embeddedAgentLog.warn)
-        .mock.calls.find(([message]) => message === "codex app-server scope timed out");
-      expect(warning?.[1]).toMatchObject({
-        phase: "acquire-client",
-        acquireLastObservedBoundary: boundary,
-        scopeAttemptOrdinal: 1,
-        requestStartedCount: 0,
-        currentRequestCount: 0,
+    } else if (boundary === "entry-selection") {
+      vi.mocked(authBridge.reconcileCodexComputerUseStartArtifacts).mockImplementationOnce(park);
+    } else if (boundary === "catalog-observation") {
+      vi.spyOn(catalogEvents, "observeCodexCatalogClient").mockImplementationOnce(park);
+    } else if (boundary === "auth-handoff") {
+      vi.mocked(authBridge.applyCodexAppServerAuthProfile).mockImplementationOnce(async () => {
+        await park();
+        return undefined;
       });
-      expect(warning?.[1]).not.toHaveProperty("clientInstanceId");
-      if (boundary === "runtime-binding") {
-        expect(warning?.[1]).toHaveProperty(
-          "lastStartedClientInstanceId",
-          harness.client.getInstanceId(),
-        );
-      } else {
-        expect(warning?.[1]).not.toHaveProperty("lastStartedClientInstanceId");
-      }
-      expect(run).not.toHaveBeenCalled();
-      finish.resolve();
-      harness.emitExit();
-      await vi.advanceTimersByTimeAsync(0);
-    },
-  );
+    } else if (boundary === "runtime-binding") {
+      const runtimeArtifact = await import("./runtime-artifact.js");
+      vi.spyOn(sharedClient, "getLeasedSharedCodexAppServerClient").mockImplementation((options) =>
+        getLeasedSharedCodexAppServerClient({ ...options, runtimeArtifactMode: "capture" }),
+      );
+      vi.spyOn(
+        runtimeArtifact,
+        "captureCodexAppServerRuntimeArtifactBeforeStart",
+      ).mockResolvedValue({
+        kind: "configured-connection",
+        transport: "websocket",
+        selectionFingerprint: "synthetic-selection",
+      });
+      vi.spyOn(runtimeArtifact, "finalizeCodexAppServerRuntimeArtifact").mockImplementationOnce(
+        async () => {
+          await park();
+          return { id: "synthetic-artifact", fingerprint: "synthetic-fingerprint" };
+        },
+      );
+    }
+    const run = vi.fn(async () => undefined);
+    const result = withCodexAppServerJsonClient({ timeoutMs: 50 }, run).catch(
+      (error: unknown) => error,
+    );
+    if (boundary === "initialize") {
+      await harness.waitForWrite(0);
+    } else {
+      await entered.promise;
+    }
+    await vi.advanceTimersByTimeAsync(50);
+    expect(await result).toMatchObject({ message: "codex app-server request timed out" });
+    const warning = vi
+      .mocked(embeddedAgentLog.warn)
+      .mock.calls.find(([message]) => message === "codex app-server scope timed out");
+    expect(warning?.[1]).toMatchObject({
+      phase: "acquire-client",
+      acquireLastObservedBoundary: boundary,
+      scopeAttemptOrdinal: 1,
+      requestStartedCount: 0,
+      currentRequestCount: 0,
+    });
+    expect(warning?.[1]).not.toHaveProperty("clientInstanceId");
+    if (boundary === "initialize") {
+      expect(JSON.parse(String(warning?.[1]?.initializeSnapshot))).toMatchObject({
+        boundary: "request",
+        outcome: "pending",
+        wireOutcome: "retained-pending",
+        writeState: "callback-ok",
+        clientClosed: false,
+      });
+      expect(warning?.[1]).not.toHaveProperty("initializeBeforeCleanup");
+    }
+    if (
+      ["initialize", "catalog-observation", "runtime-binding", "auth-handoff"].includes(boundary)
+    ) {
+      expect(warning?.[1]).toHaveProperty(
+        "lastStartedClientInstanceId",
+        harness.client.getInstanceId(),
+      );
+    } else {
+      expect(warning?.[1]).not.toHaveProperty("lastStartedClientInstanceId");
+    }
+    expect(run).not.toHaveBeenCalled();
+    finish.resolve();
+    harness.emitExit();
+    await vi.advanceTimersByTimeAsync(0);
+  });
 
   it("retains the blocked boundary when an inner deadline joins cleanup before the scope times out", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });

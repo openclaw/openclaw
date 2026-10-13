@@ -546,25 +546,6 @@ describe("loadGatewayPlugins", () => {
     expect(registry.diagnostics).toEqual([diagnostic, distinctDiagnostic]);
   });
 
-  test.each([false, true])(
-    "routes plugin registration logs with info suppression %s",
-    async (suppressPluginInfoLogs) => {
-      loadOpenClawPlugins.mockReturnValue(createRegistry([]));
-      await loadGatewayPluginsForTest({ suppressPluginInfoLogs });
-
-      const logger = getLastPluginLoadLogger();
-      logger.info("plugin ready");
-      logger.warn("plugin warning");
-
-      if (suppressPluginInfoLogs) {
-        expect(pluginRuntimeLoaderLogger.info).not.toHaveBeenCalled();
-      } else {
-        expect(pluginRuntimeLoaderLogger.info).toHaveBeenCalledWith("plugin ready");
-      }
-      expect(pluginRuntimeLoaderLogger.warn).toHaveBeenCalledWith("plugin warning");
-    },
-  );
-
   test("binds channel reply dispatch to the owning Gateway context", async () => {
     const terminalSessions = { listAgent: vi.fn(() => []) };
     const context = {
@@ -772,6 +753,25 @@ describe("loadGatewayPlugins", () => {
     expect(getLastPluginLoadOption("allowProcessHomeSessionCatalogs")).toBe(false);
   });
 
+  test.each([false, true])(
+    "routes plugin registration logs with info suppression %s",
+    async (suppressPluginInfoLogs) => {
+      loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+      await loadGatewayPluginsForTest({ suppressPluginInfoLogs });
+
+      const logger = getLastPluginLoadLogger();
+      logger.info("plugin ready");
+      logger.warn("plugin warning");
+
+      if (suppressPluginInfoLogs) {
+        expect(pluginRuntimeLoaderLogger.info).not.toHaveBeenCalled();
+      } else {
+        expect(pluginRuntimeLoaderLogger.info).toHaveBeenCalledWith("plugin ready");
+      }
+      expect(pluginRuntimeLoaderLogger.warn).toHaveBeenCalledWith("plugin warning");
+    },
+  );
+
   test.each(["startup"] as const)(
     "prepares an empty %s candidate without loading plugins or replacing the active runtime",
     async (loadIntent) => {
@@ -802,6 +802,36 @@ describe("loadGatewayPlugins", () => {
       expect(getGlobalPluginRegistry()).toBe(previous);
     },
   );
+
+  test("provides subagent runtime session messages through sessions.get", async () => {
+    const runtime = await createSubagentRuntime();
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("sessions-get-aliases"));
+    handleGatewayRequest
+      .mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+        expect(opts.req.method).toBe("sessions.get");
+        expect(opts.req.params).toEqual({ key: "s-read" });
+        opts.respond(true, { messages: [{ id: "m-1" }] });
+      })
+      .mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+        expect(opts.req.method).toBe("sessions.get");
+        expect(opts.req.params).toEqual({ key: "s-limited", limit: 1_000 });
+        opts.respond(true, { messages: [{ id: "m-3" }] });
+      });
+
+    await expect(runtime.getSessionMessages({ sessionKey: "s-read" })).resolves.toEqual({
+      messages: [{ id: "m-1" }],
+    });
+    expect(getLastDispatchedClientScopes()).toEqual(["operator.write"]);
+    expect(getLastDispatchedClientScopes()).not.toContain("operator.admin");
+    await expect(
+      runtime.getSessionMessages({
+        sessionKey: "s-limited",
+        limit: 9e15,
+      }),
+    ).resolves.toEqual({
+      messages: [{ id: "m-3" }],
+    });
+  });
 
   test("runs in-process abort cleanup once without replacing the abort error", async () => {
     serverPluginsModule.setFallbackGatewayContext(createTestContext("aborted-request-cleanup"));
@@ -1198,7 +1228,7 @@ describe("loadGatewayPlugins", () => {
     expect(handleGatewayRequest).not.toHaveBeenCalled();
   });
 
-  test.each(["no scopes"])(
+  test.each(["operator.read", "no scopes"])(
     "does not elevate a scoped %s caller when forcing a synthetic duplex client",
     async (scopeLabel) => {
       const scopes = scopeLabel === "no scopes" ? [] : ["operator.read"];
@@ -1237,7 +1267,10 @@ describe("loadGatewayPlugins", () => {
     },
   );
 
-  test.each([{ callerScope: "operator.read", requestedScope: "operator.write" }] as const)(
+  test.each([
+    { callerScope: "operator.read", requestedScope: "operator.write" },
+    { callerScope: "operator.write", requestedScope: "operator.admin" },
+  ] as const)(
     "rejects explicit $requestedScope duplex escalation from an authenticated $callerScope caller",
     async ({ callerScope, requestedScope }) => {
       const scopes = [callerScope];
@@ -1629,6 +1662,36 @@ describe("loadGatewayPlugins", () => {
     expect((generated as string).length).toBeGreaterThan(0);
   });
 
+  test("forwards the plugin-owned subagent request, idempotency key, and bounded context", async () => {
+    const runtime = await createSubagentRuntime();
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("subagent-request"));
+    await gatewayRequestScopeModule.withPluginRuntimePluginScope(
+      { pluginId: "workboard", pluginOrigin: "bundled" },
+      () =>
+        runtime.run({
+          sessionKey: "s-light-context",
+          message: "hello",
+          deliver: false,
+          idempotencyKey: "caller-provided-key",
+          cwd: "/tmp/managed-worktree",
+          lightContext: true,
+          promptMode: "minimal",
+          lane: "dreaming-narrative:s-light-context",
+        }),
+    );
+    expect(getRequiredLastDispatchedParams()).toMatchObject({
+      sessionKey: "s-light-context",
+      message: "hello",
+      deliver: false,
+      idempotencyKey: "caller-provided-key",
+      cwd: "/tmp/managed-worktree",
+      bootstrapContextMode: "lightweight",
+      promptMode: "minimal",
+      lane: "dreaming-narrative:s-light-context",
+    });
+    expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("workboard");
+  });
+
   test.each([
     {
       name: "named factory",
@@ -1880,6 +1943,35 @@ describe("loadGatewayPlugins", () => {
     },
   );
 
+  test("marks plugin SDK subagent runs for Gateway-owned subagent tracking", async () => {
+    const runtime = await createSubagentRuntime();
+    const requesterContext = await import("../plugins/runtime/subagent-requester-context.js");
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("plugin-sdk-subagent"));
+    const requester = requesterContext.createPluginSubagentRequesterContext({
+      sessionKey: "agent:main:telegram:direct:123",
+      origin: { channel: "telegram", to: "telegram:123" },
+    });
+    if (!requester) {
+      throw new Error("expected valid requester context");
+    }
+
+    const result = await requesterContext.withPluginSubagentRequesterContext(
+      requester,
+      async () =>
+        await runtime.run({
+          sessionKey: "agent:main:subagent:plugin-helper",
+          message: "summarize this transcript",
+          deliver: false,
+        }),
+    );
+
+    expect(result.runId).toBe("run-1");
+    const internal = getLastDispatchedClientInternal();
+    expect(internal.agentRunTracking).toBe("plugin_subagent");
+    expect(internal.pluginRuntimeOwnerId).toBeUndefined();
+    expect(internal.pluginSubagentRequester).toBeUndefined();
+  });
+
   test("attaches only host-owned requester lineage for explicit completion delivery", async () => {
     const runtime = await createSubagentRuntime();
     const requesterContext = await import("../plugins/runtime/subagent-requester-context.js");
@@ -1997,6 +2089,14 @@ describe("loadGatewayPlugins", () => {
 
   test.each<{ name: string; result: AgentWaitResult; expected?: AgentWaitResult }>([
     {
+      name: "pending queue observation",
+      result: {
+        status: "pending",
+        timeoutPhase: "queue",
+        providerStarted: false,
+      },
+    },
+    {
       name: "metadata-rich observation timeout",
       result: {
         status: "timeout",
@@ -2011,6 +2111,10 @@ describe("loadGatewayPlugins", () => {
         providerStarted: true,
         terminalReply: { disposition: "empty" },
       },
+    },
+    {
+      name: "successful completion",
+      result: { status: "ok" },
     },
     {
       name: "legacy completed error",

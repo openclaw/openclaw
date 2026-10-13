@@ -107,6 +107,7 @@ import { createChatAbortMarker, type AgentEventHandlerOptions } from "./server-c
 import { broadcastChatFinal } from "./server-methods/chat-broadcast.js";
 import { createGatewayNodeSessionRuntime } from "./server-node-session-runtime.js";
 import * as sessionEventRows from "./session-event-prepared-row.js";
+import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 import { loadSessionEntry } from "./session-utils.js";
 
 function waitForFast<T>(
@@ -117,7 +118,9 @@ function waitForFast<T>(
 }
 
 describe("agent event handler", () => {
+  let lineageProjection: ReturnType<typeof createSessionRowProjectionFixture> | undefined;
   beforeEach(() => {
+    lineageProjection = undefined;
     resetAgentEventsForTest({ preserveListeners: true });
     vi.mocked(getRuntimeConfig).mockReturnValue({});
     vi.mocked(resolveHeartbeatVisibility).mockReturnValue({
@@ -140,15 +143,18 @@ describe("agent event handler", () => {
   });
 
   afterEach(() => {
+    lineageProjection?.dispose();
     vi.useRealTimers();
     resetAgentEventsForTest({ preserveListeners: true });
   });
 
   function createHarness(params?: AgentEventTestHarnessOptions) {
+    const projection = lineageProjection;
     return createAgentEventTestHarness({
       ...params,
       loadGatewaySessionLifecycleSnapshotForEvent: loadGatewaySessionLifecycleSnapshotMock,
       persistGatewaySessionLifecycleEventForEvent: persistGatewaySessionLifecycleEventMock,
+      getSessionRowProjection: () => projection,
     });
   }
 
@@ -234,6 +240,21 @@ describe("agent event handler", () => {
   });
 
   registerBoundedWidgetSnapshotsTest({ createHarness, widgetResult, logWarnMock });
+
+  it.each(["silent", "heartbeat"])("does not revive widgets from a %s turn", async (mode) => {
+    const h = createHarness();
+    h.registerNamed("widgets");
+    if (mode === "heartbeat") {
+      registerAgentRunContext("run-widgets", { sessionKey: "session-widgets", isHeartbeat: true });
+    }
+    await h.emitMany("run-widgets", [
+      ["tool", { phase: "result", name: "show_widget", result: widgetResult("hidden") }],
+      ["assistant", { text: mode === "silent" ? "NO_REPLY" : "" }],
+      ["lifecycle", { phase: "end" }],
+    ]);
+    expect(h.chat().at(-1)?.[1].message).toBeUndefined();
+    await h.handler.dispose();
+  });
 
   it("drops failed-attempt widgets before a runtime retry succeeds", async () => {
     vi.useFakeTimers();
@@ -393,6 +414,55 @@ describe("agent event handler", () => {
       await stop();
       await h.handler.dispose();
     }
+  });
+
+  it("records, replaces, dismisses, and clears normalized plan snapshots", async () => {
+    const h = createHarness();
+    h.register("provider-run", "session-1", "client-run");
+    await h.emit(
+      "provider-run",
+      "plan",
+      {
+        phase: "update",
+        explanation: "  Initial plan  ",
+        steps: ["Legacy step", { step: "Active step", status: "in_progress" }],
+      },
+      { ts: 1_000 },
+    );
+    expect(h.chatRunState.runs.get("client-run")?.planSnapshot).toEqual({
+      explanation: "Initial plan",
+      steps: [
+        { step: "Legacy step", status: "pending" },
+        { step: "Active step", status: "in_progress" },
+      ],
+    });
+
+    await h.emit(
+      "provider-run",
+      "plan",
+      { phase: "update", steps: [{ step: "Replacement", status: "completed" }] },
+      { seq: 2, ts: 1_100 },
+    );
+    expect(h.chatRunState.runs.get("client-run")?.planSnapshot).toEqual({
+      steps: [{ step: "Replacement", status: "completed" }],
+    });
+
+    await h.emit(
+      "provider-run",
+      "plan",
+      { phase: "update", steps: [] },
+      {
+        seq: 3,
+        ts: 1_200,
+      },
+    );
+    expect(h.chatRunState.runs.get("client-run")?.planSnapshot).toEqual({ steps: [] });
+
+    h.chatRunState.getOrCreate("client-run").planSnapshot = {
+      steps: [{ step: "Temporary", status: "pending" }],
+    };
+    h.chatRunState.clearRun("client-run");
+    expect(h.chatRunState.runs.get("client-run")?.planSnapshot).toBeUndefined();
   });
 
   it.each([
@@ -1124,6 +1194,28 @@ describe("agent event handler", () => {
     nowSpy.mockRestore();
   });
 
+  it("keeps item ownership across message-2 correction Hi", async () => {
+    const h = createHarness({ now: 11_800 });
+    h.registerNamed("item-correction");
+    await h.emit("run-item-correction", "assistant", {
+      itemId: "message-1",
+      text: "Hello",
+      delta: "Hello",
+    });
+    await h.emit(
+      "run-item-correction",
+      "assistant",
+      { itemId: "message-2", text: "Hi", replace: true, replaceable: true },
+      { seq: 2 },
+    );
+    await h.end("run-item-correction", 3);
+
+    const final = { state: "final", message: { content: [{ type: "text", text: "Hi" }] } };
+    expect(h.chat().at(-1)?.[1]).toMatchObject(final);
+    expect(h.nodeChat().at(-1)?.[2]).toMatchObject(final);
+    h.nowSpy?.mockRestore();
+  });
+
   it("flushes buffered chat delta before tool start events", async () => {
     let now = 12_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -1236,6 +1328,72 @@ describe("agent event handler", () => {
     } finally {
       h.nowSpy?.mockRestore();
     }
+  });
+
+  it("uses newer session verbose state for in-flight tool events", async () => {
+    lineageProjection = createSessionRowProjectionFixture({
+      cfg: {},
+      agentId: "main",
+      store: { "session-1": { sessionId: "session-1", verboseLevel: "on", updatedAt: 1_500 } },
+    });
+    const h = createHarness({
+      now: 1_000,
+      resolveSessionKeyForRun: () => "session-1",
+    });
+
+    registerAgentRunContext("run-tool-toggle", {
+      sessionKey: "session-1",
+      verboseLevel: "off",
+    });
+
+    await h.emit("run-tool-toggle", "tool", {
+      phase: "start",
+      name: "read",
+      toolCallId: "t-toggle",
+    });
+
+    const nodeToolCalls = h.nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
+    expect(nodeToolCalls).toHaveLength(1);
+    const payload = requireRecord(nodeToolCalls[0]?.[2], "node tool payload");
+    expect(payload.stream).toBe("tool");
+    expectRecordFields(requireRecord(payload.data, "node tool payload data"), {
+      phase: "start",
+      name: "read",
+    });
+  });
+
+  it("does not duplicate tool events to clients subscribed by run and session", async () => {
+    const runId = "provider-tool";
+    const sessionKey = "session-dedupe";
+    const h = createHarness({ resolveSessionKeyForRun: () => sessionKey });
+    h.register(runId, sessionKey, "client-tool", { agentId: "work" });
+    registerAgentRunContext(runId, { sessionKey, verboseLevel: "off" });
+    h.toolEventRecipients.add(runId, "conn-overlap");
+    h.toolEventRecipients.add(runId, "conn-run-only");
+    h.sessionEventSubscribers.subscribe("conn-overlap");
+    h.sessionEventSubscribers.subscribe("conn-session-only");
+    await h.emit(
+      runId,
+      "tool",
+      {
+        phase: "start",
+        name: "exec",
+        toolCallId: "tool-session-dedupe-1",
+        args: { command: "echo hi" },
+      },
+      { ts: 1_234 },
+    );
+    expect(
+      h.broadcastToConnIds.mock.calls.map(([event, payload, recipients]) => [
+        event,
+        payload.runId,
+        payload.agentId,
+        recipients,
+      ]),
+    ).toEqual([
+      ["agent", "client-tool", "work", new Set(["conn-overlap", "conn-run-only"])],
+      ["session.tool", "client-tool", "work", new Set(["conn-session-only"])],
+    ]);
   });
 
   it("suppresses heartbeat tool events for Control UI and verbose node subscribers", async () => {
@@ -2224,6 +2382,54 @@ describe("agent event handler", () => {
     }
   });
 
+  it.each(["recovery provenance", "owner claim"])(
+    "preserves %s in terminal persistence",
+    async (metadata) => {
+      const runId = "run-terminal-metadata";
+      const sessionKey = "session-terminal-metadata";
+      const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      const claimed = metadata === "owner claim";
+      const claimId = claimed
+        ? expectDefined(
+            claimAgentRunContext(runId, { sessionKey }, { exclusive: true, trackOwner: true }),
+            "terminal owner claim",
+          )
+        : undefined;
+      if (!claimed) {
+        registerAgentRunContext(runId, {
+          lifecycleGeneration,
+          mainSessionRestartRecovery: true,
+          sessionKey,
+        });
+      }
+      const h = createHarness({ resolveSessionKeyForRun: () => sessionKey });
+      let event: Parameters<typeof h.handler>[0] | undefined;
+      const stop = onAgentRuntimeEvent((received) => {
+        event = received;
+      });
+      const terminal = { runId, stream: "lifecycle", data: { phase: "end" } };
+      if (claimId) {
+        emitAgentEventForOwner(terminal, claimId);
+      } else {
+        emitRuntimeAgentEvent(terminal);
+      }
+      stop();
+      await h.handler(expectDefined(event, "terminal runtime event"));
+      expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: expect.objectContaining(
+            claimId
+              ? { contextClaimId: claimId }
+              : { lifecycleGeneration, mainSessionRestartRecovery: true, runId },
+          ),
+        }),
+      );
+      if (claimId) {
+        releaseAgentRunContext(runId, claimId);
+      }
+    },
+  );
+
   it.each([
     ["assistant", { text: "owned reply", delta: "owned reply", phase: "commentary" }],
     ["lifecycle", { phase: "end" }],
@@ -2757,6 +2963,86 @@ describe("agent event handler", () => {
     },
   );
 
+  describe("spawnedBy enrichment in chat and agent broadcasts", () => {
+    function mockSessionLineage(key: string, spawnedBy?: string) {
+      lineageProjection = createSessionRowProjectionFixture({
+        cfg: {},
+        store: {
+          [key]: { sessionId: "lineage", updatedAt: 1, ...(spawnedBy ? { spawnedBy } : {}) },
+        },
+      });
+      mockSessionEntry(
+        { sessionId: "lineage", updatedAt: 1, ...(spawnedBy ? { spawnedBy } : {}) },
+        key,
+      );
+      vi.mocked(loadGatewaySessionRow).mockReturnValue({
+        key,
+        kind: "direct",
+        updatedAt: null,
+        ...(spawnedBy ? { spawnedBy } : {}),
+      });
+    }
+
+    it.each([
+      {
+        name: "dashboard delta",
+        key: "agent:main:dashboard:visible-child",
+        parent: "agent:main:discord:direct:alice",
+        state: "delta",
+        events: [["assistant", { text: "visible child" }]],
+      },
+      {
+        name: "subagent terminal error",
+        key: "agent:coder:subagent:err",
+        parent: "agent:conductor:task:parent-err",
+        state: "error",
+        events: [
+          ["assistant", { text: "partial" }],
+          ["lifecycle", { phase: "error", error: "provider failed" }],
+        ],
+      },
+      {
+        name: "subagent sequence gap",
+        key: "agent:coder:subagent:gap",
+        parent: "agent:conductor:task:parent-gap",
+        state: "gap",
+        events: [
+          ["lifecycle", { phase: "start" }],
+          ["assistant", { text: "skipped seq" }, { seq: 5 }],
+        ],
+      },
+    ] as const)(
+      "includes spawnedBy in $name broadcasts",
+      async ({ key, parent, state, events }) => {
+        mockSessionLineage(key, parent);
+        const h = createHarness({
+          resolveSessionKeyForRun: () => key,
+          lifecycleErrorRetryGraceMs: 0,
+        });
+        if (state === "gap") {
+          registerAgentRunContext("run-lineage", { sessionKey: key });
+        } else {
+          h.register("run-lineage", key, "client-lineage");
+        }
+        await h.emitMany("run-lineage", events);
+        const calls = state === "gap" ? h.agent() : h.chat();
+        const call = expectDefined(
+          calls.find(([, payload]) =>
+            state === "gap"
+              ? payload.stream === "error" && payload.data?.reason === "seq gap"
+              : payload.state === state,
+          ),
+          "lineage broadcast",
+        );
+        expectPayloadFields(call[1], { sessionKey: key, spawnedBy: parent });
+        if (state === "gap") {
+          expectPayloadDataFields(call[1], { reason: "seq gap", expected: 2, received: 5 });
+        } else {
+          expectPayloadFields(call[1], { state });
+        }
+      },
+    );
+  });
   describe("agent model roster publications", () => {
     type ModelObservation = { provider: string | null; model: string | null };
     const PRIMARY_MODEL: ModelObservation = { provider: "provider", model: "primary" };
@@ -2819,6 +3105,65 @@ describe("agent event handler", () => {
       logErrorMock.mockReset();
     });
     afterEach(() => resetAgentEventsForTest());
+
+    it("publishes candidate changes and clearing without persisting session selection", () => {
+      const { runId, broadcast, changes, observe, persist, sessionEventSubscribers } =
+        createModelHarness();
+      sessionEventSubscribers.subscribe("conn-model");
+      const candidates: ModelObservation[] = [
+        PRIMARY_MODEL,
+        { provider: "other-provider", model: "primary" },
+        { provider: "other-provider", model: "fallback" },
+        { provider: null, model: null },
+      ];
+      for (const candidate of candidates) {
+        observe(candidate);
+        observe(candidate);
+      }
+      expect(broadcast.mock.calls.filter(([event]) => event === "agent")).toHaveLength(8);
+      expect(changes()).toHaveLength(4);
+      for (const [index, { provider, model }] of candidates.entries()) {
+        expect(changes()[index]).toMatchObject({
+          phase: "model",
+          modelProvider: "selected",
+          model: "configured",
+          activeModelProvider: provider,
+          activeModel: model,
+          hasActiveRun: true,
+          activeRunIds: [runId],
+          session: { activeModelProvider: provider, activeModel: model },
+        });
+        expect(changes()[index]).not.toHaveProperty("catalogChanged");
+      }
+      expect(persist).not.toHaveBeenCalled();
+    });
+
+    it("publishes unchanged candidates after visibility, receiver, or target changes", () => {
+      const sessionKey = "session-2";
+
+      const { runId, changes, observe, sessionEventSubscribers } = createModelHarness();
+      observe();
+      registerAgentRunContext(runId, { isControlUiVisible: false });
+      sessionEventSubscribers.subscribe("conn-model");
+      observe();
+      expect(changes()).toHaveLength(0);
+      registerAgentRunContext(runId, { isControlUiVisible: true });
+      observe();
+      observe();
+      expect(changes()).toHaveLength(1);
+      registerAgentRunContext(runId, { sessionId: "replacement" });
+      observe();
+      observe();
+      expect(changes()).toHaveLength(2);
+      expect(changes()[1]).toMatchObject({ session: { sessionId: "replacement" } });
+      observe(PRIMARY_MODEL, sessionKey);
+      observe(PRIMARY_MODEL, sessionKey);
+      expect(changes()).toHaveLength(3);
+      expect(changes()[2]).toMatchObject({
+        sessionKey,
+        session: { key: sessionKey, activeModel: "primary" },
+      });
+    });
 
     it("remembers the committed model after deferred row preparation", async () => {
       const { changes, observe, sessionEventSubscribers } = createModelHarness();

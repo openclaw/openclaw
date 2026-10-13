@@ -8,6 +8,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptMessage,
@@ -20,6 +21,7 @@ import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-eve
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { resolveAutoLiveToolResultMaxChars } from "../tool-result-limits.js";
 import { prepareEmbeddedAttemptPromptContext } from "./run/attempt-prompt-build.js";
 import { buildRuntimeContextCustomMessage } from "./run/runtime-context-prompt.js";
 import {
@@ -34,6 +36,8 @@ let truncateOversizedToolResultsInMessages: typeof import("./tool-result-truncat
 let truncateOversizedToolResultsInSessionManager: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInSessionManager;
 let sessionLikelyHasOversizedToolResults: typeof import("./tool-result-truncation.js").sessionLikelyHasOversizedToolResults;
 let estimateToolResultReductionPotential: typeof import("./tool-result-truncation.js").estimateToolResultReductionPotential;
+let resolveLiveToolResultMaxChars: typeof import("./tool-result-truncation.js").resolveLiveToolResultMaxChars;
+let resolveLiveToolResultAggregateMaxChars: typeof import("./tool-result-truncation.js").resolveLiveToolResultAggregateMaxChars;
 let toolResultWarningDedupe: typeof import("./tool-result-truncation.js").toolResultWarningDedupe;
 let tmpDir: string | undefined;
 const sessionDirs = useSessionStoreTempDirs(afterAll, "tool-result-truncation-test-");
@@ -47,6 +51,8 @@ async function loadFreshToolResultTruncationModuleForTest() {
     truncateOversizedToolResultsInSessionManager,
     sessionLikelyHasOversizedToolResults,
     estimateToolResultReductionPotential,
+    resolveLiveToolResultMaxChars,
+    resolveLiveToolResultAggregateMaxChars,
     toolResultWarningDedupe,
   } = await import("./tool-result-truncation.js"));
 }
@@ -120,23 +126,23 @@ async function preparePromptProjectionStateForTest(params: {
 describe("tool-result warning dedupe", () => {
   const warningDedupeLimit = 1_024;
 
-  it.each([["prompt pressure", () => toolResultWarningDedupe.promptPressure]])(
-    "bounds and evicts the oldest %s warning keys",
-    (_name, getCache) => {
-      const cache = getCache();
+  it.each([
+    ["prompt pressure", () => toolResultWarningDedupe.promptPressure],
+    ["session recovery", () => toolResultWarningDedupe.sessionRecovery],
+  ])("bounds and evicts the oldest %s warning keys", (_name, getCache) => {
+    const cache = getCache();
 
-      for (let index = 0; index <= warningDedupeLimit; index += 1) {
-        expect(cache.check(`session-${index}`)).toBe(false);
-      }
+    for (let index = 0; index <= warningDedupeLimit; index += 1) {
+      expect(cache.check(`session-${index}`)).toBe(false);
+    }
 
-      expect(cache.size()).toBe(warningDedupeLimit);
-      expect(cache.peek("session-0")).toBe(false);
-      expect(cache.peek("session-1")).toBe(true);
-      expect(cache.peek(`session-${warningDedupeLimit}`)).toBe(true);
-      expect(cache.check("session-0")).toBe(false);
-      expect(cache.check(`session-${warningDedupeLimit}`)).toBe(true);
-    },
-  );
+    expect(cache.size()).toBe(warningDedupeLimit);
+    expect(cache.peek("session-0")).toBe(false);
+    expect(cache.peek("session-1")).toBe(true);
+    expect(cache.peek(`session-${warningDedupeLimit}`)).toBe(true);
+    expect(cache.check("session-0")).toBe(false);
+    expect(cache.check(`session-${warningDedupeLimit}`)).toBe(true);
+  });
 });
 
 function textWithFullOutputFooter(text: string, fullOutputPath: string): string {
@@ -180,6 +186,10 @@ function truncateToolResultText(
   return getFirstToolResultText(truncateToolResultMessage(makeToolResult(text), maxChars, options));
 }
 
+function calculateMaxToolResultChars(contextWindowTokens: number): number {
+  return resolveLiveToolResultMaxChars({ contextWindowTokens });
+}
+
 function getToolResultTextLength(message: AgentMessage): number {
   if (message.role !== "toolResult") {
     return 0;
@@ -203,6 +213,33 @@ async function createShortTmpDir(): Promise<string> {
 }
 
 describe("truncateToolResultText", () => {
+  it("supports custom suffix and min keep chars", () => {
+    const text = "x".repeat(5_000);
+    const result = truncateToolResultText(text, 300, {
+      suffix: () => "\n\n[custom-truncated]",
+      minKeepChars: 250,
+    });
+    expect(result).toContain("[custom-truncated]");
+    expect(result.length).toBeGreaterThan(250);
+  });
+
+  it.each([
+    { text: "aaa😀z", maxChars: 5, suffix: () => "!", minKeepChars: 0, expected: "aaa!" },
+    { text: "abcdef", maxChars: 1, suffix: () => "😀", minKeepChars: 0, expected: "" },
+    {
+      text: "x".repeat(100),
+      maxChars: 4,
+      suffix: (truncatedChars: number) => `[${truncatedChars}]`,
+      minKeepChars: 1,
+      expected: "[100",
+    },
+  ])(
+    "bounds suffix-only and code-point cuts at $maxChars chars",
+    ({ text, maxChars, suffix, minKeepChars, expected }) => {
+      expect(truncateToolResultText(text, maxChars, { suffix, minKeepChars })).toBe(expected);
+    },
+  );
+
   it.each(["m", "你𠀀😀"])(
     "keeps both head and tail cuts on complete code points (%s)",
     (middle) => {
@@ -267,10 +304,83 @@ describe("truncateToolResultMessage", () => {
     expect(estimateStringChars(resultText)).toBeLessThanOrEqual(maxChars);
     expect(resultText).toContain("truncated");
   });
+
+  it.each([
+    {
+      kind: "mixed CJK/ASCII",
+      texts: ["你".repeat(1_000), "a".repeat(4_000)],
+      maxChars: 4_000,
+      options: undefined,
+    },
+    {
+      kind: "small blocks",
+      texts: ["a".repeat(50), "b".repeat(50), "c".repeat(500)],
+      maxChars: 100,
+      options: { suffix: () => "!", minKeepChars: 99 },
+    },
+    {
+      kind: "empty blocks",
+      texts: [...Array<string>(150).fill(""), "x".repeat(500)],
+      maxChars: 100,
+      options: { suffix: () => "!", minKeepChars: 0 },
+    },
+  ])("reserves the weighted notice budget for $kind", ({ kind, texts, maxChars, options }) => {
+    const msg = {
+      ...makeToolResult("unused"),
+      content: texts.map((text) => ({ type: "text" as const, text })),
+    };
+    const result = truncateToolResultMessage(msg, maxChars, options);
+    expect(result.role).toBe("toolResult");
+    if (result.role !== "toolResult") {
+      throw new Error("expected toolResult");
+    }
+    const output = result.content.map((block) => (block.type === "text" ? block.text : ""));
+    expect(output.reduce((sum, text) => sum + estimateStringChars(text), 0)).toBeLessThanOrEqual(
+      maxChars,
+    );
+    if (kind === "mixed CJK/ASCII") {
+      expect(result.content).toHaveLength(2);
+    } else if (kind === "small blocks") {
+      expect(output[2]).toContain("!");
+      expect(output.every((text) => text.length > 0)).toBe(true);
+    } else {
+      expect(
+        result.content.slice(0, -1).every((block) => block.type !== "text" || block.text === ""),
+      ).toBe(true);
+      expect(output.at(-1)).toMatch(/!$/u);
+    }
+  });
+});
+
+describe("calculateMaxToolResultChars", () => {
+  it.each([
+    { contextWindowTokens: 8_000, perResultMaxChars: 9_600, aggregateMaxChars: 38_400 },
+    { contextWindowTokens: 20_000, perResultMaxChars: 16_000, aggregateMaxChars: 64_000 },
+    { contextWindowTokens: 128_000, perResultMaxChars: 32_000, aggregateMaxChars: 256_000 },
+    { contextWindowTokens: 200_000, perResultMaxChars: 64_000, aggregateMaxChars: 400_000 },
+    { contextWindowTokens: 1_000_000, perResultMaxChars: 64_000, aggregateMaxChars: 2_000_000 },
+  ])(
+    "resolves aggregate live cap for $contextWindowTokens token windows",
+    ({ contextWindowTokens, perResultMaxChars, aggregateMaxChars }) => {
+      expect(calculateMaxToolResultChars(contextWindowTokens)).toBe(perResultMaxChars);
+      if (contextWindowTokens === 200_000) {
+        expect(resolveAutoLiveToolResultMaxChars(contextWindowTokens)).toBe(64_000);
+        expect(perResultMaxChars).toBeGreaterThan(calculateMaxToolResultChars(8_000));
+      }
+      expect(
+        resolveLiveToolResultAggregateMaxChars({
+          contextWindowTokens,
+          perResultMaxChars,
+        }),
+      ).toBe(aggregateMaxChars);
+    },
+  );
 });
 
 describe("sessionLikelyHasOversizedToolResults", () => {
   it.each([
+    { kind: "CJK", text: "你".repeat(5_000), count: 1, contextWindowTokens: 50_000 },
+    { kind: "oversized", text: "x".repeat(500_000), count: 1, contextWindowTokens: 128_000 },
     {
       kind: "aggregate",
       text: "alpha beta gamma delta epsilon ".repeat(500),
@@ -288,6 +398,43 @@ describe("sessionLikelyHasOversizedToolResults", () => {
 describe("estimateToolResultReductionPotential", () => {
   type Estimate = ReturnType<typeof estimateToolResultReductionPotential>;
   it.each([
+    {
+      kind: "small",
+      texts: ["small result"],
+      contextWindowTokens: 128_000,
+      check: (estimate: Estimate) => {
+        expect(estimate.toolResultCount).toBe(1);
+        expect(estimate.maxReducibleChars).toBe(0);
+      },
+    },
+    {
+      kind: "aggregate",
+      texts: Array<string>(6).fill("alpha beta gamma delta epsilon ".repeat(400)),
+      contextWindowTokens: 20_000,
+      check: (estimate: Estimate) => {
+        expect(estimate.toolResultCount).toBe(6);
+        expect(estimate.oversizedCount).toBe(0);
+        expect(estimate.aggregateReducibleChars).toBeGreaterThan(0);
+        expect(estimate.maxReducibleChars).toBe(estimate.aggregateReducibleChars);
+      },
+    },
+    {
+      kind: "mixed",
+      texts: [
+        "x".repeat(500_000),
+        ...Array<string>(2).fill("alpha beta gamma delta epsilon ".repeat(800)),
+      ],
+      contextWindowTokens: 128_000,
+      aggregateMaxCharsOverride: 50_000,
+      check: (estimate: Estimate) => {
+        expect(estimate.oversizedCount).toBeGreaterThan(0);
+        expect(estimate.oversizedReducibleChars).toBeGreaterThan(0);
+        expect(estimate.aggregateReducibleChars).toBeGreaterThan(0);
+        expect(estimate.maxReducibleChars).toBe(
+          estimate.oversizedReducibleChars + estimate.aggregateReducibleChars,
+        );
+      },
+    },
     {
       kind: "explicit cap",
       texts: Array<string>(3).fill("alpha beta gamma delta epsilon ".repeat(600)),
@@ -324,6 +471,159 @@ describe("truncateOversizedToolResultsInMessages", () => {
     );
     expect(truncatedCount).toBe(0);
     expect(result).toEqual(messages);
+  });
+
+  it("truncates multiple oversized tool results", () => {
+    const messages: AgentMessage[] = [
+      makeUserMessage("hello"),
+      makeAssistantMessage("reading files"),
+      makeToolResult("x".repeat(500_000), "call_1"),
+      makeToolResult("y".repeat(500_000), "call_2"),
+    ];
+    const { messages: result, truncatedCount } = truncateOversizedToolResultsInMessages(
+      messages,
+      128_000,
+    );
+    expect(truncatedCount).toBe(2);
+    for (const msg of result.slice(2)) {
+      expect(msg.role).toBe("toolResult");
+      const text = getFirstToolResultText(msg);
+      expect(text.length).toBeLessThan(500_000);
+      expect(text).toContain("truncated");
+    }
+  });
+
+  it("applies the aggregate cap to CJK-weighted prompt history", () => {
+    const messages = Array.from({ length: 6 }, (_, index) =>
+      makeToolResult("你".repeat(3_000), `call_${index}`),
+    );
+
+    const result = truncateOversizedToolResultsInMessages(messages, 20_000);
+    const estimated = result.messages.reduce(
+      (sum, message) =>
+        sum +
+        (message.role === "toolResult" ? estimateStringChars(getFirstToolResultText(message)) : 0),
+      0,
+    );
+
+    expect(result.aggregateTruncatedCount).toBeGreaterThan(0);
+    expect(estimated).toBeLessThanOrEqual(result.aggregateBudgetChars);
+  });
+
+  it("bounds aggregate tool-result text in prompt history without rewriting callers", () => {
+    // Live replay truncates cloned tool-result messages; the source array keeps
+    // full content for UI and transcript persistence.
+    const medium = "alpha beta gamma delta epsilon ".repeat(800);
+    const messages: AgentMessage[] = [
+      makeUserMessage("hello"),
+      makeAssistantMessage("calling tools"),
+      makeToolResult(medium, "call_1"),
+      makeToolResult(medium, "call_2"),
+      makeToolResult(medium, "call_3"),
+    ];
+
+    const { messages: result, truncatedCount } = truncateOversizedToolResultsInMessages(
+      messages,
+      128_000,
+      12_000,
+      12_000,
+    );
+
+    const totalChars = result.reduce(
+      (sum, message) =>
+        sum + (message.role === "toolResult" ? getToolResultTextLength(message) : 0),
+      0,
+    );
+    expect(truncatedCount).toBeGreaterThan(0);
+    expect(totalChars).toBeLessThanOrEqual(12_000);
+    expect(result[0]).toBe(messages[0]);
+    expect(result[1]).toBe(messages[1]);
+    expect(messages.reduce((sum, message) => sum + getToolResultTextLength(message), 0)).toBe(
+      medium.length * 3,
+    );
+  });
+
+  it("keeps prompt projections stable while enforcing aggregate recovery as history grows", () => {
+    const prefix = [
+      makeToolResult("p".repeat(15_000), "prefix_1"),
+      makeToolResult("q".repeat(15_000), "prefix_2"),
+    ];
+    const suffix = [
+      makeToolResult("x".repeat(15_000), "current_1"),
+      makeToolResult("y".repeat(15_000), "current_2"),
+    ];
+    const messages = [...prefix, ...suffix];
+    const projectionState = createToolResultPromptProjectionState();
+
+    const first = truncateOversizedToolResultsInMessages(
+      messages,
+      128_000,
+      12_000,
+      12_000,
+      projectionState,
+    );
+    const second = truncateOversizedToolResultsInMessages(
+      [...messages, makeToolResult("z".repeat(15_000), "current_3")],
+      128_000,
+      12_000,
+      12_000,
+      projectionState,
+    );
+
+    expect(first.truncatedCount).toBe(4);
+    expect(second.truncatedCount).toBe(1);
+    expect(second.messages.every((message) => getToolResultTextLength(message) <= 12_000)).toBe(
+      true,
+    );
+    expect(messages).toEqual([...prefix, ...suffix]);
+
+    const stableState = createToolResultPromptProjectionState();
+    const stableHistory = [
+      makeToolResult("a".repeat(4_000), "stable_1"),
+      makeToolResult("b".repeat(4_000), "stable_2"),
+    ];
+    const stableFirst = truncateOversizedToolResultsInMessages(
+      stableHistory,
+      128_000,
+      12_000,
+      12_000,
+      stableState,
+    );
+    const stableSecond = truncateOversizedToolResultsInMessages(
+      [...stableHistory, makeToolResult("c".repeat(3_000), "stable_3")],
+      128_000,
+      12_000,
+      12_000,
+      stableState,
+    );
+    expect(stableFirst.truncatedCount).toBe(0);
+    expect(stableSecond.messages.slice(0, stableHistory.length)).toEqual(stableFirst.messages);
+    const stableThird = truncateOversizedToolResultsInMessages(
+      [
+        ...stableHistory,
+        makeToolResult("c".repeat(3_000), "stable_3"),
+        makeToolResult("d".repeat(15_000), "stable_4"),
+      ],
+      128_000,
+      12_000,
+      12_000,
+      stableState,
+    );
+    expect(stableThird.messages).toHaveLength(4);
+    const stableFourth = truncateOversizedToolResultsInMessages(
+      [
+        ...stableHistory,
+        makeToolResult("c".repeat(3_000), "stable_3"),
+        makeToolResult("d".repeat(15_000), "stable_4"),
+        makeToolResult("e".repeat(15_000), "stable_5"),
+      ],
+      128_000,
+      12_000,
+      12_000,
+      stableState,
+    );
+    const lastText = stableFourth.messages.at(-1);
+    expect(lastText && getToolResultTextLength(lastText)).toBeLessThanOrEqual(12_000);
   });
 
   it("keeps #99495 historical bytes stable across attempts sharing session state", () => {
@@ -379,6 +679,51 @@ describe("truncateOversizedToolResultsInMessages", () => {
     ).toEqual(projected.messages.slice(1));
   });
 
+  it("keeps frozen aggregate projections byte-identical when a later turn exceeds the budget", () => {
+    const projectionState = createToolResultPromptProjectionState();
+    const history = [
+      makeToolResult("a".repeat(4_000), "history_1"),
+      makeToolResult("b".repeat(4_000), "history_2"),
+      makeUserMessage("continue"),
+    ];
+    const first = truncateOversizedToolResultsInMessages(
+      history,
+      128_000,
+      8_000,
+      12_000,
+      projectionState,
+    );
+    const frozenBytes = first.messages.map((message) => JSON.stringify(message));
+    const runtimeContextMessage = buildRuntimeContextCustomMessage("runtime context refresh");
+    if (!runtimeContextMessage) {
+      throw new Error("expected runtime context message");
+    }
+
+    const second = truncateOversizedToolResultsInMessages(
+      [
+        ...history,
+        makeAssistantMessage("running exec"),
+        makeToolResult("c".repeat(6_000), "current"),
+        runtimeContextMessage,
+      ],
+      128_000,
+      8_000,
+      12_000,
+      projectionState,
+    );
+
+    expect(first.aggregateTruncatedCount).toBe(0);
+    expect(second.aggregateTruncatedCount).toBe(0);
+    expect(
+      second.messages.slice(0, history.length).map((message) => JSON.stringify(message)),
+    ).toEqual(frozenBytes);
+    const current = second.messages.find(
+      (message): message is ToolResultMessage =>
+        message.role === "toolResult" && message.toolCallId === "current",
+    );
+    expect(current && getFirstToolResultText(current)).toBe("c".repeat(6_000));
+  });
+
   it("shrinks #99495 frozen bytes monotonically only under a tighter hard cap", () => {
     using promptStateLease = retainEmbeddedSessionPromptState("session-99495-shrink");
     const state = promptStateLease.state.toolResults;
@@ -397,7 +742,23 @@ describe("truncateOversizedToolResultsInMessages", () => {
     expect(relaxed.messages).toEqual(shrunk.messages);
   });
 
-  it.each([{ kind: "oversized", outputs: ["z".repeat(20_000)], totalCap: 40_000 }])(
+  it.each([
+    { kind: "tiny", outputs: ["ABC"], totalCap: 32_100 },
+    {
+      kind: "runtime carrier",
+      outputs: ["OC99756_EXEC_MARKER_".padEnd(4_000, "x")],
+      totalCap: 36_000,
+    },
+    {
+      kind: "queued steering",
+      outputs: [
+        "OC99241_SHORT_SENTINEL_".padEnd(234, "s"),
+        "OC99241_LONG_SENTINEL_".padEnd(4_000, "l"),
+      ],
+      totalCap: 36_234,
+    },
+    { kind: "oversized", outputs: ["z".repeat(20_000)], totalCap: 40_000 },
+  ])(
     "preserves fresh $kind output without rewriting frozen history",
     ({ kind, outputs, totalCap }) => {
       const projectionState = createToolResultPromptProjectionState();
@@ -430,7 +791,10 @@ describe("truncateOversizedToolResultsInMessages", () => {
         ...outputs.map((text, index) => makeToolResult(text, `fresh_${index}`)),
         carrier,
       ];
-      const providerMessages = messages;
+      const providerMessages = kind === "runtime carrier" ? convertToLlm(messages) : messages;
+      if (kind === "runtime carrier") {
+        expect(providerMessages.at(-1)).toMatchObject({ role: "user", runtimeContext: {} });
+      }
       const second = truncateOversizedToolResultsInMessages(
         providerMessages,
         1_000_000,
@@ -472,7 +836,115 @@ describe("truncateOversizedToolResultsInMessages", () => {
     },
   );
 
+  it("allows aggregate overflow rather than rewriting frozen history", () => {
+    const projectionState = createToolResultPromptProjectionState();
+    const history: AgentMessage[] = [
+      makeToolResult("a".repeat(4_000), "history_a"),
+      makeToolResult("b".repeat(4_000), "history_b"),
+      makeUserMessage("establish a frozen projection baseline"),
+    ];
+    const first = truncateOversizedToolResultsInMessages(
+      history,
+      1_000_000,
+      8_000,
+      10_000,
+      projectionState,
+    );
+    expect(first.aggregatePressureEngaged).toBe(false);
+
+    const freshOutput = "OC99241_HARD_CAP_SENTINEL_".padEnd(4_000, "f");
+    const runtimeContextMessage = buildRuntimeContextCustomMessage("hard-cap runtime context");
+    if (!runtimeContextMessage) {
+      throw new Error("expected runtime context message");
+    }
+    const providerMessages = convertToLlm([
+      ...history,
+      makeToolResult(freshOutput, "fresh_hard_cap"),
+      runtimeContextMessage,
+    ] as AgentMessage[]);
+    expect(providerMessages.at(-1)).toMatchObject({ role: "user", runtimeContext: {} });
+    const second = truncateOversizedToolResultsInMessages(
+      providerMessages,
+      1_000_000,
+      8_000,
+      100,
+      projectionState,
+    );
+    const freshResult = second.messages.find(
+      (message): message is ToolResultMessage =>
+        message.role === "toolResult" && message.toolCallId === "fresh_hard_cap",
+    );
+    const freshText = freshResult ? getFirstToolResultText(freshResult) : "";
+    const totalChars = second.messages.reduce(
+      (sum, message) =>
+        sum + (message.role === "toolResult" ? getToolResultTextLength(message) : 0),
+      0,
+    );
+
+    expect(
+      second.messages.filter(
+        (message) => message.role === "toolResult" && message.toolCallId.startsWith("history_"),
+      ),
+    ).toEqual(first.messages.filter((message) => message.role === "toolResult"));
+    expect(freshText).toBe(freshOutput);
+    expect(second.aggregateTruncatedCount).toBe(0);
+    expect(second.aggregatePressureEngaged).toBe(true);
+    expect(totalChars).toBeGreaterThan(100);
+  });
+
+  it("leaves fresh trailing batches intact when only they exceed the aggregate budget", () => {
+    const projectionState = createToolResultPromptProjectionState();
+    const messages: AgentMessage[] = [makeUserMessage("run several tools")];
+    for (let index = 0; index < 5; index++) {
+      messages.push(makeToolResult(String(index).repeat(8_000), `fresh_${index}`));
+    }
+
+    const result = truncateOversizedToolResultsInMessages(
+      messages,
+      1_000_000,
+      8_000,
+      32_000,
+      projectionState,
+    );
+    const toolResults = result.messages.filter((message) => message.role === "toolResult");
+    const totalChars = toolResults.reduce(
+      (sum, message) => sum + getToolResultTextLength(message),
+      0,
+    );
+
+    expect(result.truncatedCount).toBe(0);
+    expect(result.aggregatePressureEngaged).toBe(true);
+    expect(totalChars).toBeGreaterThan(32_000);
+    expect(toolResults.every((message) => getFirstToolResultText(message).length > 0)).toBe(true);
+  });
+
   it.each([
+    { budget: 8, perResult: 100, kind: "tiny" },
+    { budget: 100, perResult: 100, kind: "plain" },
+    { budget: 94, perResult: 1_000, kind: "sliced" },
+  ])("bounds pointerless aggregate elision for $kind budgets", ({ budget, perResult, kind }) => {
+    const messages = ["a", "b", "c"].map((char, index) =>
+      makeToolResult(char.repeat(100), `plain_${index}`),
+    );
+    const result = truncateOversizedToolResultsInMessages(messages, 128_000, perResult, budget);
+    const texts = result.messages.map(getFirstToolResultText);
+    if (kind === "tiny") {
+      expect(result.truncatedCount).toBeGreaterThan(0);
+      expect(
+        result.messages.reduce((sum, message) => sum + getToolResultTextLength(message), 0),
+      ).toBeLessThanOrEqual(8);
+    } else if (kind === "plain") {
+      expect(texts[0]).toContain("[tool result elided");
+      expect(texts[0]).not.toContain("full output preserved at");
+    } else {
+      expect(
+        texts.some((text) => text.startsWith("[tool result elided:") && !text.includes("rerun")),
+      ).toBe(true);
+    }
+  });
+
+  it.each([
+    { kind: "live", name: "o", short: true, chars: 100, perResult: 500, budget: 100, count: 3 },
     { kind: "partial", name: "p", short: true, chars: 100, perResult: 300, budget: 100, count: 3 },
     {
       kind: "escaped",
@@ -500,6 +972,24 @@ describe("truncateOversizedToolResultsInMessages", () => {
       perResult: 100,
       budget: 100,
       count: 3,
+    },
+    {
+      kind: "compact",
+      name: "realistic",
+      short: false,
+      chars: 2_000,
+      perResult: 5_000,
+      budget: 1,
+      count: 3,
+    },
+    {
+      kind: "suffix",
+      name: "suffix",
+      short: false,
+      chars: 5_000,
+      perResult: 8_000,
+      budget: 9_000,
+      count: 2,
     },
   ])(
     "preserves only recoverable, disclosed $kind spill pointers",
@@ -613,6 +1103,28 @@ describe("truncateOversizedToolResultsInMessages", () => {
     expect(replay.details).toBe(current.details);
     expect(replay.content).toEqual((first.messages[0] as ToolResultMessage).content);
     expect(source.content[0]).toEqual({ type: "text", text });
+  });
+
+  it.each([
+    [
+      ["ab", "c"],
+      ["a", "bc"],
+    ],
+    [["\ud800"], ["\ud801"]],
+  ])("invalidates rewritten canonical text with preserved framing: %j", async (before, after) => {
+    const state = createToolResultPromptProjectionState();
+    const source = makeToolResult("", "rewritten-source");
+    const blocks = (parts: string[]) => parts.map((text) => ({ type: "text" as const, text }));
+    source.content = blocks(["x".repeat(15_000), ...before]);
+    truncateOversizedToolResultsInMessages([source], 128_000, 5_000, 20_000, state);
+    const rewritten = { ...source, content: blocks(["x".repeat(15_000), ...after]) };
+    await preparePromptProjectionStateForTest({
+      sessionId: "rewritten-source",
+      messages: [rewritten],
+      state,
+    });
+    expect(state.replacements.size).toBe(0);
+    expect(state.frozen.size).toBe(0);
   });
 
   it("freezes #99495 ambiguous-key projections across filtered history", async () => {
@@ -1074,6 +1586,10 @@ describe("truncateToolResultText head+tail strategy", () => {
         "\nError: something failed\nStack trace: at foo.ts:42\n",
     },
     { kind: "ordinary", text: "normal line\n".repeat(1000) },
+    {
+      kind: "newline",
+      text: Array.from({ length: 100 }, (_, i) => `line ${i}: ${"x".repeat(50)}`).join("\n"),
+    },
   ])("preserves the $kind tail appropriately", ({ kind, text }) => {
     const result = truncateToolResultText(text, kind === "newline" ? 3000 : 5000);
     if (kind === "error") {
