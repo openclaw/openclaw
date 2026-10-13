@@ -56,6 +56,7 @@ vi.mock("../../subagents/registry/subagent-registry-terminal-effects.js", () => 
 registerAgentSessionLoopTestLifecycle();
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot({});
   vi.restoreAllMocks();
   steeringMocks.lease.mockReset().mockResolvedValue(undefined);
 });
