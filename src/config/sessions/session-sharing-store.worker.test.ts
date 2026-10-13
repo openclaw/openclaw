@@ -357,7 +357,12 @@ it("commits aliased worker membership and participant facts before publishing, a
           promptedAt: 4,
         }),
       ).toBe("updated");
-      expect(changes).toHaveLength(publications);
+      expect(changes).toHaveLength(publications + 1);
+      expect(changes.at(-1)).toMatchObject({
+        sessionKey: scope.sessionKey,
+        facts: { kind: "participants" },
+      });
+      expect(changes.at(-1)).not.toHaveProperty("facts.projection");
       expect(participantLifecycle).toHaveBeenCalledTimes(2);
       await expect(
         addSessionMember(scope, {

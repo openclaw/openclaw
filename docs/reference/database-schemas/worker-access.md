@@ -129,9 +129,9 @@ batch carries the rewrite generation and hot/cold state alongside the bounds,
 so the subsequent scan reuses those facts without another watermark read. A
 rewrite during a background scan converges on the next receipt-driven refresh.
 Participant writers likewise reuse their committed projection-change decision:
-counter-only contributions persist without rereading or invalidating unchanged
-display facts. These changes do not alter stored formats, retention, or update
-behavior.
+counter-only contributions skip the display-projection read while still publishing
+an invalidation for exact aggregate records. These changes do not alter stored
+formats, retention, or update behavior.
 
 Memory retrieval workers borrow the existing agent read-only owner across query
 awaits and release each borrow before replying. The owner retains the idle reader

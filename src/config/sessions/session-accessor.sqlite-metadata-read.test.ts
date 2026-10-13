@@ -62,11 +62,12 @@ it("preserves hot, cold, missing and repeated IDs across metadata batch boundari
       expect(
         readTranscriptStatsBatchFromDatabase(database, ids, { includeGeneration: true }),
       ).toEqual(
-        ids.map((id, index) => ({
-          ...expected[index % expected.length],
-          generation: null,
-          cold: id === "cold",
-        })),
+        ids.map((id, index) =>
+          Object.assign({}, expected[index % expected.length], {
+            generation: null,
+            cold: id === "cold",
+          }),
+        ),
       );
     }
     expect(readTranscriptStatsBatchFromDatabase(database, [])).toEqual([]);

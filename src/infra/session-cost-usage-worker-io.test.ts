@@ -221,17 +221,23 @@ describe("session cost usage worker I/O", () => {
           },
         });
         const first = message("first", null, 1);
-        runOpenClawAgentWriteTransaction((owner) => {
-          writeSessionEntry(owner, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
-          appendTranscriptEventsInTransaction(
-            owner,
-            scope,
-            [first, message("second", "first", 2)],
-            {
-              scheduleProjectionReconcile: false,
-            },
-          );
-        });
+        runOpenClawAgentWriteTransaction(
+          (owner) => {
+            writeSessionEntry(owner, scope.sessionKey, {
+              sessionId: scope.sessionId,
+              updatedAt: 1,
+            });
+            appendTranscriptEventsInTransaction(
+              owner,
+              scope,
+              [first, message("second", "first", 2)],
+              {
+                scheduleProjectionReconcile: false,
+              },
+            );
+          },
+          { agentId: scope.agentId, path: database.path },
+        );
         const sessionFile = formatSqliteSessionFileMarker({
           agentId: scope.agentId,
           sessionId: scope.sessionId,
@@ -247,15 +253,22 @@ describe("session cost usage worker I/O", () => {
           });
         await refresh();
         expect(await cached()).toMatchObject({ summaries: [{ totalTokens: 3 }] });
-        const generation = runOpenClawAgentWriteTransaction((owner) => {
-          const rewritten = rewriteSqliteTranscriptEventRowsInTransaction(owner, scope, [
-            { seq: 1, expectedEventJson: JSON.stringify(first), event: message("first", null, 8) },
-          ]);
-          appendTranscriptEventsInTransaction(owner, scope, [message("third", "second", 4)], {
-            scheduleProjectionReconcile: false,
-          });
-          return rewritten;
-        });
+        const generation = runOpenClawAgentWriteTransaction(
+          (owner) => {
+            const rewritten = rewriteSqliteTranscriptEventRowsInTransaction(owner, scope, [
+              {
+                seq: 1,
+                expectedEventJson: JSON.stringify(first),
+                event: message("first", null, 8),
+              },
+            ]);
+            appendTranscriptEventsInTransaction(owner, scope, [message("third", "second", 4)], {
+              scheduleProjectionReconcile: false,
+            });
+            return rewritten;
+          },
+          { agentId: scope.agentId, path: database.path },
+        );
         expect(generation).toEqual(expect.any(String));
         await probe.clear();
         await refresh();
