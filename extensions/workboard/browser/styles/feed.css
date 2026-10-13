@@ -5,7 +5,6 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  overscroll-behavior: contain;
   font-family: var(--font-body);
   color: var(--text);
   -webkit-text-size-adjust: 100%;
