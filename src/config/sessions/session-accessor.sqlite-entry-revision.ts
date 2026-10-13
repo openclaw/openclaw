@@ -17,8 +17,8 @@ export function readSessionNodesGeneration(database: DatabaseSync): number {
   if (revision === undefined) {
     throw new Error("SQLite session entry caching requires a tracked writer");
   }
-  // The writer already records local mutations and rollback. Unrelated local writes
-  // conservatively expire metadata instead of installing another table-specific tracker.
+  // The writer records mutations and rollback; known writes publish their cache receipts.
+  // Uncovered writes expire metadata without another table-specific tracker.
   return revision;
 }
 

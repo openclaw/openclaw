@@ -4795,7 +4795,9 @@ Entry-cache revisions reuse the existing local mutation and sibling write receip
 plus admitted schema facts. They install no TEMP triggers or JavaScript SQL functions.
 Local rollback invalidates abandoned snapshots; unrelated local writes conservatively
 expire cached metadata. Entry writers record conversation, node, snapshot, and window
-writes together before publishing the resulting cache revision.
+writes together before publishing the resulting cache revision. Transcript appends
+publish unchanged metadata across their known transcript-only writes; metadata
+mutations and extension callbacks remain outside that receipt.
 
 Writer-held target discovery uses a separate, single-worker read lane under the
 existing session database lifecycle owner. Target reads and their awaited native
