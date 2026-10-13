@@ -1,6 +1,8 @@
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { assertExistingOpenClawStateRuntimeSchema } from "./openclaw-state-db-existing-schema.js";
+import { ensureSecretStoreSchema } from "./openclaw-state-db-schema-additive.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
@@ -38,6 +40,27 @@ async function fixture() {
   const settled = authority.transferSettled(profile.id);
   return { options, profile, context, authority, bound, unrelated, settled };
 }
+
+it("preserves profile authority through unrelated feature schema admission", async () => {
+  const { options, profile, context } = await fixture();
+  const { db } = openOpenClawStateDatabase(options);
+  assertExistingOpenClawStateRuntimeSchema(db, options.path, context.stateIntegrity);
+  const authority = await captureUserProfileAuthorityRead(context.admission);
+  const bound = authority.bind(profile.id)!;
+  const settled = authority.transferSettled(profile.id);
+  expect(bound()).toBe(true);
+
+  runOpenClawStateWriteTransaction(() => ensureSecretStoreSchema(db), options);
+  expect(bound()).toBe(true);
+  expect(readProfileAuthority(bound.transferable)).toBe("current");
+  expect(readProfileAuthority(settled)).toBe("current");
+  expect(() => authority.assertSettled(profile.id)).not.toThrow();
+
+  setUserProfileRole(profile.id, "member", options);
+  expect(bound()).toBe(false);
+  expect(readProfileAuthority(bound.transferable)).toBe("revoked");
+  expect(readProfileAuthority(settled)).toBe("current");
+});
 
 it.each([false, true])(
   "fences transferred readers before native COMMIT (rollback=%s)",

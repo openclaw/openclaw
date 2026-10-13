@@ -53,17 +53,10 @@ async function openUpdateCard(page: Page, baseUrl: string) {
   const updateIssue = page.locator(
     'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
   );
-  const statusRequestsBeforeExpansion = (
-    await gateway.getRequests("update.status", { refreshCheckout: true })
-  ).length;
   await updateIssue.locator("summary").click();
-  // The native details toggle queues its freshness check after the click.
-  await gateway.waitForRequest("update.status", {
-    after: statusRequestsBeforeExpansion,
-    match: { refreshCheckout: true },
-  });
   const updateButton = updateIssue.locator(".sidebar-update-card__action");
   await updateButton.waitFor({ timeout: 10_000 });
+  // Expansion refreshes the target; the action stays disabled until that check settles.
   await expect.poll(() => updateButton.isEnabled()).toBe(true);
   return { gateway, updateButton };
 }

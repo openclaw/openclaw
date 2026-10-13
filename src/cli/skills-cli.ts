@@ -12,6 +12,7 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
+  listAgentIds,
   resolveConfiguredAgentId,
   resolveAgentIdByWorkspacePath,
   resolveAgentWorkspaceDir,
@@ -92,6 +93,7 @@ type ResolveSkillsWorkspaceOptions = {
 type ResolvedSkillsWorkspace = Awaited<ReturnType<typeof resolveSkillsWorkspace>>;
 
 const GATEWAY_SKILLS_STATUS_TIMEOUT_MS = 1_500;
+const GATEWAY_SKILLS_REFRESH_TIMEOUT_MS = 120_000;
 const GATEWAY_SKILLS_OFFLINE_LOCK_TIMEOUT_MS = 250;
 const GATEWAY_SKILLS_WORKSHOP_MUTATION_TIMEOUT_MS = 30_000;
 
@@ -108,6 +110,31 @@ async function callSkillsGateway<T>(params: {
     mode: GATEWAY_CLIENT_MODES.CLI,
     ...params,
   });
+}
+
+async function refreshLocalGatewaySkills(
+  target: Pick<ResolvedSkillsWorkspace, "config"> & { agentId?: string },
+): Promise<void> {
+  try {
+    const { isImplicitLocalGatewayTarget } = await import("../gateway/call.js");
+    if (!(await isImplicitLocalGatewayTarget({ config: target.config }))) {
+      return;
+    }
+    const agentId = target.agentId ?? listAgentIds(target.config)[0];
+    if (!agentId) {
+      return;
+    }
+    await callSkillsGateway({
+      config: target.config,
+      method: "skills.status",
+      params: { agentId, refresh: true },
+      timeoutMs: GATEWAY_SKILLS_REFRESH_TIMEOUT_MS,
+    });
+  } catch (error) {
+    skillInstallLogger.warn(
+      `Skill files changed, but local Gateway refresh failed: ${formatErrorMessage(error)}. Restart the Gateway to refresh skills.`,
+    );
+  }
 }
 
 function normalizeExplicitAgentId(agentId?: string): string | undefined {
@@ -179,7 +206,9 @@ async function resolveClawHubTargetWorkspace(
   command: Command,
   opts: { global?: boolean },
   reportError: (message: string) => void = defaultRuntime.error,
-): Promise<Pick<ResolvedSkillsWorkspace, "config" | "workspaceDir"> | undefined> {
+): Promise<
+  (Pick<ResolvedSkillsWorkspace, "config" | "workspaceDir"> & { agentId?: string }) | undefined
+> {
   const agentId = normalizeExplicitAgentId(resolveOptionFromCommand<string>(command, "agent"));
   if (opts.global && agentId) {
     reportError("Use either --global or --agent, not both.");
@@ -361,6 +390,7 @@ export function registerSkillsCli(program: Command) {
               defaultRuntime.exit(1);
               return;
             }
+            await refreshLocalGatewaySkills(target);
             defaultRuntime.log(
               `Installed ${result.slug} from ${result.source} -> ${result.targetDir}`,
             );
@@ -398,6 +428,7 @@ export function registerSkillsCli(program: Command) {
             defaultRuntime.exit(1);
             return;
           }
+          await refreshLocalGatewaySkills(target);
           defaultRuntime.log(`Installed ${result.slug}@${result.version} -> ${result.targetDir}`);
         } catch (err) {
           if (err instanceof ExitError) {
@@ -471,6 +502,9 @@ export function registerSkillsCli(program: Command) {
             logger: skillInstallLogger,
             config: target.config,
           });
+          if (results.some((result) => result.ok && result.changed)) {
+            await refreshLocalGatewaySkills(target);
+          }
           let failed = false;
           for (const result of results) {
             if (!result.ok) {

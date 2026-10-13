@@ -43,7 +43,10 @@ import {
   partitionUsageCostRollup,
   type UsageCostPartition,
 } from "./session-cost-usage-partitions.js";
-import { readSessionCostUsagePartitionsInDatabase } from "./session-cost-usage-partitions.worker.js";
+import {
+  readSessionCostUsagePartitionsInDatabase,
+  readSessionCostUsageRollupWithPartitionsInDatabase,
+} from "./session-cost-usage-partitions.worker.js";
 import {
   projectCostUsageSummary,
   projectSessionCostSummaries,
@@ -292,6 +295,12 @@ export async function executeUsageCostWorker(
           (db) => readSessionCostUsagePartitionsInDatabase(db, filePath, startMs, endMs),
           [],
         ),
+      ),
+    );
+  const readPartitionedBody = (row: SessionCostUsageRollupRow) =>
+    control.runNativeSection(() =>
+      readDatabase(cacheDatabase, () =>
+        readCache((db) => readSessionCostUsageRollupWithPartitionsInDatabase(db, row), undefined),
       ),
     );
   const resolveCosts = createUsageCostWorkerPriceResolver((pairs) => host("pricing", pairs));
@@ -614,19 +623,25 @@ export async function executeUsageCostWorker(
     control.throwIfCancelled();
     await host("refresh-session", { sessionFile: file.filePath });
     let previous: UsageCostRollupEntry | undefined;
+    let priorPartitions: UsageCostPartition[] = [];
     if (
       !rebuild &&
       row &&
       envelope &&
       canUseUsageCostRollupForPartial({ checkpoint: envelope.checkpoint, file })
     ) {
-      const body = await readBody(row);
+      let body: { blob: Uint8Array | null } | undefined;
+      if (!memoryCache && envelope.projection) {
+        const snapshot = await readPartitionedBody(row);
+        body = snapshot;
+        priorPartitions = snapshot?.partitions ?? [];
+      } else {
+        body = await readBody(row);
+      }
       previous = body
         ? decodeUsageCostRollup(row.valueJson, operation.pricingFingerprint, body.blob)
         : undefined;
     }
-    const priorPartitions =
-      previous && envelope?.projection && !memoryCache ? await readPartitions(file.filePath) : [];
     if (previous && envelope?.projection) {
       if (memoryCache || priorPartitions.length !== envelope.projection.dates.length) {
         previous = undefined;

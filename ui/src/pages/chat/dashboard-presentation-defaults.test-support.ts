@@ -1,4 +1,5 @@
 import { render } from "lit";
+import { flush } from "solid-js";
 import { expect, vi } from "vitest";
 import type { GatewaySessionRow, SessionsPatchResult } from "../../api/types.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
@@ -156,6 +157,8 @@ export function createDashboardHarness(
     );
     const menu = mount.querySelector<HeaderMenu>(".chat-pane__layout-menu");
     expect(menu).not.toBeNull();
+    menu!.dispatchEvent(new Event("wa-show"));
+    flush();
     await menu!.updateComplete;
     return menu!;
   };

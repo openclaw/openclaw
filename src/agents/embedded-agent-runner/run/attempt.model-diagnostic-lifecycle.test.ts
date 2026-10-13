@@ -217,51 +217,85 @@ describe("model diagnostic lifecycle", () => {
     },
   );
 
-  it("separates provider activity from delayed terminal settlement without content", async () => {
-    let now = Date.parse("2026-07-09T18:30:00.000Z");
-    const startedAt = now;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    const assistant = { role: "assistant", stopReason: "stop", content: "private-answer" };
-    async function* stream() {
-      now += 10;
-      yield { type: "start", partial: { private: "private-payload" } };
-      now += 20;
-      yield { type: "done", message: assistant };
-    }
-    const source = Object.assign(stream(), {
-      result: async () => {
-        now += 100;
-        return assistant;
-      },
-    });
-    const wrapped = wrap((() => source) as unknown as StreamFn, {
-      config: { diagnostics: { flags: ["timeline"] } },
-    });
-    const events = await timeline(async () => {
-      const response = await wrapped(
-        {} as never,
-        { messages: [{ role: "user", content: "private-prompt" }] } as never,
-      );
-      await drain(response);
-      await response.result();
-      await response.result();
-    }, null);
-    expect(events).toMatchObject([
-      { name: "provider.request.started", timestamp: new Date(startedAt).toISOString() },
-      { name: "provider.request.activity", timestamp: new Date(startedAt + 10).toISOString() },
-      {
-        type: "provider.request",
-        durationMs: 130,
-        ok: true,
-        attributes: {
-          terminalAtMs: startedAt + 130,
-          lastProviderActivityAtMs: startedAt + 30,
-          terminalReason: "stop",
+  it.each([
+    [20, 20, 110],
+    [0, 0, 130],
+    [200, 200, 0],
+    [-1, undefined, undefined],
+    ["20", undefined, undefined],
+    [Number.NaN, undefined, undefined],
+    [undefined, undefined, undefined],
+  ] as const)(
+    "separates reported processing %s from delayed terminal settlement",
+    async (processingMs, expectedProcessingMs, expectedWaitMs) => {
+      let now = Date.parse("2026-07-09T18:30:00.000Z");
+      const startedAt = now;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      const assistant = {
+        role: "assistant",
+        stopReason: "stop",
+        content: "private-answer",
+        diagnostics: [{ type: "provider_timing", timestamp: now, details: { processingMs } }],
+      };
+      async function* stream() {
+        now += 10;
+        yield { type: "start", partial: { private: "private-payload" } };
+        now += 20;
+        yield { type: "done", message: assistant };
+      }
+      const source = Object.assign(stream(), {
+        result: async () => {
+          now += 100;
+          return assistant;
         },
-      },
-    ]);
-    expect(JSON.stringify(events)).not.toMatch(/private-(?:answer|payload|prompt)/);
-  });
+      });
+      const wrapped = wrap((() => source) as unknown as StreamFn, {
+        config: { diagnostics: { flags: ["timeline"] } },
+      });
+      const { ended } = hooks();
+      let events: Record<string, unknown>[] = [];
+      const diagnostics = await collect(async () => {
+        events = await timeline(async () => {
+          const response = await wrapped(
+            {} as never,
+            { messages: [{ role: "user", content: "private-prompt" }] } as never,
+          );
+          await drain(response);
+          await response.result();
+          await response.result();
+        }, null);
+      });
+      expect(events).toMatchObject([
+        { name: "provider.request.started", timestamp: new Date(startedAt).toISOString() },
+        { name: "provider.request.activity", timestamp: new Date(startedAt + 10).toISOString() },
+        {
+          type: "provider.request",
+          durationMs: 130,
+          ok: true,
+          attributes: {
+            terminalAtMs: startedAt + 130,
+            lastProviderActivityAtMs: startedAt + 30,
+            terminalReason: "stop",
+          },
+        },
+      ]);
+      for (const record of [diagnostics.at(-1), events.at(-1)?.attributes]) {
+        if (expectedProcessingMs === undefined) {
+          expect(record).not.toHaveProperty("providerProcessingMs");
+          expect(record).not.toHaveProperty("providerWaitEstimateMs");
+        } else {
+          expect(record).toMatchObject({
+            providerProcessingMs: expectedProcessingMs,
+            providerWaitEstimateMs: expectedWaitMs,
+          });
+        }
+      }
+      expect(ended).toHaveBeenCalledTimes(1);
+      expect(ended.mock.calls[0]?.[0]).not.toHaveProperty("providerProcessingMs");
+      expect(ended.mock.calls[0]?.[0]).not.toHaveProperty("providerWaitEstimateMs");
+      expect(JSON.stringify(events)).not.toMatch(/private-(?:answer|payload|prompt)/);
+    },
+  );
 
   it("bounds activity marks and flag lookups independently of chunk volume", async () => {
     let now = 0;
