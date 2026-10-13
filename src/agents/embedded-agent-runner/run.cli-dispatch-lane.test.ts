@@ -157,6 +157,8 @@ describe("runEmbeddedAgent CLI dispatch per-turn send ledger ownership", () => {
   }
 
   async function seedSession(params: ReturnType<typeof laneRunParams>) {
+    setRuntimeConfigSnapshot(params.config);
+    onTestFinished(clearRuntimeConfigSnapshot);
     await upsertSessionEntryCore(params.sessionTarget, {
       sessionId: params.sessionId,
       updatedAt: 1,
