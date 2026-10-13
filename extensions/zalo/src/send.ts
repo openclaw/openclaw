@@ -20,6 +20,11 @@ type ZaloSendOptions = {
   caption?: string;
   proxy?: string;
   assertDirectAdapterHandoff?: () => void;
+  /** Reports each accepted part of a multi-message send before the next part can fail. */
+  onDeliveryResult?: (result: {
+    messageId: string;
+    receipt: MessageReceipt;
+  }) => Promise<void> | void;
 };
 
 // Zalo Bot API limit for message text and photo captions.
@@ -145,9 +150,13 @@ export async function sendMessageZalo(
         (assertCurrent) =>
           sendPhoto(token, { chat_id: normalizedChatId, photo: photoUrl }, fetcher, assertCurrent),
       );
-      return photo.ok
-        ? await sendZaloTextChunks(normalizedChatId, caption, { token, fetcher, options }, [photo])
-        : photo;
+      if (!photo.ok) {
+        return photo;
+      }
+      await reportZaloSendPart(options, photo);
+      return await sendZaloTextChunks(normalizedChatId, caption, { token, fetcher, options }, [
+        photo,
+      ]);
     }
     return await runZaloSend(
       "Failed to send photo",
@@ -200,6 +209,9 @@ async function sendZaloTextChunks(
       return sent.length > 0 ? { ...result, receipt: combineZaloReceipts(chatId, sent) } : result;
     }
     sent.push(result);
+    if (chunks.length > 1 || sent.length > 1) {
+      await reportZaloSendPart(context.options, result);
+    }
   }
   if (sent.length === 1) {
     return sent[0]!;
@@ -209,6 +221,11 @@ async function sendZaloTextChunks(
     messageId: sent.at(-1)?.messageId,
     receipt: combineZaloReceipts(chatId, sent),
   };
+}
+
+// Core records a reported part as delivered, so a later failed part cannot get it resent.
+async function reportZaloSendPart(options: ZaloSendOptions, result: ZaloSendResult) {
+  await options.onDeliveryResult?.({ messageId: result.messageId ?? "", receipt: result.receipt });
 }
 
 function combineZaloReceipts(chatId: string, sent: ZaloSendResult[]): MessageReceipt {

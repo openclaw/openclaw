@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type zaloEntry from "../../extensions/zalo/index.js";
 import * as bootstrapRegistry from "../../src/channels/plugins/bootstrap-registry.js";
 import { importBundledChannelContractSourceArtifact } from "../../src/channels/plugins/contracts/test-helpers/runtime-artifacts.js";
+import { isChannelPartialDeliveryError } from "../../src/channels/turn/partial-delivery-error.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { runMessageAction } from "../../src/infra/outbound/message-action-runner.js";
 
@@ -30,13 +31,20 @@ async function readJson(request: IncomingMessage): Promise<Record<string, unknow
   return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
 }
 
-function zaloBotApi(calls: ZaloCall[]): RequestListener {
+/** Fake Zalo Bot API; `failCall` (1-based) makes that request a Zalo-side rejection. */
+function zaloBotApi(calls: ZaloCall[], failCall?: number): RequestListener {
   return (request, response) => {
     void readJson(request).then((body) => {
       const method = (request.url ?? "").split("/").pop() ?? "";
       calls.push({ method, body });
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ ok: true, result: { message_id: `z-${calls.length}` } }));
+      response.end(
+        JSON.stringify(
+          calls.length === failCall
+            ? { ok: false, error_code: 500, description: "synthetic Zalo failure" }
+            : { ok: true, result: { message_id: `z-${calls.length}` } },
+        ),
+      );
     });
   };
 }
@@ -52,9 +60,13 @@ function registerZalo() {
 
 const cfg: OpenClawConfig = { channels: { zalo: { enabled: true, botToken: TOKEN } } };
 
-async function sendWithMessageTool(params: Record<string, unknown>, calls: ZaloCall[]) {
+async function sendWithMessageTool(
+  params: Record<string, unknown>,
+  calls: ZaloCall[],
+  failCall?: number,
+) {
   let result: Awaited<ReturnType<typeof runMessageAction>> | undefined;
-  await withServer(zaloBotApi(calls), async (baseUrl) => {
+  await withServer(zaloBotApi(calls, failCall), async (baseUrl) => {
     vi.stubEnv("ZALO_API_URL", baseUrl);
     registerZalo();
     result = await runMessageAction({
@@ -133,5 +145,27 @@ describe("Zalo message-tool send", () => {
     const texts = rest.map((call) => String(call.body.text));
     expect(texts.every((text) => text.length <= 2000)).toBe(true);
     expect(texts.join(" ")).toBe(message);
+  });
+
+  it("keeps the accepted photo on the failure when the caption text after it fails", async () => {
+    const calls: ZaloCall[] = [];
+    const message = Array.from({ length: 500 }, (_, i) => `cap${i}`).join(" ");
+
+    const error = await sendWithMessageTool(
+      { message, media: "https://example.com/photo.jpg" },
+      calls,
+      2,
+    ).then(
+      () => undefined,
+      (caught: unknown) => caught,
+    );
+
+    expect(calls.map((call) => call.method)).toEqual(["sendPhoto", "sendMessage"]);
+    // Core learned the photo was delivered, so the failure is partial and names it.
+    expect(isChannelPartialDeliveryError(error)).toBe(true);
+    if (!isChannelPartialDeliveryError(error)) {
+      throw error;
+    }
+    expect(error.deliveryResult.messageIds).toEqual(["z-1"]);
   });
 });

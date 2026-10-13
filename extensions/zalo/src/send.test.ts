@@ -207,15 +207,44 @@ describe("zalo send", () => {
   it("reports a failed follow-up text with the photo still on the receipt", async () => {
     sendPhotoMock.mockResolvedValueOnce({ ok: true, result: { message_id: "z-photo" } });
     sendMessageMock.mockResolvedValueOnce({ ok: false });
+    const onDeliveryResult = vi.fn();
 
     const result = await sendMessageZalo("dm-chat", "word ".repeat(500), {
       token: "zalo-token",
       mediaUrl: "https://example.com/photo.jpg",
+      onDeliveryResult,
     });
 
     expect(result.ok).toBe(false);
     expect(result.error).toBe("Failed to send message");
     expect(result.receipt.platformMessageIds).toEqual(["z-photo"]);
+    // The accepted photo was reported before the text request that failed.
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+    expect(onDeliveryResult.mock.calls[0]?.[0]).toMatchObject({ messageId: "z-photo" });
+    expect(onDeliveryResult.mock.invocationCallOrder[0]).toBeLessThan(
+      sendMessageMock.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("reports each accepted part of a split text, and nothing for a single message", async () => {
+    let textMessageId = 0;
+    sendMessageMock.mockImplementation(async () => ({
+      ok: true,
+      result: { message_id: `z-part-${++textMessageId}` },
+    }));
+    const onDeliveryResult = vi.fn();
+
+    await sendMessageZalo("dm-chat", "short", { token: "zalo-token", onDeliveryResult });
+    expect(onDeliveryResult).not.toHaveBeenCalled();
+
+    await sendMessageZalo("dm-chat", "word ".repeat(500), {
+      token: "zalo-token",
+      onDeliveryResult,
+    });
+    expect(onDeliveryResult.mock.calls.map((call) => call[0].messageId)).toEqual([
+      "z-part-2",
+      "z-part-3",
+    ]);
   });
 
   it("sends cfg-backed media directly without hosted-media rewrites", async () => {
