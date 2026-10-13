@@ -7,6 +7,7 @@ import type {
   captureSessionActorStorageOwner,
   SessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { buildUsageOverview } from "../shared/usage-overview.js";
 import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
@@ -285,10 +286,8 @@ async function runCapturedSessionActorUsage(
         },
         binding.authority,
       );
-      if (outcome.kind === "rolled-back") {
-        throw new Error(outcome.error.message);
-      }
-      changed ||= outcome.value;
+      const saved = readSessionActorStorageResult(outcome);
+      changed ||= saved;
     }
     if (!limit || stale.length <= limit) {
       return { kind: "refresh", changed };

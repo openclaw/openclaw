@@ -3,7 +3,7 @@ import { loadSessionEntryReadOnly } from "../../../config/sessions/session-acces
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { warnPluginSdkDeprecation } from "../../../plugins/sdk-deprecation.js";
 
-/** @deprecated Use resolveNativeSessionBindingWithAuthorityV2; removed in the next Plugin SDK major. */
+/** @deprecated Use resolvePreparedNativeSessionBinding. */
 export async function resolveNativeSessionBinding<TBinding>(
   params: Omit<NativeSessionGenerationParams, "target"> & {
     target?: NativeSessionGenerationTarget;
@@ -17,7 +17,7 @@ export async function resolveNativeSessionBinding<TBinding>(
   warnPluginSdkDeprecation({
     family: "native-session-binding",
     method: "resolveNativeSessionBinding",
-    replacement: "resolveNativeSessionBindingWithAuthorityV2",
+    replacement: "resolvePreparedNativeSessionBinding",
   });
   let assertCurrent = params.assertCurrent ?? (() => {});
   const assertAdmissionCurrent = () => {
@@ -52,7 +52,7 @@ export async function resolveNativeSessionBinding<TBinding>(
   return { binding, assertCurrent };
 }
 
-/** @deprecated Use reclaimNativeSessionGenerationWithAuthority; removed in the next Plugin SDK major. */
+/** @deprecated Use reclaimNativeSessionGenerationWithAuthority. */
 export async function reclaimNativeSessionGeneration(
   params: NativeSessionGenerationParams & {
     generation: NativeSessionGenerationOperations;
@@ -76,12 +76,12 @@ export async function reclaimNativeSessionGeneration(
   return reclaimPreparedGeneration(params, authority);
 }
 
-/** @deprecated Await prepareNativeSessionGenerationAuthority; removed in the next Plugin SDK major. */
+/** @deprecated Await retainNativeSessionGenerationAuthority. */
 export function captureNativeSessionGenerationAuthority(params: NativeSessionGenerationParams) {
   warnPluginSdkDeprecation({
     family: "native-session-binding",
     method: "captureNativeSessionGenerationAuthority",
-    replacement: "await prepareNativeSessionGenerationAuthority()",
+    replacement: "await retainNativeSessionGenerationAuthority()",
   });
   const readEntry = () => {
     try {
@@ -143,7 +143,7 @@ export type NativeSessionGenerationReclaimPlan =
 
 export type NativeSessionGenerationAdoptionResult = "absent" | "current" | "adopted" | "conflict";
 
-/** @deprecated Use NativeSessionGenerationOperationsV2; removed in the next Plugin SDK major. */
+/** @deprecated Use NativeSessionGenerationOperationsV2. */
 export type NativeSessionGenerationOperations = {
   prepareReclaim: () => Promise<NativeSessionGenerationReclaimPlan>;
   adopt: (

@@ -2,6 +2,7 @@ import {
   getSessionActorStorageBinding,
   type captureSessionActorStorageOwner,
 } from "../config/sessions/session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
 import { IncognitoSessionMissingError } from "../state/incognito-session-error.js";
 import type {
   SerializedTrajectoryEvent,
@@ -88,6 +89,7 @@ export function createMemoryTrajectoryRuntimeSink(
     pending = new Map();
     queuedBytes = 0;
     discardPrevious = false;
+    let committed = false;
     flushing = append({
       sessionId: params.sessionId,
       events: [...batch.keys()],
@@ -95,12 +97,11 @@ export function createMemoryTrajectoryRuntimeSink(
       maxRuntimeBytes: params.maxRuntimeFileBytes,
     })
       .then((result) => {
-        if (result.kind === "rolled-back") {
-          throw new Error(result.error.message);
-        }
+        committed = result.kind === "committed";
+        readSessionActorStorageResult(result);
       })
       .catch((error: unknown) => {
-        if (!discardPrevious) {
+        if (!committed && !discardPrevious) {
           pending = new Map([...batch, ...pending]);
           queuedBytes += batchBytes;
           discardPrevious = batchDiscard;

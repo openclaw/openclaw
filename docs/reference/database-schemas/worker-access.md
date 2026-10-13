@@ -420,6 +420,11 @@ worker snapshot; discovery still reads only metadata. Its transcript statistics
 batch carries the rewrite generation and hot/cold state alongside the bounds,
 so the subsequent scan reuses those facts without another watermark read. A
 rewrite during a background scan converges on the next receipt-driven refresh.
+Usage reports capture cache metadata, bodies, and selected monthly partitions in
+one synchronous engine read snapshot, then close it before asynchronous transcript
+discovery, replay, or pricing. Concurrent refreshes cannot change those captured
+inputs; subsequent reports see the newer cache. Canonical replay retains its
+checkpoint-bounded transcript reads and anchor comparison.
 Participant writers likewise reuse their committed projection-change decision:
 counter-only contributions skip the display-projection read, preserve committed
 display facts, and invalidate exact aggregate records. These changes do not alter stored
@@ -471,6 +476,18 @@ Source preparation borrows an already-retained entry predicate instead of dispat
 another exact-entry read. Releasing a mutation's source leaves its selecting reader
 current; releasing that reader revokes every borrower. The destination worker keeps
 its transaction-local source comparison before the effect.
+
+Bundled native harnesses prepare session lineage once and retain the same entry
+predicate through terminal cleanup. Final lineage checks use published facts;
+tool policy and caller liveness still authorize each effect. Cleanup may borrow
+the lineage with its own liveness check, but cannot outlive the capture owner.
+The released synchronous authority factories remain deprecated compatibility
+entry points, separate from the prepared API.
+
+Session-list row materialization consumes prepared title fields. Its old
+synchronous transcript-title fallback is removed; bounded title probes and their
+cache live in the history worker. Deprecated SessionManager readers and SDK
+facades remain explicitly guarded compatibility paths, not physical SQL retirements.
 
 Reply-initialization cohorts reuse those entry facts only when the selected entry
 and its parent are both covered. Cold-archive absence requires a complete actor
@@ -614,8 +631,9 @@ the loaded generation, sequence, and mutation timestamp once in their write
 transaction. Compaction uses its append receipt instead of rereading the appended
 rows or version. These paths preserve stored bytes, permissions, and update behavior.
 Durable SessionManager calls from the Gateway must use the asynchronous methods.
-The deprecated synchronous SDK methods retain compatibility until the next SDK
-major; bundled transcript archive and model-context readers use workers. Skill Workshop
+The deprecated synchronous SDK methods retain compatibility during their
+deprecation period and will be removed in a later stable release; bundled
+transcript archive and model-context readers use workers. Skill Workshop
 validates source permissions, lifecycle, and the accepted anchor through the history
 worker. It reuses those facts until the Gateway's session-key or transcript write
 receipt changes. The final filesystem guard checks the retained receipt without SQL;
@@ -5910,9 +5928,10 @@ repeats selection; uncertain writes are never replayed. Startup orphan repair
 retains its native transaction so session settlement and the report remain atomic.
 Bundled session callers await this owner before dependent publication. The
 shipped synchronous SessionManager methods remain named third-party
-compatibility adapters, deprecated for removal at the next Plugin SDK major;
-each warns once per method per process. Incognito reports use the memory actor;
-its synchronous persistence methods refuse access and name the awaited replacement. Schemas, stored bytes,
+compatibility adapters, deprecated for removal in a later stable release after
+the deprecation period; each warns once per method per process. Incognito reports
+use the memory actor; synchronous persistence methods refuse access and name
+the awaited replacement. Schemas, stored bytes,
 retention, and update behavior are unchanged. See the
 [SDK migration](/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence).
 

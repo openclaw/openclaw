@@ -31,11 +31,15 @@ import {
   readSessionSharingMemoryFacts,
   SessionMutationFactsUnavailableError,
 } from "./session-sharing-incognito.js";
+import type {
+  PreparedSessionMutationFacts,
+  SessionSharingTarget,
+} from "./session-sharing-target.types.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import {
   withGatewaySessionStoreTarget,
-  resolveGatewaySessionStoreTargetWithStore,
+  resolveGatewaySessionStoreTargetWithStoreAsync,
   type GatewaySessionStoreCache,
 } from "./session-utils-store-lookup.js";
 import {
@@ -43,17 +47,12 @@ import {
   type GatewaySessionStoreSelection,
 } from "./session-utils-store-retained.js";
 import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
+import type { GatewaySessionStoreTargetWithStore } from "./session-utils-store.types.js";
 
-export type SessionSharingTarget = {
-  agentId: string;
-  canonicalKey: string;
-  entry: SessionEntry;
-  storeKey: string;
-  storeKeys: string[];
-  storePath: string;
-  /** Physical source selected by the store reader, independent of its configured locator. */
-  readSource?: CapturedSessionEntryReadSource;
-};
+export type {
+  PreparedSessionMutationFacts,
+  SessionSharingTarget,
+} from "./session-sharing-target.types.js";
 
 export function resolveSessionVisibility(
   entry: Pick<SessionEntry, "visibility">,
@@ -117,30 +116,7 @@ function captureSessionSharingIncognitoTarget(params: {
   });
 }
 
-export async function resolveSessionSharingTargetAsync(
-  params: Parameters<typeof resolveSessionSharingTarget>[0],
-): Promise<SessionSharingTarget | null> {
-  if (isIncognitoSessionKey(params.sessionKey)) {
-    return resolveSessionSharingTarget(params);
-  }
-  return withGatewaySessionStoreTarget(
-    {
-      cfg: params.cfg,
-      key: params.sessionKey,
-      agentId: params.agentId,
-      projection: "list",
-    },
-    (target) => {
-      if (target.capturedReadSource) {
-        params.onReadSource?.(target.capturedReadSource);
-      }
-      return toSessionSharingTarget(target);
-    },
-  );
-}
-
-/** Synchronous final-authority exception; ordinary reads use the worker-backed resolver. */
-export function resolveSessionSharingTarget(params: {
+export function resolveIncognitoSessionSharingTarget(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
@@ -149,11 +125,23 @@ export function resolveSessionSharingTarget(params: {
   targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
   onReadSource?: (source: CapturedSessionEntryReadSource) => void;
 }): SessionSharingTarget | null {
+  return captureSessionSharingIncognitoTarget(params)?.target ?? null;
+}
+
+export async function resolveSessionSharingTargetAsync(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId?: string;
+  exactRead?: boolean;
+  storeCache?: GatewaySessionStoreCache;
+  targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
+  onReadSource?: (source: CapturedSessionEntryReadSource) => void;
+}): Promise<SessionSharingTarget | null> {
   const captured = captureSessionSharingIncognitoTarget(params);
   if (captured) {
     return captured.target;
   }
-  const target = resolveGatewaySessionStoreTargetWithStore({
+  const target = await resolveGatewaySessionStoreTargetWithStoreAsync({
     cfg: params.cfg,
     key: params.sessionKey,
     agentId: params.agentId,
@@ -259,7 +247,7 @@ export async function withSessionSharingTarget<T>(
 }
 
 function toSessionSharingTarget(
-  target: ReturnType<typeof resolveGatewaySessionStoreTargetWithStore>,
+  target: GatewaySessionStoreTargetWithStore,
 ): SessionSharingTarget | null {
   const match = findCanonicalStoreMatch(target.store, target.storeKeys);
   return match
@@ -352,14 +340,17 @@ function isIncognitoSessionTarget(params: {
     : isIncognitoSessionKey(params.sessionKey);
 }
 
-export async function isResolvedIncognitoSessionAsync(params: {
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  agentId?: string;
-}): Promise<boolean> {
+export function isResolvedIncognitoSession(
+  params: {
+    cfg: OpenClawConfig;
+    sessionKey: string;
+    agentId?: string;
+  },
+  target: SessionSharingTarget | null,
+): boolean {
   return isIncognitoSessionTarget({
     sessionKey: params.sessionKey,
-    target: await resolveSessionSharingTargetAsync(params),
+    target,
   });
 }
 
@@ -414,11 +405,6 @@ export async function authorizeResolvedSessionMutationAsync(params: {
   });
 }
 
-export type PreparedSessionMutationFacts = {
-  target: SessionSharingTarget | null;
-  membership: ReadonlySet<string>;
-};
-
 /** Prepared facts carry no decision; current caller and configuration still determine access. */
 export function authorizePreparedSessionMutation(
   params: Parameters<typeof authorizeResolvedSessionMutationAsync>[0],
@@ -429,30 +415,14 @@ export function authorizePreparedSessionMutation(
     authorizesAgentRun?: boolean;
   },
 ): ErrorShape | null {
-  return authorizeSessionMutationTarget(params, () => facts.target, {
-    ...prepared,
-    membership: facts.membership,
-  });
-}
-
-function authorizeSessionMutationTarget(
-  params: Parameters<typeof authorizeResolvedSessionMutationAsync>[0],
-  readTarget: () => SessionSharingTarget | null,
-  prepared?: {
-    policy: GatewayOperatorRoleDefinition | undefined;
-    aliases: ReadonlySet<string>;
-    membership: ReadonlySet<string>;
-    authorizesAgentRun?: boolean;
-  },
-): ErrorShape | null {
-  const authorizesAgentRun = prepared?.authorizesAgentRun !== false;
+  const authorizesAgentRun = prepared.authorizesAgentRun !== false;
   if (isGatewayAdmin(params.client) && (!authorizesAgentRun || !params.cfg.gateway?.roles)) {
     return null;
   }
   if (isGatewayClientProfilePending(params.client)) {
     return authenticatedProfileUnavailableError();
   }
-  const target = readTarget();
+  const target = facts.target;
   if (target && authorizesAgentRun) {
     const agentError = authorizeSessionAgentRun(
       { cfg: params.cfg, client: params.client, target },
@@ -477,15 +447,12 @@ function authorizeSessionMutationTarget(
     return null;
   }
   const sharing = { cfg: params.cfg, client: params.client, target };
-  if (!prepared) {
-    return authorizeSessionSharingTarget(sharing);
-  }
   const identity = sharingIdentity(params.client, resolveGatewayOperatorRoleActor(params.client));
   const cap = { value: prepared.policy?.sessions.others };
   return authorizeSessionSharingTarget(sharing, {
     ...cap,
     role: resolveSessionSharingRole(
-      { ...sharing, isMember: Boolean(identity && prepared.membership.has(identity.id)) },
+      { ...sharing, isMember: Boolean(identity && facts.membership.has(identity.id)) },
       cap,
       prepareSessionCreatorProfile(identity?.id, prepared.aliases),
     ),

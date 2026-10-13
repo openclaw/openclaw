@@ -17,6 +17,15 @@ type DirectPendingFinalCustody = Pick<ChannelDeliveryInfo, "bindPendingFinalDeli
   release: () => void;
 };
 
+export class PendingFinalDeliveryNotOwnedError extends PlatformMessageNotDispatchedError {
+  constructor(state: string) {
+    super("Pending final delivery ownership changed before platform dispatch", {
+      cause: new Error(`pending final delivery is ${state}`),
+      retryable: false,
+    });
+  }
+}
+
 export const NO_PENDING_FINAL_CUSTODY: DirectPendingFinalCustody = {
   assertPlatformSendAuthorized: () => undefined,
   onPlatformSendDispatch: () => Promise.resolve(),
@@ -62,10 +71,7 @@ export async function createDirectPendingFinalCustody(
           "queued",
         ]);
         if (result.state !== "unknown") {
-          throw new PlatformMessageNotDispatchedError(
-            "Pending final delivery ownership changed before platform dispatch",
-            { cause: new Error(`pending final delivery is ${result.state}`) },
-          );
+          throw new PendingFinalDeliveryNotOwnedError(result.state);
         }
       })());
       assertSessionWriterDeliveryAuthorized(authority);

@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
@@ -32,7 +33,7 @@ import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 import * as rowInputs from "./session-utils-row.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store-lookup.js";
+import { resolveGatewaySessionStoreTargetWithStoreAsync } from "./session-utils-store-lookup.js";
 import {
   resolveSessionKeyFromResolveParams,
   withPreparedSessionResolve,
@@ -413,7 +414,7 @@ describe("session resolution metadata", () => {
   });
 
   it.each(["malformed", "mismatched-window"])(
-    "preserves warm and cold storage-reader outcomes for %s rows",
+    "omits invalid warm rows and rejects cold stores with %s rows",
     async (kind) => {
       await withOpenClawTestState({ label: "resolve-corruption" }, async () => {
         const siblingKey = "agent:main:sibling";
@@ -422,8 +423,8 @@ describe("session resolution metadata", () => {
           { ...scope, sessionKey: siblingKey },
           { sessionId: "sibling", updatedAt: 1 },
         );
-        const read = (key: string) => {
-          const target = resolveGatewaySessionStoreTargetWithStore({
+        const read = async (key: string) => {
+          const target = await resolveGatewaySessionStoreTargetWithStoreAsync({
             cfg,
             key,
             agentId: "main",
@@ -432,7 +433,7 @@ describe("session resolution metadata", () => {
           });
           return target.store[target.canonicalKey];
         };
-        expect(read(scope.sessionKey)?.sessionId).toBe(entry.sessionId);
+        expect((await read(scope.sessionKey))?.sessionId).toBe(entry.sessionId);
         const owner = openOpenClawAgentDatabase(scope);
         const database = owner.db;
         runSqliteImmediateTransactionSync(database, () => seedCanonicalSessionValidation(owner));
@@ -458,11 +459,13 @@ describe("session resolution metadata", () => {
             )
             .run("different", scope.sessionKey);
         }
-        expect(read(scope.sessionKey)).toBeUndefined();
-        expect(read(siblingKey)?.sessionId).toBe("sibling");
+        expect(await read(scope.sessionKey)).toBeUndefined();
+        expect((await read(siblingKey))?.sessionId).toBe("sibling");
+        await closeOpenClawAgentDatabasesAsync();
+
         closeOpenClawAgentDatabasesForTest();
         for (const key of [scope.sessionKey, siblingKey]) {
-          expect(() => read(key)).toThrow(
+          await expect(read(key)).rejects.toThrow(
             expect.objectContaining({ code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED" }),
           );
         }

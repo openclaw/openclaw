@@ -206,9 +206,6 @@ export async function certifySessionCanonicalValidationPending(
                       assertCurrent();
                       execution?.assertCurrent();
                       worker.assertCurrent(databaseOptions, currentClaim);
-                      if (validation && readValidation() !== validation) {
-                        throw new Error("Canonical validation admission changed");
-                      }
                     };
                     assertCommitAllowed();
                     return await worker.runCanonicalValidation({

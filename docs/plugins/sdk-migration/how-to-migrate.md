@@ -14,8 +14,8 @@ The ordered migration steps. Work through them in order; each step is self-conta
 Use the asynchronous `SessionManager` methods for durable sessions on the
 Gateway main thread, including
 `openAsync`, `openModelContextAsync`, `readSessionContextAsync`, and
-`appendMessageAsync`. Deprecated synchronous SDK methods remain compatible until
-the next SDK major. Replace
+`appendMessageAsync`. Deprecated synchronous SDK methods remain compatible
+during their deprecation period and will be removed in a later stable release. Replace
 `readCodexSessionContext` with the reader from `createCodexSessionContextReader`.
 
 The `codex-session-transcript-runtime` facade also retains deprecated
@@ -1045,8 +1045,8 @@ their existing immediate return values and emit one `DeprecationWarning` per
 method per process with code `DEP_SESSION_PERSISTENCE`, naming the
 awaited replacement. The
 `session-manager-sync-persistence` compatibility record deprecates them on
-October 1, 2026, with removal at the next Plugin SDK major
-(`next-plugin-sdk-major`); there is no calendar removal deadline. Bundled callers
+October 1, 2026, with removal in a later stable release after the deprecation
+period; there is no calendar removal deadline. Bundled callers
 use the awaited methods. Do not add a sync fallback when adopting the new API.
 
 User-turn transcript recorders also provide optional

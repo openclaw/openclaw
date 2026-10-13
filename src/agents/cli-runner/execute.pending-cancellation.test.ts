@@ -144,6 +144,7 @@ describe("CLI execution cancellation", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     setCliRunnerExecuteTestDeps({ getProcessSupervisor: restoreProcessSupervisor });
     vi.restoreAllMocks();
     vi.useRealTimers();

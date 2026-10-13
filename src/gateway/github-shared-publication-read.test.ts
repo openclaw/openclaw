@@ -313,6 +313,7 @@ describe("shared worktree receipt observation", () => {
   it.each(["latest", "pending", "terminal"] as const)(
     "revalidates workspace selection after the worker read for %s",
     async (mode) => {
+      mocks.persistedSessionKeys.add(SESSION_KEY);
       const coordinator = sharedPublicationCoordinator();
       const row = insertSharedWorktreeReceipt("held-selection");
       if (mode !== "pending") {
@@ -497,7 +498,7 @@ describe("shared worktree receipt observation", () => {
     await expect(
       async () =>
         await coordinator.sharedStatus({ ...session, agentId: "other" }, "private-to-session"),
-    ).rejects.toThrow('agent-scoped session key belongs to "main", not "other"');
+    ).rejects.toThrow("GitHub publication session lifecycle changed.");
     changeSession({ sessionId: "rotated-before-read" });
     await expect(async () => await coordinator.latestShared(session)).rejects.toThrow(
       /session.*changed/i,
@@ -541,14 +542,21 @@ describe("shared worktree receipt observation", () => {
     expect(await coordinator.latestShared(session)).toBeNull();
     expect(await coordinator.sharedStatus(session, "absent")).toBeUndefined();
     expect(schema()).toEqual(before);
-    const { loadGatewaySessionEntryReadOnly } =
-      await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
+    const { loadGatewaySessionEntryReadOnlyInWorker } = await vi.importActual<
+      typeof import("./session-utils-store-worker.js")
+    >("./session-utils-store-worker.js");
     const cfg = getRuntimeConfig();
+    const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+      cfg,
+      key: SESSION_KEY,
+      agentId: "main",
+      readOnly: true,
+    });
     setRuntimeConfigSnapshot({
       ...cfg,
       session: {
         ...cfg.session,
-        store: loadGatewaySessionEntryReadOnly(SESSION_KEY, { agentId: "main" }).storePath,
+        store: loaded.storePath,
       },
     });
     const missingRoot = path.join(root, "never-opened");
@@ -751,7 +759,7 @@ describe("shared repository receipt observation", () => {
     ).toBeUndefined();
     await expect(
       async () => await coordinator.sharedStatus({ ...session, agentId: "other" }, row.request_id),
-    ).rejects.toThrow('agent-scoped session key belongs to "main", not "other"');
+    ).rejects.toThrow("GitHub publication session lifecycle changed.");
   });
 
   it("excludes personal rows before decoding even when their stored digest is corrupt", async () => {

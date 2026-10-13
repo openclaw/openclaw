@@ -225,7 +225,7 @@ it("keeps workspace effect predicates current without pinning unrelated planning
 
 it("rechecks metadata only at response and honors the caller's allowed metadata changes", async () => {
   const { actor, owner } = await fixture();
-  const read = retainGatewaySessionEntryReadOnly(
+  const read = await retainGatewaySessionEntryReadOnly(
     sessionKey,
     "main",
     (previous, current) => previous.category === current.category,

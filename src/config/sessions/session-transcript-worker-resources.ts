@@ -60,6 +60,8 @@ export type SessionDatabaseCleanup = { run: () => Promise<void> };
 /** Physical path for work; callers' lexical paths select the same owner for cleanup. */
 export type SessionHistoryDatabaseTarget = OpenClawAgentDatabaseOptions & {
   requestedPaths?: readonly string[];
+  /** Capture a cold physical source after admission and before the row request. */
+  prepareRead?: () => void;
 };
 
 export type HistoryDatabaseResource = {

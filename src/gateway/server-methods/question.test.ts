@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -26,11 +26,14 @@ import {
   registerChatAbortController,
   type ChatAbortControllerEntry,
 } from "../chat-abort.js";
+import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
-import { canReceiveSessionEvent } from "../session-sharing.js";
+import { createSessionRowProjection } from "../session-row-projection.js";
+import { canReceiveSessionEvent, prepareProjectedSessionSharing } from "../session-sharing.js";
+import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import {
   adminRequestClient,
   broadcast,
@@ -188,11 +191,15 @@ it("scopes requested and resolved questions to operators allowed to see their se
         usesSharedGatewayAuth: false,
         authenticatedUserProfile: userProfile(profile),
       };
+      prepareGatewayRecipientProfile(client);
       return { client, socket };
     };
     const ownerClient = makeQuestionClient(owner, "question-owner");
     const viewerClient = makeQuestionClient(viewer, "question-viewer");
     const guestClient = makeQuestionClient(guest, "question-guest");
+    const projection = await createSessionRowProjection({ cfg });
+    onTestFinished(() => projection.dispose());
+    await projection.ensureMaterialized();
     const gatewayBroadcaster = createGatewayBroadcaster({
       clients: new GatewayClientRegistry([
         ownerClient.client,
@@ -200,7 +207,30 @@ it("scopes requested and resolved questions to operators allowed to see their se
         guestClient.client,
       ]),
       canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
-        canReceiveSessionEvent({ cfg, client, sessionKeys, agentId, event, payload }),
+        canReceiveSessionEvent({
+          cfg,
+          client,
+          sessionKeys,
+          agentId,
+          event,
+          payload,
+          prepared: {
+            sharing: prepareProjectedSessionSharing({
+              cfg,
+              client,
+              isMember: (target, identityId) =>
+                projection.hasMembership(target.storePath, target.storeKey, identityId),
+            }),
+            target: (key, targetAgentId) => {
+              const { agentId: ownerAgentId } = resolveSessionStoreIdentity({
+                cfg,
+                sessionKey: key,
+                agentId: targetAgentId,
+              });
+              return projection.sharingTarget({ key, agentId: ownerAgentId });
+            },
+          },
+        }),
     });
     broadcast.mockImplementation(gatewayBroadcaster.broadcast);
 

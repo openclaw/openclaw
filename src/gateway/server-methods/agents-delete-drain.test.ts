@@ -7,6 +7,7 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   patchSessionEntryCore,
   replaceSessionEntry,
@@ -106,11 +107,12 @@ it.each(["rollback", "rollback during recovery"] as const)(
 
 it("preserves another agent's replacement run and admissions in a shared store during inventory", async () => {
   await withOpenClawTestState({ label: "deletion-run-identity" }, async (state) => {
-    const storePath = state.path("agents/keeper/sessions/sessions.json");
+    const storePath = state.path("shared-sessions.sqlite");
     const cfg = {
       agents: { entries: { keeper: {}, doomed: {} } },
       session: { store: storePath },
     };
+    setRuntimeConfigSnapshot(cfg);
     const sessionId = "reused-session";
     const original = createEmbeddedRunHandle({ runId: "original" });
     const replacementAbort = vi.fn(() => clearActiveEmbeddedRun(sessionId, replacement));
@@ -174,6 +176,7 @@ it.each([false, true])(
   async (placed) => {
     await withOpenClawTestState({ label: "deletion-session-aliases" }, async (state) => {
       const cfg = { agents: { entries: { doomed: {}, keeper: {} } } };
+      setRuntimeConfigSnapshot(cfg);
       const sessionId = "cron-shared-session";
       const baseKey = "agent:doomed:cron:job";
       const runKey = `${baseKey}:run:run-id`;

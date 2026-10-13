@@ -327,6 +327,25 @@ it("checks claim-free reclaim, activity and the exact terminal turn inside drain
 it("persists monotonic ACKs and their terminal fence through the gate without host SQLite", async () => {
   const claim = await workerClaim("ack-cursors");
   const gate = createWorkerSessionPlacementGate(placements);
+  const retained = await placements.prepareSessionPlacement(claim.sessionId);
+  let observedCommit = false;
+  const admission = probe.admission(operationAdmission, (request, grant, admit) => {
+    admit(request, () => {
+      if (
+        request.stage === "commit" &&
+        isRecord(request.facts) &&
+        isRecord(request.facts.placement) &&
+        request.facts.placement.sessionId === claim.sessionId
+      ) {
+        observedCommit = true;
+        expect(retained.current()).toMatchObject({
+          state: "active",
+          turnClaim: { claimId: claim.claimId },
+        });
+      }
+      return grant();
+    });
+  });
   const queries = observeHostDataSql();
   try {
     await gate.updateAckCursors({ claim, transcriptSeq: 4 });
@@ -334,10 +353,17 @@ it("persists monotonic ACKs and their terminal fence through the gate without ho
     await gate.updateAckCursors({ claim, liveSeq: 9 });
     await gate.updateAckCursors({ claim, transcriptSeq: 3, liveSeq: 8 });
     await gate.updateAckCursors({ claim, transcriptSeq: 4, liveSeq: 9 });
+    expect(retained.current()).toMatchObject({
+      lastTranscriptAckCursor: 4,
+      lastLiveEventAckCursor: 9,
+    });
     expect(queries.queries).toEqual([]);
   } finally {
     queries.restore();
+    admission.mockRestore();
+    retained.release();
   }
+  expect(observedCommit).toBe(true);
   expect(placements.get(claim.sessionId)).toMatchObject({
     generation: claim.placementGeneration,
     lastTranscriptAckCursor: 4,
@@ -362,6 +388,54 @@ it("persists monotonic ACKs and their terminal fence through the gate without ho
   await expect(gate.updateAckCursors({ claim, liveSeq: 10 })).rejects.toThrow("stale worker turn");
   expect(await placements.listPendingWorkspaceResultsAsync(claim.sessionId)).toEqual([]);
   expect(placements.get(claim.sessionId)?.lastLiveEventAckCursor).toBe(9);
+});
+
+it("keeps the maintenance inventory usable across non-local turn bookkeeping", async () => {
+  const requested = input("maintenance-bookkeeping");
+  const active = await advancePlacementFixtureToActive(placements, database, requested, {
+    environmentId: "maintenance-bookkeeping-environment",
+  });
+  const inventory = await placements.prepareMaintenancePlacements();
+  const turn = {
+    ...requested,
+    owner: {
+      kind: "worker" as const,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+    },
+  };
+  let pendingChecks = 0;
+  const admission = probe.admission(operationAdmission, (request, grant, admit) => {
+    admit(request, () => {
+      if (request.stage === "commit") {
+        inventory.assertCurrent();
+        pendingChecks += 1;
+      }
+      return grant();
+    });
+  });
+  const queries = observeHostDataSql();
+  try {
+    await placements.releaseTurn(await placements.claimTurn(turn));
+    const claim = await placements.claimTurn(turn);
+    await placements.updateAckCursors({ claim, liveEvent: 9 });
+    await placements.acceptWorkspaceResult(claim);
+    await placements.completeWorkspaceResultAndReleaseTurn(claim);
+    inventory.assertCurrent();
+    expect(pendingChecks).toBe(6);
+    expect(inventory.placements).toContainEqual({ ...active, lastLiveEventAckCursor: 9 });
+    const current = await placements.prepareMaintenancePlacements();
+    try {
+      expect(current.placements).toContainEqual({ ...active, lastLiveEventAckCursor: 9 });
+    } finally {
+      current.release();
+    }
+    expect(queries.queries).toEqual([]);
+  } finally {
+    queries.restore();
+    admission.mockRestore();
+    inventory.release();
+  }
 });
 
 it.each(["placement", "caller"] as const)(

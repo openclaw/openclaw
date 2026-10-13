@@ -179,6 +179,7 @@ export function retainSessionHistoryWorkerDatabase(
                 requestLane.pool.run(
                   () => {
                     assertCurrent();
+                    options.prepareRead?.();
                     const input = prepare();
                     const projection = projectionTarget(input);
                     owned.nativeSequences.set(requestLane, ++requestLane.nativeSequence);

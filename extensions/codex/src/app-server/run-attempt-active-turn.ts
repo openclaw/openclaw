@@ -6,7 +6,7 @@ import {
   resolveAttemptFsWorkspaceOnly,
   setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import {
@@ -423,7 +423,7 @@ export function activateCodexAttemptTurn(
         await codexTranscriptMirrorRuntime.mirror({
           assertCurrent: composeSessionTranscriptWriteAssertion([
             connection.assertLegacyCurrent,
-            createNativeSessionBindingAuthority([], assertSteeringActive).assertLegacyCurrent,
+            createNativeSessionBindingScope(assertSteeringActive).assertLegacyCurrent,
           ]),
           agentId: sessionAgentId,
           sessionKey: contextSessionKey,

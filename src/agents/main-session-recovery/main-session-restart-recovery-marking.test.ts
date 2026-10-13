@@ -13,7 +13,6 @@ import { memorySessionActorOwners } from "../../config/sessions/session-actor-me
 import * as sessionEntryReader from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
-import * as sessionStoreWorker from "../../gateway/session-utils-store-worker.js";
 import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
@@ -60,7 +59,7 @@ import {
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-restart-owner-");
 
-it("keeps retained subagent interruptions out of main-session startup worker admission", async () => {
+it("keeps retained subagent interruptions out of main-session startup recovery", async () => {
   const stateDir = sessionDirs.make();
   const storePath = path.join(stateDir, "sessions.json");
   const sessionKey = "agent:main:main";
@@ -76,15 +75,6 @@ it("keeps retained subagent interruptions out of main-session startup worker adm
   const read = vi
     .spyOn(sessionEntryReader, "readSessionEntrySummariesInWorker")
     .mockResolvedValue([...retained, ...summaries]);
-  const resolveTarget = sessionStoreWorker.resolveGatewaySessionStoreTargetInWorker;
-  const lookup = vi
-    .spyOn(sessionStoreWorker, "resolveGatewaySessionStoreTargetInWorker")
-    .mockImplementation((params) => {
-      if (params.key !== sessionKey) {
-        return Promise.reject(new Error("worker task capacity reached"));
-      }
-      return resolveTarget(params);
-    });
   const warn = vi.spyOn(mainSessionRecoveryLog, "warn").mockImplementation(() => {});
   try {
     expect(
@@ -97,11 +87,8 @@ it("keeps retained subagent interruptions out of main-session startup worker adm
       abortedLastRun: true,
       mainRestartRecovery: { chargedAttempts: 0 },
     });
-    expect(lookup.mock.calls.length).toBe(1);
-    expect(lookup.mock.calls[0]?.[0].key).toBe(sessionKey);
   } finally {
     read.mockRestore();
-    lookup.mockRestore();
     warn.mockRestore();
   }
 });

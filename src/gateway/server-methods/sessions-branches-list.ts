@@ -29,7 +29,7 @@ export async function listSessionBranchesForGateway(
     return;
   }
   // Branches depend on transcript/lifecycle state, not a label or activity update during I/O.
-  const read = retainSessionScopedRead(options, sessionKey, requestedAgent.agentId, {
+  const read = await retainSessionScopedRead(options, sessionKey, requestedAgent.agentId, {
     allowMetadataChanges: true,
   });
   const run = () =>

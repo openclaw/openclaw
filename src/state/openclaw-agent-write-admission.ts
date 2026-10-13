@@ -2,6 +2,7 @@ import { channel } from "node:diagnostics_channel";
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
 import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
+import { runWithSqliteDatabaseAdmissionTurn } from "../infra/sqlite-database-admission-turn.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -134,20 +135,27 @@ export function runOpenClawAgentPathWriteAdmission<T>(
     "direct",
     timing,
     (observed) =>
-      runQueuedStoreWrite({
-        queues: admission.queues,
-        storePath,
-        label: "agent database write admission",
-        // Worker callbacks inherit their parent's async context, but not its native
-        // writer lock. Their foreground writes must queue, never reenter that owner.
-        reentrant: reentrant && !admission.workers.has(storePath),
-        fn: async () => {
-          assertCurrent();
-          return await run(identity, assertCurrent);
-        },
-        timing: observed,
+      // Cold tasks may need a host write before releasing their admission turn.
+      runWithSqliteDatabaseAdmissionTurn(
+        [pathname],
+        () =>
+          runQueuedStoreWrite({
+            queues: admission.queues,
+            storePath,
+            label: "agent database write admission",
+            // Worker callbacks inherit their parent's async context, but not its native
+            // writer lock. Their foreground writes must queue, never reenter that owner.
+            reentrant: reentrant && !admission.workers.has(storePath),
+            fn: async () => {
+              assertCurrent();
+              return await run(identity, assertCurrent);
+            },
+            timing: observed,
+            signal,
+          }),
+        [],
         signal,
-      }),
+      ),
     caller,
   );
 }
@@ -220,12 +228,18 @@ export async function runOpenClawAgentWriteAdmissions<T>(
   if (paths.some((pathname) => inherited.some((held) => held > pathname))) {
     throw new Error("Session read batch would invert inherited SQLite writer admission order");
   }
-  return await runStoreWriterAcquisitions((index, next) => {
-    const pathname = paths[index];
-    return pathname === undefined
-      ? Promise.resolve().then(run)
-      : observeWriteAdmission("ordered-read", undefined, (timing) =>
-          runOpenClawAgentWriteAdmission(selected.get(pathname)!, next, true, timing, signal),
-        );
-  });
+  return await runWithSqliteDatabaseAdmissionTurn(
+    paths,
+    () =>
+      runStoreWriterAcquisitions((index, next) => {
+        const pathname = paths[index];
+        return pathname === undefined
+          ? Promise.resolve().then(run)
+          : observeWriteAdmission("ordered-read", undefined, (timing) =>
+              runOpenClawAgentWriteAdmission(selected.get(pathname)!, next, true, timing, signal),
+            );
+      }),
+    [],
+    signal,
+  );
 }

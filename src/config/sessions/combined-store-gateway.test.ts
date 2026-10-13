@@ -9,7 +9,6 @@ import {
 } from "../../gateway/session-row-projection.js";
 import { resolveSessionStoreKey } from "../../gateway/session-store-key.js";
 import { listProjectedSessions } from "../../gateway/session-utils-list.js";
-import { createGatewaySessionEntryReader } from "../../gateway/session-utils-store-lineage.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
@@ -544,12 +543,6 @@ it.each(["global", "per-sender"] as const)(
                 modelOverrideSource: "inherited",
               });
             }
-            const read = createGatewaySessionEntryReader({
-              cfg,
-              agentId: "alpha",
-              store: { [key]: child },
-            });
-            expect(read(parent)?.modelOverride).toBe(model);
             const filtered = await listProjectedSessions({
               projection,
               opts: { spawnedBy: displayParent },

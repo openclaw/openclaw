@@ -134,6 +134,24 @@ database worker. The synchronous `loadCombinedSessionStoreForGateway` retains it
 return value and emits a bounded deprecation warning; it remains supported until
 the next Plugin SDK major.
 
+### Native session lineage
+
+Use `resolvePreparedNativeSessionBinding` or
+`retainNativeSessionGenerationAuthority` from
+`openclaw/plugin-sdk/agent-harness-session-runtime` to prepare lineage in the
+session worker. Both return an owned capture: call `release()` in `finally`
+after the last effect and any terminal cleanup. Repeated authority checks use
+the session owner's published facts and immediately reject revoked lineage.
+
+Use `authority.withLiveness(assertCurrent)` when cleanup needs its own lifecycle
+check. This borrows the same source; it does not extend the capture's lifetime.
+Use `createNativeSessionBindingScope` when there is no stored session lineage.
+The released `createNativeSessionBindingAuthority`,
+`combineNativeSessionBindingAuthority`, `prepareNativeSessionGenerationAuthority`,
+and `resolveNativeSessionBindingWithAuthority` contracts remain available but
+deprecated. Their synchronous readers are compatibility paths; bundled harnesses
+use the prepared API.
+
 ### Exec approval reads
 
 Await `loadExecApprovalsReadOnlyAsync` or `readExecApprovalsSnapshotAsync` from

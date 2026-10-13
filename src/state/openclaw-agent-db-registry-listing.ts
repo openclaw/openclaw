@@ -640,9 +640,10 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
           assertAdmissionCurrent();
           const witness = scopedWitness ?? captureWitness();
           const { memo, assertCurrent, followRegistration } = witness;
+          const assertReadCurrent = scopedWitness ? assertCurrent : assertAdmissionCurrent;
           // Install the witness before the first await, including a read that later rejects.
           preparedWitness = witness;
-          assertCurrent();
+          assertReadCurrent();
           let entries = options.fresh ? undefined : memo.entries;
           if (!entries) {
             const reply = await inCapturedScope(() =>
@@ -662,7 +663,7 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
               continue;
             }
             witness.acceptEntries(result?.status === "available" ? result.entries : []);
-            assertCurrent();
+            assertReadCurrent();
             if (
               result?.status === "unavailable" ||
               (result === undefined && hasUnavailableMissingSqlitePath(options.path))
@@ -673,7 +674,7 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
               ? (result?.entries ?? [])
               : (memo.entries ??= result?.entries ?? []);
           }
-          assertCurrent();
+          assertReadCurrent();
           return {
             result: {
               status: "available",

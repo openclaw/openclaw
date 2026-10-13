@@ -297,6 +297,7 @@ it.each(admissionScenarios)(
         if (dashboardRead) {
           expect(admission.admittedSessionId).toBe(initialSessionId);
           expect(dashboardRead.sessionId).toBe(binding.sessionId);
+          await dashboardRead.prepare?.();
           dashboardRead.assertCurrent();
         }
         clone.mockClear();
@@ -404,10 +405,10 @@ it.each(admissionScenarios)(
           owned.admission.cleanupAdmittedRun();
           clearAgentRunContext(runId, owned.admission.lifecycleGeneration);
         }
+        releaseAuthorization?.();
         holdDispatch.mockRestore();
         observeDispatch.mockRestore();
         clone.mockRestore();
-        releaseAuthorization?.();
       }
     });
   },
@@ -485,6 +486,7 @@ it.each(
           finished: ReturnType<typeof createDeferred<void>>;
           owned?: Parameters<typeof chatDispatch.startChatDispatch>[0];
           options?: DispatchOptions;
+          releaseAuthorization?: () => void;
         };
         const sources = new Map<string, Source>();
         const observeDispatch = vi.spyOn(chatDispatch, "startChatDispatch");
@@ -508,7 +510,6 @@ it.each(
         );
         let token: string | undefined;
         let probe: ReturnType<typeof sqliteWorkerOwnerProbe.admission> | undefined;
-        const authorizationReleases: Array<() => void> = [];
         async function sendPrompt(runId: string, message: string) {
           const source: Source = {
             entered: createDeferred<DispatchOptions>(),
@@ -523,9 +524,7 @@ it.each(
             method: "chat.send",
             requestParams: params,
           });
-          if (authorization.authorization?.release) {
-            authorizationReleases.push(authorization.authorization.release);
-          }
+          source.releaseAuthorization = authorization.authorization?.release;
           expect(authorization.error).toBeNull();
           const respond = vi.fn();
           await handleDirectExternalChatSend({
@@ -557,6 +556,7 @@ it.each(
           });
           const promptSource = readUserTurnPromptReactionSource(owned.userTurn.recorder);
           expect(promptSource).toBeDefined();
+          await promptSource?.prepare?.();
           promptSource?.assertCurrent();
           return { ...source, owned, options };
         }
@@ -768,12 +768,10 @@ it.each(
           );
           for (const [runId, source] of sources) {
             source.owned?.admission.cleanupAdmittedRun();
+            source.releaseAuthorization?.();
             if (source.owned) {
               clearAgentRunContext(runId, source.owned.admission.lifecycleGeneration);
             }
-          }
-          for (const release of authorizationReleases) {
-            release();
           }
           holdDispatch.mockRestore();
           observeDispatch.mockRestore();
