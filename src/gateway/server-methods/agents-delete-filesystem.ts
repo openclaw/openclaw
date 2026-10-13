@@ -27,17 +27,6 @@ export function cleanupFailure(pathname: string, error: unknown): AgentDeletePat
   return { failed: { path: pathname, reason: reason || "unknown error" } };
 }
 
-const defaultExactCleanupStat = (target: string): Promise<BigIntStats> =>
-  fs.lstat(target, { bigint: true });
-
-let exactCleanupStat = defaultExactCleanupStat;
-
-export const testing = {
-  setExactStatForTests(override?: typeof defaultExactCleanupStat) {
-    exactCleanupStat = override ?? defaultExactCleanupStat;
-  },
-};
-
 function cleanupPathIdentity(stat: { dev?: number | bigint; ino?: number | bigint } | undefined) {
   if (
     (typeof stat?.dev !== "number" && typeof stat?.dev !== "bigint") ||
@@ -50,27 +39,27 @@ function cleanupPathIdentity(stat: { dev?: number | bigint; ino?: number | bigin
   return { dev: String(stat.dev), ino: String(stat.ino) };
 }
 
-// The root stat carries containment, kind and nlink but types the file id as a
-// double. Small ids survive that exactly, so only an id past the safe integer
-// range pays for a second bigint lstat inside the already-verified parent.
-// The two stats must agree on the rounded value, so a swap between them is a
-// mismatch. A path that vanishes after the root stat is already gone.
-async function resolveExactCleanupIdentity(
-  parentPath: string,
-  basename: string,
-  rounded: { dev?: number; ino?: number },
-) {
-  if (typeof rounded.dev !== "number" || typeof rounded.ino !== "number") {
-    return null;
+// PathStat.dev/ino are the uint64 view of the same observation (BigInt.asUintN).
+// Node stores those libuv fields in a signed bigint, so Number(ino) and the
+// numeric metadata disagree when the high bit is set. exactIdentity is that
+// signed pair. A stat without the companion can only prove a safe integer.
+function guardedCleanupIdentity(stat: {
+  exactIdentity?: { readonly dev: bigint; readonly ino: bigint };
+  dev?: number;
+  ino?: number;
+}) {
+  if (stat.exactIdentity) {
+    return cleanupPathIdentity(stat.exactIdentity);
   }
-  if (Number.isSafeInteger(rounded.dev) && Number.isSafeInteger(rounded.ino)) {
-    return { dev: String(rounded.dev), ino: String(rounded.ino) };
+  if (
+    typeof stat.dev === "number" &&
+    typeof stat.ino === "number" &&
+    Number.isSafeInteger(stat.dev) &&
+    Number.isSafeInteger(stat.ino)
+  ) {
+    return { dev: String(stat.dev), ino: String(stat.ino) };
   }
-  const exact = await exactCleanupStat(path.join(parentPath, basename));
-  if (Number(exact.dev) !== rounded.dev || Number(exact.ino) !== rounded.ino) {
-    throw new AgentCleanupIdentityMismatchError("cleanup path identity changed before deletion");
-  }
-  return cleanupPathIdentity(exact);
+  return null;
 }
 
 // A journal written before the exact pair existed carries only rounded ids.
@@ -111,7 +100,7 @@ export async function statAgentCleanupPath(cleanupPath: AgentDeleteCleanupPath) 
   if (stat.isFile && stat.nlink > 1) {
     throw new AgentCleanupIdentityMismatchError("hardlinked cleanup replacement preserved");
   }
-  const identity = await resolveExactCleanupIdentity(parentPath, basename, stat);
+  const identity = guardedCleanupIdentity(stat);
   if (cleanupPath.preparedIdentity === null) {
     // The journal fence blocks legitimate claims on prepared-absent paths, so a
     // file that appeared here is leaked deleted-agent state (recreated WAL

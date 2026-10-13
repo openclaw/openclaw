@@ -15,6 +15,9 @@ type AgentDeleteFilesystemHarness = {
     deleteWorkspaceState: unknown;
     rootStat: Mock<
       (params: { rootDir: string; relativePath: string }) => Promise<{
+        dev?: number;
+        ino?: number;
+        exactIdentity?: { readonly dev: bigint; readonly ino: bigint };
         isFile: boolean;
         isSymbolicLink: boolean;
         mtimeMs: number;

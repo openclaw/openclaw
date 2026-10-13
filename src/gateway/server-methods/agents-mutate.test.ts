@@ -126,13 +126,27 @@ const mocks = vi.hoisted(() => ({
     realPath: "/workspace/test-agent/AGENTS.md",
     stat: { size: 0, mtimeMs: 0 },
   })),
-  rootStat: vi.fn(async (_params: { rootDir: string; relativePath: string }) => ({
-    isFile: true,
-    isSymbolicLink: false,
-    mtimeMs: 0,
-    nlink: 1,
-    size: 0,
-  })),
+  rootStat: vi.fn(
+    async (_params: {
+      rootDir: string;
+      relativePath: string;
+    }): Promise<{
+      dev?: number;
+      ino?: number;
+      exactIdentity?: { readonly dev: bigint; readonly ino: bigint };
+      isFile: boolean;
+      isSymbolicLink: boolean;
+      mtimeMs: number;
+      nlink: number;
+      size: number;
+    }> => ({
+      isFile: true,
+      isSymbolicLink: false,
+      mtimeMs: 0,
+      nlink: 1,
+      size: 0,
+    }),
+  ),
   rootWrite: vi.fn(async (_params?: unknown) => {}),
   migrateLegacyMainSessionKeys: vi.fn(),
   purgeAgentSessionStoreEntries: vi.fn<
@@ -490,7 +504,71 @@ vi.mock("node:fs/promises", async () => {
   return { ...patched, default: patched };
 });
 
-const { agentsHandlers, testing: agentsTesting } = await import("./agents.js");
+const { agentsHandlers } = await import("./agents.js");
+
+type MockObservedStat = {
+  dev?: number | bigint;
+  ino?: number | bigint;
+  isFile?: () => boolean;
+  isSymbolicLink?: () => boolean;
+  mtimeMs?: number;
+  nlink?: number | bigint;
+  size?: number | bigint;
+};
+
+// fs-safe 0.26.2 numberStatScalar: Node's signed bigint is an unsigned libuv field.
+function numberStatScalar(value: number | bigint): number {
+  return typeof value === "bigint" ? Number(BigInt.asUintN(64, value)) : value;
+}
+
+function scalarStatField(value: number | bigint | undefined, fallback: number): number {
+  return typeof value === "number" || typeof value === "bigint"
+    ? numberStatScalar(value)
+    : fallback;
+}
+
+function observedIdentity(value: number | bigint | undefined): number | bigint | undefined {
+  return typeof value === "number" || typeof value === "bigint" ? value : undefined;
+}
+
+function mockFsSafePathStat(stat: MockObservedStat | null | undefined) {
+  const dev = observedIdentity(stat?.dev);
+  const ino = observedIdentity(stat?.ino);
+  const result: {
+    dev?: number;
+    ino?: number;
+    exactIdentity?: { readonly dev: bigint; readonly ino: bigint };
+    isFile: boolean;
+    isSymbolicLink: boolean;
+    mtimeMs: number;
+    nlink: number;
+    size: number;
+  } = {
+    isFile: stat?.isFile?.() ?? true,
+    isSymbolicLink: stat?.isSymbolicLink?.() ?? false,
+    mtimeMs: stat?.mtimeMs ?? 0,
+    nlink: scalarStatField(stat?.nlink, 1),
+    size: scalarStatField(stat?.size, 0),
+  };
+  if (dev !== undefined) {
+    result.dev = numberStatScalar(dev);
+  }
+  if (ino !== undefined) {
+    result.ino = numberStatScalar(ino);
+  }
+  if (
+    dev !== undefined &&
+    ino !== undefined &&
+    (typeof dev === "bigint" || Number.isSafeInteger(dev)) &&
+    (typeof ino === "bigint" || Number.isSafeInteger(ino))
+  ) {
+    // Non-enumerable, matching pathStatFromStats in @openclaw/fs-safe 0.26.2.
+    Object.defineProperty(result, "exactIdentity", {
+      value: { dev: BigInt(dev), ino: BigInt(ino) },
+    });
+  }
+  return result;
+}
 
 beforeEach(() => {
   vi.mocked(root).mockReset();
@@ -566,15 +644,7 @@ beforeEach(() => {
   });
   mocks.rootStat.mockImplementation(async ({ rootDir, relativePath }) => {
     const stat = await mocks.fsLstat(path.join(rootDir, relativePath));
-    return {
-      dev: stat?.dev,
-      ino: stat?.ino,
-      isFile: stat?.isFile?.() ?? true,
-      isSymbolicLink: stat?.isSymbolicLink?.() ?? false,
-      mtimeMs: stat?.mtimeMs ?? 0,
-      nlink: stat?.nlink ?? 1,
-      size: stat?.size ?? 0,
-    };
+    return mockFsSafePathStat(stat);
   });
   mocks.rootWrite.mockResolvedValue(undefined);
 });
@@ -756,7 +826,6 @@ describe("agents.update", () => {
 describe("agents.delete", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    agentsTesting.setExactStatForTests();
     mocks.resolveAgentDir.mockImplementation((_cfg?: unknown, agentId?: string) =>
       agentId === "main" ? "/agents/main/agent" : "/agents/test-agent",
     );
@@ -1622,9 +1691,8 @@ describe("agents.delete", () => {
     expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
   });
 
-  // Root.stat types the file id as a double, so a large NTFS id arrives rounded.
-  // These cover the exact recheck, the collision it must keep rejecting, and a
-  // child that disappears between the two stats.
+  // The filesystem mock feeds fs-safe's PathStat shape: uint64 numeric metadata
+  // plus the signed exactIdentity companion from the same lstat.
   function mockNtfsCleanupStats(present: Map<string, { dev: bigint; ino: bigint }>) {
     mocks.fsLstat.mockImplementation(async (pathname: unknown) => {
       const stat = present.get(String(pathname));
@@ -1639,21 +1707,6 @@ describe("agents.delete", () => {
         nlink: 1,
       } as unknown as import("node:fs").Stats;
     });
-    mocks.rootStat.mockImplementation(async ({ rootDir, relativePath }) => {
-      const stat = present.get(path.join(rootDir, relativePath));
-      if (!stat) {
-        throw createEnoentError();
-      }
-      return {
-        dev: Number(stat.dev),
-        ino: Number(stat.ino),
-        isFile: false,
-        isSymbolicLink: false,
-        mtimeMs: 0,
-        nlink: 1,
-        size: 0,
-      };
-    });
   }
 
   it("deletes agent files whose NTFS ids exceed Number.MAX_SAFE_INTEGER", async () => {
@@ -1665,13 +1718,30 @@ describe("agents.delete", () => {
       ["/transcripts/test-agent", { dev: 1n, ino: ntfsIno + 2n }],
     ]);
     mockNtfsCleanupStats(present);
-    agentsTesting.setExactStatForTests(async (target) => {
-      const stat = present.get(target);
-      if (!stat) {
-        throw createEnoentError();
-      }
-      return { dev: stat.dev, ino: stat.ino } as unknown as import("node:fs").BigIntStats;
-    });
+
+    const respond = await call("agents.delete", { agentId: "test-agent" });
+
+    expectRespondOk(respond, { failed: [] });
+    expectTrashedWithinParent(agentDir);
+    expectTrashedWithinParent("/workspace/test-agent");
+    expectTrashedWithinParent("/transcripts/test-agent");
+    expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
+  });
+
+  it("deletes agent files whose NTFS ids are signed high-bit file ids", async () => {
+    const agentDir = "/agents/test-agent";
+    // Node reports this unsigned id as a negative bigint. fs-safe's numeric
+    // field is the uint64 view, so Number(ino) and PathStat.ino disagree.
+    const ntfsIno = -9_223_372_036_854_775_808n;
+    expect(Number(ntfsIno)).toBeLessThan(0);
+    expect(Number(BigInt.asUintN(64, ntfsIno))).toBeGreaterThan(0);
+    expect(Number(ntfsIno)).not.toBe(Number(BigInt.asUintN(64, ntfsIno)));
+    const present = new Map<string, { dev: bigint; ino: bigint }>([
+      [agentDir, { dev: 1n, ino: ntfsIno }],
+      ["/workspace/test-agent", { dev: 1n, ino: ntfsIno + 1n }],
+      ["/transcripts/test-agent", { dev: 1n, ino: ntfsIno + 2n }],
+    ]);
+    mockNtfsCleanupStats(present);
 
     const respond = await call("agents.delete", { agentId: "test-agent" });
 
@@ -1692,13 +1762,12 @@ describe("agents.delete", () => {
       [agentDir, { dev: 1n, ino: prepared }],
     ]);
     mockNtfsCleanupStats(present);
-    agentsTesting.setExactStatForTests(async (target) => {
-      const stat = present.get(target);
-      if (!stat) {
-        throw createEnoentError();
-      }
-      return { dev: stat.dev, ino: replacement } as unknown as import("node:fs").BigIntStats;
-    });
+    mocks.cronRemoveAgentJobsTransactional.mockImplementation(
+      async (_agentId: string, commit: () => Promise<unknown>) => {
+        present.set(agentDir, { dev: 1n, ino: replacement });
+        return await commit();
+      },
+    );
 
     const respond = await call("agents.delete", { agentId: "test-agent" });
 
@@ -1719,16 +1788,12 @@ describe("agents.delete", () => {
       [child, { dev: 1n, ino: ntfsIno + 3n }],
     ]);
     mockNtfsCleanupStats(present);
-    agentsTesting.setExactStatForTests(async (target) => {
-      if (target === child) {
-        throw createEnoentError();
-      }
-      const stat = present.get(target);
-      if (!stat) {
-        throw createEnoentError();
-      }
-      return { dev: stat.dev, ino: stat.ino } as unknown as import("node:fs").BigIntStats;
-    });
+    mocks.cronRemoveAgentJobsTransactional.mockImplementation(
+      async (_agentId: string, commit: () => Promise<unknown>) => {
+        present.delete(child);
+        return await commit();
+      },
+    );
 
     const respond = await call("agents.delete", { agentId: "test-agent" });
 
