@@ -53,9 +53,15 @@ async function openUpdateCard(page: Page, baseUrl: string) {
   const updateIssue = page.locator(
     'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
   );
+  const statusRequestsBeforeExpansion = (
+    await gateway.getRequests("update.status", { refreshCheckout: true })
+  ).length;
   await updateIssue.locator("summary").click();
-  // Details queues its toggle; observe the refresh before checking completion.
-  await gateway.waitForRequest("update.status", { match: { refreshCheckout: true } });
+  // The native details toggle queues its freshness check after the click.
+  await gateway.waitForRequest("update.status", {
+    after: statusRequestsBeforeExpansion,
+    match: { refreshCheckout: true },
+  });
   const updateButton = updateIssue.locator(".sidebar-update-card__action");
   await updateButton.waitFor({ timeout: 10_000 });
   await expect.poll(() => updateButton.isEnabled()).toBe(true);
@@ -608,8 +614,7 @@ suite.define(() => {
       async ({ page }) => {
         const { gateway, updateButton } = await openUpdateCard(page, suite.server.baseUrl);
 
-        await updateButton.focus();
-        await page.keyboard.press("Enter");
+        await updateButton.press("Enter");
         const dialog = confirmationDialog(page);
         await dialog.waitFor();
 
@@ -633,7 +638,7 @@ suite.define(() => {
           animations: "disabled",
           path: path.join(PROOF_DIR, "06-confirmation-confirm-focus.png"),
         });
-        await page.keyboard.press("Enter");
+        await confirm.press("Enter");
 
         await gateway.waitForRequest("update.run");
         expect(await gateway.getRequests("update.run")).toHaveLength(1);

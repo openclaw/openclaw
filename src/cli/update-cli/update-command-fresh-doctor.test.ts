@@ -6,6 +6,7 @@ import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../../config/io.js";
+import type { readDeferredPluginMigrationsAsync } from "../../infra/deferred-plugin-migrations.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import {
   consumeUpdatePostInstallDoctorResult,
@@ -46,6 +47,7 @@ const mocks = vi.hoisted(() => ({
   resolveEntrypoint: vi.fn(),
   command: vi.fn(),
   runUtf8: vi.fn<typeof import("../../process/exec.js").runUtf8CommandWithTimeout>(),
+  pendingMigrations: vi.fn<typeof readDeferredPluginMigrationsAsync>(),
 }));
 
 vi.mock("../../config/config.js", async (importOriginal) => ({
@@ -59,7 +61,7 @@ vi.mock("../../daemon/gateway-entrypoint.js", () => ({
 
 vi.mock("../../infra/deferred-plugin-migrations.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/deferred-plugin-migrations.js")>()),
-  readDeferredPluginMigrationsAsync: async () => [],
+  readDeferredPluginMigrationsAsync: mocks.pendingMigrations,
 }));
 
 vi.mock("../../process/exec.js", async (importOriginal) => {
@@ -157,6 +159,7 @@ describe("post-plugin update readiness", () => {
     mocks.readConfig.mockReset().mockResolvedValue(validConfigSnapshot);
     mocks.resolveEntrypoint.mockReset().mockResolvedValue("/opt/openclaw/dist/index.js");
     mocks.command.mockReset().mockResolvedValue({ stdout: "", stderr: "" });
+    mocks.pendingMigrations.mockReset().mockResolvedValue([]);
     mocks.runUtf8.mockReset().mockResolvedValue({
       ...readinessExit,
       stdout: JSON.stringify({ ok: true, checksRun: 1, checksSkipped: 0, findings: [] }),

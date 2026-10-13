@@ -224,7 +224,11 @@ async function prepareCapabilityReads<T>(read: () => T, retain: boolean) {
               storePath: query.storePath,
               agentId: query.agentId,
               ...(query.sessionKey !== undefined
-                ? { projection: "list" as const, sessionKeys: [query.sessionKey] }
+                ? {
+                    projection: "full" as const,
+                    snapshotFields: [],
+                    sessionKeys: [query.sessionKey],
+                  }
                 : {
                     projection: "sharing" as const,
                     selection: { kind: "session-id", sessionId: query.sessionId } as const,

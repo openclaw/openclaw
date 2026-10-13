@@ -9,6 +9,7 @@ import {
   validateSystemAgentSetupActivateStartParams,
   validateSystemAgentSetupAuthStartParams,
   validateSystemAgentSetupDetectParams,
+  validateSystemAgentSetupAutoParams,
   validateSystemAgentSetupVerifyParams,
   type SystemAgentChatQuestion,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -39,7 +40,10 @@ import {
   authenticatedProfileUnavailableError,
   isGatewayClientProfilePending,
 } from "./gateway-client-identity.js";
-import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
+import {
+  readGatewayRequestMutationAuthority,
+  retainGatewayRequestMutationAuthority,
+} from "./session-mutation-guards.js";
 import {
   createAdmittedWizardSession,
   runExclusiveSystemAgentSetupActivation,
@@ -150,6 +154,25 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     async ({ params, respond }) => {
       const { detectSetupInference } = await import("../../system-agent/setup-inference.js");
       respond(true, await detectSetupInference({}, params.agentId), undefined);
+    },
+  ),
+  "openclaw.setup.auto": defineValidatedGatewayHandler(
+    "openclaw.setup.auto",
+    validateSystemAgentSetupAutoParams,
+    async (options) => {
+      const { context, respond } = options;
+      const authority = retainGatewayRequestMutationAuthority(options);
+      try {
+        const { runGatewayAutomaticSetup } = await import("./system-agent-setup-auto.js");
+        respond(true, await runGatewayAutomaticSetup(context, authority.assertCurrent), undefined);
+      } catch (error) {
+        if (!(error instanceof SetupAdmissionBusyError)) {
+          throw error;
+        }
+        respondSetupAdmissionBusy(respond);
+      } finally {
+        authority.release();
+      }
     },
   ),
   "openclaw.setup.verify": defineValidatedGatewayHandler(

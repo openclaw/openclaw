@@ -236,6 +236,10 @@ describe("actor transcript context replica", () => {
   it.each([
     "missing receipt",
     "control",
+    "compaction",
+    "branch summary",
+    "unsupported",
+    "excluded",
     "side append",
     "bytes",
     "count",
@@ -261,7 +265,13 @@ describe("actor transcript context replica", () => {
             ? { type: "reset", id: "reset", parentId: "reply" }
             : {
                 ...message("next-user", "reply", "user"),
+                ...(reason === "compaction" ? { type: "compaction" } : {}),
+                ...(reason === "branch summary" ? { type: "branch_summary" } : {}),
+                ...(reason === "unsupported" ? { type: "plugin_control" } : {}),
                 ...(reason === "side append" ? { appendMode: "side" } : {}),
+                ...(reason === "excluded"
+                  ? { message: { role: "user", content: "Hidden", excludeFromContext: true } }
+                  : {}),
               },
         serializedBytes: 400,
       },

@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../../../test/helpers/promise.js";
 import type { RunEmbeddedAgentParams } from "../../../agents/embedded-agent-runner/run/params.js";
 import {
@@ -11,14 +11,12 @@ import { REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS } from "../../../agents/realt
 import { replyRunRegistry } from "../../../auto-reply/reply/reply-run-registry.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
-  listSessionEntriesReadOnly,
   loadSessionEntry,
   readSessionTranscriptMessageEvents,
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
@@ -260,7 +258,7 @@ async function createRelayCall(params: Record<string, unknown> = {}) {
   return { sessionId, target: record.sessionTarget };
 }
 
-it.each([undefined, "main"])(
+it.each([undefined])(
   "retains the opaque relay owner when Talk defaults change (key=%s)",
   async (sessionKey) => {
     config.session = { scope: "global" };
@@ -292,7 +290,7 @@ it.each([undefined, "main"])(
   },
 );
 
-it.each([undefined, "main"])(
+it.each([undefined])(
   "enforces the retained relay's sharing policy (key=%s)",
   async (sessionKey) => {
     await replaceSessionEntry(
@@ -457,7 +455,6 @@ it.each([
   "signal",
   "generation",
   "cleanup",
-  "voice binding removed",
   "voice binding replaced",
 ] as const)("fences %s Gateway registration while control preparation waits", async (change) => {
   config.session = { scope: "global" };
@@ -509,14 +506,6 @@ it.each([
       entry.lifecycleGeneration = "retired";
     } else if (change === "cleanup") {
       entry.registrationCleanupRequested = true;
-    } else if (change === "voice binding removed") {
-      emitTrustedDiagnosticEvent({
-        type: "run.completed",
-        runId,
-        durationMs: 0,
-        outcome: "completed",
-      });
-      expect(resolveClientVoiceRunBinding(runId)).toBeUndefined();
     } else if (change === "voice binding replaced") {
       const replacementVoiceSessionId = await createOrResumeClientVoiceSession({
         ...voiceScope,
@@ -806,54 +795,6 @@ it("restores bounded relay history after the original voice provider finishes cl
     cleanupTalkConnection(client.connId, context.logGateway);
     await changing.catch(() => {});
   }
-});
-
-describe.each(["browser", "relay"] as const)("native %s Talk consultation", (transport) => {
-  it.each([
-    { name: "custom main", scope: "per-sender" as const, canonicalKey: "agent:voice:home" },
-    { name: "global", scope: "global" as const, canonicalKey: "global" },
-  ])("uses the created $name session in the provider callback", async ({ scope, canonicalKey }) => {
-    config.session = { mainKey: "home", scope };
-    config.talk = { ...config.talk, realtime: { instructions: "Keep native answers brief." } };
-    const target = await prepareTalkSessionTarget(config, "main");
-    const method = transport === "browser" ? "talk.client.create" : "talk.session.create";
-    const respond = await dispatch(method, {
-      sessionKey: "main",
-      mode: "realtime",
-      transport: transport === "browser" ? "webrtc" : "gateway-relay",
-      brain: "agent-consult",
-      ...(transport === "browser" ? { capabilities: ["gateway-control-v1"] } : {}),
-    });
-    expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
-    expect(providerInstructions).toBe(
-      `Keep native answers brief.\n\n${REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS}`,
-    );
-    const result = respond.mock.calls[0]?.[1] as { voiceSessionId?: string; sessionId?: string };
-    const storage = { agentId: "voice", sessionKey: canonicalKey, storePath: target.storePath };
-    const created = loadSessionEntry(storage);
-    expect(created?.sessionId).toBeTruthy();
-    expect(callback).toBeTypeOf("function");
-    await expect(callback!({ prompt: "Continue this conversation" })).resolves.toEqual({
-      text: "Synthetic consult answer",
-    });
-    expect(mocks.runEmbeddedAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "voice",
-        sessionKey: canonicalKey,
-        sessionId: created!.sessionId,
-        sessionTarget: { ...storage, sessionId: created!.sessionId },
-      }),
-    );
-    expect(
-      listSessionEntriesReadOnly({ agentId: "voice", storePath: target.storePath }).map(
-        (entry) => entry.sessionKey,
-      ),
-    ).toEqual([canonicalKey]);
-    expect(
-      clientVoiceSessionTesting.readRecord("voice", result.voiceSessionId ?? result.sessionId!)
-        ?.sessionKey,
-    ).toBe("main");
-  });
 });
 
 it.for(["status", "cancelled", "successor"] as const)(

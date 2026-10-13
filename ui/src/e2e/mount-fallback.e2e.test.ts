@@ -244,7 +244,7 @@ runtimeFailureSuite.define(() => {
           Object.defineProperty(globalThis, "getComputedStyle", {
             configurable: true,
             value: (element: Element, pseudoElement?: string | null) => {
-              if (customElements.get("openclaw-app")) {
+              if (element === document.documentElement) {
                 throw new Error("forced application runtime creation failure");
               }
               return browserGetComputedStyle(element, pseudoElement);
@@ -253,8 +253,11 @@ runtimeFailureSuite.define(() => {
         });
         await page.clock.install();
         await pauseVirtualClock(page);
+        const failed = page.waitForEvent("pageerror", {
+          predicate: (error) => error.message === "forced application runtime creation failure",
+        });
         await page.goto(runtimeFailureSuite.server.baseUrl, { waitUntil: "domcontentloaded" });
-        await page.waitForFunction(() => customElements.get("openclaw-app") !== undefined);
+        await failed;
 
         await page.clock.runFor(12_001);
         await waitForRecoveryDocument(page);

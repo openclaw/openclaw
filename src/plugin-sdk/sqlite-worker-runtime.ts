@@ -16,6 +16,7 @@ export {
   supportsNodeSqliteExtensionLoading,
 } from "../infra/node-sqlite.js";
 export type { SqlConnection } from "../infra/sql-connection.js";
+export { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
 export {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,

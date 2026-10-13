@@ -451,7 +451,7 @@ it("revokes earlier engine callbacks while its raw disposal remains admitted", a
       const late = new Promise((resolve) => process.once(${JSON.stringify(event + "-late")}, resolve));
       const finish = new Promise((resolve) => process.once(${JSON.stringify(event + "-finish")}, resolve));
       const record = (kind) => process.emit(${JSON.stringify(event)}, kind);
-      const route = (text) => api.runtime.system.enqueueSystemEvent(text, { sessionKey: ${JSON.stringify(event)} });
+      const route = (text) => api.runtime.system.enqueueSystemEvent(text, { sessionKey: ${JSON.stringify(`agent:main:${event}`)} });
       api.registerContextEngine("closing-engine", () => ({
         info: { id: "closing-engine", name: "Closing Engine" },
         ingest: async () => ({ ingested: false }),

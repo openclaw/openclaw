@@ -271,6 +271,9 @@ not merely its declared capabilities. A declared command is usable only when
 the approved pairing and Gateway command allowlist both authorize it.
 Connected non-hosts, ineligible or saturated hosts, update-required devices,
 and unavailable hosts remain visible but disabled with an actionable reason.
+The session picker and command palette show a warning icon and **Unavailable**
+for these computers. Focus or tap the row to read why it cannot host the session;
+the command palette shows one unavailable row instead of repeating project choices.
 For an already-paired headless node, enable `nodeHost.workerRuns.enabled` and
 run `openclaw node install --force` as shown above. Update-required hosts must
 be upgraded and restarted before selection.

@@ -198,16 +198,9 @@ async function readWorkingStartedAts(page: Page): Promise<number[]> {
 
 async function waitForGatewayConnected(page: Page): Promise<void> {
   await expect
-    .poll(
-      () =>
-        page.evaluate(() => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-          };
-          return app.runtime?.context.gateway.snapshot.phase;
-        }),
-      { timeout: 15_000 },
-    )
+    .poll(() => page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase), {
+      timeout: 15_000,
+    })
     .toBe("connected");
 }
 

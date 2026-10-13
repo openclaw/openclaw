@@ -1,10 +1,6 @@
--- Generated lazy feature; create dependencies first.
+-- Generated runtime DDL; the owner supplies search_path and the transaction.
 
-BEGIN;
-
-SET LOCAL standard_conforming_strings = on;
-
-CREATE TABLE "openclaw_state"."skill_library_entries" (
+CREATE TABLE "skill_library_entries" (
   "skill_id" text COLLATE "C" NOT NULL,
   "owner_profile_id" text COLLATE "C",
   "author_profile_id" text COLLATE "C" NOT NULL,
@@ -18,7 +14,7 @@ CREATE TABLE "openclaw_state"."skill_library_entries" (
   PRIMARY KEY ("skill_id")
 );
 
-CREATE TABLE "openclaw_state"."skill_library_events" (
+CREATE TABLE "skill_library_events" (
   "event_id" text COLLATE "C" NOT NULL,
   "skill_id" text COLLATE "C" NOT NULL,
   "revision" text COLLATE "C" NOT NULL,
@@ -28,7 +24,7 @@ CREATE TABLE "openclaw_state"."skill_library_events" (
   PRIMARY KEY ("event_id")
 );
 
-CREATE TABLE "openclaw_state"."skill_library_revisions" (
+CREATE TABLE "skill_library_revisions" (
   "skill_id" text COLLATE "C" NOT NULL,
   "revision" text COLLATE "C" NOT NULL,
   "description" text COLLATE "C" NOT NULL,
@@ -37,7 +33,7 @@ CREATE TABLE "openclaw_state"."skill_library_revisions" (
   PRIMARY KEY ("skill_id", "revision")
 );
 
-CREATE TABLE "openclaw_state"."skill_library_uploads" (
+CREATE TABLE "skill_library_uploads" (
   "upload_id" text COLLATE "C" NOT NULL,
   "owner_profile_id" text COLLATE "C" NOT NULL,
   "slug" text COLLATE "C" NOT NULL,
@@ -48,5 +44,3 @@ CREATE TABLE "openclaw_state"."skill_library_uploads" (
   "published_skill_id" text COLLATE "C",
   PRIMARY KEY ("upload_id")
 );
-
-COMMIT;
