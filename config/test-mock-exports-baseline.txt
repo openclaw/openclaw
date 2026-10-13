@@ -2713,8 +2713,6 @@
 ["src/agents/model-auth.test.ts","../plugins/provider-runtime.js","103a7b46eb0d8d1aac8153b8e3b402fda6128589ea47475dcd476f0ad4cbf669",1]
 ["src/agents/model-auth.test.ts","../plugins/providers.js","ab1594c641aef9e097176e52d10f51d8ee2a84aa434774b0b4101d1cdde5f13b",1]
 ["src/agents/model-auth.test.ts","../plugins/setup-registry.js","f0f8d1772d8adc6a2052bc56416d4d535a8645bb0e4da024003da2199bf02836",1]
-["src/agents/model-catalog-auth-labels.test.ts","./auth-profiles.js","84493bde39f9e780bd908e71f95cf9eab46820693b0125833fcd5414801e95ca",1]
-["src/agents/model-catalog-auth-labels.test.ts","./model-auth.js","37b117e34b53d378a5e9060fc3101f08fea3e0ff6dc6cc45145d5ca04de0970e",1]
 ["src/agents/model-catalog-view.test.ts","../plugins/plugin-metadata-snapshot.js","bb8c23078a4ab4e31196260e6c5dc9d58acfc6ad73e426b31e6051dc1192ea9d",1]
 ["src/agents/model-catalog-view.test.ts","./prepared-model-catalog.js","0c7deae038ab89985e12d19d5c1c3ed208af82e91cd7a352f8508772e88bdb78",1]
 ["src/agents/model-catalog.configured.test.ts","../plugins/provider-runtime.runtime.js","4b5384366c2eff65b61c13198543d5a31e715fcf2b2f81b654fd251e01f03441",1]
