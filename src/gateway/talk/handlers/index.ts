@@ -726,6 +726,7 @@ export const talkHandlers: GatewayRequestHandlers = {
             } else {
               return session.key;
             }
+            return undefined;
           },
         );
       const sessionKey = await resolveSession();
