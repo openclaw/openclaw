@@ -1107,6 +1107,7 @@
 @container chat-composer (max-width: 560px) {
   .agent-chat__input--mobile-toolbar .agent-chat__composer-controls {
     flex: 1 1 0;
+    gap: var(--chat-composer-chip-gap);
     min-width: 0;
     margin-inline-start: auto;
     overflow: visible;
@@ -1173,7 +1174,7 @@
   }
 
   .agent-chat__input--mobile-toolbar .context-ring,
-  .agent-chat__input--mobile-toolbar .chat-controls__permission-trigger,
+  .agent-chat__input.agent-chat__input--mobile-toolbar .chat-controls__permission-trigger,
   .agent-chat__input--mobile-toolbar .chat-send-btn--voice {
     width: var(--chat-composer-control-size);
     min-width: var(--chat-composer-control-size);

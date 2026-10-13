@@ -238,8 +238,8 @@ describe("duckduckgo web search provider", () => {
     },
   );
 
-  it("returns the first two valid results with their own snippets", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+  it("uses an honest User-Agent and returns the first two valid results with their snippets", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
         `
           <a class="result__a" href="https://example.com/empty-title"></a>
@@ -257,6 +257,12 @@ describe("duckduckgo web search provider", () => {
     );
     const tool = createSearchTool({ tools: { web: { search: { cacheTtlMinutes: 0 } } } });
     const result = await tool.execute({ query: "DuckDuckGo valid result count", count: 2 });
+
+    expect(fetch).toHaveBeenCalledOnce();
+    const headers = new Headers(fetch.mock.calls[0]?.[1]?.headers);
+    const userAgent = headers.get("User-Agent");
+    expect(userAgent).toMatch(/^openclaw-duckduckgo\//);
+    expect(userAgent).not.toMatch(/Mozilla|Chrome|AppleWebKit/);
 
     const expected = [
       { url: "https://example.com/first", snippet: expect.stringContaining("First snippet") },

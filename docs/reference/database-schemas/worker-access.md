@@ -183,10 +183,12 @@ appends, content rewrites, rewind, compaction, archive/restore, deletion, and un
 writes retain their session-scoped invalidation or committed actor update.
 
 Activity-summary batches also reuse the actor's complete retained linear context
-at its committed write token. The replica and worker share incremental batch
-selection, including byte limits and omitted-content handling. Incomplete or
-invalidated context uses the bounded worker reader; the replica adds no separate
-cache, stored format, retention rule, or permission grant.
+at its committed write token, including canonical model snapshots and runtime-context
+metadata. The replica and worker share transcript projection semantics and incremental
+batch selection, including byte limits and omitted-content handling. Incomplete or
+invalidated context, unsupported entries, and reset, rewind, or compaction boundaries
+use the bounded worker reader; the replica adds no separate cache, stored format,
+retention rule, or permission grant.
 
 Parent forks use the existing session-entry worker for both transcript copying
 and child-row commits. Internal fork transformations are data patches, not native
@@ -1155,10 +1157,17 @@ an overlapping read; it still validates its exact context at acceptance.
 
 Initial bounded hydration can also supply model context when it contains the whole
 active path. The manager retains detached, sanitized bytes and consumes them only
-under its existing source, writer FIFO, and native-mutation checks while the
-physical store's write revision remains unchanged. Truncated or changed views use
-the normal worker reader. Hydration and anchors share the projection's version
-and watermark in their existing snapshot.
+while its view and the physical store's receipt-owned write revision remain
+unchanged, under the current writer and selected reader. This synchronous handoff
+does not reacquire a history worker, recapture file identity, join the writer FIFO,
+or rebuild a second manager. A later pending write may complete after snapshot
+acceptance; writes and external effects keep their own authority checks. Truncated,
+changed, or admission-fenced views use the normal worker reader. Reset, compaction,
+fork, and retargeting invalidate through the same receipts or manager view. The
+writable manager, callbacks, resource extensions, and transport authority remain
+attempt-scoped; history replicas and provider connections retain their existing
+session owners. Hydration and anchors share the projection's version and watermark
+in their existing snapshot.
 
 Turn writers carry current entry facts into source and custody checks. Publication
 can reuse a writer-certified entry postimage while its transaction revision still

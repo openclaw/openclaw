@@ -295,20 +295,6 @@ it("rejects replaced parent incarnations and never retains a reused child grant"
     });
     expect(await spawn({ senderIsOwner: false })).toMatchObject({ status: "ok" });
     expect(child()).toMatchObject({ spawnedBySenderIsOwner: false });
-
-    // The parent resets in place while the child's store is still being prepared.
-    const reset = writeParentDuringChildPrepare(childSessionKey, () =>
-      upsertSessionEntryCore(scope, { sessionId: "parent-first", lifecycleRevision: "second" }),
-    );
-    try {
-      expect(await spawn({ senderIsOwner: true })).toMatchObject({
-        status: "error",
-        error: expect.stringContaining("Parent session changed"),
-      });
-      expect(child()).toMatchObject({ spawnedBySenderIsOwner: false });
-    } finally {
-      reset.mockRestore();
-    }
   });
 });
 

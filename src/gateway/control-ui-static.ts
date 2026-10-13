@@ -235,6 +235,7 @@ export async function sendControlUiHtmlBody(
   res: ServerResponse,
   body: string,
   isCurrent?: () => boolean,
+  staleRedirectPath?: string,
 ) {
   const encoding = resolveControlUiHtmlEncoding(req);
   if (encoding === "not-acceptable") {
@@ -246,7 +247,18 @@ export async function sendControlUiHtmlBody(
     encoding === "identity" ? body : await cachedCompressedControlUiHtml(body, encoding);
   if (isCurrent && !isCurrent()) {
     res.removeHeader("Content-Encoding");
-    respondPlainText(res, 403, "Session access changed. Reload the conversation.");
+    if (!staleRedirectPath) {
+      respondPlainText(res, 403, "Session access changed. Reload the conversation.");
+      return;
+    }
+    // A session entry re-enters through its plain app path, where the normal
+    // auth gate decides access; the prepared entry document is never sent.
+    res.statusCode = 303;
+    res.setHeader("Location", staleRedirectPath);
+    res.setHeader("Cache-Control", "no-store");
+    res.removeHeader("Content-Type");
+    res.removeHeader("Content-Security-Policy");
+    res.end();
     return;
   }
   res.end(encoded);

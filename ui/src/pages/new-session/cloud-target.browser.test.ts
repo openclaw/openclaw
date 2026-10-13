@@ -128,8 +128,12 @@ describe("cloud target accessibility", () => {
         ),
         container,
       );
-      const choice = page.getByRole("button", { name: "production Linux · Standard", exact: true });
-      await expect.element(choice).toHaveAccessibleName("production Linux · Standard");
+      const name =
+        compact && disabled
+          ? "production Linux · Standard Unavailable"
+          : "production Linux · Standard";
+      const choice = page.getByRole("button", { name, exact: true });
+      await expect.element(choice).toHaveAccessibleName(name);
       await expect.element(choice).toHaveAccessibleDescription(expected);
       if (disabled) {
         container.querySelector<HTMLButtonElement>("[data-value]")!.click();

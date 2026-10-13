@@ -283,6 +283,7 @@ suite.define(() => {
           ...delegatingParent,
           hasActiveRun: false,
           activeRunIds: [],
+          endedAt: now + 2,
           updatedAt: now + 2,
           snapshotAt: now + 2,
         };

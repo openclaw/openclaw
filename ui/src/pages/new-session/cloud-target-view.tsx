@@ -90,8 +90,7 @@ export function SessionMenuItem(props: { item: NativeSessionMenuItem; submitting
   const unavailableReason = () =>
     props.item.disabled ? props.item.title || props.item.description : undefined;
   const description = () => (props.item.compact ? undefined : props.item.description);
-  const accessibleBlocker = () =>
-    props.item.compact && props.item.disabled && !props.item.hideDetails;
+  const accessibleBlocker = () => props.item.compact && props.item.disabled;
   const touchDetails = () => props.item.compact && !props.item.disabled && !props.item.hideDetails;
   const accessibilityHints = () =>
     [
@@ -103,9 +102,7 @@ export function SessionMenuItem(props: { item: NativeSessionMenuItem; submitting
       .filter(Boolean)
       .join(", ");
   const accessibleDescription = () =>
-    [accessibilityHints(), props.item.accessibleProvider ? unavailableReason() : undefined]
-      .filter(Boolean)
-      .join(", ");
+    [accessibilityHints(), unavailableReason()].filter(Boolean).join(", ");
   const select = nativeListener("click", (event) => {
     if (props.item.disabled) {
       event.preventDefault();
@@ -145,7 +142,15 @@ export function SessionMenuItem(props: { item: NativeSessionMenuItem; submitting
           <span class="new-session-page__selected-summary">{props.item.selectedSummary}</span>
         ) : undefined}
         {description() ? <span class="session-menu__description">{description()}</span> : undefined}
-      </span>
+      </span>{" "}
+      {accessibleBlocker() ? (
+        <span class="new-session-page__unavailable-status">
+          <span aria-hidden="true">
+            <Icon name="alertTriangle" />
+          </span>
+          {t("newSession.environmentUnavailable")}
+        </span>
+      ) : undefined}
       {!props.item.compact && props.item.facts?.length ? (
         <span class="new-session-page__menu-meta">
           <span class="new-session-page__menu-facts">
@@ -170,7 +175,7 @@ export function SessionMenuItem(props: { item: NativeSessionMenuItem; submitting
   );
   return (
     <>
-      {props.item.compact && !props.item.hideDetails ? (
+      {props.item.compact && (!props.item.hideDetails || accessibleBlocker()) ? (
         <openclaw-tooltip
           class="new-session-page__environment-details"
           placement="right-start"

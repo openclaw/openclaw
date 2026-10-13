@@ -137,7 +137,7 @@ export function UnplacedSubagentWait(props: {
     {
       kind: "reading-indicator",
       key: `waiting-subagents:${props.sessionKey}`,
-      startedAt: props.wait.startedAt ?? 0,
+      startedAt: props.wait.startedAt,
       waitingOn: "subagents",
     },
   ]);

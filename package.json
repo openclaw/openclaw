@@ -1799,7 +1799,7 @@
     "deps:vuln:gate": "node --import ./scripts/tsx.mjs scripts/dependency-vulnerability-gate.mts",
     "db:kysely:check": "node scripts/run-vitest.mjs test/scripts/generate-kysely-types.test.ts && node scripts/generate-kysely-types.mts --verify",
     "db:kysely:gen": "node scripts/generate-kysely-types.mts",
-    "db:postgres:check": "node scripts/run-vitest.mjs test/scripts/generate-postgres-schema.test.ts && node --import ./scripts/tsx.mjs scripts/generate-postgres-schema.mts --verify && node --import ./scripts/tsx.mjs scripts/generate-postgres-schema.mts --target workboard --verify",
+    "db:postgres:check": "node scripts/run-vitest.mjs test/scripts/generate-postgres-schema.test.ts && node --import ./scripts/tsx.mjs scripts/generate-postgres-schema.mts --target canonical --verify && node --import ./scripts/tsx.mjs scripts/generate-postgres-schema.mts --target workboard --verify",
     "db:postgres:gen": "node --import ./scripts/tsx.mjs scripts/generate-postgres-schema.mts",
     "db:worker-inventory:check": "node --max-old-space-size=4096 scripts/database-worker-inventory.mjs --check",
     "db:worker-inventory:gen": "node --max-old-space-size=4096 scripts/database-worker-inventory.mjs --write",

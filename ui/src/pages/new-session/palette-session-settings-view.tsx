@@ -1,5 +1,6 @@
 import { For } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
+import "../../components/tooltip.ts";
 import { KeyboardShortcut, ShortcutText } from "../../components/solid/kbd.tsx";
 import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
@@ -71,11 +72,6 @@ function SettingsPlaces(props: { view: SettingsView }) {
                   />
                 )}
               </For>
-              {group().machine.disabledReason ? (
-                <div class="palette-session-settings__unavailable">
-                  {group().machine.disabledReason}
-                </div>
-              ) : undefined}
             </section>
           )}
         </For>
@@ -123,25 +119,50 @@ function SettingsPlaceChoice(props: {
             : props.view.options.draft.place.folder ===
               props.view.options.draft.place.workspacePath())));
   const choose = nativeListener("click", () => props.view.choose(props.machine, props.choice.id));
-  return (
+  const row = () => (
     <button
       type="button"
       class="palette-session-settings__row"
       data-machine={props.machine.id}
       data-project={props.choice.id}
       aria-pressed={selected() ? "true" : "false"}
-      title={props.machine.disabledReason}
-      disabled={props.view.locked || Boolean(props.machine.disabledReason)}
+      aria-description={props.machine.disabledReason}
+      aria-disabled={props.machine.disabledReason ? "true" : undefined}
+      disabled={props.view.locked}
       ref={choose}
     >
-      <span class="palette-session-settings__icon">
-        <Icon name={props.choice.id ? "gitBranch" : "folder"} />
+      <span class="palette-session-settings__icon" aria-hidden="true">
+        <Icon
+          name={
+            props.machine.disabledReason
+              ? "alertTriangle"
+              : props.choice.id
+                ? "gitBranch"
+                : "folder"
+          }
+        />
       </span>
       <span class="palette-session-settings__label">{props.choice.label}</span>
       <span class="palette-session-settings__check">
         {selected() ? <Icon name="check" /> : undefined}
       </span>
     </button>
+  );
+  return (
+    <>
+      {props.machine.disabledReason ? (
+        <openclaw-tooltip
+          class="palette-session-settings__reason"
+          placement="right-start"
+          prop:openOnClick={true}
+          prop:content={props.machine.disabledReason}
+        >
+          {row()}
+        </openclaw-tooltip>
+      ) : (
+        row()
+      )}
+    </>
   );
 }
 

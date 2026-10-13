@@ -192,7 +192,8 @@ export function createAgentDatabaseExecution(
     creatingTarget?: DatabasePathIdentity,
     signal?: AbortSignal,
     readmitSchema = false,
-    admissionDeadline?: number,
+    contentionDeadline?: number,
+    schemaReadmitted = false,
   ): Promise<T | undefined> {
     const pending = agentDatabaseLifecycle.pending.get(pathname);
     if (pending) {
@@ -262,10 +263,14 @@ export function createAgentDatabaseExecution(
     } catch (error) {
       const nativeFailure = current.failure();
       const contended = !entered && isSqliteLockError(error);
-      const schemaChanged = !entered && error instanceof AgentDatabaseSchemaAdmissionChangedError;
+      const schemaChanged =
+        !entered &&
+        !schemaReadmitted &&
+        nativeFailure !== "native" &&
+        error instanceof AgentDatabaseSchemaAdmissionChangedError;
       if (generation === current && (nativeFailure || retireNativeOnFailure || schemaChanged)) {
         try {
-          if (nativeFailure === "native" && !contended && !schemaChanged && !nativeClosing) {
+          if (nativeFailure === "native" && !contended && !nativeClosing) {
             await owner.close();
           } else {
             // The rejected broker scope has settled; only its captured native owner is retired.
@@ -280,13 +285,32 @@ export function createAgentDatabaseExecution(
           );
         }
       }
-      if (contended || schemaChanged) {
-        const deadline = admissionDeadline ?? performance.now() + LEASE_CONTENTION_RETRY_TIMEOUT_MS;
-        if (admissionDeadline === undefined) {
+      if (schemaChanged) {
+        // Fresh proof can recover a refused publication; an entered operation is never replayed.
+        assertCurrent();
+        source.assertCurrent();
+        assertCallerCurrent();
+        signal?.throwIfAborted();
+        return run(
+          source,
+          operation,
+          assertCallerCurrent,
+          expectedIdentity,
+          retireNativeOnFailure,
+          createIfMissing,
+          creatingTarget,
+          signal,
+          readmitSchema,
+          contentionDeadline,
+          true,
+        );
+      }
+      if (contended) {
+        const deadline =
+          contentionDeadline ?? performance.now() + LEASE_CONTENTION_RETRY_TIMEOUT_MS;
+        if (contentionDeadline === undefined) {
           log.warn(
-            schemaChanged
-              ? "Agent database schema admission changed; retrying before execution."
-              : "Agent database execution admission delayed by SQLite lock contention; retrying before execution.",
+            "Agent database execution admission delayed by SQLite lock contention; retrying before execution.",
           );
         }
         const remaining = deadline - performance.now();
@@ -309,6 +333,7 @@ export function createAgentDatabaseExecution(
             signal,
             readmitSchema,
             deadline,
+            schemaReadmitted,
           );
         }
       }

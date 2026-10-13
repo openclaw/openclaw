@@ -123,7 +123,7 @@ afterEach(async () => {
 });
 
 test.each(["two-leases-missing", "revoked-after-open", "revoked-during-open"] as const)(
-  "reclamation borrows refreshed native verification and rechecks later invalidation (%s)",
+  "reclamation borrows native-only verification unless revoked (%s)",
   async (proof) => {
     const { database, options, plans, scopes } = createFixture(["victim"]);
     closeOpenClawAgentDatabasesForTest(options.env.OPENCLAW_STATE_DIR);
@@ -132,11 +132,18 @@ test.each(["two-leases-missing", "revoked-after-open", "revoked-during-open"] as
       proof === "revoked-during-open",
     );
     const execution = captureOpenClawAgentDatabaseExecution({ ...options, path: database.path });
+    validation.admissionPath = database.path;
+    let entries = 0;
     let peerLease: string | undefined;
     try {
-      const operation = vi.fn(async () => "opened");
-      await expect(execution.runExisting(source, operation)).resolves.toBe("opened");
-      expect(operation).toHaveBeenCalledOnce();
+      await expect(
+        execution.runExisting(source, async () => {
+          entries += 1;
+          return "opened";
+        }),
+      ).resolves.toBe("opened");
+      expect(entries).toBe(1);
+      expect(loadSessionEntryReadOnly(scopes[0]!)).toMatchObject({ sessionId: "victim" });
       if (proof.startsWith("two-leases")) {
         const before = readOpenClawAgentIntegrityVerification(database.path, options.env);
         peerLease = claimOpenClawAgentDatabaseLease({ ...options, path: database.path });
@@ -148,6 +155,7 @@ test.each(["two-leases-missing", "revoked-after-open", "revoked-during-open"] as
       expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
       const transferred = getOpenClawAgentDatabaseValidationForTransfer(database);
       expect(transferred).toBeDefined();
+      expect(Atomics.load(new Int32Array(transferred!.valid), 0)).toBe(1);
       if (proof === "revoked-after-open") {
         invalidateOpenClawAgentDatabaseValidation(database.path);
       }
