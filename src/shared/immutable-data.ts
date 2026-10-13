@@ -64,8 +64,13 @@ function inspectPlainData(value: unknown, freeze: boolean, requireFrozen = true)
   }
   // A cycle is proven only when every reachable member passes, not on a back edge.
   if (plain && (freeze || requireFrozen)) {
-    for (const candidate of inspected) {
-      deeplyFrozenPlainData.add(candidate);
+    if (freeze) {
+      // Freezing publishes a root; admission can memoize descendants when they are consumed.
+      deeplyFrozenPlainData.add(value);
+    } else {
+      for (const candidate of inspected) {
+        deeplyFrozenPlainData.add(candidate);
+      }
     }
   }
   return plain;
