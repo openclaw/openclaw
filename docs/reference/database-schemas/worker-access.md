@@ -3534,9 +3534,13 @@ Embedded writer claims, live-model-switch consolidation, and pending-final deliv
 preparation, settlement, and cleanup explicitly select that worker patch path.
 After the reply dispatcher finishes delivery, terminal settlement and pending-final
 cleanup reduce the same entry in one worker transaction. Suppression uses the same
-combined operation. The lower-level delivery receipt still commits before queue
-acknowledgment; it does not clear recovery custody. Custom delivery paths retain
-their existing cleanup operation.
+combined operation. Direct channel delivery shares that committed terminal receipt
+with the reply dispatcher and records it before fallible delivery observers run.
+When the dispatcher owns cleanup, the channel joins it to that first receipt;
+observer failure cannot restore replayable custody. Multipart direct sends admit
+custody once and retain live writer authorization at each platform send. Queued
+delivery receipts still commit before queue acknowledgment without clearing
+recovery custody. Custom delivery paths retain their existing cleanup operation.
 Callback-based reducers prepare outside the transaction; the worker rereads the selected
 rows before applying the patch and publishes acknowledged results before releasing
 the existing writer queue. Uncertain writes never replay. Durable lifecycle start
