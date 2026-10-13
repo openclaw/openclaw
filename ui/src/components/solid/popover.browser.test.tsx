@@ -23,12 +23,12 @@ describe("Solid native popover", () => {
         >
           <input aria-label="Pinned draft" />
         </Popover>
-        <button>Outside</button>
+        <input aria-label="Outside" />
       </>
     ));
     flush();
     const button = view.getByRole("button", { name: "Pinned details" });
-    const outside = view.getByRole("button", { name: "Outside" });
+    const outside = view.getByRole("textbox", { name: "Outside" });
     await userEvent.click(button);
     await phase(handle.overlay.surface, "open");
     const input = view.getByRole("textbox", { name: "Pinned draft" });
