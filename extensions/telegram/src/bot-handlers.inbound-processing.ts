@@ -30,6 +30,7 @@ import type {
 } from "./bot-message-context.types.js";
 import {
   createTelegramSpooledReplayDeferredParticipant,
+  getTelegramSpooledReplayLifecycle,
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
@@ -61,11 +62,15 @@ export function createTelegramInboundProcessing({
   const { cancelPending, inboundDebouncer, resolveTelegramDebounceLane } =
     createTelegramInboundBuffers({ params: handlerParams, message });
 
-  const { handleMediaGroup, resolveUnaddressedGroupMediaDisposition, sendMediaWarning } =
-    createTelegramInboundMedia({
-      params: handlerParams,
-      message,
-    });
+  const {
+    handleMediaGroup,
+    pendingMediaGroups,
+    resolveUnaddressedGroupMediaDisposition,
+    sendMediaWarning,
+  } = createTelegramInboundMedia({
+    params: handlerParams,
+    message,
+  });
   const processInboundMessage = async (
     params: TelegramInboundMessage,
   ): Promise<TelegramInboundDisposition> => {
@@ -133,6 +138,24 @@ export function createTelegramInboundProcessing({
       })
     ) {
       return { kind: "buffered", buffer: "media-group" };
+    }
+
+    // Wait in the ordinary conversation lane, never the independent control lane.
+    // The album queue releases at adoption (or claim release), not reply completion.
+    const pendingAlbums = !bypassTextBuffer && pendingMediaGroups(mediaInput);
+    if (pendingAlbums) {
+      const lifecycle = getTelegramSpooledReplayLifecycle();
+      const intervalMs = lifecycle?.deferredHeartbeatIntervalMs;
+      const heartbeat =
+        intervalMs === undefined
+          ? undefined
+          : setInterval(() => lifecycle?.onDeferredHeartbeat?.(), intervalMs);
+      heartbeat?.unref();
+      try {
+        await pendingAlbums;
+      } finally {
+        clearInterval(heartbeat);
+      }
     }
 
     const mediaDisposition = await resolveUnaddressedGroupMediaDisposition(mediaInput);

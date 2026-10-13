@@ -1,5 +1,5 @@
 import type { File as TelegramFile } from "grammy/types";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import * as keyedAsyncQueue from "openclaw/plugin-sdk/keyed-async-queue";
 import type { SavedRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -450,10 +450,11 @@ describe("createTelegramBot channel_post media", () => {
     rejectFirstTelegramAlbumDownloadWhen(testCase.partial);
     const fetchSpy = createImageFetchSpy();
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue");
+    const enqueueSpy = vi.spyOn(keyedAsyncQueue, "enqueueKeyedTask");
     const albumWork = () =>
       enqueueSpy.mock.results.flatMap((result, index) =>
-        enqueueSpy.mock.calls[index]?.[0] === "media:-100456:none:main" && result.type === "return"
+        enqueueSpy.mock.calls[index]?.[0].key === "media:-100456:none:main" &&
+        result.type === "return"
           ? [result.value]
           : [],
       );
@@ -574,7 +575,7 @@ describe("createTelegramBot channel_post media", () => {
     });
 
     const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
-    const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue");
+    const enqueueSpy = vi.spyOn(keyedAsyncQueue, "enqueueKeyedTask");
     try {
       await createTelegramBot({
         token: "tok",
@@ -628,7 +629,7 @@ describe("createTelegramBot channel_post media", () => {
 
     const runtimeError = vi.fn();
     const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
-    const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue");
+    const enqueueSpy = vi.spyOn(keyedAsyncQueue, "enqueueKeyedTask");
     try {
       await createTelegramBot({
         token: "tok",
