@@ -27,7 +27,7 @@ import { isGatewayMachineOutput } from "./output-mode.js";
 import { addGatewayRestartHandoffCommands } from "./register-restart-handoff.js";
 import { addGatewayRunCommand } from "./run-command.js";
 import { normalizeStabilityBundleTarget } from "./stability-bundle-target.js";
-import { formatBytes, formatStabilityEvent } from "./stability-format.js";
+import { formatStabilityBytes, formatStabilityEvent } from "./stability-format.js";
 import { runGatewayResume, runGatewaySuspend } from "./suspend-cli.js";
 
 type GatewayRpcOpts = Parameters<typeof callGatewayFromCliWithTransport>[1];
@@ -180,9 +180,9 @@ function renderStabilitySummary(snapshot: DiagnosticStabilitySnapshot, rich: boo
   const memory = snapshot.summary.memory;
   if (memory) {
     lines.push(
-      `${colorize(rich, theme.muted, "Memory:")} rss=${formatBytes(
+      `${colorize(rich, theme.muted, "Memory:")} rss=${formatStabilityBytes(
         memory.latest?.rssBytes,
-      )} heap=${formatBytes(memory.latest?.heapUsedBytes)} maxRss=${formatBytes(
+      )} heap=${formatStabilityBytes(memory.latest?.heapUsedBytes)} maxRss=${formatStabilityBytes(
         memory.maxRssBytes,
       )} pressure=${memory.pressureCount}`,
     );
@@ -248,17 +248,17 @@ function renderStabilityBundleSummary(params: {
     lines.push(
       `${colorize(rich, theme.muted, "Memory pressure:")} ${memoryPressure.level}/${
         memoryPressure.reason
-      } rss=${formatBytes(memoryPressure.memory.rssBytes)} heap=${formatBytes(
+      } rss=${formatStabilityBytes(memoryPressure.memory.rssBytes)} heap=${formatStabilityBytes(
         memoryPressure.memory.heapUsedBytes,
-      )} threshold=${formatBytes(memoryPressure.thresholdBytes)}`,
+      )} threshold=${formatStabilityBytes(memoryPressure.thresholdBytes)}`,
     );
     if (memoryPressure.heapStatistics) {
       lines.push(
-        `${colorize(rich, theme.muted, "V8 heap:")} used=${formatBytes(
+        `${colorize(rich, theme.muted, "V8 heap:")} used=${formatStabilityBytes(
           memoryPressure.heapStatistics.usedHeapSizeBytes,
-        )} limit=${formatBytes(
+        )} limit=${formatStabilityBytes(
           memoryPressure.heapStatistics.heapSizeLimitBytes,
-        )} available=${formatBytes(memoryPressure.heapStatistics.totalAvailableSizeBytes)}`,
+        )} available=${formatStabilityBytes(memoryPressure.heapStatistics.totalAvailableSizeBytes)}`,
       );
     }
     if (memoryPressure.activeResources) {
@@ -274,7 +274,7 @@ function renderStabilityBundleSummary(params: {
     if (memoryPressure.topSessionFiles?.length) {
       const files = memoryPressure.topSessionFiles
         .slice(0, 5)
-        .map((file) => `${file.relativePath}=${formatBytes(file.sizeBytes)}`)
+        .map((file) => `${file.relativePath}=${formatStabilityBytes(file.sizeBytes)}`)
         .join(", ");
       lines.push(`${colorize(rich, theme.muted, "Largest session files:")} ${files}`);
     }
@@ -290,7 +290,7 @@ function renderSupportExportResult(
   return [
     colorize(rich, theme.heading, "Diagnostics export"),
     `${colorize(rich, theme.muted, "Path:")} ${result.path}`,
-    `${colorize(rich, theme.muted, "Size:")} ${formatBytes(result.bytes)}`,
+    `${colorize(rich, theme.muted, "Size:")} ${formatStabilityBytes(result.bytes)}`,
     `${colorize(rich, theme.muted, "Files:")} ${result.manifest.contents.length}`,
     `${colorize(rich, theme.muted, "Privacy:")} payload-free stability, sanitized logs/status/health/config`,
   ];

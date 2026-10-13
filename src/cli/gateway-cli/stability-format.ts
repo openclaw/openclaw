@@ -1,7 +1,7 @@
 import { formatByteSize } from "@openclaw/normalization-core";
 import type { DiagnosticStabilityEventRecord } from "../../logging/diagnostic-stability.js";
 
-export function formatBytes(value: number | undefined): string {
+export function formatStabilityBytes(value: number | undefined): string {
   if (value === undefined) {
     return "n/a";
   }
@@ -35,15 +35,15 @@ export function formatStabilityEvent(record: DiagnosticStabilityEventRecord): st
     record.channel ? `channel=${record.channel}` : "",
     record.pluginId ? `plugin=${record.pluginId}` : "",
     record.reason ? `reason=${record.reason}` : "",
-    record.bytes !== undefined ? `bytes=${formatBytes(record.bytes)}` : "",
-    record.limitBytes !== undefined ? `limit=${formatBytes(record.limitBytes)}` : "",
+    record.bytes !== undefined ? `bytes=${formatStabilityBytes(record.bytes)}` : "",
+    record.limitBytes !== undefined ? `limit=${formatStabilityBytes(record.limitBytes)}` : "",
     record.queueDepth !== undefined ? `queueDepth=${record.queueDepth}` : "",
     record.queueLength !== undefined ? `queueLength=${record.queueLength}` : "",
     record.droppedEvents !== undefined ? `dropped=${record.droppedEvents}` : "",
     record.maxQueueLength !== undefined ? `maxQueue=${record.maxQueueLength}` : "",
     record.queued !== undefined ? `queued=${record.queued}` : "",
-    record.memory ? `rss=${formatBytes(record.memory.rssBytes)}` : "",
-    record.memory ? `heap=${formatBytes(record.memory.heapUsedBytes)}` : "",
+    record.memory ? `rss=${formatStabilityBytes(record.memory.rssBytes)}` : "",
+    record.memory ? `heap=${formatStabilityBytes(record.memory.heapUsedBytes)}` : "",
   ].filter(Boolean);
   return parts.join(" ");
 }
