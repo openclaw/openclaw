@@ -5,14 +5,23 @@ import {
   createModalDialogTestFixture,
   getRenderedModalDialog,
 } from "../test-helpers/modal-dialog.ts";
+import { installPopoverPolyfill } from "../test-helpers/popover.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { showSessionGroupDefaultsDialog } from "./session-group-defaults-dialog.ts";
 
 let fixture: ReturnType<typeof createModalDialogTestFixture>;
+let restorePopover: () => void;
 beforeEach(() => {
+  restorePopover = installPopoverPolyfill();
   fixture = createModalDialogTestFixture();
 });
-afterEach(() => fixture.cleanup());
+afterEach(async () => {
+  try {
+    await fixture.cleanup();
+  } finally {
+    restorePopover();
+  }
+});
 
 it("keeps folder input focus while filtering and saves the keyboard-completed folder", async () => {
   const listing: FsListDirResult = {
@@ -39,10 +48,13 @@ it("keeps folder input focus while filtering and saves the keyboard-completed fo
     }),
   );
   const { modal } = await getRenderedModalDialog(document.body);
+  const trigger = modal.querySelector<HTMLButtonElement>("#session-group-defaults-folder-trigger")!;
+  trigger.click();
+  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
   modal.querySelector<HTMLButtonElement>('[data-value="browse"]')!.click();
   await waitForSolid(() => expect(modal.querySelectorAll('[role="option"]')).toHaveLength(2));
   const input = modal.querySelector<HTMLInputElement>(".new-session-page__browser-path")!;
-  input.focus();
+  expect(document.activeElement).toBe(input);
   input.value = "/workspace/to";
   input.dispatchEvent(new InputEvent("input", { bubbles: true }));
   await waitForSolid(() => {
@@ -85,10 +97,40 @@ it("clears a saved directory when the agent workspace choice closes the popover"
     }),
   );
   const { modal } = await getRenderedModalDialog(document.body);
-  modal.querySelector<HTMLButtonElement>("#session-group-defaults-folder-trigger")!.click();
+  const trigger = modal.querySelector<HTMLButtonElement>("#session-group-defaults-folder-trigger")!;
+  trigger.click();
+  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
   const reset = modal.querySelector<HTMLButtonElement>('[data-value="agent-workspace"]')!;
   reset.click();
-  await waitForSolid(() => expect(reset.getAttribute("aria-pressed")).toBe("true"));
+  await waitForSolid(() => {
+    expect(reset.getAttribute("aria-pressed")).toBe("true");
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(trigger);
+  });
+  trigger.click();
+  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+  modal.querySelector<HTMLButtonElement>('[data-value="browse"]')!.click();
+  await waitForSolid(() =>
+    expect(modal.querySelector(".new-session-page__browser-path")).not.toBeNull(),
+  );
+  const input = modal.querySelector<HTMLInputElement>(".new-session-page__browser-path")!;
+  expect(document.activeElement).toBe(input);
+  const back = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+  input.dispatchEvent(back);
+  expect(back.defaultPrevented).toBe(true);
+  await waitForSolid(() => {
+    expect(modal.querySelector(".new-session-page__browser-path")).toBeNull();
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(modal.querySelector('[data-value="agent-workspace"]'));
+  });
+  const close = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+  document.activeElement!.dispatchEvent(close);
+  expect(close.defaultPrevented).toBe(true);
+  await waitForSolid(() => {
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(trigger);
+    expect(document.body.querySelector("openclaw-modal-dialog")).toBe(modal);
+  });
   modal
     .querySelector("form")!
     .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));

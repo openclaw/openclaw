@@ -107,10 +107,12 @@ export function commitSessionEntryPatch(
       | ReturnType<typeof readSessionPendingInputAuthorityFactsInTransaction>
       | undefined;
     let result: SessionEntryPatchCommitted;
+    const actorPatch = prepareSessionActorEntryPatch(database, input.sessionKey);
     const predicate = readSessionEntryPatchPredicate(
       database,
       input.sessionKey,
       input.shouldCommitIf,
+      actorPatch?.transcript,
     );
     if (!predicate.matches) {
       // A false predicate precedes CAS and the throwing guard, including for a null patch.
@@ -139,7 +141,6 @@ export function commitSessionEntryPatch(
           });
         },
       };
-      const publishActor = prepareSessionActorEntryPatch(database, input.sessionKey);
       let mutation;
       if ("operation" in input) {
         if (input.validateCanonicalKeys) {
@@ -217,7 +218,7 @@ export function commitSessionEntryPatch(
         publishRetention?.();
       }
       if (publication && mutation.postimages) {
-        publishActor?.(mutation.postimages, publication);
+        actorPatch?.publish(mutation.postimages, publication);
       }
       result = {
         kind: "session-entry-patch",
