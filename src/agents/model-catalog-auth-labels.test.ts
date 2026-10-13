@@ -8,10 +8,12 @@ import {
 } from "./model-catalog-auth-labels.js";
 
 const envKey = vi.hoisted(() => vi.fn());
-vi.mock("./model-auth-env.js", () => ({
+vi.mock("./model-auth-env.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-auth-env.js")>()),
   resolveEnvApiKey: envKey,
 }));
-vi.mock("./model-auth-provider-config.js", () => ({
+vi.mock("./model-auth-provider-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-auth-provider-config.js")>()),
   resolveUsableCustomProviderApiKey: () => null,
 }));
 const capture = (provider: string, store: AuthProfileStore, cfg: OpenClawConfig = {}) => {

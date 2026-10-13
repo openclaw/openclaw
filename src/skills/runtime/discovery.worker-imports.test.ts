@@ -11,7 +11,8 @@ import {
 const worker = vi.hoisted(() => ({
   read: undefined as ((input: SkillsDiscoveryInput) => SkillsDiscoveryOutput) | undefined,
 }));
-vi.mock("../../infra/worker-task-server.js", () => ({
+vi.mock("../../infra/worker-task-server.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/worker-task-server.js")>()),
   serveWorkerTasks: (read: (input: SkillsDiscoveryInput) => SkillsDiscoveryOutput) => {
     worker.read = read;
   },
