@@ -341,7 +341,10 @@ export class ChatPane extends ChatPaneLayoutRender {
         placementComposer.busyMessage ??
         (placementComposer.state.kind === "failed" && !placementComposer.state.recoveryAction
           ? placementComposer.failedUnavailableMessage
-          : null),
+          : null) ??
+        // Send carries connection recovery; offline it stays enabled for the outbox, so only
+        // this band can explain an unresolved initial turn.
+        (state.connected ? null : pendingReason),
       disabledReasonTone:
         !composerAccess ||
         disabledReason ||

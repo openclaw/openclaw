@@ -282,7 +282,9 @@ suite.define(() => {
             await outbox.getByText("later ordinary turn", { exact: true }).waitFor();
             await outbox.getByText("Waiting for reconnect", { exact: true }).waitFor();
             expect(await outbox.count()).toBe(1);
-            expect(await pane.locator(".agent-chat__composer-status-band").count()).toBe(0);
+            await pollLocatorText(pane.locator(".agent-chat__composer-status-band")).toContain(
+              "The initial message is unresolved.",
+            );
             await pollLocatorText(failedGroup.locator(".chat-send-status")).toContain(
               "Waiting for reconnect",
             );
