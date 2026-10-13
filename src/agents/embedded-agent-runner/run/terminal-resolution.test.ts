@@ -187,7 +187,7 @@ describe("terminal resolution", () => {
     expect(markEmbeddedRunAuthProfileSuccess).toHaveBeenCalledOnce();
   });
 
-  it.each(["", SILENT_REPLY_TOKEN])(
+  it.each([""])(
     "retries required empty output %j even when legacy silence is enabled",
     async (text) => {
       const assistant = emptyAssistant({ content: [{ type: "text", text }] });
@@ -215,7 +215,7 @@ describe("terminal resolution", () => {
     },
   );
 
-  it.each(["explicit policy", "internal notification"])(
+  it.each(["required policy", "explicit policy", "internal notification"])(
     "completes NO_REPLY from %s without retrying",
     async (source) => {
       const assistant = buildEmbeddedRunnerAssistant({
@@ -232,13 +232,15 @@ describe("terminal resolution", () => {
         attempt,
         attemptAssistant: assistant,
         runParams:
-          source === "explicit policy"
-            ? { allowEmptyAssistantReplyAsSilent: false, terminalReplyExpectation: "optional" }
-            : {
-                allowEmptyAssistantReplyAsSilent: false,
-                trigger: "user",
-                inputProvenance: { kind: "inter_session", sourceTool: "subagent_announce" },
-              },
+          source === "required policy"
+            ? { allowEmptyAssistantReplyAsSilent: false, terminalReplyExpectation: "required" }
+            : source === "explicit policy"
+              ? { allowEmptyAssistantReplyAsSilent: false, terminalReplyExpectation: "optional" }
+              : {
+                  allowEmptyAssistantReplyAsSilent: false,
+                  trigger: "user",
+                  inputProvenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+                },
         sessionPromptState: { activateInternalPrompt },
       });
 

@@ -535,7 +535,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.deliberateSilentTerminalReply).toBeUndefined();
   });
 
-  it.each(["optional", "blocked"] as const)(
+  it.each(["optional", "blocked", "silent"] as const)(
     "preserves the public silence projection for an authoritative %s completion",
     async (completion) => {
       setNoAbort();
@@ -550,10 +550,10 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
             throw new Error("expected reply operation run state");
           }
           runState.replyCompletion =
-            completion === "blocked"
+            completion !== "optional"
               ? resolveReplyCompletion(
                   runState.replyCompletion?.expectation ?? "required",
-                  "blocked",
+                  completion,
                 )
               : resolveReplyCompletion("optional", "empty");
           return undefined;
