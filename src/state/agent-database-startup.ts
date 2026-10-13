@@ -48,7 +48,7 @@ type Activation = {
   isCurrent: () => boolean;
   preparationReady: Promise<void>;
   openAgent: (input: PreparationInput) => Promise<void>;
-  migrateAgent: (input: PreparationInput) => Promise<void>;
+  migrateAgent: (input: PreparationInput) => Promise<void | { maintain: () => Promise<void> }>;
   publishAgent: (input: PreparationInput) => Promise<void>;
 };
 type PreparationPhase =
@@ -346,6 +346,7 @@ class AgentDatabaseStartupAdmission {
       // Gateway-owned recovery outlives the caller's temporary discovery snapshot.
       const work = runInDetachedAsyncContext(async () => {
         const publicationComplete = createDeferredCore();
+        const preparation: { maintenance?: () => Promise<void> } = {};
         try {
           const results = await checked;
           phase("activation");
@@ -425,7 +426,8 @@ class AgentDatabaseStartupAdmission {
                 try {
                   assertCurrent();
                   phase("migration");
-                  await activation.migrateAgent(input);
+                  const migrated = await activation.migrateAgent(input);
+                  preparation.maintenance = migrated ? migrated.maintain : undefined;
                 } finally {
                   releaseMigration?.();
                 }
@@ -472,6 +474,19 @@ class AgentDatabaseStartupAdmission {
           }
           publicationComplete.resolve();
           completion.resolve();
+        }
+        // End the admission borrow and publication turn before advisory repair.
+        if (!readAgentDatabaseAdmissionRefusal(agentId, { env }) && !this.stopped) {
+          try {
+            await preparation.maintenance?.();
+          } catch (error) {
+            if (!this.stopped) {
+              log.warn("agent database background maintenance failed", {
+                agentId,
+                reason: formatErrorMessage(error),
+              });
+            }
+          }
         }
       });
       this.track(work);

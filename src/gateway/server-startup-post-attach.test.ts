@@ -722,12 +722,16 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(outcomeMessage).not.toContain("private hook path");
   });
 
-  it("does not publish an imported hook candidate after Gateway close starts", async () => {
+  it("prepares requests alongside hooks and refuses hook publication after close", async () => {
     const loading = createDeferred<{
       loadedCount: number;
       commit: typeof hoisted.commitInternalHooks;
     }>();
     let closing = false;
+    const requestsPrepared = createDeferred();
+    hoisted.prewarmConfigDrivenReplyRuntime.mockImplementationOnce(async () => {
+      requestsPrepared.resolve();
+    });
     hoisted.prepareInternalHooks.mockReturnValueOnce(loading.promise);
     const params = createPostAttachParams();
     const starting = startGatewaySidecars({
@@ -743,9 +747,8 @@ describe("startGatewayPostAttachRuntime", () => {
       logHooks: params.logHooks,
       logChannels: params.logChannels,
     });
-    await waitForGatewayTestState(() => {
-      expect(hoisted.prepareInternalHooks).toHaveBeenCalledOnce();
-    });
+    await requestsPrepared.promise;
+    expect(hoisted.prepareInternalHooks).toHaveBeenCalledOnce();
     closing = true;
     loading.resolve({ loadedCount: 1, commit: hoisted.commitInternalHooks });
     await starting;

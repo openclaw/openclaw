@@ -82,7 +82,7 @@ export function activateGatewayAgentDatabaseStartup(params: {
       }),
     migrateAgent: ({ agentId, paths, env, signal, assertCurrent }) =>
       runWithSpawnBroker(broker, async () => {
-        const { prepareGatewayStartupSessions, runGatewaySessionStartupMaintenance } =
+        const { prepareGatewayStartupSessions } =
           await import("./server-startup-session-migration.js");
         const assertMigrationCurrent = createPreparationGuard(
           agentId,
@@ -98,13 +98,22 @@ export function activateGatewayAgentDatabaseStartup(params: {
           assertCurrent: assertMigrationCurrent,
           log: params.log,
         });
-        await runGatewaySessionStartupMaintenance({
-          databases,
-          assertCurrent: assertMigrationCurrent,
-          signal,
-          log: params.log,
-        });
         assertMigrationCurrent();
+        return {
+          maintain: () =>
+            runWithSpawnBroker(broker, async () => {
+              const { runGatewaySessionStartupMaintenance } =
+                await import("./server-startup-session-migration.js");
+              await runGatewaySessionStartupMaintenance({
+                databases,
+                signal,
+                assertCurrent: createPreparationGuard(agentId, paths, env, signal, () =>
+                  signal.throwIfAborted(),
+                ),
+                log: params.log,
+              });
+            }),
+        };
       }),
     publishAgent: ({ agentId, paths, env, signal, assertCurrent, phase }) =>
       runWithSpawnBroker(broker, async () => {
