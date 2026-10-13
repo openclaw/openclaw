@@ -826,7 +826,7 @@ function checkSource(pr, source, cwd, root, lockRef, lockOid, suppliedSnapshot, 
   );
 }
 
-export function baselineRefreshScope({
+export function baselineRefreshCandidate({
   pr,
   incoming,
   incomingReviewOid,
@@ -838,7 +838,7 @@ export function baselineRefreshScope({
     if (present(bindingPath)) {
       throw new Error("Unbound baseline refresh evidence; retain and reconcile preparation.");
     }
-    return paths(incoming, head, false);
+    return { paths: paths(incoming, head, false), baselineHead: null };
   }
   const binding = bindingAt(anchor);
   if (
@@ -852,7 +852,10 @@ export function baselineRefreshScope({
   }
   const retained = retainedAuthority({ ...binding, anchor });
   git(["merge-base", "--is-ancestor", anchor, head]);
-  return [...retained.scope, ...paths(anchor, head)];
+  return {
+    paths: [...retained.scope, ...paths(anchor, head)],
+    baselineHead: binding.record.baselineHead,
+  };
 }
 
 function create(pr, source, baseline, main, archive, snapshot, manifestPath, successor, signer) {

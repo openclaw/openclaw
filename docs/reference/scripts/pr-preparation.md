@@ -23,6 +23,13 @@ Use focused local checks before publication and PR CI for broad proof. Open a re
 - Native gate planning derives one candidate/main fork base from that captured snapshot and passes it through `pnpm check --base` to all ratchets. Incoming review identity and prior publication receipts do not select the check base; keep those bindings intact when a prepared candidate incorporates main.
 - When explicitly selecting the optional local full-test gate mode, scope `OPENCLAW_BUILD_PRIVATE_QA=1` to its initial `pnpm build` child so ordinary test preparation can reuse complete artifacts. Keep the full build profile, freshness checks, and managed-Gateway fences; do not export the flag across check/test workers. Docs-only builds and remote/hosted gate modes retain their existing inputs.
 
+For baseline-bound corrections, publication verifies every prepared commit outside
+the hosted head and the exact
+baseline authenticated by its signed refresh binding. Inherited baseline history
+does not require additional local signer trust; task commits on either merge
+parent still require valid signatures. Missing or changed baseline authority
+refuses publication before transport selection.
+
 ## Signing a baseline on another host
 
 When the preparation host can verify signatures but the signing key is available
