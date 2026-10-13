@@ -48,6 +48,7 @@ import {
 import {
   createDirectPendingFinalCustody,
   NO_PENDING_FINAL_CUSTODY,
+  PendingFinalDeliveryNotOwnedError,
   resolvePendingFinalCompletion,
   toCoreManagedDeliveryInfo,
 } from "./direct-delivery-custody.js";
@@ -545,6 +546,10 @@ async function dispatchChannelTurnWithDeliveryOwner(
         }
       }
     } catch (error: unknown) {
+      if (error instanceof PendingFinalDeliveryNotOwnedError) {
+        // Leave the earlier attempt's ambiguous or terminal custody untouched.
+        return { visibleReplySent: false };
+      }
       await settleFailedPendingFinalDelivery(effectivePayload, error);
       if (delivery.observeMessageSent) {
         await settleChannelDeliveryAttempt(
@@ -642,6 +647,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
                   : {}),
                 dispatcherOptions: {
                   ...replyPipeline.dispatcherOptions,
+                  pendingFinalDeliveryAdmission: "deliver",
                   onSkip: (payload, info) => {
                     replyPipeline.dispatcherOptions?.onSkip?.(payload, info);
                     if (info.reason !== "channel_transform") {

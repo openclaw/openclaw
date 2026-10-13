@@ -409,6 +409,13 @@ when initialization must finish before the child runs.
       replies whose confirmed delivery the shared dispatcher will record. Channel
       adapters must skip their own transcript mirror for those replies, including
       fallback sends, while still reporting the delivery outcome normally.
+
+      The shared channel turn lifecycle owns pending-final delivery admission.
+      It records direct-send custody immediately before platform I/O, or transfers
+      custody to the durable delivery queue. Its reply dispatcher skips the
+      intermediate queued claim; terminal settlement and replay suppression remain
+      owned by the delivery lifecycle.
+
       When recovering a payload from earlier source text, apply
       `preserveReplyPayloadMediaSelection(current, recovered)` from
       `openclaw/plugin-sdk/channel-outbound`.
