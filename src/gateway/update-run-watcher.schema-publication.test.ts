@@ -9,6 +9,7 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contra
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  reconcileOpenClawStateSchemaPublication,
 } from "../state/openclaw-state-db.js";
 import {
   createGatewaySchedulerClock,
@@ -24,6 +25,12 @@ vi.mock("./server-update-sentinel.js", async (original) => ({
   refreshLatestUpdateRestartSentinel: async () => null,
 }));
 // Publication deadlines share the fixture clock; worker transport is covered separately.
+vi.mock("../state/openclaw-state-schema-publication.async.js", async (original) => ({
+  ...(await original<typeof import("../state/openclaw-state-schema-publication.async.js")>()),
+  reconcileOpenClawStateSchemaPublicationAsync: async (
+    ...args: Parameters<typeof reconcileOpenClawStateSchemaPublication>
+  ) => reconcileOpenClawStateSchemaPublication(...args),
+}));
 vi.mock("../infra/update-run-reconciliation.js", async (original) => ({
   ...(await original<typeof import("../infra/update-run-reconciliation.js")>()),
   reconcileAbandonedUpdateRunsAsync: async (

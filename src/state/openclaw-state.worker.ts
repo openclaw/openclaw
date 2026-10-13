@@ -34,6 +34,7 @@ import type { ExistingOpenClawStateWriter } from "./openclaw-state-db-existing-w
 import { ensureSecretStoreSchema } from "./openclaw-state-db-schema-additive.js";
 import {
   openOpenClawStateDatabase,
+  reconcileOpenClawStateSchemaPublication,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import {
@@ -148,6 +149,18 @@ function createSharedStateWorkerBackend(
   let publicationSourceReader:
     | ReturnType<NonNullable<typeof publicationSource>["createGitHubPublicationSourceWorker"]>
     | undefined;
+  const retainCachedDatabase = () => {
+    // Existing-only operations can acquire their first writable handle through a native owner.
+    if (!nativeDatabase) {
+      const database = openClawStateDatabaseCache.getCachedOpenClawStateDatabase(
+        context.databasePath,
+      );
+      if (database) {
+        borrow = retainOpenClawStateDatabase(database);
+        nativeDatabase = database;
+      }
+    }
+  };
   const retainedDatabase = (): OpenClawStateDatabase => {
     if (!nativeDatabase) {
       const opened = openOpenClawStateDatabase({
@@ -313,6 +326,7 @@ function createSharedStateWorkerBackend(
       if (
         commandType === "database.inspectIdle" ||
         commandType === "database.walMaintenance" ||
+        commandType === "database.publishSchema" ||
         commandType === "stateLease.acquire" ||
         commandType === "deviceIdentity.read" ||
         commandType === "deviceIdentity.load" ||
@@ -385,16 +399,7 @@ function createSharedStateWorkerBackend(
             env: stateDatabaseInitializationEnvironment(),
           });
         } finally {
-          // An existing-only actor may acquire its first writable handle through this owner.
-          if (!nativeDatabase) {
-            const database = openClawStateDatabaseCache.getCachedOpenClawStateDatabase(
-              context.databasePath,
-            );
-            if (database) {
-              borrow = retainOpenClawStateDatabase(database);
-              nativeDatabase = database;
-            }
-          }
+          retainCachedDatabase();
         }
       }
       if (command.type === "agentDatabases.releaseExitedLease") {
@@ -420,6 +425,16 @@ function createSharedStateWorkerBackend(
         command.type === "stateLease.release"
       ) {
         return executeOpenClawStateLeaseCommand(command, open());
+      }
+      if (command.type === "database.publishSchema") {
+        try {
+          return reconcileOpenClawStateSchemaPublication({
+            path: context.databasePath,
+            env: getSqliteWorkerStateContext().environment,
+          });
+        } finally {
+          retainCachedDatabase();
+        }
       }
       if (command.type === "database.walMaintenance") {
         const database = open();

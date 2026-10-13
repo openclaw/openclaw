@@ -7,6 +7,7 @@ import {
 } from "../infra/update-check-lifecycle.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import type { StateSchemaPublicationBlocker } from "../state/openclaw-state-schema-publication.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -19,10 +20,14 @@ const ledger = vi.hoisted(() => ({
   reconcile: vi.fn<(input: { signal?: AbortSignal }) => Promise<UpdateRunRecord[]>>(),
   notice: vi.fn(async (_run: UpdateRunRecord) => {}),
   sentinel: vi.fn<() => Promise<RestartSentinelPayload | null>>(),
+  publication:
+    vi.fn<
+      (options: { signal?: AbortSignal }) => Promise<StateSchemaPublicationBlocker | undefined>
+    >(),
 }));
-vi.mock("../state/openclaw-state-db.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../state/openclaw-state-db.js")>()),
-  reconcileOpenClawStateSchemaPublication: () => undefined,
+vi.mock("../state/openclaw-state-schema-publication.async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-state-schema-publication.async.js")>()),
+  reconcileOpenClawStateSchemaPublicationAsync: ledger.publication,
 }));
 vi.mock("../infra/update-run-interruption.js", () => ({
   reconcileInterruptedUpdateRuns: ledger.reconcile,
@@ -58,6 +63,7 @@ beforeEach(() => {
   ledger.reconcile.mockReset().mockResolvedValue([]);
   ledger.notice.mockReset().mockResolvedValue(undefined);
   ledger.sentinel.mockReset().mockResolvedValue(null);
+  ledger.publication.mockReset().mockResolvedValue(undefined);
 });
 afterEach(async () => {
   await watcher?.stop();
@@ -121,6 +127,34 @@ function nextPollSchedule() {
 }
 
 describe("Gateway update run watcher", () => {
+  it("joins in-flight schema publication on shutdown without arming its returned deadline", async () => {
+    const publication = createDeferredCore<StateSchemaPublicationBlocker>();
+    const entered = createDeferredCore();
+    let publicationSignal: AbortSignal | undefined;
+    const events: string[] = [];
+    ledger.publication.mockImplementationOnce(async ({ signal }) => {
+      publicationSignal = signal;
+      entered.resolve();
+      const blocker = await publication.promise;
+      events.push("publication-settled");
+      return blocker;
+    });
+    watcher = startUpdateRunWatcher({ lifecycle, broadcast: vi.fn(), log: { warn: vi.fn() } });
+    await entered.promise;
+    const stopping = watcher.stop().then(() => events.push("stopped"));
+    try {
+      expect(publicationSignal?.aborted).toBe(true);
+      expect(events).toEqual([]);
+    } finally {
+      publication.resolve({ runId: "legacy-run", updaterVersion: "2026.9.2", publishAfterMs: 100 });
+      await stopping;
+    }
+    expect(events).toEqual(["publication-settled", "stopped"]);
+    expect(clock.armedAtMs).toBeNull();
+    await clock.advanceBy(100);
+    expect(ledger.publication).toHaveBeenCalledOnce();
+  });
+
   it("clears a campaign created after watcher startup before publishing its terminal run", async () => {
     beginRun();
     const onChange = vi.fn();
