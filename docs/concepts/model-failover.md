@@ -417,6 +417,7 @@ OpenClaw builds the candidate list from the currently requested `provider/model`
   </Tab>
   <Tab title="Does not continue on">
     - explicit aborts that are not timeout/failover-shaped
+    - an incomplete embedded reply ending with a normal `stop` after bounded same-model recovery, unless the harness explicitly classifies the result as a fallback failure. If the host requires an answer, OpenClaw surfaces the incomplete-turn error; optional internal turns may finish silently. Replay safety does not establish that a different model would answer
     - context overflow after committed tool effects or delivered replies that cannot safely be replayed
     - a provider request-size ceiling inside an embedded run (for example Groq's `413 ... on tokens per minute (TPM): Limit 8000, Requested 8098`), which remains terminal rather than compacting
     - a final unknown error when there are no candidates left

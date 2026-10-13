@@ -1,7 +1,8 @@
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
-import "../../../lib/toast.ts";
+import "../../../lib/toast-host.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayload,
@@ -196,11 +197,12 @@ describe("comment actions outside the transcript", () => {
     fixture.input()!.value = "Original comment!";
     fixture.save().click();
     await fixture.controller.updateComplete;
-    await fixture.toast.updateComplete;
     expect(fixture.input()?.value).toBe("Original comment!");
     expect(fixture.attachments()).toEqual([fixture.attachment, file]);
     expect(getChatAttachmentDataUrl(fixture.attachment)).toBe(originalPayload);
-    expect(fixture.toast.textContent).toContain("Too large to send: selection-comment.txt");
+    await waitForSolid(() =>
+      expect(fixture.toast.textContent).toContain("Too large to send: selection-comment.txt"),
+    );
 
     fixture.input()!.value = "Replaced comment";
     fixture.save().click();

@@ -574,6 +574,18 @@ internal admission command. Reading this marker does not execute candidate code.
 Managed-service preflight still runs in the installed updater before the
 candidate admission process starts.
 
+The same release metadata can declare
+`openclaw.databaseEngines: ["sqlite", "postgres"]`. This optional field does not
+change `updateAdmissionProtocol: 1` or its comparison rules. An absent field means
+`["sqlite"]`. When physical anchors show that any installed store uses PostgreSQL,
+the installed driver checks the selected package or Git target for `postgres`
+before mutation. A target that lacks it is refused with `database-engine-preflight`:
+reverse-port to SQLite with the current compatible binary before updating, or
+stay on the current version. See [Database engines](/reference/database-engines);
+the port command remains disabled until its release prerequisites are met.
+SQLite-only installations keep the existing admission path and do not require
+the field. Candidate admission cannot override this installed-driver protection.
+
 | Owner                                | Checks and operations                                                                                                                                                                                                                                                                                                                    |
 | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Candidate-owned (via `update admit`) | Config read/validation with the candidate schema (missing-path style problems that candidate Doctor preserves/handles are `admit` + warning), database schema preflight against the explicit installation root, plugin availability preflight. The Node engine comparison is informational (`ok` or `warn`) and cannot refuse admission. |
@@ -639,6 +651,25 @@ receipts use the full history budget.
 This handoff works only when the installed updater already supports it. An older
 updater that refuses before staging cannot use a newer candidate's judgment;
 follow the recovery guidance for that installed release first.
+
+## Database capture and recovery
+
+Updates preserve each store's physical engine. Before database mutation, the
+installed updater keeps the existing exact SQLite captures and captures each
+PostgreSQL store as an unsanitized SQLite export image plus its matching anchor
+and format-2 manifest. These private recovery captures preserve canonical data,
+transient rows, and allocation facts; ordinary sanitized user backups cannot
+replace them. Recovery receipts record the physical engine and store identity.
+
+PostgreSQL capture runs under the update's exclusive maintenance ownership.
+Rollback verifies the capture, restores a fresh owned PostgreSQL namespace, and
+publishes the matching anchor through the existing recovery owner. It retains the
+migrated namespace until recovery is confirmed. If state has changed since the
+capture or ownership or commit outcome is uncertain, automatic restore stops and
+retains both for recovery. Partial restoration keeps the Gateway stopped.
+SQLite capture and restore retain their existing behavior; updates never
+reverse-port or silently change engines. These protections must already exist in
+the installed updater: installing a candidate does not retrofit its parent driver.
 
 ## Runtime retention failures
 

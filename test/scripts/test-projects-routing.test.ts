@@ -362,13 +362,19 @@ describe("test-projects args", () => {
         watchMode: false,
       },
     ]);
-    for (const target of [
-      "src/auto-reply/reply/dispatch-from-config.test.ts",
-      "src/auto-reply/reply/dispatch-from-config.tts-stream.test.ts",
-    ]) {
+    for (const [target, config] of [
+      [
+        "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "test/vitest/vitest.auto-reply.config.ts",
+      ],
+      [
+        "src/auto-reply/reply/dispatch-from-config.tts-stream.test.ts",
+        "test/vitest/vitest.infra.config.ts",
+      ],
+    ] as const) {
       expect(buildVitestRunPlans([target])).toEqual([
         {
-          config: "test/vitest/vitest.auto-reply.config.ts",
+          config,
           forwardedArgs: [],
           includePatterns: [target],
           watchMode: false,

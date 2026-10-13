@@ -10,12 +10,11 @@ import {
   prepareSqliteScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
-import { readAdmittedHarnessCompletionInputFromSqlite } from "../config/sessions/session-harness-completion-source.kernel.js";
+import type { readAdmittedHarnessCompletionInputFromSqlite } from "../config/sessions/session-harness-completion-source.kernel.js";
 import type { HarnessCompletionSourceSnapshot } from "../config/sessions/session-harness-completion-source.types.js";
 import { decodeSessionTranscriptWorkerReadError } from "../config/sessions/session-history-worker-errors.js";
-import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import {
   composeSessionSourceAssertion,
   releaseSessionSourceAuthorities,
@@ -46,40 +45,15 @@ import { assertHarnessCompletionSourceAdmission } from "./agent-harness-completi
 export async function readAdmittedHarnessCompletionInputAsync(
   params: Parameters<typeof readAdmittedHarnessCompletionInputFromSqlite>[0],
 ): Promise<boolean> {
-  const memory = getSessionActorStorageBinding({
-    sessionKey: params.claim.requesterSessionKey,
-    agentId: params.claim.requesterAgentId,
-    storePath: params.storePath,
-  });
-  if (!memory) {
-    const binding = captureIncognitoSessionBinding({
-      agentId: params.claim.requesterAgentId,
+  const memory = captureSessionActorStorageOwner(
+    {
       sessionKey: params.claim.requesterSessionKey,
+      agentId: params.claim.requesterAgentId,
       storePath: params.storePath,
-    });
-    if (binding) {
-      const snapshot = await binding.actor.sessions.history(
-        { assertCurrent: () => binding.actor.assertReadable() },
-        {
-          type: "session.history.harness-completion-source",
-          input: {
-            sessionKey: params.claim.requesterSessionKey,
-            sessionId: params.entry.sessionId,
-            lifecycleRevision: params.entry.lifecycleRevision,
-            claim: params.claim,
-            admission: resolveSessionTranscriptReadFence({
-              agentId: params.claim.requesterAgentId,
-              sessionId: params.claim.sessionId,
-            }),
-          },
-        },
-        binding.admissionSignal,
-      );
-      if (snapshot.readError) {
-        throw decodeSessionTranscriptWorkerReadError(snapshot.readError);
-      }
-      return snapshot.entry?.sessionId === params.claim.sessionId && snapshot.validInput;
-    }
+    },
+    { assertCurrent() {}, authorize() {} },
+  );
+  if (!memory) {
     return withSessionTranscriptReadSource(
       {
         agentId: params.claim.requesterAgentId,
@@ -87,7 +61,6 @@ export async function readAdmittedHarnessCompletionInputAsync(
         sessionId: params.entry.sessionId,
         storePath: params.storePath,
       },
-      () => readAdmittedHarnessCompletionInputFromSqlite(params),
       async ({ owner, scope, expectedIdentity, assertCurrent }) => {
         if (!expectedIdentity) {
           return false;
@@ -115,22 +88,23 @@ export async function readAdmittedHarnessCompletionInputAsync(
       },
     );
   }
-  const snapshot = memory.actor.storage!.readCurrent(
-    {
-      type: "session.completion.read",
-      input: {
-        sourceRunId: params.claim.sourceRunId,
-        claim: params.claim,
-        mode: "committed",
-        admission: resolveSessionTranscriptReadFence({
-          agentId: params.claim.requesterAgentId,
-          sessionId: params.claim.sessionId,
-        }),
-      },
+  const query = {
+    type: "session.completion.read" as const,
+    input: {
+      sourceRunId: params.claim.sourceRunId,
+      claim: params.claim,
+      mode: "committed" as const,
+      admission: resolveSessionTranscriptReadFence({
+        agentId: params.claim.requesterAgentId,
+        sessionId: params.claim.sessionId,
+      }),
     },
-    memory.authority,
-  );
-  return snapshot.entry?.sessionId === params.claim.sessionId && snapshot.validInput;
+  };
+  const snapshot =
+    memory.binding?.actor.target.sessionKey === params.claim.requesterSessionKey
+      ? memory.binding.actor.storage!.readCurrent(query, memory.authority)
+      : memory.owner?.readStorage(params.claim.requesterSessionKey, query, memory.authority);
+  return snapshot?.entry?.sessionId === params.claim.sessionId && snapshot.validInput;
 }
 
 /** These receipts are stricter than legacy live-return classification: omission is not success. */
@@ -284,26 +258,27 @@ export function createHarnessCompletionSourceAssertion(params: {
     sessionKey: params.claim.requesterSessionKey,
     storePath: params.storePath,
   };
-  const memory = getSessionActorStorageBinding(target);
+  const memory = captureSessionActorStorageOwner(target, { assertCurrent() {}, authorize() {} });
   if (memory) {
     const assertCurrent = () => {
-      const snapshot = memory.actor.storage!.readCurrent(
-        {
-          type: "session.completion.read",
-          input: {
-            sourceRunId: params.claim.sourceRunId,
-            claim: params.claim,
-            mode: params.mode,
-            admission: resolveSessionTranscriptReadFence({
-              agentId: target.agentId,
-              sessionId: params.claim.sessionId,
-            }),
-          },
+      const query = {
+        type: "session.completion.read" as const,
+        input: {
+          sourceRunId: params.claim.sourceRunId,
+          claim: params.claim,
+          mode: params.mode,
+          admission: resolveSessionTranscriptReadFence({
+            agentId: target.agentId,
+            sessionId: params.claim.sessionId,
+          }),
         },
-        memory.authority,
-      );
+      };
+      const snapshot =
+        memory.binding?.actor.target.sessionKey === target.sessionKey
+          ? memory.binding.actor.storage!.readCurrent(query, memory.authority)
+          : memory.owner?.readStorage(target.sessionKey, query, memory.authority);
       if (
-        !snapshot.entry ||
+        !snapshot?.entry ||
         !snapshot.validInput ||
         !getOwedHarnessCompletionTask(params.claim, snapshot.entry)
       ) {
@@ -322,51 +297,8 @@ export function createHarnessCompletionSourceAssertion(params: {
       }),
     ]);
   }
-  const binding = captureIncognitoSessionBinding(target);
-  const capturedClaim = binding?.actor.sessions.captureCurrent(target.sessionKey);
   const refuse = (): never => {
     throw createSessionWorkStartChangedError(target.sessionKey);
-  };
-  const assertIncognitoClaim = () => {
-    if (!binding) {
-      return refuse();
-    }
-    binding.admissionSignal?.throwIfAborted();
-    binding.actor.assertReadable();
-    capturedClaim?.assertCurrent();
-    const entry = binding.actor.sessions.readSteering(target.sessionKey);
-    if (!entry || !getOwedHarnessCompletionTask(params.claim, entry)) {
-      return refuse();
-    }
-    return entry;
-  };
-  const prepareIncognitoSource = async (): Promise<PreparedSessionSourceAuthority> => {
-    if (!binding) {
-      return refuse();
-    }
-    assertIncognitoClaim();
-    const retained = await binding.actor.sessions.retainCompletionSource(
-      { assertCurrent: assertIncognitoClaim },
-      {
-        sessionKey: target.sessionKey,
-        sessionId: params.claim.sessionId,
-        lifecycleRevision: params.claim.lifecycleRevision,
-        claim: params.claim,
-        admission: resolveSessionTranscriptReadFence({
-          agentId: target.agentId,
-          sessionId: params.claim.sessionId,
-        }),
-      },
-      binding.admissionSignal,
-    );
-    return {
-      assertCurrent: () => {
-        assertIncognitoClaim();
-        retained.assertCurrent();
-      },
-      checks: [],
-      release: () => retained.release(),
-    };
   };
   const prepareSnapshot = (
     snapshot: HarnessCompletionSourceSnapshot,
@@ -426,14 +358,6 @@ export function createHarnessCompletionSourceAssertion(params: {
     };
   };
   const assertSource = () => {
-    if (binding) {
-      const entry = assertIncognitoClaim();
-      // Recovery requires an async prepared scope. The original host claim
-      // precedes its transcript commit and retains its existing admission rule.
-      if (entry.restartRecoveryDeliveryRunId !== params.claim.sourceRunId) {
-        refuse();
-      }
-    }
     // The durable requester receipt outlives the original source admission.
     // Each effect scope prepares and validates that receipt before its callback.
   };
@@ -441,9 +365,6 @@ export function createHarnessCompletionSourceAssertion(params: {
     checkWriteToken = false,
   ): Promise<PreparedSessionSourceAuthority> => {
     const { claim } = params;
-    if (binding) {
-      return prepareIncognitoSource();
-    }
     const env = captureSessionTranscriptStorageEnvironment(process.env);
     const candidates = captureSessionStoreReadCandidates(params.storePath);
     const identities = captureSessionStoreCandidateIdentities(candidates);

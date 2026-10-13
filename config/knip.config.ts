@@ -61,6 +61,8 @@ const repositoryScriptEntries = [
   "scripts/bench-channel-turn.mts!",
   // Maintainers invoke this isolated transcript-rewrite benchmark by path.
   "scripts/bench-session-manager-rewrite.ts",
+  // The team-shaped fixture README invokes this measurement CLI by path.
+  "scripts/perf/team-shape-measure.ts",
   "scripts/bundle-a2ui.mts!",
   "scripts/build-discord-activity-sdk.mts!",
   // Plugin package asset hooks invoke the browser builder by path.
@@ -856,6 +858,9 @@ const config = {
         // Solid plugin builds createRequire the compiler from the plugin author's package.json;
         // the host never resolves or ships it (docs/plugins/feature-plugins.md).
         "@solidjs/compiler",
+        // Canvas bundling resolves these from extensions/canvas/package.json.
+        "@solidjs/web",
+        "solid-js",
         "playwright-core",
         "partial-json",
         // The native Canvas bundle falls back without optional Markdown support.

@@ -146,15 +146,18 @@ export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCle
         }
         const tag = classifyTtsTag(input.slice(tagStart + 2, tagEnd));
         const keepTag = tag === "other";
-        let insideCode = false;
         if (!insideHiddenTextBlock) {
           const segment = input.slice(index, tagEnd + 2);
           const code = buildCodeSpanIndex(segment, inlineCode, fence);
-          insideCode = code.isInside(tagStart - index);
+          if (code.isInside(tagStart - index)) {
+            output += trackVisibleText(segment, code);
+            index = tagEnd + 2;
+            continue;
+          }
           // A tag can be the trailing text that prevents a fence from closing.
           output += trackVisibleText(
             input.slice(index, keepTag ? tagEnd + 2 : tagStart),
-            insideCode || keepTag ? code : undefined,
+            keepTag ? code : undefined,
           );
         }
 
@@ -162,7 +165,7 @@ export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCle
           insideHiddenTextBlock = true;
         } else if (tag === "hidden-close") {
           insideHiddenTextBlock = false;
-        } else if (tag === "tts" && !insideHiddenTextBlock && !insideCode) {
+        } else if (tag === "tts" && !insideHiddenTextBlock) {
           const body = /^\s*tts\s*:([\s\S]*)$/i.exec(input.slice(tagStart + 2, tagEnd))?.[1];
           if (body !== undefined) {
             output += trackVisibleText(resolveTtsDirectiveBody(body) ?? "");

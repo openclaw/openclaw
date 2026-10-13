@@ -7,6 +7,10 @@ read_when:
 title: "Integrity, troubleshooting, and recovery"
 ---
 
+## Gateway database ownership
+
+Gateway process owns every OpenClaw database and its state. In-process writer receipts invalidate cached rows across workers and handles; use direct reads when cache cannot be covered. Never add runtime foreign-commit probes (`PRAGMA data_version`, version observations, foreign-observation scopes); remove when touched. Outside writers, including CLI, Doctor, cron, plugin children: must use Gateway or hold exclusive ownership while Gateway stopped. Preserve live-authority checks at effect boundaries and consistent snapshots for multi-statement reads.
+
 ## Integrity checks
 
 Admission validates SQLite format, schema, canonical indexes, and required
@@ -16,7 +20,13 @@ and worker isolates while a database remains open. Final close releases those
 in-memory payloads. Reopens reuse a matching seal without validation SQL; an
 uncheckpointed or failed close requires fresh admission. Current ownership, live write authority,
 row-cache freshness, and durable quarantine refusals remain separate checks.
-A seal never overrides a recorded corruption refusal.
+A seal never overrides a recorded corruption refusal. This includes
+quarantine-store format checks; existing indexed durable quarantine-row guards
+still observe recorded corruption. Share schema-version and table-existence
+facts too, across opens, scopes, requests, and idle close. Never add repeated
+format checks; remove them when touched. Identify replacement files by volume,
+inode, and birthtime with `fstat`, not SQL. Migration/repair owners publish new
+facts after their DDL; Doctor and explicit verification retain full checks.
 
 Each owned database can have a regular file named `<database>.seal` beside it,
 for example `openclaw.sqlite.seal`. The database admission owner writes this file
@@ -26,6 +36,12 @@ publish a seal. The seal contains the admitted schema and integrity facts, a
 schema identity, the time of the last full verification, and the final physical
 file metadata. It is reconstructible verification metadata, not database state
 or a backup.
+
+Completed memory index schema receipts also survive a clean close. They remain
+scoped to the cache, FTS, and tokenizer settings that were validated, so an
+unchanged restart skips memory schema setup and the resulting agent schema
+refresh. Changed settings, in-process DDL, or a missing or invalid seal take the
+ordinary memory schema admission path. Imported-row backfills still run.
 
 At startup, admission accepts the seal only when its JSON parses, its short
 checksum matches, and all of the following match the current database: device,
@@ -58,6 +74,8 @@ runtime scan or a new timer.
 
 Before the first write after admission, the owner unlinks the seal. Explicit
 maintenance also invalidates it before checkpointing or rewriting a database.
+The seal is an allowed small sidecar, published only after successful close.
+Acceptance is atomic: a partial payload cannot supply admitted facts.
 Publication uses a plain file write with a checksum: it needs no temporary-file
 rename or `fsync` protocol. A torn write fails parsing or checksum validation and
 falls back to a full check. If a crash loses the unlink but preserves a database

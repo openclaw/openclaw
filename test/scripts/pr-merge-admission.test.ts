@@ -449,7 +449,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     }
     if (fault === "known HAS_HOOKS") {
       expect(run.output).toContain(
-        "auto-merge admission requires MERGEABLE with CLEAN, BEHIND, or BLOCKED status",
+        "auto-merge admission requires MERGEABLE with CLEAN, UNSTABLE, BEHIND, or BLOCKED status",
       );
     }
     if (fault === "conflicting") {

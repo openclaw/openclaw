@@ -2,10 +2,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { getRuntimeConfig } from "../config/io.js";
-import {
-  captureIncognitoSessionSource,
-  withIncognitoSessionEntry,
-} from "../config/sessions/session-incognito-binding.js";
+import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { resolveInboundMediaReference } from "../media/media-reference.js";
 import { readMediaBuffer } from "../media/store.js";
@@ -110,19 +107,11 @@ export async function handleChannelAvatarHttpRequest(
   const sessionKey = requestedKey
     ? normalizeSessionKeyPreservingOpaquePeerIds(requestedKey)
     : undefined;
-  let selected: Result<ReturnType<typeof captureIncognitoSessionSource>, unknown>;
-  let assertSourceCurrent = () => {};
+  let selected: Result<ReturnType<typeof captureSessionEntryMetadataRead>, unknown>;
   try {
-    const source = sessionKey ? captureIncognitoSessionSource({ sessionKey }) : undefined;
-    if (sessionKey && source && !("kind" in source)) {
-      const claim = source.actor.sessions.captureCurrent(sessionKey);
-      assertSourceCurrent = () => {
-        source.admissionSignal?.throwIfAborted();
-        source.actor.assertReadable();
-        claim.assertCurrent();
-      };
-    }
-    selected = ok(source);
+    selected = ok(
+      sessionKey ? captureSessionEntryMetadataRead({ sessionKey }, () => {}) : undefined,
+    );
   } catch (error) {
     selected = err(error);
   }
@@ -169,21 +158,23 @@ export async function handleChannelAvatarHttpRequest(
     return true;
   };
   if (source) {
+    const entry = source.readCurrent();
+    const origin = sessionDeliveryOrigin(entry);
+    const reference = origin?.avatar;
     const assertCurrent = () => {
       requestAuth.assertCurrent();
-      assertSourceCurrent();
+      const current = source.readCurrent();
+      if (
+        current?.sessionId !== entry?.sessionId ||
+        current?.lifecycleRevision !== entry?.lifecycleRevision ||
+        sessionDeliveryOrigin(current)?.avatar !== reference
+      ) {
+        throw new Error("Channel avatar session authority changed");
+      }
     };
-    return withIncognitoSessionEntry(
-      source,
-      sessionKey,
+    return serve(
+      matchesChannelAvatarSender(requestUrl.searchParams, origin) ? reference : undefined,
       assertCurrent,
-      (entry, assertReadCurrent) => {
-        const origin = sessionDeliveryOrigin(entry);
-        return serve(
-          matchesChannelAvatarSender(requestUrl.searchParams, origin) ? origin?.avatar : undefined,
-          assertReadCurrent,
-        );
-      },
     );
   }
   let reference: string | undefined;

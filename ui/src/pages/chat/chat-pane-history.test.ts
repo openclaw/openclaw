@@ -413,7 +413,7 @@ describe("chat pane native history pagination", () => {
     expect(scrollToOffset).not.toHaveBeenCalled();
   });
 
-  it("bootstraps a visible history tail once the viewport can fit it", async () => {
+  it("does not bootstrap older history when the viewport starts short or grows", async () => {
     const request = vi.fn(async () => ({
       messages: [nativeHistoryMessage(1), nativeHistoryMessage(2)],
       hasMore: false,
@@ -426,7 +426,7 @@ describe("chat pane native history pagination", () => {
     const thread = document.createElement("div");
     thread.className = "chat-thread";
     Object.defineProperty(thread, "scrollHeight", { value: 400 });
-    let clientHeight = 200;
+    let clientHeight = 0;
     Object.defineProperty(thread, "clientHeight", { get: () => clientHeight });
     const sentinel = document.createElement("div");
     sentinel.className = "chat-history-sentinel";
@@ -449,17 +449,37 @@ describe("chat pane native history pagination", () => {
     try {
       pane.syncHistoryObserver();
       expect(request).not.toHaveBeenCalled();
+      clientHeight = 200;
+      pane.syncHistoryObserver();
       clientHeight = 600;
       pane.syncHistoryObserver();
-      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-      expect(observe).toHaveBeenCalledWith(sentinel);
-      await vi.waitFor(() =>
-        expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4]),
-      );
+      await Promise.resolve();
+      expect(request).not.toHaveBeenCalled();
+      expect(observe).not.toHaveBeenCalled();
+      expect(state.chatMessages.map(nativeHistorySeq)).toEqual([3, 4]);
     } finally {
       vi.unstubAllGlobals();
     }
   });
+
+  it.each(["initial placement", "programmatic reveal"])(
+    "does not arm history from an upward offset during %s",
+    (placement) => {
+      const { pane } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
+      vi.spyOn(pane.transcript, "isPositionSettled", "get").mockReturnValue(
+        placement !== "initial placement",
+      );
+      vi.spyOn(pane.transcript, "isProgrammaticScroll", "get").mockReturnValue(
+        placement === "programmatic reveal",
+      );
+      const thread = appendChatThread(pane, { scrollTop: 80 });
+      pane.transcriptScrollTop = 100;
+      const event = new Event("scroll");
+      Object.defineProperty(event, "target", { value: thread });
+      pane.handleTranscriptScroll(event);
+      expect(pane.historyObserverArmed).toBe(false);
+    },
+  );
 
   it("prefetches older history from upward intent well before the top edge", async () => {
     const request = vi.fn(async () => ({

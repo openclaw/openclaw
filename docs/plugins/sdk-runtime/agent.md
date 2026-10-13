@@ -67,6 +67,10 @@ loads the selected active branch, and `openDetachedBoundedAsync` returns the sam
 selection without persistence. File-backed SQLite reads run on the history worker.
 The synchronous getters consume the prepared view without reading storage.
 
+Hydrated entry and message envelopes remain mutable local views. Their nested
+payloads are frozen after migration and can be shared across rewrite snapshots.
+Replace a payload with a new value instead of editing its nested objects or arrays.
+
 Full reads transfer bounded chunks from one committed SQLite snapshot without
 truncating the transcript to fit the worker. The caller still holds the complete
 result in memory; use the bounded methods when the complete history is unnecessary.

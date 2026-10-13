@@ -68,6 +68,7 @@ describe("chat pane keyboard focus", () => {
         client: createGatewayBrowserClientFixture({ request }),
         sessions: createSessionCapabilityFixture(),
       });
+      vi.spyOn(pane.transcript, "isPositionSettled", "get").mockReturnValue(true);
       state.chatHistoryPagination = { hasMore: true, nextOffset: 2 };
       pane.historyAutoLoadBlocked = true;
       vi.stubGlobal("IntersectionObserver", undefined);

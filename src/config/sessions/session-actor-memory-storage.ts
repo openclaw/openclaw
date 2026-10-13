@@ -244,6 +244,7 @@ export function createSessionActorMemoryStorage(options: {
           authority.assertCurrent();
           // Detach before installation: an uncloneable result cannot leave a partial commit.
           const committed = structuredClone({ kind: "committed" as const, value, changes });
+          observer?.beforeCommit?.(structuredClone(committed));
           for (const [sessionKey, state] of changed) {
             const previous = sessions.get(sessionKey);
             if (!state) {
@@ -275,7 +276,7 @@ export function createSessionActorMemoryStorage(options: {
               { ...options, incarnation: target.database.incarnation },
               committed.changes,
             );
-            observer?.committed(structuredClone(committed));
+            observer?.committed?.(structuredClone(committed));
           } catch (error) {
             outcome.failure = errorFacts(error);
           }

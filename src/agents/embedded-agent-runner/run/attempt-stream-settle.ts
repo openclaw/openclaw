@@ -341,6 +341,9 @@ export async function settleEmbeddedAttemptStream(input: {
               error: formatErrorMessage(state.promptError),
             });
           } catch (entryErr) {
+            // Worker errors lose object identity; use the live owner's cancellation reason.
+            attempt.abortSignal?.throwIfAborted();
+            input.runAbortSignal.throwIfAborted();
             log.warn(`failed to persist prompt error entry: ${String(entryErr)}`);
           }
         }

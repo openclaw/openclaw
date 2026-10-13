@@ -99,7 +99,7 @@ it("reuses involvement facts until session replacement or profile publication", 
   const select = (id = "profile-ada") =>
     runSynchronousWork(
       filterSessionEntries({
-        ...prepareSessionRowSelection(projection, {}),
+        ...prepareSessionRowSelection(projection, {}, { ordered: true }),
         involvingActorId: id,
       }),
     ).entries.map(([sessionKey]) => sessionKey);

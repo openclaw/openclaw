@@ -9,6 +9,7 @@ import {
   createSignal,
   getOwner,
   onCleanup,
+  onSettled,
   runWithOwner,
 } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
@@ -23,6 +24,24 @@ import {
 } from "./solid-content.tsx";
 
 describe("Lit and Solid content boundaries", () => {
+  it("settles parent refs after mounting nested Solid content through Lit", () => {
+    const settled = vi.fn();
+    const Nested = () => <span>Provider</span>;
+    function Parent() {
+      let sibling: HTMLButtonElement | undefined;
+      onSettled(() => settled(sibling?.isConnected));
+      return (
+        <section>
+          <LegacyOutlet render={() => html`${solidContent(Nested, {})}`} />
+          <button ref={(element) => (sibling = element)}>Next</button>
+        </section>
+      );
+    }
+    mountSolid(() => <Parent />);
+    flush();
+    expect(settled).toHaveBeenCalledExactlyOnceWith(true);
+  });
+
   it("updates a retained media mount and clears its range before remounting", () => {
     const disconnected = vi.fn();
     class MediaContent extends AsyncDirective {
