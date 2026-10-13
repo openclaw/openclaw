@@ -2,9 +2,12 @@ import type { DatabaseSync } from "node:sqlite";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
-import type { SessionActorHotState } from "./session-actor-contract.js";
+import type { SessionActorVersion } from "./session-actor-state.types.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
-import type { readSessionEntryPatchPredicate } from "./session-entry-patch-guard.js";
+import type {
+  SessionEntryPatchCommitted,
+  SessionEntryPatchGuard,
+} from "./session-entry-patch.types.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import type { SessionParticipantRecord } from "./session-membership-facts.types.js";
 
@@ -14,9 +17,10 @@ type PrepareEntryPatch = (
 ) =>
   | {
       snapshot(): SqliteLifecycleTargetSnapshot[number];
-      readPredicate: (
-        predicate: Parameters<typeof readSessionEntryPatchPredicate>[2],
-      ) => ReturnType<typeof readSessionEntryPatchPredicate>;
+      readPredicate: (predicate: SessionEntryPatchGuard["shouldCommitIf"]) => {
+        matches: boolean;
+        transcriptPredicate?: SessionEntryPatchCommitted["transcriptPredicate"];
+      };
       publish(
         postimages: SessionEntryWritePostimages,
         publication: SessionEntryReplacementPublication,
@@ -37,7 +41,7 @@ type ParticipantOwner = {
     singleStatement?: boolean,
   ) =>
     | {
-        version: SessionActorHotState["version"];
+        version: SessionActorVersion;
         publish(participants: SessionParticipantRecord[]): void;
       }
     | undefined;

@@ -12,23 +12,15 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { readActiveTranscriptEntryAnchor } from "../config/sessions/session-accessor.sqlite-transcript-anchor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import { hydrateSessionActorState } from "../config/sessions/session-actor-hydration.worker.js";
-import {
-  createSessionActorReplica,
-  readSessionActorProjectionReceipt,
-} from "../config/sessions/session-actor-replica.js";
+import { captureDurableSessionActor } from "../config/sessions/session-actor-durable.js";
+import { readSessionActorProjectionReceipt } from "../config/sessions/session-actor-replica.js";
 import {
   markCanonicalSessionValidationPending,
   setCanonicalSqliteSessionMainKey,
 } from "../config/sessions/session-canonical-key.js";
 import { withSessionTranscriptProjectionReceipt } from "../config/sessions/session-transcript-projection-facts-scope.js";
 import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
-import { collectSessionEntryLookupKeys } from "../config/sessions/store-entry.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
-import {
-  readSqliteDatabaseScopedWriteToken,
-  sqliteSessionIdWriteScope,
-} from "../infra/sqlite-database-admission.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import {
@@ -100,17 +92,11 @@ it("reuses complete accounting facts and reloads them after a transcript write",
         nativeLocation: database.path,
       },
     };
-    const token = readSqliteDatabaseScopedWriteToken(database.db, [
-      ...collectSessionEntryLookupKeys(actorTarget.sessionKey),
-      sqliteSessionIdWriteScope(target.transcript.sessionId),
-    ]);
-    if (!token) {
-      throw new Error("Accounting receipt proof requires a write token");
-    }
-    const replica = createSessionActorReplica({
+    const authority = { assertCurrent() {}, assertReadable() {}, authorize() {} };
+    const actor = captureDurableSessionActor({
+      database: target.database,
       target: actorTarget,
-      lifetime: { assertCurrent() {}, assertReadable() {} },
-      currentGeneration: () => identity.incarnation,
+      lifetime: authority,
     });
     const owner = new OpenClawAgentDatabaseReadOnlyScope();
     const reader = createReadonlySessionHistoryReader(target);
@@ -118,18 +104,7 @@ it("reuses complete accounting facts and reloads them after a transcript write",
     const read = () => owner.run(target.database, () => reader.readTranscriptAccounting(options));
     try {
       const before = read();
-      expect(
-        replica
-          .beginRead()
-          .install(
-            hydrateSessionActorState(
-              database,
-              actorTarget,
-              { epoch: "accounting", sequence: 0 },
-              token,
-            ).hot,
-          ),
-      ).toBe(true);
+      await actor.read(authority);
       const receipt = readSessionActorProjectionReceipt({
         path: database.path,
         sessionKey: actorTarget.sessionKey,
@@ -162,7 +137,7 @@ it("reuses complete accounting facts and reloads them after a transcript write",
         observed.restore();
       }
     } finally {
-      replica.close();
+      await actor.release();
       owner.close();
     }
   });

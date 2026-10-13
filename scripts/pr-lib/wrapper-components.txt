@@ -2064,6 +2064,7 @@ src/config/sessions/session-accessor.sqlite-identity.ts
 src/config/sessions/session-accessor.sqlite-worker-coordination.ts
 src/config/sessions/session-accessor.sqlite-worker-transport.ts
 src/config/sessions/session-actor-replica.ts
+src/config/sessions/session-actor-replica-receipts.ts
 src/config/sessions/session-actor-bounded-history.ts
 src/config/sessions/session-actor-transcript-anchors.ts
 src/config/sessions/session-actor-transcript-replica.ts

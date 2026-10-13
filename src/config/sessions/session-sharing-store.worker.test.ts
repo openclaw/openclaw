@@ -316,7 +316,7 @@ it("commits aliased worker membership and participant facts before publishing, a
         nativeLocation: database.path,
       },
     };
-    const authority = { assertCurrent() {}, assertReadable() {} };
+    const authority = { assertCurrent() {}, assertReadable() {}, authorize() {} };
     let actor: ReturnType<typeof captureDurableSessionActor> | undefined;
     const expectedEntry = {
       sessionId: entry.sessionId,
