@@ -14,8 +14,11 @@ const mocks = vi.hoisted(() => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+// mock-isolation: Keep state directory resolution inside this fixture's temporary directory.
 vi.mock("../../config/paths.js", () => ({ resolveStateDir: () => mocks.stateDir }));
+// mock-isolation: Observe diagnostic levels without opening real log sinks.
 vi.mock("../../logging/subsystem.js", () => ({ createSubsystemLogger: () => mocks.log }));
+// mock-isolation: Deliver worker audit events without launching TLS or a worker thread.
 vi.mock("./proxy-worker.js", () => ({ startSecretEgressProxyWorker: mocks.startWorker }));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
