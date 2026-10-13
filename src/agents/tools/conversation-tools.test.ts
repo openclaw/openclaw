@@ -6,6 +6,10 @@ import {
   ConversationTurnResultSchema,
 } from "../../../packages/gateway-protocol/src/schema/agent.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { MessageActionResult } from "../../infra/outbound/message-action-contracts.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -43,6 +47,7 @@ import { resetTurnSendLedgerForTest } from "./turn-send-ledger.js";
 const conversationSendToolResultSchema = createConversationsSendTool().outputSchema!;
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   resetTurnSendLedgerForTest();
   resetPluginRuntimeStateForTest();
 });
@@ -633,6 +638,8 @@ describe("message and conversations_send share the per-turn budget", () => {
   }
 
   function createMixedMessageTool(config: Record<string, unknown>) {
+    // The Gateway option resolver reads the runtime snapshot; keep it on the tool's config.
+    setRuntimeConfigSnapshot(config as never);
     return createMessageTool({
       currentChannelProvider: "reef",
       currentChannelId: "reef:operator",
@@ -703,6 +710,8 @@ describe("message and conversations_send share the per-turn budget", () => {
   // ref's target. Its ledger key must equal the one conversations_send builds for
   // the same peer, or alternating them evades the cap.
   function createSourceReplyMessageTool(config: Record<string, unknown>) {
+    // The Gateway option resolver reads the runtime snapshot; keep it on the tool's config.
+    setRuntimeConfigSnapshot(config as never);
     return createMessageTool({
       currentChannelProvider: "reef",
       currentChannelId: "reef:operator",
@@ -849,6 +858,7 @@ describe("Code Mode bridge projects the send-budget notice into the guest value"
     config: Record<string, unknown>,
     options: { toolResult?: AgentToolResult<unknown> } = {},
   ) {
+    setRuntimeConfigSnapshot(config as never);
     return createMessageTool({
       currentChannelProvider: "reef",
       currentChannelId: "reef:operator",
