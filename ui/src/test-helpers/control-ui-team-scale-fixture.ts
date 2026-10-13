@@ -36,7 +36,7 @@ export const TEAM_SCALE_SELF_INSTANCE_ID = "team-scale-self";
 type TeamScaleCatalogEvent = { event: "sessions.catalog.host"; payload: SessionsCatalogHostEvent };
 type TeamScaleEvent = TeamScaleCatalogEvent | { event: "presence"; payload: PresencePayload };
 
-export type TeamScaleLiveEvent = {
+type TeamScaleLiveEvent = {
   atMs: number;
   kind: string;
   event: string;
