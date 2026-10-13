@@ -46,14 +46,15 @@ function params(): PluginDoctorMigrationResourceCollectionParams {
   };
 }
 
-it("warns once per undeclared owner without running the bundled Canvas migration", async () => {
-  const migration = canvasMigrations.find(
+it("warns once per undeclared owner without running its migration", async () => {
+  const shipped = canvasMigrations.find(
     (entry) => entry.id === "canvas-custom-root-documents-to-core",
   );
-  if (!migration) {
+  if (!shipped) {
     throw new Error("Missing shipped Canvas migration");
   }
-  expect(migration.collectBackupResources).toBeUndefined();
+  // Canvas declares its inventory; strip it to exercise the undeclared-owner path.
+  const { collectBackupResources: _declared, ...migration } = shipped;
   const detect = vi.spyOn(migration, "detectLegacyState");
   const migrate = vi.spyOn(migration, "migrateLegacyState");
   const input = params();

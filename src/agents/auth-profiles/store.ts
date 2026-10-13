@@ -9,6 +9,7 @@ import { projectModelProviderConfig } from "../../config/model-provider-config.j
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { readUserModelAuthProfile } from "../../state/user-model-accounts.js";
 import { isRecord, resolveUserPath } from "../../utils.js";
@@ -35,7 +36,6 @@ import {
   warnLegacyAuthProfileSourcesIgnored,
 } from "./legacy-source-diagnostic.js";
 import { resolveLegacyAuthProfileSourceCandidates } from "./legacy-source-files.js";
-import { captureOAuthRefreshClaimPublication } from "./oauth-refresh-marker.js";
 import {
   shouldUseMainOwnerForLocalOAuthCredential,
   type PersistedAuthProfileStores,
@@ -291,11 +291,16 @@ export function isSharedMainAuthProfileAgentDir(agentDir?: string): boolean {
   return resolveAgentAuthPath(effectiveAgentDir) === mainPath;
 }
 
-/** Find a persisted credential in the scoped store, falling back to the main store. */
+/** @deprecated Use findPersistedAuthProfileCredentialAsync. Removed at the next Plugin SDK major. */
 export function findPersistedAuthProfileCredential(params: {
   agentDir?: string;
   profileId: string;
 }): AuthProfileStore["profiles"][string] | undefined {
+  warnPluginSdkDeprecation({
+    family: "auth-profiles",
+    method: "findPersistedAuthProfileCredential",
+    replacement: "findPersistedAuthProfileCredentialAsync",
+  });
   if (isEnvOnlyAuthProfileRuntime()) {
     return undefined;
   }
@@ -324,11 +329,19 @@ export function findPersistedAuthProfileCredential(params: {
   ];
 }
 
-/** Resolve which agent dir owns a persisted profile, accounting for inherited OAuth. */
+/**
+ * Resolve which agent dir owns a persisted profile, accounting for inherited OAuth.
+ * @deprecated Use resolvePersistedAuthProfileOwnerAgentDirAsync. Removed at the next Plugin SDK major.
+ */
 export function resolvePersistedAuthProfileOwnerAgentDir(params: {
   agentDir?: string;
   profileId: string;
 }): string | undefined {
+  warnPluginSdkDeprecation({
+    family: "auth-profiles",
+    method: "resolvePersistedAuthProfileOwnerAgentDir",
+    replacement: "resolvePersistedAuthProfileOwnerAgentDirAsync",
+  });
   if (isEnvOnlyAuthProfileRuntime() || isUserModelAuthProfileId(params.profileId)) {
     return undefined;
   }
@@ -761,10 +774,6 @@ export function restoreAuthProfileStorePersistenceSnapshot(
                 stateChanged: stateRestored,
                 selectionChanged: stateRestored,
                 profileIds: credentialsRestored ? changedProfileIds : [],
-                oauthRefreshClaimIds: captureOAuthRefreshClaimPublication(
-                  restoredProfiles,
-                  credentialsRestored ? changedProfileIds : [],
-                ),
               },
               owner,
             );
@@ -1116,44 +1125,114 @@ export function createAuthProfileStoreRuntime(
     if (provider || isEnvOnlyAuthProfileRuntime()) {
       return { provider };
     }
-    return withPreparedAuthProfileStoreReads(params.agentDir, { readOnly: true }, async (reads) => {
-      const readProvider = async (agentDir: string | undefined) => {
-        let recordedProvider: string | undefined;
-        await reads.readStore(agentDir, {
-          ...reads.options,
-          // Read the captured persisted rows, not the composed runtime/CLI overlay.
-          onReadOwner: (owner) => {
-            recordedProvider = owner.readStore()?.profiles[params.profileId]?.provider;
-          },
-        });
-        return recordedProvider;
-      };
-      const requestedProvider = await readProvider(reads.effectiveAgentDir);
-      const scopedSharedStore = reads.runInCapturedScope(getScopedSharedAuthStore);
-      if (scopedSharedStore) {
-        return {
-          provider: requestedProvider ?? scopedSharedStore.profiles[params.profileId]?.provider,
+    return { provider: (await findPersistedAuthProfileCredentialAsync(params))?.provider };
+  }
+
+  async function findPersistedAuthProfileCredentialAsync(params: {
+    agentDir?: string;
+    profileId: string;
+  }): Promise<AuthProfileStore["profiles"][string] | undefined> {
+    if (isEnvOnlyAuthProfileRuntime()) {
+      return undefined;
+    }
+    if (isUserModelAuthProfileId(params.profileId) && authProfileRuntimeMode.getStore()) {
+      return undefined;
+    }
+    return withPreparedAuthProfileStoreReads(
+      params.agentDir,
+      { readOnly: true, profileId: params.profileId },
+      async (reads) => {
+        if (isUserModelAuthProfileId(params.profileId)) {
+          const store = await reads.materializePersonalProfile(createEmptyAuthProfileStore());
+          return store.profiles[params.profileId];
+        }
+        let requestedPath: string | undefined;
+        const readCredential = async (agentDir: string | undefined) => {
+          let recordedCredential: AuthProfileStore["profiles"][string] | undefined;
+          await reads.readStore(agentDir, {
+            ...reads.options,
+            // Read the captured persisted rows, not the composed runtime/CLI overlay.
+            onReadOwner: (owner) => {
+              requestedPath ??= owner.databasePath;
+              recordedCredential = owner.readStore()?.profiles[params.profileId];
+            },
+          });
+          return recordedCredential;
         };
-      }
-      if (
-        requestedProvider ||
-        !reads.effectiveAgentDir ||
-        reads.runInCapturedScope(() => isSharedMainAuthProfileAgentDir(reads.effectiveAgentDir))
-      ) {
-        return { provider: requestedProvider };
-      }
-      return {
-        provider: await readProvider(
-          reads.runInCapturedScope(() => resolveRuntimeAuthProfileAgentDir()),
-        ),
-      };
-    });
+        const requestedCredential = await readCredential(reads.effectiveAgentDir);
+        const scopedSharedStore = reads.runInCapturedScope(getScopedSharedAuthStore);
+        if (scopedSharedStore) {
+          return requestedCredential ?? scopedSharedStore.profiles[params.profileId];
+        }
+        if (
+          requestedCredential ||
+          !reads.effectiveAgentDir ||
+          requestedPath === (await reads.sharedPath())
+        ) {
+          return requestedCredential;
+        }
+        return readCredential(reads.runInCapturedScope(() => resolveRuntimeAuthProfileAgentDir()));
+      },
+    );
+  }
+
+  /** Resolve persisted ownership from worker-prepared rows, including inherited OAuth. */
+  async function resolvePersistedAuthProfileOwnerAgentDirAsync(params: {
+    agentDir?: string;
+    profileId: string;
+  }): Promise<string | undefined> {
+    if (isEnvOnlyAuthProfileRuntime() || isUserModelAuthProfileId(params.profileId)) {
+      return undefined;
+    }
+    const agentDir = resolveRuntimeAuthProfileAgentDir(params.agentDir);
+    if (!agentDir) {
+      return undefined;
+    }
+    const mainAgentDir = resolveRuntimeAuthProfileAgentDir();
+    return withPreparedAuthProfileStoreReads(
+      agentDir,
+      { readOnly: true, profileId: params.profileId },
+      async (reads) => {
+        const readCredential = async (ownerAgentDir: string | undefined) => {
+          let credential: AuthProfileStore["profiles"][string] | undefined;
+          await reads.readStore(ownerAgentDir, {
+            ...reads.options,
+            // Ownership follows persisted credentials, not runtime/CLI overlays.
+            onReadOwner: (owner) => {
+              credential = owner.readStore()?.profiles[params.profileId];
+            },
+          });
+          return credential;
+        };
+        const requestedProfile = await readCredential(agentDir);
+        const mainPath = mainAgentDir
+          ? resolveAgentAuthPath(mainAgentDir)
+          : await reads.sharedPath();
+        if (resolveAgentAuthPath(agentDir) === mainPath) {
+          return undefined;
+        }
+        const mainProfile = await readCredential(mainAgentDir);
+        if (!requestedProfile) {
+          return mainProfile ? undefined : agentDir;
+        }
+        return shouldUseMainOwnerForLocalOAuthCredential({
+          profileId: params.profileId,
+          local: requestedProfile,
+          main: mainProfile,
+        })
+          ? undefined
+          : agentDir;
+      },
+    );
   }
 
   const {
     loadAuthProfileStoreWithoutExternalProfiles,
+    loadAuthProfileStoreWithoutExternalProfilesAsync,
     ensureAuthProfileStore,
+    ensureAuthProfileStoreAsync,
     ensureAuthProfileStoreWithoutExternalProfiles,
+    ensureAuthProfileStoreWithoutExternalProfilesAsync,
     prepareAuthProfileStoreForModelRuntime,
   } = createAuthProfileStoreReadRuntime({
     isEnvOnlyAuthProfileRuntime,
@@ -1171,7 +1250,7 @@ export function createAuthProfileStoreRuntime(
   });
 
   /** Retain read owners, never copies of their migration refusals, for a session facade. */
-  function createAuthProfileStoreReadScope(agentDir: string, config: OpenClawConfig | undefined) {
+  function captureAuthProfileStoreReadScope(agentDir: string, config: OpenClawConfig | undefined) {
     let mode = authProfileRuntimeMode.getStore();
     const env = { ...(mode?.kind === "agent-dir" ? mode.env : process.env) };
     const effectiveAgentDir = mode?.kind === "agent-dir" ? mode.agentDir : agentDir;
@@ -1182,38 +1261,46 @@ export function createAuthProfileStoreRuntime(
       owners.set(databasePath, {
         databasePath,
         candidates: resolveLegacyAuthProfileSourceCandidates({ env }),
-        readStore: () => loadPersistedSharedAuthProfileStore(env),
+        readStore: () => (mode?.kind === "agent-dir" ? (mode.sharedStore ?? null) : null),
       });
     }
-    const read = (): AuthProfileStore => {
-      const load = () =>
-        loadAuthProfileStoreForRuntime(
-          effectiveAgentDir,
-          {
-            config,
-            readOnly: true,
-            allowKeychainPrompt: false,
-            deferScopedMigrationRefusals: true,
-            onReadOwner: (owner) => {
-              owners.set(owner.databasePath, owner);
-            },
-          },
-          env,
-        );
-      const store = mode
-        ? authProfileRuntimeMode.run(mode, load)
-        : authProfileRuntimeMode.exit(load);
+    const readOptions: LoadAuthProfileStoreOptions = {
+      config,
+      readOnly: true,
+      allowKeychainPrompt: false,
+      deferScopedMigrationRefusals: true,
+      onReadOwner: (owner) => {
+        owners.set(owner.databasePath, owner);
+      },
+    };
+    const runInScope = <T>(load: () => T): T =>
+      mode ? authProfileRuntimeMode.run(mode, load) : authProfileRuntimeMode.exit(load);
+    const assertReadOwners = () => {
       // Supplied shared snapshots must still honor their owner's all-provider refusal.
       for (const owner of owners.values()) {
         assertAuthProfileMigrationStateAtDatabasePath(owner.databasePath, undefined, config, true);
       }
+    };
+    const read = (): AuthProfileStore => {
+      const store = runInScope(() =>
+        loadAuthProfileStoreForRuntime(effectiveAgentDir, readOptions, env),
+      );
+      assertReadOwners();
       return store;
     };
-    const store = read();
+    const readAsync = async (): Promise<AuthProfileStore> => {
+      const store = await runInScope(() =>
+        loadAuthProfileStoreForRuntimeAsync(effectiveAgentDir, readOptions, env),
+      );
+      assertReadOwners();
+      return store;
+    };
     return {
       agentDir: effectiveAgentDir,
-      store,
+      env,
+      envOnly: mode?.kind === "env-only",
       read,
+      readAsync,
       getRuntimeSnapshots: () =>
         [...owners.keys()]
           .map((databasePath) => getRuntimeAuthProfileStoreSnapshotAtDatabasePath(databasePath))
@@ -1247,7 +1334,24 @@ export function createAuthProfileStoreRuntime(
     };
   }
 
-  /** Load auth profiles for secret resolution without keychain prompts or writes. */
+  function createAuthProfileStoreReadScope(agentDir: string, config: OpenClawConfig | undefined) {
+    const scope = captureAuthProfileStoreReadScope(agentDir, config);
+    return { ...scope, store: scope.read() };
+  }
+
+  async function createAuthProfileStoreReadScopeAsync(
+    agentDir: string,
+    config: OpenClawConfig | undefined,
+  ) {
+    const scope = captureAuthProfileStoreReadScope(agentDir, config);
+    return { ...scope, store: await scope.readAsync() };
+  }
+
+  /**
+   * @deprecated Await loadAuthProfileStoreForRuntimeAsync from openclaw/plugin-sdk/agent-runtime
+   * with readOnly: true and allowKeychainPrompt: false. Retained until removal in a later stable
+   * release after deprecation ships.
+   */
   function loadAuthProfileStoreForSecretsRuntime(
     agentDir?: string,
     options?: Pick<
@@ -1260,6 +1364,12 @@ export function createAuthProfileStoreRuntime(
       | "inheritedAuthDir"
     >,
   ): AuthProfileStore {
+    warnPluginSdkDeprecation({
+      family: "auth-profiles",
+      method: "loadAuthProfileStoreForSecretsRuntime",
+      replacement:
+        "loadAuthProfileStoreForRuntimeAsync from openclaw/plugin-sdk/agent-runtime with readOnly: true and allowKeychainPrompt: false",
+    });
     return loadAuthProfileStoreForRuntime(agentDir, {
       ...options,
       readOnly: true,
@@ -1267,8 +1377,25 @@ export function createAuthProfileStoreRuntime(
     });
   }
 
-  /** Load the store shape used when applying local-only auth updates. */
+  /** Load auth profiles for secret resolution without keychain prompts or writes. */
+  function loadAuthProfileStoreForSecretsRuntimeAsync(
+    agentDir?: string,
+    options?: Parameters<typeof loadAuthProfileStoreForSecretsRuntime>[1],
+  ): Promise<AuthProfileStore> {
+    return loadAuthProfileStoreForRuntimeAsync(agentDir, {
+      ...options,
+      readOnly: true,
+      allowKeychainPrompt: false,
+    });
+  }
+
+  /** @deprecated Use ensureAuthProfileStoreForLocalUpdateAsync. Removed at the next Plugin SDK major. */
   function ensureAuthProfileStoreForLocalUpdate(agentDir?: string): AuthProfileStore {
+    warnPluginSdkDeprecation({
+      family: "auth-profiles",
+      method: "ensureAuthProfileStoreForLocalUpdate",
+      replacement: "ensureAuthProfileStoreForLocalUpdateAsync",
+    });
     if (isEnvOnlyAuthProfileRuntime()) {
       return createEmptyAuthProfileStore();
     }
@@ -1294,6 +1421,43 @@ export function createAuthProfileStoreRuntime(
     return mainStore
       ? mergeAuthProfileStores(mainStore, store, { preserveBaseRuntimeExternalProfiles: true })
       : store;
+  }
+
+  async function ensureAuthProfileStoreForLocalUpdateAsync(
+    agentDir?: string,
+  ): Promise<AuthProfileStore> {
+    if (isEnvOnlyAuthProfileRuntime()) {
+      return createEmptyAuthProfileStore();
+    }
+    return withPreparedAuthProfileStoreReads(agentDir, undefined, async (prepared) => {
+      const options: LoadAuthProfileStoreOptions = { syncExternalCli: false };
+      const store = await prepared.readStore(prepared.effectiveAgentDir, options);
+      const mainAgentDir = prepared.runInCapturedScope(() => resolveRuntimeAuthProfileAgentDir());
+      const mainAuthPath = mainAgentDir
+        ? resolveAgentAuthPath(mainAgentDir)
+        : await prepared.sharedPath();
+      if (
+        !prepared.effectiveAgentDir ||
+        resolveAgentAuthPath(prepared.effectiveAgentDir) === mainAuthPath
+      ) {
+        return store;
+      }
+      let mainStore: AuthProfileStore | null | undefined;
+      try {
+        mainStore = await prepared.readStore(undefined, { readOnly: true, syncExternalCli: false });
+      } catch (error) {
+        mainStore = loadInheritedAuthProfileStore(
+          () => {
+            throw error;
+          },
+          undefined,
+          prepared.env,
+        );
+      }
+      return mainStore
+        ? mergeAuthProfileStores(mainStore, store, { preserveBaseRuntimeExternalProfiles: true })
+        : store;
+    });
   }
 
   function saveAuthProfileStoreInTransaction(
@@ -1451,13 +1615,21 @@ export function createAuthProfileStoreRuntime(
     };
   }
 
-  /** Save the auth profile store plus sidecar state, preserving runtime overlay metadata. */
+  /**
+   * @deprecated Use updateAuthProfileStoreWithLock from openclaw/plugin-sdk/provider-auth.
+   * Retained until removal in a later stable release after deprecation ships.
+   */
   function saveAuthProfileStore(
     store: AuthProfileStore,
     agentDir?: string,
     options?: SaveAuthProfileStoreOptions,
     database?: AuthProfileDatabase,
   ): void {
+    warnPluginSdkDeprecation({
+      family: "auth-profiles",
+      method: "saveAuthProfileStore",
+      replacement: "updateAuthProfileStoreWithLock from openclaw/plugin-sdk/provider-auth",
+    });
     // Reject lossy SDK inputs before opening the write owner; normalize its detached copy later.
     for (const credential of Object.values(store.profiles)) {
       normalizeAuthProfileSecretRefs(credential);
@@ -1585,19 +1757,27 @@ export function createAuthProfileStoreRuntime(
   return {
     prepareAuthProfileStoreForModelRuntime,
     createAuthProfileStoreReadScope,
+    createAuthProfileStoreReadScopeAsync,
     updateAuthProfileStoreWithLock,
     loadAuthProfileStore,
     loadAuthProfileStoreForRuntime,
     loadAuthProfileStoreForRuntimeAsync,
     loadAuthProfileStoreForSecretsRuntime,
+    loadAuthProfileStoreForSecretsRuntimeAsync,
     loadAuthProfileStoreWithoutExternalProfiles,
+    loadAuthProfileStoreWithoutExternalProfilesAsync,
     ensureAuthProfileStore,
+    ensureAuthProfileStoreAsync,
     ensureAuthProfileStoreWithoutExternalProfiles,
+    ensureAuthProfileStoreWithoutExternalProfilesAsync,
     ensureAuthProfileStoreForLocalUpdate,
+    ensureAuthProfileStoreForLocalUpdateAsync,
     saveAuthProfileStore,
     saveAuthProfileStoreWithPreparedOwner,
     saveAuthProfileStoreIfPersistenceSnapshotMatches,
     findPersistedAuthProfileCredential,
+    findPersistedAuthProfileCredentialAsync,
+    resolvePersistedAuthProfileOwnerAgentDirAsync,
     prepareAuthProfileProvider,
   };
 }

@@ -84,6 +84,7 @@ function boundLiveEvent(event: WorkerLiveEvent): WorkerLiveEvent {
     bounded = {
       kind: "thinking",
       payload: {
+        ...event.payload,
         text: truncateLiveText(event.payload.text),
         delta: truncateLiveText(event.payload.delta),
       },
@@ -176,7 +177,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient) {
         ...(stopReason ? { stopReason } : {}),
         ...(terminal.aborted ? { aborted: true } : {}),
         ...(replayInvalid ? { replayInvalid: true } : {}),
-        ...(!terminal.aborted && typeof terminal.promptError === "string"
+        ...(typeof terminal.promptError === "string"
           ? { error: redactLiveText(terminal.promptError) }
           : {}),
       },
@@ -188,6 +189,10 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient) {
   let streamedThinking = "";
   const emitAssistantSnapshot = (message: AgentMessage, complete = false) => {
     const { text, phase } = readAssistantSnapshot(message);
+    // Cancellation can synthesize an empty final after checked text was streamed.
+    if (complete && !text && message.role === "assistant" && message.stopReason === "aborted") {
+      return;
+    }
     const mediaUrls = complete ? parseReplyDirectives(text).mediaUrls : undefined;
     if (text === streamedText && phase === streamedPhase && !mediaUrls?.length) {
       return;
@@ -248,7 +253,11 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient) {
         streamedThinking = readAssistantThinking(event.message);
         enqueueLive({
           kind: "thinking",
-          payload: { text: streamedThinking, delta: event.assistantMessageEvent.delta },
+          payload: {
+            text: streamedThinking,
+            delta: event.assistantMessageEvent.delta,
+            itemId: assistantSource?.itemId,
+          },
         });
       }
       return;
@@ -259,7 +268,11 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient) {
       if (finalThinking !== streamedThinking) {
         enqueueLive({
           kind: "thinking",
-          payload: { text: finalThinking, delta: finalThinking },
+          payload: {
+            text: finalThinking,
+            delta: finalThinking,
+            itemId: assistantSource?.itemId,
+          },
         });
       }
       return;

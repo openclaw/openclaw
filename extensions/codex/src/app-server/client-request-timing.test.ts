@@ -143,32 +143,6 @@ describe("Codex request timing", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("keeps a deferred guard budget across a wall-clock jump", async () => {
-    const entered = createDeferred<void>();
-    const resume = createDeferred<void>();
-    const release = vi.fn();
-    const harness = createHarness({
-      onWrite(line, send) {
-        const frame = JSON.parse(line) as { id: number };
-        send({ id: frame.id, result: { thread: { id: "wall-clock-thread" } } });
-      },
-    });
-    harness.client.setThreadSessionRequestGuard(async () => {
-      entered.resolve();
-      await resume.promise;
-      return release;
-    });
-    const pending = harness.client.request("thread/start", {}, { timeoutMs: 1_000 });
-    void pending.catch(() => undefined);
-    await entered.promise;
-    vi.setSystemTime(Date.now() + 300_100);
-    resume.resolve();
-    await expect(pending).resolves.toEqual({ thread: { id: "wall-clock-thread" } });
-    expect(harness.writes).toHaveLength(1);
-    expect(release).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
   it("retries overload within its budget across a wall-clock jump", async () => {
     const harness = createHarness();
     const pending = read(harness);

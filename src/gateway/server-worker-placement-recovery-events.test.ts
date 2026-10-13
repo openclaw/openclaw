@@ -180,6 +180,7 @@ async function withRecoveryRuntime(
       ),
     );
     const runtime = createGatewayWorkerPlacementRuntime({
+      initialPlacements: [],
       scheduler,
       getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
@@ -534,7 +535,7 @@ describe("worker placement recovery session events", () => {
             if (mode === "broadcast failure") {
               expect(runtimeMocks.publicationWarn).toHaveBeenCalledWith(
                 "Session change publication failed",
-                { error: expect.objectContaining({ message: "session broadcast failed" }) },
+                { error: "session broadcast failed" },
               );
             }
           }

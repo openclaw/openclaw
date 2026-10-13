@@ -202,13 +202,20 @@ it("adopts native committed facts after reply loss without replaying the mutatio
   });
   const pendingRef = "refs/openclaw/results/accepted";
   const acknowledged = await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
-    const row = await store.update(store.get()!, { pending_ref: pendingRef });
+    const row = await store.update(
+      { ...store.get()!, base_commit: "f".repeat(40) },
+      { pending_ref: pendingRef },
+    );
     expect(store.get()).toEqual(row);
     return row;
   });
   lostReply.mockRestore();
   expect(writes).toBe(1);
-  expect(acknowledged).toMatchObject({ revision: 1, pending_ref: pendingRef });
+  expect(acknowledged).toMatchObject({
+    revision: 1,
+    pending_ref: pendingRef,
+    base_commit: "a".repeat(40),
+  });
   await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
     expect(store.get()).toEqual(acknowledged);
     await expect(store.delete(store.get()!)).rejects.toThrow("unsettled edits");

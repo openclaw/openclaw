@@ -20,9 +20,10 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { runAgentsApiAttempt, type AgentsApiPromptHistories } from "./agentsapi-attempt.js";
-import { createAgentsApiBindings, type AgentsApiBinding } from "./agentsapi-bindings.js";
+import { migrateAgentsApiBinding } from "./agentsapi-binding-migration.js";
+import type { AgentsApiCleanupBinding } from "./agentsapi-binding-record.js";
+import { createAgentsApiBindings } from "./agentsapi-bindings.js";
 import { AgentsApiClient } from "./agentsapi-client.js";
 import { retireAgentsApiExecutor } from "./agentsapi-environment.js";
 import { runAgentsApiIsolatedCompletion } from "./agentsapi-isolated-completion.js";
@@ -49,7 +50,7 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
     string,
     {
       nativeSessionId: string;
-      configFingerprint: string;
+      configFingerprint?: string;
       settle: (assertCleanupCurrent: () => void) => Promise<void>;
     }
   >();
@@ -66,7 +67,7 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
           assertCleanupCurrent();
           // Reacquire agent-scoped auth after restart without persisting credentials
           // or validating the new configuration against the session being removed.
-          const config = getRuntimeConfig();
+          const config = runtime.config.current({ clone: true });
           // Older hosted/external bindings have no executor metadata. The host
           // mutation target supplies their original agent, never the current default.
           const agentId = binding.executor?.agentId ?? targetAgentId;
@@ -223,6 +224,13 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
                 }),
             );
           },
+          (binding, assertMigrationCurrent) =>
+            migrateAgentsApiBinding(
+              binding,
+              params,
+              () => runtime.config.current().plugins?.entries?.agentsapi?.config,
+              assertMigrationCurrent,
+            ),
         );
       } finally {
         const count = runningSessions.get(params.sessionId)! - 1;
@@ -256,10 +264,12 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
     withSessionContextReset: async (params, run) => {
       params.assertCurrent();
       assertCurrent();
-      const sessionId = getBindings().resolveContextResetSessionId(
+      const sessionId = await getBindings().resolveContextResetSessionId(
         params.sessionId,
         params.previousSessionId,
       );
+      params.assertCurrent();
+      assertCurrent();
       return withSessionDeletion({ ...params, sessionId }, run, true);
     },
     dispose: async () => {
@@ -332,7 +342,10 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
     }
   }
 
-  async function retireExecutor(binding: AgentsApiBinding, assertCleanupCurrent: () => void) {
+  async function retireExecutor(
+    binding: AgentsApiCleanupBinding,
+    assertCleanupCurrent: () => void,
+  ) {
     const executor = binding.executor;
     if (!executor) {
       return;
@@ -374,7 +387,11 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
     }
   }
 
-  function prepareNativeCleanup(localSessionId: string, binding: AgentsApiBinding, apiKey: string) {
+  function prepareNativeCleanup(
+    localSessionId: string,
+    binding: AgentsApiCleanupBinding,
+    apiKey: string,
+  ) {
     assertCurrent();
     const prepared = {
       nativeSessionId: binding.sessionId,

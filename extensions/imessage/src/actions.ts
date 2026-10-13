@@ -28,7 +28,6 @@ import { normalizeIMessageMessageId } from "./message-guid.js";
 import { describeIMessageMessageTool } from "./message-tool-api.js";
 import {
   findLatestIMessageEntryForChat,
-  isIMessageCurrentMessageInChat,
   isIMessageCurrentMessageInChatAsync,
   rememberIMessageReplyCache,
   type IMessageChatContext,
@@ -134,10 +133,6 @@ function createIMessageTargetAliases(resourceAliases: string[] = []) {
     deliveryTargetAliases: [...IMESSAGE_DELIVERY_TARGET_ALIASES],
     resolveDeliveryTarget: ({ args }: { args: Record<string, unknown> }) =>
       resolveIMessageDeliveryTarget(args),
-    matchesCurrentConversation: (params: Parameters<typeof currentConversationMatchParams>[0]) => {
-      const match = currentConversationMatchParams(params);
-      return match ? isIMessageCurrentMessageInChat(match) : false;
-    },
     matchesCurrentConversationAsync: async (
       params: Parameters<typeof currentConversationMatchParams>[0],
     ) => {

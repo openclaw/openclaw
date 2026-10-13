@@ -440,43 +440,6 @@ describe("handleFeishuCommentEvent", () => {
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   });
 
-  it("passes whole-comment metadata to the comment reply dispatcher", async () => {
-    resolveDriveCommentEventTurnMock.mockResolvedValueOnce({
-      eventId: "evt_whole",
-      messageId: "drive-comment:evt_whole",
-      commentId: "comment_whole",
-      replyId: "reply_whole",
-      noticeType: "add_reply",
-      fileToken: "doc_token_1",
-      fileType: "docx",
-      isWholeComment: true,
-      senderId: "ou_sender",
-      senderUserId: "on_sender_user",
-      timestamp: "1774951528000",
-      isMentioned: false,
-      documentTitle: "Project review",
-      prompt: "prompt body",
-      preview: "prompt body",
-      rootCommentText: "root comment",
-      targetReplyText: "reply text",
-    });
-
-    await handleComment({
-      event: { event_id: "evt_whole" },
-    });
-
-    expect(createFeishuCommentReplyDispatcherMock).toHaveBeenCalledTimes(1);
-    expect(createFeishuCommentReplyDispatcherMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        commentId: "comment_whole",
-        fileToken: "doc_token_1",
-        fileType: "docx",
-        replyId: "reply_whole",
-        isWholeComment: true,
-      }),
-    );
-  });
-
   it("always finalizes comment typing cleanup even when dispatch fails", async () => {
     dispatchInboundMessageMock.mockRejectedValueOnce(new Error("dispatch failed"));
     const runtime = createTestRuntime();

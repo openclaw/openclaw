@@ -12,6 +12,7 @@ import { buildAssistantMessage, buildUsageWithNoCost } from "../../agents/stream
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { getRuntimeConfig } from "../../config/io.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessageSync,
   loadTranscriptEventsSync,
@@ -173,6 +174,20 @@ describe("webchat commentary media", () => {
       for (const url of authoredUrls) {
         remoteFixtures.set(url, fixtureUrl);
       }
+      const cfg = {
+        agents: { entries: { main: { workspace: state.workspaceDir } } },
+        ...(localMedia
+          ? {
+              tools: {
+                fs: { workspaceOnly: true },
+                ...(scenario === "sender-denied"
+                  ? { toolsBySender: { "id:cli": { deny: ["read"] } } }
+                  : {}),
+              },
+            }
+          : {}),
+      };
+      setRuntimeConfigSnapshot(cfg);
       const scope = {
         agentId: "main",
         sessionId: "commentary-session",
@@ -231,20 +246,9 @@ describe("webchat commentary media", () => {
         logGateway: { warn } as never,
         session: {
           ...scope,
+          storePath: transcriptContext.sessionTarget.storePath,
           backingSessionId: scope.sessionId,
-          cfg: {
-            agents: { entries: { main: { workspace: state.workspaceDir } } },
-            ...(localMedia
-              ? {
-                  tools: {
-                    fs: { workspaceOnly: true },
-                    ...(scenario === "sender-denied"
-                      ? { toolsBySender: { "id:cli": { deny: ["read"] } } }
-                      : {}),
-                  },
-                }
-              : {}),
-          },
+          cfg,
           clientRunId: runId,
           sessionLoadOptions: { agentId: "main" },
         },

@@ -636,13 +636,13 @@ function loadAuthProfileMigrationTargetStore(
     return store;
   }
   if (inspection.status !== "missing") {
-    throw new Error("canonical auth profile store is unreadable; legacy source left in place");
+    throw new Error("current auth profile store is unreadable; legacy source left in place");
   }
   const stateInspection = explicitSharedRead
     ? inspectPersistedSharedAuthProfileStateRaw(env)
     : inspectPersistedAuthProfileStateRaw(agentDir, database);
   if (stateInspection.status === "unreadable") {
-    throw new Error("canonical auth profile state is unreadable; legacy source left in place");
+    throw new Error("current auth profile state is unreadable; legacy source left in place");
   }
   return {
     version: AUTH_STORE_VERSION,
@@ -1017,7 +1017,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
                 // This store includes the separately persisted auth_profile_state row,
                 // so state-only concurrent changes abort before either table is written.
                 if (!isDeepStrictEqual(authoritative, existing)) {
-                  throw new Error("canonical auth profile store changed during legacy migration");
+                  throw new Error("current auth profile store changed during legacy migration");
                 }
                 saveAuthProfileStoreWithPreparedOwner(
                   next,
@@ -1324,7 +1324,7 @@ export function maybeRepairOpenAICodexAuthConfig(
   }
   return {
     config,
-    changes: changed ? ["Migrated legacy auth profile config to canonical providers."] : [],
+    changes: changed ? ["Migrated legacy auth profile config to current providers."] : [],
     warnings: [],
   };
 }

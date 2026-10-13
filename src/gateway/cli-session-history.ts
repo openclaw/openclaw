@@ -3,7 +3,6 @@ import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 // Claude's native transcript augments display history, never canonical model context.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { withTranscriptRedactionSnapshot } from "../agents/transcript-redact-text.js";
 import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js";
 import type {
   ChatHistoryPage,
@@ -27,6 +26,7 @@ import {
   resolveClaudeCliHistorySource,
   visitClaudeCliSessionMessages,
 } from "./cli-session-history.claude-snapshot.js";
+import { cleanClaudeCliImportedUserDisplay } from "./cli-session-history.claude.js";
 import {
   readChatHistoryMessageId,
   readChatHistoryMessageSeq,
@@ -111,10 +111,6 @@ export async function prepareCliSessionHistoryReader(
       return undefined;
     }
   }
-  const redaction = params.cliHistoryRedaction;
-  if (!redaction) {
-    throw new Error("CLI history requires prepared transcript redaction");
-  }
   const native = {
     cliSessionId: binding.sessionId,
     homeDir: params.cliHistoryHomeDir,
@@ -130,12 +126,7 @@ export async function prepareCliSessionHistoryReader(
   const revisionKey = (value: CliHistoryRevision) =>
     JSON.stringify([value.generation, value.indexedSeq, value.leafEventId]);
   const localRevision = revision ? revisionKey(revision) : undefined;
-  const key = JSON.stringify([
-    localRevision,
-    source[1],
-    params.entry?.sessionStartedAt,
-    redaction.policyToken,
-  ]);
+  const key = JSON.stringify([localRevision, source[1], params.entry?.sessionStartedAt]);
   let cached = revision?.database ? indexes.get(identity) : undefined;
   if (cached && (cached.database !== revision?.database || cached.key !== key)) {
     retire(identity);
@@ -156,13 +147,11 @@ export async function prepareCliSessionHistoryReader(
   if (!cached) {
     const index = new CliSessionHistoryIndex(!revision?.database);
     try {
-      await withTranscriptRedactionSnapshot(redaction, () =>
-        visitClaudeCliSessionMessages(
-          source[0],
-          native,
-          (message) => index.appendImported(message),
-          source[2],
-        ),
+      await visitClaudeCliSessionMessages(
+        source[0],
+        native,
+        (message) => index.appendImported(message),
+        source[2],
       );
       if (!index.importedCount) {
         index.close();
@@ -327,8 +316,12 @@ export async function prepareCliSessionHistoryReader(
     }
     const messages: unknown[] = [];
     for (const row of window) {
+      // The merge matched on original text; only an import that found no canonical row
+      // is served from the index, so its generated prefixes can leave the display copy here.
       const message =
-        row.local_seq === null ? index.message(row.id) : localMessages.get(row.local_seq);
+        row.local_seq === null
+          ? cleanClaudeCliImportedUserDisplay(index.message(row.id))
+          : localMessages.get(row.local_seq);
       const record = asOptionalRecord(message);
       if (!record) {
         throw new SessionTranscriptProjectionUnavailableError(params.sessionId!, "window-changed");

@@ -70,6 +70,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}new`);
       const sidebar = page.locator("openclaw-app-sidebar");
+      const identity = sidebar.locator(".sidebar-identity-card");
       await sidebar.getByText("Retained sample session", { exact: true }).waitFor();
       await gateway.setMethodResponse("sessions.catalog.list", { __mockError: suspensionError });
       await gateway.emitGatewayEvent("gateway.suspension", { phase: "draining" });
@@ -88,7 +89,9 @@ suite.define(() => {
         })
         .toBe(true);
       expect(await sidebar.getByRole("alert").count()).toBe(0);
-      await sidebar.locator(".gateway-status__label", { hasText: "Suspending…" }).waitFor();
+      await expect.poll(() => identity.getAttribute("data-connection-status")).toBe("suspending");
+      expect(await identity.getAttribute("aria-label")).toContain("Suspending…");
+      expect(await identity.getAttribute("title")).toBe(await identity.getAttribute("aria-label"));
       expect(await sidebar.getByText("Retained sample session", { exact: true }).isVisible()).toBe(
         true,
       );
@@ -97,6 +100,7 @@ suite.define(() => {
       await gateway.setMethodResponse("sessions.catalog.list", catalog("Recovered sample session"));
       await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
       await sidebar.getByText("Recovered sample session", { exact: true }).waitFor();
+      await expect.poll(() => identity.getAttribute("data-connection-status")).toBeNull();
       expect((await gateway.getRequests("sessions.catalog.list")).length).toBe(before + 1);
       expect(await gateway.getSocketCount()).toBe(1);
       expect(await sidebar.getByRole("alert").count()).toBe(0);
@@ -122,7 +126,9 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("connect")).length)
         .toBeGreaterThan(1);
-      await sidebar.locator(".gateway-status__label", { hasText: "Suspending…" }).waitFor();
+      await expect.poll(() => identity.getAttribute("data-connection-status")).toBe("suspending");
+      expect(await identity.getAttribute("aria-label")).toContain("Suspending…");
+      expect(await identity.getAttribute("title")).toBe(await identity.getAttribute("aria-label"));
       expect(await sidebar.getByRole("alert").count()).toBe(0);
       await page.screenshot({ path: path.join(artifactDir, "after-sidebar.png") });
     } finally {

@@ -66,8 +66,8 @@ describe("ordinary steering into automatic model fallback", () => {
         sessionId: run.run.sessionId,
         resetTriggered: false,
       });
-      operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
-      operation.bindToolAuthorityRoute(run.run);
+      await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
+      await operation.bindToolAuthorityRouteAsync(run.run);
       const injected = vi.fn(async () => {});
       const replacementInjected = vi.fn(async () => {});
       if (!holdBackend) {
@@ -110,9 +110,9 @@ describe("ordinary steering into automatic model fallback", () => {
           }
         }
       });
-      const fingerprint = toolAuthority.resolveFollowupRunToolAuthorityFingerprintAsync;
+      const fingerprint = toolAuthority.prepareFollowupRunToolAuthorityFingerprint;
       let reads = 0;
-      vi.spyOn(toolAuthority, "resolveFollowupRunToolAuthorityFingerprintAsync").mockImplementation(
+      vi.spyOn(toolAuthority, "prepareFollowupRunToolAuthorityFingerprint").mockImplementation(
         async (...args) => {
           const result = await fingerprint(...args);
           if (++reads === read) {
@@ -264,7 +264,7 @@ describe("ordinary steering into automatic model fallback", () => {
         gatewayUiCommandTarget: { connId: "alice-tab", profileId: "alice" },
       });
     }
-    operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
+    await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
     operation.setPhase("running");
     const delivered: string[] = [];
     const candidates: string[] = [];
@@ -306,7 +306,7 @@ describe("ordinary steering into automatic model fallback", () => {
             modelIdSource: "selected",
             cfg: run.run.config,
           });
-          operation.bindToolAuthorityRoute({
+          await operation.bindToolAuthorityRouteAsync({
             provider:
               scenario === "hook-route"
                 ? "hook-provider"

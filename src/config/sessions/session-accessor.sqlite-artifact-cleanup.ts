@@ -13,10 +13,7 @@ import type {
   SqliteSessionArtifactPreparationDiagnostics,
   SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
-import {
-  hasPreparedNativeSessionDeletion,
-  withSqliteSessionDeletions,
-} from "./session-accessor.sqlite-deletion.js";
+import { withSqliteSessionDeletions } from "./session-accessor.sqlite-deletion.js";
 import { prepareSessionLifecycleArtifactCleanup } from "./session-accessor.sqlite-lifecycle-artifacts.js";
 import { refreshSqliteSessionPlannerStatisticsBestEffort } from "./session-accessor.sqlite-maintenance.js";
 import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
@@ -110,6 +107,10 @@ export async function cleanupSessionLifecycleArtifactsCore(
         }
       : readDatabasePathIdentitySync(requested.path)
     : undefined;
+  // An absent store has no historical artifacts, even if startup creates it after capture.
+  if (source?.key.startsWith("path:")) {
+    return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
+  }
   const resolved = { ...requested, path: source?.canonicalPath ?? requested.path };
   const databaseOptions = { ...toDatabaseOptions(resolved), path: resolved.path };
   return withSqliteMutationWorkerLifetime(databaseOptions, async ({ assertCurrent, signal }) => {
@@ -201,7 +202,6 @@ export async function cleanupSessionLifecycleArtifactsCore(
           const reclaimed = await runSqliteSessionReclamation({
             diagnostics,
             assertCommitAllowed,
-            forceInProcess: hasPreparedNativeSessionDeletion(),
             plan,
           });
           if (reclaimed.kind !== plan.kind) {

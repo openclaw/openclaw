@@ -3,7 +3,6 @@ import type {
   WorkerDesktopAppId,
   WorkerDesktopLaunchResult,
 } from "@openclaw/gateway-protocol";
-import type { ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
@@ -23,7 +22,7 @@ export class DesktopAppLauncher {
   private operationId = 0;
 
   constructor(
-    private readonly host: ReactiveControllerHost,
+    private readonly host: { requestUpdate(): void },
     private readonly target: () => LaunchTarget,
   ) {}
 

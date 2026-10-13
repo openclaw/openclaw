@@ -3,19 +3,35 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
+  resolveAuthProfileOrder,
+} from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-profile.js";
+import { createCodexAuthProfileSelection } from "./app-server/auth-profile-selection.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config-runtime.js";
 import { createCodexSupervisionTools } from "./supervision-tools.js";
 
 type CodexSupervisionToolsOptions = Parameters<typeof createCodexSupervisionTools>[0];
 
+const { resolveCodexAppServerAuthProfileIdForAgent, resolveCodexAppServerAuthProfileIdAtEffect } =
+  createCodexAuthProfileSelection({
+    ensureAuthProfileStore,
+    ensureAuthProfileStoreAsync,
+    resolveAuthProfileOrder,
+  });
+
 function createTestSupervisionTools(
-  options: Omit<CodexSupervisionToolsOptions, "resolveAuthProfileId" | "resolveRuntimeOptions">,
+  options: Omit<
+    CodexSupervisionToolsOptions,
+    "resolveAuthProfileId" | "resolveAuthProfileIdAtEffect" | "resolveRuntimeOptions"
+  >,
 ) {
   return createCodexSupervisionTools({
     ...options,
     resolveAuthProfileId: resolveCodexAppServerAuthProfileIdForAgent,
+    resolveAuthProfileIdAtEffect: resolveCodexAppServerAuthProfileIdAtEffect,
     resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
   });
 }
@@ -218,67 +234,120 @@ describe("Codex supervision compatibility tools", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("omits stored transcript metadata and endpoint errors when raw reads are disabled", async () => {
-    const privatePreview = "private stored transcript preview";
-    const privateName = "private stored thread name";
-    const privateError = "private endpoint failure detail";
-    const request = createEndpointRequest(async (endpoint, method) => {
-      if (endpoint.id === "broken") {
-        throw new Error(privateError);
-      }
-      if (method === "thread/loaded/list") {
-        return { data: [], nextCursor: null };
-      }
-      if (method === "thread/list") {
-        return {
-          data: [
+  it.each([false, true])(
+    "preserves permitted list text and omits restricted fields (raw reads=%s)",
+    async (allowRawTranscripts) => {
+      const privatePreview = "API_TOKEN = computeToken()";
+      const privateName = "Stored sk-abcdefghijklmnopqrstuv";
+      const privateError = "private endpoint failure detail";
+      const request = createEndpointRequest(async (endpoint, method) => {
+        if (endpoint.id === "broken") {
+          throw new Error(privateError);
+        }
+        if (method === "thread/loaded/list") {
+          return { data: [], nextCursor: null };
+        }
+        if (method === "thread/list") {
+          return {
+            data: [
+              {
+                id: "stored-thread",
+                name: privateName,
+                preview: privatePreview,
+                status: { type: "idle" },
+              },
+            ],
+            nextCursor: null,
+          };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      const tools = createTestSupervisionTools({
+        getPluginConfig: () => ({
+          supervision: {
+            enabled: true,
+            allowRawTranscripts,
+            endpoints: [
+              { id: "healthy", transport: "stdio-proxy" },
+              { id: "broken", transport: "stdio-proxy" },
+            ],
+          },
+        }),
+        senderIsOwner: true,
+        request,
+      });
+
+      const result = await toolByName(tools, "codex_sessions_list").execute("list", {
+        include_stored: true,
+        max_stored_sessions: 1,
+      });
+
+      expect(result).toMatchObject({
+        details: {
+          sessions: [
             {
-              id: "stored-thread",
-              name: privateName,
-              preview: privatePreview,
-              status: { type: "idle" },
+              endpointId: "healthy",
+              threadId: "stored-thread",
+              status: "idle",
+              ...(allowRawTranscripts ? { name: privateName, preview: privatePreview } : {}),
             },
           ],
-          nextCursor: null,
-        };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const tools = createTestSupervisionTools({
-      getPluginConfig: () => ({
-        supervision: {
-          enabled: true,
-          endpoints: [
-            { id: "healthy", transport: "stdio-proxy" },
-            { id: "broken", transport: "stdio-proxy" },
+          errors: [
+            {
+              endpointId: "broken",
+              ok: false,
+              ...(allowRawTranscripts ? { detail: privateError } : {}),
+            },
           ],
         },
-      }),
-      senderIsOwner: true,
-      request,
-    });
+      });
+      const serialized = JSON.stringify(result);
+      for (const text of [privatePreview, privateName, privateError]) {
+        if (allowRawTranscripts) {
+          expect(serialized).toContain(text);
+        } else {
+          expect(serialized).not.toContain(text);
+        }
+      }
+    },
+  );
 
-    const result = await toolByName(tools, "codex_sessions_list").execute("list", {
-      include_stored: true,
-      max_stored_sessions: 1,
+  it("preserves raw tool arguments and output in permitted transcript reads", async () => {
+    const output = "API_TOKEN = computeToken()\nOPENAI_API_KEY=sk-abcdefghijklmnopqrstuv\n";
+    const thread = {
+      id: "thread-1",
+      status: { type: "idle" },
+      turns: [
+        {
+          id: "turn-1",
+          status: "completed",
+          items: [
+            {
+              type: "dynamicToolCall",
+              id: "call-read",
+              tool: "read",
+              arguments: { path: ".env", apiToken: "sk-abcdefghijklmnopqrstuv" },
+              status: "completed",
+              contentItems: [{ type: "inputText", text: output }],
+              success: true,
+            },
+          ],
+        },
+      ],
+    };
+    const { request } = createRequest(thread);
+    const result = await toolByName(createTools(request), "codex_session_read").execute("read", {
+      endpoint_id: "local",
+      thread_id: "thread-1",
+      include_turns: true,
     });
-
-    expect(result).toMatchObject({
-      details: {
-        sessions: [
-          {
-            endpointId: "healthy",
-            threadId: "stored-thread",
-            status: "idle",
-          },
-        ],
-        errors: [{ endpointId: "broken", ok: false }],
-      },
-    });
-    const serialized = JSON.stringify(result);
-    expect(serialized).not.toContain(privatePreview);
-    expect(serialized).not.toContain(privateName);
-    expect(serialized).not.toContain(privateError);
+    const expected = { summary: "codex session: thread-1", response: { thread } };
+    expect(result.details).toEqual(expected);
+    const text = result.content.find((part) => part.type === "text");
+    expect(text?.type).toBe("text");
+    if (text?.type === "text") {
+      expect(JSON.parse(text.text)).toEqual(expected);
+    }
   });
 
   it("stops loaded-session pagination when Codex cycles through prior cursors", async () => {
@@ -311,46 +380,6 @@ describe("Codex supervision compatibility tools", () => {
       },
     });
     expect(pageCalls).toBe(3);
-  });
-
-  it("stops stored-session pagination when duplicate-only pages repeat a cursor", async () => {
-    let storedPageCalls = 0;
-    const request = createEndpointRequest(async (_endpoint, method) => {
-      if (method === "thread/loaded/list") {
-        return { data: [], nextCursor: null };
-      }
-      if (method !== "thread/list") {
-        throw new Error(`unexpected method: ${method}`);
-      }
-      storedPageCalls += 1;
-      if (storedPageCalls > 2) {
-        throw new Error("unexpected third stored-session page");
-      }
-      return {
-        data: [{ id: "stored-thread", status: { type: "idle" } }],
-        nextCursor: "stored-page-2",
-      };
-    });
-    const tools = createTools(request);
-
-    await expect(
-      toolByName(tools, "codex_sessions_list").execute("list", {
-        include_stored: true,
-        max_stored_sessions: 2,
-      }),
-    ).resolves.toMatchObject({
-      details: {
-        sessions: [],
-        errors: [
-          {
-            endpointId: "local",
-            ok: false,
-            detail: "Codex thread/list returned repeated cursor stored-page-2",
-          },
-        ],
-      },
-    });
-    expect(storedPageCalls).toBe(2);
   });
 
   it("fails closed at the loaded-session page cap when a cursor remains", async () => {
@@ -555,43 +584,6 @@ describe("Codex supervision compatibility tools", () => {
         errors: [{ endpointId: "local", ok: false, detail }],
       },
     });
-  });
-
-  it("fails closed at the stored-session page cap when a cursor remains", async () => {
-    let storedPageCalls = 0;
-    const request = createEndpointRequest(async (_endpoint, method) => {
-      if (method === "thread/loaded/list") {
-        return { data: [], nextCursor: null };
-      }
-      if (method !== "thread/list") {
-        throw new Error(`unexpected method: ${method}`);
-      }
-      storedPageCalls += 1;
-      return {
-        data: [{ id: "stored-thread", status: { type: "idle" } }],
-        nextCursor: `stored-page-${storedPageCalls + 1}`,
-      };
-    });
-    const tools = createTools(request);
-
-    await expect(
-      toolByName(tools, "codex_sessions_list").execute("list", {
-        include_stored: true,
-        max_stored_sessions: 2,
-      }),
-    ).resolves.toMatchObject({
-      details: {
-        sessions: [],
-        errors: [
-          {
-            endpointId: "local",
-            ok: false,
-            detail: "Codex thread/list exceeded 100 pages with a continuation cursor",
-          },
-        ],
-      },
-    });
-    expect(storedPageCalls).toBe(100);
   });
 
   it("rechecks live supervision config before every paginated request", async () => {

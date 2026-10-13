@@ -12,6 +12,10 @@ import {
   loadUserTurnTranscriptRecorderFactoryForTest,
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import * as transcriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -86,6 +90,7 @@ afterEach(() => {
   createSession.mockReset();
   registerRun.mockReset();
   resetGlobalHookRunner();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("Agents API completed reply settlement", () => {
@@ -524,29 +529,22 @@ describe("Agents API retry prompt history", () => {
       } else if (retryScope === "revoked") {
         fixture.revoke(interruption);
       }
+      const historyReads = vi.spyOn(SessionManager, "openModelContextAsync");
       const retried = await fixture.run();
 
-      if (retryScope !== "same run") {
+      if (retryScope === "cancelled" || retryScope === "revoked") {
         expect(retried.terminal).toEqual(
           retryScope === "cancelled"
             ? { kind: "aborted", source: "external" }
-            : {
-                kind: "failed",
-                source: "prompt",
-                error:
-                  retryScope === "revoked"
-                    ? interruption
-                    : expect.objectContaining({
-                        message: expect.stringContaining(
-                          "Current-turn transcript admission identity changed:",
-                        ),
-                      }),
-              },
+            : { kind: "failed", source: "prompt", error: interruption },
         );
         expect(createSession).toHaveBeenCalledTimes(1);
         return;
       }
 
+      // Steering confirmation keeps the foreground admission, so a changed scope
+      // rereads the same fenced prefix instead of reusing the first attempt's history.
+      expect(historyReads).toHaveBeenCalledTimes(retryScope === "same run" ? 0 : 1);
       expect(retried.terminal).toEqual({ kind: "ok" });
       expect(retried.assistantTexts).toEqual(["The completed answer."]);
       expect(histories[1]).toEqual([
@@ -607,6 +605,8 @@ describe("Agents API retry prompt history", () => {
 });
 
 async function createAttempt() {
+  const config = {};
+  setRuntimeConfigSnapshot(config);
   const workspaceDir = tempDirs.make();
   const target = {
     agentId: "main",
@@ -636,7 +636,7 @@ async function createAttempt() {
     sessionFile: path.join(workspaceDir, "session.jsonl"),
     workspaceDir,
     agentDir: workspaceDir,
-    config: {},
+    config,
     runId: "run-fixture",
     prompt: "Create an output file and summarize the result.",
     timeoutMs: 5_000,

@@ -11,7 +11,7 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
-import { applyChatAgentsList } from "./chat-history.ts";
+import { applyChatAgentsList, loadChatHistory } from "./chat-history.ts";
 import { makeRequestMock } from "./chat-host.test-support.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
 import {
@@ -65,6 +65,25 @@ function disconnect(pane: TestChatPane) {
 }
 
 describe("chat pane connection lifecycle", () => {
+  it("keeps the initial transcript pending while the first client connects", async () => {
+    const client = createTestGatewayClient(createReconnectRequest({ messages: [] }));
+    const { pane, state } = createTestChatPane({ client });
+    state.connected = false;
+    state.client = null;
+    await loadChatHistory(state, { startup: true });
+    expect(state.chatLoading).toBe(true);
+
+    pane.applyGatewaySnapshot({
+      ...pane.context.gateway.snapshot,
+      client,
+      phase: "connecting",
+      hello: null,
+    });
+
+    expect(chatHistoryRequests(state).historyLoad.phase).toBe("pending-connection");
+    expect(state.chatLoading).toBe(true);
+  });
+
   it("notifies the owning shell after a pane leaves its DOM subtree", async () => {
     const { pane } = createTestChatPane({
       client: { request: vi.fn() } as unknown as GatewayBrowserClient,

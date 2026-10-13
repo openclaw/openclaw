@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
   appendTranscriptMessage,
@@ -16,6 +17,7 @@ import {
   getAgentEventLifecycleGeneration,
   resetAgentEventsForTest,
 } from "../../infra/agent-events.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "../../infra/agent-run-registry.js";
 import * as gatewayWorkAdmission from "../../process/gateway-work-admission.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -82,11 +84,155 @@ beforeEach(() => {
   resetAgentEventsForTest();
   resetGatewayWorkAdmission();
   tmpDir = tempDirs.make();
+  setRuntimeConfigSnapshot({});
 });
 
-afterEach(() => resetGatewayWorkAdmission());
+afterEach(() => {
+  resetGatewayWorkAdmission();
+  clearRuntimeConfigSnapshot();
+});
 
 describe("main-session startup recovery", () => {
+  it("preserves a claimless delivered continuation but marks one with only older receipts", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const delivered = mainSessionEntry({
+      mainRestartRecovery: undefined,
+      lifecycleRunId: "interrupted-continuation",
+      activeWriterRunId: "interrupted-continuation",
+      restartRecoveryDeliverySourceRunId: "completed-source",
+      restartRecoveryTerminalRunIds: ["completed-source", "interrupted-continuation"],
+      restartRecoveryTerminalDeliveryEvidence: [
+        {
+          runId: "completed-source",
+          transcriptRunId: "interrupted-continuation",
+          captured: true,
+          payloads: [{ visible: true }],
+        },
+      ],
+    });
+    await writeStore(sessionsDir, {
+      "agent:main:delivered": delivered,
+      "agent:main:undelivered": {
+        ...delivered,
+        sessionId: "undelivered-session",
+        lifecycleRunId: "undelivered-continuation",
+        activeWriterRunId: "undelivered-continuation",
+        restartRecoveryDeliverySourceRunId: "undelivered-source",
+      },
+    });
+    const before = readStore(storePath);
+
+    expect(await markStartupOrphanedMainSessionsForRecovery({ stateDir: tmpDir })).toEqual({
+      marked: 1,
+      skipped: 0,
+    });
+
+    const after = readStore(storePath);
+    expect(after["agent:main:delivered"]).toEqual(before["agent:main:delivered"]);
+    expect(after["agent:main:undelivered"]).toMatchObject({
+      status: "interrupted",
+      abortedLastRun: true,
+      mainRestartRecovery: { chargedAttempts: 0 },
+      restartRecoveryTerminalRunIds: ["completed-source", "interrupted-continuation"],
+    });
+  });
+
+  it("recovers unclaimed interruptions without taking archived, live, or newer turns", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const cutoff = Date.now();
+    const interrupted = mainSessionEntry({
+      updatedAt: cutoff - 10_000,
+      mainRestartRecovery: undefined,
+      restartRecoveryRuns: undefined,
+      activeWriterRunId: "prior-process-run",
+    });
+    const entries: Record<string, SessionEntry> = {
+      "agent:main:interrupted": interrupted,
+      "agent:main:flag-only": { ...interrupted, sessionId: "flag-only", status: undefined },
+      "agent:main:status-only": { ...interrupted, sessionId: "status-only", abortedLastRun: false },
+      "agent:main:archived": { ...interrupted, sessionId: "archived", archivedAt: cutoff - 5_000 },
+      "agent:main:archived-claim": mainSessionEntry({
+        sessionId: "archived-claim",
+        archivedAt: cutoff - 5_000,
+        pendingWorktree: { titleSource: "old-work" },
+      }),
+      "agent:main:live": { ...interrupted, sessionId: "live", activeWriterRunId: "live-run" },
+      "agent:main:cancelled": { ...interrupted, sessionId: "cancelled", status: "killed" },
+      "agent:main:newer": {
+        ...interrupted,
+        sessionId: "newer",
+        status: undefined,
+        abortedLastRun: false,
+      },
+      "agent:main:fresh": { ...interrupted, sessionId: "fresh", updatedAt: cutoff + 1 },
+    };
+    await writeStore(sessionsDir, entries);
+    for (const sessionId of ["main-session", "flag-only", "status-only"]) {
+      await writeTranscript(sessionsDir, sessionId, [
+        { role: "user", content: "finish this turn" },
+      ]);
+    }
+    const before = readStore(storePath);
+    const claim = claimAgentRunContext(
+      "live-run",
+      {
+        sessionId: "live",
+        sessionKey: "agent:main:live",
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      },
+      { trackOwner: true },
+    );
+    const info = vi.spyOn(mainSessionRecoveryLog, "info");
+    try {
+      expect(
+        await markStartupOrphanedMainSessionsForRecovery({
+          stateDir: tmpDir,
+          updatedBeforeMs: cutoff,
+        }),
+      ).toMatchObject({ marked: 3 });
+      const marked = readStore(storePath);
+      for (const key of [
+        "agent:main:interrupted",
+        "agent:main:flag-only",
+        "agent:main:status-only",
+      ]) {
+        expect(marked[key]).toMatchObject({
+          status: "interrupted",
+          abortedLastRun: true,
+          mainRestartRecovery: { chargedAttempts: 0 },
+        });
+      }
+      for (const key of [
+        "agent:main:archived",
+        "agent:main:archived-claim",
+        "agent:main:live",
+        "agent:main:cancelled",
+        "agent:main:newer",
+        "agent:main:fresh",
+      ]) {
+        expect(marked[key]).toEqual(before[key]);
+      }
+      expect(await recoverRestartAbortedMainSessions({ stateDir: tmpDir })).toEqual({
+        started: 3,
+        settled: 0,
+        failed: 0,
+        skipped: 1,
+      });
+      expect(callGateway).toHaveBeenCalledTimes(3);
+      expect(info.mock.calls.map(([line]) => line)).toContainEqual(
+        expect.stringContaining("skipReasons=archived:1"),
+      );
+      expect(info.mock.calls.map(([line]) => line)).toContainEqual(
+        expect.stringContaining('"decision":"deferred","reason":"archived","nextOwner":"none"'),
+      );
+    } finally {
+      info.mockRestore();
+      releaseAgentRunContext("live-run", claim);
+    }
+  });
+
   it.each([
     { selection: "all", agentIds: undefined },
     { selection: "unrelated logical owner", agentIds: new Set(["main"]) },
@@ -320,6 +466,7 @@ describe("main-session startup recovery", () => {
           owner === "old"
             ? { agents: { entries: { main: {} } }, session: { store: storePath } }
             : {};
+        setRuntimeConfigSnapshot(cfg);
         if (shared) {
           openOpenClawAgentDatabase({ agentId: owner, path: storePath });
         }

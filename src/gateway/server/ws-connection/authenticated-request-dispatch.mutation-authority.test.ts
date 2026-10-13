@@ -27,6 +27,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resetGatewayWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { prepareUserProfileSelectionAuthority } from "../../../state/user-channel-identity-operations.js";
+import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { captureGatewayAuthPolicy } from "../../auth-policy.js";
@@ -67,6 +68,7 @@ describe("authenticated request mutation custody", () => {
   it("keeps original wildcard model ceilings separate through WS capture and contiguous collect", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const profile = ensureProfileForEmail("queued-model-ceiling@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const modelA = { provider: "fixture", model: "family-a" };
       const modelB = { provider: "fixture", model: "family-b" };
       let committedConfig: OpenClawConfig = {

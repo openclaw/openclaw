@@ -2,8 +2,7 @@ import { Buffer } from "node:buffer";
 import type { DatabaseSync } from "node:sqlite";
 import type { AliasedExpression } from "kysely";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "./kysely-sync.js";
-
-export class SqliteJsonlReadBudgetExceededError extends Error {}
+import { SqliteJsonlReadBudgetExceededError } from "./sqlite-jsonl-budget-error.js";
 
 /** Admit a filtered JSONL source inside the caller's payload-read transaction. */
 export function assertSqliteJsonlReadBudget(

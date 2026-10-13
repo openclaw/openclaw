@@ -1,5 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
+import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import { renderExecUpdateText } from "./bash-tools.exec-output.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
@@ -163,13 +164,23 @@ export async function invokeNodeSystemRun(params: {
   invoke: Record<string, unknown>;
   signal?: AbortSignal;
   scopes?: OperatorScope[];
+  source?: SessionSourceAssertion;
 }): Promise<NodeSystemRunInvokeResult> {
   try {
-    const callOptions =
-      params.scopes || params.signal
+    const callOptions: Parameters<typeof callGatewayTool>[3] =
+      params.scopes || params.signal || params.source
         ? {
             ...(params.scopes ? { scopes: params.scopes } : {}),
             ...(params.signal ? { signal: params.signal } : {}),
+            ...(params.source
+              ? {
+                  dispatchAuthority: {
+                    version: 2,
+                    kind: "source-bound",
+                    assertCurrent: params.source,
+                  },
+                }
+              : {}),
           }
         : undefined;
     const raw = await callGatewayTool(

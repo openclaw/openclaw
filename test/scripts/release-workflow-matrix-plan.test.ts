@@ -264,6 +264,74 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     },
   );
 
+  it.each(["beta", "minimum", "stable", "full"])(
+    "selects prompt-cache checks by default and for focused %s validation",
+    (releaseProfile) => {
+      const job = requiredJob(workflow(), "validate_release_live_cache");
+      expect(job["timeout-minutes"]).toBe(30);
+      const condition = expectDefined(job.if, "live-cache job selection");
+      for (const [liveSuiteFilter, enabled] of [
+        ["", true],
+        ["live-cache", true],
+        ["docker-live-models", false],
+      ] as const) {
+        expect(
+          runInNewContext(condition, {
+            inputs: {
+              prepare_only: false,
+              include_live_suites: true,
+              live_models_only: false,
+              live_suite_filter: liveSuiteFilter,
+              release_test_profile: releaseProfile,
+            },
+          }),
+        ).toBe(enabled);
+      }
+      expect(job.steps.map((step) => step.name)).toEqual(
+        expect.arrayContaining([
+          "Verify live prompt cache floors",
+          "Verify live prompt prefix reuse",
+          "Verify live agent prompt prefix reuse",
+        ]),
+      );
+    },
+  );
+
+  it.each([
+    [
+      "Verify live prompt prefix reuse",
+      "--import ./scripts/tsx.mjs scripts/e2e/anthropic-cache-live.mts",
+    ],
+    [
+      "Verify live agent prompt prefix reuse",
+      "test:live src/agents/embedded-agent-runner.cache.live.test.ts --testNamePattern release prompt-prefix gate",
+    ],
+  ])("propagates harness results from %s to the release gate", (stepName, args) => {
+    const job = requiredJob(workflow(), "validate_release_live_cache");
+    const step = expectDefined(
+      job.steps.find((entry) => entry.name === stepName),
+      "prompt-prefix step",
+    );
+    for (const code of [0, 23]) {
+      const result = spawnSync(
+        "bash",
+        [
+          "--noprofile",
+          "--norc",
+          "-c",
+          `timeout() { while [[ "$1" == --* ]]; do shift; done; shift; "$@"; }
+node() { printf '%s\\n' "$*"; return "$HARNESS_EXIT"; }
+pnpm() { node "$@"; }
+${expectDefined(step.run, "prompt-prefix command")}`,
+        ],
+        { encoding: "utf8", env: { PATH: process.env.PATH, HARNESS_EXIT: String(code) } },
+      );
+      expect(result.stdout.trim()).toBe(args);
+      expect(result.status, result.stderr).toBe(code);
+    }
+    expect(step["continue-on-error"]).not.toBe(true);
+  });
+
   it.each([
     ["validate_docker_e2e", "Run Docker E2E chunk"],
     ["validate_docker_lanes", "Run targeted Docker E2E lanes"],
@@ -534,7 +602,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
         plan.dockerE2e.matrix.include.find(
           (entry: MatrixEntry) => entry.chunk_id === "package-update-restart-auth",
         ),
-      ).toMatchObject({ timeout_minutes: 55 });
+      ).toMatchObject({ timeout_minutes: 75 });
       expect(plan.liveModels.matrix.include.map((entry: MatrixEntry) => entry.providers)).toEqual(
         liveModelProviders,
       );

@@ -25,8 +25,9 @@ const {
   loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } = await import("../config/sessions/session-accessor.js");
+const { replaceTranscriptEvents } =
+  await import("../config/sessions/session-accessor.sqlite-transcript-write.test-support.js");
 const { getBootEchoContextForSession } = await import("./boot-echo-guard.js");
 
 describe("runBootOnce", () => {

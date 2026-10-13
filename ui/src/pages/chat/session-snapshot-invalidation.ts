@@ -12,7 +12,7 @@ export async function deleteStoredChatSnapshot(
   reason?: SessionSnapshotInvalidationReason,
 ): Promise<void> {
   await publishSnapshotInvalidation({ sessionKey, ...(reason ? { reason } : {}) });
-  await deleteSessionSnapshotEntries(sessionKey, "key");
+  await deleteSessionSnapshotEntries(sessionKey, "key", reason);
 }
 
 export async function clearStoredChatSnapshots(scopePrefix?: string): Promise<void> {

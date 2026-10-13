@@ -7,7 +7,6 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   readSessionTranscriptFailureRunId,
@@ -101,13 +100,6 @@ export function hasTranscriptArchiveInDatabase(
 export function readTranscriptArchivePresenceInWorker(
   request: TranscriptArchivePresenceRead,
 ): boolean {
-  const assertCurrent = () =>
-    assertExistingDatabaseIdentity(
-      request.database.path,
-      request.expectedIdentity.key,
-      request.expectedIdentity.birthtime,
-    );
-  assertCurrent();
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) => {
       const actual = readOpenClawAgentDatabaseIdentity(database);
@@ -122,7 +114,6 @@ export function readTranscriptArchivePresenceInWorker(
     },
     { ...request.database, env: request.env },
   );
-  assertCurrent();
   return result.found && result.value;
 }
 
@@ -131,23 +122,12 @@ export async function readTranscriptArchiveFinalInWorker(
   plan: TranscriptArchiveReadPlan,
   env: NodeJS.ProcessEnv,
 ): Promise<TranscriptArchiveReadResult> {
-  const assertCurrent = () => {
-    if (plan.expectedIdentity) {
-      assertExistingDatabaseIdentity(
-        plan.databasePath,
-        plan.expectedIdentity.key,
-        plan.expectedIdentity.birthtime,
-      );
-    }
-  };
-  assertCurrent();
   const opened = openOpenClawAgentDatabaseReadOnly({
     agentId: plan.agentId,
     path: plan.databasePath,
     env,
   });
   if (!opened.found) {
-    assertCurrent();
     return {};
   }
   const database = opened.database;
@@ -211,7 +191,6 @@ export async function readTranscriptArchiveFinalInWorker(
     }
     database.db.exec("COMMIT"); // sqlite-allow-raw: release the completed read snapshot.
     transactionOpen = false;
-    assertCurrent();
     return result;
   } finally {
     try {

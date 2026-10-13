@@ -89,7 +89,7 @@ export function planReleaseChildRerun(input: {
   jobs: ReleaseRecord[];
 }):
   | { failed: string[]; mode: "failed-jobs" }
-  | { failed: string[]; mode: "producer"; producer: string };
+  | { failed: string[]; mode: "producer" | "receipt"; producer: string };
 export function validateReleaseChildRunProvenance(
   run: ReleaseRecord,
   expected?: ReleaseRecord,

@@ -11,6 +11,7 @@ type DurableHistoryReadOperationRequest = Extract<
   SessionTranscriptWorkerInput,
   {
     kind:
+      | "trajectory-events"
       | "trajectory-retention"
       | "board-snapshot"
       | "board-widget-document"
@@ -21,6 +22,7 @@ type DurableHistoryReadOperationRequest = Extract<
       | "model-context"
       | "context-messages"
       | "transcript-watermark"
+      | "transcript-stats"
       | "transcript-message-presence"
       | "transcript-anchors"
       | "transcript-raw-delta"
@@ -48,6 +50,7 @@ export function isSessionHistoryReadOperation(
   request: SessionTranscriptWorkerInput,
 ): request is DurableHistoryReadOperationRequest {
   switch (request.kind) {
+    case "trajectory-events":
     case "trajectory-retention":
     case "board-snapshot":
     case "board-widget-document":
@@ -58,6 +61,7 @@ export function isSessionHistoryReadOperation(
     case "model-context":
     case "context-messages":
     case "transcript-watermark":
+    case "transcript-stats":
     case "transcript-message-presence":
     case "transcript-anchors":
     case "transcript-raw-delta":
@@ -107,6 +111,18 @@ async function prepareHistoryRead(
   retainedDatabase?: OpenClawAgentReadOnlyDatabase,
 ): Promise<() => SessionTranscriptWorkerValues[SessionHistoryReadOperationRequest["kind"]]> {
   switch (request.kind) {
+    case "trajectory-events": {
+      const { loadSqliteTrajectoryRuntimeEventRowsSync } =
+        await import("../../trajectory/runtime-store.sqlite.js");
+      return () => ({
+        kind: request.kind,
+        events: loadSqliteTrajectoryRuntimeEventRowsSync({
+          ...request.scope,
+          agentId: request.database.agentId,
+          storePath: request.database.path,
+        }).map((row) => row.event),
+      });
+    }
     case "trajectory-retention": {
       const [
         { withOpenClawAgentDatabaseReadOnly },
@@ -253,6 +269,8 @@ async function prepareHistoryRead(
               request.resolved,
               request.selection,
               readMessage,
+              undefined,
+              request.preparedEntry,
             ),
           { ...request.database, env: request.resolved.env },
         );
@@ -274,7 +292,7 @@ async function prepareHistoryRead(
           (database) => {
             assertCapturedSessionEntryReadSource(request.source, database);
             return runWithSessionTranscriptReadFence(request.admission, () =>
-              readHarnessCompletionSourceInDatabase(database, request.claim),
+              readHarnessCompletionSourceInDatabase(database, request.claim, request.mode),
             );
           },
           { ...request.database, env: request.env },
@@ -429,6 +447,23 @@ async function prepareHistoryRead(
         await import("./session-accessor.sqlite-transcript-watermark.js");
       return () => {
         return { kind: request.kind, watermark: readSessionTranscriptWatermark(request.scope) };
+      };
+    }
+    case "transcript-stats": {
+      const [{ withOpenClawAgentDatabaseReadOnly }, { readTranscriptStatsFromDatabase }] =
+        await Promise.all([
+          import("../../state/openclaw-agent-db-readonly.js"),
+          import("./session-accessor.sqlite-transcript-stats.js"),
+        ]);
+      return () => {
+        const read = withOpenClawAgentDatabaseReadOnly(
+          (database) => readTranscriptStatsFromDatabase(database, request.scope.sessionId),
+          { ...request.database, env: request.scope.env },
+        );
+        return {
+          kind: request.kind,
+          stats: read.found ? read.value : { eventCount: 0, maxSeq: 0, sizeBytes: 0 },
+        };
       };
     }
     case "transcript-message-presence": {

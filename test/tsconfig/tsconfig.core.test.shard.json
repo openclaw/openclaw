@@ -15,7 +15,8 @@
     "../../ui/src/i18n/virtual-locale.d.ts",
     "../../ui/src/markdown-it-emoji.d.ts",
     "../../ui/src/types/highlight-js-subpaths.d.ts",
-    "../../ui/src/types/novnc.d.ts"
+    "../../ui/src/types/novnc.d.ts",
+    "../../ui/src/types/solid-elements.d.ts"
   ],
   "include": []
 }

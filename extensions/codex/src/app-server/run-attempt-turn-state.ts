@@ -59,7 +59,6 @@ class CodexAttemptState {
   };
   terminalDynamicToolReleaseCheckScheduled = false;
   currentTurnHadNonTerminalDynamicToolResult = false;
-  currentTurnHadToolAuthoredFinalReply = false;
 }
 
 export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
@@ -173,6 +172,7 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
   };
   const deadlines = createAgentHarnessAttemptDeadlineController({
     startedAtMs: connection.attemptStartedAt,
+    startedAtMonotonicMs: connection.attemptStartedAtMonotonicMs,
     timeoutMs: params.timeoutMs,
     settlementTimeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
     signal: runAbortController.signal,

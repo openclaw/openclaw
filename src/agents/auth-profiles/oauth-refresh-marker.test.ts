@@ -11,11 +11,7 @@ import {
   evaluateStoredCredentialEligibility,
   hasUsableOAuthCredential,
 } from "./credential-state.js";
-import {
-  createOAuthRefreshFence,
-  createFailedOAuthRefreshFence,
-  readPendingOAuthRefreshClaimId,
-} from "./oauth-refresh-marker.js";
+import { createOAuthRefreshFence, createFailedOAuthRefreshFence } from "./oauth-refresh-marker.js";
 
 describe("OAuth refresh marker isolation", () => {
   it.each(["pending", "failed"] as const)(
@@ -34,9 +30,6 @@ describe("OAuth refresh marker isolation", () => {
         },
       });
       const fence = state === "failed" ? createFailedOAuthRefreshFence(pending) : pending;
-      expect(readPendingOAuthRefreshClaimId(fence)).toEqual(
-        state === "pending" ? expect.any(String) : undefined,
-      );
       const store = { version: 1 as const, profiles: { [profileId]: fence } };
 
       expect(hasUsableOAuthCredential(fence)).toBe(false);

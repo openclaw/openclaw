@@ -36,7 +36,6 @@ async function createGitTransfer() {
     environmentId: "environment",
     ownerEpoch: 1,
     sessionId: "session",
-    generation: 1,
     localPath,
     isAuthorized: () => true,
   });

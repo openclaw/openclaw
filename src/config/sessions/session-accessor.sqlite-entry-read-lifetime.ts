@@ -1,5 +1,5 @@
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import type { SessionEntry } from "./types.js";
@@ -11,7 +11,7 @@ export function captureSessionEntryRead(
   allowMetadataChanges?: (previous: SessionEntry, current: SessionEntry) => boolean,
 ) {
   const capture = () =>
-    runSqliteDeferredTransactionSync(database.db, () => {
+    runSqliteReadSnapshotSync(database.db, () => {
       // Entry, owner, and participant projections must come from one committed snapshot.
       const selected = readExactSessionEntryRow(database, sessionKey, "list", "canonical");
       return selected

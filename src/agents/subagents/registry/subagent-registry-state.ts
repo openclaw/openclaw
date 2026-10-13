@@ -4,10 +4,7 @@ import {
 } from "../../../sessions/session-lifecycle-events.js";
 import { getActiveOpenClawStateDatabaseReadSnapshot } from "../../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
-import {
-  captureOpenClawStateWorkerContext,
-  prepareOpenClawStateReadSource,
-} from "../../../state/openclaw-state-worker-context.js";
+import { prepareOpenClawStateReadSource } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
@@ -20,7 +17,6 @@ import {
 } from "./subagent-registry-memory.js";
 import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
 import {
-  assertSubagentReadContext,
   consumeFreshSubagentRuns,
   getSessionListLookup,
   getSubagentRunsSnapshot,
@@ -48,7 +44,6 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const persistedSubagentRunsReadCache: SubagentRunsCache<SubagentRunRecord> = {
   state: {},
-  retainRetiredPublications: true,
   copy: immutableSubagentRun,
   project: (entry) => entry,
 };
@@ -254,16 +249,13 @@ export async function prepareOptionalSubagentSessionListReadCache(): Promise<boo
   if (!shouldReadPersistedSubagentRuns()) {
     return true;
   }
-  const context = captureOpenClawStateWorkerContext();
   try {
     await prepareSubagentSessionListReadCache();
-    assertSubagentReadContext(context);
     return true;
   } catch (error) {
     if (!(error instanceof SubagentSessionListUnavailableError)) {
       throw error;
     }
-    assertSubagentReadContext(context);
     return false;
   }
 }

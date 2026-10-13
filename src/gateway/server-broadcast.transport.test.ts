@@ -61,6 +61,34 @@ describe("broadcast transport retirement", () => {
     vi.useRealTimers();
   });
 
+  it("delivers identity invalidations only to agent identity readers", () => {
+    const read = controlledPeer("read");
+    const sessionRead = controlledPeer("session-read");
+    const admin = controlledPeer("admin");
+    const node = controlledPeer("node");
+    sessionRead.client.connect.scopes = ["operator.sessions.read"];
+    admin.client.connect.scopes = ["operator.admin"];
+    node.client.connect.role = "node";
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([
+        read.client,
+        sessionRead.client,
+        admin.client,
+        node.client,
+      ]),
+    });
+
+    broadcast("agent.identity.changed", { agentId: "main" });
+
+    for (const peer of [read, admin]) {
+      expect(peer.frames).toEqual([
+        { type: "event", event: "agent.identity.changed", payload: { agentId: "main" }, seq: 1 },
+      ]);
+    }
+    expect(sessionRead.frames).toEqual([]);
+    expect(node.frames).toEqual([]);
+  });
+
   it("shares encoded plugin events only after scope filtering and preserves recipient sequences", () => {
     const read = controlledPeer("read");
     const write = controlledPeer("write");

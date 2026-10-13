@@ -1,4 +1,9 @@
 import path from "node:path";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import {
+  captureIncognitoSessionBinding,
+  withIncognitoSessionActor,
+} from "../config/sessions/session-incognito-binding.js";
 import { captureSessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -17,6 +22,40 @@ export async function withControlUiSessionPrSource<T>(
   operation: (assertCurrent: () => void, sourceIdentity: string) => Promise<T>,
 ): Promise<T> {
   const target = { agentId: normalizeAgentId(source.agentId), path: path.resolve(source.path) };
+  const memory = getSessionActorStorageBinding({
+    agentId: target.agentId,
+    storePath: target.path,
+  });
+  if (memory) {
+    const assertCurrent = () => {
+      memory.authority.assertCurrent();
+      memory.actor.assertReadable();
+    };
+    return operation(assertCurrent, JSON.stringify(memory.actor.target.database));
+  }
+  const binding = captureIncognitoSessionBinding({
+    agentId: target.agentId,
+    storePath: target.path,
+  });
+  if (binding) {
+    return withIncognitoSessionActor(
+      binding.actor,
+      async () => {
+        const assertCurrent = () => {
+          binding.admissionSignal?.throwIfAborted();
+          binding.actor.assertReadable();
+        };
+        assertCurrent();
+        const result = await operation(
+          assertCurrent,
+          `incognito:${binding.actor.identity.incarnation}`,
+        );
+        assertCurrent();
+        return result;
+      },
+      binding.admissionSignal,
+    );
+  }
   const unregister: Array<() => void> = [];
   let active = true;
   let releaseNative = () => {};

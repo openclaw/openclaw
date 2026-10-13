@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import "../../../test-helpers/load-styles.ts";
-import "./browser-tab-card.ts";
+import "./browser-tab-card.tsx";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -20,10 +20,10 @@ it("shows action icons and supports copy, external opening, and keyboard dismiss
   };
   document.body.append(card);
   await card.updateComplete;
-  const trigger = card.shadowRoot!.querySelector<HTMLButtonElement>(".more")!;
-  const dropdown = card.shadowRoot!.querySelector("wa-dropdown")!;
-  const copy = card.shadowRoot!.querySelector<HTMLElement>('[value="copy-url"]')!;
-  const open = card.shadowRoot!.querySelector<HTMLElement>('[value="open-new-tab"]')!;
+  const trigger = card.querySelector<HTMLButtonElement>(".more")!;
+  const dropdown = card.querySelector("wa-dropdown")!;
+  const copy = card.querySelector<HTMLElement>('[value="copy-url"]')!;
+  const open = card.querySelector<HTMLElement>('[value="open-new-tab"]')!;
   const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
   const openWindow = vi.spyOn(window, "open").mockReturnValue(null);
 
@@ -38,17 +38,17 @@ it("shows action icons and supports copy, external opening, and keyboard dismiss
     expect(icon.getBoundingClientRect().width).toBeGreaterThan(0);
     expect(icon.getBoundingClientRect().height).toBeGreaterThan(0);
   }
-  await expect.poll(() => card.shadowRoot!.activeElement).toBe(copy);
+  await expect.poll(() => document.activeElement).toBe(copy);
   await userEvent.keyboard("{ArrowDown}");
-  await expect.poll(() => card.shadowRoot!.activeElement).toBe(open);
+  await expect.poll(() => document.activeElement).toBe(open);
   await userEvent.keyboard("{ArrowUp}");
-  await expect.poll(() => card.shadowRoot!.activeElement).toBe(copy);
+  await expect.poll(() => document.activeElement).toBe(copy);
   await userEvent.keyboard("{Escape}");
   await expect.poll(() => dropdown.open).toBe(false);
-  await expect.poll(() => card.shadowRoot!.activeElement).toBe(trigger);
+  await expect.poll(() => document.activeElement).toBe(trigger);
 
   await userEvent.keyboard("{Enter}");
-  await expect.poll(() => card.shadowRoot!.activeElement).toBe(copy);
+  await expect.poll(() => document.activeElement).toBe(copy);
   await userEvent.keyboard("{Enter}");
   await expect.poll(() => writeText.mock.calls).toEqual([[url]]);
   await expect.poll(() => dropdown.open).toBe(false);
@@ -56,5 +56,5 @@ it("shows action icons and supports copy, external opening, and keyboard dismiss
   await page.elementLocator(open).click();
   expect(openWindow).toHaveBeenCalledExactlyOnceWith(url, "_blank", "noopener,noreferrer");
   await expect.poll(() => dropdown.open).toBe(false);
-  await expect.poll(() => card.shadowRoot!.activeElement).toBe(trigger);
+  await expect.poll(() => document.activeElement).toBe(trigger);
 });

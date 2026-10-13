@@ -357,7 +357,9 @@ describe("agent registration native settlement", () => {
           await projection.ensureMaterialized();
           expect(projection.capture(query)?.entry).toMatchObject(entry);
           expect(observed.trace).toEqual([{ kind: "stores", inTransaction: false }]);
-          expect(snapshot.assertCurrent).toThrow(registryListing.AgentDatabaseRegistryChangedError);
+          expect(snapshot.assertCurrent).toThrow(
+            expect.objectContaining({ name: "AgentDatabaseRegistryChangedError" }),
+          );
         } finally {
           endScope.resolve();
           deliverCommitted?.();

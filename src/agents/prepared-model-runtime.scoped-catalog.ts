@@ -3,6 +3,7 @@ import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
+import { MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "./models-config.js";
 import { loadPersistedPluginModelCatalogs } from "./plugin-model-catalog-execution.js";
@@ -24,8 +25,6 @@ import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimePluginGeneration,
 } from "./prepared-model-runtime.types.js";
-
-const MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
 
 /** Builds a request-scoped read-only catalog; live discovery requires an explicit mode. */
 export async function prepareScopedReadOnlyModelCatalog(

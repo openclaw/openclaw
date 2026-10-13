@@ -71,7 +71,7 @@ function managedDeps(version = CODEX_APP_SERVER_VERSION) {
     })),
     isDesktopCommand: vi.fn((command: string) => command.startsWith("/Applications/")),
     resolveNativeCommand,
-    runVersionCommand: vi.fn(async () => ({ stdout: `codex-cli ${version}\n`, stderr: "" })),
+    runVersionCommand: vi.fn(async () => `codex-cli ${version}\n`),
   };
 }
 
@@ -117,7 +117,7 @@ describe("managed Codex doctor check", () => {
     ]);
     expect(deps.resolveStartOptions).toHaveBeenCalledWith(
       expect.objectContaining({ managedCommandOrder: "package-only" }),
-      { pluginRoot: "/candidate/plugin" },
+      { pluginRoot: "/candidate/plugin", preferInstalled: false },
     );
   });
 

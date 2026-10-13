@@ -672,6 +672,7 @@ describe("session navigation intent prefetch", () => {
     );
     expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey })).toEqual({
       deltaCursor: "cursor-2",
+      transcriptMetadata: { key: sessionKey, kind: "direct" },
       messages: [...priorMessages, liveMessage, preparedDeltaMessage],
       pagination: { hasMore: false, completeSnapshot: true },
       sessionId: "session-delta",
@@ -680,6 +681,7 @@ describe("session navigation intent prefetch", () => {
     await store.flush();
     expect(await new SessionSnapshotStore().read(cacheKey(sessionKey))).toEqual({
       deltaCursor: "cursor-2",
+      transcriptMetadata: { key: sessionKey, kind: "direct" },
       messages: [...priorMessages, liveMessage, preparedDeltaMessage],
       pagination: { hasMore: false, completeSnapshot: true },
       sessionId: "session-delta",

@@ -26,7 +26,10 @@ registerSessionPlacementEnglish();
 export async function requestPlaceCatalog(
   client: Pick<GatewayBrowserClient, "request">,
   runtimeId?: string,
-): Promise<{ profiles: DraftCloudProfile[]; environments: DraftEnvironment[] }> {
+): Promise<{
+  profiles: DraftCloudProfile[];
+  environments: DraftEnvironment[];
+}> {
   const result = await client.request<EnvironmentsListResult>(
     "environments.list",
     runtimeId ? { runtimeId } : {},
@@ -71,7 +74,10 @@ function formatUnavailableReason(
 ) {
   if (remediation === "enable-session-hosting") {
     return html`<div>${t("newSession.sessionHostingAction")}</div>
-      <code class="new-session-page__command">openclaw connect --service --session-host</code>`;
+      <code class="new-session-page__command"
+        >openclaw config set nodeHost.workerRuns.enabled true</code
+      >
+      <code class="new-session-page__command">openclaw node install --force</code>`;
   }
   if (remediation === "update-device") {
     return html`<div>${t("newSession.updateAction")}</div>
@@ -91,7 +97,7 @@ function detailRow(icon: TemplateResult, text: string) {
 export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting: boolean) {
   const unavailableReason = params.disabled ? params.title || params.description : undefined;
   const description = params.compact ? undefined : params.description;
-  const accessibleBlocker = params.compact && params.disabled && !params.hideDetails;
+  const accessibleBlocker = params.compact && params.disabled;
   const touchDetails = params.compact && !params.disabled && !params.hideDetails;
   const accessibilityHints = [
     params.suggested ? t("newSession.machineDefault") : undefined,
@@ -101,12 +107,7 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
   ]
     .filter(Boolean)
     .join(", ");
-  const accessibleDescription = [
-    accessibilityHints,
-    params.accessibleProvider ? unavailableReason : undefined,
-  ]
-    .filter(Boolean)
-    .join(", ");
+  const accessibleDescription = [accessibilityHints, unavailableReason].filter(Boolean).join(", ");
   const row = html`
     <button
       type="button"
@@ -151,6 +152,14 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
         }
       </span>
       ${
+        accessibleBlocker
+          ? html`<span class="new-session-page__unavailable-status"
+              ><span aria-hidden="true">${icons.alertTriangle}</span
+              >${t("newSession.environmentUnavailable")}</span
+            >`
+          : nothing
+      }
+      ${
         !params.compact && params.facts?.length
           ? html`<span class="new-session-page__menu-meta">
               <span class="new-session-page__menu-facts">
@@ -179,7 +188,7 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
       }
     </button>
   `;
-  return params.compact && !params.hideDetails
+  return params.compact && (!params.hideDetails || accessibleBlocker)
     ? html`<openclaw-tooltip
         class="new-session-page__environment-details"
         placement="right-start"
@@ -393,57 +402,48 @@ function renderCloudConfiguration(params: {
   onSelectOs: (id: string) => void;
   onSelectMachine: (id: string) => void;
 }) {
-  const operatingSystems = params.operatingSystems.filter((os) => !os.disabledReason);
-  const fixedOs = operatingSystems.length === 1 ? operatingSystems[0] : undefined;
-  const fixedMachine = params.machines.length === 1 ? params.machines[0] : undefined;
   const groups = [
-    [
-      operatingSystems.length,
-      t("newSession.operatingSystem"),
-      () =>
-        fixedOs
-          ? html`<span class="new-session-page__fixed-os" data-value=${`os:${fixedOs.id}`}
-              >${fixedOs.label}</span
-            >`
-          : renderCloudChoiceMenuItems({
-              kind: "os",
-              choices: operatingSystems,
-              selectedId: params.selectedOs,
-              suggestedId: params.suggested ? defaultCloudOs(params.profile) : undefined,
-              submitting: params.submitting,
-              onSelect: params.onSelectOs,
-            }),
-    ],
-    [
-      params.machines.length,
-      t("newSession.machine"),
-      () =>
-        fixedMachine
-          ? renderFixedMachine(fixedMachine)
-          : renderCloudChoiceMenuItems({
-              kind: "machine",
-              choices: params.machines,
-              selectedId: params.selectedMachine,
-              suggestedId: params.suggested
-                ? defaultCloudMachine(params.profile, params.selectedOs)?.id
-                : undefined,
-              submitting: params.submitting,
-              onSelect: params.onSelectMachine,
-            }),
-    ],
+    {
+      kind: "os",
+      label: t("newSession.operatingSystem"),
+      choices: params.operatingSystems.filter((os) => !os.disabledReason),
+      selectedId: params.selectedOs,
+      suggestedId: params.suggested ? defaultCloudOs(params.profile) : undefined,
+      onSelect: params.onSelectOs,
+    },
+    {
+      kind: "machine",
+      label: t("newSession.machine"),
+      choices: params.machines,
+      selectedId: params.selectedMachine,
+      suggestedId: params.suggested
+        ? defaultCloudMachine(params.profile, params.selectedOs)?.id
+        : undefined,
+      onSelect: params.onSelectMachine,
+    },
   ] as const;
   return html`<section
     class="new-session-page__cloud-configuration"
     aria-label=${params.profile.id}
   >
-    ${groups.map(([count, label, renderChoices]) =>
-      count
-        ? html`<div class="new-session-page__environment-heading">${label}</div>
-            <div class="new-session-page__cloud-choice-list" role="group" aria-label=${label}>
-              ${renderChoices()}
-            </div>`
-        : nothing,
-    )}
+    ${groups.map((group) => {
+      if (!group.choices.length) {
+        return nothing;
+      }
+      const fixed = group.choices.length === 1 ? group.choices[0] : undefined;
+      return html`<div class="new-session-page__environment-heading">${group.label}</div>
+        <div class="new-session-page__cloud-choice-list" role="group" aria-label=${group.label}>
+          ${
+            fixed
+              ? group.kind === "machine"
+                ? renderFixedMachine(fixed)
+                : html`<span class="new-session-page__fixed-os" data-value=${`os:${fixed.id}`}
+                    >${fixed.label}</span
+                  >`
+              : renderCloudChoiceMenuItems({ ...group, submitting: params.submitting })
+          }
+        </div>`;
+    })}
   </section>`;
 }
 

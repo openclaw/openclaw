@@ -100,7 +100,7 @@ describe("worker inference account service tiers", () => {
     const runtime = setup(entry, { pluginRegistry, accountCatalog, config: runtimeConfig });
     const authStorage = AuthStorage.inMemory({});
     const modelRegistry = ModelRegistry.inMemory(authStorage);
-    vi.spyOn(authProfileStore, "ensureAuthProfileStore").mockReturnValue({
+    vi.spyOn(authProfileStore, "ensureAuthProfileStoreAsync").mockResolvedValue({
       version: 1,
       profiles: {},
     });
@@ -130,9 +130,7 @@ describe("worker inference account service tiers", () => {
     transport.requests.length = 0;
     for (const echo of ["priority", "priority", "ultrafast"]) {
       transport.echo = echo;
-      await expect(
-        runtime.executor(params(request(), vi.fn(), runtimeConfig)),
-      ).resolves.toMatchObject({
+      await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
         type: "done",
       });
       expect(transport.requests.at(-1)?.service_tier).toBe("ultrafast");
@@ -151,9 +149,7 @@ describe("worker inference account service tiers", () => {
       runtime.readPromptCacheContext.mockReturnValue({ boundaryCount: 0, fastMode });
       const inferenceRequest = request();
       Object.assign(inferenceRequest.options, { fastMode: "ultrafast" });
-      await expect(
-        runtime.executor(params(inferenceRequest, vi.fn(), runtimeConfig)),
-      ).resolves.toMatchObject({
+      await expect(runtime.executor(params(inferenceRequest, vi.fn()))).resolves.toMatchObject({
         type: "done",
       });
       expect(transport.requests.at(-1)?.service_tier).toBe(fastMode ? "priority" : undefined);

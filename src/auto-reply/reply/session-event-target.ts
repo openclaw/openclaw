@@ -1,7 +1,6 @@
 /** Captured destination identity and live generation facts for ordinary session events. */
 import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
-import { intersectSessionPermissionModes } from "../../agents/session-permission-exec-mode.js";
 import { isRuntimeToolAllowed } from "../../agents/tool-policy-match.js";
 import {
   attachToolAllowlistIntersection,
@@ -16,10 +15,7 @@ import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { SessionEntryReadSourcePreparation } from "../../config/sessions/session-entry-read-runtime.types.js";
 import { isSessionStoreReadCandidateCurrent } from "../../config/sessions/session-store-read-candidates.js";
-import {
-  intersectSessionToolOverrides,
-  sessionToolOverridesEqual,
-} from "../../config/sessions/session-tool-overrides.js";
+import { sessionToolOverridesEqual } from "../../config/sessions/session-tool-overrides.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   getAgentEventLifecycleGeneration,
@@ -36,6 +32,7 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { SessionEventTarget } from "./session-event-contract.js";
+import { narrowSessionEventSettings } from "./session-event-policy.js";
 
 type CapturedEventSource = {
   database: Parameters<SessionEntryReadSourcePreparation>[0];
@@ -192,7 +189,7 @@ export async function captureSessionEventTargetForHost(
         ) {
           throw new Error("Session event producer tool surface exceeds the supported bound");
         }
-        toolsAllow = [...caller.sessionEventToolsAllow];
+        toolsAllow = intersectSessionEventToolsAllow(caller.sessionEventToolsAllow);
       }
     }
     toolsAllow = intersectSessionEventToolsAllow(toolsAllow, options.producerPolicy?.toolsAllow);
@@ -446,20 +443,6 @@ export function intersectSessionEventToolsAllow(
     restrictions.every((restriction) => isRuntimeToolAllowed(name, restriction)),
   );
   return attachToolAllowlistIntersection(candidates, restrictions);
-}
-
-/** A delayed producer can retain restrictions, never replace current session authority. */
-export function narrowSessionEventSettings(
-  retained: SessionEventTarget["settings"],
-  current: SessionEventTarget["settings"],
-): NonNullable<SessionEventTarget["settings"]> {
-  return {
-    permissionMode: intersectSessionPermissionModes(
-      retained?.permissionMode,
-      current?.permissionMode,
-    ),
-    toolOverrides: intersectSessionToolOverrides(retained?.toolOverrides, current?.toolOverrides),
-  };
 }
 
 /** Frozen tools may continue only while the current session still covers their admitted policy. */

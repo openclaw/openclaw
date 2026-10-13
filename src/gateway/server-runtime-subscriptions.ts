@@ -25,7 +25,7 @@ import {
   getAgentRunContext,
   getAgentRunContextOwnerStatus,
 } from "../infra/agent-run-registry.js";
-import { captureAgentRunTerminalWriteContext } from "../infra/agent-run-terminal-writes.js";
+import { captureAgentRunTerminalPersistence } from "../infra/agent-run-terminal-writes.js";
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
@@ -38,10 +38,7 @@ import {
   onSessionIdentityMutation,
   onSessionLifecycleEvent,
 } from "../sessions/session-lifecycle-events.js";
-import {
-  onInternalSessionTranscriptUpdate,
-  type InternalSessionTranscriptUpdate,
-} from "../sessions/transcript-events.js";
+import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -151,6 +148,7 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
   });
   const sessionObserver = createSessionObserver({
     getConfig: getRuntimeConfig,
+    getSessionRowProjection: params.getSessionRowProjection,
     subscribers: params.sessionMessageSubscribers,
     sessionEventSubscribers: params.sessionEventSubscribers,
     broadcastToConnIds: params.broadcastToConnIds,
@@ -509,7 +507,7 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
           evt.projectSessionLifecycle !== false &&
           trackedOwnerIsCurrent &&
           claimIsComplete;
-        const writeContext = captureAgentRunTerminalWriteContext(evt.runId);
+        const { writeContext, track } = captureAgentRunTerminalPersistence(evt.runId);
         const prepareTerminalPersistence = (sessionKey: string, agentId = sessionAgentId) => {
           const persistence = sessionLifecyclePersistence.observe({
             sessionKey,
@@ -549,7 +547,7 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
         if (canPersistTerminal) {
           if (knownSessionKey) {
             const persistence = prepareTerminalPersistence(knownSessionKey);
-            writeContext?.track(persistence);
+            track?.(persistence);
           } else {
             // Context cleanup can precede a terminal event. Resolve its persisted
             // run mapping before the lazy chat handler consumes the same event.
@@ -562,7 +560,7 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
                 await prepareTerminalPersistence(selected.sessionKey, selected.agentId);
               }
             });
-            writeContext?.track(terminalPreparation);
+            track?.(terminalPreparation);
           }
         }
       }
@@ -660,16 +658,16 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
     const agentHandler = agentEventHandlerLoader.peek();
     const publication = createDeferredCore();
     const dispatch = runOutsideAsyncWorkScope(() =>
-      dispatchEventHandler<InternalSessionTranscriptUpdate>({
-        loadHandler: agentHandler
-          ? () =>
-              agentHandler
-                .then(
-                  (handler) => handler.retireTranscript(evt, publication.promise),
-                  () => undefined,
-                )
-                .then(getTranscriptUpdateHandler)
-          : getTranscriptUpdateHandler,
+      dispatchEventHandler({
+        loadHandler: async () => {
+          if (agentHandler) {
+            await agentHandler.then(
+              (handler) => handler.retireTranscript(evt, publication.promise),
+              () => undefined,
+            );
+          }
+          return getTranscriptUpdateHandler();
+        },
         event: evt,
         log: params.log,
         failureMessage: "Transcript update dispatch failed",

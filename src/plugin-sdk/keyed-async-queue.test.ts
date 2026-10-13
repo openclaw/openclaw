@@ -2,7 +2,6 @@
  * Tests keyed async queue serialization and cancellation behavior.
  */
 
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { enqueueKeyedTask, KeyedAsyncQueue } from "./keyed-async-queue.js";
@@ -51,29 +50,6 @@ describe("enqueueKeyedTask", () => {
     expect(tails.size).toBe(0);
   });
 
-  it("keeps queue alive after task failures", async () => {
-    const tails = new Map<string, Promise<void>>();
-    const runs = [
-      () =>
-        enqueueKeyedTask({
-          tails,
-          key: "a",
-          task: async () => {
-            throw new Error("boom");
-          },
-        }),
-      () =>
-        enqueueKeyedTask({
-          tails,
-          key: "a",
-          task: async () => "ok",
-        }),
-    ];
-
-    await expect(expectDefined(runs[0], "runs[0] test invariant")()).rejects.toThrow("boom");
-    await expect(expectDefined(runs[1], "runs[1] test invariant")()).resolves.toBe("ok");
-  });
-
   it("does not leak unhandled rejections when a task failure is already awaited", async () => {
     const tails = new Map<string, Promise<void>>();
     const unhandled: unknown[] = [];
@@ -97,6 +73,9 @@ describe("enqueueKeyedTask", () => {
         setImmediate(resolve);
       });
       expect(unhandled).toStrictEqual([]);
+      await expect(enqueueKeyedTask({ tails, key: "a", task: async () => "ok" })).resolves.toBe(
+        "ok",
+      );
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
     }

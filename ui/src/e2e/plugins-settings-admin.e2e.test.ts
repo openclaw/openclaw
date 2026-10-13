@@ -4,7 +4,6 @@ import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, expect, it } from "vitest";
 import { loadPluginManifest, PLUGIN_MANIFEST_FILENAME } from "../../../src/plugins/manifest.ts";
 import { resolveBundledPluginPublicModulePath } from "../../../src/test-utils/bundled-plugin-public-surface.ts";
-import type { ApplicationContext } from "../app/context.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -312,16 +311,7 @@ suite.define(() => {
               },
             },
           });
-          await expect
-            .poll(() =>
-              page.evaluate(
-                () =>
-                  document.querySelector<HTMLElement & { context: ApplicationContext }>(
-                    "openclaw-plugins-page",
-                  )?.context.runtimeConfig.state.configAutoSaveStatus,
-              ),
-            )
-            .toBe("saved");
+          await page.locator(".settings-save-indicator--saved").waitFor();
           await page.reload();
           await gateway.waitForRequest("config.get");
           await expect.poll(() => apiKey.inputValue()).toBe("synthetic-credential");
@@ -337,64 +327,6 @@ suite.define(() => {
       );
     },
   );
-
-  it("opens settings without adding a setup alert", async () => {
-    await suite.withPage(
-      {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
-      async ({ page }) => {
-        const needsSetup = { ...workboard, enabled: false, state: "needs-setup" as const };
-        const localInspection = {
-          ...inspection,
-          catalog: undefined,
-          components: {
-            mapped: ["commands"],
-            skills: [],
-            mcpServers: [],
-            commands: [],
-            hooks: [],
-            lspServers: [],
-            unavailable: {
-              capabilities: ["agents", "hooks", "rules"],
-              mcpServers: [],
-              lspServers: [],
-            },
-          },
-        };
-        await installMockGateway(page, {
-          featureMethods: pluginMethods,
-          methodResponses: {
-            ...pluginResponses(),
-            "plugins.list": { ...inventory, plugins: [needsSetup] },
-            "plugins.inspect": {
-              ...localInspection,
-              plugin: { ...localInspection.plugin, enabled: false },
-            },
-          },
-          operatorScopes: ["operator.read", "operator.admin"],
-        });
-
-        await page.goto(`${suite.server.baseUrl}settings/plugins/workboard`);
-        const configuration = page
-          .locator(".plugin-catalog-detail__actions")
-          .getByRole("link", { name: "Settings", exact: true });
-        await configuration.waitFor();
-        expect(await page.getByRole("tab").count()).toBe(0);
-        expect(await page.locator(".plugin-installed-detail__setup-dot").count()).toBe(0);
-        expect(await page.getByText("Setup required", { exact: true }).count()).toBe(0);
-        await configuration.click();
-        await page
-          .locator(".plugin-editor")
-          .getByRole("searchbox", { name: "Search settings", exact: true })
-          .waitFor();
-        expect(await page.locator(".plugin-editor .callout.warning").count()).toBe(0);
-      },
-    );
-  });
 
   it("drills from searchable inventory into overview and same-URL Settings", async () => {
     await suite.withPage(

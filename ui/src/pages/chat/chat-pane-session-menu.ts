@@ -7,10 +7,12 @@ import type {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { serializeSidebarEntry } from "../../app-navigation.ts";
+import { togglePinnedSession } from "../../app/bootstrap-navigation-preferences.ts";
 import { resolveSidebarSessionParentKey } from "../../components/app-sidebar-session-parent.ts";
 import type { SidebarSessionMutationScope } from "../../components/app-sidebar-session-types.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import type { SessionMenuData } from "../../components/session-menu-actions.ts";
+import { hasSessionArchiveDescendants } from "../../components/session-menu-descendants.ts";
 import type { SessionActionHost } from "../../components/session-organizer-operations.runtime.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
@@ -28,7 +30,9 @@ import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
 import {
   areUiSessionKeysEquivalent,
   canArchiveSessionRow,
+  isPinnableUiSessionRow,
   parseAgentSessionKey,
+  isSubagentSessionKey,
   resolveUiConfiguredMainKey,
   resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
@@ -38,6 +42,7 @@ import { showToast } from "../../lib/toast.ts";
 import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
 import { ChatPaneContext } from "./chat-pane-context.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
+import { headerSessionMetadataPatch } from "./chat-pane-session-metadata-patch.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
@@ -107,18 +112,32 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       parseAgentSessionKey(row.key)?.agentId ?? row.agentId,
     ).sessionKey;
     const label = this.resolveHeaderSessionTitle(row);
-    const isChild = Boolean(resolveSidebarSessionParentKey(row, new Set([mainSessionKey])));
+    const isChild =
+      !isSubagentSessionKey(row.key) &&
+      Boolean(resolveSidebarSessionParentKey(row, new Set([mainSessionKey])));
+    const hasChildren = hasSessionArchiveDescendants(
+      row,
+      this.state?.sessionsResult?.sessions ?? [],
+    );
     const archiving = this.context.sessions.archiveVisibility(row.key) === "pending";
+    const pinned = this.context.navigation.snapshot.sidebarEntries.includes(
+      serializeSidebarEntry({ type: "session", key: row.key }),
+    );
     return this.headerSessionDataMemo.read(
       [
         label,
+        row.key,
+        row.agentId,
         row.sessionId,
         isChild,
-        row.pinned,
+        hasChildren,
+        pinned,
         pinnable,
         row.snoozedUntil,
         row.unread,
         row.hiddenFromInvolvingMe,
+        row.communication,
+        row.effectiveCommunication,
         row.archived,
         archiving,
         row.category,
@@ -127,13 +146,17 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       ],
       () => ({
         label,
+        target: { key: row.key, agentId: row.agentId },
         sessionId: row.sessionId ?? null,
         isChild,
-        pinned: row.pinned === true,
+        hasChildren,
+        pinned,
         pinnable,
         snoozedUntil: row.snoozedUntil ?? null,
         unread: row.unread === true,
         hiddenFromInvolvingMe: row.hiddenFromInvolvingMe,
+        communication: row.communication,
+        effectiveCommunication: row.effectiveCommunication,
         archived: row.archived === true,
         archiving,
         category: normalizeOptionalString(row.category) ?? null,
@@ -203,6 +226,19 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       this.openContinueInTerminalDialog(row);
       return;
     }
+    if (action.kind === "toggle-pin") {
+      const current = this.state ? selectedChatSessionRow(this.state) : undefined;
+      if (
+        !current ||
+        !areUiSessionKeysEquivalent(current.key, row.key) ||
+        (row.sessionId && current.sessionId !== row.sessionId) ||
+        !isPinnableUiSessionRow(current)
+      ) {
+        return;
+      }
+      togglePinnedSession(this.context.navigation, current.key);
+      return;
+    }
     const scope = this.captureHeaderSessionActionScope();
     if (!scope) {
       this.publishHeaderError(t("sessionsView.actionRequiresConnection"));
@@ -236,9 +272,14 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       unread: candidate.unread === true,
       archived: candidate.archived === true,
       category: candidate.category,
+      sidebarRoot: candidate.sidebarRoot,
+      isChild:
+        !isSubagentSessionKey(candidate.key) &&
+        Boolean(resolveSidebarSessionParentKey(candidate, new Set())),
       active: true,
       hasActiveRun: candidate.hasActiveRun ?? candidate.status === "running",
       gatewayHasActiveRun: candidate.hasActiveRun,
+      hasActiveSubagentRun: candidate.hasActiveSubagentRun,
     });
     const session = toActionSession(row);
     // Refresh metadata only on the selected instance; replacements must keep
@@ -305,30 +346,15 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         case "toggle-involving-me":
           await operations.setSessionInvolvement(host, session, !row.hiddenFromInvolvingMe, scope);
           break;
-        case "toggle-pin":
         case "toggle-unread":
         case "set-icon":
         case "set-color":
+        case "set-communication":
         case "reset-appearance": {
           const currentSession = resolveCurrentSession(true);
           if (currentSession) {
-            const patch =
-              action.kind === "toggle-pin"
-                ? { pinned: !currentSession.pinned }
-                : action.kind === "toggle-unread"
-                  ? { unread: !currentSession.unread }
-                  : action.kind === "set-icon"
-                    ? { icon: action.icon }
-                    : action.kind === "set-color"
-                      ? { color: action.color }
-                      : { icon: null, color: null };
-            await operations.patchSession(
-              host,
-              currentSession,
-              patch,
-              scope,
-              action.kind === "toggle-pin" ? { sessionScope: true } : undefined,
-            );
+            const patch = headerSessionMetadataPatch(action, currentSession);
+            await operations.patchSession(host, currentSession, patch, scope);
           }
           break;
         }
@@ -337,6 +363,12 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           break;
         case "fork":
           await operations.forkSession(host, session, scope);
+          break;
+        case "move-to-top-level":
+          await operations.promoteSession(host, session, scope);
+          break;
+        case "archive-tree":
+          await operations.archiveSessionTreeWithUndo(host, session, scope);
           break;
         case "move-to-group":
           await assignCategory(action.category);

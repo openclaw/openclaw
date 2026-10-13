@@ -16,7 +16,7 @@ import {
   captureSidebarUiProof,
   createSidebarCustomizationSuite,
   openSidebarCustomizationPage,
-  openSidebarMoreMenu,
+  openSidebarPinMenu,
 } from "./sidebar-customization.test-support.ts";
 
 const suite = createSidebarCustomizationSuite("Control UI sidebar interactions mocked Gateway E2E");
@@ -110,7 +110,6 @@ suite.define(() => {
 
       const actions: Array<{ selector: string; section?: string; params: Record<string, string> }> =
         [
-          { selector: ".sidebar-brand__new-thread", params: { agent: agentId } },
           {
             selector: ".sidebar-session-toolbar .sidebar-new-session",
             params: { agent: agentId },
@@ -134,7 +133,7 @@ suite.define(() => {
         ];
       for (const [index, action] of actions.entries()) {
         if (index === actions.length - 1) {
-          await page.locator(".sidebar-brand__collapse").click();
+          await page.locator('[data-navigation-view][aria-pressed="true"]').click();
         }
         if (action.section) {
           await page
@@ -323,90 +322,62 @@ suite.define(() => {
     }
   });
 
-  it("restores focus to the Pages edit button after closing the pin editor with Escape", async () => {
+  it("restores focus to the rail pin menu trigger after Escape", async () => {
     const { context, page } = await openSidebarCustomizationPage(suite);
-
     try {
-      const sidebar = page.locator("openclaw-app-sidebar");
-      const moreButton = sidebar.getByRole("button", { name: "Edit pinned items", exact: true });
-      const moreMenu = await openSidebarMoreMenu(page);
-      await moreMenu.getByRole("menuitem", { name: "Edit pinned items" }).click();
-      const pinItems = sidebar
-        .locator(
-          "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu):not(.sidebar-agent-menu)",
-        )
-        .locator('[role="menuitem"], [role="menuitemcheckbox"]');
-      // The pin editor installs roving focus after the outgoing More menu yields.
+      const row = page.locator('[data-sidebar-entry="route:dashboards"]');
+      const trigger = row.getByRole("link", { name: "Dashboards", exact: true });
+      const menu = await openSidebarPinMenu(page);
+      const items = menu.getByRole("menuitem");
       await expect
-        .poll(() =>
-          pinItems.evaluateAll((items) => items.filter((item) => item.tabIndex === 0).length),
-        )
-        .toBe(1);
-      await expect
-        .poll(() => pinItems.first().evaluate((element) => element === document.activeElement))
+        .poll(() => items.first().evaluate((element) => element.matches(":focus-within")))
         .toBe(true);
       await page.keyboard.press("End");
       await expect
-        .poll(() => pinItems.last().evaluate((element) => element === document.activeElement))
+        .poll(() => items.last().evaluate((element) => element.matches(":focus-within")))
         .toBe(true);
       await page.keyboard.press("Home");
       await expect
-        .poll(() => pinItems.first().evaluate((element) => element === document.activeElement))
+        .poll(() => items.first().evaluate((element) => element.matches(":focus-within")))
         .toBe(true);
       await page.keyboard.press("Escape");
-
-      await expect.poll(() => page.locator(".sidebar-customize-menu").count()).toBe(0);
+      await menu.waitFor({ state: "detached" });
       await expect
-        .poll(() => moreButton.evaluate((element) => element === document.activeElement))
+        .poll(() => trigger.evaluate((element) => element === document.activeElement))
         .toBe(true);
     } finally {
       await suite.closeBrowserContext(context);
     }
   });
 
-  it("moves focus through the sidebar pin editor with menu keys", async () => {
+  it("moves focus through personal pin actions with menu keys", async () => {
     const { context, page } = await openSidebarCustomizationPage(suite);
-
     try {
-      const sidebar = page.locator("openclaw-app-sidebar");
-      const moreMenu = await openSidebarMoreMenu(page);
+      const menu = await openSidebarPinMenu(page);
+      const items = menu.getByRole("menuitem");
+      expect((await items.allTextContents()).map((text) => text.trim())).toEqual([
+        "Move up",
+        "Move down",
+        "Unpin",
+      ]);
       await expect
-        .poll(() =>
-          moreMenu
-            .locator('[role="menuitem"]')
-            .first()
-            .evaluate((element) => element === document.activeElement),
-        )
+        .poll(() => items.first().evaluate((element) => element.matches(":focus-within")))
         .toBe(true);
-      await moreMenu.getByRole("menuitem", { name: "Edit pinned items" }).click();
-      const menu = sidebar.locator(
-        "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu):not(.sidebar-agent-menu)",
-      );
-      const menuItems = menu.locator('[role="menuitem"], [role="menuitemcheckbox"]');
-      await expect
-        .poll(() =>
-          menuItems.evaluateAll((items) => items.filter((item) => item.tabIndex === 0).length),
-        )
-        .toBe(1);
-      await expect
-        .poll(() => menuItems.first().evaluate((element) => element === document.activeElement))
-        .toBe(true);
-
       await page.keyboard.press("ArrowDown");
       await expect
-        .poll(() => menuItems.nth(1).evaluate((element) => element === document.activeElement))
+        .poll(() => items.nth(1).evaluate((element) => element.matches(":focus-within")))
         .toBe(true);
       await page.keyboard.press("End");
       await expect
-        .poll(() => menuItems.last().evaluate((element) => element === document.activeElement))
+        .poll(() => items.last().evaluate((element) => element.matches(":focus-within")))
         .toBe(true);
       await page.keyboard.press("ArrowDown");
       await expect
-        .poll(() => menuItems.first().evaluate((element) => element === document.activeElement))
+        .poll(() => items.first().evaluate((element) => element.matches(":focus-within")))
         .toBe(true);
       await page.keyboard.press("Tab");
-      await expect.poll(() => menu.count()).toBe(0);
-      const nextLink = sidebar.locator('[data-sidebar-entry="route:agents-home"] .nav-item');
+      await menu.waitFor({ state: "detached" });
+      const nextLink = page.locator('[data-sidebar-entry="route:systems"] .nav-item');
       await expect
         .poll(() => nextLink.evaluate((element) => element === document.activeElement))
         .toBe(true);

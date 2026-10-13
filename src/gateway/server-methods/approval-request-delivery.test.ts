@@ -42,7 +42,7 @@ type DeliveryParams = Parameters<
   typeof handlePendingApprovalRequestWithDelivery<"exec" | "plugin">
 >[0];
 
-function createDeliveryFixture(
+async function createDeliveryFixture(
   test: TestContext,
   caller: (typeof approvalDeliveryCallers)[number] = approvalDeliveryCallers[0],
 ) {
@@ -52,6 +52,7 @@ function createDeliveryFixture(
     approvalKind: caller.approvalKind,
   });
   const record = manager.create(caller.request, 60_000, caller.id);
+  await manager.register(record, 60_000);
   const decision = createDeferredCore<ExecApprovalDecision | null>();
   // Persistence/decision custody is a separate owner; delivery still uses its real work tracker.
   vi.spyOn(manager, "registerDecisionHandoff").mockImplementation((_id, run) => ({
@@ -105,7 +106,7 @@ function createDeliveryFixture(
   };
 }
 
-function expectAccepted(fixture: ReturnType<typeof createDeliveryFixture>) {
+function expectAccepted(fixture: Awaited<ReturnType<typeof createDeliveryFixture>>) {
   expect(fixture.respond).toHaveBeenCalledWith(
     true,
     {
@@ -129,7 +130,7 @@ describe("handlePendingApprovalRequestWithDelivery", () => {
   });
 
   it("expires a request when no external routes or approval clients exist", async (test) => {
-    const fixture = createDeliveryFixture(test);
+    const fixture = await createDeliveryFixture(test);
     await fixture.start();
 
     expect(fixture.expire).toHaveBeenCalledExactlyOnceWith(fixture.record.id, "no-approval-route");
@@ -146,7 +147,7 @@ describe("handlePendingApprovalRequestWithDelivery", () => {
   });
 
   it("accepts a request delivered by Web Push", async (test) => {
-    const fixture = createDeliveryFixture(test);
+    const fixture = await createDeliveryFixture(test);
     fixture.webPush.mockResolvedValue(true);
     const request = fixture.start();
     await vi.advanceTimersByTimeAsync(0);
@@ -164,7 +165,7 @@ describe("handlePendingApprovalRequestWithDelivery", () => {
   )(
     "accepts $caller.name through $successfulRoute while retaining the other route",
     async ({ caller, successfulRoute }, test) => {
-      const fixture = createDeliveryFixture(test, caller);
+      const fixture = await createDeliveryFixture(test, caller);
       const release = createDeferredCore<boolean>();
       const started: string[] = [];
       let pendingRouteFinished = false;
@@ -237,7 +238,7 @@ describe("handlePendingApprovalRequestWithDelivery", () => {
     { name: "iOS push rejects", forwardRejects: false, pushRejects: true },
     { name: "both routes reject", forwardRejects: true, pushRejects: true },
   ])("expires after $name", async ({ forwardRejects, pushRejects }, test) => {
-    const fixture = createDeliveryFixture(test);
+    const fixture = await createDeliveryFixture(test);
     await fixture.start({
       forwardRequest: async () => {
         if (forwardRejects) {
@@ -276,7 +277,7 @@ describe("handlePendingApprovalRequestWithDelivery", () => {
   });
 
   it("handles a late route rejection after accepting and answering the request", async (test) => {
-    const fixture = createDeliveryFixture(test);
+    const fixture = await createDeliveryFixture(test);
     const pendingPush = createDeferredCore<boolean>();
     const request = fixture.start({
       forwardRequest: async () => true,
@@ -303,7 +304,7 @@ describe("handlePendingApprovalRequestWithDelivery", () => {
   it.for(["forward", "push"] as const)(
     "starts both routes and isolates a %s failure",
     async (failedRoute, test) => {
-      const fixture = createDeliveryFixture(test);
+      const fixture = await createDeliveryFixture(test);
       const successfulResult = createDeferredCore<boolean>();
       const started: string[] = [];
       const route = (name: "forward" | "push") => {
@@ -333,7 +334,7 @@ describe("handlePendingApprovalRequestWithDelivery", () => {
   );
 
   it("limits mobile delivery to the bound requester, reviewers, and administrators", async (test) => {
-    const fixture = createDeliveryFixture(test);
+    const fixture = await createDeliveryFixture(test);
     fixture.record.requestedByDeviceId = "requester";
     fixture.record.approvalReviewerDeviceIds = ["reviewer"];
     const visible: boolean[] = [];

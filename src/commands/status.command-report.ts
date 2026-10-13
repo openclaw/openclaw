@@ -29,11 +29,6 @@ export async function buildStatusCommandReportLines(params: {
     heading: theme.heading,
     width: params.width,
   };
-  // Prepare empty-state styling before rendering any table.
-  const channelsMessage =
-    params.channelsRows.length === 0 ? theme.muted("No channels configured") : undefined;
-  const sessionsMessage = params.sessionsRows.length === 0 ? theme.muted("No sessions") : undefined;
-
   appendStatusReportTable(report, "Overview", [...statusOverviewTableColumns], params.overviewRows);
   if (params.pluginCompatibilityLines.length > 0) {
     appendStatusReportLines(report, "Plugin compatibility", params.pluginCompatibilityLines);
@@ -45,15 +40,15 @@ export async function buildStatusCommandReportLines(params: {
     appendStatusReportLines(report, "Model selection", params.modelSelectionLines);
   }
   appendStatusReportLines(report, "Security audit", params.securityAuditLines);
-  if (channelsMessage !== undefined) {
-    appendStatusReportLines(report, "Channels", [channelsMessage]);
-  } else {
-    appendStatusReportTable(report, "Channels", [...params.channelsColumns], params.channelsRows);
-  }
-  if (sessionsMessage !== undefined) {
-    appendStatusReportLines(report, "Sessions", [sessionsMessage]);
-  } else {
-    appendStatusReportTable(report, "Sessions", [...params.sessionsColumns], params.sessionsRows);
+  for (const [title, columns, rows, emptyMessage] of [
+    ["Channels", params.channelsColumns, params.channelsRows, "No channels configured"],
+    ["Sessions", params.sessionsColumns, params.sessionsRows, "No sessions"],
+  ] as const) {
+    if (rows.length === 0) {
+      appendStatusReportLines(report, title, [theme.muted(emptyMessage)]);
+    } else {
+      appendStatusReportTable(report, title, [...columns], rows);
+    }
   }
   if (params.systemEventsRows?.length) {
     appendStatusReportTable(

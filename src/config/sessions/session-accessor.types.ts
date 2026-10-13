@@ -5,6 +5,7 @@ import type {
   InternalSessionTranscriptUpdate,
   SessionTranscriptUpdate,
 } from "../../sessions/transcript-events.js";
+import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type {
   SessionTranscriptTurnMutation,
@@ -15,7 +16,7 @@ import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-en
 import type { SessionEntryCommitContext } from "./session-entry-commit-context.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
-import type { SessionEntryProjection } from "./session-entry-snapshots.js";
+import type { SessionEntryProjection } from "./session-entry-snapshot-values.js";
 import type { SessionSourceAssertion } from "./session-source-authority.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type {
@@ -319,7 +320,7 @@ export type TranscriptMessageAppendOptions<TMessage> = {
   expectedTranscript?: SessionTranscriptContextVersion;
   /** Rebase a stale explicit parent when the current tail still descends from it. */
   appendIntent?: "active-branch";
-  /** Runtime config used for message redaction and transcript header metadata. */
+  /** Runtime config used for transcript header metadata. */
   config?: OpenClawConfig;
   /** Working directory recorded in a newly created transcript header. */
   cwd?: string;
@@ -335,9 +336,9 @@ export type TranscriptMessageAppendOptions<TMessage> = {
   eventId?: string;
   /** Existing parent id owned by a caller with its own session tree. */
   parentId?: string | null;
-  /** @deprecated Use preparation.prepareMessage. Removed at the next Plugin SDK major. */
+  /** @deprecated Use preparation.prepareMessage; removed in the next Plugin SDK major. */
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
-  /** @deprecated Use preparation.source. Removed at the next Plugin SDK major. */
+  /** @deprecated Use preparation.source; removed in the next Plugin SDK major. */
   beforeFreshMessageCommit?: () => void;
   /** Allow append without parent-link migration for large legacy linear transcripts. */
   useRawWhenLinear?: boolean;
@@ -346,7 +347,7 @@ export type TranscriptMessageAppendOptions<TMessage> = {
 export type TranscriptMessageAppendResult<TMessage> = {
   /** False when idempotency lookup found an existing transcript message. */
   appended: boolean;
-  /** Redacted message payload as persisted or replayed from the transcript. */
+  /** Prepared message payload as persisted or replayed from the transcript. */
   message: TMessage;
   /** Existing or newly generated transcript message id. */
   messageId: string;
@@ -382,10 +383,14 @@ export type SessionTranscriptWriteLockAccessorContext = {
     result: TranscriptMessageAppendResult<TMessage> | undefined;
   }>;
   /** Reads bounded indexed facts for supplied transcript mirror identities. */
-  readMessageFacts: (params: { idempotencyKeys: readonly string[] }) => Promise<{
+  readMessageFacts: (params: {
+    idempotencyKeys: readonly string[];
+    sourceRunId?: string;
+  }) => Promise<{
     anchorsByIdempotencyKey: Map<string, TranscriptEntryAnchor>;
     existingIdempotencyKeys: Set<string>;
     messagesByIdempotencyKey: Map<string, unknown>;
+    sourceEvents?: TranscriptEvent[];
   }>;
   readEvents: () => Promise<TranscriptEvent[]>;
   replaceEvents: (events: readonly TranscriptEvent[]) => Promise<void>;
@@ -395,7 +400,7 @@ export type LockedTranscriptMessageAppendOptions<TMessage> = Omit<
   TranscriptMessageAppendOptions<TMessage>,
   "prepareMessageAfterIdempotencyCheck"
 > & {
-  /** @deprecated Use preparation.prepareMessage. Removed at the next Plugin SDK major. */
+  /** @deprecated Use preparation.prepareMessage; removed in the next Plugin SDK major. */
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
   /** Awaited after duplicate detection; undefined suppresses a fresh append. */
   prepareMessageAfterIdempotencyCheckAsync?: (message: TMessage) => Promise<TMessage | undefined>;
@@ -438,7 +443,7 @@ export type SessionTranscriptTurnPersistOptions = {
   /** Retained caller authority, with no same-database reads inside worker grants. */
   assertCurrent?: () => void;
   acceptedResultGuard?: { expectedWriterRunId: string | null; errorMessage: string };
-  /** Runtime config used for lock settings, redaction, and header metadata. */
+  /** Runtime config used for lock settings and header metadata. */
   config?: OpenClawConfig;
   /** Working directory recorded in a newly created transcript header. */
   cwd?: string;
@@ -472,6 +477,8 @@ export type SessionTranscriptTurnPersistOptions = {
   onMessageCommitted?: (
     result: TranscriptMessageAppendResult<unknown>,
     acceptCompletion: (complete: () => Promise<void>) => void,
+    /** Exact guarded-turn postimage; absent for legacy, unguarded single-message writes. */
+    turn?: Pick<SessionTranscriptTurnPersistResult, "sessionEntry" | "sessionTurnMutationResult">,
   ) => void;
   /** Publish each appended message inline, one file-only invalidation, or nothing. */
   updateMode?: SessionTranscriptTurnUpdateMode;
@@ -705,22 +712,9 @@ export type ForkSessionEntryFromParentTargetResult =
 export type ForkSessionEntryFromParentTargetParams = {
   agentId?: string;
   commitGuard?: () => void;
-  decisionSkipPatch?: (params: {
-    decision: Extract<SessionParentForkDecision, { status: "skip" }>;
-    entry: SessionEntry;
-    parentEntry: SessionEntry;
-  }) => Partial<SessionEntry> | null;
   fallbackEntry?: SessionEntry;
   parentTarget: SessionLifecycleStoreTarget;
-  patch?: (params: {
-    entry: SessionEntry;
-    parentEntry: SessionEntry;
-    fork: ParentForkedSessionTranscript;
-    decision: Extract<SessionParentForkDecision, { status: "fork" }>;
-  }) => Partial<SessionEntry>;
   sessionTarget: SessionLifecycleStoreTarget;
-  skipForkWhen?: (entry: SessionEntry) => boolean;
-  skipPatch?: (entry: SessionEntry) => Partial<SessionEntry> | null;
   storePath: string;
 };
 
@@ -831,6 +825,8 @@ export type SessionEntryCreateWithTranscriptOptions = {
   onPhase?: (phase: SessionEntryCreationPhase) => void;
   /** Bind retained target facts to this creator's own placeholder publication. */
   bindCreation?: (operation: SessionEntryCreationOperation) => void;
+  /** Follow the selected creator execution's own database registration receipts. */
+  followRegistration?: AgentDatabaseRequestExecutionSource["onRegistryChange"];
   /** Protect the newly created row from maintenance during its initial write. */
   activeSessionKey?: string;
   /** Working directory stored in the initial transcript header. */

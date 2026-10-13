@@ -7,6 +7,10 @@ import {
   iterateSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import {
+  sqliteSessionIdWriteScope,
+  withSqliteDatabaseWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -49,11 +53,9 @@ import {
 } from "./session-accessor.sqlite-references.js";
 import { getSessionKysely, withSqliteSessionDatabase } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson as parseSessionEntryRow } from "./session-accessor.sqlite-status.js";
-import {
-  assertSessionTranscriptHot,
-  readSessionColdTranscript,
-} from "./session-cold-storage-state.js";
+import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
+import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
 
 // Transcript-state reclamation owner. Planning stays async-free; transactions revalidate before delete.
@@ -135,13 +137,7 @@ export function readReferencedSessionIds(
               /* kysely-allow-raw: substring narrowing retains trimmed current IDs. */ sql<boolean>`instr(current_session_id, ${candidate}) > 0`,
           ),
         ),
-        /* kysely-allow-raw: malformed TEXT and optional fields retain their original reference semantics. */ sql<boolean>`CASE
-          WHEN NOT json_valid(entry_json) THEN 1
-          WHEN length(CAST(entry_json AS BLOB)) != length(CAST(printf('%s', entry_json) AS BLOB)) THEN 1
-          ELSE json_type(entry_json, '$.previousSessionId') IS NOT NULL
-            OR json_type(entry_json, '$.usageFamilySessionIds') IS NOT NULL
-            OR json_type(entry_json, '$.compactionCheckpoints') IS NOT NULL
-        END`,
+        eb("has_optional_references", "=", 1),
       ]),
     );
   }
@@ -298,6 +294,9 @@ export function readSessionGenerationIdsForKeys(
   options: { exactStoredKeys?: boolean } = {},
 ): string[] {
   const sessionKeys = [...keys].map((key) => (options.exactStoredKeys ? key : key.trim()));
+  if (sessionKeys.length === 0) {
+    return [];
+  }
   const db = getSessionKysely(database.db);
   return executeSqliteQuerySync(
     database.db,
@@ -468,6 +467,39 @@ export function projectSessionEntryLifecycleRemovalsInDatabase(
   );
 }
 
+export function readProjectedLifecycleStore(
+  database: OpenClawAgentDatabase,
+  params: {
+    allowCanonicalRepair?: boolean;
+    removals: readonly SessionEntryLifecycleRemoval[];
+    upserts: readonly Pick<SessionEntryLifecycleUpsert, "sessionKey" | "relatedSessionKeys">[];
+  },
+): Record<string, SessionEntry> {
+  const sessionKeys = new Set([
+    ...params.removals.map((removal) =>
+      removal.exactStoredKey ? removal.sessionKey : removal.sessionKey.trim(),
+    ),
+    ...params.upserts.flatMap((upsert) => [
+      upsert.sessionKey.trim(),
+      ...(upsert.relatedSessionKeys ?? []).map(normalizeStoreSessionKey),
+    ]),
+  ]);
+  const options = { allowCanonicalRepair: params.allowCanonicalRepair === true };
+  const store = readSessionEntryStore(database, { ...options, sessionKeys: [...sessionKeys] });
+  const parentSessionKeys = params.upserts.flatMap((upsert) => {
+    const parent = store[upsert.sessionKey.trim()]?.parentSessionKey;
+    const key = parent ? normalizeStoreSessionKey(parent) : "";
+    return upsert.relatedSessionKeys !== undefined && key && !sessionKeys.has(key) ? [key] : [];
+  });
+  if (parentSessionKeys.length > 0) {
+    Object.assign(
+      store,
+      readSessionEntryStore(database, { ...options, sessionKeys: parentSessionKeys }),
+    );
+  }
+  return store;
+}
+
 // Projects removals and upserts before archive materialization so same-call
 // upserts can keep a transcript live without producing a spurious archive.
 export async function projectSessionEntryLifecycleMutation(
@@ -480,16 +512,7 @@ export async function projectSessionEntryLifecycleMutation(
   },
 ): Promise<ProjectedLifecycleMutation> {
   return withSqliteSessionDatabase(databaseOptions, async (removalDatabase) => {
-    const sessionKeys = [
-      ...params.removals.map((removal) =>
-        removal.exactStoredKey ? removal.sessionKey : removal.sessionKey.trim(),
-      ),
-      ...params.upserts.map((upsert) => upsert.sessionKey.trim()),
-    ];
-    const store = readSessionEntryStore(removalDatabase, {
-      allowCanonicalRepair: params.allowCanonicalRepair === true,
-      sessionKeys,
-    });
+    const store = readProjectedLifecycleStore(removalDatabase, params);
     const selected = selectProjectedLifecycleRemovals(removalDatabase, store, params.removals);
     const { projectedRemovals } = selected;
     const upsertedEntries = await buildProjectedLifecycleUpserts(store, selected, params.upserts);
@@ -545,6 +568,10 @@ export async function buildProjectedLifecycleUpserts(
         ? upsert.entry
         : await upsert.buildEntry({
             currentEntry: expectedEntry ? structuredClone(expectedEntry) : undefined,
+            readEntry: (key) => {
+              const related = store[normalizeStoreSessionKey(key)];
+              return related ? structuredClone(related) : undefined;
+            },
             sessionKey,
           });
     if (!entry) {
@@ -589,14 +616,15 @@ export function collectProjectedReferencedSessionIds(params: {
 export { collectSessionStateIdsForEntry };
 
 function deleteSqliteSessionStateRows(database: OpenClawAgentDatabase, sessionId: string): void {
-  assertSessionTranscriptHot(database.db, sessionId);
   const db = getSessionKysely(database.db);
   // The window row cascades canonical transcript tables, but FTS is virtual;
   // clear its projection before dropping the owner row.
   deleteSessionTranscriptIndexInTransaction(database.db, sessionId);
-  executeSqliteQuerySync(
-    database.db,
-    db.deleteFrom("session_windows").where("session_id", "=", sessionId),
+  withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(sessionId)], () =>
+    executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("session_windows").where("session_id", "=", sessionId),
+    ),
   );
 }
 

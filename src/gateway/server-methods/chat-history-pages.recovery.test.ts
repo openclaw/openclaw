@@ -2,11 +2,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { installSessionToolResultGuard } from "../../agents/session-tool-result-guard.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import {
   appendTranscriptMessage,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import * as nestedActivity from "../../sessions/nested-tool-activity.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as historySanitize from "../chat-display-projection.sanitize.js";
@@ -49,6 +50,7 @@ async function withTranscript(
   entryOptions: { sessionStartedAt?: number } = {},
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:page-recovery",
@@ -427,6 +429,31 @@ describe("historical page recovery context", () => {
       );
     },
   );
+
+  it("recovers a failed page across a hidden runtime continuation without rewriting history", async () => {
+    await withTranscript(
+      [
+        ["user", user],
+        ["failed", failed],
+        [
+          "continuation",
+          {
+            role: "user",
+            content: "Continue from the current transcript.",
+            display: false,
+            provenance: { kind: "internal_system" },
+          },
+        ],
+        ["answer", answer],
+      ],
+      async ({ read, raw }) => {
+        const original = await raw();
+        const page = await read({ offset: undefined, messageId: "failed" });
+        expect(page.messages.map(readChatHistoryMessageId)).toEqual([]);
+        expect(await raw()).toEqual(original);
+      },
+    );
+  });
 
   it.each([
     { reason: "later turn", offset: 2, messageId: undefined },

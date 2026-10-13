@@ -20,8 +20,6 @@ export class WorkboardCatalog {
   private client: GatewayBrowserClient | null = null;
   private connected = false;
   private disposed = false;
-  private generation = 0;
-  private connectionGeneration = 0;
   private retryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private snapshot: WorkboardCatalogSnapshot = { boards: [], ready: false };
 
@@ -36,8 +34,6 @@ export class WorkboardCatalog {
     }
     const reconnecting = connected && !this.connected && this.snapshot.ready;
     if (this.connected !== connected || this.client !== client) {
-      this.connectionGeneration += 1;
-      this.generation += 1;
       invalidateWorkboardLoads(this.host);
     }
     this.connected = connected;
@@ -65,7 +61,6 @@ export class WorkboardCatalog {
   }
 
   removeBoard(id: string): void {
-    this.generation += 1;
     invalidateWorkboardLoads(this.host);
     const state = getWorkboardState(this.host);
     state.boards = state.boards.filter((board) => board.id !== id);
@@ -75,8 +70,6 @@ export class WorkboardCatalog {
 
   dispose(): void {
     this.disposed = true;
-    this.connectionGeneration += 1;
-    this.generation += 1;
     this.clearRetry();
     invalidateWorkboardLoads(this.host);
     this.host.clearCatalog();
@@ -87,14 +80,8 @@ export class WorkboardCatalog {
     if (this.disposed || !client || !this.connected) {
       return;
     }
-    const connectionGeneration = this.connectionGeneration;
     void this.ensure(client, force).then((loaded) => {
-      if (
-        this.disposed ||
-        !this.connected ||
-        this.client !== client ||
-        connectionGeneration !== this.connectionGeneration
-      ) {
+      if (this.disposed) {
         return;
       }
       if (loaded) {
@@ -117,19 +104,12 @@ export class WorkboardCatalog {
     if (!force && (this.snapshot.ready || getWorkboardRuntime(this.host).loadPromise)) {
       return false;
     }
-    const generation = ++this.generation;
     const loaded = await loadWorkboardCatalog({
       host: this.host,
       client,
       requestUpdate: this.host.notify,
     });
-    if (
-      !loaded ||
-      this.disposed ||
-      !this.connected ||
-      this.client !== client ||
-      generation !== this.generation
-    ) {
+    if (!loaded || this.disposed || !this.connected || this.client !== client) {
       return false;
     }
     this.publishCatalog(getWorkboardState(this.host).boards, true);

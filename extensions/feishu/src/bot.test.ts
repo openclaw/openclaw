@@ -10,7 +10,7 @@ import type {
   ensureConfiguredBindingRouteReady,
   getSessionBindingService,
   resolveConfiguredBindingRoute,
-} from "openclaw/plugin-sdk/conversation-runtime";
+} from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveAgentRoute, type ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -258,7 +258,7 @@ const {
   ),
   mockResolveBoundConversation: vi.fn((_ref?: unknown) => null as BoundConversation),
   mockTouchBinding: vi.fn(),
-  mockResolveFeishuReasoningPreviewEnabled: vi.fn(() => false),
+  mockResolveFeishuReasoningPreviewEnabled: vi.fn(async () => false),
   mockTranscribeFirstAudio:
     vi.fn<typeof import("openclaw/plugin-sdk/media-runtime").transcribeFirstAudio>(),
   mockMaybeCreateDynamicAgent: vi.fn(),
@@ -344,15 +344,15 @@ vi.mock("./bot-name.js", () => ({
   resolveFeishuBotName: mockResolveFeishuBotName,
 }));
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
-    "openclaw/plugin-sdk/conversation-runtime",
-  );
+vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/conversation-binding-runtime")
+  >("openclaw/plugin-sdk/conversation-binding-runtime");
   return {
     ...actual,
     resolveConfiguredBindingRoute: (params: unknown) =>
       mockResolveConfiguredBindingRoute(params as { route: ResolvedAgentRoute }),
-    resolveRuntimeConversationBindingRoute: (params: {
+    resolveRuntimeConversationBindingRouteAsync: async (params: {
       route: ResolvedAgentRoute;
       conversation: Parameters<
         ReturnType<typeof actual.getSessionBindingService>["resolveByConversation"]
@@ -490,7 +490,7 @@ describe("handleFeishuMessage ACP routing", () => {
     vi.clearAllMocks();
     resetConfiguredBindings();
     mockTouchBinding.mockReset();
-    mockResolveFeishuReasoningPreviewEnabled.mockReset().mockReturnValue(false);
+    mockResolveFeishuReasoningPreviewEnabled.mockReset().mockResolvedValue(false);
     mockTranscribeFirstAudio.mockReset().mockResolvedValue(undefined);
     mockMaybeCreateDynamicAgent.mockReset().mockImplementation(async ({ cfg }) => ({
       created: false,

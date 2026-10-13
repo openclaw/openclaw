@@ -4,7 +4,7 @@ import type {
   MusicGenerationModeCapabilities,
   MusicGenerationProvider,
 } from "openclaw/plugin-sdk/music-generation";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import type {
   VideoGenerationModeCapabilities,
   VideoGenerationProvider,
@@ -29,8 +29,10 @@ export const GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS = [4, 6, 8] as const;
 export const GOOGLE_VIDEO_MIN_DURATION_SECONDS = GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS[0];
 export const GOOGLE_VIDEO_MAX_DURATION_SECONDS = GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS[2];
 
-function isGoogleProviderConfigured(ctx: VideoGenerationProviderConfiguredContext): boolean {
-  return isProviderApiKeyConfigured({ provider: "google", ...ctx });
+function isGoogleProviderConfiguredAsync(
+  ctx: VideoGenerationProviderConfiguredContext,
+): Promise<boolean> {
+  return isProviderApiKeyConfiguredAsync({ provider: "google", ...ctx });
 }
 
 function createGoogleVideoCommonCapabilities() {
@@ -48,7 +50,7 @@ function createGoogleVideoCommonCapabilities() {
 
 export function createGoogleImageGenerationProviderMetadata(): Omit<
   ImageGenerationProvider,
-  "generateImage" | "isConfigured"
+  "generateImage" | "isConfigured" | "isConfiguredAsync"
 > {
   return {
     id: "google",
@@ -114,7 +116,7 @@ export function createGoogleMusicGenerationProviderMetadata(): Omit<
     label: "Google",
     defaultModel: DEFAULT_GOOGLE_MUSIC_MODEL,
     models: [DEFAULT_GOOGLE_MUSIC_MODEL, GOOGLE_PRO_MUSIC_MODEL],
-    isConfigured: isGoogleProviderConfigured,
+    isConfiguredAsync: isGoogleProviderConfiguredAsync,
     capabilities: {
       generate: createModeCapabilities(),
       edit: {
@@ -138,7 +140,7 @@ export function createGoogleVideoGenerationProviderMetadata(): Omit<
       "veo-3.1-generate-preview",
       "veo-3.1-lite-generate-preview",
     ],
-    isConfigured: isGoogleProviderConfigured,
+    isConfiguredAsync: isGoogleProviderConfiguredAsync,
     capabilities: {
       generate: {
         maxVideos: 1,

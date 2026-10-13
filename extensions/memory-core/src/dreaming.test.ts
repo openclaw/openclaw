@@ -21,13 +21,13 @@ import { registerShortTermPromotionDreaming } from "./dreaming.js";
 import { recordShortTermRecalls } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness, shortTermTestState } from "./test-helpers.js";
 
-// `runDreamingSweepPhases` is the only binding the dreaming trigger imports from this module.
 const runDreamingSweepPhasesMock = vi.hoisted(() =>
   vi.fn<typeof import("./dreaming-phases.js").runDreamingSweepPhases>(async () => ({
-    degradedPhases: 0,
-    pendingNarratives: 0,
+    narratives: [],
+    failed: false,
   })),
 );
+// mock-isolation: Scheduler tests isolate phase preparation; the real sweep has separate coverage.
 vi.mock("./dreaming-phases.js", () => ({
   runDreamingSweepPhases: runDreamingSweepPhasesMock,
 }));
@@ -265,7 +265,13 @@ function getBeforeAgentReplyHandler(onMock: ReturnType<typeof vi.fn>) {
   );
   return call[1] as (
     event: { cleanedBody: string },
-    ctx: { agentId?: string; trigger?: string; workspaceDir?: string; sessionKey?: string },
+    ctx: {
+      agentId?: string;
+      trigger?: string;
+      workspaceDir?: string;
+      sessionKey?: string;
+      heartbeatEventQueueSessionKey?: string;
+    },
   ) => Promise<unknown>;
 }
 
@@ -580,7 +586,7 @@ describe("dreaming service reconciliation", () => {
 
   it("only triggers managed dreaming when the queued cron event is still pending", async () => {
     const { api, harness } = createDreamingTestContext({
-      config: createDreamingConfig({ enabled: false }),
+      config: createDreamingConfig({ enabled: true, phases: { deep: { limit: 0 } } }),
     });
 
     registerShortTermPromotionDreamingForTest(api);
@@ -603,7 +609,7 @@ describe("dreaming service reconciliation", () => {
 
     expect(first).toEqual({
       handled: true,
-      reason: "memory-core: short-term dreaming disabled",
+      reason: "memory-core: short-term dreaming disabled by limit",
     });
 
     resetSystemEventsForTest();
@@ -618,7 +624,7 @@ describe("dreaming service reconciliation", () => {
 
   it("resolves queued managed dreaming cron events from the base session for isolated heartbeats", async () => {
     const { api, harness } = createDreamingTestContext({
-      config: createDreamingConfig({ enabled: false }),
+      config: createDreamingConfig({ enabled: true, phases: { deep: { limit: 0 } } }),
     });
 
     registerShortTermPromotionDreamingForTest(api);
@@ -635,12 +641,17 @@ describe("dreaming service reconciliation", () => {
     const beforeAgentReply = getBeforeAgentReplyHandler(api.on);
     const result = await beforeAgentReply(
       { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
-      { trigger: "heartbeat", workspaceDir: ".", sessionKey: "agent:main:main:heartbeat" },
+      {
+        trigger: "heartbeat",
+        workspaceDir: ".",
+        sessionKey: "agent:main:main:heartbeat",
+        heartbeatEventQueueSessionKey: "agent:main:main",
+      },
     );
 
     expect(result).toEqual({
       handled: true,
-      reason: "memory-core: short-term dreaming disabled",
+      reason: "memory-core: short-term dreaming disabled by limit",
     });
   });
 
@@ -830,7 +841,7 @@ describe("dreaming service reconciliation", () => {
 
   // Regression: the sweep dropped the agent id entirely, so narrative subagent sessions used
   // unscoped keys that no per-agent SQLite store could resolve and every phase failed.
-  it("sweeps each workspace as its owning agent with the configured narrative budget", async () => {
+  it("sweeps each workspace as its owning agent rather than the roster default", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-owner-");
     runDreamingSweepPhasesMock.mockClear();
     const { api, harness } = createDreamingTestContext({
@@ -840,11 +851,9 @@ describe("dreaming service reconciliation", () => {
           limit: 5,
           phases: { light: { enabled: false }, rem: { enabled: false } },
         },
-        { agents: { defaults: { workspace: workspaceDir, timeoutSeconds: 180 } } },
+        { agents: { defaults: { workspace: workspaceDir } } },
       ),
     });
-    const resolveTimeout = vi.mocked(api.runtime.agent.resolveAgentTimeoutMs);
-    resolveTimeout.mockReturnValue(180_000);
 
     registerShortTermPromotionDreamingForTest(api);
     await triggerDreamingServiceStart(api, {
@@ -870,39 +879,6 @@ describe("dreaming service reconciliation", () => {
     )[0];
     expect(sweepArgs.agentId).toBe("researcher");
     expect(sweepArgs.workspaceDir).toBe(workspaceDir);
-    expect(sweepArgs.narrativeTimeoutMs).toBe(180_000);
-    expect(resolveTimeout).toHaveBeenCalledWith({ cfg: api.config });
-  });
-
-  it("reports a degraded sweep when narrative cleanup fails", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-cleanup-degraded-");
-    runDreamingSweepPhasesMock.mockResolvedValueOnce({
-      degradedPhases: 1,
-      pendingNarratives: 0,
-    });
-    const { api, harness, logger } = createDreamingTestContext({
-      config: createDreamingConfig(
-        {
-          enabled: true,
-          limit: 1,
-          phases: { light: { enabled: false }, rem: { enabled: false } },
-        },
-        { agents: { defaults: { workspace: workspaceDir } } },
-      ),
-    });
-
-    registerShortTermPromotionDreamingForTest(api);
-    await triggerDreamingServiceStart(api, { config: api.config, getCron: () => harness.cron });
-    const result = await getBeforeAgentReplyHandler(api.on)(
-      { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
-      { trigger: "cron", agentId: "main", workspaceDir },
-    );
-
-    expect(result).toEqual({
-      handled: true,
-      reason: "memory-core: short-term dreaming degraded",
-    });
-    expectLogContains(logger.warn, "failed=0, degraded=1, narrativesPending=0");
   });
 
   it.each([{ label: "mixed outcomes", rejected: 1, promoted: 1 }])(

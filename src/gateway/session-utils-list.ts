@@ -36,7 +36,10 @@ import {
 } from "./session-list-order.js";
 import { bindSessionListRowRead } from "./session-list-read-result.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
-import { prepareSessionRowPublication } from "./session-row-presentation.js";
+import {
+  prepareSessionRowPublication,
+  shareSidebarSessionRows,
+} from "./session-row-presentation.js";
 import {
   identity as rowIdentity,
   selectionRow,
@@ -161,7 +164,7 @@ function buildSessionsListResult(
         }
       : {}),
     defaults: policy ? policy.defaults(defaults) : defaults,
-    sessions,
+    ...(opts.rowMode === "sidebar" ? shareSidebarSessionRows(sessions) : { sessions }),
   };
 }
 
@@ -299,6 +302,7 @@ export function prepareSessionRowSelection(
     metadataPrepared?: boolean;
     ordered?: boolean;
     candidateSessionIdsOrKeys?: ReadonlySet<string>;
+    candidateKeys?: ReadonlySet<string>;
   },
 ) {
   const { cfg, modelCatalog, scope, rowContext: residentContext } = projection.state;
@@ -308,7 +312,10 @@ export function prepareSessionRowSelection(
     ...residentContext,
     subagentRuns: residentContext.subagentRuns.atTime(now),
   };
-  const keyed = prepared?.key !== undefined || prepared?.sessionIdOrKey !== undefined;
+  const keyed =
+    prepared?.key !== undefined ||
+    prepared?.sessionIdOrKey !== undefined ||
+    prepared?.candidateKeys !== undefined;
   // Person references resolve against the full visible roster before child filtering.
   const parentSessionKey = !keyed && !opts.involvingProfileId ? opts.spawnedBy : undefined;
   const broad = !keyed && !parentSessionKey;
@@ -335,15 +342,18 @@ export function prepareSessionRowSelection(
   let selection = retained ? scopes.get(selectedScope)?.get(activeOnly) : undefined;
   if (!selection) {
     selection = createSessionRowSelection(cfg, selectedScope, activeOnly);
-    for (const row of projection.selectEntries(
-      {
-        agentId: selectedScope.agentId,
-        key: prepared?.key,
-        sessionIdOrKey: prepared?.sessionIdOrKey,
-        parentSessionKey,
-        sortBy: null,
-      },
-      prepared?.metadataPrepared === true,
+    const queries = prepared?.candidateKeys
+      ? [...prepared.candidateKeys].map((key) => ({ key }))
+      : [{ key: prepared?.key, sessionIdOrKey: prepared?.sessionIdOrKey, parentSessionKey }];
+    for (const row of queries.flatMap((query) =>
+      projection.selectEntries(
+        {
+          agentId: selectedScope.agentId,
+          ...query,
+          sortBy: null,
+        },
+        prepared?.metadataPrepared === true,
+      ),
     )) {
       selection.add(selectionRow(row)!);
     }

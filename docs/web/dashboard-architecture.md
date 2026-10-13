@@ -30,7 +30,7 @@ Principles:
 - **Agent parity.** Everything the user can do on a board, the agent can do
   with tools: add/update/remove widgets, arrange them, manage tabs, switch the
   visible tab, and request split or expanded presentation.
-- **Native shell.** The board is Lit components in the Control UI shell
+- **Native shell.** The board uses Solid components in the Control UI shell
   (the same design system as the rest of the app). Data reports render directly.
   Custom executable widgets use sandboxed iframes; Browser dashboards reuse the
   Browser panel and its navigation controls.
@@ -54,6 +54,13 @@ Principles:
 | Pin (session)       | Root sessions and ordinary Home-linked dashboard sessions can be pinned; spawned, subagent, and nested-child sessions reject pin requests. Subagent runs appear in session transcripts, outside sidebar navigation. Opening a pinned session restores that browser's saved task layout. |
 
 ## UX flows
+
+The dashboard gallery requests `sessions.list` with `rowMode: "dashboard"`.
+Rows retain card display, navigation, and membership facts; model, usage,
+permission, and participant details remain available through `sessions.describe`.
+The gallery uses the shared session-event reconciler and paced fallback refresh.
+Omitted fields never clear richer session facts already held by another view.
+Other session lists retain their existing compact or full projections.
 
 - **Graduation:** agent calls `show_widget` from an inline-capable chat → widget
   renders in the transcript → hover shows **Pin to dashboard** → widget appears
@@ -414,14 +421,18 @@ Authenticated reads never use preview authentication or anonymous retry.
 Redirects are refused. Only this Actions read permits an upstream body up to
 1 MiB. Other GitHub JSON callers retain their 256 KiB default. The owner validates
 and projects at most 30 runs into a small response, without raw repository
-objects or secrets. A Gateway-local cache holds at most 32 successful results
-for 30 seconds. At most 32 concurrent callers can prepare or await reads.
+objects or secrets. A Gateway-local cache holds at most 32 successful results.
+For 30 seconds, reads reuse the result. Expired results return with `stale: true`
+while a single background refresh runs under the Gateway's execution owner.
+The first read still awaits GitHub. At most 32 concurrent callers can prepare
+or await reads, and at most 32 transports can remain in flight.
 The shared transport caches only validated projections under its captured
 credential scope. This internal cache write is not delivery to a widget.
 Every caller, including the initiator, followers, and cache hits, revalidates its
 own live authority before delivery. Removing one caller does not invalidate
-another authorized caller's result, and failed transport reads are not cached
-as success. See the
+another authorized caller's result. Failed refreshes log sanitized guidance and
+evict the old result; the next read retries through the normal error boundary.
+Failed transport reads are not cached as success. See the
 [authoring contract and example](/tools/show-widget#read-github-actions-runs).
 
 ### Modeled residual: WebRTC data channels

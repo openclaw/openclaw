@@ -7,6 +7,7 @@ import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import {
@@ -16,8 +17,10 @@ import {
 import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
 import { retainQueuedAgentRunContext } from "../infra/agent-run-registry.js";
 import { enqueueCommandInLane, isCommandLaneTaskMarkerCurrent } from "../process/command-queue.js";
+import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveAdmittedRunActiveAssertion } from "./admitted-run-context.js";
+import { resolveSessionAgentIds } from "./agent-scope.js";
 import { resolveSessionLane } from "./embedded-agent-runner/lanes.js";
 import type { RunEmbeddedAgentInternalParams } from "./embedded-agent-runner/run/internal-params.js";
 import { resolveEmbeddedRunSessionLanePolicy } from "./embedded-agent-runner/run/lane-runtime.js";
@@ -58,7 +61,7 @@ export type PreparedSessionPlacementSandbox = Disposable & {
 
 export type SessionPlacementAdmissionProvider = {
   withRequiredSession?: RequiredSessionPlacementAdmission;
-  usesWorkerInference?: (identity: Omit<LocalTurnPlacementClaim, "runId">) => boolean;
+  usesWorkerInference?: (identity: Omit<LocalTurnPlacementClaim, "runId">) => Promise<boolean>;
   resolveRuntimeOverride?: (
     identity: Omit<LocalTurnPlacementClaim, "runId">,
   ) => Promise<string | undefined>;
@@ -193,10 +196,10 @@ export async function withRequiredSessionPlacement<T>(
   );
 }
 
-export function sessionPlacementUsesWorkerInference(
+export async function sessionPlacementUsesWorkerInference(
   identity: Omit<LocalTurnPlacementClaim, "runId">,
-): boolean {
-  return state.provider?.usesWorkerInference?.(identity) === true;
+): Promise<boolean> {
+  return (await state.provider?.usesWorkerInference?.(identity)) === true;
 }
 
 /** Captures the exact placement owner, including standalone absence, before awaited work. */
@@ -222,10 +225,47 @@ function withPlacementTurnCallerScope<T>(
     params.preparedRunAdmission?.operationalRunInstance;
   return instance && getGatewayToolCallerIdentity()?.operationalRunInstance === instance
     ? task()
-    : withoutGatewayToolCallerIdentity(task);
+    : withoutGatewayToolCallerIdentity(() => runWithoutOwnedSessionTranscriptWrites(task));
 }
 
 export async function withSessionPlacementTurnAdmission(
+  claim: LocalTurnPlacementClaim,
+  params: SessionPlacementTurnParams,
+  task: (signal: AbortSignal) => Promise<EmbeddedAgentRunResult>,
+  onAdmitted?: () => void,
+): Promise<EmbeddedAgentRunResult> {
+  const { sessionAgentId } = resolveSessionAgentIds({
+    config: params.config ?? getRuntimeConfig(),
+    sessionKey: claim.sessionKey,
+    agentId: claim.agentId,
+  });
+  const interrupted = new AbortController();
+  const signal = params.abortSignal
+    ? AbortSignal.any([params.abortSignal, interrupted.signal])
+    : interrupted.signal;
+  const admission = await beginSessionWorkAdmission({
+    agentId: sessionAgentId,
+    scope: `agent:${sessionAgentId}`,
+    identities: [claim.sessionKey, claim.sessionId, claim.runId],
+    signal,
+    assertAllowed: () => signal.throwIfAborted(),
+    onInterrupt: (reason) => interrupted.abort(reason),
+  });
+  try {
+    return await admission.run(() =>
+      executeAdmittedSessionPlacementTurn(
+        claim,
+        { ...params, abortSignal: signal },
+        () => task(signal),
+        onAdmitted,
+      ),
+    );
+  } finally {
+    admission.release();
+  }
+}
+
+async function executeAdmittedSessionPlacementTurn(
   claim: LocalTurnPlacementClaim,
   params: SessionPlacementTurnParams,
   task: () => Promise<EmbeddedAgentRunResult>,
@@ -400,6 +440,7 @@ export async function withLocalSessionPlacementTurnSettlement(
         return result;
       },
       {
+        abortSignal: options.abortSignal,
         sessionTarget: claim,
         priority: resolveEmbeddedRunSessionLanePolicy(options.trigger, options.inputProvenance)
           .priority,

@@ -40,11 +40,7 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import { renderChatPermissionPicker } from "./components/chat-permission-picker.ts";
-import {
-  getChatModelObservedRunId,
-  getChatSessionProjection,
-  setChatRunOwner,
-} from "./history-merge.ts";
+import { getChatSessionProjection, setChatRunOwner } from "./history-merge.ts";
 import { adoptStartedChatRun, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
 type ComposerControlsParams = Parameters<typeof renderChatPaneComposerControls>[0];
@@ -556,7 +552,7 @@ describe("chat pane composer controls", () => {
 });
 
 describe("chat pane model controls", () => {
-  it("binds model events to the admitted run when session rows omit exact run IDs", async () => {
+  it("keeps the preference visible while admitted events update execution metadata", async () => {
     const row: GatewaySessionRow = {
       key: "agent:main:current",
       kind: "direct",
@@ -660,18 +656,22 @@ describe("chat pane model controls", () => {
           session: { ...row, key: sessionKey, updatedAt, activeModel: model },
         },
       });
+    const expectFallbackExecution = () => {
+      expect(draw()).toContain("Primary");
+      expect(state.sessionsResult?.sessions[0]?.activeModel).toBe("fallback");
+    };
     observe("current-run", "primary", 3);
     expect(draw()).toContain("Primary");
     observe("current-run", "fallback", 4);
-    expect(draw()).toContain("Fallback");
+    expectFallbackExecution();
     observe("previous-run", "primary", 1);
-    expect(draw()).toContain("Fallback");
+    expectFallbackExecution();
     observe("elsewhere-run", "primary", 5, "agent:main:elsewhere");
-    expect(draw()).toContain("Fallback");
+    expectFallbackExecution();
     observe("current-run", null, 6);
     expect(draw()).toContain("Primary");
     observe("current-run", "fallback", 7);
-    expect(draw()).toContain("Fallback");
+    expectFallbackExecution();
     adoptStartedChatRun(state, "replacement-run", 8);
     expect(draw()).toContain("Primary");
     observe("replacement-run", "primary", 9);
@@ -692,7 +692,7 @@ describe("chat pane model controls", () => {
     expect(draw()).toContain("Primary");
     adoptStartedChatRun(state, "next-run", 11);
     state.chatSending = false;
-    expect(draw()).toContain("Fallback");
+    expectFallbackExecution();
     observe("next-run", "primary", 12);
     expect(draw()).toContain("Primary");
     vi.stubGlobal("sessionStorage", window.sessionStorage);
@@ -733,9 +733,9 @@ describe("chat pane model controls", () => {
     await steering;
     await vi.waitFor(() => expect(state.chatSending).toBe(false));
     expect(state.chatRunId).toBe("next-run");
-    expect(draw()).toContain("Fallback");
-    reconcileChatRunLifecycle(state, { clearLocalRun: true, clearChatStream: true });
-    expect(getChatModelObservedRunId(state, state.sessionsResult?.sessions[0])).toBeUndefined();
+    expectFallbackExecution();
+    reconcileChatRunLifecycle(state, { clearLocalRun: true });
+    expect(state.chatRunId).toBeNull();
   });
 
   it("does not show another session's pending model after switching sessions", () => {
