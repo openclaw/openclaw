@@ -1,9 +1,12 @@
+import { resolveSubagentLabel } from "../../../auto-reply/reply/subagents-utils.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import {
   execRequestMatches,
   type ExecRequestIdentity,
   type ExecRequestOwner,
 } from "../../../infra/exec-request-context.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership.js";
 import {
   isSubagentSessionKey,
@@ -48,7 +51,6 @@ import {
   getSubagentSessionListRunsSnapshotForRead,
   withSubagentRunReadSnapshot,
 } from "./subagent-registry-state.js";
-import { cancelSubagentRequesterSettleWake } from "./subagent-registry.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isRequesterSettleWakeForRun } from "./subagent-requester-settle-identity.js";
 import {
@@ -79,6 +81,7 @@ export async function prepareSessionSubagentKillSelection(params: {
       ...listRunsForControllerFromRuns(subagentRuns, params.sessionKey, params.agentId),
     ].map((entry) => [entry.runId, entry]),
   );
+  const preparationErrors: string[] = [];
   for (const entry of runs.values()) {
     if (
       entry.execution.status !== "terminal" ||
@@ -102,8 +105,16 @@ export async function prepareSessionSubagentKillSelection(params: {
         throw new Error("Subagent completion changed during session cleanup; retry.");
       }
     };
-    assertCurrent();
-    await cancelSubagentRequesterSettleWake(entry, assertCurrent);
+    try {
+      const { cancelSubagentRequesterSettleWake } = await import("./subagent-registry.js");
+      assertCurrent();
+      await cancelSubagentRequesterSettleWake(entry, assertCurrent);
+    } catch (error) {
+      if (hasSqliteWorkerOutcomeUnknown(error)) {
+        throw error;
+      }
+      preparationErrors.push(`${resolveSubagentLabel(entry)}: ${formatErrorMessage(error)}`);
+    }
     runs.delete(entry.runId);
   }
   return {
@@ -114,6 +125,7 @@ export async function prepareSessionSubagentKillSelection(params: {
     // lifecycle boundary can retire work whose completion belongs to this session.
     ownsRoot,
     suppressTaskDelivery: true,
+    preparationErrors,
   };
 }
 

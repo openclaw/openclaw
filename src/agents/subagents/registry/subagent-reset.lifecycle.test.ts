@@ -78,7 +78,7 @@ it.each([false, true])(
         status: "terminal",
         endedAt: 1_000,
         outcome: { status: "error", error: "original session incarnation changed" },
-        suppressSessionEffects: suppressed,
+        suppressSessionEffects: suppressed ? true : undefined,
       };
       entry.completion = { required: false, capturedAt: 1_000, resultText: "stopped" };
       entry.requesterSettleWake = { status: "pending", attemptCount: 0 };

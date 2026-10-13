@@ -548,6 +548,7 @@ export async function killSessionSubagentRuns(params: {
 
 async function killSelectedSubagentRuns(
   params: KillSelection & {
+    preparationErrors?: string[];
     suppressTaskDelivery?: boolean;
     beforeKill?: (sealRootSelection: () => void) => boolean | Promise<boolean>;
   },
@@ -568,6 +569,8 @@ async function killSelectedSubagentRuns(
     });
     return { ...stopped, ...collectKillErrors(acceptedTrees) };
   });
+  result.errors.unshift(...(params.preparationErrors ?? []));
+  result.failed += params.preparationErrors?.length ?? 0;
   if (result.errors.length > 0) {
     return {
       status: "error" as const,
