@@ -151,7 +151,7 @@ enum PermissionManager {
         guard !Task.isCancelled, isCurrent() else { return false }
         if interactive, !granted {
             if self.screenRecordingState.requestAttempted {
-                SystemSettingsURLSupport.openPrivacySettings(for: .screenRecording)
+                SystemSettingsURLSupport.openFirst(SystemSettingsURLSupport.settingsCandidates(for: .screenRecording))
             } else {
                 self.screenRecordingState.requestAttempted = true
                 self.screenRecordingPermissions.requestScreenRecordingPermission()

@@ -250,9 +250,13 @@ it("shows grant failures and never claims success", async () => {
   expect(f.view.queryByRole("button", { name: "Try again" })).toBeNull();
 });
 
-it.each(["denied", "restart-required", "granted"] as const)(
-  "refreshes the card to %s even when the native grant request rejects",
-  async (outcome) => {
+it.each(
+  (["denied", "restart-required", "granted"] as const).flatMap((outcome) =>
+    [false, true].map((reject) => ({ outcome, reject })),
+  ),
+)(
+  "refreshes the card to $outcome after a native grant attempt (reject=$reject)",
+  async ({ outcome, reject }) => {
     const f = await fixture("not-determined");
     f.post.mockImplementation(async (message) => {
       if (message.type === "resolve-permission") {
@@ -261,7 +265,10 @@ it.each(["denied", "restart-required", "granted"] as const)(
             ? { id: "screenRecording", status: "granted" }
             : { id: "screenRecording", status: "denied", state: outcome },
         ];
-        throw new Error("Native grant request ended");
+        if (reject) {
+          throw new Error("Native grant request ended");
+        }
+        return null;
       }
       f.publish();
       return f.snapshot;
@@ -273,9 +280,7 @@ it.each(["denied", "restart-required", "granted"] as const)(
       } else if (outcome === "restart-required") {
         expect(f.view.getByRole("button", { name: "Relaunch OpenClaw" })).toBeTruthy();
       } else {
-        expect(
-          f.view.getByText("Choose Grant to open System Settings and allow access for OpenClaw."),
-        ).toBeTruthy();
+        expect(f.view.getByRole("button", { name: "Open System Settings" })).toBeTruthy();
       }
     });
   },

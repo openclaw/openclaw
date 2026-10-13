@@ -3,7 +3,7 @@ import Testing
 @testable import OpenClaw
 
 struct ScreenRecordingPermissionStateTests {
-    @Test func deniedRequestOffersSettingsInsteadOfAnotherPrompt() {
+    @Test func `denied request offers settings instead of another prompt`() {
         var state = ScreenRecordingPermissionState()
         #expect(state.missingState(granted: false) == .notDetermined)
         state.requestAttempted = true
