@@ -64,11 +64,8 @@ import {
   summarizeChangedPaths,
 } from "../control-plane-audit.js";
 import { resolveBaseHashParam } from "./base-hash.js";
-import {
-  diffConfigLeafPaths,
-  hasHashlessPatchLwwStructure,
-  isHashlessPatchLwwPath,
-} from "./config-patch-intent.js";
+import { hasHashlessPatchLwwStructure, isHashlessPatchLwwPath } from "./config-patch-intent.js";
+import { mergeGatewayConfigPatch, prepareGatewayConfigPatchValues } from "./config-patch-values.js";
 import {
   summarizeConfigValidationIssues,
   validateSubmittedConfigOrRespond,
@@ -912,19 +909,14 @@ export const configHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)));
       return;
     }
-    // Merge authored rows first; merging runtime rows would persist catalog defaults
-    // from untouched siblings whenever an ID-keyed array changes.
-    const sourceConfig = normalizeSubmittedConfigModelRefs(
-      snapshot.sourceConfig,
-      modelIdNormalizationPolicies,
-    );
-    const mergedSource = applyMergePatch(sourceConfig, normalizedPatch, {
-      // Arrays with stable ids behave like maps for partial control-plane edits.
-      mergeObjectArraysById: true,
-      replaceArrayPaths: replacePaths,
-    });
     const schemaPatch = loadGatewayRuntimeConfigSchema();
-    const restoredMerge = restoreRedactedValues(mergedSource, snapshot.config, schemaPatch.uiHints);
+    const restoredMerge = mergeGatewayConfigPatch({
+      snapshot,
+      patch: normalizedPatch,
+      replacePaths,
+      uiHints: schemaPatch.uiHints,
+      modelIdNormalizationPolicies,
+    });
     if (!restoredMerge.ok) {
       respond(
         false,
@@ -941,7 +933,7 @@ export const configHandlers: GatewayRequestHandlers = {
         currentConfig: snapshot.config,
         mergedConfig: applyMergePatch(
           snapshot.config,
-          createMergePatch(sourceConfig, restoredMerge.result),
+          createMergePatch(restoredMerge.sourceConfig, restoredMerge.result),
         ),
         patch: normalizedPatch,
         replacePaths,
@@ -950,8 +942,12 @@ export const configHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    // Patch presence is authored intent even when its value equals a runtime default.
-    const restoredChangedPaths = diffConfigLeafPaths(sourceConfig, restoredMerge.result);
+    const preparedPatch = prepareGatewayConfigPatchValues({
+      snapshot,
+      writeOptions,
+      patch: restoredMerge,
+    });
+    const restoredChangedPaths = preparedPatch.changedPaths;
     if (hashlessPatch && !restoredChangedPaths.every(isHashlessPatchLwwPath)) {
       const guardedPaths = restoredChangedPaths.filter((path) => !isHashlessPatchLwwPath(path));
       respond(
@@ -985,14 +981,14 @@ export const configHandlers: GatewayRequestHandlers = {
       return;
     }
     const validatedSubmission = validateSubmittedConfigOrRespond({
-      candidate: restoredMerge.result,
+      candidate: preparedPatch.validationCandidate,
       pluginMetadataSnapshot: writeOptions.basePluginMetadataSnapshot,
       respond,
     });
     if (!validatedSubmission) {
       return;
     }
-    const writeConfig = validatedSubmission.validationCandidate;
+    const writeConfig = preparedPatch.authoredConfig ?? validatedSubmission.validationCandidate;
     const validatedConfig = validatedSubmission.config;
     const preparedSecretsSnapshot = await ensureResolvableSecretRefsOrRespond({
       config: validatedConfig,
@@ -1004,7 +1000,7 @@ export const configHandlers: GatewayRequestHandlers = {
     await commitConfigRestartWrite({
       requestParams: params,
       mode: "config.patch",
-      writeSnapshot,
+      writeSnapshot: { snapshot, writeOptions: preparedPatch.writeOptions },
       writeConfig,
       nextConfig: validatedConfig,
       actor,

@@ -9,6 +9,9 @@ type MergePatchOptions = {
   mergeObjectArraysById?: boolean;
   replaceArrayPaths?: ReadonlySet<string>;
   path?: string;
+  /** Observe supplied values at their destination, including ID-merged array indices. */
+  onSetValue?: (value: unknown, path: readonly string[]) => void;
+  valuePath?: readonly string[];
 };
 
 /** Builds a merge patch; ID-keyed array mode emits changed fields for upserts. */
@@ -143,12 +146,14 @@ function mergeObjectArraysById(
 
   for (const patchEntry of patch) {
     if (!isObjectWithStringId(patchEntry)) {
+      options.onSetValue?.(patchEntry, [...(options.valuePath ?? []), String(merged.length)]);
       merged.push(structuredClone(patchEntry));
       continue;
     }
 
     const existingIndex = indexById.get(patchEntry.id);
     if (existingIndex === undefined) {
+      options.onSetValue?.(patchEntry, [...(options.valuePath ?? []), String(merged.length)]);
       merged.push(structuredClone(patchEntry));
       indexById.set(patchEntry.id, merged.length - 1);
       continue;
@@ -157,6 +162,9 @@ function mergeObjectArraysById(
     merged[existingIndex] = applyMergePatch(merged[existingIndex], patchEntry, {
       ...options,
       path: `${arrayPath}[]`,
+      valuePath: options.onSetValue
+        ? [...(options.valuePath ?? []), String(existingIndex)]
+        : undefined,
     });
   }
 
@@ -176,6 +184,7 @@ export function applyMergePatch(
   options: MergePatchOptions = {},
 ): unknown {
   if (!isPlainObject(patch)) {
+    options.onSetValue?.(patch, options.valuePath ?? []);
     return patch;
   }
 
@@ -190,13 +199,20 @@ export function applyMergePatch(
       delete result[key];
       continue;
     }
+    const valuePath = options.onSetValue ? [...(options.valuePath ?? []), key] : undefined;
     if (options.mergeObjectArraysById && Array.isArray(result[key]) && Array.isArray(value)) {
       if (options.replaceArrayPaths?.has(path)) {
+        options.onSetValue?.(value, valuePath ?? []);
         result[key] = value;
         continue;
       }
       // Config arrays like agents/plugins can patch by id; non-id arrays keep RFC replacement.
-      const mergedArray = mergeObjectArraysById(result[key] as unknown[], value, options, path);
+      const mergedArray = mergeObjectArraysById(
+        result[key] as unknown[],
+        value,
+        { ...options, valuePath },
+        path,
+      );
       if (mergedArray) {
         result[key] = mergedArray;
         continue;
@@ -206,9 +222,11 @@ export function applyMergePatch(
       result[key] = applyMergePatch(result[key], value, {
         ...options,
         path,
+        valuePath,
       });
       continue;
     }
+    options.onSetValue?.(value, valuePath ?? []);
     result[key] = value;
   }
 

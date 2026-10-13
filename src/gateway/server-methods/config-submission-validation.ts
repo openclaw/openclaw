@@ -2,6 +2,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { normalizeSubmittedConfigModelRefs } from "../../config/model-input-normalization.js";
+import { copyConfigResolutionFactsThroughRewrite } from "../../config/resolution-facts.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   validateConfigObjectRawWithPlugins,
@@ -40,6 +41,8 @@ export function validateSubmittedConfigOrRespond(params: {
     normalizationCandidate,
     params.pluginMetadataSnapshot?.owners.modelIdNormalizationPolicies,
   );
+  // Model normalization must not turn already-decoded literals back into references.
+  copyConfigResolutionFactsThroughRewrite(params.candidate, validationCandidate);
   const respondInvalid = (issues: ReadonlyArray<ConfigValidationIssue>) => {
     params.respond(
       false,
