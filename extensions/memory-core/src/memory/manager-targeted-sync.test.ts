@@ -13,6 +13,7 @@ function createTargetedSyncOwner(sessionsDirtyFiles: Set<string>) {
     endSyncProviderGeneration: vi.fn(),
     syncArchiveFiles: vi.fn(async () => {}),
     activateFallbackProvider: vi.fn(async (_reason: string) => false),
+    requestSessionIndexRetry: vi.fn(),
   };
 }
 
@@ -64,6 +65,7 @@ describe("memory targeted session sync", () => {
     });
     expect(result).toBe(true);
     expect(owner.sessionsDirty).toBe(true);
+    expect(owner.requestSessionIndexRetry).toHaveBeenCalledWith(true);
     expect(owner.syncOutcomes.recordActiveFailure).toHaveBeenCalledWith(
       expect.objectContaining({ message: "embedding backend failed" }),
     );

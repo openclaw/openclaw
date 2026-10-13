@@ -447,21 +447,21 @@ async function migrateSource(
         }
         const parsed = readStoredCodexAppServerBinding(current);
         if (!parsed) {
-          return `canonical plugin state is invalid at ${key}`;
+          return `current plugin state is invalid at ${key}`;
         }
         const normalized = normalizeStoredCodexAppServerBindingFingerprints(parsed);
         if (!normalized) {
-          return `canonical plugin state is invalid at ${key}`;
+          return `current plugin state is invalid at ${key}`;
         }
         if (isDeepStrictEqual(parsed, normalized)) {
           return parsed;
         }
         if (parsed.lease && parsed.lease.expiresAt > Date.now()) {
-          return `canonical plugin state is leased at ${key}`;
+          return `current plugin state is leased at ${key}`;
         }
         const { observe, compareAndApply } = store;
         if (!observe || !compareAndApply) {
-          return `canonical plugin state could not be normalized at ${key}`;
+          return `current plugin state could not be normalized at ${key}`;
         }
         const observation = await observe(key);
         const candidateParsed = readStoredCodexAppServerBinding(observation.value);
@@ -475,7 +475,7 @@ async function migrateSource(
         // Offline migration is best effort: a conflicting writer leaves the sidecar for the next run.
         const persisted = readStoredCodexAppServerBinding(await store.lookup(key));
         if (!persisted || !isDeepStrictEqual(persisted, normalized)) {
-          return `canonical plugin state changed at ${key}`;
+          return `current plugin state changed at ${key}`;
         }
         importedKeys++;
         return normalized;
@@ -521,7 +521,7 @@ async function migrateSource(
           return retain(current);
         }
         if (current && !hasExpected(current, entry.value)) {
-          return retain(`canonical plugin state changed at ${entry.key}`);
+          return retain(`current plugin state changed at ${entry.key}`);
         }
       }
       for (const entry of entries) {
@@ -529,7 +529,7 @@ async function migrateSource(
           importedKeys++;
         }
         if (!hasExpected(await store.lookup(entry.key), entry.value)) {
-          return retain(`canonical plugin state changed at ${entry.key}`);
+          return retain(`current plugin state changed at ${entry.key}`);
         }
       }
       if (owner) {
@@ -541,7 +541,7 @@ async function migrateSource(
           typeof ownershipResult === "string"
             ? ownershipResult
             : ownershipResult
-              ? "its canonical session was deleted"
+              ? "its saved session was deleted"
               : undefined;
         if (ownershipWarning) {
           if (sessionEntry?.value.state === "active") {
@@ -579,7 +579,7 @@ async function migrateSource(
         } else {
           for (const entry of entries) {
             if (!hasExpected(await store.lookup(entry.key), entry.value)) {
-              return retain(`canonical plugin state changed at ${entry.key}`);
+              return retain(`current plugin state changed at ${entry.key}`);
             }
           }
         }
@@ -620,7 +620,7 @@ async function recordSessionOwner(
 ): Promise<string | { deleted: true } | undefined> {
   const { prepareSessionEntryPatch } = await import("openclaw/plugin-sdk/session-store-runtime");
   // Legacy indexes are offline inputs; only the canonical session can change ownership now.
-  let observedForeignHarness: string | undefined;
+  let ownershipRefusal: string | undefined;
   let observedCanonicalEntry = false;
   const updated = await prepareSessionEntryPatch({
     agentId: owner.agentId,
@@ -645,21 +645,24 @@ async function recordSessionOwner(
         entry.sessionId.trim() !== owner.sessionId ||
         entry.lifecycleRevision !== owner.lifecycleRevision
       ) {
+        ownershipRefusal = "its session owner changed before Codex ownership could be recorded";
         return null;
       }
       const harnessId =
         typeof entry.agentHarnessId === "string" ? entry.agentHarnessId.trim() : undefined;
       if (entry.agentHarnessId !== undefined && !harnessId) {
+        ownershipRefusal = "Codex harness ownership could not be recorded on its session";
         return null;
       }
       if (harnessId && harnessId !== CODEX_AGENT_HARNESS_ID) {
-        observedForeignHarness = harnessId;
+        ownershipRefusal = `its session is owned by agent harness ${harnessId}`;
         return null;
       }
       return { agentHarnessId: CODEX_AGENT_HARNESS_ID };
     },
   });
-  if (!updated) {
+  // A declined patch can return the unchanged row, not only null.
+  if (!updated || ownershipRefusal) {
     if (!options.canCreateOwner && !observedCanonicalEntry && options.readEvidence) {
       const current = (
         await options.readEvidence([{ agentId: owner.agentId, sessionId: owner.sessionId }])
@@ -668,22 +671,9 @@ async function recordSessionOwner(
         return { deleted: true };
       }
     }
-    return observedForeignHarness
-      ? `its session is owned by agent harness ${observedForeignHarness}`
-      : "its session owner changed before Codex ownership could be recorded";
+    return ownershipRefusal ?? "its session owner changed before Codex ownership could be recorded";
   }
-  if (
-    updated.sessionId.trim() !== owner.sessionId ||
-    updated.lifecycleRevision !== owner.lifecycleRevision
-  ) {
-    return "its session owner changed before Codex ownership could be recorded";
-  }
-  const harnessId = updated.agentHarnessId?.trim();
-  return harnessId === CODEX_AGENT_HARNESS_ID
-    ? undefined
-    : harnessId
-      ? `its session is owned by agent harness ${harnessId}`
-      : "Codex harness ownership could not be recorded on its session";
+  return undefined;
 }
 
 async function readDirectoryEntries(directory: string) {

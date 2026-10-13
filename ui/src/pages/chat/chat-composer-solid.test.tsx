@@ -12,7 +12,7 @@ import {
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
 import { solidTemplate } from "./components/chat-composer-controls.ts";
-import { renderComposerDictationSendAction } from "./components/chat-composer-controls.tsx";
+import { ComposerDictationSendAction } from "./components/chat-composer-controls.tsx";
 import { LitContent } from "./components/chat-composer-interop.tsx";
 import { renderChatComposer } from "./components/chat-composer.tsx";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
@@ -286,9 +286,21 @@ it("keeps a pending dictation send bound to the action that started it", async (
   const view = mountSolid(() => <section />);
   const outlet = view.container.querySelector("section")!;
   try {
-    render(renderComposerDictationSendAction(controller, firstSend), outlet);
+    render(
+      solidTemplate(ComposerDictationSendAction, {
+        readDictation: () => controller,
+        onSend: firstSend,
+      }),
+      outlet,
+    );
     outlet.querySelector<HTMLButtonElement>("button")!.click();
-    render(renderComposerDictationSendAction(controller, laterSend), outlet);
+    render(
+      solidTemplate(ComposerDictationSendAction, {
+        readDictation: () => controller,
+        onSend: laterSend,
+      }),
+      outlet,
+    );
     finish(true);
     await Promise.resolve();
     expect(firstSend).toHaveBeenCalledOnce();

@@ -17,6 +17,12 @@ import {
   selectCanonicalSessionEntryMatch,
 } from "./session-accessor.entry-read-runtime.js";
 import {
+  assertMemoryExactReadSource,
+  captureMemoryExactSessionReader,
+} from "./session-accessor.memory-exact-read.js";
+import "./plugin-host-cleanup.js";
+import "./session-accessor.sqlite-canonical-repair.js";
+import {
   listSessionEntryRows,
   listSessionEntriesReadOnly,
   loadExactSessionEntry,
@@ -25,12 +31,7 @@ import {
   patchSessionEntryCore,
   patchSessionEntryTarget,
 } from "./session-accessor.sqlite-entry.js";
-import "./plugin-host-cleanup.js";
-import "./session-accessor.sqlite-canonical-repair.js";
-import {
-  resolveSessionEntry as resolveSessionEntrySelection,
-  retainSessionEntryKeyAbsence,
-} from "./session-accessor.sqlite-exact-read.js";
+import { resolveSessionEntry as resolveSessionEntrySelection } from "./session-accessor.sqlite-exact-read.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
 import "./session-accessor.sqlite-summary.js";
 import type {
@@ -144,17 +145,17 @@ function findCanonicalSessionEntryMatch(
 export function resolveSessionEntryAccessTarget(
   scope: LogicalSessionAccessScope,
   options: { keyFormat: "agent-qualified" },
-): QualifiedSessionEntryAccessTarget;
+): Promise<QualifiedSessionEntryAccessTarget>;
 export function resolveSessionEntryAccessTarget(
   scope: LogicalSessionAccessScope,
 ): ResolvedSessionEntryAccessTarget;
 export function resolveSessionEntryAccessTarget(
   scope: LogicalSessionAccessScope,
   options?: { keyFormat?: "agent-qualified" },
-): ResolvedSessionEntryAccessTarget | QualifiedSessionEntryAccessTarget {
+): ResolvedSessionEntryAccessTarget | Promise<QualifiedSessionEntryAccessTarget> {
   const target = resolveSessionEntryStoreTarget(scope);
   if (options?.keyFormat === "agent-qualified") {
-    return projectQualifiedSessionEntryTarget(scope, target);
+    return prepareQualifiedSessionEntryTarget(target, undefined, scope.env);
   }
   return {
     agentId: target.agentId,
@@ -347,19 +348,7 @@ function resolveSessionEntryStoreTarget(
   };
 }
 
-function projectQualifiedSessionEntryTarget(
-  scope: Pick<LogicalSessionAccessScope, "env">,
-  target: ResolvedSessionEntryStoreTarget & { readSource?: CapturedSessionEntryReadSource },
-): QualifiedSessionEntryAccessTarget {
-  const prepared = prepareQualifiedSessionEntryTarget(target, undefined, scope.env);
-  try {
-    return prepared.target;
-  } finally {
-    prepared.release();
-  }
-}
-
-export function prepareQualifiedSessionEntryTarget(
+export async function prepareQualifiedSessionEntryTarget(
   target: ResolvedSessionEntryStoreTarget & { readSource?: CapturedSessionEntryReadSource },
   readSources: readonly CapturedSessionEntryReadSource[] = [],
   env?: NodeJS.ProcessEnv,
@@ -393,62 +382,59 @@ export function prepareQualifiedSessionEntryTarget(
     entry: target.entry,
     readSource: target.readSource,
   };
-  const sources: ReturnType<typeof retainSessionEntryKeyAbsence>[] = [];
-  let active = true;
-  const release = () => {
-    active = false;
-    const failures: unknown[] = [];
-    for (let index = sources.length - 1; index >= 0; index--) {
-      try {
-        sources[index]!.release();
-        sources.splice(index, 1);
-      } catch (error) {
-        failures.push(error);
-      }
-    }
-    if (failures.length) {
-      throw new AggregateError(failures, "Qualified session sources could not be released");
-    }
-  };
-  try {
-    const capturedSources = target.readSource
-      ? [
-          target.readSource,
-          ...readSources.filter((source) => !isDeepStrictEqual(source, target.readSource)),
-        ]
-      : readSources;
-    for (const readSource of capturedSources) {
+  const capturedSources = target.readSource
+    ? [
+        target.readSource,
+        ...readSources.filter((source) => !isDeepStrictEqual(source, target.readSource)),
+      ]
+    : readSources;
+  await Promise.all(
+    capturedSources.map(async (readSource) => {
       const selectedSource =
         readSource.agentId === target.readSource?.agentId &&
         readSource.databaseIdentity === target.readSource.databaseIdentity &&
         readSource.databaseBirthtime === target.readSource.databaseBirthtime;
-      sources.push(
-        retainSessionEntryKeyAbsence({
-          source: readSource,
-          canonicalKey,
-          sessionKeys: physicalKeys(readSource.agentId).filter(
-            (key) => !selectedSource || key !== target.storeKey,
-          ),
-          env,
-        }),
+      const sessionKeys = physicalKeys(readSource.agentId).filter(
+        (key) => !selectedSource || key !== target.storeKey,
       );
-    }
-    return {
-      target: qualified,
-      assertCurrent: () => {
-        if (!active) {
-          throw new Error("Qualified session target is no longer active");
+      if (!sessionKeys.length) {
+        return;
+      }
+      const memory = captureMemoryExactSessionReader({
+        agentId: readSource.agentId,
+        storePath: readSource.path,
+      });
+      let occupied: boolean;
+      if (memory) {
+        assertMemoryExactReadSource(readSource, memory.source);
+        occupied = sessionKeys.some((key) => memory.read(key, "list"));
+      } else {
+        const result = await readSessionEntriesFromStoreInWorker({
+          agentId: readSource.agentId,
+          storePath: readSource.path,
+          sessionKeys,
+          projection: "sharing",
+          includeAuthorization: true,
+          env,
+        });
+        if (
+          result.sharing?.source.agentId !== readSource.agentId ||
+          result.databaseIdentity?.identity !== readSource.databaseIdentity ||
+          result.databaseIdentity?.birthtime !== readSource.databaseBirthtime
+        ) {
+          throw new Error("Captured session database changed before read");
         }
-        for (const source of sources) {
-          source.assertCurrent();
-        }
-      },
-      release,
-    };
-  } catch (error) {
-    release();
-    throw error;
-  }
+        occupied = result.entries.length > 0 || result.sharing.placeholders.length > 0;
+      }
+      if (occupied) {
+        throw new Error(
+          `Session "${canonicalKey}" has ambiguous stored identity. Select an unambiguous session; stored rows and history were not changed.`,
+        );
+      }
+    }),
+  );
+  // Later alternate-key or sibling-store duplicates affect discovery, not this pinned target.
+  return qualified;
 }
 
 /**

@@ -82,16 +82,17 @@ Gateway startup runs this admission in its native execution Worker; other
 asynchronous openers use a read-only child and retain the lease until it closes.
 No schema, stored data, or configuration changes are required.
 
-Native Gateway admission distinguishes these missing-receipt classes:
+Native Gateway admission distinguishes these restart-proof classes:
 
-- **No verification receipt:** a native writer with a running background verifier and no prior verification receipt,
+- **Missing or incomplete close receipt:** a native writer with a running background verifier and no prior verification receipt or a matching dirty receipt,
   no revoked runtime proof, and no stale, foreign, or unknown lease validates the
   current owner, schema, and canonical indexes without scanning database contents.
   SQLite must open successfully in WAL mode with no rollback journal or pending
   migration. The existing background verifier runs the full integrity and
   foreign-key check and retains its normal quarantine policy. This avoids making
   an otherwise compatible agent wait for a whole-file scan after a receipt was
-  unavailable at shutdown. Physical damage not exposed by metadata reads can be
+  unavailable at shutdown or its final checkpoint was incomplete. A dirty receipt
+  does not prove corruption: SQLite recovers the WAL on open. Physical damage not exposed by metadata reads can be
   detected after admission; metadata admission does not certify durable integrity.
   The native opener captures the verifier's lifetime and rechecks it through
   admission. CLI callers and stopped verifiers retain the foreground check.
@@ -107,7 +108,7 @@ Native Gateway admission distinguishes these missing-receipt classes:
   The listening Gateway queues a full integrity and foreign-key check in its
   existing low-priority verifier child.
 - **Corruption risk:** foreign host/boot, changed PID start identity, legacy or
-  unknown provenance, dirty receipt without a matching dead lease,
+  unknown provenance, revoked admission,
   failed journal/header checks, and pending migrations retain the full admission
   gate. Other platforms and non-native openers remain conservative.
 
@@ -117,7 +118,7 @@ process-death class. SQLite recovers committed frames and discards uncommitted
 transactions on open. Busy readers or an incomplete checkpoint do not imply corruption.
 Admission leaves checkpointing to WAL maintenance rather than copying outstanding
 WAL pages before the agent becomes available. It does not scan the whole database
-or run `quick_check` for either deferred class.
+or run `quick_check` for these deferred classes.
 
 Concurrent readers of persisted canonical session proof preserve an in-flight
 native integrity handoff. Recording that read result does not replace the
@@ -198,8 +199,8 @@ live or unknown owner. The stored provenance is a combined hash, so a mismatch
 cannot identify which hashed component changed. Native admission, prepared
 provenance, pending migration, journal, header, and WAL recovery refusals have
 separate reasons. A dirty receipt alone does not
-distinguish an incomplete checkpoint from a live lease; neither permits restart
-reuse. A process exiting with status zero after its shutdown deadline can still
+distinguish an incomplete checkpoint from a live lease; neither certifies restart
+reuse; eligible native WAL admission defers its full scan. A process exiting with status zero after its shutdown deadline can still
 leave a stale lease and require the admission gate. Stale-lease diagnostics name
 `owner-pid-dead` or `owner-start-time-changed`; agent leases do not use an expiry.
 Their provenance column carries the boot/file binding. A surviving stale lease means its release was not
@@ -208,18 +209,24 @@ observed, rather than proving which signal ended the old process.
 The lease owner logs `agent database clean-close receipt` with `written` or the
 reason it skipped publication: another active lease, incomplete checkpoint,
 unconfirmed close, read-only release, missing lease, changed file, mismatched
-path, or missing matching verification. An interrupted release leaves its lease
-for the next admission to diagnose.
+path, or missing matching verification. After native work drains, shutdown makes
+one TRUNCATE checkpoint attempt with zero reader-lock wait. Idle peer handles do
+not retain already-checkpointed WAL frames. Native last-close can also finish a
+checkpoint after a reader releases its snapshot. The lease owner certifies an empty WAL after that close,
+including when the preceding checkpoint was incomplete. A genuinely pinned WAL
+retains a dirty receipt and uses native background verification on the next
+Gateway admission. An interrupted release leaves its lease for the next admission
+to diagnose.
 
-| When                                                 | Check                                                                                                                                                         |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| First physical-database admission in a process       | Validate format, schema metadata, and canonical indexes; share the admitted facts with all handles and workers                                                |
-| First writable agent admission and Gateway readiness | Run required integrity and foreign-key checks without reusable proof; native WAL admission with no receipt or proven same-boot process death defers that scan |
-| Same-process reopen or new worker                    | Reuse file-bound admitted facts without schema, version, catalog, or integrity SQL; retain current ownership and durable quarantine-row checks                |
-| Clean same-version agent restart                     | Recheck owner, version, schema, and canonical indexes; queue a child-process `quick_check` and foreign-key check after the Gateway is listening               |
-| Before a pending migration                           | Run a full integrity, foreign-key, role, schema, and index scan                                                                                               |
-| After a migration or repair                          | The migration or repair owner validates its changes and publishes committed facts; later consumers do not repeat the checks                                   |
-| Doctor, backup verification, and compaction          | Run the full scan before accepting or rewriting the database                                                                                                  |
+| When                                                 | Check                                                                                                                                                                             |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| First physical-database admission in a process       | Validate format, schema metadata, and canonical indexes; share the admitted facts with all handles and workers                                                                    |
+| First writable agent admission and Gateway readiness | Run required integrity and foreign-key checks without reusable proof; native WAL admission with missing/incomplete close proof or proven same-boot process death defers that scan |
+| Same-process reopen or new worker                    | Reuse file-bound admitted facts without schema, version, catalog, or integrity SQL; retain current ownership and durable quarantine-row checks                                    |
+| Clean same-version agent restart                     | Recheck owner, version, schema, and canonical indexes; queue a child-process `quick_check` and foreign-key check after the Gateway is listening                                   |
+| Before a pending migration                           | Run a full integrity, foreign-key, role, schema, and index scan                                                                                                                   |
+| After a migration or repair                          | The migration or repair owner validates its changes and publishes committed facts; later consumers do not repeat the checks                                                       |
+| Doctor, backup verification, and compaction          | Run the full scan before accepting or rewriting the database                                                                                                                      |
 
 The existing quarantine store keeps a reconstructible `agent_integrity_verifications`
 record: canonical database path, device, inode, OpenClaw version, verification time, and

@@ -87,7 +87,9 @@ export async function readAcpSessionMetaForEntryAsync(
   return metadata ?? undefined;
 }
 
-export function rowToAcpSessionMeta(row: AcpSessionRow): SessionAcpMeta {
+export function rowToAcpSessionMeta(
+  row: Omit<AcpSessionRow, "resume_agent_session_id" | "resume_acpx_session_id">,
+): SessionAcpMeta {
   // SAFETY: These JSON columns are written from the typed ACP metadata by its storage owner.
   const identity = safeParseJsonRecord(row.identity_json ?? "") as SessionAcpIdentity | undefined;
   // SAFETY: Runtime options share the same typed persisted metadata contract.

@@ -5,6 +5,10 @@ import {
   type CodexSessionContextReader,
   type CodexSessionContextSnapshot,
 } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { appendSessionTranscriptMessagesByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   observeHostDataSql,
@@ -16,7 +20,10 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { projectCodexSettledHistoryInWorker } from "./session-history-worker-runtime.js";
 import { settledFixture } from "./src/app-server/session-history.test-support.js";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+  vi.restoreAllMocks();
+});
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 
 function actorHistoryFixture() {
@@ -109,6 +116,7 @@ describe("Codex actor history adapter", () => {
   });
 
   it("resolves marker-only history through the captured actor without host SQL", async () => {
+    setRuntimeConfigSnapshot({});
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("codex-marker-actor-") };
     const authority = { assertCurrent() {} };
     const actor = await openIncognitoTestActor(env, authority);

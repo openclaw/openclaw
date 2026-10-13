@@ -526,10 +526,7 @@ export function createWorkboardLifecycleService(params: {
       if (!reader) {
         return { sessions: [], complete: false };
       }
-      const snapshot = await reader(options);
-      return workboardLifecycleGatewayState.readSessions === reader
-        ? snapshot
-        : { sessions: [], complete: false };
+      return await reader(options);
     },
     start(ctx) {
       const owner = ++generation;
@@ -555,9 +552,6 @@ export function createWorkboardLifecycleService(params: {
                     (card) => !card.metadata?.archivedAt && cardSessionKey(card) === "unknown",
                   ),
                 });
-                if (generation !== owner) {
-                  return;
-                }
                 // Incognito sessions are absent from discovery. Read only identities
                 // already linked to cards, without requesting private preview content.
                 let describedIncognitoKeys: Set<string> | undefined;
@@ -573,9 +567,6 @@ export function createWorkboardLifecycleService(params: {
                   }
                   (describedIncognitoKeys ??= new Set()).add(sessionKey);
                   const exact = await params.readSessions({ includeUnknown: false, sessionKey });
-                  if (generation !== owner) {
-                    return;
-                  }
                   snapshot.sessions.push(...exact.sessions);
                 }
                 await syncWorkboardLifecycleSessions({
@@ -585,9 +576,6 @@ export function createWorkboardLifecycleService(params: {
                   now: params.now?.() ?? Date.now(),
                   onMatched,
                 });
-                if (generation !== owner) {
-                  return;
-                }
                 cards = await params.store.list();
               } catch (error) {
                 if (generation === owner) {

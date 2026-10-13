@@ -151,11 +151,10 @@ export type OperatorApprovalReceiptSnapshotRow = Omit<
   presentation_json: string | null;
   reviewer_device_ids_json: string | null;
   audience_session_keys_json: string | null;
-  receipt_rowid: number;
   payload_bytes: number;
 };
 export type OperatorApprovalReceiptSnapshotQueryRow = OperatorApprovalReceiptSnapshotRow & {
-  cursor_boundary_rowid: number | null;
+  cursor_boundary_id: number | null;
   page_present: 0 | 1;
 };
 type OperatorApprovalReceiptPageEntry = {

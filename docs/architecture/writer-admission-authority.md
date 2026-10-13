@@ -23,8 +23,9 @@ stall. Those diagnostic observations justify transferring authority ownership
 contracts; they do not predict production latency.
 
 The first slice transfers profile revision/status checks through shared cells and
-adds a read-only admission service factory with two typed profile checks. Bound
-and current-settled operations use the same canonical state as host assertions.
+adds a read-only admission service test factory in
+`src/infra/sqlite-writer-admission-service.test-support.ts`. Bound and
+current-settled operations use the same canonical state as host assertions.
 The factory is exercised through real worker tests; production dispatch stays
 with the host until remaining dependencies can transfer. A measured intermediate
 host-to-service preparation detour added latency and was removed.
@@ -53,13 +54,22 @@ cancellation preserves dispatch history and receipt settlement. Native stages ch
 those exact cells before requesting host admission and after consuming its grant;
 a late descriptor cannot reacquire authority through a reused numeric request ID.
 
-The service also exposes a direct native-port custody check with a bounded wait.
+The service test helper also exposes a direct native-port custody check with a bounded wait.
 Expiry atomically closes the pending decision, so a delayed service reply cannot
 grant it. Service shutdown revokes its epoch before awaiting cleanup; replacement
 uses a fresh cell. This transport remains a prerequisite exercised by worker tests:
 mixed production admission still uses the host and does not add a second service
 round trip until the remaining owners can transfer. It grants only broker custody,
 never policy authority, native COMMIT or receipt settlement.
+
+The execution slice gives each logical owner, native generation and borrower its
+own shared lifetime. Logical close publishes `closing` before cleanup and can
+reopen after failed cleanup; revocation and native retirement remain permanent.
+Borrower release closes new calls and claims, while accepted operations retain
+logical/native custody through settlement. Warm operations carry those exact
+cells and their admitted physical identity to native stages and the service.
+Cold creation, readiness, deletion and policy still require their host owners;
+the service transport remains unbound to mixed production admission.
 
 ## Current owners and required transfers
 

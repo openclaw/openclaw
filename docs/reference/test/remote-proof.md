@@ -12,8 +12,9 @@ read_when:
 
 Use the canonical
 [proof policy](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-testing/SKILL.md#proof-policy)
-to decide whether remote proof is needed. The procedures below apply only to
-that exception. Never execute untrusted repository tooling locally; use
+to select a qualified proof route. Prefer bounded local proof on an available
+host; expensive checks and busy or unqualified local hosts can use remote proof.
+Never execute untrusted repository tooling locally; use
 secretless fork CI or sanitized direct AWS, never credential-hydrated Testbox.
 
 Acquire only when the command is ready; reuse task-owned leases and stop them
@@ -24,7 +25,26 @@ inherit the maintained spending limits. The wrapper overrides configured workflo
 refs and rejects an explicit `--blacksmith-ref` other than `main`. Choose the
 source revision in your local checkout; its source capsule and frozen dependency
 install preserve that selection independently of the workflow ref. Explicit
-workflow and job selection still support the high-memory profile.
+workflow and job selection support explicit focused, routine, and high-memory
+profiles. The default stays 16-class until real smaller-machine qualification
+passes; neither `--class` nor `--type` sizes delegated Testbox leases.
+
+| Workload                                     | Workflow                           | Runner tier | Runtime ceiling |
+| -------------------------------------------- | ---------------------------------- | ----------- | --------------- |
+| Focused tests and narrow checks              | `ci-check-focused-testbox.yml`     | 4 vCPU      | 60 minutes      |
+| Bounded routine proof                        | `ci-check-routine-testbox.yml`     | 8 vCPU      | 120 minutes     |
+| Broad compiler/lint graphs (current default) | `ci-check-testbox.yml`             | 16 vCPU     | 240 minutes     |
+| Measured memory-heavy proof                  | `ci-check-high-memory-testbox.yml` | 32 vCPU     | 240 minutes     |
+
+Select with `--blacksmith-workflow .github/workflows/<workflow> --blacksmith-job check`
+on a fresh lease. Small profiles are opt-in qualification candidates, not proof
+that arbitrary compiler or lint graphs fit. Capture actual CPU affinity, cgroup
+limits, peak memory, OOM events, hydration and payload time before promoting a
+workload; runner labels alone do not establish usable RAM. All profiles retain
+the same 32-slot concurrency namespace; memory-heavy proof still shares four
+of those slots. Hash collisions can queue even when another slot is free.
+Stop only task-owned queued allocations; do not compensate with a larger box
+or force expensive work locally.
 
 At allocation, the wrapper records the caller task, physical checkout, HEAD,
 base, dependency inputs, and Testbox preparation fingerprint under

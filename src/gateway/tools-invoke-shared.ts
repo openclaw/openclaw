@@ -262,7 +262,7 @@ async function invokeGatewayToolWithSignal(
         400,
         "invalid_request",
         `memory tools are disabled in tests${suffix}. ` +
-          `Enable by setting plugins.slots.memory="${defaultSlotIdForKey("memory")}" (and ensure plugins.enabled is not false).`,
+          `Enable by setting plugins.slots.memory="${defaultSlotIdForKey("memory")}" (and check that plugins.enabled is not false).`,
       );
     }
   }

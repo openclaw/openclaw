@@ -646,25 +646,25 @@ type DiagnosticModelCallStartedEvent = DiagnosticModelCallBaseEvent & {
   type: "model.call.started";
 };
 
-type DiagnosticModelCallCompletedEvent = DiagnosticModelCallBaseEvent & {
-  type: "model.call.completed";
+type DiagnosticModelCallEndedEvent = DiagnosticModelCallBaseEvent & {
   durationMs: number;
+  providerProcessingMs?: number;
+  providerWaitEstimateMs?: number;
   requestPayloadBytes?: number;
   responseStreamBytes?: number;
   timeToFirstByteMs?: number;
   usage?: DiagnosticModelCallUsage;
 };
 
-type DiagnosticModelCallErrorEvent = DiagnosticModelCallBaseEvent & {
+type DiagnosticModelCallCompletedEvent = DiagnosticModelCallEndedEvent & {
+  type: "model.call.completed";
+};
+
+type DiagnosticModelCallErrorEvent = DiagnosticModelCallEndedEvent & {
   type: "model.call.error";
-  durationMs: number;
   errorCategory: string;
   failureKind?: "aborted" | "connection_closed" | "connection_reset" | "terminated" | "timeout";
   memory?: DiagnosticMemoryUsage;
-  requestPayloadBytes?: number;
-  responseStreamBytes?: number;
-  timeToFirstByteMs?: number;
-  usage?: DiagnosticModelCallUsage;
 };
 
 type DiagnosticModelCallPromptStats = Readonly<{
@@ -802,6 +802,17 @@ export type DiagnosticEventPayload =
   | DiagnosticModelCallStartedEvent
   | DiagnosticModelCallCompletedEvent
   | DiagnosticModelCallErrorEvent
+  | (DiagnosticBaseEvent & {
+      type: "secret.egress";
+      outcome: "forwarded" | "refused";
+      substituted: boolean;
+    })
+  | (DiagnosticBaseEvent & {
+      type: "tool.catalog";
+      source: "builtin" | "client";
+      mode: "code-mode" | "tool-search";
+      toolCount: number;
+    })
   | DiagnosticContextAssembledEvent
   | DiagnosticMemorySampleEvent
   | DiagnosticMemoryPressureEvent

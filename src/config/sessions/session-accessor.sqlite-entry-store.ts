@@ -54,7 +54,10 @@ import {
   parseSessionEntryJson as parseSessionEntryRow,
 } from "./session-accessor.sqlite-status.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
-import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import {
+  readSessionActorTransactionState,
+  replaceSessionActorStoredEntry,
+} from "./session-actor-transaction.js";
 import {
   assertCanonicalSessionEntryLineageWrite,
   assertCanonicalSessionKeyWrite,
@@ -700,12 +703,11 @@ export function writeSessionEntry(
       })
     : undefined;
   if (actor && persistedEntry && row) {
-    actor.entryRows.set(sessionKey, {
-      entry: structuredClone(persistedEntry),
+    replaceSessionActorStoredEntry(actor, sessionKey, {
+      entry: persistedEntry,
       row,
+      window: written.window.postimage,
     });
-    actor.hot.entry = structuredClone(persistedEntry);
-    actor.window = written.window.postimage;
   }
   if (options.postimages && persistedEntry && row && canonicalPreviousSideTables) {
     const stagedTranscript = readStagedSessionTranscriptAuthority(database)

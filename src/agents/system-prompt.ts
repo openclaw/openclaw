@@ -576,7 +576,7 @@ export function buildAgentSystemPrompt(params: {
         ? buildLimitedBootstrapPromptLines({
             introLine: "Bootstrap pending; this run cannot safely finish full BOOTSTRAP.md.",
             nextStepLine:
-              "Next: primary interactive run with normal workspace access, or user deletes canonical BOOTSTRAP.md after completion.",
+              "Next: primary interactive run with normal workspace access, or user deletes workspace BOOTSTRAP.md after completion.",
           })
         : buildFullBootstrapPromptLines({
             readLine:
@@ -902,6 +902,7 @@ export function buildAgentSystemPrompt(params: {
       isMinimal,
       availableTools,
       inlineButtonsEnabled,
+      customInlineButtonHint: params.runtimeInfo?.customInlineButtonHint,
       runtimeChannel,
       runtimeChatType,
       messageChannelOptions,

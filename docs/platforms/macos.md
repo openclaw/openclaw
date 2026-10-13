@@ -60,7 +60,9 @@ Install and launch **OpenClaw.app**. On a fresh installation with no saved Gatew
 or configuration, a progress window appears while the app prepares its bundled
 runtime, starts a Gateway on **This Mac**, and opens the dashboard's onboarding conversation. It never joins
 a discovered Gateway automatically. The window shows the current step and closes
-once the dashboard is ready. Choose **Set up manually** to use native setup instead.
+once the dashboard is ready. Reconnecting the dashboard during this handoff keeps setup in the same
+window, and **Review permissions** continues in the dashboard. Choose **Set up manually** to use native
+setup instead.
 
 The dashboard connects your AI, shows what it selected, and offers alternatives.
 You can choose another Gateway or review this Mac's permissions from the setup
@@ -74,6 +76,8 @@ older Gateway without automatic AI setup opens the native AI picker instead.
 Native setup remains available from the menu for manual recovery: choose
 **This Mac** or enter an existing Gateway's address, prepare the local runtime
 when needed, then select an AI connection to run its live model check.
+Native setup keeps the current page visible when runtime readiness removes the
+installation step from the flow.
 
 Existing installations and remote connections keep their saved setup. Native AI
 detection only presents available connections; it checks and activates one after

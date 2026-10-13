@@ -60,6 +60,38 @@ own existing budgets. A migration can still take substantial downtime: the
 controller removes deployment-specific admission machinery, not the work
 performed by the database migration itself.
 
+Candidate acceptance and predecessor rollback use the same verification owner.
+`OPENCLAW_TEAM_VERIFICATION_BUDGET` defaults to 600 seconds and bounds each
+started process's convergence, marker admission, dispatch reconciliation, and
+terminal observation together. Readiness waits and RPC retries never renew that
+deadline. The 60-second marker RPC timeout bounds a transport exchange; it is
+not the whole startup acceptance window.
+
+Before the marker, the owner waits for native `/startupz` to report that critical
+initial startup has settled, `/readyz` to report readiness without a refusal for
+the configured `modelAgent`, and a sampled main-thread delay below one second.
+A `system.info` response within ten seconds must identify the same process and
+instance. CPU/utilization warnings with bounded loop delay permit default
+acceptance; native degradation remains reported and steady profiling remains
+ineligible under load. The existing `--allow-cpu-degraded` argument remains
+accepted for installed service invocations. Native background recovery,
+transcript maintenance, and prewarming
+can continue after initial startup readiness; their completion is not another
+acceptance gate. A native `agent-database-inspection` startup reason for other
+agents does not delay an admitted model agent when `/readyz` is healthy; critical
+sidecar startup and the model agent's own pending admission still wait. Missing
+transport responses and pending startup/admission
+facts wait inside the original budget. Malformed evidence, corruption, changed
+identity, protocol failures, and authentication failures remain failures.
+
+If marker dispatch has a typed transport timeout, the owner checks readiness
+again and replays the byte-identical request with its original idempotency key.
+The Gateway owns reservation and replay; a minimal `in_flight` acknowledgement
+still names that same run. Acceptance requires the subsequent `agent.wait`
+terminal receipt to bind the exact session, visible marker, and configured
+provider/model. Neither a healthy probe nor a timeout becomes successful
+acceptance. A deadline expiry retains recovery evidence.
+
 Migration and restoration receive at least two hours, or the existing build
 budget when larger. A measured synthetic 25 → 26 crossing took 4m04s for
 3.865 GiB, roughly 39 minutes at 37 GiB by linear extrapolation before backup;

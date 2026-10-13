@@ -274,12 +274,15 @@ export function createGatewayChatMetadataRuntime(params: {
       // Commands and session-specific projections stay on demand within the published owner facts.
       const generation: PreparedMetadataGeneration = {
         facts,
-        modelLists: createChatMetadataModelList({
-          facts,
-          context: deps.getContext(),
-          requested: requestedModelLists,
-          maxEntries: CHAT_METADATA_CACHE_MAX_ENTRIES,
-        }),
+        modelLists:
+          current && generationFactsMatch(current.facts, facts, "catalog")
+            ? current.modelLists
+            : createChatMetadataModelList({
+                facts,
+                context: deps.getContext(),
+                requested: requestedModelLists,
+                maxEntries: CHAT_METADATA_CACHE_MAX_ENTRIES,
+              }),
         agentsById: new Map(),
         neutralProjectionByAgentId: new Map(),
         sessionProjectionByKey: new Map(),

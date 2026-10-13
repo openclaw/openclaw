@@ -35,6 +35,7 @@ private final class DashboardWindow: ExperienceWindow {
     var userIntentGeneration: UInt64 = 0
     var lifetimeRevision: UInt64 = 0
     var pendingGatewaySwitch: DashboardGatewaySwitchIntent?
+    var documentLoad: DashboardDocumentLoad?
 
     override func toggleToolbarShown(_: Any?) {}
 
@@ -125,8 +126,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var pendingNativeCommands: [DashboardNativeCommand] = []
     private var pendingNativeNavigation: DashboardNativeNavigation?
     var onClosed: (() -> Void)?
-    private var documentLoadContinuation: CheckedContinuation<Void, Error>?
-    private var documentLoadURL: URL?
+    private var documentLoad: DashboardDocumentLoad? {
+        (self.window as? DashboardWindow)?.documentLoad
+    }
 
     init(
         url: URL,
@@ -457,7 +459,6 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
     func detachWindowForReplacement() -> NSWindow? {
         guard let window else { return nil }
-        self.finishDocumentLoad(.failure(CancellationError()))
         // Route changes replace the privileged document, not its native shell;
         // detaching first transfers AppKit ownership without a close/focus cycle.
         self.reconnectTask?.task.cancel()
@@ -992,25 +993,21 @@ extension DashboardWindowController {
     }
 
     private func refreshNativeCommandReadiness() {
-        guard self.auth.usesBrowserIdentity || self.documentLoadContinuation != nil else { return }
+        guard self.auth.usesBrowserIdentity || self.documentLoad != nil else { return }
         let sourceID = self.notificationSourceID
         let sourceURL = self.currentURL
         Task { @MainActor [weak self] in
             guard let self else { return }
             // Messages only wake the read. A previous same-URL document cannot
             // attest that the currently displayed sign-in page has command listeners.
-            let routeCheck = self.documentLoadURL.map {
-                "window.location.pathname === \(WebViewJavaScriptSupport.jsValue($0.path)) && " +
-                    "window.location.search === \(WebViewJavaScriptSupport.jsValue($0.query.map { "?" + $0 } ?? ""))"
-            } ?? "true"
             let readiness = try? await self.webView.evaluateJavaScript(ControlUIDocumentHost.scopedDashboardScript(
-                "return {ready: window.__OPENCLAW_NATIVE_COMMANDS_READY__ === true, matches: (\(routeCheck))};",
-                url: sourceURL)) as? [String: Bool]
+                "return window.__OPENCLAW_NATIVE_COMMANDS_READY__ === true;",
+                url: sourceURL)) as? Bool
             guard self.notificationSourceID == sourceID, self.currentURL == sourceURL,
                   !self.webView.isLoading else { return }
-            self.nativeCommandsReady = readiness?["ready"] == true
+            self.nativeCommandsReady = readiness == true
             self.flushReadyNativeActions()
-            if self.nativeCommandsReady, readiness?["matches"] == true {
+            if self.nativeCommandsReady {
                 self.finishDocumentLoad(.success(()))
             }
         }
@@ -1414,40 +1411,29 @@ extension DashboardWindowController {
         }
     }
 
-    func waitForDocumentLoad(at url: URL) async throws {
+    func waitForDocumentLoad() async throws {
         // The shell can bootstrap after HTML finishes; its listener-owned readiness
-        // signal, rather than didFinish, completes the first-run handoff.
+        // signal completes handoff even if the user has already changed web routes.
+        try Task.checkCancellation()
+        if self.isShowingFailurePage { throw URLError(.cannotLoadFromNetwork) }
+        guard let window = self.window as? DashboardWindow else { throw CancellationError() }
+        let request = DashboardDocumentLoad()
+        window.documentLoad?.finish(.failure(CancellationError()))
+        window.documentLoad = request
+        defer {
+            if window.documentLoad === request { window.documentLoad = nil }
+        }
+        if self.documentHost.hasLiveContent, !self.webView.isLoading {
+            self.refreshNativeCommandReadiness()
+        }
         try await AsyncTimeout.withTimeout(
             seconds: 120,
             onTimeout: { URLError(.timedOut) },
-            operation: { try await self.awaitDocumentLoad(at: url) })
-    }
-
-    private func awaitDocumentLoad(at url: URL) async throws {
-        try Task.checkCancellation()
-        if self.isShowingFailurePage { throw URLError(.cannotLoadFromNetwork) }
-        try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                guard !Task.isCancelled else {
-                    continuation.resume(throwing: CancellationError())
-                    return
-                }
-                self.documentLoadContinuation?.resume(throwing: CancellationError())
-                self.documentLoadContinuation = continuation
-                self.documentLoadURL = url
-                if self.documentHost.hasLiveContent, !self.webView.isLoading {
-                    self.refreshNativeCommandReadiness()
-                }
-            }
-        } onCancel: {
-            Task { @MainActor in self.finishDocumentLoad(.failure(CancellationError())) }
-        }
+            operation: { try await request.wait() })
     }
 
     private func finishDocumentLoad(_ result: Result<Void, Error>) {
-        self.documentLoadContinuation?.resume(with: result)
-        self.documentLoadContinuation = nil
-        self.documentLoadURL = nil
+        self.documentLoad?.finish(result)
     }
 
     private func finishDocument() {

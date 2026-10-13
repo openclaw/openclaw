@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { migrateSqliteSchemaToStrict } from "./sqlite-strict.js";
+import { migrateSqliteSchemaToStrict, withSqliteForeignKeysDisabled } from "./sqlite-strict.js";
 
 const openDatabases: Array<import("node:sqlite").DatabaseSync> = [];
 
@@ -24,6 +24,47 @@ afterEach(() => {
       database.close();
     }
   }
+});
+
+describe("withSqliteForeignKeysDisabled", () => {
+  it.each([0, 1])("restores previous enforcement %i after success and failure", (enabled) => {
+    const database = createDatabase();
+    database.exec(`PRAGMA foreign_keys = ${enabled};`);
+    const operation = () => {
+      expect(database.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 0 });
+      return 42;
+    };
+    expect(withSqliteForeignKeysDisabled(database, operation)).toBe(42);
+    expect(database.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: enabled });
+    expect(() =>
+      withSqliteForeignKeysDisabled(database, () => {
+        operation();
+        throw new Error("staging failed");
+      }),
+    ).toThrow("staging failed");
+    expect(database.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: enabled });
+  });
+
+  it("rejects an active transaction before invoking the callback", () => {
+    const database = createDatabase();
+    database.exec("PRAGMA foreign_keys = ON; BEGIN;");
+    let called = false;
+    expect(() => withSqliteForeignKeysDisabled(database, () => (called = true))).toThrow(
+      "cannot change inside a transaction",
+    );
+    expect(called).toBe(false);
+    expect(database.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+    database.exec("ROLLBACK;");
+  });
+
+  it("rejects asynchronous work and restores enforcement", () => {
+    const database = createDatabase();
+    database.exec("PRAGMA foreign_keys = ON;");
+    expect(() => withSqliteForeignKeysDisabled(database, async () => 42)).toThrow(
+      "must be synchronous",
+    );
+    expect(database.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+  });
 });
 
 describe("migrateSqliteSchemaToStrict", () => {

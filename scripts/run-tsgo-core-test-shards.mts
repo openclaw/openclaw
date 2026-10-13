@@ -210,7 +210,7 @@ export async function createChangedCiTypeCheckPlan(
   const { inspectCiTsgoCheckGraphs } = await import("./check-tsgo-core-boundary.mts");
   const inspected = await inspectCiTsgoCheckGraphs({ cwd, scope });
   const selected =
-    paths.every((file) => existsSync(path.resolve(cwd, file))) &&
+    compilerPaths.every((file) => existsSync(path.resolve(cwd, file))) &&
     (scope !== "noncore" || physicalExtensionInputs())
       ? selectChangedCiTsgoGraphs(paths, inspected, { scope })
       : undefined;

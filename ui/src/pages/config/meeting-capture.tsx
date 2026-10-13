@@ -2,7 +2,7 @@ import type { TranscriptsStatusResult } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { JSX } from "@solidjs/web";
-import { For, Show, createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
+import { For, Show, createMemo, createSignal } from "solid-js";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -18,12 +18,10 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { registerTranscriptsEnglish } from "../../i18n/locales/en-transcripts.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
-import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { createSettingsStatus } from "./settings-status.ts";
 import { COMMUNICATION_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 registerEnglishCatalog(registerTranscriptsEnglish);
 
@@ -46,31 +44,21 @@ type SettingsProps = {
 };
 function MeetingCaptureSettingsContent(props: SettingsProps) {
   const context = useApplication();
-  const gatewayProjection = projectGateway(context.gateway);
-  const configProjection = projectRuntimeConfig(context.runtimeConfig);
-  const gateway = createGatewayConnectionLifecycle(context.gateway.snapshot);
-  let disposed = false;
-  let request: AbortController | undefined;
-  const [requestStatus, setRequestStatus] = createSignal<"idle" | "pending" | "complete" | "error">(
-    untrack(client) ? "pending" : "idle",
-  );
-  const [requestError, setRequestError] = createSignal<unknown>();
-  const [result, setResult] = createSignal<
-    { status: TranscriptsStatusResult; isCurrent: () => boolean } | undefined
-  >();
-  const [refreshRevision, setRefreshRevision] = createSignal(0);
-  function refreshStatus() {
-    setRefreshRevision((value) => value + 1);
-  }
-  function client() {
-    gatewayProjection.read();
-    const snapshot = context.gateway.snapshot;
-    return !disposed &&
-      snapshot.phase === "connected" &&
-      hasOperatorReadAccess(snapshot.hello?.auth ?? null)
-      ? snapshot.client
-      : null;
-  }
+  const {
+    client,
+    state: requestStatus,
+    error: requestError,
+    result,
+    refresh: refreshStatus,
+    gatewayProjection,
+    configProjection,
+  } = createSettingsStatus<TranscriptsStatusResult>(context, {
+    method: "transcripts.status",
+    access: hasOperatorReadAccess,
+    configHash: "hash",
+    onStatus: (status) =>
+      retainLocatorRequirements(status, editing(), editedProviderId(), locatorRequirements()),
+  });
   const [editing, setEditing] = createSignal<number | "new" | null>(null);
   const [editError, setEditError] = createSignal<string | null>(null);
   const [editedProviderId, setEditedProviderId] = createSignal("");
@@ -78,93 +66,6 @@ function MeetingCaptureSettingsContent(props: SettingsProps) {
   let editedSource: unknown;
   let sourceDraft: Record<string, unknown> = {};
   let originalLocatorRequirements: SourceProvider["autoStart"];
-  let previousHello = context.gateway.snapshot.hello;
-  let previousAuth = previousHello?.auth;
-  function synchronizeConnection() {
-    const snapshot = context.gateway.snapshot;
-    const transition = gateway.transition(snapshot);
-    const identityChanged =
-      previousHello !== snapshot.hello || previousAuth !== snapshot.hello?.auth;
-    if (identityChanged) {
-      gateway.invalidate();
-    }
-    previousHello = snapshot.hello;
-    previousAuth = snapshot.hello?.auth;
-    if (transition || identityChanged) {
-      request?.abort();
-      refreshStatus();
-    }
-  }
-  const unsubscribeGateway = gatewayProjection.subscribe(synchronizeConnection);
-  onCleanup(unsubscribeGateway);
-  const requestKey = createMemo(
-    () => {
-      const snapshot = gatewayProjection.read().snapshot;
-      return [
-        client(),
-        snapshot.phase,
-        snapshot.hello,
-        snapshot.hello?.auth,
-        configProjection.read().state.configSnapshot?.hash,
-        refreshRevision(),
-      ] as const;
-    },
-    { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
-  );
-  createEffect(requestKey, ([currentClient, , hello, auth, hash], previous) => {
-    request?.abort();
-    if (!currentClient) {
-      if (previous) {
-        setRequestStatus("idle");
-      }
-      return undefined;
-    }
-    const controller = new AbortController();
-    request = controller;
-    const scope = gateway.capture();
-    const currentGateway = context.gateway;
-    const isConnectionCurrent = () =>
-      client() === currentClient &&
-      scope !== null &&
-      gateway.isCurrent(scope) &&
-      context.gateway === currentGateway &&
-      currentGateway.snapshot.hello === hello &&
-      hello?.auth === auth &&
-      context.runtimeConfig.state.configSnapshot?.hash === hash;
-    const isCurrent = () =>
-      !controller.signal.aborted && request === controller && isConnectionCurrent();
-    if (previous) {
-      setRequestStatus("pending");
-    }
-    void currentClient
-      .request<TranscriptsStatusResult>("transcripts.status", {}, { signal: controller.signal })
-      .then(
-        (status) =>
-          untrack(() => {
-            if (!isCurrent()) {
-              return;
-            }
-            setResult({ status, isCurrent: isConnectionCurrent });
-            setRequestStatus("complete");
-            retainLocatorRequirements(status, editing(), editedProviderId(), locatorRequirements());
-          }),
-        (error: unknown) => {
-          if (!isCurrent()) {
-            return;
-          }
-          // Failed health must not seed a later editor with stale provider requirements.
-          setResult(undefined);
-          setRequestError(error);
-          setRequestStatus("error");
-        },
-      );
-    return () => controller.abort();
-  });
-  onCleanup(() => {
-    disposed = true;
-    request?.abort();
-    gateway.dispose();
-  });
   function disabled() {
     configProjection.read();
     gatewayProjection.read();

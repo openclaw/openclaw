@@ -33,7 +33,7 @@ it.each(["release", "replacement"] as const)(
         key: scope.sessionKey,
         agentId: scope.agentId,
       });
-      const qualified = prepareQualifiedSessionEntryTarget(
+      const qualified = await prepareQualifiedSessionEntryTarget(
         {
           ...loaded,
           requestedKey: scope.sessionKey,
@@ -44,7 +44,7 @@ it.each(["release", "replacement"] as const)(
       );
       const work = createChatSendWorkAdmission({
         admission: { release: vi.fn() },
-        releaseCallerAuthority: qualified.release,
+        releaseCallerAuthority: vi.fn(),
         logGateway: { warn: vi.fn() },
       });
       const reader = createChatReplySessionReader(
@@ -55,8 +55,7 @@ it.each(["release", "replacement"] as const)(
           clientRunId: "reply-run",
           backingSessionId: "reply-session",
           sessionLoadOptions: { agentId: scope.agentId },
-          sessionTarget: qualified.target,
-          assertSessionTargetCurrent: qualified.assertCurrent,
+          sessionTarget: qualified,
         },
         getRuntimeConfig,
         () => {

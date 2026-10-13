@@ -85,60 +85,17 @@ export function reconcileNative(registry: OverlayRegistry, except?: Overlay) {
   orderStack(registry);
 }
 
-export function branchRevision(owner: Overlay): string {
-  return JSON.stringify([owner.id, owner.revision, [...owner.children].map(branchRevision)]);
-}
-
-export function prepareClosures(
-  registry: OverlayRegistry,
-  readOwners: () => Overlay[],
-  admitted: Set<Overlay>,
-) {
-  const prepared = new Map<Overlay, { commit: () => boolean; revision: string }>();
-  for (;;) {
-    reconcileNative(registry);
-    const owners = readOwners();
-    if (
-      owners.some((owner) => !admitted.has(owner)) ||
-      owners.some((owner) => {
-        const prior = prepared.get(owner);
-        return prior && prior.revision !== branchRevision(owner);
-      })
-    ) {
+export function prepareClosures(owners: readonly Overlay[]): (() => boolean) | null {
+  const commits: (() => boolean)[] = [];
+  for (const owner of owners) {
+    const commit = owner.prepareClose();
+    if (!commit) {
       return null;
     }
-    const missing = owners.filter((owner) => !prepared.has(owner));
-    if (missing.length === 0) {
-      return {
-        current() {
-          reconcileNative(registry);
-          const live = readOwners();
-          return (
-            live.length === owners.length &&
-            live.every(
-              (owner) =>
-                owners.includes(owner) && prepared.get(owner)?.revision === branchRevision(owner),
-            )
-          );
-        },
-        commit() {
-          for (const owner of owners) {
-            if (!prepared.get(owner)?.commit()) {
-              return false;
-            }
-          }
-          return true;
-        },
-      };
-    }
-    for (const owner of missing) {
-      const commit = owner.prepareClose();
-      if (!commit) {
-        return null;
-      }
-      prepared.set(owner, { commit, revision: branchRevision(owner) });
-    }
+    commits.push(commit);
   }
+  // Hide listeners may veto; mutating the overlay tree inside one is best effort.
+  return () => commits.every((commit) => commit());
 }
 
 function collectRoots(elements: Iterable<Element | undefined>): Set<OverlayRoot> {
@@ -174,7 +131,7 @@ function connectedSurfaceRoot(surface: HTMLElement): OverlayRoot | undefined {
   return view && root instanceof view.ShadowRoot ? root : undefined;
 }
 
-function refreshSurfaceRoot(registry: OverlayRegistry, overlay: Overlay, entry: RegisteredOverlay) {
+function refreshSurfaceRoot(overlay: Overlay, entry: RegisteredOverlay) {
   const next = connectedSurfaceRoot(overlay.surface);
   if (next === entry.surfaceRoot) {
     return;
@@ -183,20 +140,8 @@ function refreshSurfaceRoot(registry: OverlayRegistry, overlay: Overlay, entry: 
   entry.releaseSurfaceRoot = undefined;
   entry.surfaceRoot = next;
   release?.();
-  if (
-    !next ||
-    registry.members.get(overlay) !== entry ||
-    connectedSurfaceRoot(overlay.surface) !== next
-  ) {
-    return;
-  }
-  const cleanup = entry.options.onRootChange?.(next);
-  if (typeof cleanup === "function") {
-    if (registry.members.get(overlay) === entry && connectedSurfaceRoot(overlay.surface) === next) {
-      entry.releaseSurfaceRoot = cleanup;
-    } else {
-      cleanup();
-    }
+  if (next) {
+    entry.releaseSurfaceRoot = entry.options.onRootChange?.(next) ?? undefined;
   }
 }
 
@@ -217,7 +162,7 @@ export function refreshOverlayRoots(registry: OverlayRegistry, overlay: Overlay)
       registration.roots.delete(root);
     }
   }
-  refreshSurfaceRoot(registry, overlay, registration);
+  refreshSurfaceRoot(overlay, registration);
 }
 
 export function registerOverlay(

@@ -1,10 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { useTempSessionsFixture } from "../../../config/sessions/test-helpers.js";
 import {
@@ -28,13 +24,9 @@ describe("unavailable finalization through the real core backend", () => {
   let admission: ReturnType<typeof prepareSystemAgentRunAdmission>;
 
   beforeEach(() => {
-    setRuntimeConfigSnapshot({});
     admission = prepareSystemAgentRunAdmission({}, "run-settled", "main", "unavailable-finalizer");
   });
-  afterEach(() => {
-    admission.close();
-    clearRuntimeConfigSnapshot();
-  });
+  afterEach(() => admission.close());
 
   it("preserves a failed cron turn and its transcript when finalization is unavailable", async () => {
     const expectedText =

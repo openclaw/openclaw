@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import { z } from "zod";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createChromeExtensionSetupResult } from "../test-helpers/chrome-extension-setup.ts";
 import {
@@ -246,6 +247,80 @@ describe("native device settings wire contract", () => {
     expect(capability!.snapshot).toEqual(stopped);
   });
 
+  it("keeps the shipped closed permission decoder valid while merging additional entries", () => {
+    // v2026.10.2's permission envelope ignores unknown fields but rejects unknown enum values.
+    const shippedEnvelope = z.object({
+      contract: z.literal(1),
+      permissions: z.object({
+        entries: z.array(
+          z.object({
+            id: z.enum([
+              "notifications",
+              "accessibility",
+              "screenRecording",
+              "microphone",
+              "camera",
+              "speechRecognition",
+              "location",
+              "contacts",
+              "calendars",
+              "reminders",
+              "photos",
+              "automation",
+            ]),
+            status: z.enum(["granted", "denied", "notDetermined", "unavailable", "limited"]),
+          }),
+        ),
+      }),
+    });
+    const legacy = createNativeDeviceSettingsSnapshot();
+    const additionalEntries = [{ id: "eventPosting", status: "denied", state: "restart-required" }];
+    const wire = { ...legacy, permissions: { ...legacy.permissions, additionalEntries } };
+    expect(shippedEnvelope.parse(wire).permissions.entries).toEqual(legacy.permissions.entries);
+    expect(
+      shippedEnvelope.safeParse({
+        ...wire,
+        permissions: { entries: [...legacy.permissions.entries, ...additionalEntries] },
+      }).success,
+    ).toBe(false);
+    installBridge(wire);
+    expect(capability?.snapshot?.permissions.entries).toEqual([
+      ...legacy.permissions.entries,
+      ...additionalEntries,
+    ]);
+    const listener = vi.fn();
+    capability?.subscribe(listener);
+    publish({
+      ...wire,
+      permissions: {
+        ...wire.permissions,
+        additionalEntries: [{ id: "eventPosting", status: "granted" }],
+      },
+    });
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({
+        permissions: {
+          ...legacy.permissions,
+          entries: [...legacy.permissions.entries, { id: "eventPosting", status: "granted" }],
+        },
+      }),
+    );
+  });
+  it("advertises permission resolution when a connecting native node publishes its identity", async () => {
+    const snapshot = createNativeDeviceSettingsSnapshot();
+    const post = installBridge(snapshot);
+    expect(capability?.resolvePermission).toBeUndefined();
+    publish({ ...snapshot, device: { ...snapshot.device, nodeId: "node-mac" } });
+    const request = {
+      nodeId: "node-mac",
+      command: "screen.capture",
+      capabilities: ["screenRecording"],
+      state: "denied" as const,
+    };
+    await capability?.resolvePermission?.(request);
+    expect(post).toHaveBeenCalledWith({ type: "resolve-permission", request });
+  });
+
   it("accepts shipped Mac snapshots without exposing their retired Terminal permission", () => {
     const snapshot = createNativeDeviceSettingsSnapshot();
     snapshot.device.appVersion = "2026.9.5";
@@ -384,6 +459,24 @@ describe("native device settings wire contract", () => {
                 { id: "camera", status: "granted" },
                 { id: "camera", status: "denied" },
               ],
+            },
+          },
+        ],
+        [
+          "duplicate additional permission id",
+          {
+            permissions: {
+              ...createNativeDeviceSettingsSnapshot().permissions,
+              additionalEntries: [{ id: "camera", status: "denied" }],
+            },
+          },
+        ],
+        [
+          "additional permission status",
+          {
+            permissions: {
+              ...createNativeDeviceSettingsSnapshot().permissions,
+              additionalEntries: [{ id: "eventPosting", status: "unknown" }],
             },
           },
         ],

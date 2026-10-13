@@ -356,10 +356,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   historical 16/32-class runs also differed in compiler optimization. See
   `docs/ci/routing-costs.md` for sizing evidence. No jobs, registrations,
   permissions, compiler checks, or hosted eligibility are added.
-  The package-boundary row has a 30-minute whole-job budget: three hosted
+  The package-boundary row has a 40-minute whole-job budget: three hosted
   four-CPU attempts hit the former 20-minute limit, with about 19 minutes in
   SDK preparation and 126 compiles before final validation/canary/cleanup.
   One completed both compile and canary but still exceeded the job deadline.
+  Two hosted release validations then passed both checks (128 plugins) and
+  were cancelled at the former 30-minute limit.
   Compiler concurrency, complete inventory, receipt guards, canary, and routing
   remain unchanged.
 - The Plugin SDK API diff row also has a 30-minute whole-job budget. Two hosted
@@ -588,6 +590,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   elapsed-time, actual memory and cleanup proof; requested labels are not capacity.
 - The whole Blacksmith agent-support group requests `blacksmith-32vcpu-ubuntu-2404`.
   Its file inventory and resource-derived worker policy remain unchanged.
+- Precisely selected serial CLI-only jobs use the 16-class when every group has
+  one or two explicit files and the existing two-worker fallback, without build,
+  dist, memory, or large-runner anchors. Apply capacity after packing; preserve
+  inventories, runtime selection, timing identities, and process boundaries.
+  Full CLI families retain their planned capacity. RunsOn inherits the hybrid
+  choice for retained Blacksmith CLI jobs.
 - Source-only serial Blacksmith tooling bins use the 16-class after packing,
   retaining logical classes, names, file inventories, and two-worker pins.
   Keep the 32-class for compiler/artifact capacity files, explicit runner or
@@ -641,13 +649,13 @@ These are intentionally guarded by the `ci-workflow-guards`,
   stays on 8 unless the bounded hybrid plan admits it to hosted Ubuntu. The twelve-row 4:38 result in historical run 33695337496 used the
   32-class with eight reported CPUs; it does not prove timing on the current
   16-class route or refresh stale timing weights.
-- Eligible real-Gateway jobs retain the existing 32-class and two-row planner
-  split; ordinary PRs omit them. Their private preparation now builds runtime,
-  QA, and Control UI artifacts with SDK declaration generation disabled.
-  `build-artifacts` owns SDK declarations and validation. The old two-compiler
-  memory argument no longer establishes their runner requirement: qualify the
-  complete current job before downsizing, preserving browser workers, complete
-  inventory, build-before-test ordering, routing, deadlines, and caps.
+- Current-target real-Gateway jobs use the 16-class and existing two-row planner
+  split; frozen or unclassified targets retain the 32-class. Ordinary PRs omit
+  them. Private preparation builds runtime, QA, and Control UI artifacts with
+  SDK declaration generation disabled; `build-artifacts` owns SDK declarations
+  and validation. Preserve browser workers, complete inventory, build-before-test
+  ordering, routing, deadlines, and caps. Further sizing changes require complete
+  job qualification, including preparation and desktop transport proof.
 - Current-target `build-artifacts` uses the existing 16-class after a complete
   four-CPU/15.42-GiB compute proof, including the unchanged parallel verifier wave.
   SDK declaration generation uses one compiler program with its existing heap
@@ -670,11 +678,22 @@ These are intentionally guarded by the `ci-workflow-guards`,
   and QA; zero failures in 20 Docker and 80 QA main jobs is limited evidence,
   not a measured post-change saving. Keep backend settings, caps, budgets and
   timeouts unchanged, and verify actual emitted rows and timings.
+- Full hybrid check plans may share central formatting and scripts lint with
+  existing core lint stripe 1 when its full command inventory contains only those
+  commands. Retain both original core stripes, the exact central selection and
+  changed paths, sequential execution, one lint thread and the 15-minute budget.
+  UI, root-test and wrapper guards keep their separate central row. Require
+  another remaining check row for the existing gate; targeted and other runner
+  profiles retain their layout. Run shared central lint after a core failure so
+  its diagnostics and failure remain visible. This removes one registration and
+  setup, without enlarging runner capacity or relaxing a check.
 - Current GitHub/hybrid test types use five canonical core stripe jobs plus
   the central extensions/scripts/root tail. Eligible core-change PRs keep the
   same rows: each validates the complete graph boundary and intersects selected
   consumers with its original stripe. Empty intersections stay empty; ambiguous
   selection falls back to every canonical graph across those same stripes.
+  Check existence only for compiler inputs: deleted Markdown and UI CSS paths
+  do not widen accompanying code changes; deleted compiler inputs retain full coverage.
   Frozen targets retain two paired rows for stripes 1+2 and 3+4 sequentially,
   with stripe 5 in the central row. Keep at most two compiler children per
   stripe and one builder per child. A failing stripe stops its row; other
@@ -762,11 +781,13 @@ python3 "$HOME/.agents/skills/autoreview/scripts/autoreview" --mode branch --bas
 node scripts/watch-pr-ci.mjs <pr> <head-sha> --repo openclaw/openclaw
 ```
 
-Use focused local or Testbox proof; observe existing CI without dispatching,
-rerunning, or re-pushing just to obtain green. Proven red-main repairs follow
-the maintainer workflow's direct-main rule. Other changes use its native PR
-route under the user's existing authorization. Do not run unrelated full-suite
-proof or combine `OPENCLAW_TESTBOX=1` with `OPENCLAW_PR_GATES_REMOTE=github`.
+Focused local proof; PR CI = broad proof. Testbox only for CI/local gaps, immediate grant.
+Observe existing CI; never dispatch/rerun/re-push just for green.
+CI fails → `pnpm test:ci-failed <pr>`; read classification, fix new failures →
+`pnpm test:ci-failed <pr> --run` until local pass → push once. Never local full-suite CI repair.
+Proven red-main repairs: maintainer workflow direct-main rule. Other changes:
+native PR route under existing user authorization. Never combine
+`OPENCLAW_TESTBOX=1` with `OPENCLAW_PR_GATES_REMOTE=github`.
 
 ## Post-Land Monitoring
 

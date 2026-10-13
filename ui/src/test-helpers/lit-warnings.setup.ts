@@ -52,6 +52,15 @@ if (typeof Element !== "undefined" && !("getAnimations" in Element.prototype)) {
   });
 }
 
+// JSDOM has no layout or scrolling; browser tests retain the native method.
+if (typeof Element !== "undefined" && !("scrollIntoView" in Element.prototype)) {
+  Object.defineProperty(Element.prototype, "scrollIntoView", {
+    configurable: true,
+    writable: true,
+    value: () => {},
+  });
+}
+
 // JSDOM exposes partial ElementInternals. Web Awesome form controls require
 // the form-associated methods even when tests do not mount them in a form.
 // Browser tests need native CustomStateSet so CSS :state() observes real state.

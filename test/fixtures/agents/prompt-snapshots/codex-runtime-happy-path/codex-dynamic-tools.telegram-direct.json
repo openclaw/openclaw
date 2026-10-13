@@ -413,7 +413,7 @@
               "description": "Job fields. action=\"add\": full job. action=\"update\": partial patch — only supplied fields change; null clears.",
               "properties": {
                 "declarationKey": {
-                  "description": "Idempotent declaration key (add only).",
+                  "description": "Key to avoid duplicate declarations (add only).",
                   "maxLength": 200,
                   "minLength": 1,
                   "type": "string"

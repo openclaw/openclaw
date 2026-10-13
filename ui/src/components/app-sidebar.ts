@@ -231,7 +231,10 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       () => this.context?.gateway,
       (gateway) => gateway.subscribeEvents((event) => this.narration?.handleEvent(event)),
     )
-    .watchStore(() => this.context?.agentIdentity)
+    .effect(
+      () => this.context?.agentIdentity,
+      (identity) => identity.subscribe(this.sessionData.requestSessionDataUpdate),
+    )
     .watchStore(
       () => this.context?.theme,
       () => this.syncCommunityInviteState(),
@@ -240,7 +243,10 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       () => this.context?.config,
       () => this.syncCommunityInviteState(),
     )
-    .watchStore(() => this.context?.plugins);
+    .effect(
+      () => this.context?.plugins,
+      (plugins) => plugins.subscribe(this.sessionData.requestSessionDataUpdate),
+    );
   private readonly nativeGatewaysChanged = () => this.sidebarMenus.closeSessionMenu();
   private readonly hiddenSessionCatalogsChanged = () => {
     this.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
@@ -627,7 +633,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
           }
         }}
       >
-        ${renderSidebarRail(this)}
+        ${renderSidebarRail(this, this.sidebarAgentsMode === "roster" ? renderSidebarNewSessionMenu(this) : undefined)}
         <div class="sidebar-shell" @mousedown=${beginNativeWindowDragFromTopInset}>
           <div class="sidebar-shell__content">
             <div
@@ -640,7 +646,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                   : this.navigationView === "online"
                     ? renderAppSidebarOnline(this)
                     : html`
-                        ${renderSessionListToolbar(this, this.sidebarAgentsMode === "roster" ? renderSidebarNewSessionMenu(this) : undefined)}
+                        ${renderSessionListToolbar(this)}
                         <div
                           class="sidebar-session-content"
                           ?hidden=${Boolean(this.contextualSidebar)}

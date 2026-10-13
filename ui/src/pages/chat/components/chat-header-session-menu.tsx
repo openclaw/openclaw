@@ -1,8 +1,8 @@
 import { createSignal, For, merge, onSettled, Show } from "solid-js";
 import type { UiSettings } from "../../../app/settings.ts";
 import { BoardGrantedCapabilities } from "../../../components/board/board-widget-capabilities.solid.tsx";
+import type { BoardWidgetPageMenu } from "../../../components/board/board-widget-cell-options.ts";
 import { BoardWidgetMenuItems } from "../../../components/board/board-widget-cell-render.solid.tsx";
-import type { BoardWidgetPageMenu } from "../../../components/board/board-widget-cell-render.ts";
 import { activateMenuShortcut } from "../../../components/menu-shortcuts.ts";
 import {
   EMPTY_SESSION_MENU_DATA,
@@ -22,7 +22,7 @@ import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
 import { isChatBubbleMode, setChatBubbleMode } from "../chat-bubble-mode.ts";
-import { ChatQuickActionItem, type HeaderMenuQuickAction } from "./chat-quick-action.tsx";
+import { ChatQuickActionItem, type HeaderMenuSessionAction } from "./chat-quick-action.tsx";
 import {
   canManageChatSessionSharing,
   ChatSessionSharing,
@@ -36,9 +36,9 @@ export type HeaderMenuAction =
   | { kind: "stop-cloud-worker" }
   | { kind: "plugin"; id: string };
 export type HeaderMenuActionKind = HeaderMenuAction["kind"];
-export type { HeaderMenuQuickAction } from "./chat-quick-action.tsx";
+export type { HeaderMenuQuickAction, HeaderMenuSessionAction } from "./chat-quick-action.tsx";
 
-type CompactMenuView = CompactSessionMenuView | "panels" | "layout" | "sharing" | "view";
+type CompactMenuView = CompactSessionMenuView | "sharing" | "view";
 type HeaderMenuProps = {
   session: SessionMenuData;
   worktreePath: string | null;
@@ -57,9 +57,7 @@ type HeaderMenuProps = {
     | "chatBubbleSessionKeys"
     | "chatBubbleDisabledSessionKeys"
   >;
-  panelActions: HeaderMenuQuickAction[];
-  layoutActions: HeaderMenuQuickAction[];
-  sessionActions: HeaderMenuQuickAction[];
+  sessionActions: HeaderMenuSessionAction[];
   boardWidgetMenu?: BoardWidgetPageMenu;
   sharing: ChatSessionSharingProps | null;
   groups: readonly string[];
@@ -77,8 +75,6 @@ type HeaderMenuProps = {
 };
 
 const COMPACT_MENU_VIEW_BY_VALUE: Record<string, CompactMenuView> = {
-  "compact:open-layout": "layout",
-  "compact:open-panels": "panels",
   "compact:open-sharing": "sharing",
   "compact:open-view": "view",
 };
@@ -160,15 +156,9 @@ function ChatHeaderSessionMenuContent(
       return;
     }
     if (value.startsWith("quick:")) {
-      const [, group, id] = value.split(":");
-      const entries =
-        group === "panels"
-          ? props.panelActions
-          : group === "session"
-            ? props.sessionActions
-            : props.layoutActions;
-      const action = entries.find((candidate) => candidate.id === id);
-      if (action && action.kind !== "status" && !action.disabled) {
+      const id = value.slice("quick:".length);
+      const action = props.sessionActions.find((candidate) => candidate.id === id);
+      if (action && !action.disabled) {
         action.onActivate();
       }
       return;
@@ -217,19 +207,9 @@ function ChatHeaderSessionMenuContent(
       props.onAction({ kind: value });
     }
   };
-  const QuickActions = (input: {
-    group: "panels" | "layout" | "session";
-    entries: HeaderMenuQuickAction[];
-    inline?: boolean;
-  }) => (
-    <For each={input.entries}>
-      {(action) => (
-        <ChatQuickActionItem
-          action={action}
-          slot={input.inline ? undefined : "submenu"}
-          value={`quick:${input.group}:${action.id}`}
-        />
-      )}
+  const SessionActions = () => (
+    <For each={props.sessionActions}>
+      {(action) => <ChatQuickActionItem action={action} value={`quick:${action.id}`} />}
     </For>
   );
   const ViewOption = (input: {
@@ -287,7 +267,7 @@ function ChatHeaderSessionMenuContent(
     </>
   );
   const Submenu = (input: {
-    group: "panels" | "layout" | "view" | "sharing";
+    group: "view" | "sharing";
     label: string;
     icon: IconName;
     disabled?: boolean;
@@ -307,23 +287,13 @@ function ChatHeaderSessionMenuContent(
         </span>
       ) : input.group === "view" ? (
         <ViewOptions />
-      ) : (
-        <QuickActions
-          group={input.group === "panels" ? "panels" : "layout"}
-          entries={input.group === "panels" ? props.panelActions : props.layoutActions}
-        />
-      )}
+      ) : undefined}
     </wa-dropdown-item>
   );
   const Compact = () => (
     <Show when={compactView()} keyed>
       {(current) => {
-        if (
-          current !== "panels" &&
-          current !== "layout" &&
-          current !== "sharing" &&
-          current !== "view"
-        ) {
+        if (current !== "sharing" && current !== "view") {
           return <view.Compact view={current} />;
         }
         return (
@@ -335,11 +305,7 @@ function ChatHeaderSessionMenuContent(
               <span class="session-menu__text">{t("common.back")}</span>
             </wa-dropdown-item>
             <div class="session-menu__separator" role="separator" />
-            {current === "panels" ? (
-              <QuickActions group="panels" entries={props.panelActions} inline />
-            ) : current === "layout" ? (
-              <QuickActions group="layout" entries={props.layoutActions} inline />
-            ) : current === "sharing" && props.sharing ? (
+            {current === "sharing" && props.sharing ? (
               <ChatSessionSharing {...props.sharing} inline />
             ) : (
               <ViewOptions inline />
@@ -377,12 +343,6 @@ function ChatHeaderSessionMenuContent(
           </>
         )}
       </Show>
-      {props.panelActions.length ? (
-        <Submenu group="panels" label={t("chat.sessionHeader.panels")} icon="panelRightOpen" />
-      ) : undefined}
-      {props.layoutActions.length ? (
-        <Submenu group="layout" label={t("chat.sessionHeader.layout")} icon="columns2" />
-      ) : undefined}
       {props.compact &&
       props.sharing?.session &&
       canManageChatSessionSharing(props.sharing.session) ? (
@@ -398,7 +358,7 @@ function ChatHeaderSessionMenuContent(
       <view.Primary />
       <div class="session-menu__separator" role="separator" />
       <view.Organization />
-      <QuickActions group="session" entries={props.sessionActions} inline />
+      <SessionActions />
       <div class="session-menu__separator" role="separator" />
       <view.Advanced />
     </>
@@ -468,8 +428,6 @@ defineSolidBridge<HeaderMenuProps>(
         default: { chatShowThinking: false, chatShowToolCalls: false },
         attribute: false,
       },
-      panelActions: { default: [], attribute: false },
-      layoutActions: { default: [], attribute: false },
       sessionActions: { default: [], attribute: false },
       boardWidgetMenu: { default: undefined, attribute: false },
       sharing: { default: null, attribute: false },

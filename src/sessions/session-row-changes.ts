@@ -48,6 +48,8 @@ export type SessionRowFacts =
       kind: "participants";
       /** Participant history belongs to the logical key, across transcript replacements. */
       projection?: Pick<SessionEntry, "participants" | "participantCount">;
+      /** Count-only contributions leave display identity and ordering unchanged. */
+      projectionChanged?: false;
     }
   | { kind: "category"; sessionId: string; category: string | null }
   | { kind: "removed" };

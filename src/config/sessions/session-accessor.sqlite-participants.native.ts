@@ -34,13 +34,18 @@ import type {
 } from "./session-sharing-store.types.js";
 export type { RecordSessionParticipantResult } from "./session-sharing-store.types.js";
 
+type SessionParticipantWriteResult = {
+  value: RecordSessionParticipantResult | null;
+  projectionChanged: boolean;
+};
+
 export function recordSessionParticipant(
   scope: SessionAccessScope,
   params: SessionParticipantRecordInput,
 ): RecordSessionParticipantResult | null {
   return recordSessionParticipantWithAliasRead(scope, params, () =>
     readUserProfileAliases(params.identity.id, { env: scope.env }),
-  );
+  ).value;
 }
 
 /** The sharing worker already holds its agent transaction when resolving profile aliases. */
@@ -48,7 +53,7 @@ export function recordSessionParticipantFromWorker(
   database: OpenClawAgentDatabase,
   scope: SessionAccessScope,
   params: SessionParticipantRecordInput,
-): RecordSessionParticipantResult | null {
+): SessionParticipantWriteResult {
   return recordSessionParticipantWithAliasRead(
     scope,
     params,
@@ -62,16 +67,16 @@ function recordSessionParticipantWithAliasRead(
   params: SessionParticipantRecordInput,
   readAliases: () => ReadonlySet<string> | undefined,
   transaction?: OpenClawAgentDatabase,
-): RecordSessionParticipantResult | null {
+): SessionParticipantWriteResult {
   const actorId = params.identity.id;
   if (!actorId || (params.identity.type === "agent" && actorId === params.sessionAgentId)) {
-    return null;
+    return { value: null, projectionChanged: false };
   }
   const resolved = resolveSqliteScope(scope);
   const options = toDatabaseOptions(resolved);
   const promptedAt = params.promptedAt ?? Date.now();
   const namespace = participantIdentityNamespace(params.identity);
-  const write = (database: OpenClawAgentDatabase): RecordSessionParticipantResult => {
+  const write = (database: OpenClawAgentDatabase): SessionParticipantWriteResult => {
     ensureSessionParticipantsSchema(database.db);
     const kysely = getSessionKysely(database.db);
     const participantQuery = kysely
@@ -105,7 +110,7 @@ function recordSessionParticipantWithAliasRead(
           .where("session_key", "=", resolved.sessionKey),
       );
       if ((count?.count ?? 0) >= MAX_SESSION_PARTICIPANTS) {
-        return "capped";
+        return { value: "capped", projectionChanged: false };
       }
     }
     const aggregate = mergeParticipantAggregate(
@@ -137,12 +142,13 @@ function recordSessionParticipantWithAliasRead(
         ),
       ),
     );
+    const projectionChanged =
+      !existing ||
+      existing.actor_id !== actorId ||
+      aggregate.first_prompted_at !== existing.first_prompted_at;
     publishSessionEntryCacheParticipantUpdate(database, resolved.sessionKey, {
       writeGeneration,
-      projectionChanged:
-        !existing ||
-        existing.actor_id !== actorId ||
-        aggregate.first_prompted_at !== existing.first_prompted_at,
+      projectionChanged,
     });
     deferOpenClawAgentPostCommitPublication(database, () =>
       emitSessionLifecycleEvent({
@@ -152,7 +158,7 @@ function recordSessionParticipantWithAliasRead(
         scope: "session-entry",
       }),
     );
-    return existing ? "updated" : "inserted";
+    return { value: existing ? "updated" : "inserted", projectionChanged };
   };
   if (transaction) {
     assertTransactionUsable(transaction.db);

@@ -777,7 +777,7 @@ Nested durations overlap their parent phases; do not add them to the parent tota
 Set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` for the complete breakdown and per-plugin
 import and registration timings.
 
-Desktop permission narrowing and canonical session checks remain on their required
+Desktop permission narrowing and session identity checks remain on their required
 admission paths. Transcript projection repair, orphan settlement, channel
 maintenance, pairing diagnostics, and restored-subagent activation run after
 readiness. Retired plugin captures join the existing post-ready idle cleanup.
@@ -968,12 +968,12 @@ The object aggregates observations across the pruning pass:
   calls and their requested page counts. Requested pages are not confirmed
   reclaimed pages.
 - `queryMs` covers existing archive-presence, candidate, unpublished-name, and
-  freelist reads. `rowDeletionMs` covers the canonical archive row-deletion
+  freelist reads. `rowDeletionMs` covers the archive row-deletion
   transaction.
 - `fileRemovalMs`, `removedFiles`, `missingFiles`, and `failedRemovals` report
-  existing file-removal outcomes. `removedFiles` counts successful canonical and
-  legacy removals. `missingFiles` counts canonical removal attempts that return
-  `ENOENT`. Other canonical failures and all unsuccessful legacy removals count
+  existing file-removal outcomes. `removedFiles` counts successful current-layout and
+  legacy removals. `missingFiles` counts current-layout removal attempts that return
+  `ENOENT`. Other current-layout failures and all unsuccessful legacy removals count
   under `failedRemovals`; the legacy count includes missing paths, non-files,
   and stat or removal failures.
 - `measurementMs` and `measurements` cover awaited disk-usage measurement attempts,
@@ -1049,6 +1049,20 @@ capturing raw prompt or response content:
 
 These fields are available to diagnostic snapshots, model-call plugin hooks, and
 OTEL model-call spans/metrics when diagnostics export is enabled.
+
+Completed llama.cpp and Ollama calls also report `providerProcessingMs` and
+`providerWaitEstimateMs` in model-call diagnostics, provider request timeline
+events, and Gateway stability snapshots and bundles. `openclaw gateway stability`
+shows these as `processing` and `wait~`, alongside total `wall` time.
+
+Processing is the server-reported prompt evaluation plus token generation time.
+Estimated wait is the nonnegative difference between wall time and processing:
+it includes backend queueing, model loading, transport, and terminal settlement
+overhead, so it is not an exact slot-wait measurement. Ollama's `load_duration`
+can include scheduling and is not counted as inference. These fields remain
+absent when final server timings are missing or invalid, including cancellations
+without final statistics. An aborted call does not prove the backend released
+its slot. No additional server polling is performed.
 
 Prompt-cache drop warnings include `requestGapMs` (start-to-start time since the
 session's previous request) and `promptTokens` when reported by the provider.

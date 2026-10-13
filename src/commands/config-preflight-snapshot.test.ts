@@ -37,8 +37,8 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import {
+  createConfigPreflightSnapshotReader,
   readAdmittedConfigSnapshot,
-  readConfigPreflightSnapshot,
 } from "./config-preflight-snapshot.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import { runStartupConfigPreflight } from "./startup-config-preflight.js";
@@ -485,8 +485,9 @@ it.each([
       });
       expect(fs.readFileSync(identityPath, "utf8")).toBe(identityRaw);
     } else {
+      await using snapshots = createConfigPreflightSnapshotReader();
       const result = await withArtifactPreservingStateReads(async () =>
-        readConfigPreflightSnapshot({
+        snapshots.read({
           purpose: "doctor",
           allowCurrentPluginMetadata: false,
           includePluginMetadata: true,

@@ -36,6 +36,7 @@ import {
   rejectGitHubPublicationSelection,
   type GitHubPublicationPreparation,
 } from "./github-publication-failure.js";
+import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
@@ -538,8 +539,24 @@ async function localGitHubPublicationSessionIdentity(row: {
   const authority = await prepareGitHubPublicationSessionLifecycle({
     publicationKind: row.identity_source === "personal" ? "personal" : "shared",
     requestId: row.request_id,
+  }).catch((cause: unknown) => {
+    throw new GitHubPublicationRecoveryPendingError(
+      "GitHub publication lifecycle authority is unavailable; retry recovery.",
+      { cause },
+    );
   });
-  const lifecycle = authority.readCurrent();
+  const readLifecycle = () => {
+    try {
+      return authority.readCurrent();
+    } catch (cause) {
+      // Pending writes deny effects without proving that the accepted request failed.
+      throw new GitHubPublicationRecoveryPendingError(
+        "GitHub publication lifecycle authority is unavailable; retry recovery.",
+        { cause },
+      );
+    }
+  };
+  const lifecycle = readLifecycle();
   if (!lifecycle) {
     throw new GitHubPublicationSessionChangedError();
   }
@@ -548,7 +565,7 @@ async function localGitHubPublicationSessionIdentity(row: {
     sessionKey: row.session_key,
     agentId: row.agent_id,
     lifecycleRevision: lifecycle.lifecycle_revision,
-    assertLifecycleCurrent: authority.readCurrent,
+    assertLifecycleCurrent: readLifecycle,
     expected: {
       worktreeId: row.worktree_id,
       repositoryFingerprint: row.repository_fingerprint,

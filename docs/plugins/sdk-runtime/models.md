@@ -78,13 +78,16 @@ host.
 ## Low-level completions
 
 `resolveApiKeyForProfile` from `openclaw/plugin-sdk/agent-runtime` returns a
-non-enumerable `readCurrentCredential` capability for personal accounts. Retain
-it with the resolved token and call it synchronously at the transport's final
-authorization boundary, after asynchronous preparation. It reads Gateway-owned
-facts without SQL, rejects pending or revoked authority, and remains valid after
-resolution completes. Reconnect retires old capabilities; an ordinary OAuth
-refresh publishes its new credential through the same owner. Shared and agent
-profiles return `null` and retain their existing persisted-authority checks.
+non-enumerable `readCurrentCredential` capability for personal accounts and for
+persisted shared or agent profiles using `chatgpt-token-sharing`. Retain it with
+the resolved token and call it synchronously at the transport's final
+authorization boundary, after asynchronous preparation. Validate the returned
+credential against the selected profile and expected identity; an absent
+credential must prevent dispatch. It reads Gateway-owned facts without SQL,
+rejects pending or unavailable authority, and remains valid after resolution
+completes. Personal-account reconnect retires old capabilities; an ordinary OAuth
+refresh publishes its new credential through the same owner. Profiles without a
+retained authority capability return `null`.
 
 The `complete` and `completeSimple` helpers from `openclaw/plugin-sdk/llm` accept
 an optional fourth `assertCurrent` callback. It runs after transport setup and
@@ -216,7 +219,7 @@ Backend adapters retain protocol validation and special-mode handling.
     flattened for Responses, including any supplied `strict` value.
 
     Set `reasoning` to request a reasoning effort for the selected model. The
-    host accepts the canonical thinking levels (`off`, `minimal`, `low`,
+    host accepts the standard thinking levels (`off`, `minimal`, `low`,
     `medium`, `high`, `xhigh`, `adaptive`, `max`, and `ultra`). Direct completions
     map `adaptive` to `medium` and `ultra` to `max`; the selected provider transport
     maps each effort to its supported wire value. Explicit `off` reaches the
@@ -245,7 +248,7 @@ Backend adapters retain protocol validation and special-mode handling.
   <Accordion title="api.runtime.modelAuth">
     Model and provider auth resolution.
 
-    Synchronous profile operations are also available: `resolveProviderIdForAuth`, `ensureAuthProfileStore`, `resolveAuthProfileOrder`, `listProfilesForProvider`, and `isProviderApiKeyConfigured`. They use the canonical host auth policy. Supply the owning agent directory when reading agent profiles, and use `readOnly: true` and `allowKeychainPrompt: false` for non-interactive profile inspection. Profile stores and resolved credentials must not be logged.
+    Synchronous profile operations are also available: `resolveProviderIdForAuth`, `ensureAuthProfileStore`, `resolveAuthProfileOrder`, `listProfilesForProvider`, and `isProviderApiKeyConfigured`. They use the shared host auth policy. Supply the owning agent directory when reading agent profiles, and use `readOnly: true` and `allowKeychainPrompt: false` for non-interactive profile inspection. Profile stores and resolved credentials must not be logged.
 
     Capability factories should construct descriptors only. Keep credential inspection and resolution in the callbacks that need them, rather than performing them while registering a provider.
 
