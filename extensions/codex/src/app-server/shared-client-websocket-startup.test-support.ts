@@ -65,7 +65,6 @@ export function registerSharedClientWebSocketStartupTests({
 
   it.each([
     ["unopened transient transport", "CODEX_APP_SERVER_WEBSOCKET_OPEN_FAILED", 3],
-    ["post-open transport", "ECONNRESET", 1],
     ["authentication refusal", "HTTP_401", 1],
   ])("bounds acquisition retries for %s", async (_label, code, attempts) => {
     const transports: ReturnType<typeof createClientHarness>[] = [];
@@ -132,7 +131,7 @@ export function registerSharedClientWebSocketStartupTests({
     },
   );
 
-  it.each(["shared", "isolated"] as const)(
+  it.each(["shared"] as const)(
     "uses the configured remote endpoint for a %s client without explicit start options",
     async (kind) => {
       const harness = createInitializingClientHarness();

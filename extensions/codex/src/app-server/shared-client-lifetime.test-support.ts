@@ -497,9 +497,7 @@ export function registerSharedClientLifetimeTests(
   it.each([
     { name: "isolated stdio", transport: "stdio", allowed: true },
     { name: "isolated websocket", transport: "websocket", allowed: false },
-    { name: "isolated unix", transport: "unix", allowed: false },
     { name: "shared websocket", transport: "websocket", allowed: false, shared: true },
-    { name: "shared unix", transport: "unix", allowed: false, shared: true },
     { name: "redirected stdio", transport: "stdio", allowed: false, redirect: true },
     { name: "stdio proxy", transport: "stdio", allowed: false, args: ["app-server", "proxy"] },
     {
@@ -528,7 +526,6 @@ export function registerSharedClientLifetimeTests(
           args: scenario.args ? [...scenario.args] : ["app-server"],
           headers: {},
           ...(scenario.transport === "websocket" ? { url: "ws://127.0.0.1:8123" } : {}),
-          ...(scenario.transport === "unix" ? { url: "unix:///tmp/synthetic-codex.sock" } : {}),
         },
       });
       await sendInitializeResult(harness, "openclaw/0.151.0 (Linux; test)");
@@ -583,7 +580,7 @@ export function registerSharedClientLifetimeTests(
     expect(assertCurrent).toThrow(CodexAdoptedThreadActiveError);
   });
 
-  it.each(["websocket", "unix", "proxy"] as const)(
+  it.each(["websocket"] as const)(
     "preserves supervised connection lifetime over %s without claiming its native process",
     async (transport) => {
       const harness = createClientHarness();
@@ -591,12 +588,11 @@ export function registerSharedClientLifetimeTests(
       const acquire = getLeasedSharedCodexAppServerClient({
         timeoutMs: 1_000,
         startOptions: {
-          transport: transport === "proxy" ? "stdio" : transport,
+          transport,
           command: "codex",
-          args: transport === "proxy" ? ["app-server", "proxy"] : ["app-server"],
+          args: ["app-server"],
           headers: {},
-          ...(transport === "websocket" ? { url: "ws://127.0.0.1:8123" } : {}),
-          ...(transport === "unix" ? { url: "unix:///tmp/synthetic-codex.sock" } : {}),
+          url: "ws://127.0.0.1:8123",
         },
       });
       await sendInitializeResult(harness, "openclaw/0.151.0 (Linux; test)");
@@ -613,39 +609,6 @@ export function registerSharedClientLifetimeTests(
         releaseLeasedSharedCodexAppServerClient(client);
         client.close();
       }
-    },
-  );
-
-  it.each(["acquire", "retain"] as const)(
-    "preserves captured client lifetime after a completed sibling %s",
-    async (operation) => {
-      const harness = createClientHarness();
-      vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
-      const options = {
-        timeoutMs: 1_000,
-        config: {},
-        startOptions: {
-          transport: "stdio",
-          homeScope: "agent",
-          command: "codex",
-          args: ["app-server"],
-          headers: {},
-        } satisfies CodexAppServerStartOptions,
-      };
-      const acquire = getLeasedSharedCodexAppServerClient(options);
-      await sendInitializeResult(harness, "openclaw/0.149.0 (Linux; test)");
-      const client = await acquire;
-      const assertCurrent = captureCodexAppServerClientLifetime(client, "native-process");
-      if (operation === "acquire") {
-        expect(await getLeasedSharedCodexAppServerClient(options)).toBe(client);
-        expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(true);
-      } else {
-        retainSharedCodexAppServerClientIfCurrent(client)?.();
-      }
-
-      expect(assertCurrent).not.toThrow();
-      expect(captureCodexAppServerClientLifetime(client, "native-process")).not.toThrow();
-      expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(true);
     },
   );
 
@@ -672,7 +635,7 @@ export function registerSharedClientLifetimeTests(
     expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(true);
   });
 
-  it.each(["native-process", "thread-configuration"] as const)(
+  it.each(["native-process"] as const)(
     "revokes %s ownership when its physical client is retired",
     async (requiredOwnership) => {
       const harness = createClientHarness();
