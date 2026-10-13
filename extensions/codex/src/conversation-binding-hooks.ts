@@ -16,10 +16,7 @@ import { withCodexConversationThreadActivity } from "./app-server/thread-ownersh
 import { defineCodexBuildState } from "./build-state.js";
 import { canMutateCodexHost, CODEX_NATIVE_EXECUTION_AUTH_ERROR } from "./command-authorization.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
-import {
-  prepareCodexConversationAudioPrompt,
-  type RunCodexConversationMediaUnderstandingFile,
-} from "./conversation-audio.js";
+import type { RunCodexConversationMediaUnderstandingFile } from "./conversation-audio.js";
 import {
   readCodexConversationBindingData,
   readCodexConversationBindingDataRecord,
@@ -142,8 +139,12 @@ export async function handleCodexConversationInboundClaim(
           text: "This Codex conversation was detached or changed before its message could run.",
         };
       }
+      // Load the audio adapter only after the binding is reserved, and only
+      // when this turn has audio. Registration must not evaluate the media runtime.
       const preparedAudio = hasAudio
-        ? await prepareCodexConversationAudioPrompt({
+        ? await (
+            await import("./conversation-audio.js")
+          ).prepareCodexConversationAudioPrompt({
             prompt,
             event,
             config: options.config,
