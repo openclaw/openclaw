@@ -14,7 +14,7 @@ import {
 } from "../../channels/message/ingress-drain.test-helpers.js";
 import type { PluginHookReplyDispatchContext } from "../../plugins/hook-types.js";
 import { createHookRunner } from "../../plugins/hooks.js";
-import { createRuntimeTestRegistry } from "../../plugins/registry-runtime.test-helpers.js";
+import { createTestPluginRegistry } from "../../plugins/registry-runtime.test-helpers.js";
 import { createPluginRecord } from "../../plugins/status.test-fixtures.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
@@ -281,14 +281,15 @@ it.each(["completed", "cancelled", "adoption-rejected"] as const)(
         });
       });
       acpManagerRuntimeMocks.getAcpSessionManager.mockReturnValue({ ...manager, runTurn });
-      const builder = createRuntimeTestRegistry();
+      const builder = createTestPluginRegistry();
+      const acpx = createPluginRecord({ id: "acpx", origin: "bundled" });
+      const fallbackPlugin = createPluginRecord({ id: "fallback", origin: "bundled" });
+      builder.registry.plugins.push(acpx, fallbackPlugin);
       builder
-        .createApi(createPluginRecord({ id: "acpx", origin: "bundled" }), { config: cfg })
+        .createApi(acpx, { config: cfg })
         .on("reply_dispatch", tryDispatchAcpReplyHook, { priority: 10 });
       const fallback = vi.fn(() => undefined);
-      builder
-        .createApi(createPluginRecord({ id: "fallback", origin: "bundled" }), { config: cfg })
-        .on("reply_dispatch", fallback);
+      builder.createApi(fallbackPlugin, { config: cfg }).on("reply_dispatch", fallback);
       const hooks = createHookRunner(builder.registry);
       hookMocks.runner.runReplyDispatch.mockImplementation((event, context) =>
         hooks.runReplyDispatch(event, context as PluginHookReplyDispatchContext),
