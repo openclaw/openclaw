@@ -225,7 +225,8 @@ describe("session notification store ownership through the Gateway", () => {
             },
             { expectFinal: false },
           );
-          expect((await wait(accepted.runId)).status).toBe("ok");
+          const parentResult = await wait(accepted.runId);
+          expect(parentResult.status, JSON.stringify(parentResult)).toBe("ok");
           expect(provider.spawn?.status).toBe("accepted");
           const child = provider.spawn;
           if (!child) {
