@@ -106,6 +106,8 @@ Delivery is best-effort. The Inbox and replay bookkeeping survive Gateway restar
 
 Dismissing an unknown or already dismissed entry is harmless and returns the current Inbox snapshot. If an Inbox request returns an `UNAVAILABLE` error, the Control UI retries with increasing delays and respects the Gateway’s minimum retry delay. Ordinary connection updates and mention events do not bypass that backoff.
 
+Background Inbox refresh failures retry after one minute, doubling the delay up to fifteen minutes until a refresh succeeds. Session and profile updates respect the pending background retry; explicit Inbox reads can still retry immediately. The `gateway/mentions` warning records the failing phase, source, error class and code, cause, elapsed time, and next retry delay.
+
 ## Control UI agents tools panel
 
 - The Control UI `/agents` Tools panel has a "Tool preview" backed by `tools.effective(sessionKey=...)`. It previews core, plugin, channel-owned, and already-discovered MCP server tools using the session's saved settings. It does not report the exact tools of an active run.

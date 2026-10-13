@@ -7,6 +7,7 @@ import type {
   SessionTranscriptSourceCursor,
 } from "../../gateway/session-transcript-read.types.js";
 import {
+  SessionTranscriptSourceMessageTooLargeError,
   SOURCE_PAGE_MAX_BYTES,
   SOURCE_PAGE_MAX_MESSAGES,
 } from "../../gateway/session-transcript-source-pages.js";
@@ -662,9 +663,7 @@ export function readSessionActorMemoryProjection(
         }
         const size = Buffer.byteLength(row.eventJson) + 1;
         if (size > SOURCE_PAGE_MAX_BYTES) {
-          throw new Error(
-            `Transcript source message exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte page limit`,
-          );
+          throw new SessionTranscriptSourceMessageTooLargeError();
         }
         if (bytes + size > SOURCE_PAGE_MAX_BYTES) {
           break;

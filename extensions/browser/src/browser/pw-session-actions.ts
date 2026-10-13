@@ -57,6 +57,7 @@ import {
   getObservedBrowserStateForPage,
   normalizeCdpUrl,
 } from "./pw-session-state.js";
+import { guardHeadlessContexts } from "./pw-session-webauthn.js";
 import {
   BROWSER_REF_MARKER_ATTRIBUTE,
   readDocumentIdentitiesForPage,
@@ -510,6 +511,8 @@ export async function createPageViaPlaywright(
     assertCurrent?: () => void;
     /** Own an empty context; never reuse profile cookies for a session-scoped dashboard. */
     isolatedContext?: true;
+    /** Launch-owner fact for managed headless Chromium. */
+    headless?: true;
     timeoutMs?: number;
   } & BrowserNavigationPolicyOptions,
 ): Promise<PlaywrightOwnedPage> {
@@ -528,7 +531,7 @@ export async function createPageViaPlaywright(
     signal: opts.signal,
   });
   assertCurrent();
-  const { browser, engine } = await connectBrowser(
+  const { browser, engine, headless } = await connectBrowser(
     opts.cdpUrl,
     opts.cdpPolicy ?? opts.ssrfPolicy,
     undefined,
@@ -564,6 +567,10 @@ export async function createPageViaPlaywright(
   try {
     assertCurrent();
     ensureContextState(context);
+    if (headless || opts.headless) {
+      await guardHeadlessContexts([context]);
+      assertCurrent();
+    }
     page = await context.newPage();
     assertCurrent();
     ensurePageState(page);
