@@ -20,6 +20,26 @@ rules without loading provider replay or transport helpers.
 Use `splitTrailingAuthProfile` to separate a trailing auth profile while preserving
 model-version and local quantization suffixes.
 
+Successful catalog hooks can return private `modelIdCatalog` evidence on a
+`ready` outcome: `{ baseUrl, modelIds, aliases? }`. Include every server-listed
+ID before filtering model kinds, and retain an empty list for a successful empty
+response. This evidence is separate from `listedModelIds`, which retains its
+entitlement meaning.
+
+Core compares current authored references and declarations with that retained
+listing when projecting a catalog, including after config hot reload. The default
+comparison uses exact IDs and trailing-slash-normalized endpoints. Providers with
+other alias or endpoint rules can supply the pure, synchronous
+`catalog.getUnlistedConfiguredModelIds(listing, configuredModels)` hook. It receives
+only that provider's resolved references, including model-level endpoint overrides;
+it must skip references routed to another server and must not perform I/O.
+`aliases` is optional provider-owned matching data.
+
+Only the derived `unlistedConfiguredModelIds` advisory is exposed publicly. It
+never changes entitlement or model availability. Failed or skipped discovery
+produces no missing-ID warning, and reprojecting retained evidence makes no
+provider requests.
+
 ## Live model discovery
 
 If your provider exposes an OpenAI-compatible `/models` API, opt the
@@ -61,6 +81,10 @@ An explicit refresh through the prepared catalog owner bypasses completed
 response-cache entries only for the keys acquired by that request. Repeated
 reads within the same acquisition share the refreshed value; concurrent callers
 share pending work. Ordinary acquisition keeps its existing cache lifetime.
+
+Passive model-list reads that wait for a configuration replacement resume against
+the newly committed catalog and configuration. They do not retry with the retired
+configuration. Exact runtime acquisitions remain bound to their requested configuration.
 
 Bundled providers set `discoveryMode: "strict"` in their catalog options.
 This code option keeps successful empty results empty and reports failed
@@ -119,6 +143,18 @@ separate cache identities. Advisory calls still retain only nonempty results.
 Custom live builders can use `runLiveProviderCatalog` at their catalog hook
 to report successful acquisition and convert acquisition errors into outcomes.
 Returning provider configuration alone does not establish a live discovery outcome.
+
+Catalog hooks should omit `contextWindow` when the provider does not report it;
+keep a reported `contextTokens` prompt limit separately. Cached catalogs preserve
+that omission. Runtime construction supplies an estimate and marks it with
+`contextWindowSource: "synthetic"`; dynamic runtime resolvers may mark their own
+unknown-model estimates the same way. This marker is runtime-only, never config
+or persisted catalog metadata. Accepted account discovery can replace that
+estimate for the same provider,
+exact model ID, and transport API (and endpoint, when the fallback binds one).
+Do not mark curated static limits or authored caps as synthetic. Failed discovery
+keeps the estimate unless the catalog owner can retain the same account's inventory.
+
 For compatibility, nonempty rows returned by a legacy catalog hook without an
 outcome survive provider-wide failures under the same credentials. This does not
 establish a successful discovery origin or retain unrelated configured and

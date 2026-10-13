@@ -18,12 +18,9 @@ extension TalkModeRuntime {
     }
 
     func stop(
-        reconfigurationGeneration expectedReconfigurationGeneration: UInt64?,
         lifecycleGeneration expectedLifecycleGeneration: Int?) async
     {
-        guard self.ownsReconfiguration(
-            expectedReconfigurationGeneration,
-            lifecycleGeneration: expectedLifecycleGeneration)
+        guard expectedLifecycleGeneration.map({ $0 == self.lifecycleGeneration }) ?? true
         else { return }
         self.pendingRealtimeRelayStartLifecycleGeneration = nil
         self.resetRealtimeRecoveryState()
@@ -34,17 +31,12 @@ extension TalkModeRuntime {
         if let realtimeSession {
             await MainActor.run { realtimeSession.stop() }
         }
-        guard self.ownsReconfiguration(
-            expectedReconfigurationGeneration,
-            lifecycleGeneration: expectedLifecycleGeneration)
+        guard expectedLifecycleGeneration.map({ $0 == self.lifecycleGeneration }) ?? true
         else { return }
         await stopSpeaking(
             reason: .manual,
-            reconfigurationGeneration: expectedReconfigurationGeneration,
             lifecycleGeneration: expectedLifecycleGeneration)
-        guard self.ownsReconfiguration(
-            expectedReconfigurationGeneration,
-            lifecycleGeneration: expectedLifecycleGeneration)
+        guard expectedLifecycleGeneration.map({ $0 == self.lifecycleGeneration }) ?? true
         else { return }
         let projectionGeneration = self.realtimeRelayGeneration
         _ = await MainActor.run {
@@ -56,27 +48,12 @@ extension TalkModeRuntime {
         }
     }
 
-    func ownsReconfiguration(
-        _ expectedReconfigurationGeneration: UInt64?,
-        lifecycleGeneration expectedLifecycleGeneration: Int?) -> Bool
-    {
-        (expectedReconfigurationGeneration.map { $0 == self.realtimeReconfigurationGeneration } ?? true) &&
-            (expectedLifecycleGeneration.map { $0 == self.lifecycleGeneration } ?? true)
-    }
-
-    func beginRealtimeReconfiguration() -> (generation: UInt64, lifecycleGeneration: Int) {
-        self.lifecycleGeneration &+= 1
-        self.realtimeReconfigurationGeneration &+= 1
-        return (self.realtimeReconfigurationGeneration, self.lifecycleGeneration)
-    }
-
     func realtimeRelayPreferenceDidChange() async {
         guard isEnabled else { return }
-        let reconfiguration = self.beginRealtimeReconfiguration()
-        await self.stop(
-            reconfigurationGeneration: reconfiguration.generation,
-            lifecycleGeneration: reconfiguration.lifecycleGeneration)
-        guard self.isCurrent(reconfiguration.lifecycleGeneration) else { return }
+        self.lifecycleGeneration &+= 1
+        let generation = self.lifecycleGeneration
+        await self.stop(lifecycleGeneration: generation)
+        guard self.isCurrent(generation) else { return }
         await self.start()
     }
 
@@ -125,12 +102,9 @@ extension TalkModeRuntime {
                       realtimeSession == nil
                 else { return }
                 let fallbackConfig = await fetchTalkConfig()
-                guard await self.applyNativeFallbackTalkConfig(
-                    fallbackConfig,
-                    lifecycleGeneration: gen,
-                    recognitionGeneration: fallbackRecognitionGeneration,
-                    relayGeneration: fallbackRealtimeRelayGeneration)
-                else { return }
+                if let locale = await MainActor.run(body: { self.state()?.voiceWakeLocaleID }) {
+                    self.commitTalkConfig(fallbackConfig, locale: locale)
+                }
                 logger.error(
                     "talk realtime unavailable; using native fallback: " +
                         "\(error.localizedDescription, privacy: .public)")
@@ -240,20 +214,14 @@ extension TalkModeRuntime {
         do {
             bootstrap = try await self.realtimeTalkBootstrapProvider()
         } catch {
-            try await self.applyRealtimeTalkConfig(
-                self.fallbackTalkConfig(),
-                lifecycleGeneration: generation,
-                relayGeneration: relayGeneration)
+            await self.applyTalkConfig(self.fallbackTalkConfig())
             throw error
         }
         guard isCurrent(generation), !isPaused,
               realtimeRelayGeneration == relayGeneration
         else { throw CancellationError() }
         let config = self.parseTalkConfig(bootstrap.configSnapshot)
-        try await self.applyRealtimeTalkConfig(
-            config,
-            lifecycleGeneration: generation,
-            relayGeneration: relayGeneration)
+        await self.applyTalkConfig(config)
         guard self.shouldAttemptRealtimeRelay() else {
             throw RealtimeRelayConfigurationError.incompatible
         }
@@ -274,55 +242,6 @@ extension TalkModeRuntime {
         logger.info(
             "talk realtime ready provider=\(self.config?.snapshot.realtime.provider ?? "default", privacy: .public) " +
                 "model=\(self.config?.snapshot.realtime.modelId ?? "default", privacy: .public)")
-    }
-
-    func applyRealtimeTalkConfig(
-        _ config: TalkModeGatewayConfigState,
-        lifecycleGeneration: Int,
-        relayGeneration: UInt64) async throws
-    {
-        let locale = await MainActor.run { () -> String? in
-            guard let state = self.state() else { return nil }
-            guard self.realtimeRelayDeliveryGate.deliver(ifActive: relayGeneration, {
-                state.seamColorHex = config.seamColorHex
-            }) else { return nil }
-            return state.voiceWakeLocaleID
-        }
-        #if DEBUG
-        if let checkpoint = self.realtimeConfigApplicationCheckpoint {
-            await checkpoint()
-        }
-        #endif
-        guard let locale,
-              self.isCurrent(lifecycleGeneration),
-              !self.isPaused,
-              self.realtimeRelayGeneration == relayGeneration,
-              self.realtimeRelayStartGeneration == relayGeneration
-        else { throw CancellationError() }
-        self.commitTalkConfig(config, locale: locale)
-    }
-
-    func applyNativeFallbackTalkConfig(
-        _ config: TalkModeGatewayConfigState,
-        lifecycleGeneration: Int,
-        recognitionGeneration: Int,
-        relayGeneration: UInt64) async -> Bool
-    {
-        let locale = await MainActor.run { self.state()?.voiceWakeLocaleID }
-        #if DEBUG
-        if let checkpoint = self.realtimeConfigApplicationCheckpoint {
-            await checkpoint()
-        }
-        #endif
-        guard let locale, self.isCurrent(lifecycleGeneration),
-              !self.isPaused,
-              self.recognitionGeneration == recognitionGeneration,
-              self.realtimeRelayGeneration == relayGeneration,
-              self.realtimeRelayStartGeneration == nil,
-              self.realtimeSession == nil
-        else { return false }
-        self.commitTalkConfig(config, locale: locale)
-        return true
     }
 
     func fallbackTalkConfig() -> TalkModeGatewayConfigState {
@@ -709,12 +628,6 @@ extension TalkModeRuntime {
 
     func _test_setRecognitionCleanupProbe(_ probe: (@Sendable () -> Void)?) {
         self.recognitionCleanupProbe = probe
-    }
-
-    func _test_setRealtimeConfigApplicationCheckpoint(
-        _ checkpoint: (@Sendable () async -> Void)?)
-    {
-        self.realtimeConfigApplicationCheckpoint = checkpoint
     }
 
     func _test_enableRealtimeRelaySelection() {

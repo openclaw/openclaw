@@ -26,7 +26,6 @@ import {
   readUserModelAccountSummary,
   readSelectedUserModelAccount,
   readUserModelAuthProfile,
-  resolveUserProfileAuthLink,
   setUserProfileAuthLink,
   updateUserModelAuthProfile,
 } from "./user-model-accounts.js";
@@ -264,9 +263,6 @@ describe("personal model accounts", () => {
         : "missing";
       expect(listUserProfileAuthLinks(profileId, options)).toEqual([]);
       expect(listUserModelAccounts({ profileId }, options)).toEqual({ accounts: [] });
-      expect(
-        resolveUserProfileAuthLink({ profileId, providers: ["openai"] }, options),
-      ).toBeUndefined();
       if (withProfile) {
         expect(hasPrivateAccountState(profileId, options)).toBe(false);
       } else {
@@ -499,35 +495,6 @@ describe("personal model accounts", () => {
     ).toEqual([ids.at(-1)]);
   });
 
-  it("resolves through provider preference order without creating storage", () => {
-    const options = stateOptions();
-    const profile = ensureProfileForEmail("bob@example.test", options);
-    expect(
-      resolveUserProfileAuthLink({ profileId: profile.id, providers: ["openai"] }, options),
-    ).toBeUndefined();
-    expect(hasPrivateAccountState(profile.id, options)).toBe(false);
-    setUserProfileAuthLink(
-      { profileId: profile.id, provider: "openai", authProfileId: "openai:bob" },
-      options,
-    );
-    setUserProfileAuthLink(
-      { profileId: profile.id, provider: "anthropic", authProfileId: "anthropic:bob" },
-      options,
-    );
-    expect(
-      resolveUserProfileAuthLink(
-        { profileId: profile.id, providers: ["anthropic", "openai"] },
-        options,
-      ),
-    ).toBe("anthropic:bob");
-    expect(
-      resolveUserProfileAuthLink({ profileId: profile.id, providers: ["openai"] }, options),
-    ).toBe("openai:bob");
-    expect(
-      resolveUserProfileAuthLink({ profileId: profile.id, providers: ["mistral"] }, options),
-    ).toBeUndefined();
-  });
-
   it("replaces only owned credentials, retaining exact session pins after unlink", () => {
     const options = stateOptions();
     const alice = ensureProfileForEmail("alice@example.test", options);
@@ -553,9 +520,7 @@ describe("personal model accounts", () => {
     expect(listUserProfileAuthLinks(bob.id, options)).toEqual([]);
 
     clearUserProfileAuthLink({ profileId: alice.id, provider: "anthropic" }, options);
-    expect(
-      resolveUserProfileAuthLink({ profileId: alice.id, providers: ["anthropic"] }, options),
-    ).toBeUndefined();
+    expect(listUserProfileAuthLinks(alice.id, options)).toEqual([]);
     expect(readUserModelAuthProfile(first.authProfileId, options)?.credential).toMatchObject({
       token: "synthetic-new-token",
     });
@@ -618,9 +583,9 @@ describe("personal model accounts", () => {
       credential: { token: "synthetic-rotated-token" },
       usageStats: { lastUsed: 42, cooldownUntil: 99, cooldownReason: "rate_limit" },
     });
-    expect(
-      resolveUserProfileAuthLink({ profileId: alice.id, providers: ["anthropic"] }, options),
-    ).toBe(authProfileId);
+    expect(listUserProfileAuthLinks(alice.id, options)).toMatchObject([
+      { provider: "anthropic", authProfileId },
+    ]);
   });
 
   it.each([false, true])(
@@ -652,12 +617,7 @@ describe("personal model accounts", () => {
         { provider: "openai", authProfileId: "openai:source" },
       ];
       expect(listUserProfileAuthLinks(target.id, options)).toMatchObject(expectedLinks);
-      expect(
-        resolveUserProfileAuthLink({ profileId: source.id, providers: ["mistral"] }, options),
-      ).toBe("mistral:target");
-      expect(
-        resolveUserProfileAuthLink({ profileId: target.id, providers: ["anthropic"] }, options),
-      ).toBe(disconnected ? undefined : targetAccount.authProfileId);
+      expect(listUserProfileAuthLinks(source.id, options)).toMatchObject(expectedLinks);
       expect(
         readUserModelAccountSummary(
           { profileId: target.id, authProfileId: sourceAccount.authProfileId },

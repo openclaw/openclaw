@@ -4,12 +4,12 @@ import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
 } from "./auth-profiles/credential-fixtures.test-support.js";
-import { resolveModelAuthLabel } from "./model-auth-label.js";
+import { resolveModelAuthLabelAsync } from "./model-auth-label.js";
 
 const mocks = vi.hoisted(() => ({
-  ensureAuthProfileStore: vi.fn(),
+  ensureAuthProfileStoreAsync: vi.fn(),
   externalCliDiscoveryForProviderAuth: vi.fn(() => undefined),
-  loadAuthProfileStoreWithoutExternalProfiles: vi.fn(),
+  ensureAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(),
   resolveAuthProfileOrder: vi.fn(),
   resolveAuthProfileDisplayLabel: vi.fn(),
   resolveProviderEntryApiKeyProfileReference: vi.fn<() => unknown>(() => ({ kind: "none" })),
@@ -20,10 +20,12 @@ const mocks = vi.hoisted(() => ({
   readCodexCliCredentialsCached: vi.fn<(options?: unknown) => unknown>(() => null),
 }));
 
+// mock-isolation: Label privacy cases use synthetic credentials without loading host auth profiles.
 vi.mock("./auth-profiles.js", () => ({
-  ensureAuthProfileStore: mocks.ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync: mocks.ensureAuthProfileStoreAsync,
   externalCliDiscoveryForProviderAuth: mocks.externalCliDiscoveryForProviderAuth,
-  loadAuthProfileStoreWithoutExternalProfiles: mocks.loadAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync:
+    mocks.ensureAuthProfileStoreWithoutExternalProfilesAsync,
   resolveAuthProfileOrder: mocks.resolveAuthProfileOrder,
   resolveAuthProfileDisplayLabel: mocks.resolveAuthProfileDisplayLabel,
 }));
@@ -38,12 +40,12 @@ vi.mock("./cli-credentials.js", () => ({
   readCodexCliCredentialsCached: mocks.readCodexCliCredentialsCached,
 }));
 
-describe("resolveModelAuthLabel", () => {
+describe("resolveModelAuthLabelAsync", () => {
   beforeEach(() => {
-    mocks.ensureAuthProfileStore.mockReset();
+    mocks.ensureAuthProfileStoreAsync.mockReset();
     mocks.externalCliDiscoveryForProviderAuth.mockReset();
     mocks.externalCliDiscoveryForProviderAuth.mockReturnValue(undefined);
-    mocks.loadAuthProfileStoreWithoutExternalProfiles.mockReset();
+    mocks.ensureAuthProfileStoreWithoutExternalProfilesAsync.mockReset();
     mocks.resolveAuthProfileOrder.mockReset();
     mocks.resolveAuthProfileDisplayLabel.mockReset();
     mocks.resolveProviderEntryApiKeyProfileReference.mockReset();
@@ -56,10 +58,10 @@ describe("resolveModelAuthLabel", () => {
     mocks.readCodexCliCredentialsCached.mockReturnValue(null);
   });
 
-  it("does not include token value in label for token profiles", () => {
+  it("does not include token value in label for token profiles", async () => {
     // Labels may be shown in status output, so token-backed profiles identify
     // the auth mode/profile only and never echo token material or refs.
-    mocks.ensureAuthProfileStore.mockReturnValue({
+    mocks.ensureAuthProfileStoreAsync.mockReturnValue({
       version: 1,
       profiles: {
         "github-copilot:default": {
@@ -73,7 +75,7 @@ describe("resolveModelAuthLabel", () => {
     mocks.resolveAuthProfileOrder.mockReturnValue(["github-copilot:default"]);
     mocks.resolveAuthProfileDisplayLabel.mockReturnValue("github-copilot:default");
 
-    const label = resolveModelAuthLabel({
+    const label = await resolveModelAuthLabelAsync({
       provider: "github-copilot",
       cfg: {},
       sessionEntry: { authProfileOverride: "github-copilot:default" } as never,
@@ -84,9 +86,9 @@ describe("resolveModelAuthLabel", () => {
     expect(label).not.toContain("ref(");
   });
 
-  it("does not include api-key value in label for api-key profiles", () => {
+  it("does not include api-key value in label for api-key profiles", async () => {
     const shortSecret = "abc123"; // pragma: allowlist secret
-    mocks.ensureAuthProfileStore.mockReturnValue({
+    mocks.ensureAuthProfileStoreAsync.mockReturnValue({
       version: 1,
       profiles: {
         "openai:default": {
@@ -99,7 +101,7 @@ describe("resolveModelAuthLabel", () => {
     mocks.resolveAuthProfileOrder.mockReturnValue(["openai:default"]);
     mocks.resolveAuthProfileDisplayLabel.mockReturnValue("openai:default");
 
-    const label = resolveModelAuthLabel({
+    const label = await resolveModelAuthLabelAsync({
       provider: "openai",
       cfg: {},
       sessionEntry: { authProfileOverride: "openai:default" } as never,
@@ -110,8 +112,8 @@ describe("resolveModelAuthLabel", () => {
     expect(label).not.toContain("...");
   });
 
-  it("shows codex cli auth for codex provider without auth profiles", () => {
-    mocks.ensureAuthProfileStore.mockReturnValue(createAuthProfileStoreFixture({}) as never);
+  it("shows codex cli auth for codex provider without auth profiles", async () => {
+    mocks.ensureAuthProfileStoreAsync.mockReturnValue(createAuthProfileStoreFixture({}) as never);
     mocks.resolveAuthProfileOrder.mockReturnValue([]);
     mocks.readCodexCliCredentialsCached.mockReturnValue({
       type: "oauth",
@@ -121,7 +123,7 @@ describe("resolveModelAuthLabel", () => {
       expires: Date.now() + 60_000,
     });
 
-    const label = resolveModelAuthLabel({
+    const label = await resolveModelAuthLabelAsync({
       provider: "codex",
       cfg: {},
     });
@@ -133,8 +135,8 @@ describe("resolveModelAuthLabel", () => {
     });
   });
 
-  it("uses Codex CLI auth for Codex-backed OpenAI before env fallback", () => {
-    mocks.ensureAuthProfileStore.mockReturnValue(createAuthProfileStoreFixture({}) as never);
+  it("uses Codex CLI auth for Codex-backed OpenAI before env fallback", async () => {
+    mocks.ensureAuthProfileStoreAsync.mockReturnValue(createAuthProfileStoreFixture({}) as never);
     mocks.resolveAuthProfileOrder.mockReturnValue([]);
     mocks.readCodexCliCredentialsCached.mockReturnValue({
       type: "oauth",
@@ -148,7 +150,7 @@ describe("resolveModelAuthLabel", () => {
       source: "env: OPENAI_API_KEY",
     });
 
-    const label = resolveModelAuthLabel({
+    const label = await resolveModelAuthLabelAsync({
       provider: "openai",
       cfg: {},
       codexCliCredentialsHome: "/tmp/openclaw-agent/codex-home",
@@ -163,10 +165,10 @@ describe("resolveModelAuthLabel", () => {
     expect(mocks.resolveEnvApiKey).not.toHaveBeenCalled();
   });
 
-  it("shows native Claude CLI auth without reading credential storage", () => {
-    mocks.ensureAuthProfileStore.mockReturnValue(createAuthProfileStoreFixture({}) as never);
+  it("shows native Claude CLI auth without reading credential storage", async () => {
+    mocks.ensureAuthProfileStoreAsync.mockReturnValue(createAuthProfileStoreFixture({}) as never);
     mocks.resolveAuthProfileOrder.mockReturnValue([]);
-    const label = resolveModelAuthLabel({
+    const label = await resolveModelAuthLabelAsync({
       provider: "claude-cli",
       cfg: {},
     });
@@ -174,8 +176,8 @@ describe("resolveModelAuthLabel", () => {
     expect(label).toBe("native (claude-cli)");
   });
 
-  it("can skip external auth profile overlays for status labels", () => {
-    mocks.loadAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+  it("can skip external auth profile overlays for status labels", async () => {
+    mocks.ensureAuthProfileStoreWithoutExternalProfilesAsync.mockReturnValue({
       version: 1,
       profiles: {
         "anthropic:oauth": {
@@ -187,19 +189,19 @@ describe("resolveModelAuthLabel", () => {
     mocks.resolveAuthProfileOrder.mockReturnValue(["anthropic:oauth"]);
     mocks.resolveAuthProfileDisplayLabel.mockReturnValue("anthropic:oauth");
 
-    const label = resolveModelAuthLabel({
+    const label = await resolveModelAuthLabelAsync({
       provider: "anthropic",
       cfg: {},
       includeExternalProfiles: false,
     });
 
     expect(label).toBe("oauth (anthropic:oauth)");
-    expect(mocks.loadAuthProfileStoreWithoutExternalProfiles).toHaveBeenCalledOnce();
-    expect(mocks.ensureAuthProfileStore).not.toHaveBeenCalled();
+    expect(mocks.ensureAuthProfileStoreWithoutExternalProfilesAsync).toHaveBeenCalledOnce();
+    expect(mocks.ensureAuthProfileStoreAsync).not.toHaveBeenCalled();
   });
 
-  it("resolves env labels with config and workspace scope", () => {
-    mocks.ensureAuthProfileStore.mockReturnValue(createAuthProfileStoreFixture({}) as never);
+  it("resolves env labels with config and workspace scope", async () => {
+    mocks.ensureAuthProfileStoreAsync.mockReturnValue(createAuthProfileStoreFixture({}) as never);
     mocks.resolveAuthProfileOrder.mockReturnValue([]);
     mocks.resolveEnvApiKey.mockReturnValue({
       apiKey: "workspace-cloud-local-credentials",
@@ -207,7 +209,7 @@ describe("resolveModelAuthLabel", () => {
     });
 
     const cfg = { plugins: { allow: ["workspace-cloud"] } };
-    const label = resolveModelAuthLabel({
+    const label = await resolveModelAuthLabelAsync({
       provider: "workspace-cloud",
       cfg,
       workspaceDir: "/tmp/workspace",
@@ -220,11 +222,11 @@ describe("resolveModelAuthLabel", () => {
     });
   });
 
-  it("shows per-entry apiKey profile-reference labels before literal models.json fallback", () => {
+  it("shows per-entry apiKey profile-reference labels before literal models.json fallback", async () => {
     const store = createAuthProfileStoreFixture({
       "openrouter:key-b": createApiKeyCredential("openrouter", "sk-or-actual-key-b"),
     });
-    mocks.ensureAuthProfileStore.mockReturnValue(store as never);
+    mocks.ensureAuthProfileStoreAsync.mockReturnValue(store as never);
     mocks.resolveAuthProfileOrder.mockReturnValue([]);
     mocks.resolveAuthProfileDisplayLabel.mockReturnValue("openrouter:key-b");
     mocks.resolveProviderEntryApiKeyProfileReference.mockReturnValue({
@@ -238,7 +240,7 @@ describe("resolveModelAuthLabel", () => {
       source: "models.json",
     });
 
-    const label = resolveModelAuthLabel({
+    const label = await resolveModelAuthLabelAsync({
       provider: "openrouter-minimax",
       cfg: {},
     });
@@ -247,8 +249,8 @@ describe("resolveModelAuthLabel", () => {
     expect(mocks.resolveUsableCustomProviderApiKey).not.toHaveBeenCalled();
   });
 
-  it("does not report incompatible per-entry profile references as literal models.json keys", () => {
-    mocks.ensureAuthProfileStore.mockReturnValue(createAuthProfileStoreFixture({}) as never);
+  it("does not report incompatible per-entry profile references as literal models.json keys", async () => {
+    mocks.ensureAuthProfileStoreAsync.mockReturnValue(createAuthProfileStoreFixture({}) as never);
     mocks.resolveAuthProfileOrder.mockReturnValue([]);
     mocks.resolveProviderEntryApiKeyProfileReference.mockReturnValue({
       kind: "profile-incompatible",
@@ -262,7 +264,7 @@ describe("resolveModelAuthLabel", () => {
       source: "models.json",
     });
 
-    const label = resolveModelAuthLabel({
+    const label = await resolveModelAuthLabelAsync({
       provider: "openrouter-minimax",
       cfg: {},
     });

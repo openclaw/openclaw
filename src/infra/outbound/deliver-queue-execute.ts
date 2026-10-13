@@ -1,6 +1,9 @@
 // Owns queued delivery execution, custody transitions, and terminal cleanup.
 import type { AuditMessageFailureStage } from "../../audit/audit-event-types.js";
-import { assertSessionWriterDeliveryAuthorized } from "../../auto-reply/reply/session-writer-delivery-authority.js";
+import {
+  assertSessionWriterDeliveryAuthorized,
+  prepareSessionWriterDeliveryAuthority,
+} from "../../auto-reply/reply/session-writer-delivery-authority.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   isAmbiguousDeliveryTransportError,
@@ -179,13 +182,10 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     }
   };
   let generation: Awaited<ReturnType<typeof prepareOutboundDeliveryGeneration>> | undefined;
+  let writer: Awaited<ReturnType<typeof prepareSessionWriterDeliveryAuthority>> | undefined;
   const assertPlatformSendAuthorized = (): void => {
     throwIfAborted(params.abortSignal);
-    assertSessionWriterDeliveryAuthorized(
-      params.deliveryCompletion?.kind === "pending-final"
-        ? params.deliveryCompletion.sessionWriterDeliveryAuthority
-        : undefined,
-    );
+    assertSessionWriterDeliveryAuthorized(writer?.authority);
   };
   const wrappedParams: InternalDeliverOutboundPayloadsParams = {
     ...params,
@@ -314,6 +314,11 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
 
   try {
     throwIfProducerLeaseLost();
+    writer = await prepareSessionWriterDeliveryAuthority(
+      params.deliveryCompletion?.kind === "pending-final"
+        ? params.deliveryCompletion.sessionWriterDeliveryAuthority
+        : undefined,
+    );
     if (params.sessionGeneration !== undefined) {
       generation = await prepareOutboundDeliveryGeneration(params.sessionGeneration);
       throwIfProducerLeaseLost();
@@ -645,6 +650,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         : error;
     }
   } finally {
+    writer?.release();
     generation?.release();
     await producerLease?.stop();
     for (const outcome of payloadOutcomes) {

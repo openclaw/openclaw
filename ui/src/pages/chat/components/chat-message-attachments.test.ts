@@ -508,7 +508,18 @@ describe("attachment sidebar source ownership", () => {
   it("falls back to the SVG card when a same-origin fetch stalls", async () => {
     vi.useFakeTimers();
     const intersectAttachment = stubAttachmentIntersection();
-    const fetchMock = vi.fn(async () => await new Promise<Response>(() => {}));
+    const fetchMock = vi.fn<typeof fetch>(
+      (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("Aborted", "AbortError")),
+            {
+              once: true,
+            },
+          );
+        }),
+    );
     vi.stubGlobal("fetch", fetchMock);
     const container = document.body.appendChild(document.createElement("div"));
     const onAssistantAttachmentLoaded = vi.fn();
@@ -834,6 +845,12 @@ describe("attachment sidebar source ownership", () => {
     expect(
       container.querySelector(".chat-assistant-attachment-card__status-reason")?.textContent,
     ).toBe(reason);
+    expect(
+      container
+        .querySelector(".chat-assistant-attachment-card__status-meta")
+        ?.textContent?.replace(/\s+/gu, " ")
+        .trim(),
+    ).toBe(`Not sent · ${reason}`);
     expect(
       container.querySelector(
         ".chat-assistant-attachment-card__download, .chat-assistant-attachment-card__expand, .chat-assistant-attachment-card__retry",

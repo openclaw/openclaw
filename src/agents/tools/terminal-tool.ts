@@ -13,7 +13,7 @@ import {
   resolveRegisteredExecApprovalDecision,
 } from "../bash-tools.exec-approval-request.js";
 import {
-  resolveExecDefaults,
+  resolveExecDefaultsAsync,
   prepareExecDefaults,
   resolvePreparedExecDefaultsAsync,
   type ExecPolicyOverrides,
@@ -183,9 +183,14 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
           ? "kind" in source
             ? undefined
             : source.actor.sessions.readPolicy(agentSessionKey)
-          : (await import("../../gateway/session-utils-store.js")).loadGatewaySessionEntryReadOnly(
-              agentSessionKey,
-              { agentId, clone: false },
+          : (
+              await (
+                await import("../../gateway/session-utils-store-worker.js")
+              ).loadGatewaySessionEntryReadOnlyInWorker({
+                cfg: opts.config ?? (await import("../../config/io.js")).getRuntimeConfig(),
+                key: agentSessionKey,
+                agentId,
+              })
             ).entry;
         if (!entry || entry.sessionId?.trim() !== agentSessionId) {
           throw new ToolInputError(TERMINAL_UNAVAILABLE_MESSAGE);
@@ -222,6 +227,8 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
         execOverrides: opts.execOverrides,
         agentId,
         sessionKey: agentSessionKey,
+        // Required isolation cannot be supplied by an existing unconfined terminal.
+        sandboxAvailable: execSession.sandbox === "required" ? false : undefined,
       };
       const policy = actorPolicy
         ? await resolvePreparedExecDefaultsAsync(prepareExecDefaults(policyInput), async () => {
@@ -229,7 +236,7 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
               await import("../../infra/exec-approvals-store.js");
             return loadExecApprovalsReadOnlyAsync();
           })
-        : resolveExecDefaults(policyInput);
+        : await resolveExecDefaultsAsync(policyInput);
       assertSessionCurrent();
       if (policy.mode === "deny") {
         throw new ToolInputError("Terminal input denied by execution policy");

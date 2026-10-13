@@ -33,7 +33,7 @@ Workboard sidebar entries offer pin/unpin and, with write access, confirmed boar
     - Tool activity counts distinct calls, not start/update/result events, repeated history or live projections, or Gateway observation RPCs. Nested calls count independently, even when their names and arguments match. Expand the activity to see each call; read and edit counts can include repeated attempts on the same file.
     - Tool activity automatically displays a short purpose description supplied by the acting agent when available, with commands and results expandable underneath. Calls without descriptions keep deterministic labels. Viewing activity makes no additional model calls. The former `gateway.controlUi.toolTitles` option is retired; `openclaw doctor --fix` removes it from existing configs.
     - Start or dismiss ephemeral model-suggested follow-up tasks. **Start in a new session** opens the proposed task in the suggested folder without requiring Git or creating a worktree. The new session asks the user before using a worktree if the task needs one later.
-    - Activity tab with browser-local, redaction-first summaries of live tool activity from existing `session.tool` / tool event delivery.
+    - Activity tab with browser-local, bounded summaries of live tool activity from existing `session.tool` / tool event delivery.
 
   </Accordion>
   <Accordion title="Channels, sessions, memory">
@@ -98,7 +98,7 @@ Workboard sidebar entries offer pin/unpin and, with write access, confirmed boar
 
     - Session-derived token and estimated-cost analysis stays separate from provider billing.
     - Session rows and selected details show saved conversation names, including generated titles. Explicit renames take precedence; unnamed sessions show their keys.
-    - The Sessions card counts the rows currently shown: up to 50 in **All**, or matching sessions selected on this Usage page in **Recently viewed**. The total is the loaded session count for the agent scope; the separate selected-session comparison does not increase the shown count.
+    - Overview charts and totals cover every session matching the active filters. The Sessions card pages 50 rows on the server; its shown count excludes the separate selected-session comparison. Comparisons remain visible when you change pages and refresh with the overview. Shift-click selects a range within the current page. **Recently viewed** shows matching sessions selected on this Usage page.
     - Filter sessions with the provider, model, channel, or tool menus, or type case-insensitive `key:value` terms. Values within one category match as alternatives. Toggling a menu option preserves the other filters and their quoted text.
     - Selecting days narrows token and cost totals to those days within the active session filters. Daily charts and exports retain that session scope. Provider/model/tool queries select matching sessions, including all usage within each matched session; hour filters select sessions active in those hours.
     - Whole-session totals count each tool call, including repeated uses of the same tool in one assistant message. Drag the handles in a session’s usage timeline to inspect an interval; its counts use assistant invocations in the loaded conversation. Tool results do not add calls. Tool-only assistant messages remain visible in the loaded conversation.
@@ -130,7 +130,7 @@ Workboard sidebar entries offer pin/unpin and, with write access, confirmed boar
   </Accordion>
   <Accordion title="Automations panel notes">
     - Scheduler status, automation lists, and run history pause background refreshes while the browser tab is hidden and catch up when you return. Your current filters and unsaved draft stay in place; saves and runs already submitted continue.
-    - A pending edit save can finish after you navigate away without replacing the current editor or showing that save's errors in it.
+    - A pending create or edit save can finish after you navigate away without replacing the current editor or showing that save's errors in it. **Create & run now** still runs the created task if you open another automation while saving.
     - Keyboard navigation keeps automation form controls visible above the sticky save actions, including when the actions wrap on narrow screens.
     - Selecting a row opens a full-page detail view with an Active/Paused switch and Run now in the header (run-if-due, clone, and remove in its menu); the Settings tab edits the automation inline (prompt, details, frequency, advanced overrides) and the Run history tab shows that automation's runs. Switching tasks while Run now is pending keeps history attached to the selected task. If an earlier run, pause/resume, or removal reports feedback after you select another automation, the message names the automation you acted on.
     - Cloning an agent task retains its stored tool allowlist, model fallback list, lightweight-context setting, and external-content setting, including empty lists and explicit `false` values. Fields you change in the copy's form take precedence. The new task is authorized by the current operator; captured execution grants are not copied.
@@ -145,6 +145,7 @@ Workboard sidebar entries offer pin/unpin and, with write access, confirmed boar
     - Model suggestions update when the Gateway publishes catalog or configuration changes. A failed read shows an error and keeps the last suggestions for the same agent and connection; the next successful read replaces them without changing your draft.
     - Saved interval labels retain millisecond precision: a 90-second interval displays as `Every 1m 30s`. Repeat and stagger inputs accept decimal amounts that resolve to whole milliseconds; editing a cron expression preserves its stagger window.
     - Form validation is inline with field-level errors; invalid values disable the save button until fixed.
+    - Background automation refreshes preserve unsaved settings. If saving or pausing/resuming an open automation conflicts with a newer Gateway definition, the editor loads that definition for review. Review it before retrying; the rejected action is never retried automatically.
     - Set `cron.webhookToken` to send a dedicated bearer token; if omitted, the webhook is sent without an auth header.
     - `cron.webhook` is a retired legacy fallback rejected by current config validation. Run `openclaw doctor --fix` to migrate stored jobs that still use `notify: true` to explicit per-job webhook or completion delivery and remove the old key.
 

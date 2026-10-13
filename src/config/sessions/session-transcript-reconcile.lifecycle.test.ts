@@ -2,7 +2,7 @@ import path from "node:path";
 import * as timers from "node:timers/promises";
 import type { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
@@ -29,6 +29,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.js";
 import * as reconcilePool from "./session-transcript-reconcile-pool.js";
 import { getSessionTranscriptReconcileWorkerPoolSnapshot } from "./session-transcript-reconcile-pool.js";
@@ -55,6 +56,10 @@ vi.mock("node:timers/promises", async (importOriginal) => ({
 const observer = useReconcileWorkerObserver();
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => clearRuntimeConfigSnapshot());
+
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(() => clearRuntimeConfigSnapshot());
 
 type TerminalType = Extract<
   SessionTranscriptReconcileWorkerMessage,
@@ -213,6 +218,7 @@ describe("session transcript reconcile worker lifecycle", () => {
   it("queues dirty agents behind one reusable fleet worker and releases each database lease", async () => {
     const stateDir = tempDirs.make("openclaw-reconcile-fleet-");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    setRuntimeConfigSnapshot({});
     const agents = Array.from({ length: 8 }, (_, index) => ({ agentId: `fleet-${index}`, env }));
     const sessionId = "fleet-session";
     const canonical = observeCanonicalWriterLeases();
@@ -328,6 +334,7 @@ describe("session transcript reconcile worker lifecycle", () => {
     const root = tempDirs.make("openclaw-reconcile-scope-");
     const stateDir = path.join(root, "state");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    setRuntimeConfigSnapshot({});
     const first = { agentId: "main", env };
     const later = { agentId: "later", env };
     const unrelated = {
@@ -397,6 +404,7 @@ describe("session transcript reconcile worker lifecycle", () => {
       sessionId: "active-transcript-test",
       sessionKey: "agent:main:active-transcript-test",
     };
+    setRuntimeConfigSnapshot({});
     try {
       const secondScope = { ...scope, sessionId: "session-slow", sessionKey: "agent:main:slow" };
       for (const target of [scope, secondScope]) {
@@ -500,6 +508,7 @@ describe("session transcript reconcile worker lifecycle", () => {
   it("awaits pending-pass backoff while coalescing writes and keeping ready sessions available", async () => {
     const stateDir = tempDirs.make("openclaw-reconcile-backoff-");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    setRuntimeConfigSnapshot({});
     const databaseOptions = { agentId: "main", env };
     const scope = {
       ...databaseOptions,
@@ -615,6 +624,7 @@ describe("session transcript reconcile worker lifecycle", () => {
     async (explicitClose) => {
       const stateDir = tempDirs.make("openclaw-reconcile-retained-");
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        setRuntimeConfigSnapshot({});
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         const databaseOptions = { agentId: "main" };
         const scope = {
@@ -722,6 +732,7 @@ describe("session transcript reconcile worker lifecycle", () => {
     async (mode) => {
       const stateDir = tempDirs.make("openclaw-reconcile-startup-release-");
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        setRuntimeConfigSnapshot({});
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         const options = { agentId: "main" };
         const scope = {
@@ -816,6 +827,7 @@ describe("session transcript reconcile worker lifecycle", () => {
     async ({ expectedTerminal, failAfterFirstPlan }) => {
       const stateDir = tempDirs.make("openclaw-transcript-worker-cleanup-");
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        setRuntimeConfigSnapshot({});
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         const primarySessionId = "cleanup-primary";
         const primaryScope = {

@@ -6,6 +6,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { readSessionEntryResetRecallCutoff } from "../../packages/memory-host-sdk/src/host/session-files.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import type { IncognitoLifecycleEntry } from "../config/sessions/session-incognito-lifecycle-contract.js";
@@ -44,9 +48,9 @@ import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-executio
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
 // Two retained private actors plus shared ACP state need three broker slots.
-vi.mock("node:os", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:os")>()),
-  availableParallelism: () => 24,
+vi.mock("../infra/worker-pool-sizing.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/worker-pool-sizing.js")>()),
+  resolveSqliteBrokerWorkerCount: () => 3,
 }));
 
 const probe = useIncognitoActorProbe();
@@ -60,6 +64,7 @@ let env: NodeJS.ProcessEnv;
 
 beforeAll(async () => {
   env = { OPENCLAW_STATE_DIR: tempDirs.make("incognito-history-") };
+  setRuntimeConfigSnapshot({});
   mainStorePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
   openOpenClawStateDatabase({ env });
   const posted = vi.spyOn(Worker.prototype, "postMessage");
@@ -82,6 +87,7 @@ useIncognitoNoHostSql();
 afterAll(async () => {
   await Promise.all([actor?.close(), lossActor?.close()]);
   await closeOpenClawStateDatabaseAsync();
+  clearRuntimeConfigSnapshot();
 });
 
 async function create(

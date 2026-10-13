@@ -11,7 +11,7 @@ import {
 /** Bind the original database borrow to the operation and join lifecycle handoffs on release. */
 export function bindReplyOperationDatabaseAdmission(
   readerOperation: ReplyOperation,
-  params: { sessionKey: string },
+  params: { sessionKey: string; workSignal?: AbortSignal },
   lease: SessionWorkAdmissionLease | undefined,
   databaseClaim: SessionAdmissionDatabaseClaim | undefined,
 ) {
@@ -20,6 +20,10 @@ export function bindReplyOperationDatabaseAdmission(
   let sessionActor: Promise<SessionActor | undefined> | undefined;
   const assertReaderOperation = () => {
     readerOperation.abortSignal.throwIfAborted();
+    // Terminal settlement can freeze reply abort while restart still retires its work owner.
+    if (releasing) {
+      params.workSignal?.throwIfAborted();
+    }
     if (releasing || readerOperation.key !== params.sessionKey) {
       throw new SessionWorkStartChangedError("Session reader operation is no longer current");
     }
@@ -102,7 +106,7 @@ export function bindReplyOperationDatabaseAdmission(
         const next = await prepare(transition, assertTransitionActive);
         if (releasing) {
           await next.release();
-          throw new SessionWorkStartChangedError("Session reader operation is no longer current");
+          assertReaderOperation();
         }
         operationAdmission.databaseClaim = next;
         operationAdmission.reader = next.reader;

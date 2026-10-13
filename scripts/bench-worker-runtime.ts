@@ -6,7 +6,6 @@ import { availableParallelism, cpus } from "node:os";
 import { createHistogram, performance } from "node:perf_hooks";
 import { setImmediate } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getTrackedWorkerLifecycleSnapshot } from "../src/infra/worker-cpu.js";
 import {
@@ -164,27 +163,19 @@ function parseOptions(): Options {
   return parsed;
 }
 
-/** Always join cleanup, preserving both failures instead of letting teardown replace the result. */
+/** Cleanup is always awaited; if both phases fail, its error takes precedence. */
 async function withJoinedCleanup<Value, Cleanup>(
   measure: () => Promise<Value>,
   cleanup: () => Promise<Cleanup>,
 ) {
-  const [measured] = await Promise.allSettled([Promise.resolve().then(measure)]);
-  const [cleaned] = await Promise.allSettled([Promise.resolve().then(cleanup)]);
-  if (measured.status === "rejected") {
-    if (cleaned.status === "rejected") {
-      throw new AggregateError(
-        [measured.reason, cleaned.reason],
-        `${toErrorObject(measured.reason, "Measurement failed").message}; additionally cleanup failed: ${toErrorObject(cleaned.reason, "Cleanup failed").message}`,
-        { cause: measured.reason },
-      );
-    }
-    throw measured.reason;
+  let value: Value;
+  let cleaned: Cleanup;
+  try {
+    value = await measure();
+  } finally {
+    cleaned = await cleanup();
   }
-  if (cleaned.status === "rejected") {
-    throw cleaned.reason;
-  }
-  return { value: measured.value, cleanup: cleaned.value };
+  return { value, cleanup: cleaned };
 }
 
 function cpuDelta(start: NodeJS.CpuUsage) {

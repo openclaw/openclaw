@@ -242,6 +242,7 @@ describe("agent run session target", () => {
 
     await expect(
       resolveAgentRunSessionTarget({
+        config: { session: { store: storePath } },
         sessionId: "legacy-session",
         sessionFile: formatSqliteSessionFileMarker({
           agentId: "main",
@@ -253,6 +254,7 @@ describe("agent run session target", () => {
 
     await expect(
       resolveAgentRunSessionTarget({
+        config: { session: { store: storePath } },
         sessionId: "legacy-session",
         sessionKey,
         sessionFile: formatSqliteSessionFileMarker({
@@ -267,6 +269,7 @@ describe("agent run session target", () => {
   it("rejects a partial typed key from another marker agent", async () => {
     await expect(
       resolveAgentRunSessionTarget({
+        config: {},
         sessionId: "legacy-session",
         sessionFile: formatSqliteSessionFileMarker({
           agentId: "main",
@@ -284,6 +287,7 @@ describe("agent run session target", () => {
   it("rejects a compatibility key from another target agent", async () => {
     await expect(
       resolveAgentRunSessionTarget({
+        config: {},
         sessionId: "compat-session",
         sessionFile: "agent:helper:compat-session",
         sessionTarget: { agentId: "main", sessionId: "compat-session" },
@@ -294,6 +298,7 @@ describe("agent run session target", () => {
   it("does not let a partial typed target suppress file-backed rejection", async () => {
     await expect(
       resolveAgentRunSessionTarget({
+        config: {},
         sessionId: "legacy-session",
         sessionFile: path.join(tempDir, "legacy-session.jsonl"),
         sessionTarget: { agentId: "main", sessionId: "legacy-session" },
@@ -304,6 +309,7 @@ describe("agent run session target", () => {
   it("rejects a partial typed target that conflicts with a legacy marker", async () => {
     await expect(
       resolveAgentRunSessionTarget({
+        config: {},
         sessionId: "legacy-session",
         sessionFile: formatSqliteSessionFileMarker({
           agentId: "main",
@@ -320,6 +326,7 @@ describe("agent run session target", () => {
 
     await expect(
       resolveAgentRunSessionTarget({
+        config: {},
         sessionId: "old-session",
         sessionFile: `sqlite:helper:old-session:${path.join(tempDir, "old.json")}`,
         sessionTarget: {

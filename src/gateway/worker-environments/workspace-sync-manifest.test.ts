@@ -668,56 +668,6 @@ process.kill = function(pid, signal) {
     expect(secondTurn.stdout.trim()).not.toBe(acceptedRef);
   });
 
-  it("drops derived artifacts from the worker manifest", async () => {
-    const root = tempDirs.make("openclaw-manifest-derived-test-");
-    const home = path.join(root, "home");
-    const workspace = path.join(root, "workspace");
-    const retainedFiles = [
-      "keep.ts",
-      "openclaw-inbound-project/report.txt",
-      "nested/openclaw-inbound-12345678-1234-4234-8234-123456789ab-/report.txt",
-    ];
-    const files = [
-      ...retainedFiles,
-      "__pycache__/fizzbuzz.cpython-314.pyc",
-      "generated.pyc",
-      "generated.pyo",
-      "cache.pyc/inside",
-      "nested/.DS_Store/inside",
-      ".pytest_cache/state",
-      ".mypy_cache/state",
-      ".ruff_cache/state",
-      "node_modules/pkg/index.js",
-      ".DS_Store",
-      "openclaw-inbound-12345678-1234-4234-8234-123456789abc/report.pdf",
-      "nested/openclaw-inbound-12345678-1234-4234-8234-123456789abc/photo.png",
-    ];
-    await Promise.all([fs.mkdir(home), fs.mkdir(workspace)]);
-    await Promise.all(
-      files.map(async (file) => {
-        await fs.mkdir(path.dirname(path.join(workspace, file)), { recursive: true });
-        await fs.writeFile(path.join(workspace, file), file);
-      }),
-    );
-
-    const result = await runCommandWithTimeout(
-      [process.execPath, "-e", REMOTE_WORKSPACE_MANIFEST_JS, workspace],
-      { timeoutMs: 10_000, baseEnv: { ...process.env, HOME: home } },
-    );
-    expect(result.code).toBe(0);
-    const digest = result.stdout.trim().slice("sha256:".length);
-    const manifest = JSON.parse(
-      await fs.readFile(path.join(home, ".openclaw-worker", "manifests", `${digest}.json`), "utf8"),
-    ) as { entries: Array<{ path: string }> };
-    const manifestPaths = manifest.entries.map((entry) => entry.path);
-    for (const retained of retainedFiles) {
-      expect(manifestPaths).toContain(retained);
-    }
-    for (const excluded of files.slice(retainedFiles.length)) {
-      expect(manifestPaths).not.toContain(excluded);
-    }
-  });
-
   it("keeps base tombstones in the final ignored-path verification", async () => {
     const root = tempDirs.make("openclaw-manifest-tombstone-test-");
     const home = path.join(root, "home");

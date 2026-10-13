@@ -48,6 +48,7 @@ import {
   readTranscriptMutationStateInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
 import {
+  readTranscriptExportStatsFromDatabase,
   readTranscriptStatsBatchFromDatabase,
   readTranscriptStatsFromDatabase,
 } from "./session-accessor.sqlite-transcript-stats.js";
@@ -57,7 +58,10 @@ import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import type { SessionTranscriptReadSnapshot } from "./session-history-read.types.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import { SessionTranscriptStorageUnavailableError } from "./session-transcript-projection-error.js";
-import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
+import {
+  captureSessionTranscriptQuestionAnswers,
+  resolveSqliteSessionTranscriptReadFence,
+} from "./session-transcript-read-fence.js";
 import {
   transcriptEventJsonSql,
   transcriptEventNavigationSql,
@@ -84,9 +88,6 @@ export function createTranscriptIdentityReader(
   const actor = readSessionActorTransactionState(database, { sessionId });
   if (actor) {
     return (eventId: string) => {
-      if (readSessionActorTransactionState(database, { sessionId }) !== actor) {
-        throw new Error("Transcript identity reader escaped its actor transaction");
-      }
       if (actor.transcript.coldArchive) {
         throw new SessionTranscriptColdError(sessionId);
       }
@@ -159,6 +160,12 @@ export function readTranscriptExportSnapshotReadOnlySync(
     projection?: "reset-boundary";
     /** Reduce each decoded event synchronously before retaining the snapshot. */
     projectEvent?: (event: TranscriptEvent) => TranscriptEvent;
+    /** Worker-owned projection from the preceding export; null starts an incremental reader. */
+    previous?: {
+      events: TranscriptEvent[];
+      generation: string | null;
+      throughSeq: number;
+    } | null;
   } = {},
 ) {
   const resolved = resolveSqliteTranscriptReadScope(scope);
@@ -168,6 +175,28 @@ export function readTranscriptExportSnapshotReadOnlySync(
         database.db,
         () => {
           const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
+          const { stats, generation, cold } =
+            options.previous !== undefined
+              ? readTranscriptExportStatsFromDatabase(database, resolved.sessionId)
+              : {
+                  stats: readTranscriptStatsFromDatabase(database, resolved.sessionId),
+                  generation: null,
+                  cold: false,
+                };
+          // Cached rows must still enter the existing archive restoration path.
+          if (cold) {
+            throw new SessionTranscriptColdError(resolved.sessionId);
+          }
+          const throughSeq = Math.min(
+            stats.eventCount === 0 ? -1 : stats.maxSeq,
+            fence ? fence.beforeRawSeq - 1 : Number.POSITIVE_INFINITY,
+          );
+          const previous =
+            generation !== null &&
+            options.previous?.generation === generation &&
+            options.previous.throughSeq <= throughSeq
+              ? options.previous
+              : undefined;
           const sessionKey =
             resolved.sessionKey ??
             executeSqliteQueryTakeFirstSync(
@@ -179,13 +208,20 @@ export function readTranscriptExportSnapshotReadOnlySync(
                 .limit(1),
             )?.session_key;
           return {
-            events: loadTranscriptEventsFromDatabase(database, resolved.sessionId, {
-              ...options,
-              beforeEventSeq: fence?.beforeRawSeq,
-              maxEventBytes: scope.maxEventBytes,
-            }),
-            stats: readTranscriptStatsFromDatabase(database, resolved.sessionId),
+            events: [
+              ...(previous?.events ?? []),
+              ...(previous?.throughSeq === throughSeq
+                ? []
+                : loadTranscriptEventsFromDatabase(database, resolved.sessionId, {
+                    ...options,
+                    beforeEventSeq: fence?.beforeRawSeq,
+                    afterEventSeq: previous?.throughSeq,
+                    maxEventBytes: scope.maxEventBytes,
+                  })),
+            ],
+            stats,
             sessionKey,
+            ...(options.previous !== undefined ? { generation, throughSeq } : {}),
           };
         },
         { operationLabel: "session transcript export snapshot" },
@@ -262,6 +298,11 @@ export function validatePreparedAssistantAppendSync(
 ): number | null | undefined {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const questionAnswers = captureSessionTranscriptQuestionAnswers(
+    database,
+    resolved.sessionId,
+    admittedUserId,
+  );
   return runSqliteDeferredTransactionSync(
     database.db,
     () =>
@@ -270,6 +311,7 @@ export function validatePreparedAssistantAppendSync(
         resolved.sessionId,
         preparedParentId,
         admittedUserId,
+        questionAnswers?.answers,
       )
         ? readTranscriptMutationStateInTransaction(database, resolved.sessionId).updatedAt
         : undefined,
@@ -337,6 +379,7 @@ export function prepareTranscriptEventReadQuery(
   sessionId: string,
   options: {
     beforeEventSeq?: number;
+    afterEventSeq?: number;
     maxEventBytes?: number;
   } = {},
 ) {
@@ -359,6 +402,9 @@ export function prepareTranscriptEventReadQuery(
   return db
     .selectFrom("transcript_events")
     .where("session_id", "=", sessionId)
+    .$if(options.afterEventSeq !== undefined, (query) =>
+      query.where("seq", ">", options.afterEventSeq!),
+    )
     .$if(beforeEventSeq !== undefined, (query) => query.where("seq", "<", beforeEventSeq!));
 }
 
@@ -367,6 +413,7 @@ export function loadTranscriptEventsFromDatabase(
   sessionId: string,
   options: {
     beforeEventSeq?: number;
+    afterEventSeq?: number;
     projection?: "reset-boundary";
     maxEventBytes?: number;
     projectEvent?: (event: TranscriptEvent) => TranscriptEvent;

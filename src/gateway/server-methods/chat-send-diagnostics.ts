@@ -17,7 +17,7 @@ const PHASES = [
   "response",
   "dispatch",
 ] as const;
-type ChatSendPhase = (typeof PHASES)[number];
+type ChatSendPhase = (typeof PHASES)[number] | `detail.${string}`;
 type PhaseScope = { mark: (phase?: ChatSendPhase) => void; finish: () => void };
 type PostAckStage = "startup" | "steer" | "queued";
 
@@ -61,7 +61,10 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
       if (acknowledgedMs !== undefined) {
         message += ` ack=${Math.round(acknowledgedMs)}ms`;
       }
-      for (const phase of PHASES) {
+      for (const phase of [
+        ...PHASES,
+        ...[...totals.keys()].filter((name) => name.startsWith("detail.")).toSorted(),
+      ]) {
         const durationMs = totals.get(phase);
         if (durationMs === undefined) {
           continue;
@@ -102,33 +105,38 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
       active.clear();
     }
   };
-  return {
-    scope(initialPhase: ChatSendPhase): PhaseScope | undefined {
-      if (finished) {
-        return undefined;
+  const scope = (initialPhase: ChatSendPhase): PhaseScope | undefined => {
+    if (finished) {
+      return undefined;
+    }
+    let phase: ChatSendPhase | undefined = initialPhase;
+    let phaseStartedAt = performance.now();
+    const flush = (now: number) => {
+      if (phase) {
+        totals.set(phase, (totals.get(phase) ?? 0) + now - phaseStartedAt);
       }
-      let phase: ChatSendPhase | undefined = initialPhase;
-      let phaseStartedAt = performance.now();
-      const flush = (now: number) => {
-        if (phase) {
-          totals.set(phase, (totals.get(phase) ?? 0) + now - phaseStartedAt);
+      phaseStartedAt = now;
+    };
+    active.add(flush);
+    const phaseScope: PhaseScope = {
+      mark(nextPhase) {
+        if (active.has(flush)) {
+          flush(performance.now());
+          phase = nextPhase;
         }
-        phaseStartedAt = now;
-      };
-      active.add(flush);
-      const scope: PhaseScope = {
-        mark(nextPhase) {
-          if (active.has(flush)) {
-            flush(performance.now());
-            phase = nextPhase;
-          }
-        },
-        finish() {
-          scope.mark();
-          active.delete(flush);
-        },
-      };
-      return scope;
+      },
+      finish() {
+        phaseScope.mark();
+        active.delete(flush);
+      },
+    };
+    return phaseScope;
+  };
+  return {
+    scope,
+    observeSpan: (name: string, attributes: Record<string, unknown> | undefined) => {
+      const spanName = name === "agent.prepare" ? attributes?.stage : name;
+      return typeof spanName === "string" ? scope(`detail.${spanName}`)?.finish : undefined;
     },
     acknowledge(disposition: PostAckStage = "startup") {
       if (!finished && stage === "request") {

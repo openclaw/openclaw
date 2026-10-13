@@ -1,7 +1,6 @@
 import { Type, type Static } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
-import { redactToolPayloadText } from "../../logging/redact.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -121,11 +120,10 @@ function sanitizeHit(params: {
   ) {
     return undefined;
   }
-  const sanitized = redactToolPayloadText(hit.snippet);
   const snippet =
-    sanitized.length > SESSIONS_SEARCH_SNIPPET_MAX_CHARS
-      ? `${truncateUtf16Safe(sanitized, SESSIONS_SEARCH_SNIPPET_MAX_CHARS)}…`
-      : sanitized;
+    hit.snippet.length > SESSIONS_SEARCH_SNIPPET_MAX_CHARS
+      ? `${truncateUtf16Safe(hit.snippet, SESSIONS_SEARCH_SNIPPET_MAX_CHARS)}…`
+      : hit.snippet;
   return {
     sessionKey: resolveDisplaySessionKey({
       key: hit.sessionKey,

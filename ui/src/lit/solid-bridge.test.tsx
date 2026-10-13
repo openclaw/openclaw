@@ -1,12 +1,13 @@
 import { ContextProvider } from "@lit/context";
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
-import { LitElement, html } from "lit";
-import { createEffect, createSignal, flush, onCleanup } from "solid-js";
+import { LitElement, html, render as renderLit } from "lit";
+import { createEffect, createMemo, createSignal, flush, onCleanup } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { ShellLayoutOwner } from "../app/shell-layout-owner.ts";
 import { ShellLayoutBoundary, ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
 import { ApplicationProvider, useApplication } from "../lib/reactive/context.ts";
+import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { collectGarbageForTest } from "../test-helpers/garbage-collection.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { defineSolidBridge, LitContent, type SolidBridgeElement } from "./solid-bridge.ts";
@@ -16,11 +17,13 @@ type Methods = { show(): void; close(): void; setPayload(value: object): object 
 type Host = SolidBridgeElement<Props, Methods>;
 const mounted = vi.fn<(value: object) => void>();
 const disposed = vi.fn();
+const connected = vi.fn();
+const disconnected = vi.fn();
 const changed = vi.fn<(host: Host, key: keyof Props) => void>();
 const Bridge = defineSolidBridge<Props, Methods>(
   "openclaw-solid-bridge-test",
   (props, host) => {
-    const local = { id: "owned" };
+    const local = { id: props.label };
     mounted(local);
     onCleanup(() => disposed(local));
     return (
@@ -48,6 +51,8 @@ const Bridge = defineSolidBridge<Props, Methods>(
     );
   },
   {
+    connected,
+    disconnected,
     properties: {
       label: { default: "initial" },
       enabled: { default: false, type: Boolean, reflect: true },
@@ -71,7 +76,7 @@ const Bridge = defineSolidBridge<Props, Methods>(
 );
 
 function createHost() {
-  return document.createElement("openclaw-solid-bridge-test") as Host;
+  return new Bridge.Element();
 }
 
 it("runs Solid caller effects after the parent render completes", () => {
@@ -96,6 +101,8 @@ it("runs Solid caller effects after the parent render completes", () => {
 beforeEach(() => {
   mounted.mockClear();
   disposed.mockClear();
+  connected.mockClear();
+  disconnected.mockClear();
   changed.mockReset();
 });
 afterEach(async () => {
@@ -104,28 +111,37 @@ afterEach(async () => {
   await Promise.resolve();
 });
 
-it("mounts once, mirrors attributes/properties, and preserves synchronous imperative methods", async () => {
-  const host = createHost();
-  host.setAttribute("label", "attribute");
-  host.setAttribute("item-count", "4");
-  host.show();
-  const payload = {};
-  expect(host.setPayload(payload)).toBe(payload);
-  expect(host.enabled).toBe(true);
-  document.body.append(host);
-  await host.updateComplete;
-  expect(host.querySelector("output")?.textContent).toBe("attribute:4:true");
-  expect(host.payload).toBe(payload);
-  expect(host.hasAttribute("payload")).toBe(false);
-  expect(mounted).toHaveBeenCalledTimes(1);
+it.each([false, true])(
+  "mounts once and preserves setup reads with application provider: %s",
+  async (withProvider) => {
+    const host = createHost();
+    host.setAttribute("label", "attribute");
+    host.setAttribute("item-count", "4");
+    host.show();
+    const payload = {};
+    expect(host.setPayload(payload)).toBe(payload);
+    expect(host.enabled).toBe(true);
+    // SAFETY: this bridge test transports context without reading any capabilities.
+    const container = withProvider
+      ? createApplicationContextProvider({} as ApplicationContext)
+      : document.createElement("div");
+    container.append(host);
+    document.body.append(container);
+    await host.updateComplete;
+    expect(host.querySelector("output")?.textContent).toBe("attribute:4:true");
+    expect(host.payload).toBe(payload);
+    expect(host.hasAttribute("payload")).toBe(false);
+    expect(mounted).toHaveBeenCalledTimes(1);
 
-  host.label = "property";
-  host.removeAttribute("enabled");
-  host.close();
-  await host.updateComplete;
-  expect(host.querySelector("output")?.textContent).toBe("property:4:false");
-  expect(mounted).toHaveBeenCalledTimes(1);
-});
+    host.label = "property";
+    host.removeAttribute("enabled");
+    host.close();
+    await host.updateComplete;
+    expect(host.querySelector("output")?.textContent).toBe("property:4:false");
+    expect(host.querySelector("section")?.getAttribute("data-owned")).toBe("attribute");
+    expect(mounted).toHaveBeenCalledTimes(1);
+  },
+);
 
 it("publishes changed properties synchronously before rendering and suppresses equal assignments", async () => {
   const host = createHost();
@@ -166,21 +182,78 @@ it("commits Solid DOM before a Lit parent updateComplete resumes", async () => {
   expect(parent.querySelector("output")?.textContent).toBe("next:0:false");
 });
 
+it("batches Lit property bursts without invalidating unrelated Solid computations", async () => {
+  const labels = vi.fn((value: string) => value);
+  const counts = vi.fn((value: number) => value);
+  const mount = vi.fn();
+  let readLabel = () => "";
+  defineSolidBridge<{ label: string; count: number }>(
+    "openclaw-solid-granular-test",
+    (props) => {
+      mount();
+      readLabel = () => props.label;
+      const label = createMemo(() => labels(props.label));
+      const count = createMemo(() => counts(props.count));
+      return (
+        <output>
+          {label()}:{count()}
+          <input />
+        </output>
+      );
+    },
+    { properties: { label: { default: "initial" }, count: { default: 0 } } },
+  );
+  const host = document.createElement("openclaw-solid-granular-test") as SolidBridgeElement<{
+    label: string;
+    count: number;
+  }>;
+  document.body.append(host);
+  await host.updateComplete;
+  const input = host.querySelector("input")!;
+  input.value = "draft";
+  labels.mockClear();
+  counts.mockClear();
+
+  host.label = "intermediate";
+  host.label = "final";
+  expect(host.label).toBe("final");
+  expect(readLabel()).toBe("final");
+  await host.updateComplete;
+  expect(host.textContent).toBe("final:0");
+  expect(labels).toHaveBeenCalledExactlyOnceWith("final");
+  expect(counts).not.toHaveBeenCalled();
+  expect(mount).toHaveBeenCalledTimes(1);
+  expect(host.querySelector("input")).toBe(input);
+  expect(input.value).toBe("draft");
+
+  labels.mockClear();
+  host.count = 2;
+  await host.updateComplete;
+  expect(host.textContent).toBe("final:2");
+  expect(labels).not.toHaveBeenCalled();
+  expect(counts).toHaveBeenCalledExactlyOnceWith(2);
+});
+
 it("keeps the same root across moves and releases/recreates it after a real disconnect", async () => {
   const left = document.createElement("div");
   const right = document.createElement("div");
   document.body.append(left, right);
   const host = createHost();
   left.append(host);
+  expect(connected).toHaveBeenCalledExactlyOnceWith(host);
   await host.updateComplete;
   const section = host.querySelector("section");
   right.append(host);
+  expect(disconnected).toHaveBeenCalledExactlyOnceWith(host);
+  expect(connected).toHaveBeenCalledTimes(2);
   await host.updateComplete;
   expect(host.querySelector("section")).toBe(section);
   expect(mounted).toHaveBeenCalledTimes(1);
   expect(disposed).not.toHaveBeenCalled();
 
   host.remove();
+  expect(disconnected).toHaveBeenCalledTimes(2);
+  expect(disposed).not.toHaveBeenCalled();
   await Promise.resolve();
   expect(disposed).toHaveBeenCalledTimes(1);
   expect(host.childNodes).toHaveLength(0);
@@ -218,6 +291,43 @@ it("preserves caller content through updates and reconnects", async () => {
   second.remove();
   expect(input.value).toBe("last");
   expect(host.querySelectorAll("input")).toHaveLength(1);
+});
+
+it("keeps a tooltip's named caller slots live through Lit updates and reconnect", async () => {
+  await import("../components/tooltip.ts");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const update = (label: string) =>
+    renderLit(
+      html`<openclaw-tooltip content="Details">
+        <button>${label}</button>
+        <div slot="content">Rich ${label}</div>
+      </openclaw-tooltip>`,
+      container,
+    );
+  update("first");
+  const host = container.querySelector("openclaw-tooltip")!;
+  await host.updateComplete;
+  const trigger = host.querySelector("button")!;
+  const content = host.querySelector('[slot="content"]')!;
+  const assigned = () =>
+    host.shadowRoot!.querySelector<HTMLSlotElement>('slot[name="content"]')!.assignedElements();
+  expect(assigned()).toEqual([content]);
+  update("next");
+  await host.updateComplete;
+  expect(host.querySelector("button")).toBe(trigger);
+  expect(trigger.textContent).toBe("next");
+  expect(content.textContent).toBe("Rich next");
+  host.remove();
+  await Promise.resolve();
+  container.append(host);
+  await host.updateComplete;
+  expect(host.querySelector("button")).toBe(trigger);
+  expect(assigned()).toEqual([content]);
+  update("last");
+  await host.updateComplete;
+  expect(trigger.textContent).toBe("last");
+  expect(content.textContent).toBe("Rich last");
 });
 
 it("delivers the original bubbling, cancelable event with its exact detail", async () => {
@@ -285,6 +395,7 @@ it("uses a single Solid-owned host and preserves reactive props, children, event
   expect(view.container.querySelectorAll("openclaw-solid-bridge-test")).toHaveLength(1);
   expect(mounted).toHaveBeenCalledTimes(1);
   expect(host?.className).toBe("direct");
+  expect(connected).toHaveBeenCalledExactlyOnceWith(host);
   host?.show();
   const payload = {};
   host?.setPayload(payload);
@@ -296,6 +407,7 @@ it("uses a single Solid-owned host and preserves reactive props, children, event
   fireEvent.click(view.getByRole("button"));
   expect(action).toHaveBeenCalledTimes(1);
   view.unmount();
+  expect(disconnected).toHaveBeenCalledExactlyOnceWith(host);
   await Promise.resolve();
   expect(disposed).toHaveBeenCalledTimes(1);
 });
@@ -353,6 +465,7 @@ it.each(["attribute", "Solid props"])(
 
 it("provides the existing Lit application context, rebinds replacements, and unsubscribes", async () => {
   const seen = vi.fn();
+  const connection = vi.fn();
   const ContextBridge = defineSolidBridge(
     "openclaw-solid-context-test",
     () => {
@@ -360,7 +473,7 @@ it("provides the existing Lit application context, rebinds replacements, and uns
       seen(application);
       return <output>{application.basePath}</output>;
     },
-    { properties: {} },
+    { properties: {}, connected: connection },
   );
   const first = { basePath: "/first" } as ApplicationContext;
   const second = { basePath: "/second" } as ApplicationContext;
@@ -378,6 +491,7 @@ it("provides the existing Lit application context, rebinds replacements, and uns
   await host.updateComplete;
   expect(host.textContent).toBe("/second");
   expect(seen).toHaveBeenLastCalledWith(second);
+  expect(connection).toHaveBeenCalledExactlyOnceWith(host);
   host.remove();
   await Promise.resolve();
   seen.mockClear();

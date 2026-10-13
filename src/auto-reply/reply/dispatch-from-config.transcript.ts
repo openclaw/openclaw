@@ -23,20 +23,6 @@ type TranscriptMirror = NonNullable<ReplyPayloadMetadata["sourceReplyTranscriptM
   commandId?: string;
 };
 
-export function scopeCommandTranscriptId(
-  messageId: string | undefined,
-  context: { channelId?: string; accountId?: string; conversationId?: string },
-): string | undefined {
-  return messageId
-    ? JSON.stringify([
-        context.channelId ?? "",
-        context.accountId ?? "",
-        context.conversationId ?? "",
-        messageId,
-      ])
-    : undefined;
-}
-
 function transcriptMirrorExpectations(mirror: TranscriptMirror) {
   return {
     ...(mirror.expectedSessionId ? { expectedSessionId: mirror.expectedSessionId } : {}),

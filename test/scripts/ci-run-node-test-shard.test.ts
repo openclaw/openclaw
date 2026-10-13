@@ -1017,6 +1017,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
               warmup: env.BUN_JSC_thresholdForFTLOptimizeAfterWarmUp,
               soon: env.BUN_JSC_thresholdForFTLOptimizeSoon,
               ftlEnabled: env.BUN_JSC_useFTLJIT,
+              gcAllocationBytes: env.BUN_JSC_gcMaxHeapSize,
               allocatorInterval: env.MIMALLOC_PURGE_HOLES_MIN_INTERVAL,
             });
             return 0;
@@ -1029,6 +1030,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
           warmup: undefined,
           soon: undefined,
           ftlEnabled: undefined,
+          gcAllocationBytes: undefined,
           allocatorInterval: undefined,
         },
         {
@@ -1036,6 +1038,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
           warmup: "512000",
           soon: "8000",
           ftlEnabled: undefined,
+          gcAllocationBytes: "268435456",
           allocatorInterval: "1000",
         },
       ];

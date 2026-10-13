@@ -341,7 +341,6 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
         throw new Error("continuation fixture failed");
       },
       sync: async () => {},
-      setCliExecutionProvider: async () => {},
       seal: async () => {},
     });
     const release = vi.fn(async () => {});

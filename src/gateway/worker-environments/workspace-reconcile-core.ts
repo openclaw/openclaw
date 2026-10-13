@@ -61,6 +61,7 @@ export async function inspectAcceptedWorkerWorkspace(params: {
   allowAdvancedLocalState?: boolean;
   base: WorkerWorkspaceManifest;
   current: WorkerWorkspaceManifest;
+  additionalPaths?: ReadonlySet<string>;
 }): Promise<WorkerWorkspaceApplyResult | undefined> {
   const root = await fs.realpath(params.root);
   const preserveDirectories = new Set(
@@ -72,6 +73,7 @@ export async function inspectAcceptedWorkerWorkspace(params: {
   const includePaths = params.current.baseCommit
     ? new Set([...manifestNodes(params.base).keys(), ...manifestNodes(params.current).keys()])
     : undefined;
+  params.additionalPaths?.forEach((entryPath) => includePaths?.add(entryPath));
   const actual = await captureWorkspaceManifest({
     root,
     baseCommit: params.current.baseCommit,

@@ -15,6 +15,16 @@ resume them. Recovery is always on. Exhausted infrastructure retries, or a
 missing durable message-action authority claim, may tombstone one session
 until you inspect or replace it.
 
+Inter-session steering updates remain context for the executing turn. When that
+turn retains a human Control UI or channel source claim, recovery uses the claim
+rather than treating the latest steering message as a new delegated request.
+The existing source-authorization and delivery checks still apply; a transcript
+message alone cannot restore missing sender authority.
+
+This includes automation turns running in dashboard main sessions. If a restart
+exhausts its drain budget, cancellation preserves restart recovery even when the
+provider reports an error and the turn settles before shutdown discovers it.
+
 This page describes what survives a restart, how interrupted work is detected,
 and what the automatic resume looks like.
 
@@ -156,6 +166,13 @@ CLI shutdown drains process-wide work. Closing an individual Gateway drains its
 own active chat runs and queued turns, and waits on the process-wide pending-reply
 count. Both report remaining work as named counts; categories can overlap and
 should not be added as distinct turns.
+
+Transcript index reconciliation gets five seconds to finish during final cleanup.
+After that, shutdown logs the stalled worker, cancels further projection work,
+and terminates its native task. It still waits for accepted writes and database
+lease cleanup before closing agent databases. Committed transcripts remain intact;
+unfinished index work is rediscovered after restart. Idle pools close immediately.
+This also applies to update restarts once the running Gateway contains this fix.
 
 When Gateway connection shutdown begins, session observer event subscriptions
 stop before the observer closes. Accepted observer work still settles, while
@@ -874,6 +891,14 @@ keeps its normal session and ownership checks. Unfinished runs still reconcile
 the current child session before resuming.
 They are not automatically relaunched.
 The parent receives the interruption outcome and owns finishing the user's task.
+For native children with completion notifications disabled, recovery sends a
+private continuation to the original parent when its saved session identity still
+matches. Normal successful completion stays quiet. A reset or cancellation does
+not authorize a continuation into a replacement parent session.
+Cancelled turns can retain a cleanup lease briefly. That lease does not make them
+restart candidates; an immediate Gateway restart preserves their terminal outcome.
+Finished executions whose final reply is still pending retain their recovery
+custody, as do turns interrupted by the restart itself.
 Its recovery input lists current unfinished child session and run identities,
 including children interrupted by the restart. Older runs superseded by a newer
 child run are omitted, as are records from another store, parent session, or
@@ -890,7 +915,10 @@ already completed, assign a replacement, or finish the remaining work itself.
 Recovery does not automatically replay child commands or duplicate running work.
 An interruption alone is not a blocker; the parent continues until the request
 is finished or a specific blocker requires user input or unavailable authority.
-Existing cleanup and retention settings still apply.
+Interrupted native children retain their session history even when configured
+with `cleanup: "delete"`, so the parent can inspect and continue the unfinished
+work. Successful runs keep their configured cleanup behavior; normal history
+retention still applies.
 
 Startup retires superseded requester completion claims through the registry's
 cleanup owner before restoring the surviving claim.

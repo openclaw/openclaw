@@ -303,10 +303,12 @@ function buildMinimaxApiProviderPlugin(): ProviderPlugin {
       if (portalOauth) {
         return portalOauth;
       }
-      const apiKey = ctx.resolveApiKeyFromConfigAndStore({
-        providerIds: [API_PROVIDER_ID, PORTAL_PROVIDER_ID],
-        envDirect: MINIMAX_USAGE_ENV_VAR_KEYS.map((name) => ctx.env[name]),
-      });
+      const apiKey = (
+        await ctx.resolveApiKeyCandidatesFromConfigAndStore?.({
+          providerIds: [API_PROVIDER_ID, PORTAL_PROVIDER_ID],
+          envDirect: MINIMAX_USAGE_ENV_VAR_KEYS.map((name) => ctx.env[name]),
+        })
+      )?.[0];
       return apiKey ? { token: apiKey } : null;
     },
     ...MINIMAX_PROVIDER_HOOKS,

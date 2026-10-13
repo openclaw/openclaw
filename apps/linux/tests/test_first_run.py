@@ -1,12 +1,58 @@
+from contextlib import redirect_stdout
+import io
 import os
 from pathlib import Path
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from first_run import role_matches
-from gateway_switch import GatewayOnboardingFixture
+from gateway_switch import GatewayOnboardingFixture, GatewaySwitchFixture
+from inline_browser import GatewayFixture
+
+
+class GatewayPointerTests(unittest.TestCase):
+    def test_reacquires_a_replaced_accessible_before_sending_one_click(self):
+        fixture = GatewaySwitchFixture.__new__(GatewaySwitchFixture)
+        fixture.chrome = Mock()
+        fixture.chrome.until.side_effect = lambda predicate, _label: predicate()
+        fixture.windows = Mock(return_value={"1": "OpenClaw"})
+        fixture.capture = Mock()
+        fixture.open_native_menu = Mock()
+        atspi = SimpleNamespace(
+            StateType=SimpleNamespace(ACTIVE="active"),
+            ScrollType=SimpleNamespace(ANYWHERE="anywhere"),
+            CoordType=SimpleNamespace(SCREEN="screen"),
+        )
+        stale, fresh = Mock(), Mock()
+        for node in (stale, fresh):
+            node.get_localized_role_name.return_value = "button"
+            node.get_state_set.return_value.contains.return_value = True
+        stale.get_component_iface.return_value = None
+        component = fresh.get_component_iface.return_value
+        component.get_extents.return_value = SimpleNamespace(x=10, y=20, width=80, height=30)
+
+        class ClickFinished(Exception):
+            pass
+
+        def wait(label, role=None, *, predicate=None):
+            if label != "Add Gateway":
+                return None
+            if role == "heading":
+                raise ClickFinished
+            for node in (stale, fresh):
+                if predicate(node):
+                    return node
+            self.fail("No clickable accessible found")
+
+        with patch("gateway_switch.time.sleep"), self.assertRaises(ClickFinished):
+            fixture.exercise(Mock(), None, wait, atspi, None)
+        component.scroll_to.assert_called_once_with("anywhere")
+        component.get_extents.assert_called_once_with("screen")
+        pointer_calls = [call.args for call in fixture.chrome.command.call_args_list if call.args[0] == "xdotool"]
+        self.assertEqual(pointer_calls, [("xdotool", "mousemove", "50", "35", "click", "1")])
 
 
 class OnboardingResourcesTests(unittest.TestCase):
@@ -113,6 +159,100 @@ class RoleMatchingTests(unittest.TestCase):
         ):
             with self.subTest(attributes=attributes):
                 self.assertFalse(role_matches("article", "heading", attributes))
+
+
+class NativeMenuTests(unittest.TestCase):
+    invalid_id = "org.gtk.GDBus.UnmappedGError.Quark._LIBDBUSMENU_2dGLIB.Code0"
+
+    def open_menu(self, rejection):
+        class BusError(RuntimeError):
+            pass
+
+        calls, delivered = [], []
+        current_id = 44
+        click_count = 0
+        error = BusError("Synthetic D-Bus rejection")
+        error.remote = rejection
+        app = SimpleNamespace(pid=1234, poll=lambda: None)
+
+        def variant(signature, value):
+            return SimpleNamespace(value=value, unpack=lambda: value)
+
+        def call(service, path, interface, method, arguments, *_args):
+            nonlocal current_id, click_count
+            values = arguments.value if arguments else None
+            calls.append((method, values))
+            if method == "ListNames":
+                result = ([":1.7"],)
+            elif method == "GetConnectionUnixProcessID":
+                result = (app.pid,)
+            elif method == "Introspect":
+                result = ('<node><interface name="com.canonical.dbusmenu"/></node>',)
+            elif method == "AboutToShow":
+                result = (False,)
+            elif method == "GetLayout":
+                item = (current_id, {"label": "Manage Gateways…"}, [])
+                submenu = (10, {"label": "Gateways", "children-display": "submenu"}, [item])
+                if values[0] == 0:
+                    if values[1] == 1:
+                        submenu = (submenu[0], submenu[1], [])
+                    result = (1, (0, {}, [submenu]))
+                else:
+                    result = (1, submenu)
+            elif method == "Event":
+                item_id, event, _, _ = values
+                if event == "clicked":
+                    click_count += 1
+                    if rejection and (click_count == 1 or rejection == "always-stale"):
+                        current_id = 45
+                        if rejection == "always-stale":
+                            error.remote = self.invalid_id
+                        raise error
+                    delivered.append(item_id)
+                result = ()
+            else:
+                raise AssertionError(f"Unexpected D-Bus call: {method}")
+            return variant("", result)
+
+        gio = SimpleNamespace(
+            bus_get_sync=lambda *_: SimpleNamespace(call_sync=call),
+            BusType=SimpleNamespace(SESSION=0),
+            DBusCallFlags=SimpleNamespace(NONE=0),
+            DBusError=SimpleNamespace(get_remote_error=lambda error: error.remote),
+        )
+        glib = SimpleNamespace(Variant=variant, Error=BusError)
+        modules = {"gi": SimpleNamespace(), "gi.repository": SimpleNamespace(Gio=gio, GLib=glib)}
+        self.calls, self.delivered = calls, delivered
+        with patch.dict("sys.modules", modules), redirect_stdout(io.StringIO()):
+            GatewayFixture.__new__(GatewayFixture).open_native_menu(app, "Manage Gateways…")
+
+    def test_refreshes_a_rejected_menu_id_and_delivers_one_click(self):
+        self.open_menu(self.invalid_id)
+        self.assertEqual(self.delivered, [45])
+        clicks = [values[0] for method, values in self.calls
+                  if method == "Event" and values[1] == "clicked"]
+        self.assertEqual(clicks, [44, 45])
+        first_click = next(index for index, (method, values) in enumerate(self.calls)
+                           if method == "Event" and values[1] == "clicked")
+        before_click = self.calls[:first_click]
+        self.assertIn(("AboutToShow", (0,)), before_click)
+        self.assertIn(("AboutToShow", (10,)), before_click)
+        self.assertTrue(any(method == "Event" and values[:2] == (10, "opened")
+                            for method, values in before_click))
+
+    def test_other_dbus_errors_are_not_retried(self):
+        with self.assertRaisesRegex(RuntimeError, "Synthetic D-Bus rejection"):
+            self.open_menu("org.freedesktop.DBus.Error.AccessDenied")
+        self.assertEqual(self.delivered, [])
+        self.assertEqual(sum(method == "Event" and values[1] == "clicked"
+                             for method, values in self.calls), 1)
+
+    def test_a_second_stale_id_is_not_retried_again(self):
+        with self.assertRaisesRegex(RuntimeError, "Synthetic D-Bus rejection"):
+            self.open_menu("always-stale")
+        self.assertEqual(self.delivered, [])
+        self.assertEqual(sum(method == "Event" and values[1] == "clicked"
+                             for method, values in self.calls), 2)
 
 
 if __name__ == "__main__":

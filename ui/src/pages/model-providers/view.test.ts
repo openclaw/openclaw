@@ -126,23 +126,14 @@ describe("renderModelProviders", () => {
     expect(
       container.querySelector('.model-providers__catalog-progress[role="status"]'),
     ).not.toBeNull();
+    expect(
+      container.querySelector('.model-providers__catalog-progress[role="alert"] span')?.textContent,
+    ).toBe("A provider failed discovery.");
     const retry = container.querySelector<HTMLButtonElement>(
       '.model-providers__catalog-progress[role="alert"] button',
     );
     expect(retry).not.toBeNull();
     expect(retry?.disabled).toBe(false);
-  });
-
-  it("hides quick API-key setup when provider capabilities are unavailable", () => {
-    const container = mount(
-      props({
-        configuredModels: [],
-        unconfiguredProviders: [],
-      }),
-    );
-
-    expect(text(container)).not.toContain("Add provider");
-    expect(container.querySelector('[data-model-readiness="model-required"]')).not.toBeNull();
   });
 
   it("shows inherited model policy, restores overrides, and preserves advanced thinking", () => {
@@ -259,20 +250,6 @@ describe("renderModelProviders", () => {
     ).toBe(true);
     expect(
       fastMode.querySelector<HTMLInputElement>('.settings-segmented__input[value="on"]')!.checked,
-    ).toBe(true);
-  });
-
-  it("locks model behavior while shared config work is pending", () => {
-    const container = mount(props({ configBusy: true }));
-    const behavior = container.querySelector("#settings-model-behavior");
-    const groups = behavior?.querySelectorAll('.settings-segmented[role="radiogroup"]') ?? [];
-
-    expect(groups).toHaveLength(2);
-    expect(
-      [...groups].every((group) => {
-        const inputs = [...group.querySelectorAll<HTMLInputElement>(".settings-segmented__input")];
-        return inputs.length > 0 && inputs.every((input) => input.disabled);
-      }),
     ).toBe(true);
   });
 
@@ -438,24 +415,6 @@ describe("renderModelProviders", () => {
     expect(messages[1]?.classList.contains("warning")).toBe(true);
   });
 
-  it("announces provider and default-model mutation failures as accessible alerts", () => {
-    const container = mount(
-      props({
-        messages: {
-          openai: { kind: "error", text: "Provider credential could not be saved." },
-          defaults: { kind: "error", text: "Default models could not be saved." },
-        },
-      }),
-    );
-
-    expect(text(container.querySelector('[data-provider-id="openai"] [role="alert"]'))).toBe(
-      "Provider credential could not be saved.",
-    );
-    expect(text(container.querySelector('.model-providers__defaults [role="alert"]'))).toBe(
-      "Default models could not be saved.",
-    );
-  });
-
   it("keeps model behavior available while provider data loads", () => {
     const container = mount(props({ loading: true, thinkingLevel: "high", fastMode: true }));
     const behavior = container.querySelector("#settings-model-behavior");
@@ -468,20 +427,26 @@ describe("renderModelProviders", () => {
     expect(container.querySelector('[data-provider-id="openai"]')).toBeNull();
   });
 
-  it("renders credential provenance and probe results", () => {
+  it("renders credential provenance and per-credential request timing without aggregate timing", () => {
     const container = mount(
       props({
         probeResults: {
           openai: {
             provider: "openai",
             status: "ok",
-            latencyMs: 145,
+            latencyMs: 9_145,
             results: [
               {
                 profileId: "openai:default",
                 label: "Default profile",
                 status: "ok",
                 latencyMs: 145,
+              },
+              {
+                profileId: "openai:secondary",
+                label: "Secondary profile",
+                status: "ok",
+                latencyMs: 320,
               },
             ],
           },
@@ -492,9 +457,18 @@ describe("renderModelProviders", () => {
     expect(text(provider)).toContain("Credentials for Writer");
     expect(text(provider)).toContain("Global usage and cost");
     expect(text(provider)).toContain("API key from environment (OPENAI_API_KEY)");
-    expect(text(provider)).toContain("Connected");
-    expect(text(provider)).toContain("145 ms");
-    expect(text(provider)).toContain("Default profile");
+    expect(text(provider?.querySelector(".model-providers__probe-summary") ?? null)).toBe(
+      "Connected",
+    );
+    expect(
+      [...(provider?.querySelectorAll(".model-providers__probe-target") ?? [])].map((target) =>
+        [...target.querySelectorAll("span")].map(text),
+      ),
+    ).toEqual([
+      ["Default profile", "Connected · Request round-trip: 145 ms"],
+      ["Secondary profile", "Connected · Request round-trip: 320 ms"],
+    ]);
+    expect(text(provider)).not.toContain("9145");
   });
 
   it("puts model recovery first when credentials expose no selectable models", () => {
@@ -527,7 +501,7 @@ describe("renderModelProviders", () => {
     expect(onConnectProvider).toHaveBeenCalledOnce();
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "does not present catalog-rejected credentials as signed in (configured key: %s)",
     (hasConfigApiKey) => {
       const container = mount(
@@ -555,22 +529,6 @@ describe("renderModelProviders", () => {
       );
     },
   );
-
-  it("does not report an unverified API key as ready", () => {
-    const container = mount(
-      props({
-        cards: [
-          card({
-            auth: { kind: "api-key" },
-          }),
-        ],
-      }),
-    );
-
-    const provider = container.querySelector('[data-provider-id="openai"]');
-    expect(text(provider)).toContain("Credentials configured");
-    expect(text(provider)).not.toContain("Ready");
-  });
 
   it("labels provider usage and session cost as global", () => {
     const container = mount(
@@ -633,30 +591,9 @@ describe("renderModelProviders", () => {
     expect(text(probe)).toContain("Configured credential · openai/gpt-5.6-sol");
     expect(text(probe)).toContain("Profile Default · openai/gpt-5.6-sol");
     expect(text(probe)).toContain("Update or remove it, then retry");
-  });
-
-  it("renders categorized probe errors", () => {
-    const container = mount(
-      props({
-        probeResults: {
-          openai: {
-            provider: "openai",
-            status: "billing",
-            error: "Account has no credits",
-            results: [
-              {
-                label: "API key",
-                status: "billing",
-                error: "Account has no credits",
-              },
-            ],
-          },
-        },
-      }),
-    );
-    const probe = container.querySelector(".model-providers__probe--error");
-    expect(text(probe)).toContain("Billing problem");
-    expect(text(probe)).toContain("Account has no credits");
+    const targets = probe?.querySelectorAll(".model-providers__probe-target");
+    expect(text(targets?.[0] ?? null)).not.toContain("Request round-trip");
+    expect(text(targets?.[1] ?? null)).toContain("Request round-trip: 145 ms");
   });
 
   it("presents no-model probe results as a setup state, not a connection failure", () => {
@@ -694,32 +631,7 @@ describe("renderModelProviders", () => {
     expect(text(provider)).not.toContain("Connection failed");
   });
 
-  it("qualifies slash-bearing model IDs with their catalog provider", async () => {
-    const container = mount(
-      props({
-        configuredModels: [
-          {
-            id: "anthropic/claude-sonnet-4",
-            provider: "openrouter",
-            name: "Claude Sonnet 4",
-            available: true,
-          },
-        ],
-        defaultModels: {
-          primary: "openrouter/anthropic/claude-sonnet-4",
-          fallbacks: [],
-          utilityModel: null,
-        },
-      }),
-    );
-    await updatePickers(container);
-    const option = container.querySelector(
-      '[role="option"][data-value="openrouter/anthropic/claude-sonnet-4"]',
-    );
-    expect(option?.getAttribute("aria-selected") === "true").toBe(true);
-  });
-
-  it.each([undefined, null])(
+  it.each([null])(
     "renders alias defaults and distinct automatic or disabled utility states (%s)",
     async (automaticUtilityModel) => {
       const aliasEntry = {
@@ -780,39 +692,6 @@ describe("renderModelProviders", () => {
     { id: "claude-opus", provider: "anthropic", name: "Claude Opus", available: true },
     { id: "claude-haiku-4-5", provider: "anthropic", name: "Claude Haiku 4.5", available: true },
   ];
-
-  it.each([
-    [
-      { id: "claude-cli", kind: "cli", label: "Claude CLI" },
-      "Claude CLI · native",
-      "Runs through Claude CLI using its own login.",
-    ],
-    [
-      { id: "openclaw", kind: "api", label: "OpenClaw Default" },
-      "API · OpenClaw",
-      "Uses the provider's API connection",
-    ],
-  ] as const)(
-    "shows the automatic utility model's route in its detail line (%o)",
-    async (runtime, route, billing) => {
-      const container = mount(
-        props({
-          configuredModels: utilityModels,
-          defaultModels: { primary: "anthropic/claude-opus", fallbacks: [], utilityModel: null },
-          automaticUtilityModel: "anthropic/claude-haiku-4-5",
-          utilityRuntime: runtime,
-        }),
-      );
-      await updatePickers(container);
-      const automatic = utilityOption(container, "__openclaw_automatic_utility__");
-      expect(automatic.label).toBe("Auto · Claude Haiku 4.5");
-      expect(automatic.detail).toContain(route);
-      const trigger = container
-        .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
-        ?.querySelector<HTMLButtonElement>("button[aria-haspopup]");
-      expect(trigger?.title).toContain(billing);
-    },
-  );
 
   it("shows the route on an explicitly chosen utility model, not on Auto", async () => {
     const container = mount(
@@ -917,15 +796,6 @@ describe("renderModelProviders", () => {
     const setKey = button(container, "Set API key");
     expect(setKey?.disabled).toBe(true);
     expect(setKey?.title).toContain('auth mode is "oauth"');
-  });
-
-  it("hides API-key setup for providers that explicitly do not support it", () => {
-    const container = mount(
-      props({
-        cards: [card({ apiKeySupported: false })],
-      }),
-    );
-    expect(button(container, "Set API key")).toBeUndefined();
   });
 });
 

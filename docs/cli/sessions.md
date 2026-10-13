@@ -39,6 +39,13 @@ session keys.
 Token counts below 1,000 appear as whole numbers; larger counts use compact `k`
 or `m` labels. JSON output retains exact numeric counts.
 
+The context denominator follows the selected model and runtime, using the local
+Gateway's published catalog, saved metadata, configured limits, or a matching
+verified run budget. Reading a session list does not start model discovery.
+Unknown capacity is `?` in the table and `null` in JSON, with no percentage.
+If Gateway inspection or its catalog read fails, the command warns and still lists
+stored sessions using saved or configured capacity.
+
 Flags:
 
 | Flag                 | Description                                                         |
@@ -99,7 +106,7 @@ skipped.
   "hasMore": false,
   "activeMinutes": null,
   "sessions": [
-    { "agentId": "main", "key": "agent:main:main", "model": "openai/gpt-6-astra" },
+    { "agentId": "main", "key": "agent:main:main", "model": "openai/gpt-5.6-sol" },
     { "agentId": "work", "key": "agent:work:main", "model": "anthropic/claude-sonnet-4-6" }
   ]
 }
@@ -302,9 +309,10 @@ guidance for listing valid keys, and an empty or whitespace-only `--session-key`
 is rejected. Without a key, an empty selection prints
 `No sessions found.` and exits successfully, including with `--follow`.
 
-The progress view is intentionally conservative: prompt text, tool arguments,
-and tool result bodies are not printed. Tool calls show the tool name with
-`{...redacted...}`; tool results show status such as `ok`, `error`, or `done`;
+The progress view omits prompt text and tool result bodies. Tool calls show the
+tool name and serialized arguments, without secret masking; this output can
+contain credentials, so review it before copying or sharing. Tool results show
+status such as `ok`, `error`, or `done`;
 model completion lines show provider/model and terminal status. Provider failures
 and turns without delivery show `error`; cancellation shows `aborted`, timeouts
 show `timeout`, and successful completions (including delivered partial replies)

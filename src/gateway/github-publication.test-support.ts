@@ -21,7 +21,7 @@ import {
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubPublicationRequesterSnapshot } from "../state/github-publication-requester.js";
-import { insertGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
+import { insertGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.worker.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -36,7 +36,7 @@ import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes
 import { currentGitHubPublicationConfig } from "./github-publication-availability.js";
 import {
   prepareGitHubPublicationRequesterV2,
-  type GitHubPublicationRequester,
+  type GitHubPublicationRequesterV2,
 } from "./github-publication-requester.js";
 import { createGitHubPublicationRuntime as createRuntime } from "./github-publication-runtime.js";
 import { createGitHubPublicationCoordinator as createCoordinator } from "./github-publication.js";
@@ -52,6 +52,7 @@ const mocks = vi.hoisted(() => ({
   findWorktreeById: vi.fn(),
   resolveRepository: vi.fn(),
   loadSession: vi.fn(),
+  persistedSessionKeys: new Set<string>(),
   getConfigSnapshot: vi.fn(),
   attribution: vi.fn(),
   prepareAttribution: vi.fn(),
@@ -135,15 +136,18 @@ vi.mock("./session-utils.js", async (importOriginal) => ({
   loadGatewaySessionEntryReadOnly: mocks.loadSession,
 }));
 
-// Preparation and live authority checks use the same fixture session state.
-vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
-  loadGatewaySessionEntryReadOnlyInWorker: async (
-    params: Parameters<
-      typeof import("./session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
-    >[0],
-  ) => mocks.loadSession(params.key, { agentId: params.agentId }),
-}));
+vi.mock("./session-utils-store-worker.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-utils-store-worker.js")>();
+  return {
+    ...actual,
+    loadGatewaySessionEntryReadOnlyInWorker: async (
+      params: Parameters<typeof actual.loadGatewaySessionEntryReadOnlyInWorker>[0],
+    ) =>
+      mocks.persistedSessionKeys.has(params.key)
+        ? actual.loadGatewaySessionEntryReadOnlyInWorker(params)
+        : mocks.loadSession(params.key, { agentId: params.agentId }),
+  };
+});
 
 vi.mock("../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/exec.js")>()),
@@ -159,18 +163,12 @@ vi.mock("./github-publication-git-index.js", async (importOriginal) => ({
   updateGitHubPublicationBranchAndIndex: mocks.updateIndex,
 }));
 
-export const systemPublicationRequester: GitHubPublicationRequester = Object.freeze({
-  snapshot: Object.freeze({
-    version: 1,
-    actor: Object.freeze({ kind: "system" }),
-    scopes: Object.freeze(["operator.admin"]),
-    grant: null,
-  }),
-  assertCurrent: () => {},
-  assertInvocationCurrent: () => {},
-});
+export let systemPublicationRequester: GitHubPublicationRequesterV2;
 
-export async function createSystemGitHubPublicationRequesterFixture() {
+export async function createSystemGitHubPublicationRequesterFixture(
+  session = { sessionKey: SESSION_KEY, agentId: "main" },
+  assertCurrent?: () => void,
+) {
   const { createSyntheticPluginRuntimeClient } = await import("./server-plugin-runtime-client.js");
   const captured = await prepareGitHubPublicationRequesterV2(
     {
@@ -179,55 +177,57 @@ export async function createSystemGitHubPublicationRequesterFixture() {
         scopes: ["operator.admin"],
       }),
       context: { getRuntimeConfig: currentGitHubPublicationConfig },
+      ...(assertCurrent
+        ? { sessionMutationAuthorization: { assertCurrent, assertTargetCurrent: assertCurrent } }
+        : {}),
     },
-    { sessionKey: SESSION_KEY, agentId: "main" },
+    session,
   );
   onTestFinished(captured.release);
   return captured;
 }
 
 type PublicationFixtureRequest<T> = Omit<T, "requester"> & {
-  requester?: GitHubPublicationRequester;
+  requester?: GitHubPublicationRequesterV2;
   assertCurrent?: () => void;
 };
 
-function bindPublicationFixtureRequest<
-  T extends { requester?: GitHubPublicationRequester; assertCurrent?: () => void },
+async function bindPublicationFixtureRequest<
+  T extends {
+    requester?: GitHubPublicationRequesterV2;
+    assertCurrent?: () => void;
+    sessionKey?: string;
+    agentId: string;
+  },
 >(input: T) {
   const { assertCurrent, ...request } = input;
-  const params = { requester: systemPublicationRequester, ...request };
-  const requester = params.requester;
+  const requester =
+    input.requester ??
+    (
+      await createSystemGitHubPublicationRequesterFixture(
+        { sessionKey: input.sessionKey ?? SESSION_KEY, agentId: input.agentId },
+        assertCurrent,
+      )
+    ).requester;
   return {
-    ...params,
-    requester: assertCurrent
-      ? {
-          snapshot: requester.snapshot,
-          assertCurrent: () => {
-            requester.assertCurrent();
-            assertCurrent();
-          },
-          assertInvocationCurrent: () => {
-            requester.assertInvocationCurrent();
-            assertCurrent();
-          },
-        }
-      : requester,
+    ...request,
+    requester,
   };
 }
 
 function withSystemRequesterFixture(coordinator: ReturnType<typeof createCoordinator>) {
-  const requestForSession = coordinator.requestForSession.bind(coordinator);
-  const requestForClaim = coordinator.requestForClaim;
+  const requestForSession = coordinator.requestForSessionV2.bind(coordinator);
+  const requestForClaim = coordinator.requestForClaimV2.bind(coordinator);
   return Object.assign(coordinator, {
-    requestForSession(
-      input: PublicationFixtureRequest<Parameters<typeof coordinator.requestForSession>[0]>,
+    async requestForSessionV2(
+      input: PublicationFixtureRequest<Parameters<typeof coordinator.requestForSessionV2>[0]>,
     ) {
-      return requestForSession(bindPublicationFixtureRequest(input));
+      return requestForSession(await bindPublicationFixtureRequest(input));
     },
-    requestForClaim(
-      input: PublicationFixtureRequest<Parameters<typeof coordinator.requestForClaim>[0]>,
+    async requestForClaimV2(
+      input: PublicationFixtureRequest<Parameters<typeof coordinator.requestForClaimV2>[0]>,
     ) {
-      return requestForClaim(bindPublicationFixtureRequest(input));
+      return requestForClaim(await bindPublicationFixtureRequest(input));
     },
   });
 }
@@ -241,6 +241,7 @@ export function createTestGitHubPublicationRuntime({
   ...params
 }: PublicationFixtureOptions<Parameters<typeof createRuntime>[0]>) {
   const runtime = createRuntime({ ...params, getCommittedRuntimeConfig });
+  onTestFinished(() => runtime.close());
   return { ...runtime, coordinator: withSystemRequesterFixture(runtime.coordinator) };
 }
 
@@ -419,10 +420,21 @@ export async function persistPublicationTestSession(sessionKey = SESSION_KEY) {
       lifecycleRevision: randomUUID(),
     },
   );
+  if (!realWorktree && original(sessionKey).entry.worktree) {
+    const worktree = mocks.findWorktree("session", sessionKey);
+    await deleteRegistryWorktree(process.env, worktree.id);
+    await insertRegistryWorktree(process.env, {
+      ...worktree,
+      name: "publication",
+      createdAt: Date.now(),
+      lastActiveAt: Date.now(),
+    });
+  }
   mocks.loadSession.mockImplementation(
     (key: string, options: Parameters<typeof loadGatewaySessionEntryReadOnly>[1]) =>
       key === sessionKey ? loadGatewaySessionEntryReadOnly(key, options) : original(key, options),
   );
+  mocks.persistedSessionKeys.add(sessionKey);
   const read = () => loadGatewaySessionEntryReadOnly(sessionKey, { agentId: "main" }).entry!;
   return {
     storePath: loadGatewaySessionEntryReadOnly(sessionKey, { agentId: "main" }).storePath,
@@ -450,14 +462,6 @@ export async function persistPublicationTestSession(sessionKey = SESSION_KEY) {
 
 export async function persistClaimPublicationWorkspace() {
   await persistPublicationTestSession(REQUEST.sessionKey);
-  const worktree = mocks.findWorktree("session", REQUEST.sessionKey);
-  await deleteRegistryWorktree(process.env, worktree.id);
-  await insertRegistryWorktree(process.env, {
-    ...worktree,
-    name: "publication",
-    createdAt: Date.now(),
-    lastActiveAt: Date.now(),
-  });
 }
 
 export function installGitHubPublicationTestHarness(
@@ -474,6 +478,7 @@ export function installGitHubPublicationTestHarness(
     }),
   );
   beforeEach(async () => {
+    mocks.persistedSessionKeys.clear();
     root = tempDirs.make("openclaw-publication-");
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
     realWorktree = harnessOptions.realWorktree ?? false;
@@ -656,10 +661,7 @@ export function installGitHubPublicationTestHarness(
         ) {
           return commandResult("", 1);
         }
-        if (command.endsWith("write-tree")) {
-          return commandResult(`${WORKSPACE_TREE}\n`);
-        }
-        if (command === "git rev-parse HEAD^{tree}") {
+        if (command.endsWith("write-tree") || command === "git rev-parse HEAD^{tree}") {
           return commandResult(`${WORKSPACE_TREE}\n`);
         }
         if (command === `git rev-parse ${BASE_HEAD}^{tree}`) {
@@ -705,9 +707,14 @@ export function installGitHubPublicationTestHarness(
       { agentId: "main", sessionKey: SESSION_KEY },
       { ...mocks.loadSession(SESSION_KEY).entry, updatedAt: Date.now() },
     );
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: REQUEST.sessionKey },
+      { ...mocks.loadSession(REQUEST.sessionKey).entry, updatedAt: Date.now() },
+    );
     // Custody remains persisted for policy reads; release its writer lease so
     // receipt-only tests can observe a genuinely cold shared database.
     await closeOpenClawAgentDatabasesAsync();
+    systemPublicationRequester = (await createSystemGitHubPublicationRequesterFixture()).requester;
   });
 
   afterEach(async () => {

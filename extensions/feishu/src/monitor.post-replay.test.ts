@@ -77,10 +77,11 @@ it("suppresses rich-post transport twins and retained legacy records without blo
     await closeOpenClawStateDatabaseAsync();
     feishuDedupeState.reset();
     expect(await hasProcessedFeishuMessage("om-legacy", "test")).toBe(true);
+    const monitorRuntime = createNonExitingRuntimeEnv();
     const monitor = monitorSingleAccount({
       cfg,
       account: resolveFeishuAccount({ cfg, accountId: "test" }),
-      runtime: createNonExitingRuntimeEnv(),
+      runtime: monitorRuntime,
       abortSignal: controller.signal,
       fireAndForget: false,
       botOpenIdSource: { kind: "prefetched", botOpenId: "ou-bot", source: "provider" },
@@ -152,6 +153,12 @@ it("suppresses rich-post transport twins and retained legacy records without blo
       expect(mocks.dispatchReplyFromConfigMock).toHaveBeenCalledTimes(3);
       await send("om-media-fresh-id", "1758000000001", { imageKey: "img_fixture" });
       expect(mocks.dispatchReplyFromConfigMock).toHaveBeenCalledTimes(4);
+    } catch (error) {
+      console.error("Feishu post-replay lifecycle diagnostics", {
+        logs: vi.mocked(monitorRuntime.log).mock.calls,
+        errors: vi.mocked(monitorRuntime.error).mock.calls,
+      });
+      throw error;
     } finally {
       controller.abort();
       await monitor;

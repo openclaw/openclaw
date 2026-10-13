@@ -16,7 +16,6 @@ import { agentReaderFixtureFiles } from "./non-isolated-runner.agent-reader-fixt
 import { gatewayWorkerLifetimeFixtureFiles } from "./non-isolated-runner.gateway-lifecycle-fixtures.ts";
 import { mcpManagerFixtureFiles } from "./non-isolated-runner.mcp-fixtures.ts";
 import { mockResolutionFixtureFiles } from "./non-isolated-runner.mock-resolution-fixtures.ts";
-import { skillsWatcherFixtureFiles } from "./non-isolated-runner.skills-watcher-fixtures.ts";
 import { solidFixtureFiles } from "./non-isolated-runner.solid-fixtures.ts";
 import { testApiLifecycleFixtureFiles } from "./non-isolated-runner.test-api-fixtures.ts";
 
@@ -118,11 +117,9 @@ import { expect, vi, type RunnerTestFile } from "vitest";
 const resetModules = vi.resetModules;
 export default class FixtureRunner extends Runner {
   override async onAfterRunFiles(files: RunnerTestFile[]) {
-    const generation = files.some(file => file.filepath.endsWith("12-a-skills-watcher-leak.test.ts"))
-      ? "?skills-watcher-generation"
-      : files.some(file => file.filepath.endsWith("99-mcp-b-retained-owner.test.ts"))
-        ? "?mcp-retirement-generation"
-        : undefined;
+    const generation = files.some(file => file.filepath.endsWith("99-mcp-b-retained-owner.test.ts"))
+      ? "?mcp-retirement-generation"
+      : undefined;
     const cleanup = generation
       ? (await import(${JSON.stringify(path.join(repoRoot, "test", "non-isolated-runner.ts"))} + generation)).default.prototype.onAfterRunFiles
       : Runner.prototype.onAfterRunFiles;
@@ -466,7 +463,6 @@ it("reloads the redirected mock after a real import", () => {
     ...testApiLifecycleFixtureFiles(repoRoot),
     ...documentFocusFixtureFiles(),
     ...agentReaderFixtureFiles(repoRoot, fixtureRoot),
-    ...skillsWatcherFixtureFiles(repoRoot, fixtureRoot),
     ...solidFixtureFiles(repoRoot),
   };
 }
@@ -507,7 +503,7 @@ async function assertCompletion(
     pid: expected.pid,
     root: expected.root,
     processTimedOut: false,
-    ended: { reason: "failed", unhandledErrors: 0, failedModules: 6, suiteErrors: 6 },
+    ended: { reason: "failed", unhandledErrors: 0, failedModules: 5, suiteErrors: 5 },
   });
   const project = {
     name: "non-isolated-runner",
@@ -524,8 +520,8 @@ async function assertCompletion(
 
   expect(report.testResults.map((file) => file.name).toSorted()).toEqual(expected.files);
   expect(report).toMatchObject({
-    numTotalTests: 70,
-    numPassedTests: 69,
+    numTotalTests: 68,
+    numPassedTests: 67,
     numPendingTests: 1,
     numFailedTests: 0,
     numTodoTests: 0,
@@ -533,7 +529,6 @@ async function assertCompletion(
   for (const file of report.testResults) {
     const name = path.basename(file.name);
     const crashed = name === "01-a-crash.test.ts";
-    const leakedWatchers = name === "12-a-skills-watcher-leak.test.ts";
     const uncertainMcp =
       name === "99-mcp-a-uncertain-owner.test.ts" || name === "98-mcp-c-prior-failure.test.ts";
     const mockedMcpDisposer = name === "98-mcp-a-direct-disposer.test.ts";
@@ -544,15 +539,9 @@ async function assertCompletion(
     );
     const count = crashed ? 0 : lifecycle ? 2 : 1;
     expect(file.status, name).toBe(
-      crashed || leakedWatchers || uncertainMcp || mockedMcpDisposer || failedRunCancellation
-        ? "failed"
-        : "passed",
+      crashed || uncertainMcp || mockedMcpDisposer || failedRunCancellation ? "failed" : "passed",
     );
-    if (leakedWatchers) {
-      expect(file.message, name).toMatch(
-        /^12-a-skills-watcher-leak\.test\.ts: skills watchers failed\nError: left skills watchers open /u,
-      );
-    } else if (uncertainMcp || mockedMcpDisposer) {
+    if (uncertainMcp || mockedMcpDisposer) {
       expect(file.message).toContain("MCP runtime custody failed");
       expect(file.message).toContain(
         uncertainMcp
@@ -596,7 +585,7 @@ async function verifyRunnerCleanup(signal: AbortSignal) {
       await fs.mkdir(path.dirname(path.join(root, name)), { recursive: true });
       await fs.writeFile(path.join(root, name), content, "utf8");
     }
-    // This real source uses only type imports; Node can retain its native generation.
+    // The fixture primes Node's native generation before Vite imports this source.
     await fs.writeFile(
       path.join(root, "vitest.config.ts"),
       `import { sharedVitestConfig } from ${JSON.stringify(path.join(repoRoot, "test", "vitest", "vitest.shared.config.ts"))};
@@ -613,6 +602,7 @@ export default defineConfig({
   resolve: sharedVitestConfig.resolve,
   test: {
     name: "non-isolated-runner",
+    execArgv: ["--experimental-transform-types"],
     isolate: false,
     fileParallelism: false,
     maxWorkers: 1,
@@ -751,16 +741,6 @@ export default defineConfig({
             { message: "other" },
           ),
       ],
-      [
-        "unattributed skills watcher leak",
-        ({ report }) =>
-          Object.assign(
-            report.testResults.find((file) =>
-              file.name.endsWith("/12-a-skills-watcher-leak.test.ts"),
-            )!,
-            { status: "passed", message: "" },
-          ),
-      ],
       ["inconsistent totals", ({ report }) => Object.assign(report, { numPassedTests: 44 })],
     ];
     for (const patch of [
@@ -778,9 +758,9 @@ export default defineConfig({
       { reason: "interrupted" },
       { reason: "passed" },
       { unhandledErrors: 1 },
-      { failedModules: 5 },
+      { failedModules: 4 },
       { failedModules: 7 },
-      { suiteErrors: 5 },
+      { suiteErrors: 4 },
       { suiteErrors: 7 },
     ]) {
       faults.push([
@@ -913,14 +893,16 @@ class AlphabeticalSequencer extends BaseSequencer {
     return [...files].sort((a, b) => a.moduleId.localeCompare(b.moduleId));
   }
 }
-// Use the actual Gateway execution policy, with fixture-only membership and no
+// Keep Gateway isolation and cleanup, with fixture-only membership and no
 // ordinary setup hooks that could close A's database before runner cleanup.
 export default defineConfig({
   cacheDir: ${JSON.stringify(path.join(root, ".vite"))},
+  plugins: gateway.plugins,
   resolve: gateway.resolve,
   test: {
     name: "gateway-worker-lifetimes",
-    pool: gateway.test.pool,
+    // Shared-state admission needs the host broker on a process main thread.
+    pool: "forks",
     isolate: gateway.test.isolate,
     runner: gateway.test.runner,
     maxWorkers: gateway.test.maxWorkers,
@@ -933,7 +915,13 @@ export default defineConfig({
     );
     const reportPath = path.join(root, "report.json");
     let child!: ChildProcess;
-    const result = await runVitestShutdownCommand({
+    const env = {
+      ...childEnv(),
+      OPENCLAW_VITEST_MAX_WORKERS: "1",
+      GATEWAY_LIFETIME_PROBE_ROOT: root,
+    };
+    const workers = createVitestWorkerRun(env);
+    const command = runVitestShutdownCommand({
       bin: resolveTestNodeExecPath(),
       args: [
         path.join(vitestPackageDir, "vitest.mjs"),
@@ -950,13 +938,20 @@ export default defineConfig({
         `--outputFile.json=${reportPath}`,
       ],
       cwd: repoRoot,
-      env: { ...childEnv(), OPENCLAW_VITEST_MAX_WORKERS: "1", GATEWAY_LIFETIME_PROBE_ROOT: root },
+      env,
+      workerRun: workers,
       maxBytes: 16 * 1024 * 1024,
       signal,
       onReady(owned) {
         child = owned;
       },
     });
+    let result: Awaited<typeof command>;
+    try {
+      result = await command;
+    } finally {
+      await workers.dispose();
+    }
     expect(result.code, result.stdout + result.stderr).toBe(0);
     expect(child.exitCode).toBe(0);
     expect(child.signalCode).toBeNull();
@@ -981,7 +976,7 @@ export default defineConfig({
         namePrefix: "",
         root: canonicalRoot,
         config: `${canonicalRoot}/vitest.config.ts`,
-        pool: "threads",
+        pool: "forks",
       },
     ]);
     const report: JsonTestResults = JSON.parse(await fs.readFile(reportPath, "utf8"));

@@ -36,7 +36,6 @@ import {
   readGitHubRepositoryPublicationBlob,
   type GitHubRepositoryPublicationSnapshot,
 } from "./github-repository-publication-snapshot.js";
-import type { RepositoryGitHubPublicationExecution } from "./github-repository-publication-store.js";
 import { resolveGitHubRepositoryTarget } from "./github-repository-target.js";
 import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
@@ -125,7 +124,7 @@ export async function prepareRepositoryGitHubPublicationTarget(
 
 /** GitHub receives only accepted normalized objects; the Gateway never fetches source history. */
 export async function executeRepositoryGitHubPublication(params: {
-  execution: RepositoryGitHubPublicationExecution | RepositoryGitHubPublicationExecutionAsync;
+  execution: RepositoryGitHubPublicationExecutionAsync;
   snapshot: GitHubRepositoryPublicationSnapshot;
   snapshotRoot: string;
   storePath: string;

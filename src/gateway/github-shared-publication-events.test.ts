@@ -10,13 +10,18 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import {
-  claimGitHubPublicationExecution,
-  createGitHubPublicationExecutionStore,
-  deferGitHubPublicationRequests,
-  ensureGitHubPublicationStore,
-  isGitHubPublicationExecutionOwner,
-  readGitHubPublicationRequest,
-} from "./github-publication-store.js";
+  claimGitHubPublicationExecutionFixture,
+  createGitHubPublicationExecutionStoreFixture,
+  deferGitHubPublicationRequestsFixture,
+  ensureGitHubPublicationStoreFixture,
+  bindRepositoryGitHubPublicationCheckpointFixture,
+  claimRepositoryGitHubPublicationFixture,
+  deferRepositoryGitHubPublicationClaimsFixture,
+  failRepositoryGitHubPublicationPreparationFixture,
+  insertRepositoryGitHubPublicationFixture,
+  readRepositoryGitHubPublicationFixture,
+} from "./github-publication-store.test-support.js";
+import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
 import {
   BRANCH,
   NEW_HEAD,
@@ -25,15 +30,7 @@ import {
   installGitHubPublicationTestHarness,
   SESSION_KEY,
 } from "./github-publication.test-support.js";
-import {
-  bindRepositoryGitHubPublicationCheckpoint,
-  claimRepositoryGitHubPublication,
-  deferRepositoryGitHubPublicationClaims,
-  failRepositoryGitHubPublicationPreparation,
-  failStaleRepositoryGitHubPublicationInDatabase,
-  insertRepositoryGitHubPublication,
-  readRepositoryGitHubPublication,
-} from "./github-repository-publication-store.js";
+import { failStaleRepositoryGitHubPublicationInDatabase } from "./github-repository-publication-store.worker.js";
 import {
   insertSharedWorktreeReceipt,
   repositoryReceipt,
@@ -44,7 +41,7 @@ installGitHubPublicationTestHarness();
 const expectedEvent = { sessionKey: SESSION_KEY, agentId: "main", reason: "github-publication" };
 
 describe("shared publication committed notifications", () => {
-  it("installs the entire request/lifecycle batch before observers can reuse execution authority", () => {
+  it("installs the entire request/lifecycle batch before observers run", () => {
     const facts = new Map<string, SqliteCommittedFact<unknown>>();
     onTestFinished(
       githubPublicationReceipts.subscribeFacts((change) => {
@@ -62,14 +59,12 @@ describe("shared publication committed notifications", () => {
           first: facts.get(JSON.stringify(["shared", "first"])),
           second: facts.get(JSON.stringify(["shared", "second"])),
           lifecycle: facts.get(JSON.stringify(["shared-lifecycle", "first"])),
-          canPublish: isGitHubPublicationExecutionOwner("first", "instance"),
         });
       }),
     );
     runOpenClawStateWriteTransaction(() => {
       insertSharedWorktreeReceipt("first");
-      claimGitHubPublicationExecution("first", "instance");
-      expect(isGitHubPublicationExecutionOwner("first", "instance")).toBe(true);
+      claimGitHubPublicationExecutionFixture("first", "instance");
       expect(() =>
         runOpenClawStateWriteTransaction(() => {
           insertSharedWorktreeReceipt("rolled-back");
@@ -77,7 +72,7 @@ describe("shared publication committed notifications", () => {
         }),
       ).toThrow("savepoint");
       insertSharedWorktreeReceipt("second");
-      deferGitHubPublicationRequests(["first", "second"]);
+      deferGitHubPublicationRequestsFixture(["first", "second"]);
       expect(facts.size).toBe(0);
       expect(observations).toEqual([]);
     });
@@ -95,13 +90,12 @@ describe("shared publication committed notifications", () => {
           kind: "postimage",
           value: { publication_kind: "shared", request_id: "first" },
         },
-        canPublish: false,
       });
     }
   });
 
   it("publishes creation only on outer commit, not idempotent replay or a failed insertion", () => {
-    ensureGitHubPublicationStore();
+    ensureGitHubPublicationStoreFixture();
     const observer = vi.fn();
     using _ = { [Symbol.dispose]: onSessionLifecycleEvent(observer) };
     runOpenClawStateWriteTransaction(() => {
@@ -124,7 +118,7 @@ describe("shared publication committed notifications", () => {
     expect(() =>
       runOpenClawStateWriteTransaction(() => {
         insertSharedWorktreeReceipt("rolled-back");
-        claimGitHubPublicationExecution("existing", "instance");
+        claimGitHubPublicationExecutionFixture("existing", "instance");
         expect(observer).not.toHaveBeenCalled();
         throw new Error("rollback");
       }),
@@ -136,7 +130,7 @@ describe("shared publication committed notifications", () => {
   });
 
   it("drops a rolled-back savepoint's notification without losing a committed sibling", () => {
-    ensureGitHubPublicationStore();
+    ensureGitHubPublicationStoreFixture();
     const observer = vi.fn();
     using _ = { [Symbol.dispose]: onSessionLifecycleEvent(observer) };
     runOpenClawStateWriteTransaction(() => {
@@ -156,8 +150,8 @@ describe("shared publication committed notifications", () => {
     const row = insertSharedWorktreeReceipt("facts");
     const observer = vi.fn();
     using _ = { [Symbol.dispose]: onSessionLifecycleEvent(observer) };
-    let current = claimGitHubPublicationExecution(row.request_id, "instance");
-    const store = createGitHubPublicationExecutionStore("instance");
+    let current = claimGitHubPublicationExecutionFixture(row.request_id, "instance");
+    const store = createGitHubPublicationExecutionStoreFixture("instance");
     current = store.updatePublishingFacts({
       row: current,
       repository: "owner/repository",
@@ -169,7 +163,7 @@ describe("shared publication committed notifications", () => {
     });
     expect(observer).toHaveBeenCalledTimes(2);
     expect(() =>
-      createGitHubPublicationExecutionStore("wrong-owner").updatePublishingFacts({
+      createGitHubPublicationExecutionStoreFixture("wrong-owner").updatePublishingFacts({
         row: current,
         repository: "owner/repository",
         branch: BRANCH,
@@ -180,9 +174,9 @@ describe("shared publication committed notifications", () => {
       }),
     ).toThrow(/state changed/);
     expect(observer).toHaveBeenCalledTimes(2);
-    deferGitHubPublicationRequests([row.request_id]);
+    deferGitHubPublicationRequestsFixture([row.request_id]);
     expect(observer).toHaveBeenCalledTimes(3);
-    current = claimGitHubPublicationExecution(row.request_id, "instance");
+    current = claimGitHubPublicationExecutionFixture(row.request_id, "instance");
     store.complete(current, {
       requestId: row.request_id,
       status: "failed",
@@ -191,8 +185,8 @@ describe("shared publication committed notifications", () => {
       nextAction: "Inspect GitHub before retrying.",
     });
     expect(observer).toHaveBeenCalledTimes(5);
-    claimGitHubPublicationExecution(row.request_id, "instance");
-    deferGitHubPublicationRequests([row.request_id, "absent"]);
+    claimGitHubPublicationExecutionFixture(row.request_id, "instance");
+    deferGitHubPublicationRequestsFixture([row.request_id, "absent"]);
     expect(observer).toHaveBeenCalledTimes(5);
     expect(
       observer.mock.calls.every(
@@ -207,7 +201,7 @@ describe("shared publication committed notifications", () => {
     const observations: Array<{ inTransaction: boolean; status?: string; effect?: string | null }> =
       [];
     const observer = vi.fn<(event: SessionLifecycleEvent) => void>(() => {
-      const row = readRepositoryGitHubPublication("repository-request");
+      const row = readRepositoryGitHubPublicationFixture("repository-request");
       observations.push({
         inTransaction: db.isTransaction,
         status: row?.status,
@@ -222,10 +216,10 @@ describe("shared publication committed notifications", () => {
       source_index_tree: null,
       workspace_tree: null,
     });
-    let row = insertRepositoryGitHubPublication(unbound, () => {});
-    insertRepositoryGitHubPublication(unbound, () => {});
+    let row = insertRepositoryGitHubPublicationFixture(unbound, () => {});
+    insertRepositoryGitHubPublicationFixture(unbound, () => {});
     expect(observer).toHaveBeenCalledTimes(1);
-    row = bindRepositoryGitHubPublicationCheckpoint(
+    row = bindRepositoryGitHubPublicationCheckpointFixture(
       row,
       {
         checkpoint_ref: "refs/openclaw/worker-results/bound",
@@ -236,7 +230,7 @@ describe("shared publication committed notifications", () => {
       },
       () => {},
     );
-    const execution = claimRepositoryGitHubPublication(row, "instance", {
+    const execution = claimRepositoryGitHubPublicationFixture(row, "instance", {
       assertCustody: () => {},
       assertCurrent: () => {},
     });
@@ -285,7 +279,7 @@ describe("shared publication committed notifications", () => {
       }),
     );
     using _ = { [Symbol.dispose]: onSessionLifecycleEvent(observer) };
-    const row = insertRepositoryGitHubPublication(
+    const row = insertRepositoryGitHubPublicationFixture(
       repositoryReceipt(workspace, {
         owner_profile_id: "private-person",
         connection_generation: "private-generation",
@@ -293,7 +287,7 @@ describe("shared publication committed notifications", () => {
       }),
       () => {},
     );
-    const execution = claimRepositoryGitHubPublication(row, "instance", {
+    const execution = claimRepositoryGitHubPublicationFixture(row, "instance", {
       assertCustody: () => {},
       assertCurrent: () => {},
     });
@@ -303,30 +297,30 @@ describe("shared publication committed notifications", () => {
     runOpenClawStateWriteTransaction((database) =>
       failStaleRepositoryGitHubPublicationInDatabase(
         database,
-        readRepositoryGitHubPublication(row.request_id)!,
+        readRepositoryGitHubPublicationFixture(row.request_id)!,
         () => false,
       ),
     );
-    expect(readRepositoryGitHubPublication(row.request_id)?.status).toBe("failed");
+    expect(readRepositoryGitHubPublicationFixture(row.request_id)?.status).toBe("failed");
     expect(receiptRows).toHaveLength(6);
     const {
       title: _title,
       body: _body,
       next_action: _nextAction,
       ...authority
-    } = readRepositoryGitHubPublication(row.request_id)!;
+    } = readRepositoryGitHubPublicationFixture(row.request_id)!;
     expect(receiptRows.at(-1)).toEqual(authority);
     expect(observer).not.toHaveBeenCalled();
   });
 
   it("does not emit repository writes rolled back after claim/effect recording", async () => {
     const workspace = await sharedRepositoryWorkspace();
-    const row = insertRepositoryGitHubPublication(repositoryReceipt(workspace), () => {});
+    const row = insertRepositoryGitHubPublicationFixture(repositoryReceipt(workspace), () => {});
     const observer = vi.fn();
     using _ = { [Symbol.dispose]: onSessionLifecycleEvent(observer) };
     expect(() =>
       runOpenClawStateWriteTransaction(() => {
-        const execution = claimRepositoryGitHubPublication(row, "instance", {
+        const execution = claimRepositoryGitHubPublicationFixture(row, "instance", {
           assertCustody: () => {},
           assertCurrent: () => {},
         });
@@ -336,7 +330,7 @@ describe("shared publication committed notifications", () => {
       }),
     ).toThrow("rollback");
     expect(observer).not.toHaveBeenCalled();
-    expect(readRepositoryGitHubPublication(row.request_id)).toMatchObject({
+    expect(readRepositoryGitHubPublicationFixture(row.request_id)).toMatchObject({
       status: "requested",
       last_effect: null,
     });
@@ -344,7 +338,7 @@ describe("shared publication committed notifications", () => {
       throw new Error("revoked");
     };
     expect(() =>
-      claimRepositoryGitHubPublication(row, "instance", {
+      claimRepositoryGitHubPublicationFixture(row, "instance", {
         assertCustody: assertRevoked,
         assertCurrent: assertRevoked,
       }),
@@ -354,18 +348,18 @@ describe("shared publication committed notifications", () => {
 
   it("notifies committed preparation failure, stale retirement, and deferred shared claims", async () => {
     const workspace = await sharedRepositoryWorkspace();
-    const first = insertRepositoryGitHubPublication(
+    const first = insertRepositoryGitHubPublicationFixture(
       repositoryReceipt(workspace, { checkpoint_ref: null, checkpoint_digest: null }),
       () => {},
     );
-    const second = insertRepositoryGitHubPublication(
+    const second = insertRepositoryGitHubPublicationFixture(
       repositoryReceipt(workspace, {
         request_id: "retired",
         idempotency_key: "retired",
       }),
       () => {},
     );
-    const third = insertRepositoryGitHubPublication(
+    const third = insertRepositoryGitHubPublicationFixture(
       repositoryReceipt(workspace, {
         request_id: "deferred",
         idempotency_key: "deferred",
@@ -377,16 +371,20 @@ describe("shared publication committed notifications", () => {
     );
     const observer = vi.fn();
     using _ = { [Symbol.dispose]: onSessionLifecycleEvent(observer) };
-    failRepositoryGitHubPublicationPreparation(first, "Capture a fresh checkpoint.", () => {});
+    failRepositoryGitHubPublicationPreparationFixture(
+      first,
+      "Capture a fresh checkpoint.",
+      () => {},
+    );
     runOpenClawStateWriteTransaction((database) =>
       failStaleRepositoryGitHubPublicationInDatabase(database, second, () => false),
     );
-    deferRepositoryGitHubPublicationClaims([third.request_id]);
+    deferRepositoryGitHubPublicationClaimsFixture([third.request_id]);
     expect(observer).toHaveBeenCalledTimes(3);
     runOpenClawStateWriteTransaction((database) =>
       failStaleRepositoryGitHubPublicationInDatabase(database, second, () => false),
     );
-    deferRepositoryGitHubPublicationClaims([first.request_id, "absent"]);
+    deferRepositoryGitHubPublicationClaimsFixture([first.request_id, "absent"]);
     expect(observer).toHaveBeenCalledTimes(3);
   });
 });

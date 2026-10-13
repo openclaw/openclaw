@@ -352,7 +352,7 @@ export async function loadGatewayStartupPluginRuntime(params: {
       gatewayMethods: params.baseMethods,
     };
   }
-  const loaded = prepareGatewayPluginLoad({
+  const loaded = await prepareGatewayPluginLoad({
     loadIntent: "startup",
     cfg: params.cfg,
     activationSourceConfig: params.activationSourceConfig,

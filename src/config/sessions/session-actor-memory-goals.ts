@@ -13,12 +13,12 @@ import {
   type SessionGoalOperation,
   type SessionTranscriptTurnMutation,
 } from "./goals-operations.types.js";
-import type { SessionActorMemoryState } from "./session-actor-memory-state.js";
+import type { SessionActorMemoryWindow } from "./session-actor-memory-state.js";
 import { mergeSessionEntry, type SessionGoal } from "./types.js";
 
 /** The actor commits these receipts with the Goal and its accepted transcript turn. */
 export function createSessionActorMemoryGoals(options: {
-  state: SessionActorMemoryState;
+  state: SessionActorMemoryWindow;
   agentId: string;
   path: string;
 }) {

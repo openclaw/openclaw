@@ -641,7 +641,13 @@ async function stopWindowsGatewayProcess(
   // Taskkill owns its bounded synchronous TERM/force sequence. Node cannot observe
   // exit or pipe closure until it returns, so charge the existing close allowance afterward.
   try {
-    await finalizeManagedChild(child, options.forceWindowsTree ? "SIGKILL" : "SIGTERM", {
+    const signal =
+      hasChildExited(child) && !options.forceWindowsTree
+        ? undefined
+        : options.forceWindowsTree
+          ? "SIGKILL"
+          : "SIGTERM";
+    await finalizeManagedChild(child, signal, {
       platform,
       runTaskkill,
       forceKillDelayMs: 0,
@@ -1142,7 +1148,8 @@ export async function createOpenClawTestInstance(
             try {
               await verifyCleanup(async () => {
                 closed = await releaseGatewayChild(attempt, Date.now() + stopTimeoutMs * 2, {
-                  forceWindowsTree: true,
+                  // An exited leader may still have inherited diagnostics to drain.
+                  forceWindowsTree: signal?.aborted === true || !hasChildExited(attempt),
                 });
                 // The optional lifetime must retain failed rollback even if
                 // startup never handed a process to its caller.

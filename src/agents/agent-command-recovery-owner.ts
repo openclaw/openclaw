@@ -267,6 +267,7 @@ export async function runWithAgentCommandRecoveryOwner<
       assertCurrent();
       if (!commandAdmission && params.opts.sessionEffects !== "internal") {
         commandAdmission = await beginSessionWorkAdmission({
+          agentId: prepared.sessionAgentId,
           scope: prepared.storePath ?? `agent:${prepared.sessionAgentId}`,
           isSettling: params.opts.isTerminalOutcomeObserved,
           identities: [prepared.sessionKey, prepared.previousSessionId ?? prepared.sessionId],

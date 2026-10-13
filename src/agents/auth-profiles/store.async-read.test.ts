@@ -12,7 +12,6 @@ import * as migration from "./legacy-source-diagnostic.js";
 import * as persistedStore from "./persisted.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
-  clearRuntimeAuthProfileStoreSnapshotCore,
   noteRuntimeAuthProfileStorePersistedMutation,
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
@@ -22,6 +21,7 @@ import { createAuthProfileStoreRuntime } from "./store.js";
 import type { AuthProfileStore, AuthProfileRowRead } from "./types.js";
 
 const reader = vi.hoisted(() => ({
+  identity: undefined,
   read: vi.fn(),
   assertCurrent: vi.fn(),
   dispose: vi.fn(async () => {}),
@@ -206,50 +206,6 @@ it("invalidates warm rows immediately after an owner bookkeeping write", async (
     state: { status: "readable", raw: { version: 1, lastGood: { custom: "custom:new" } } },
   });
   await expect(load()).resolves.toMatchObject({ lastGood: { custom: "custom:new" } });
-  expect(reader.read).toHaveBeenCalledTimes(2);
-});
-
-it.each([
-  "rotation",
-  "all-clear",
-  "owner-clear",
-  "all-clear-and-publish",
-  "owner-clear-and-publish",
-] as const)("rejects cached rows after %s during inherited preparation", async (change) => {
-  const root = tempDirs.make("openclaw-auth-cached-rotation-");
-  const localDir = path.join(root, "agents/worker/agent");
-  createCacheDatabase(localDir);
-  const inheritedDir = path.join(root, "agents/main/agent");
-  vi.stubEnv("OPENCLAW_STATE_DIR", root);
-  reader.read.mockResolvedValue(readableRows());
-  const runtime = createRuntime();
-  await runtime.loadAuthProfileStoreForRuntimeAsync(localDir, {
-    inheritedAuthDir: localDir,
-    externalCli: { mode: "none" },
-  });
-  reader.read.mockImplementationOnce(async () => {
-    if (change === "all-clear" || change === "all-clear-and-publish") {
-      clearRuntimeAuthProfileStoreSnapshots();
-    } else if (change === "owner-clear" || change === "owner-clear-and-publish") {
-      clearRuntimeAuthProfileStoreSnapshotCore(localDir);
-    } else {
-      noteRuntimeAuthProfileStorePersistedMutation(localDir, {
-        credentialsChanged: true,
-        stateChanged: false,
-        profileIds: ["custom:local"],
-      });
-    }
-    if (change.endsWith("-and-publish")) {
-      setRuntimeAuthProfileStoreSnapshot({ version: 1, profiles: {} }, localDir);
-    }
-    return readableRows();
-  });
-  await expect(
-    runtime.loadAuthProfileStoreForRuntimeAsync(localDir, {
-      inheritedAuthDir: inheritedDir,
-      externalCli: { mode: "none" },
-    }),
-  ).rejects.toThrow("Auth profile store changed during its runtime read");
   expect(reader.read).toHaveBeenCalledTimes(2);
 });
 

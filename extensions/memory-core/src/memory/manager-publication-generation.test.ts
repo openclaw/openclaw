@@ -1,9 +1,15 @@
 import path from "node:path";
 import { deserialize } from "node:v8";
-import { Worker } from "node:worker_threads";
+import { MessagePort, Worker } from "node:worker_threads";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  getSessionEntryAsync,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import {
   borrowOpenClawAgentDatabase,
   readOpenClawAgentDatabaseIdentity,
+  runOpenClawAgentWriteAdmission,
   withOpenClawAgentDatabaseWrite,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -59,8 +65,24 @@ function sourceReplacement(model: string): MemorySourceIndexReplacement {
   };
 }
 
-function publicationCommands(calls: unknown[][]): string[] {
+function indexCommands(calls: unknown[][]): string[] {
   return calls.flatMap(([message]) => {
+    if (
+      typeof message === "object" &&
+      message !== null &&
+      "input" in message &&
+      typeof message.input === "object" &&
+      message.input !== null &&
+      "kind" in message.input &&
+      message.input.kind === "index-read" &&
+      "command" in message.input &&
+      typeof message.input.command === "object" &&
+      message.input.command !== null &&
+      "type" in message.input.command &&
+      typeof message.input.command.type === "string"
+    ) {
+      return [message.input.command.type];
+    }
     if (
       typeof message !== "object" ||
       message === null ||
@@ -78,6 +100,60 @@ function publicationCommands(calls: unknown[][]): string[] {
     return [command.input?.command?.type ?? command.type];
   });
 }
+
+it("retains session entry facts across memory publication and refreshes after a session write", async () => {
+  await withPublishedIndex(async (database) => {
+    const target = {
+      agentId: "main",
+      storePath: database.db.location()!,
+      sessionKey: "agent:main:memory-publication",
+    };
+    await upsertSessionEntry({
+      ...target,
+      entry: { sessionId: "memory-publication", updatedAt: 1, label: "Before" },
+    });
+    expect((await getSessionEntryAsync(target))?.label).toBe("Before");
+    const messages = vi.spyOn(MessagePort.prototype, "postMessage");
+    const entryReads = () =>
+      messages.mock.calls.filter(([message]) => {
+        return (
+          typeof message === "object" &&
+          message !== null &&
+          "input" in message &&
+          typeof message.input === "object" &&
+          message.input !== null &&
+          "kind" in message.input &&
+          message.input.kind === "session-entry-read"
+        );
+      });
+    try {
+      await database.writeMetadata(metadata);
+      await database.replaceSource(
+        sourceReplacement("fts-only"),
+        () => {},
+        async () => true,
+      );
+      expect((await getSessionEntryAsync(target))?.label).toBe("Before");
+      expect(entryReads()).toEqual([]);
+
+      await withOpenClawAgentDatabaseWrite(
+        { agentId: "main", path: target.storePath },
+        ({ db }) => {
+          db.prepare(
+            "UPDATE session_nodes SET entry_json = ?, updated_at = 2, label = 'After' WHERE session_key = ?",
+          ).run(
+            JSON.stringify({ sessionId: "memory-publication", updatedAt: 2, label: "After" }),
+            target.sessionKey,
+          );
+        },
+      );
+      expect((await getSessionEntryAsync(target))?.label).toBe("After");
+      expect(entryReads()).toHaveLength(1);
+    } finally {
+      messages.mockRestore();
+    }
+  });
+});
 
 it("keeps no-op and refused publication preparation SQL-free without opening a worker", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -119,7 +195,9 @@ it("keeps no-op and refused publication preparation SQL-free without opening a w
   });
 });
 
-it("reuses retained facts and connection policy after publication worker recreation", async () => {
+it("reads committed index state while another operation holds the writer FIFO", async ({
+  signal,
+}) => {
   await withPublishedIndex(async (database) => {
     await database.replaceSource(
       sourceReplacement("fts-only"),
@@ -128,8 +206,16 @@ it("reuses retained facts and connection policy after publication worker recreat
     );
     await database.closePublicationWorker();
     const sql = observeHostDataSql();
-    const messages = vi.spyOn(Worker.prototype, "postMessage");
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const abort = () => release.resolve();
+    signal.addEventListener("abort", abort, { once: true });
+    const holding = runOpenClawAgentWriteAdmission(database.writeOptions!, async () => {
+      entered.resolve();
+      await release.promise;
+    });
     try {
+      await entered.promise;
       for (let turn = 0; turn < 2; turn++) {
         expect(
           await database.read(
@@ -143,9 +229,10 @@ it("reuses retained facts and connection policy after publication worker recreat
       await database.refreshFacts();
       expect(database.facts).toMatchObject({ hasIndexedChunks: true, hasSemanticChunks: false });
       expect(sql.queries).toEqual([]);
-      expect(publicationCommands(messages.mock.calls)).toEqual(["source.hash", "source.hash"]);
     } finally {
-      messages.mockRestore();
+      release.resolve();
+      await holding;
+      signal.removeEventListener("abort", abort);
       sql.restore();
     }
   });
@@ -155,7 +242,7 @@ it("publishes committed metadata, presence, and revision facts with source mutat
   await withPublishedIndex(async (database) => {
     const initialRevision = database.facts.revision;
     await database.writeMetadata(metadata);
-    expect(database.facts).toEqual({
+    expect(database.facts).toMatchObject({
       meta: metadata,
       serialized: JSON.stringify(metadata),
       revision: initialRevision,
@@ -209,19 +296,60 @@ it("refreshes facts once after another in-process writer commits", async () => {
     try {
       for (let turn = 0; turn < 3; turn++) {
         await database.refreshFacts();
-        expect(database.facts).toEqual({
+        expect(database.facts).toMatchObject({
           meta: metadata,
           serialized: JSON.stringify(metadata),
           revision: initialRevision + 1,
           hasIndexedChunks: false,
           hasSemanticChunks: false,
+          invalidatedSources: [],
+          hasVectorTable: false,
+          vectorState: { state: "empty" },
         });
       }
       expect(sql.queries).toEqual([]);
-      expect(publicationCommands(messages.mock.calls)).toEqual(["index.facts"]);
+      expect(indexCommands(messages.mock.calls)).toEqual(["index.facts"]);
     } finally {
       messages.mockRestore();
       sql.restore();
     }
+  });
+});
+
+it("refreshes invalidated source and vector facts after an in-process write", async () => {
+  await withPublishedIndex(async (database) => {
+    await database.replaceSource(
+      sourceReplacement("test-model"),
+      () => {},
+      async () => true,
+    );
+    await withOpenClawAgentDatabaseWrite(database.writeOptions!, ({ db }) => {
+      db.prepare("UPDATE memory_index_sources SET hash = '' WHERE source = ?").run("memory");
+      db.prepare(
+        "INSERT INTO memory_index_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      ).run("memory_vector_rebuild_v1", "1");
+    });
+    const sql = observeHostDataSql();
+    try {
+      await database.refreshFacts();
+      expect(database.facts.invalidatedSources).toEqual(["memory"]);
+      expect(database.facts.vectorState).toEqual({ state: "incomplete" });
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+    await withOpenClawAgentDatabaseWrite(database.writeOptions!, ({ db }) => {
+      db.prepare("UPDATE memory_index_sources SET hash = ? WHERE source = ?").run(
+        "restored",
+        "memory",
+      );
+      db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = ?").run(
+        "clean",
+        "memory_vector_rebuild_v1",
+      );
+    });
+    await database.refreshFacts();
+    expect(database.facts.invalidatedSources).toEqual([]);
+    expect(database.facts.vectorState).toEqual({ state: "empty" });
   });
 });

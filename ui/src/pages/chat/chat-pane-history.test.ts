@@ -25,7 +25,7 @@ import {
 import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
-import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
+import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
 import { reduceChatSessionProjection } from "./history-merge.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import {
@@ -511,6 +511,7 @@ describe("chat pane native history pagination", () => {
       expect(request).toHaveBeenCalledWith("chat.history", {
         sessionKey: state.sessionKey,
         limit: 1000,
+        maxBytes: 1024 * 1024,
         toolResultMaxChars: 2_000,
         offset: 2,
       });
@@ -563,6 +564,7 @@ describe("chat pane native history pagination", () => {
     expect(request).toHaveBeenLastCalledWith("chat.history", {
       sessionKey: state.sessionKey,
       limit: 1000,
+      maxBytes: 1024 * 1024,
       toolResultMaxChars: 2_000,
       offset: 5,
     });
@@ -720,6 +722,7 @@ describe("chat pane native history pagination", () => {
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: state.sessionKey,
       limit: 1000,
+      maxBytes: 1024 * 1024,
       toolResultMaxChars: 2_000,
       offset: 2,
     });
@@ -758,6 +761,7 @@ describe("chat pane native history pagination", () => {
     expect(request).toHaveBeenNthCalledWith(1, "chat.history", {
       sessionKey: state.sessionKey,
       limit: 1000,
+      maxBytes: 1024 * 1024,
       toolResultMaxChars: 2_000,
       offset: 2,
     });

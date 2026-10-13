@@ -174,7 +174,7 @@ const focusedCases = [
     name: "dashboard",
     label: "dashboard document",
     path: focusPath({ kind: "dashboard", path: "/dashboard/main/12345678" }),
-    modulePath: "ui/src/components/board/board-document.ts",
+    modulePath: "ui/src/components/board/board-document.tsx",
     gateway: {
       sessionKey,
       featureMethods: [...defaultControlUiFeatureMethods, "board.get"],
@@ -246,7 +246,7 @@ const dockedCases = [
     ...systemBusyness,
     name: "System busyness frame",
     tag: "openclaw-debug-overlay",
-    modulePath: "ui/src/pages/debug/debug-overlay.ts",
+    modulePath: "ui/src/pages/debug/debug-overlay.tsx",
     proofName: "system-busyness-frame",
   },
 ];
@@ -553,7 +553,7 @@ suite.define(() => {
         async ({ page }) => {
           const held = await holdModuleResponse(
             page,
-            controlUiE2eBuiltModuleRequest("ui/src/pages/debug/debug-overlay.ts"),
+            controlUiE2eBuiltModuleRequest("ui/src/pages/debug/debug-overlay.tsx"),
           );
           try {
             const composer = await installDockedScenario(page, undefined, route);

@@ -1,4 +1,8 @@
-import { openOpenClawAgentDatabaseReadOnly } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
+import {
+  openOpenClawAgentDatabaseReadOnly,
+  retainOpenClawAgentDatabaseReadOnly,
+  loadSqliteVecExtension,
+} from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import {
   readCuratedMemoryTriggerCandidates,
   readCuratedProjectMemoryCandidates,
@@ -7,6 +11,7 @@ import { withOpenClawAgentDatabaseReadOnly } from "openclaw/plugin-sdk/sqlite-ru
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
+  runSqliteDeferredTransactionSync,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { serveWorkerTasks } from "openclaw/plugin-sdk/worker-task-server";
 import { readMemoryOriginsInWorker } from "../memory-entry-origin-reads.js";
@@ -16,8 +21,8 @@ import type {
 } from "../memory-entry-origins-task.js";
 import { readMemoryForgetIndexInWorker } from "../memory-forget-index-read.js";
 import type { ForgetIndexPlan, ForgetIndexReadInput } from "../memory-forget-index-task.js";
+import { readMemoryIndex, type MemoryIndexReadCommand } from "./manager-index-read.js";
 import {
-  readMemoryDatabaseFacts,
   readMemoryRetrievalIndexState,
   readMemoryRecallData,
   type MemoryRecallData,
@@ -30,7 +35,6 @@ import {
   type searchPathKeyword,
 } from "./manager-search.js";
 import { assertMemoryShadowIdentity, type MemoryShadowConnection } from "./manager-shadow-task.js";
-import { loadMemorySourceFileState } from "./manager-source-state.js";
 import { inspectMemoryIndexPresenceInWorker } from "./manager-status-presence.js";
 
 type KeywordParameters = Omit<Parameters<typeof searchKeyword>[0], "db">;
@@ -53,10 +57,10 @@ export type MemorySearchWorkerInput =
       | { kind: "keyword"; query: MemoryKeywordWorkerQuery; includeIndexState?: boolean }
       | { kind: "vector"; query: MemoryVectorWorkerQuery }
       | { kind: "index-state" }
-      | { kind: "index-facts" }
+      | { kind: "vector-load"; extensionPath?: string }
       | {
-          kind: "source-state";
-          query: Omit<Parameters<typeof loadMemorySourceFileState>[0], "db">;
+          kind: "index-read";
+          command: MemoryIndexReadCommand;
           fileIdentity: MemoryShadowConnection["fileIdentity"];
         }
       | ({ kind: "recall-metadata" } & MemoryRecallQuery)
@@ -75,8 +79,8 @@ export type MemorySearchWorkerOutput =
   | { kind: "prewarm" }
   | { kind: "presence"; present: boolean }
   | { kind: "index-state"; state: ReturnType<typeof readMemoryRetrievalIndexState> }
-  | { kind: "index-facts"; facts: ReturnType<typeof readMemoryDatabaseFacts> }
-  | { kind: "source-state"; rows: ReturnType<typeof loadMemorySourceFileState> }
+  | { kind: "vector-load"; result: Awaited<ReturnType<typeof loadSqliteVecExtension>> }
+  | { kind: "index-read"; read: ReturnType<typeof readMemoryIndex> }
   | ({ kind: "recall-metadata" } & ReturnType<typeof readMemoryRecallData>)
   | {
       kind: "curated";
@@ -108,11 +112,7 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
   if (request.kind === "forget-index-plan") {
     return { kind: request.kind, plan: await readMemoryForgetIndexInWorker(request) };
   }
-  if (
-    request.kind === "origin-rows" ||
-    request.kind === "origin-exists" ||
-    request.kind === "session-tombstones"
-  ) {
+  if (request.kind === "origin-rows" || request.kind === "session-tombstones") {
     return readMemoryOriginsInWorker(request);
   }
   if (request.kind === "recall-metadata") {
@@ -125,13 +125,14 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
     }
     return { kind: "recall-metadata", ...result.value };
   }
-  if (request.kind === "source-state") {
+  if (request.kind === "index-read") {
     assertMemoryShadowIdentity(request.databasePath, request.fileIdentity);
   }
-  const opened = openOpenClawAgentDatabaseReadOnly({
-    agentId: request.agentId,
-    path: request.databasePath,
-  });
+  const target = { agentId: request.agentId, path: request.databasePath };
+  const opened =
+    request.kind === "vector-load"
+      ? openOpenClawAgentDatabaseReadOnly(target, { allowExtension: true })
+      : retainOpenClawAgentDatabaseReadOnly(target);
   if (!opened.found) {
     if (
       opened.reason === "database-missing" &&
@@ -151,15 +152,26 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
   }
   const { db } = opened.database;
   try {
-    if (request.kind === "source-state") {
+    if (request.kind === "vector-load") {
+      return {
+        kind: "vector-load",
+        result: await loadSqliteVecExtension({ db, extensionPath: request.extensionPath }),
+      };
+    }
+    if (request.kind === "index-read") {
       assertMemoryShadowIdentity(request.databasePath, request.fileIdentity);
-      return { kind: "source-state", rows: loadMemorySourceFileState({ db, ...request.query }) };
+      const read = () => readMemoryIndex(db, request.command);
+      return {
+        kind: "index-read",
+        // Cache lookup can span provider identities and batches of hashes.
+        read:
+          request.command.type === "cache.read"
+            ? runSqliteDeferredTransactionSync(db, read)
+            : read(),
+      };
     }
     if (request.kind === "index-state") {
       return { kind: "index-state", state: readMemoryRetrievalIndexState(db) };
-    }
-    if (request.kind === "index-facts") {
-      return { kind: "index-facts", facts: readMemoryDatabaseFacts(db) };
     }
     if (request.kind === "curated") {
       const provenanceRepairPending =
@@ -202,8 +214,12 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
       ...(recallData ? { recallData } : {}),
     };
   } finally {
-    // The caller retains its published-generation lease until this close and reply,
-    // or until the pool confirms worker termination after cancellation.
-    opened.database.close();
+    // Release this request's borrow; the database owner retains the idle reader.
+    // Extension loading needs its own connection and must not change that reader.
+    if ("claim" in opened) {
+      opened.claim.release();
+    } else {
+      opened.database.close();
+    }
   }
 });

@@ -8,6 +8,7 @@ import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "./session-transcript-turn-lifecycle.types.js";
+import type { SqliteSessionTurnOptions } from "./session-turn.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 // Metadata timestamps do not fence recovery; writer and lifecycle checks are separate.
@@ -130,4 +131,37 @@ export function buildExpectedTranscriptTurnSessionPatch(params: {
         }
       : {}),
   };
+}
+
+/** Prepare the shared entry-selection policy without opening a database. */
+export function prepareSessionTranscriptTurnEntry(options: SqliteSessionTurnOptions) {
+  const initialEntry = options.initialSessionEntry
+    ? structuredClone(options.initialSessionEntry)
+    : undefined;
+  if (
+    initialEntry &&
+    (initialEntry.sessionId !== options.expectedSessionId ||
+      options.expectedLifecycleRevision !== undefined ||
+      options.expectedWriterRunId !== undefined ||
+      options.expectedSessionState !== undefined)
+  ) {
+    throw new Error(
+      "Session initialization requires its new identity and no existing writer state.",
+    );
+  }
+  const resolveExpectedEntry = (selected: { entry: SessionEntry } | undefined) => {
+    if (
+      options.selectedSessionId !== undefined &&
+      ((selected?.entry.sessionId ?? null) !== options.selectedSessionId ||
+        selected?.entry.lifecycleRevision !== (options.selectedLifecycleRevision ?? undefined))
+    ) {
+      return undefined;
+    }
+    // A prepared creation cannot adopt a row that appeared while admission was awaiting work.
+    if (initialEntry) {
+      return selected ? undefined : initialEntry;
+    }
+    return sessionMatchesExpectedTranscriptTurn(selected, options) ? selected.entry : undefined;
+  };
+  return { initialEntry, resolveExpectedEntry };
 }

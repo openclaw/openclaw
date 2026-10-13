@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
@@ -13,6 +13,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { lookupSessionGoalOperation } from "./goals-operations-read.js";
 import { mutateSessionGoal, SessionGoalOperationError } from "./goals-operations.js";
 import type {
@@ -39,6 +40,7 @@ import { useTempSessionsFixture } from "./test-helpers.js";
 // These tests exercise the durable owner, including rollback and process reopen; existing
 // textual Goal tests protect the shared policy but cannot catch a split Goal/turn commit.
 describe("typed Goal operation persistence", () => {
+  afterAll(clearRuntimeConfigSnapshot);
   const fixture = useTempSessionsFixture("openclaw-goal-operations-");
   const sessionKey = "agent:main:goal-operations";
   const sessionId = "goal-session-1";
@@ -90,6 +92,7 @@ describe("typed Goal operation persistence", () => {
     });
 
   beforeEach(async () => {
+    setRuntimeConfigSnapshot({});
     await upsertSessionEntryCore(scope(), {
       sessionId,
       updatedAt: now,
@@ -202,12 +205,15 @@ describe("typed Goal operation persistence", () => {
             : null,
     );
     let edited: Awaited<ReturnType<typeof mutateSessionGoal>>;
+    const assertCurrent = vi.fn();
     try {
       edited = await mutateSessionGoal({
         ...scope(),
         expectedSessionId: sessionId,
         operation: editOperation,
+        assertCurrent,
       });
+      expect(assertCurrent).toHaveBeenCalled();
       expect.soft(editReads.counts.sessionNodeSelects).toBe(0);
       expect.soft(editReads.rowCounts.sessionNodeSelects).toBe(0);
       expect.soft(editReads.counts.receiptStatements).toBe(0);
@@ -274,12 +280,15 @@ describe("typed Goal operation persistence", () => {
           goalId: goal.id,
           objective: "must not commit",
         },
-        assertCurrent: () => {
-          replaceSessionEntrySync(scope(), {
-            ...before!,
-            sessionId: "replacement-session",
-          });
-        },
+        assertCurrent: Object.assign(
+          () => {
+            replaceSessionEntrySync(scope(), {
+              ...before!,
+              sessionId: "replacement-session",
+            });
+          },
+          { nativeSource: true },
+        ),
       }),
     ).rejects.toMatchObject({ code: "session-rebound" });
     expect(loadSessionEntry(scope())).toEqual(before);
@@ -632,9 +641,10 @@ describe("typed Goal operation persistence", () => {
         if (
           request.stage === stage &&
           isRecord(request.facts) &&
-          isRecord(request.facts.publication) &&
-          request.facts.publication.kind ===
-            (stage === "commit" ? "session-entry-patch-committed" : "session-entry-patch-transfer")
+          (stage === "transaction"
+            ? request.facts.publication === undefined
+            : isRecord(request.facts.publication) &&
+              request.facts.publication.kind === "session-entry-patch-committed")
         ) {
           admitted = true;
         }

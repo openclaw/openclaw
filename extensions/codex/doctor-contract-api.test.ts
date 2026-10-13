@@ -591,7 +591,7 @@ describe("codex doctor contract", () => {
         threadId: "thread-1",
       });
       const sessionStateKey = sessionBindingKey("session-current", sessionKey);
-      const imported = createStoredCodexAppServerBinding(
+      const imported = await createStoredCodexAppServerBinding(
         JSON.parse(await fs.readFile(fixture.sidecarPath, "utf8")),
       );
       if (!imported) {
@@ -662,52 +662,6 @@ describe("codex doctor contract", () => {
     },
   );
 
-  it("retires an imported row when its locator escapes during owner revalidation", async () => {
-    const sessionKey = "agent:main:locator-race";
-    const fixture = await createBindingMigrationFixture({
-      name: "locator-race",
-      sessionIndex: {
-        [sessionKey]: legacySession("locator-race"),
-      },
-      threadId: "thread-locator-race",
-    });
-    let rebound = false;
-    const context = createDoctorContext(fixture.env, async () => {
-      if (rebound) {
-        return;
-      }
-      rebound = true;
-      await fs.writeFile(
-        fixture.storePath,
-        JSON.stringify({
-          [sessionKey]: {
-            sessionId: "locator-race",
-            sessionFile: "../outside.jsonl",
-          },
-        }),
-      );
-    });
-
-    const result = await fixture.migration.migrateLegacyState({ ...fixture.params, context });
-
-    expect(result.warnings).toEqual([]);
-    expect(result.notices).toEqual([
-      expect.stringContaining("session owner changed before Codex ownership could be recorded"),
-    ]);
-    await expect(fs.access(fixture.sidecarPath)).resolves.toBeUndefined();
-    await expect(fs.access(`${fixture.sidecarPath}.migrated`)).rejects.toThrow();
-    await expect(
-      openBindingStore(fixture.env).lookup(sessionBindingKey("locator-race", sessionKey)),
-    ).resolves.toMatchObject({
-      version: 1,
-      state: "cleared",
-      sessionId: "locator-race",
-      retired: true,
-    });
-
-    await removeCodexDoctorFixture(fixture.stateDir);
-  });
-
   it("does not resurrect a retired session generation from its legacy sidecar", async () => {
     const sessionKey = "agent:main:retired";
     const fixture = await createBindingMigrationFixture({
@@ -718,7 +672,7 @@ describe("codex doctor contract", () => {
       threadId: "thread-retired",
     });
     const store = openBindingStore(fixture.env);
-    const active = createStoredCodexAppServerBinding(
+    const active = await createStoredCodexAppServerBinding(
       JSON.parse(await fs.readFile(fixture.sidecarPath, "utf8")),
     );
     if (!active) {

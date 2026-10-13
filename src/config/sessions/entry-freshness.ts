@@ -94,7 +94,6 @@ export async function resolveSessionEntryResetFreshnessAsync(
         read!.result.lifecycleTimestamps,
       );
     },
-    { ordered: true },
   );
 }
 

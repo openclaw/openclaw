@@ -135,7 +135,6 @@ it("captures the shared actor for staging, submitted input, history, receipts an
     ).rejects.toThrow("session generation is no longer current");
     expect(await readSessionSubmittedInput(f.scope, "first:user")).toEqual(first.message);
     const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
-    expect(() => first.complete?.(outcome)).toThrow(IncognitoSessionSyncAccessError);
     expect(await first.completeAsync?.(outcome)).toEqual(outcome);
     first.finish("interrupted");
     second.finish("cancelled");

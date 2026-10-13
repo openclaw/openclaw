@@ -34,22 +34,19 @@ import type { AuthProfileStore } from "./types.js";
 export type AuthStoreUpdatePrepared = {
   store: AuthProfileStore;
   mainStore: AuthProfileStore | null;
+  storePresent: boolean;
 };
 export type AuthStoreUpdateCommitted = {
   store: AuthProfileStore;
   publication: AuthStoreUpdatePublication;
-};
-export type AuthStoreUpdateCommittedWire = {
-  store: AuthProfileStore;
-  publication: Omit<AuthStoreUpdatePublication, "oauthRefreshClaimIds"> & {
-    oauthRefreshClaimIds: Array<[string, string | null]>;
-  };
 };
 export type AuthStoreUpdateResponse =
   | { save: false }
   | {
       save: true;
       store: AuthProfileStore;
+      /** Compensation may restore an originally absent credential row. */
+      deleteEmptyStore?: boolean;
       scopedSharedStore?: AuthProfileStore;
       externalProfiles: RuntimeExternalOAuthProfile[];
       runtimeStore?: AuthProfileStore;
@@ -144,6 +141,7 @@ export function updateAuthProfileStoreInDatabase(
         ? markRuntimePersistedProfiles(prepared.loaded ?? createEmptyAuthProfileStore())
         : createEmptyAuthProfileStore(),
       mainStore: prepared && !isMainStore ? prepared.mainStore : null,
+      storePresent: prepared?.existingRaw !== undefined,
     });
     requestSqliteWorkerOperationAdmission(
       {
@@ -178,7 +176,11 @@ export function updateAuthProfileStoreInDatabase(
       selectionProfiles: { ...mainStore?.profiles, ...response.store.profiles, ...next.profiles },
     });
     if (publication.credentialsChanged) {
-      writeAuthProfileJsonCell(database, "store", kind, payload);
+      if (response.deleteEmptyStore && Object.keys(payload.profiles).length === 0) {
+        deleteAuthProfileJsonCell(database, "store", kind);
+      } else {
+        writeAuthProfileJsonCell(database, "store", kind, payload);
+      }
     }
     if (publication.stateChanged) {
       if (statePayload) {
@@ -189,14 +191,8 @@ export function updateAuthProfileStoreInDatabase(
     }
     sendAuthProfileUpdateValue(port1, {
       store: markRuntimePersistedProfiles(next),
-      publication: {
-        ...publication,
-        oauthRefreshClaimIds: Array.from(
-          publication.oauthRefreshClaimIds,
-          ([profileId, claimId]): [string, string | null] => [profileId, claimId ?? null],
-        ),
-      },
-    } satisfies AuthStoreUpdateCommittedWire);
+      publication,
+    } satisfies AuthStoreUpdateCommitted);
   } finally {
     port1.close();
     port2.close();

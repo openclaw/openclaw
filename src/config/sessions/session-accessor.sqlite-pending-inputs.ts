@@ -17,16 +17,17 @@ import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import { runWithSessionActorStorage } from "./session-actor-storage-binding.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
+import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
 import {
   isFinalInputCompletion,
   parseSessionPendingInputMessage,
 } from "./session-pending-input-value.js";
 import type {
   SessionPendingInputRow,
-  SessionPendingInputOwner,
   SessionPendingInputWorkerFacts,
   SessionPendingInputWorkerReceipt,
   SessionPendingInputAppend,
@@ -39,7 +40,6 @@ export type {
   SessionPendingInput,
   SessionPendingInputPage,
   SessionPendingInputRow,
-  SessionPendingInputOwner,
   SessionPendingInputWorkerFacts,
   SessionPendingInputWorkerReceipt,
   SessionPendingInputAppend,
@@ -243,8 +243,11 @@ export function assertSessionPendingInputLifetimeCurrent(owner: SessionPendingIn
 }
 
 export function runWithSessionPendingInput<T>(owner: SessionPendingInputOwner, run: () => T): T {
-  assertPendingInputOwnerCurrent(owner);
-  return owners.current.run(owner, run);
+  const enter = () => {
+    assertPendingInputOwnerCurrent(owner);
+    return owners.current.run(owner, run);
+  };
+  return owner.sessionActor ? runWithSessionActorStorage(owner.sessionActor, enter) : enter();
 }
 
 /** Persistence alone may mirror a closed turn; the append owner proves exact committed bytes. */
@@ -252,7 +255,8 @@ export function runWithSessionPendingInputPersistence<T>(
   owner: SessionPendingInputOwner,
   persist: () => T,
 ): T {
-  return owners.current.run(owner, persist);
+  const enter = () => owners.current.run(owner, persist);
+  return owner.sessionActor ? runWithSessionActorStorage(owner.sessionActor, enter) : enter();
 }
 
 /** A transcript rewrite may move only the exact current user owned by the live admitted turn. */

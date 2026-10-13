@@ -29,7 +29,10 @@ import {
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-read.js";
 import { revalidateAgentDatabaseTerminalOpen } from "./openclaw-agent-db-terminal.js";
-import { hasOpenClawAgentCanonicalValidation } from "./openclaw-agent-db-validation-cache.js";
+import {
+  adoptOpenClawAgentDatabaseSchema,
+  hasOpenClawAgentCanonicalValidation,
+} from "./openclaw-agent-db-validation-cache.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
@@ -91,10 +94,7 @@ export function captureOpenClawAgentReadOnlyAdmission(database: OpenClawAgentRea
     throw changed();
   }
   return () => {
-    if (
-      getAdmittedSqliteSchemaFacts(database.db) !== schema ||
-      !hasAdmittedAgentReadOnlySchema(database)
-    ) {
+    if (getAdmittedSqliteSchemaFacts(database.db) !== schema) {
       throw changed();
     }
   };
@@ -119,16 +119,11 @@ export function readOpenClawAgentDatabaseSnapshot<T>(
   database: OpenClawAgentReadOnlyDatabase,
   operation: (database: OpenClawAgentReadOnlyDatabase) => T,
 ): OpenClawAgentDatabaseReadOnlyResult<T> {
-  let result: OpenClawAgentDatabaseReadOnlyResult<T> = { found: false, reason: "schema-missing" };
-  runSqliteReadSnapshotSync(database.db, () => {
-    if (hasAdmittedAgentReadOnlySchema(database)) {
-      result = readOpenClawAgentDatabase(database, operation);
-      // Return the callback value so the transaction owner rejects asynchronous kernels.
-      return result.value;
-    }
-    return undefined;
-  });
-  return result;
+  const value = runSqliteReadSnapshotSync(
+    database.db,
+    () => readOpenClawAgentDatabase(database, operation).value,
+  );
+  return { found: true, value };
 }
 
 /** Fresh-only callers do not need the writable runtime's process-held connection cache. */
@@ -206,10 +201,13 @@ export function openOpenClawAgentDatabaseReadOnly(
       ? db.location()
       : undefined;
     const database = { agentId, db, path: privatePath ?? pathname, close };
-    const hasSchema = runSqliteReadOperationSync(db, () => {
-      admitSqliteSchema(db);
-      return hasAdmittedAgentReadOnlySchema(database);
-    });
+    // The physical owner already checked ownership and canonical definitions.
+    const hasSchema =
+      adoptOpenClawAgentDatabaseSchema(database) ||
+      runSqliteReadOperationSync(db, () => {
+        admitSqliteSchema(db);
+        return hasAdmittedAgentReadOnlySchema(database);
+      });
     if (!hasSchema) {
       close();
       return { found: false, reason: "schema-missing" };

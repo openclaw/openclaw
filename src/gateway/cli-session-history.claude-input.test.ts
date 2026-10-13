@@ -299,7 +299,9 @@ describe("readClaudeCliFallbackSeed", () => {
     if (kind === "empty") {
       await writeJsonl([{ ...userTurn("u-side", "sidechain user turn"), isSidechain: true }]);
     }
-    expect(readFallbackSeed(kind === "path escape" ? "../escape" : SESSION_ID)).toBeUndefined();
+    expect(
+      await readFallbackSeed(kind === "path escape" ? "../escape" : SESSION_ID),
+    ).toBeUndefined();
   });
 
   it("collects valid turns through the HOME-resolved session store despite null rows", async () => {
@@ -372,6 +374,6 @@ describe("readClaudeCliFallbackSeed", () => {
     },
   ])("seeds from the $name", async ({ lines, expected }) => {
     await writeJsonl(lines);
-    expect(readFallbackSeed()).toMatchObject(expected);
+    expect(await readFallbackSeed()).toMatchObject(expected);
   });
 });

@@ -6,6 +6,7 @@ import {
   admitReplyTurn,
   runWithReplyOperationLifecycleAdmission,
 } from "../../auto-reply/reply/reply-turn-admission.js";
+import { captureRuntimeConfigAsyncReader, setRuntimeConfigSnapshot } from "../../config/config.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -42,6 +43,7 @@ import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agen
 import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-preflight.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { createAgentRunDirectAbortError } from "../run-termination.js";
 import { readStartupRecoveryWarning } from "./main-session-restart-recovery-diagnostics.js";
 import {
   markRestartAbortedMainSessions,
@@ -107,6 +109,7 @@ it("keeps healthy stores recoverable when an earlier startup mark fails", async 
       talk: { agentId: "main" },
     };
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     for (const agentId of ["main", "worker"]) {
       const sessionKey = `agent:${agentId}:main`;
       const sessionId = `${agentId}-session`;
@@ -178,6 +181,7 @@ it.each(["before", "after"] as const)(
   "preserves a registry-owned writer registered %s orphan planning",
   async (registration) => {
     await withOpenClawTestState({ label: "recovery-live-writer" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const sessionKey = "agent:main:main";
       const sessionId = "owned-session";
       const runId = "owned-run";
@@ -236,6 +240,7 @@ it.each(["before", "after"] as const)(
 
 it("recovers an orphan after its owner releases retained run metadata", async () => {
   await withOpenClawTestState({ label: "recovery-retained-run" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const sessionKey = "agent:main:main";
     const sessionId = "retained-session";
     const runId = "retained-run";
@@ -285,6 +290,7 @@ it("marks healthy startup orphans while leaving a refused secondary database unt
       },
       talk: { agentId: "main" },
     };
+    setRuntimeConfigSnapshot(cfg);
     for (const agentId of ["main", "cleaner"]) {
       await replaceSessionEntry(
         { agentId, sessionKey: `agent:${agentId}:main` },
@@ -391,7 +397,7 @@ it("marks only the closing Gateway's exact durable admissions and leaves host in
   }
 });
 
-it.each(["release", "completed", "rotation"] as const)(
+it.each(["release", "completed", "cancelled", "rotation"] as const)(
   "does not commit a restart mark when %s invalidates its owner after planning",
   async (change) => {
     const stateDir = sessionDirs.make();
@@ -400,6 +406,8 @@ it.each(["release", "completed", "rotation"] as const)(
     const sessionId = "closing";
     const resolveGatewayContext = () => undefined;
     let admission: SessionWorkAdmissionLease | undefined;
+    let cancelled = false;
+    const cancellation = createAgentRunDirectAbortError();
     const apply = sessionAccessor.applySessionEntryReplacements;
     let restoreSpy = () => {};
     try {
@@ -408,6 +416,8 @@ it.each(["release", "completed", "rotation"] as const)(
         scope: storePath,
         identities: [sessionKey, sessionId],
         resolveGatewayContext,
+        isSettling: () => cancelled,
+        getAbortReason: () => (cancelled ? cancellation : undefined),
         assertAllowed: () => {},
       });
       const spy = vi
@@ -419,6 +429,12 @@ it.each(["release", "completed", "rotation"] as const)(
               const prepared = await params.update(entries);
               if (change === "rotation") {
                 rotateAgentEventLifecycleGeneration();
+              } else if (change === "cancelled") {
+                cancelled = true;
+                sessionAccessor.replaceSessionEntrySync(
+                  { storePath, sessionKey },
+                  { sessionId, status: "killed", updatedAt: Date.now(), endedAt: 123 },
+                );
               } else {
                 admission?.release();
                 if (change === "completed") {
@@ -448,6 +464,12 @@ it.each(["release", "completed", "rotation"] as const)(
       if (change === "completed") {
         expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
           status: "done",
+          endedAt: 123,
+        });
+      }
+      if (change === "cancelled") {
+        expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+          status: "killed",
           endedAt: 123,
         });
       }

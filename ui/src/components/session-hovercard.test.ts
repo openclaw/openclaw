@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import type { ProgressCard } from "@openclaw/gateway-protocol";
-import { render } from "lit";
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiSessionPullRequestSnapshot } from "../../../src/gateway/control-ui-contract.js";
@@ -9,7 +8,6 @@ import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { SessionHovercard, type SessionHovercardInput } from "./session-hovercard-solid.tsx";
-import { renderSessionHovercard } from "./session-hovercard.ts";
 
 function row(overrides: Partial<SidebarRecentSession> = {}): SidebarRecentSession {
   return {
@@ -56,7 +54,7 @@ function progressCard(): ProgressCard {
 
 const updateCards = new WeakMap<HTMLElement, (input: SessionHovercardInput) => void>();
 
-function renderSolidCard(input: SessionHovercardInput, container = document.createElement("div")) {
+function renderCard(input: SessionHovercardInput, container = document.createElement("div")) {
   const update = updateCards.get(container);
   if (update) {
     update(input);
@@ -107,16 +105,7 @@ function attributionSummary(container: ParentNode): string {
     .trim();
 }
 
-describe.each([
-  {
-    name: "Lit",
-    render: (input: SessionHovercardInput, container = document.createElement("div")) => {
-      render(renderSessionHovercard(input), container);
-      return container;
-    },
-  },
-  { name: "Solid", render: renderSolidCard },
-])("$name session hovercard", ({ render: renderCard }) => {
+describe("session hovercard", () => {
   it.each([undefined, "Validation worker"])(
     "shows the full failure above the notepad (child: %s)",
     (childLabel) => {
@@ -837,6 +826,7 @@ describe.each([
       participantTrigger?.dispatchEvent(touchDown);
       participantTrigger?.dispatchEvent(new MouseEvent("pointerup", { bubbles: true }));
       participantTrigger?.click();
+      await participantsTooltip?.updateComplete;
       expect(participantsTooltip?.hasAttribute("open")).toBe(true);
       expect(participantTrigger?.textContent).toContain("4 others");
       expect(
@@ -882,6 +872,7 @@ describe.each([
     trigger.dispatchEvent(pointer);
     trigger.dispatchEvent(new MouseEvent("pointerup", { bubbles: true }));
     trigger.click();
+    await tooltip.updateComplete;
     expect(tooltip.hasAttribute("open")).toBe(true);
     const name = container.querySelector<HTMLAnchorElement>(
       ".session-hovercard__attribution-name",

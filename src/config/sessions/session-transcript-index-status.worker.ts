@@ -164,7 +164,9 @@ export function maintainSessionTranscriptIndexStatus(db: DatabaseSync): {
     db,
     temporary.selectFrom("openclaw_transcript_index_status").selectAll().where("id", "=", 1),
   )!;
-  if (state.sibling_write_revision === -1 || state.schema_version !== schema.schemaVersion) {
+  // An unknown sibling revision only blocks the clean receipt; resetting here would rescan
+  // the first batch forever and never reach later dirty sessions.
+  if (state.schema_version !== schema.schemaVersion) {
     executeSqliteQuerySync(db, temporary.deleteFrom("openclaw_transcript_index_pending"));
     state.complete = 0;
     state.after_session = null;

@@ -15,9 +15,11 @@ import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscri
 import { resolveSelectedModelCredential } from "../../model-auth-selected-credential.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
+import { resolveModelCallUrgency } from "../../run-trigger.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AgentSession, SessionManager, SettingsManager } from "../../sessions/index.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
+import { withPreparedSessionCapabilityRead } from "../../subagents/spawn/subagent-session-store.js";
 import { isToolExecutionAllowed } from "../../tool-policy-shared.js";
 import { hasNonzeroUsage, normalizeUsage } from "../../usage.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -548,23 +550,26 @@ export async function prepareEmbeddedAttemptTransport(input: {
     senderE164: attempt.senderE164,
   };
 
-  const { nativeWebSearchAllowedByToolPolicy } = applyExtraParamsToAgent(
-    session.agent,
-    attempt.config,
-    attempt.provider,
-    attempt.modelId,
-    streamExtraParamsOverride,
-    input.providerThinkingLevel,
-    input.sessionAgentId,
-    input.workspaceDir,
-    attempt.model,
-    input.agentDir,
-    resolvedTransport,
-    {
-      preparedExtraParams: effectiveExtraParams,
-      auth,
-      nativeWebSearchPolicyContext,
-    },
+  const { nativeWebSearchAllowedByToolPolicy } = await withPreparedSessionCapabilityRead(() =>
+    applyExtraParamsToAgent(
+      session.agent,
+      attempt.config,
+      attempt.provider,
+      attempt.modelId,
+      streamExtraParamsOverride,
+      input.providerThinkingLevel,
+      input.sessionAgentId,
+      input.workspaceDir,
+      attempt.model,
+      input.agentDir,
+      resolvedTransport,
+      {
+        preparedExtraParams: effectiveExtraParams,
+        modelCallUrgency: resolveModelCallUrgency(attempt),
+        auth,
+        nativeWebSearchPolicyContext,
+      },
+    ),
   );
   if (input.codeModeControlsEnabled) {
     session.agent.streamFn = createCodexNativeWebSearchWrapper(session.agent.streamFn, {

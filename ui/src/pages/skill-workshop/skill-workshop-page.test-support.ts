@@ -3,12 +3,6 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 
-export type SkillWorkshopPageTestElement = HTMLElement & {
-  context: ApplicationContext;
-  updateComplete: Promise<boolean>;
-  requestUpdate(): void;
-};
-
 export function createRuntimeConfigStub(options?: {
   sourceConfig?: Record<string, unknown>;
   patch?: ReturnType<typeof vi.fn>;
@@ -51,6 +45,8 @@ export function createContext(
     lastErrorCode: null,
   };
   const subscribe = () => () => undefined;
+  const selectionListeners = new Set<() => void>();
+  const selectionState = { selectedId: "research" };
   return {
     basePath: "",
     gateway: { snapshot, subscribe },
@@ -59,7 +55,19 @@ export function createContext(
       subscribe,
     },
     agents: { state: { agentsList: null }, subscribe },
-    agentSelection: { state: { selectedId: "research" }, set: vi.fn(), subscribe },
+    agentSelection: {
+      state: selectionState,
+      set: vi.fn((selectedId: string) => {
+        selectionState.selectedId = selectedId;
+        for (const listener of selectionListeners) {
+          listener();
+        }
+      }),
+      subscribe: (listener: () => void) => {
+        selectionListeners.add(listener);
+        return () => selectionListeners.delete(listener);
+      },
+    },
     agentIdentity: {
       get: () => ({ agentId: "research", name: "Research" }),
       subscribe,

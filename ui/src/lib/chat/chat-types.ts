@@ -120,6 +120,8 @@ export type ChatGoalAction = "pause" | "resume" | "clear";
 
 export type ChatGoalRecovery = {
   pending: boolean;
+  goalId?: string;
+  action?: ChatGoalAction | "edit" | "complete" | "block";
   retired?: "expired" | "invalid";
   onCheck: () => Promise<boolean>;
 };
@@ -262,8 +264,8 @@ export type ChatItem =
       /** The run handed off and is idle; its subagents are what is still working. */
       waitingOn?: "subagents";
       /**
-       * Set for a run that resumed a handoff: when its request was asked, on the
-       * transcript's clock, and the earlier runs of the same answer, oldest first.
+       * Set while waiting on or resuming a handoff: when its request was asked,
+       * on the transcript's clock, and its handed-off runs, oldest first.
        */
       request?: { askedAt: number; runIds: readonly string[] };
       runId?: string;

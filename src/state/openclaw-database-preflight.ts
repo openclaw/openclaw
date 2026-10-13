@@ -10,6 +10,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { deferSqliteSnapshotCleanupAfterRead } from "../infra/sqlite-readonly-location-cleanup.js";
 import { adoptSqliteSchemaContracts } from "../infra/sqlite-schema-contract.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -240,6 +241,8 @@ export async function preflightOpenClawDatabaseSchemas(
           preserveSourceArtifacts: options.preserveSourceArtifacts ?? true,
           allowLiveOwner: options.preserveSourceArtifacts !== false,
           signal: options.signal,
+          // Any failed removal refuses admission; keep its cause for the Bun EBUSY deferral.
+          requireCleanup: true,
         });
         stateLocation = stateSnapshot.location;
       }
@@ -305,7 +308,7 @@ export async function preflightOpenClawDatabaseSchemas(
   if (options.scope === "state") {
     return result;
   }
-  const { candidates, isRetainedPath, failures, preparedDiscovery } =
+  const { candidates, configuredTargets, isRetainedPath, failures, preparedDiscovery } =
     collectAgentDatabasePreflightTargets({
       ...options,
       registeredDatabases,
@@ -321,19 +324,29 @@ export async function preflightOpenClawDatabaseSchemas(
   for (const failure of failures) {
     result.indeterminate.push({ kind: "agent", ...failure });
   }
+  const admissionTargets =
+    admissionConfig &&
+    (options.requireStartupMigrationReadiness || options.reuseStartupSchemaPreparation)
+      ? [
+          ...configuredTargets,
+          ...(
+            options.configuredAgentDatabaseCandidatePaths ??
+            resolveConfiguredAgentDatabaseCandidatePaths(admissionConfig, { env: options.env })
+          ).map((pathname) => ({ path: pathname })),
+        ]
+      : undefined;
   const skipped = new Set<string>();
   const inspectionTargets = candidates
     .filter((row) => {
       if (
-        !admissionConfig ||
-        !(options.requireStartupMigrationReadiness || options.reuseStartupSchemaPreparation) ||
-        isConfiguredAgentDatabaseTarget(admissionConfig, row.agentId, row.path, options.env)
+        !admissionTargets ||
+        isConfiguredAgentDatabaseTarget(admissionTargets, row.agentId, row.path)
       ) {
         return true;
       }
       if (options.requireStartupMigrationReadiness && !skipped.has(row.path)) {
         createSubsystemLogger("state/agent-admission").warn(
-          `Skipped ${nodePath.basename(row.path)}: unconfigured agent database; run openclaw doctor to inspect retained data.`,
+          `Skipped ${nodePath.basename(row.path)}: database is not a configured target; run openclaw doctor to inspect retained data.`,
         );
         skipped.add(row.path);
       }
@@ -364,6 +377,7 @@ export async function preflightOpenClawDatabaseSchemas(
         return undefined;
       }
       let agentSnapshot: Awaited<ReturnType<typeof prepareSqliteReadOnlyLocation>> | undefined;
+      let readSucceeded = false;
       try {
         // Preserve SQLite's filesystem traversal through symlink/.. locators.
         const realAgentPath = realpathSync.native(agentPath);
@@ -409,6 +423,7 @@ export async function preflightOpenClawDatabaseSchemas(
             preserveSourceArtifacts: options.preserveSourceArtifacts ?? true,
             allowLiveOwner: options.preserveSourceArtifacts !== false,
             signal: options.signal,
+            requireCleanup: true,
           });
           options.signal?.throwIfAborted();
           schemaInspection = await inspectSchema(
@@ -420,6 +435,7 @@ export async function preflightOpenClawDatabaseSchemas(
         if (!schemaInspection) {
           throw new Error(`Agent database inspection returned no result: ${agentPath}`);
         }
+        readSucceeded = !schemaInspection.failure && !schemaInspection.reason;
         const { version: agentVersion, writerAppVersion, agentSchemaMeta } = schemaInspection;
         if (row.holdForDeletionRecovery) {
           recordAgentDatabaseRecoveryInspection(
@@ -519,7 +535,12 @@ export async function preflightOpenClawDatabaseSchemas(
               };
             }
           } catch (error) {
-            failure = { error };
+            if (
+              !readSucceeded ||
+              !deferSqliteSnapshotCleanupAfterRead(error, agentSnapshot.cleanupRoot)
+            ) {
+              failure = { error };
+            }
           }
           if (failure && !startup?.recordInspectionFailure(row, inspection, failure.error)) {
             if (row.holdForDeletionRecovery) {

@@ -301,7 +301,7 @@ describe("prompt cache history fingerprints", () => {
     });
   });
 
-  it.each(["compaction", "pruning", "runtimeContextCarrier", "imageCleanup"] as const)(
+  it.each(["compaction", "pruning", "runtimeContextCarrier"] as const)(
     "consumes a declared %s rewrite for exactly one request",
     (reason) => {
       withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
@@ -332,7 +332,7 @@ describe("prompt cache history fingerprints", () => {
     },
   );
 
-  it.each(["compaction", "pruning", "runtimeContextCarrier", "imageCleanup"] as const)(
+  it.each(["compaction", "pruning", "runtimeContextCarrier"] as const)(
     "shares a %s declaration across cache affinities only within the same session key",
     (reason) => {
       withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {

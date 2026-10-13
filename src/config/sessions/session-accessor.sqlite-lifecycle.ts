@@ -1,4 +1,5 @@
 import { isMainThread } from "node:worker_threads";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -8,6 +9,7 @@ import {
   MODEL_SELECTION_LOCK_REMOVAL_MESSAGE,
   resolveAgentHarnessSessionStoreEntryError,
 } from "../../sessions/agent-harness-session-key.js";
+import { assertModelSelectionUnlocked } from "../../sessions/model-overrides.js";
 import { collectActiveSessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
 import { emitSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import {
@@ -40,7 +42,6 @@ import type {
   SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import {
-  hasPreparedNativeSessionDeletion,
   runSqliteSessionDeletionTransaction as runOpenClawAgentWriteTransaction,
   withSqliteSessionDeletions,
 } from "./session-accessor.sqlite-deletion.js";
@@ -70,6 +71,8 @@ import {
   toDatabaseOptions,
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
 import {
   deleteCapturedIncognitoSession,
@@ -307,7 +310,6 @@ async function deleteSqliteSessionEntryLifecycleLocked(
         commitGuard: _commitGuard,
         env: _env,
         expectedDatabaseIdentity: _expectedDatabaseIdentity,
-        descendantRunBasis: _descendantRunBasis,
         ...deleteParams
       } = params;
       const preparation = await runSessionDeletionPlanning(
@@ -364,7 +366,6 @@ async function deleteSqliteSessionEntryLifecycleLocked(
               commitGuard: _generationGuard,
               env: _generationEnv,
               expectedDatabaseIdentity: _generationIdentity,
-              descendantRunBasis: _generationBasis,
               ...generationParams
             } = generation.deleteParams;
             const generationValidation = {
@@ -429,7 +430,6 @@ async function deleteSqliteSessionEntryLifecycleLocked(
                 return DELETE_EXPECTED_ENTRY_MISMATCH;
               }
               const reclamationPlan: SqliteSessionReclamationPlan = {
-                descendantRunBasis: generation.deleteParams.descendantRunBasis,
                 databaseOptions: resolveSessionReclamationDatabaseOptions(databaseOptions),
                 deleteParams: prepareReclamationDeleteParams(generation.deleteParams),
                 kind: "historical-generation",
@@ -441,7 +441,6 @@ async function deleteSqliteSessionEntryLifecycleLocked(
               const reclaimed = await runSqliteSessionReclamation({
                 diagnostics,
                 assertCommitAllowed: assertDeletionCurrent,
-                forceInProcess: typeof params.expectedDatabaseIdentity === "symbol",
                 onInProcessCommit: recordCommit,
                 plan: reclamationPlan,
               });
@@ -480,7 +479,6 @@ async function deleteSqliteSessionEntryLifecycleLocked(
             const diagnostics: SqliteSessionReclamationDiagnostics = {};
             // The reclamation transaction rereads the exact target immediately before mutation.
             const reclamationPlan: SqliteSessionReclamationPlan = {
-              descendantRunBasis: params.descendantRunBasis,
               databaseOptions: resolveSessionReclamationDatabaseOptions(databaseOptions),
               deleteParams: prepareReclamationDeleteParams(params),
               kind: "entry",
@@ -490,9 +488,6 @@ async function deleteSqliteSessionEntryLifecycleLocked(
             const reclaimed = await runSqliteSessionReclamation({
               diagnostics,
               assertCommitAllowed: assertDeletionCurrent,
-              forceInProcess:
-                typeof params.expectedDatabaseIdentity === "symbol" ||
-                hasPreparedNativeSessionDeletion(),
               onInProcessCommit: (database) => {
                 committedDatabaseIdentity = readOpenClawAgentDatabaseIdentity(database).identity;
                 recordCommit(database);
@@ -562,6 +557,55 @@ async function deleteSqliteSessionEntryLifecycleLocked(
   }
 }
 
+function deleteMemorySessionEntryLifecycle(
+  params: DeleteSessionEntryLifecycleParams,
+  allowLocked = false,
+): Promise<DeleteSessionEntryLifecycleResult> | undefined {
+  const memory = getSessionActorStorageBinding({
+    ...params,
+    sessionKey: params.target.canonicalKey,
+  });
+  if (!memory) {
+    return undefined;
+  }
+  let authorityError: unknown;
+  return memory.actor
+    .storage!.mutate(
+      {
+        type: "session.lifecycle.delete",
+        input: {
+          expectedEntry: params.expectedEntry,
+          expectedSessionId: params.expectedSessionId,
+          expectedLifecycleRevision: params.expectedLifecycleRevision,
+          expectedUpdatedAt: params.expectedUpdatedAt,
+        },
+      },
+      {
+        assertCurrent() {
+          try {
+            memory.authority.assertCurrent();
+            params.commitGuard?.();
+          } catch (error) {
+            authorityError = error;
+            throw error;
+          }
+        },
+        authorize(stage, facts, publication) {
+          memory.authority.authorize(stage, facts, publication);
+          if (!allowLocked && facts.entry) {
+            assertModelSelectionUnlocked(facts.entry, MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
+          }
+        },
+      },
+    )
+    .then((outcome) => {
+      if (outcome.kind === "rolled-back" && authorityError) {
+        throw toErrorObject(authorityError, "Session deletion authority rejected the operation");
+      }
+      return readSessionActorStorageResult(outcome);
+    });
+}
+
 export async function deleteSessionEntryLifecycle(
   params:
     | DeleteSessionEntryLifecycleParams
@@ -571,6 +615,7 @@ export async function deleteSessionEntryLifecycle(
     return deleteIncognitoSessionLifecycle(params);
   }
   return (
+    deleteMemorySessionEntryLifecycle(params) ??
     deleteCapturedIncognitoSession(params) ??
     deleteSqliteSessionEntryLifecycleInternal(params, false)
   );
@@ -625,6 +670,7 @@ export async function rollbackAgentHarnessSessionEntryLifecycle(
     throw new Error(expectedEntryError ?? MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
   }
   return (
+    deleteMemorySessionEntryLifecycle(params, true) ??
     deleteCapturedIncognitoSession(params, undefined, params.expectedEntry.agentHarnessId) ??
     deleteSqliteSessionEntryLifecycleInternal(params, true)
   );
@@ -650,6 +696,7 @@ export async function rollbackPluginOwnedSessionEntryLifecycle(
     throw new Error(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
   }
   return (
+    deleteMemorySessionEntryLifecycle(params, true) ??
     deleteCapturedIncognitoSession(params, expectedPluginOwner) ??
     deleteSqliteSessionEntryLifecycleInternal(params, true, expectedPluginOwner)
   );

@@ -39,8 +39,6 @@ it("samples the inherited palette when a Solid-mounted photo first joins the doc
   });
   gateway.gateway.connection.gatewayUrl = gatewayUrl;
   await loadProfileAppearancePrefs(client, "profile-a", gateway.gateway.connection.gatewayUrl, {
-    configObject: {},
-    canMigrate: false,
     isCurrent: () => true,
   });
   const canvas = document.createElement("canvas");

@@ -271,6 +271,9 @@ not merely its declared capabilities. A declared command is usable only when
 the approved pairing and Gateway command allowlist both authorize it.
 Connected non-hosts, ineligible or saturated hosts, update-required devices,
 and unavailable hosts remain visible but disabled with an actionable reason.
+The session picker and command palette show a warning icon and **Unavailable**
+for these computers. Focus or tap the row to read why it cannot host the session;
+the command palette shows one unavailable row instead of repeating project choices.
 For an already-paired headless node, enable `nodeHost.workerRuns.enabled` and
 run `openclaw node install --force` as shown above. Update-required hosts must
 be upgraded and restarted before selection.
@@ -340,6 +343,12 @@ While a device runner is unavailable, including after session hosting is disable
 the Gateway pauses advisory disk-space checks and retains the last sample for
 that placement. Checks resume on the next scheduled sweep after the current
 runner reconnects. Disabling hosting does not discard the session's workspace.
+
+The Gateway samples the volume containing the placement's remote workspace.
+New placements, placement activity, and runner availability changes refresh the
+sample on the next maintenance pass. An unchanged idle placement reuses its
+successful sample for up to 15 minutes. Samples are advisory and do not block
+turns or workspace writes.
 
 See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
 for the Control UI behavior and storage sources.
