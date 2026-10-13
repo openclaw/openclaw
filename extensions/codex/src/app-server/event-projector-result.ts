@@ -277,9 +277,25 @@ export abstract class CodexTurnProjection {
             assistantMessageOptions,
           )
         : undefined;
-    const currentAttemptAssistant = providerRefusal
+    let currentAttemptAssistant = providerRefusal
       ? lastAssistant
       : this.assistantProjection.createCurrentAttemptAssistantMessage(assistantMessageOptions);
+    // Tool-authored completion belongs to this native turn, not another input's
+    // projected answer. Preserve the same identity even for a tool-only turn.
+    if (
+      toolTelemetry.messagingToolSourceReplyPayloads?.some(
+        (reply) => reply.toolAuthoredForTurnId === turnId,
+      )
+    ) {
+      currentAttemptAssistant ??= this.assistantProjection.createAssistantMessage(
+        "",
+        assistantMessageOptions,
+      );
+      currentAttemptAssistant = { ...currentAttemptAssistant, turnId };
+      if (lastAssistant) {
+        lastAssistant.turnId = turnId;
+      }
+    }
     // Stable turn/item identities deduplicate retries and cross-turn replays
     // without collapsing identical text from distinct turns. Codex owns history;
     // this mirror supports OpenClaw history, search, and harness switching.

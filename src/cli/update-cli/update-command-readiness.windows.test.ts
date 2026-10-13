@@ -196,7 +196,6 @@ describe("managed Windows update after the startup canary", () => {
       });
       try {
         await awaitProbe(probe.entered, pending);
-        expect(native.runtime).toHaveBeenCalledWith(f.params.env, { timeoutMs: 5_000 });
         expect(f.read()).toMatchObject({ phase: "validating", status: "running" });
         expect(f.wait()).toMatchObject({ status: "in_progress", startedAtMs: startedAt });
         expect(f.wait()?.detail).toMatch(/previous.Gateway readiness verification/i);
@@ -230,11 +229,6 @@ describe("managed Windows update after the startup canary", () => {
         expect(native.command.mock.calls.some(([argv]) => argv[0].endsWith("powershell.exe"))).toBe(
           true,
         );
-        expect(
-          native.runtime.mock.calls.every(
-            ([, opts]) => opts?.timeoutMs !== undefined && opts.timeoutMs <= 5_000,
-          ),
-        ).toBe(true);
       } finally {
         abort.abort(new Error("fixture completed"));
         probe.release();

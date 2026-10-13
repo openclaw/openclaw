@@ -2,16 +2,17 @@ import { existsSync, renameSync } from "node:fs";
 import { backup } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.entry.js";
 import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { addSessionSuggestionInWorker as addSessionSuggestion } from "../../config/sessions/session-metadata-write.async.js";
 import {
   addSessionMember,
   listSessionMembers,
 } from "../../config/sessions/session-sharing-store.js";
-import { addSessionSuggestion } from "../../config/sessions/session-suggestion-store.js";
 import { listSessionSuggestions } from "../../config/sessions/session-suggestion-store.read.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -58,6 +59,7 @@ const handlers: GatewayRequestHandlers = {
 afterEach(() => flushPendingSessionsChangedEvents());
 
 async function seedMetadata(state: OpenClawTestState) {
+  setRuntimeConfigSnapshot({});
   const owner = ensureProfileForEmail("metadata-owner@example.test");
   const other = ensureProfileForEmail("metadata-other@example.test");
   const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:metadata" };
@@ -156,6 +158,7 @@ describe("session metadata writer admission", () => {
         let cfg: OpenClawConfig = { session: { store: options.path } };
         const context = sessionSharingTestContext(vi.fn());
         context.getRuntimeConfig = () => cfg;
+        setRuntimeConfigSnapshot(cfg);
         await initializeSessionReadContext(context);
         const entered = createDeferredCore();
         const release = createDeferredCore();
@@ -176,6 +179,7 @@ describe("session metadata writer admission", () => {
           expect(request.respond).not.toHaveBeenCalled();
           // External retirement must not inherit the writer whose waiting mutation it revokes.
           cfg = { session: { store: replacement.storePath } };
+          setRuntimeConfigSnapshot(cfg);
           expect(await disposeOpenClawAgentDatabaseByPath(options.path, { env: state.env })).toBe(
             true,
           );
@@ -208,7 +212,7 @@ describe("session metadata writer admission", () => {
         await addSessionMember(scope, { identityId: other.id, addedBy: owner.id });
       }
       if (method === "session.suggestions.resolve") {
-        addSessionSuggestion(scope, {
+        await addSessionSuggestion(scope, {
           id: "pending",
           authorId: owner.id,
           text: "synthetic suggestion",
@@ -275,6 +279,7 @@ describe("session metadata writer admission", () => {
           kind === "owner" ? { agents: { entries: { main: {}, research: {} } } } : {};
         const context = sessionSharingTestContext(vi.fn());
         context.getRuntimeConfig = () => cfg;
+        setRuntimeConfigSnapshot(cfg);
         await initializeSessionReadContext(context);
         const entered = createDeferredCore();
         const release = createDeferredCore();
@@ -283,6 +288,7 @@ describe("session metadata writer admission", () => {
           await release.promise;
           if (kind === "owner") {
             cfg = { agents: { entries: { main: {} } } };
+            setRuntimeConfigSnapshot(cfg);
             expect(cfg.agents?.entries).not.toHaveProperty("research");
           } else if (kind === "config") {
             cfg = {
@@ -299,6 +305,7 @@ describe("session metadata writer admission", () => {
                 },
               },
             };
+            setRuntimeConfigSnapshot(cfg);
           } else {
             const entry = loadSessionEntry(scope)!;
             replaceSessionEntrySync(scope, {

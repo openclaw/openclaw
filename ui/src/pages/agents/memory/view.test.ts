@@ -1,13 +1,14 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import {
+  renderDreamingView,
   fullDreamingViewAccess,
   installDreamingViewTestTranslations,
 } from "./view.test-helpers.ts";
-import { createDreamingViewState, renderDreaming, type DreamingViewState } from "./view.ts";
+import { createDreamingViewState, renderDreaming, type DreamingViewState } from "./view.tsx";
 
 type DreamingProps = Parameters<typeof renderDreaming>[0];
 
@@ -15,7 +16,10 @@ let viewState = createDreamingViewState();
 const restoreTranslations = installDreamingViewTestTranslations();
 
 afterAll(() => restoreTranslations());
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  cleanupSolid();
+  vi.restoreAllMocks();
+});
 
 const setDreamSubTab = (tab: DreamingViewState["activeSubTab"]) => (viewState.activeSubTab = tab);
 
@@ -216,7 +220,7 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
 
 function renderInto(props: DreamingProps): HTMLDivElement {
   const container = document.createElement("div");
-  render(renderDreaming(props), container);
+  renderDreamingView(props, container);
   return container;
 }
 
@@ -252,9 +256,9 @@ describe("dreaming view", () => {
 
     // The sleeper is the seeded pet cameo: eyes closed, pupils hidden.
     const closedEyes = container.querySelector<SVGGElement>(".dreams__lobster .lob-eye-closed");
-    expect(closedEyes?.getAttribute("style")).toContain("opacity:1");
+    expect(closedEyes?.style.opacity).toBe("1");
     const openEyes = container.querySelector<SVGGElement>(".dreams__lobster .lob-eye-open");
-    expect(openEyes?.getAttribute("style")).toContain("display:none");
+    expect(openEyes?.style.display).toBe("none");
     expect(
       container.querySelector<HTMLElement>(".dreams__lobster")?.getAttribute("style"),
     ).toContain("--lob-shell:");
@@ -396,7 +400,7 @@ describe("dreaming view", () => {
       totalLines: 6001,
       truncated: true,
     });
-    const rerender = () => render(renderDreaming(props), container);
+    const rerender = () => renderDreamingView(props, container);
     const props: DreamingProps = buildProps({
       onOpenWikiPage,
       onViewStateChange: rerender,
@@ -467,7 +471,7 @@ describe("dreaming view", () => {
     setDreamSubTab("diary");
     setDreamDiarySubTab("wiki");
     const container = document.createElement("div");
-    const rerender = () => render(renderDreaming(props), container);
+    const rerender = () => renderDreamingView(props, container);
     const props: DreamingProps = buildProps({ onViewStateChange: rerender });
     rerender();
 
@@ -490,7 +494,7 @@ describe("dreaming view", () => {
       truncated: false,
     });
     const container = document.createElement("div");
-    const rerender = () => render(renderDreaming(props), container);
+    const rerender = () => renderDreamingView(props, container);
     const props: DreamingProps = buildProps({
       onOpenWikiPage,
       onViewStateChange: rerender,

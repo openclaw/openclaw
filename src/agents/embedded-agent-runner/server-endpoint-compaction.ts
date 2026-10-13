@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { supportsNativeOpenAIResponsesEndpoint } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import {
   captureOpenAIResponsesCompaction,
   requestPreparedOpenAIResponsesCompaction,
@@ -11,7 +12,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { CompactionRequestBudget } from "../sessions/compaction/request-budget.js";
 import { withSessionManagerWrite } from "../sessions/session-manager-write-admission.js";
-import { redactTranscriptMessage } from "../transcript-redact.js";
+import { sanitizeTranscriptMessage } from "../transcript-sanitize.js";
 import { compactWithSafetyTimeout } from "./compaction-safety-timeout.js";
 import { log } from "./logger.js";
 import {
@@ -47,8 +48,7 @@ export async function attemptServerEndpointCompaction(params: {
   if (
     params.trigger === "overflow" ||
     params.customInstructions?.trim() ||
-    !resolveOpenAIResponsesCompactEndpointPlan(params.model, params.extraParams, params.trigger)
-      .enabled
+    !resolveOpenAIResponsesCompactEndpointPlan(params.model, params.extraParams).enabled
   ) {
     return undefined;
   }
@@ -60,11 +60,28 @@ export async function attemptServerEndpointCompaction(params: {
         message.role === "user" || message.role === "assistant" || message.role === "toolResult",
     );
     if (messages.at(-1)?.role !== "assistant") {
+      log.warn(
+        "Responses compact endpoint skipped: history does not end with an assistant message; " +
+          "using client compaction",
+      );
       return undefined;
     }
     if (requiresCompactionReplayRefresh(messages, params.model, params.requestOptions)) {
       // The exact old window is gone. Only the durable full-history client
       // compactor can rebuild it; recent-turn endpoint input cannot.
+      log.warn(
+        "Responses compact endpoint skipped: the stored checkpoint needs a full-history rebuild; " +
+          "using client compaction",
+      );
+      return undefined;
+    }
+    // Retained windows must already contain canonical image payloads.
+    const windowSource = findEndpointWindowNormalizationSource(params);
+    if (windowSource) {
+      log.warn(
+        `Responses compact endpoint skipped: its ${windowSource} would require image ` +
+          "normalization in the stored window; using client compaction",
+      );
       return undefined;
     }
     const owner = params.sessionManager
@@ -113,22 +130,26 @@ export async function attemptServerEndpointCompaction(params: {
         replacementTokens + budget.fixedTokens + budget.pendingTokens >
         budget.contextWindow - budget.reserveTokens
       ) {
+        log.warn(
+          "Responses compact endpoint result discarded: returned window does not fit the " +
+            `request budget (windowTokens=${replacementTokens}); using client compaction`,
+        );
         return undefined;
       }
     }
-    const redacted = redactTranscriptMessage(replacement, params.config);
+    const normalized = sanitizeTranscriptMessage(replacement);
     if (
-      redacted.role !== "assistant" ||
-      !isDeepStrictEqual(redacted.providerReplay, replacement.providerReplay)
+      normalized.role !== "assistant" ||
+      !isDeepStrictEqual(normalized.providerReplay, replacement.providerReplay)
     ) {
-      throw new Error("Responses compact endpoint window requires transcript redaction");
+      throw new Error("Responses compact endpoint window requires image normalization");
     }
     await withSessionManagerWrite(params.sessionManager, async () => {
       params.requestOptions.signal?.throwIfAborted();
       params.assertActive?.();
       const rewritten = await rewriteTranscriptEntriesInSessionManager({
         sessionManager: params.sessionManager,
-        replacements: [{ entryId: owner.id, message: redacted }],
+        replacements: [{ entryId: owner.id, message: normalized }],
         preserveReplacementCompactionReplay: true,
       });
       if (
@@ -150,9 +171,33 @@ export async function attemptServerEndpointCompaction(params: {
       throw err;
     }
     params.assertActive?.();
-    log.debug(
+    log.warn(
       `Responses compact endpoint failed; falling back to client compaction: ${formatErrorMessage(err)}`,
     );
     return undefined;
   }
+}
+
+/** Name the first request source the endpoint may retain that image normalization would rewrite. */
+function findEndpointWindowNormalizationSource(params: {
+  model: Parameters<typeof supportsNativeOpenAIResponsesEndpoint>[0];
+  context: { systemPrompt: string; messages: readonly AgentMessage[] };
+  config?: OpenClawConfig;
+}): "system prompt" | "user message" | undefined {
+  // Public OpenAI receives the prompt as `instructions`; other compact routes put it in input.
+  if (params.context.systemPrompt && !supportsNativeOpenAIResponsesEndpoint(params.model)) {
+    const prompt: AgentMessage = {
+      role: "user",
+      content: params.context.systemPrompt,
+      timestamp: 0,
+    };
+    if (sanitizeTranscriptMessage(prompt) !== prompt) {
+      return "system prompt";
+    }
+  }
+  return params.context.messages.some(
+    (message) => message.role === "user" && sanitizeTranscriptMessage(message) !== message,
+  )
+    ? "user message"
+    : undefined;
 }

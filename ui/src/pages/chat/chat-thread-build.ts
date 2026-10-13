@@ -1,7 +1,9 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
+import { readModelFallbackNotice } from "../../../../src/shared/model-fallback-notice.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
+import { t } from "../../i18n/index.ts";
 import {
   type ChatGuardianNotice,
   type ChatItem,
@@ -32,6 +34,7 @@ import {
   resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
+import { activeChatReasoning } from "./chat-reasoning.ts";
 import {
   hasSessionsYieldCall,
   pendingSessionsYield,
@@ -57,6 +60,7 @@ import {
   type ChatProjection,
   messageMatchesSearchQuery,
   rawMessageTimestamp,
+  readChatThreadMessageIdentity,
   insertChatItemsByTimestamp,
   sanitizeStreamText,
   timestampAfterVisibleItems,
@@ -76,7 +80,7 @@ import {
 } from "./chat-thread-run-identity.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
-import type { CompactionStatus } from "./tool-stream-contract.ts";
+import type { ChatReasoning, CompactionStatus } from "./tool-stream-contract.ts";
 
 export type BuildChatItemsProps = ChatInputPlacementProps & {
   paneId: string;
@@ -90,6 +94,8 @@ export type BuildChatItemsProps = ChatInputPlacementProps & {
   toolMessages: unknown[];
   guardianNotices?: ChatGuardianNotice[];
   streamSegments: ChatStreamSegment[];
+  reasoning?: ChatReasoning | null;
+  showReasoning?: boolean;
   stream: string | null;
   streamStartedAt: number | null;
   showToolCalls: boolean;
@@ -139,6 +145,7 @@ export function buildChatItems(
   });
   const queuedSends = props.queue ?? [];
   const segments = props.streamSegments;
+  const activeReasoning = activeChatReasoning(props.reasoning);
   let progress: ReturnType<typeof resolveWorkingProgress> | null = null;
   const resolveProgress = () => {
     if (progress) {
@@ -218,6 +225,28 @@ export function buildChatItems(
     const itemKey = item.key;
     const raw = asRecord(msg) ?? {};
     const marker = asRecord(raw["__openclaw"]);
+    const fallback = readModelFallbackNotice(msg);
+    if (fallback) {
+      items.push({
+        kind: "divider",
+        key: `divider:model-fallback:${itemKey}`,
+        label: t(
+          fallback.phase === "restored"
+            ? "chat.composer.modelRestoredEvent"
+            : "chat.composer.modelFallbackEvent",
+          { from: fallback.fromModel, to: fallback.toModel },
+        ),
+        ...(fallback.reason
+          ? {
+              description: t("chat.composer.fallbackReason", {
+                reason: fallback.reason.replace(/_/g, " "),
+              }),
+            }
+          : {}),
+        timestamp: rawMessageTimestamp(msg) ?? Date.now(),
+      });
+      continue;
+    }
     if (marker?.kind === "compaction" || isContextCompactionMessage(msg)) {
       const matchesLive = compaction != null && matchesCompactionOperation(msg, compaction);
       const divider = buildCompactionDividerItem(
@@ -445,18 +474,26 @@ export function buildChatItems(
       });
     }
   }
-  const appendStreamSegment = (segment: ChatStreamSegment, key: string, text: string) => {
+  const appendStreamSegment = (
+    segment: Pick<ChatStreamSegment, "ts" | "runId" | "afterUserSendId">,
+    key: string,
+    text: string,
+    thinking?: string,
+    beforeKey?: string,
+  ) => {
+    const bounds = resolveProjectionBounds(segment.runId, segment.afterUserSendId);
     projections.push({
       item: {
         kind: "stream",
         key,
         text,
+        ...(thinking ? { thinking } : {}),
         startedAt: segment.ts,
         isStreaming: false,
         ...optionalRunIdentity(segment.runId),
         ...optionalBoundaryIdentity(segment.runId),
       },
-      bounds: resolveProjectionBounds(segment.runId, segment.afterUserSendId),
+      bounds: beforeKey ? { ...bounds, beforeKey } : bounds,
     });
   };
   let previousAccumulatedStreamText: string | null = null;
@@ -520,6 +557,44 @@ export function buildChatItems(
     });
   }
 
+  const visibleText = trimAccumulatedStreamPrefix(
+    sanitizeStreamText(props.stream ?? ""),
+    accumulatedStreamText(segments, sanitizeStreamText),
+  );
+  if (props.reasoning) {
+    const { runId } = props.reasoning;
+    for (const reasoning of props.reasoning.items) {
+      if (
+        reasoning === activeReasoning ||
+        !reasoning.text ||
+        (props.showReasoning && reasoning.receipt?.persisted)
+      ) {
+        continue;
+      }
+      const receipt = reasoning.receipt;
+      // Provider timestamps may precede the first token. The receipt keeps
+      // a stream-mode preview before its exact durable tool/answer row.
+      const persisted = receipt?.persisted
+        ? historyItems.find(({ message }) => {
+            const identity = readChatThreadMessageIdentity(message);
+            return (
+              identity?.role === "assistant" &&
+              !identity.isImported &&
+              identity.id === receipt.messageId &&
+              identity.runId === receipt.runId
+            );
+          })
+        : undefined;
+      appendStreamSegment(
+        { runId, ts: reasoning.startedAt },
+        `reasoning:${runId}:${reasoning.itemId}`,
+        "",
+        reasoning.text,
+        persisted?.key,
+      );
+    }
+  }
+
   // Unowned projections keep their user-turn floor despite clock skew;
   // identified live tools stay in the canonical invocation's interval.
   applyPersistedToolInvocationBounds(
@@ -563,24 +638,26 @@ export function buildChatItems(
       items.push(item);
     }
   };
-  if (props.stream !== null) {
-    const text = sanitizeStreamText(props.stream);
-    const prefix = accumulatedStreamText(segments, sanitizeStreamText);
-    const visibleText = trimAccumulatedStreamPrefix(text, prefix);
-    if (visibleText.length > 0 && !stripHeartbeatTokenForDisplay(visibleText).shouldSkip) {
-      const liveProgress = resolveProgress();
-      const liveRunId = props.runId ?? liveProgress.runId;
-      const liveStreamItem: ChatItem = {
-        kind: "stream",
-        key: liveProgress.key,
-        text: visibleText,
-        startedAt: timestampAfterVisibleItems(items, props.streamStartedAt ?? Date.now()),
-        isStreaming: true,
-        ...optionalRunIdentity(liveRunId),
-        ...optionalBoundaryIdentity(liveRunId),
-      };
-      appendActiveRunItem(liveStreamItem);
-    }
+  if (
+    activeReasoning ||
+    (visibleText.length > 0 && !stripHeartbeatTokenForDisplay(visibleText).shouldSkip)
+  ) {
+    const liveProgress = resolveProgress();
+    const liveRunId = props.runId ?? props.reasoning?.runId ?? liveProgress.runId;
+    // Unsaved answer text follows accepted steers at the run's live tail.
+    appendActiveRunItem({
+      kind: "stream",
+      key: liveProgress.key,
+      text: visibleText,
+      thinking: activeReasoning?.text,
+      startedAt: timestampAfterVisibleItems(
+        items,
+        props.streamStartedAt ?? activeReasoning?.startedAt ?? Date.now(),
+      ),
+      isStreaming: true,
+      ...optionalRunIdentity(liveRunId),
+      ...optionalBoundaryIdentity(liveRunId),
+    });
   }
   if (showWorkingIndicator) {
     const workingProgress = resolveProgress();

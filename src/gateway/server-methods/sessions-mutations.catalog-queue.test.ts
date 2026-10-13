@@ -11,7 +11,12 @@ import {
 } from "../../agents/prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../../agents/prepared-model-runtime.test-support.js";
 import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
-import { validateConfigObject, type OpenClawConfig } from "../../config/config.js";
+import {
+  setRuntimeConfigSnapshot,
+  validateConfigObject,
+  type OpenClawConfig,
+} from "../../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   loadSessionEntry,
@@ -88,11 +93,13 @@ function modelConfig(store: string, agents: NonNullable<OpenClawConfig["agents"]
         openai: {
           api: model.api,
           baseUrl: model.baseUrl,
-          models: [model].map(({ provider: _provider, ...definition }) => definition),
+          models: [model, { ...model, id: "gpt-5.5", name: "GPT-5.5" }].map(
+            ({ provider: _provider, ...definition }) => definition,
+          ),
         },
       },
     },
-    agents: { defaults: { model: "openai/gpt-5.6-sol" }, ...agents },
+    agents: { defaults: { model: "openai/gpt-5.5" }, ...agents },
     session: { store },
   };
   expect(validateConfigObject(cfg)).toMatchObject({ ok: true });
@@ -113,6 +120,7 @@ test.each(["sessions.patch", "sessions.patchMany"] as const)(
   "%s bounds a stalled catalog without committing and permits retry",
   async (method) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const targets = (method === "sessions.patchMany" ? ["first", "second"] : ["first"]).map(
         (name) => ({ key: `agent:main:catalog-deadline-${name}` }),
       );
@@ -187,6 +195,7 @@ test.each(["sessions.patch", "sessions.patchMany"] as const)(
 
 test("catalog reload releases the agent writer while preserving same-session ordering", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const catalogKey = "agent:main:catalog-dependent";
     const metadataKey = "agent:main:independent-metadata";
     for (const sessionKey of [catalogKey, metadataKey]) {
@@ -293,6 +302,7 @@ test.each(["identity", "label", "alias", "cleared-selection"] as const)(
   "catalog preparation revalidates fresh %s before using the prepared result",
   async (change) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const key = change === "alias" ? "agent:main:main" : "agent:main:catalog-revalidation";
       const storedKey = change === "alias" ? "agent:main:work" : key;
       const otherKey = "agent:main:new-label-owner";
@@ -421,6 +431,7 @@ test.each(["identity", "label", "alias", "cleared-selection"] as const)(
 
 test("patchMany prepares singleton agent groups without blocking another session", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await captureRuntimeConfigAsyncReader()();
     const targets = ["main", "secondary"].map((agentId) => ({
       key: `agent:${agentId}:catalog-batch`,
     }));
@@ -518,6 +529,7 @@ test("patchMany prepares singleton agent groups without blocking another session
 
 test("a multi-target agent group retains ordered label claims around catalog loading", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await captureRuntimeConfigAsyncReader()();
     const targets = ["first", "second"].map((name) => ({ key: `agent:main:ordered-${name}` }));
     for (const { key } of targets) {
       await upsertSessionEntryCore(
@@ -563,13 +575,19 @@ test("a multi-target agent group retains ordered label claims around catalog loa
 
 test("dispatched authorization rejects an instance replaced during catalog preparation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await captureRuntimeConfigAsyncReader()();
     const member = await ensureCanonicalUserProfileForEmail("member@example.com");
     const sessionKey = "agent:main:commit-bound-authorization";
-    // A write-scoped model reset revalidates retained thinking. Admin scope would
+    // A write-scoped model reset revalidates the retained context window. Admin scope would
     // bypass the session-instance authorization this request must exercise.
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey },
-      { sessionId: "session-shared", updatedAt: 1, visibility: "shared", thinkingLevel: "off" },
+      {
+        sessionId: "session-shared",
+        updatedAt: 1,
+        visibility: "shared",
+        contextWindow: "extended",
+      },
     );
     const entered = createDeferredCore();
     const release = createDeferredCore();
@@ -622,7 +640,7 @@ test("dispatched authorization rejects an instance replaced during catalog prepa
           {
             sessionId: "session-draft-replacement",
             updatedAt: 2,
-            thinkingLevel: undefined,
+            contextWindow: undefined,
             visibility: "draft",
             createdVia: "operator",
             createdActor: { type: "human", source: "profile", id: "owner" },
@@ -651,7 +669,7 @@ test("dispatched authorization rejects an instance replaced during catalog prepa
         visibility: "draft",
       });
       expect(current).not.toHaveProperty("label");
-      expect(current).not.toHaveProperty("thinkingLevel");
+      expect(current).not.toHaveProperty("contextWindow");
     } finally {
       release.resolve();
       await Promise.allSettled([request, replacement]);
@@ -661,6 +679,7 @@ test("dispatched authorization rejects an instance replaced during catalog prepa
 
 test("patch timing covers preparation and lifecycle finalization before cleanup", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await captureRuntimeConfigAsyncReader()();
     const key = "agent:main:phase-boundaries";
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: key },
@@ -736,6 +755,7 @@ test("patchMany creates one shared physical store through original per-agent dir
       entries: { main: {}, work: {} },
     });
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     const context = patchContext(async () => [model], cfg);
     const response = vi.fn();
     const params = { targets, patch: { model: "openai/gpt-5.6-sol" } };
@@ -815,6 +835,7 @@ test("patchMany retains original RAM facts while its cold durable sibling publis
       entries: { main: {} },
     });
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     const ramKey = "agent:main:dashboard:incognito-mixed-patch";
     const ramPath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
     const ramScope = { agentId: "main", sessionKey: ramKey, storePath: ramPath };
@@ -898,6 +919,7 @@ test("patchMany excludes a revoked cold-store promotion while its independent st
       entries: { main: {}, work: {} },
     });
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     const context = patchContext(async () => [model], cfg);
     const revoked = new SessionMutationAuthorizationChangedError(
       errorShape(ErrorCodes.FORBIDDEN, "Original cold-store source was revoked"),

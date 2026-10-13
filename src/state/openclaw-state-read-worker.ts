@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import {
   createRetainedOperation,
   flatMapRetainedOperation,
+  mapRetainedOperation,
   type RetainedOperation,
 } from "@openclaw/worker-runtime/lifecycle";
 import {
@@ -10,11 +11,9 @@ import {
 } from "../infra/bun-sqlite-library.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
+import { acquireSqliteDatabaseAdmissionTurn } from "../infra/sqlite-database-admission-turn.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
-import {
-  createSqliteLifecycleAggregateError,
-  throwSqliteLifecycleErrors,
-} from "../infra/sqlite-lifecycle-errors.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import {
   captureRetainedNativeWorkerSource,
   type RetainedNativeWorkerSource,
@@ -31,7 +30,7 @@ import {
   registerOpenClawStateDatabaseAsyncResource,
   registerOpenClawStateDatabaseLifecycleListener,
 } from "./openclaw-state-db-cache.js";
-import { captureCommand, requestBytes } from "./openclaw-state-read-request.js";
+import { requestBytes } from "./openclaw-state-read-request.js";
 import type {
   OpenClawStateReadAuthority,
   OpenClawStateReadCommand,
@@ -279,62 +278,27 @@ function createReadTransport(
   onChunk?: OpenClawStateReadOptions["onChunk"],
   onChunkAsync?: OpenClawStateReadOptions["onChunkAsync"],
 ) {
-  if (onChunk && onChunkAsync) {
-    throw new Error("Shared-state reads require one stream consumer");
-  }
   // Capture nested input before the read owner can yield during snapshot preparation.
-  const capturedCommand = captureCommand(command);
+  const capturedCommand = structuredClone(command);
   type ReadTask = ReturnType<ReadPool["startTask"]>;
-  const tasks = new Map<ReadTask, { retire: boolean; error?: Error }>();
+  const tasks = new Map<ReadTask, { retire: boolean }>();
   let closed = false;
   let closing: RetainedOperation<void> | undefined;
   let pendingChunks = 0;
 
   const startCloseTask = (task: ReadTask): RetainedOperation<void> => {
-    const inContext = AsyncLocalStorage.snapshot();
-    const cleanup = tasks.get(task);
-    let release: RetainedOperation<void>;
-    const completion = createRetainedOperation<void>(() => inContext(service));
-    const fail = (error: unknown) =>
-      completion.reject(
-        cleanup?.error
-          ? createSqliteLifecycleAggregateError(
-              [cleanup.error, error],
-              "Shared-state reader cleanup and worker retirement failed",
-              cleanup.error,
-            )
-          : error,
-      );
-    function service() {
-      if (completion.operation.read().status !== "pending") {
-        return;
-      }
-      try {
-        release.service();
-        const outcome = release.read();
-        if (outcome.status === "pending") {
-          return;
-        }
-        if (outcome.status === "rejected") {
-          throw outcome.error;
-        }
-        tasks.delete(task);
-        completion.resolve(undefined);
-      } catch (error) {
-        fail(error);
-      }
-    }
     try {
-      release = task.release(cleanup?.retire ? { retire: true } : undefined);
-      void release.result.then(
-        () => completion.operation.service(),
-        () => completion.operation.service(),
+      return mapRetainedOperation(
+        task.release(tasks.get(task)?.retire ? { retire: true } : undefined),
+        () => {
+          tasks.delete(task);
+        },
       );
-      completion.operation.service();
     } catch (error) {
-      fail(error);
+      const completion = createRetainedOperation<void>(() => {});
+      completion.reject(error);
+      return completion.operation;
     }
-    return completion.operation;
   };
 
   const startRun = (
@@ -348,7 +312,8 @@ function createReadTransport(
   ) => {
     const inContext = AsyncLocalStorage.snapshot();
     let task: ReadTask | undefined;
-    const cleanup: { retire: boolean; error?: Error } = { retire: true };
+    let releaseAdmission: (() => void) | undefined;
+    const cleanup = { retire: true };
     const completion = createRetainedOperation<OpenClawStateReadOutcome>(() => inContext(service));
     function service() {
       if (!task || completion.operation.read().status !== "pending") {
@@ -365,11 +330,7 @@ function createReadTransport(
           throw read.error;
         }
         const reply = read.value;
-        if (reply.nativeCleanupFailure) {
-          const error = new Error("Shared-state reader native cleanup was not confirmed");
-          retainOpenClawStateWorkerErrorPayload(error, reply.nativeCleanupFailure.error);
-          cleanup.error = hydrateOpenClawStateWorkerError(error, { includeOrdinary: true });
-        }
+        cleanup.retire = Boolean(reply.nativeCleanupFailure);
         if (reply.ok) {
           outcome = { value: reply };
         } else {
@@ -383,8 +344,10 @@ function createReadTransport(
       } catch (error) {
         outcome = { error };
       }
+      releaseAdmission?.();
+      releaseAdmission = undefined;
       // Native closes and quarantine cleanup can require exit even when the domain read succeeds.
-      cleanup.retire = "error" in outcome || cleanup.error !== undefined;
+      cleanup.retire ||= "error" in outcome;
       completion.resolve(outcome);
     }
     try {
@@ -406,8 +369,22 @@ function createReadTransport(
       };
       task = readPool(state, ownsAdmission()).startTask(
         () => {
-          authority.assertCurrent();
-          return request;
+          const turn = acquireSqliteDatabaseAdmissionTurn(location);
+          if (!turn) {
+            authority.assertCurrent();
+            return request;
+          }
+          return turn.then((release) => {
+            releaseAdmission = release;
+            try {
+              authority.assertCurrent();
+              return request;
+            } catch (error) {
+              releaseAdmission();
+              releaseAdmission = undefined;
+              throw error;
+            }
+          });
         },
         {
           signal: authority.signal,
@@ -449,6 +426,8 @@ function createReadTransport(
       );
       completion.operation.service();
     } catch (error) {
+      releaseAdmission?.();
+      releaseAdmission = undefined;
       completion.reject(error);
     }
     return { task, operation: completion.operation };

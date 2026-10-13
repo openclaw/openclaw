@@ -258,6 +258,7 @@ export class ExtensionRunner {
     bindExtensionPersistenceActions(this.sessionManager, this.runtime, actions);
   }
 
+  /** @deprecated Use bindCoreAsync with ExtensionActionsV2; removed in the next Plugin SDK major. */
   bindCore(
     actions: ExtensionActions,
     contextActions: ExtensionContextActions,

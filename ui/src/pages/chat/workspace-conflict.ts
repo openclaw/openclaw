@@ -19,17 +19,15 @@ function isWorkspaceConflictPath(entryPath: string): boolean {
 }
 
 export function workspaceConflictPathForDisplay(entryPath: string): string {
-  return Array.from(entryPath)
-    .map((character) => {
-      if (character === "\\") {
-        return "\\\\";
-      }
-      const codeUnit = character.charCodeAt(0);
-      return codeUnit <= 0x1f || (codeUnit >= 0x7f && codeUnit <= 0x9f)
-        ? `\\u{${codeUnit.toString(16).padStart(4, "0")}}`
-        : character;
-    })
-    .join("");
+  return Array.from(entryPath, (character) => {
+    if (character === "\\") {
+      return "\\\\";
+    }
+    const codeUnit = character.charCodeAt(0);
+    return codeUnit <= 0x1f || (codeUnit >= 0x7f && codeUnit <= 0x9f)
+      ? `\\u{${codeUnit.toString(16).padStart(4, "0")}}`
+      : character;
+  }).join("");
 }
 
 function normalizeWorkspaceResultConflict(value: unknown): WorkspaceResultConflict | undefined {

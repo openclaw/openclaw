@@ -32,7 +32,7 @@ import type { CloudWorkerSetupCompletionPublication } from "./device-pairing-rea
 import {
   confirmDevicePairSetupCompletionDeliveryInTransaction,
   consumeDeviceBootstrapTokenWithSetupCompletionInTransaction,
-  hasExpiredDevicePairSetupCompletionsInDatabase,
+  readDevicePairSetupCompletionExpiryInDatabase,
   loadDeviceBootstrapTokenRecords,
   withDevicePairingStoreDatabase,
   loadDevicePairSetupCompletionRecord,
@@ -44,6 +44,7 @@ import type {
   DevicePairSetupCompletionRecord,
 } from "./device-pairing.types.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
+import { readSqliteDatabaseWriteTokenForPath } from "./sqlite-database-admission.js";
 import { runSqliteReadOperationSync } from "./sqlite-schema-facts.js";
 
 // Outlive generic setup credentials; cloud-worker completion also binds durably
@@ -502,17 +503,25 @@ export const deviceBootstrapOperations = {
   ),
   "bootstrap.prune": (input: { nowMs: number }, { open, write }) => {
     const database = open();
-    const due = runSqliteReadOperationSync(database.db, () =>
-      hasExpiredDevicePairSetupCompletionsInDatabase(database.db, input.nowMs),
-    );
-    if (!due) {
-      return 0;
+    const readExpiry = () =>
+      runSqliteReadOperationSync(database.db, () =>
+        readDevicePairSetupCompletionExpiryInDatabase(database.db),
+      );
+    let nextExpiryAtMs = readExpiry();
+    let removed = 0;
+    if (nextExpiryAtMs !== undefined && nextExpiryAtMs <= input.nowMs) {
+      removed = write(({ db }) =>
+        withDevicePairingMutationAdmission(() =>
+          pruneExpiredDevicePairSetupCompletionsInDatabase(db, input.nowMs),
+        ),
+      );
+      nextExpiryAtMs = readExpiry();
     }
-    return write(({ db }) =>
-      withDevicePairingMutationAdmission(() => ({
-        value: pruneExpiredDevicePairSetupCompletionsInDatabase(db, input.nowMs),
-      })),
-    );
+    return {
+      removed,
+      nextExpiryAtMs: nextExpiryAtMs ?? null,
+      writeToken: readSqliteDatabaseWriteTokenForPath(database.path),
+    };
   },
   "bootstrap.clear": devicePairingMutation(clearDeviceBootstrapTokens),
   "bootstrap.revoke": devicePairingMutation(

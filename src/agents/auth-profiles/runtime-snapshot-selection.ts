@@ -33,7 +33,6 @@ export type SharedAuthProfileStoreMutation = {
   stateChanged: boolean;
   selectionChanged?: boolean;
   profileIds: Iterable<string>;
-  oauthRefreshClaimIds?: ReadonlyMap<string, string | undefined>;
 };
 
 /** Retain overlays while preparing snapshots for the acknowledged shared-owner handoff. */

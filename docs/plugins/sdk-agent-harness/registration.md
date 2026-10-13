@@ -55,6 +55,14 @@ export default definePluginEntry({
 
 ### Executor controller plugins
 
+A harness with a provider-managed workspace may declare
+`workspaceEnvironment: { kind: "provider-hosted", label: "Provider workspace" }`.
+The Gateway projects this metadata on configured model/runtime choices so the
+Control UI can distinguish hosted workspaces from local folders and cloud workers.
+Declare it only for the active hosted configuration, not a self-hosted executor.
+This presentation metadata grants no availability, authentication, placement, or
+file-synchronization capability; those stay with their existing owners.
+
 A harness can delegate self-hosted executor connection management to a separate
 plugin. Register one controller with `api.registerAgentExecutorController(...)`.
 The registry assigns ownership from the registering plugin's ID; the controller
@@ -134,6 +142,13 @@ deadline controls, and one prepared `authorization`:
 - `owner: "harness"` contains the prepared runtime auth plan and a credential
   snapshot restricted to the single profile selected for that call. Core owns
   automatic fallback order and invokes the harness separately for each candidate.
+
+When supplied, `onRequestComplete(durationMs)` reports inference dispatch through
+settlement, including a dispatched failure. Measure at the runtime's request
+boundary, not around its entire completion method: credential, model, client,
+and session preparation and post-request cleanup are excluded. Preparation
+failures must not report request timing. Core does not invent a duration when
+a harness does not report one.
 
 Agents API is a documented exception to the literal empty tool surface: it
 creates a fresh session without an executor, supplied functions, web search,

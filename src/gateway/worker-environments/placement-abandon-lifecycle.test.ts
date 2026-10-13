@@ -1,7 +1,11 @@
 import { setImmediate } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
@@ -16,8 +20,11 @@ import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
 
+afterEach(() => clearRuntimeConfigSnapshot());
+
 describe("offline device abandonment with retained physical cleanup", () => {
   support.setupWorkerEnvironmentServiceSuite();
+  beforeEach(() => setRuntimeConfigSnapshot(support.testState.config));
 
   it.each([
     { cleanup: "complete", sharedHost: true },
@@ -33,7 +40,7 @@ describe("offline device abandonment with retained physical cleanup", () => {
     "fences the old claim and retains exact cleanup ownership with $cleanup sibling cleanup and sharedHost=$sharedHost",
     async ({ cleanup, sharedHost }) => {
       let placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const harness = createHarness(support.testState.stateDb, placements, {
+      const harness = await createHarness(support.testState.stateDb, placements, {
         workspacePath: support.testState.root,
       });
       const environmentId = harness.ready.environmentId;
@@ -154,7 +161,8 @@ describe("offline device abandonment with retained physical cleanup", () => {
         );
       let service = createService();
       const restartDisconnectedService = async () => {
-        await expect(service.stop()).rejects.toThrow("not connected");
+        // Shutdown defers the unreachable node's stop; durable ownership keeps the cleanup.
+        await service.stop();
         support.testState.service = undefined;
         await support.reopenWorkerEnvironmentStore();
         placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });

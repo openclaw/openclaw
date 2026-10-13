@@ -3,6 +3,7 @@ import type {
   WorkerTaskOptions,
   WorkerTaskPoolOptions,
 } from "../../infra/worker-task-pool.types.js";
+import type { WorkerTaskContext } from "../../infra/worker-task-transport.js";
 import type { SessionTranscriptDisplayDeltaResult } from "./session-accessor.sqlite-history-query.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
@@ -13,15 +14,9 @@ type Request = {
   taskId: number;
   interactive?: boolean;
   nativeSections: SharedArrayBuffer;
-  taskContext: [string, string][];
+  taskContext: WorkerTaskContext;
 };
 type Resource = { close: () => Promise<void>; agentId?: string; revoke: () => void };
-type QuarantineDatabase = {
-  isOpen: boolean;
-  exec: () => void;
-  prepare: () => { get: () => unknown };
-  close: () => void;
-};
 const observed = vi.hoisted(() => ({
   receive: undefined as ((message: Request) => void) | undefined,
   post: vi.fn<(message: unknown) => void>(),
@@ -35,11 +30,6 @@ const observed = vi.hoisted(() => ({
   deferredRun: undefined as
     | ((prepare: () => unknown, options: { inputBytes?: number }) => Promise<unknown>)
     | undefined,
-  quarantineRead: vi.fn<() => unknown>(),
-  quarantineClose: vi.fn<() => void>(),
-  quarantineOpen: vi.fn<() => QuarantineDatabase>(),
-  quarantinePaths: new Set<string>(),
-  hydrate: vi.fn<() => unknown>(),
   rotate: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
   unregister: vi.fn<() => void>(),
   resources: [] as Resource[],
@@ -142,25 +132,12 @@ vi.mock("../../state/openclaw-agent-db-readonly-scope.js", () => ({
     }
   },
 }));
-vi.mock("../../infra/node-sqlite.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/node-sqlite.js")>();
-  return {
-    ...actual,
-    openNodeSqliteDatabase: (...args: Parameters<typeof actual.openNodeSqliteDatabase>) =>
-      observed.quarantinePaths.has(args[0])
-        ? observed.quarantineOpen()
-        : actual.openNodeSqliteDatabase(...args),
-  };
-});
 // Keep the history fixture's fake pool out of the process-wide disk-scan singleton.
 vi.mock("./disk-budget-runtime.js", () => ({
   measureSessionPhysicalDiskUsage: () => {
     throw new Error("Disk scans are forbidden in these pure controls");
   },
   drainSessionDiskBudgetWorkers: async () => {},
-}));
-vi.mock("./session-transcript-hydration.worker.js", () => ({
-  streamSessionTranscriptHydration: observed.hydrate,
 }));
 vi.mock("./session-accessor.sqlite-exact-read.js", () => ({
   loadSessionEntryReadOnlyInScope: () => observed.read(),

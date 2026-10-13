@@ -1,6 +1,6 @@
 import type { Static } from "typebox";
 import type * as AgentSchema from "./schema/agent.js";
-import type { BackupStatusParams } from "./schema/backup.js";
+import type { BackupRecordOutcomeParams, BackupStatusParams } from "./schema/backup.js";
 import type * as BoardSchema from "./schema/board.js";
 import type { CanvasDocumentPreviewParams, CanvasDocumentViewParams } from "./schema/canvas.js";
 import type { CatalogBrowseParams, CatalogSearchKeywordsParams } from "./schema/catalog.js";
@@ -33,6 +33,7 @@ export type GatewayCoreRequestParams = {
   "catalog.browse": CatalogBrowseParams;
   "catalog.searchKeywords": CatalogSearchKeywordsParams;
   "backup.status": BackupStatusParams;
+  "backup.recordOutcome": BackupRecordOutcomeParams;
   "storage.locations.list": StorageLocationsListParams;
   "storage.locations.probe": StorageLocationsProbeParams;
   "presence.activity": PresenceActivityParams;

@@ -448,16 +448,6 @@ function emitSegments(
     if (left.start !== right.start) {
       return left.start - right.start;
     }
-    // Tables occupy no IR text. A table before an HTML opener shares its offset,
-    // but Markdown quotes/lists at that offset still own their table children.
-    const ownsTable = (segment: StructuralSegment) =>
-      segment.kind === "blockquote" || segment.kind === "list";
-    if (left.kind === "table" && right.kind !== "table" && !ownsTable(right)) {
-      return -1;
-    }
-    if (right.kind === "table" && left.kind !== "table" && !ownsTable(left)) {
-      return 1;
-    }
     return right.end - left.end || containerRank(left) - containerRank(right);
   });
   const blocks: InputRichBlock[] = [];
@@ -604,8 +594,7 @@ export function markdownToTelegramRichBlocks(
 
   return {
     blocks,
-    // Tables are zero-width placeholders in ir.text; project the blocks so the
-    // plain fallback keeps table content instead of silently dropping it.
+    // Native-table coordinates carry no cell text; project the blocks to retain it.
     plainText: inputRichBlocksToPlainText(plainBlocks),
     degradationReasons: [...degradationReasons],
   };

@@ -54,7 +54,16 @@ await runWatchdog('docker', timeoutValue, args);
 }
 
 docker_e2e_docker_cmd() {
-  local timeout_value="${DOCKER_COMMAND_TIMEOUT:-600s}"
+  docker_e2e_docker_with_timeout "${DOCKER_COMMAND_TIMEOUT:-600s}" "$@"
+}
+
+docker_e2e_docker_run_cmd() {
+  docker_e2e_docker_with_timeout "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" "$@"
+}
+
+docker_e2e_docker_with_timeout() {
+  local timeout_value="$1"
+  shift
   if [ "${1:-}" = "run" ]; then
     shift
     docker_e2e_docker_run_resource_args "$@" || return $?
@@ -68,17 +77,6 @@ docker_e2e_docker_cmd() {
 docker_e2e_cleanup_container_run() {
   docker_e2e_docker_cmd rm -f "$1" >/dev/null 2>&1 || true
   rm -f "$2"
-}
-
-docker_e2e_docker_run_cmd() {
-  local timeout_value="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}"
-  if [ "${1:-}" = "run" ]; then
-    shift
-    docker_e2e_docker_run_resource_args "$@" || return $?
-    docker_e2e_docker_run_with_resource_diagnostics "$timeout_value" "$@"
-    return "$?"
-  fi
-  docker_e2e_timeout_cmd "$timeout_value" docker "$@"
 }
 
 docker_e2e_resource_limits_disabled() {

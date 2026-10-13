@@ -88,8 +88,6 @@ const RESTORE_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const MAX_TRANSCRIPTS_PER_PASS = 128;
 const MAX_BATCH_BYTES = 64 * 1024 * 1024;
 
-export type { SessionColdMaintenanceResult } from "./session-cold-storage.types.js";
-
 function workerDatabaseOptions(options: OpenClawAgentDatabaseOptions) {
   const sourceEnv = options.env ?? process.env;
   return {
@@ -263,19 +261,17 @@ async function runColdMutation(
               assertCurrent: assertAllowed,
             }),
           );
-        }
-        if (
-          plan.kind === "cold-restore" &&
+        } else if (
           completed.result.restored &&
           completed.result.sessionKey !== undefined &&
           retained?.found &&
           retained.claim.isCurrent()
         ) {
           assertAllowed();
-          // Restoration commits transcript rows only; a facts-less change would revoke sharing.
           sessionChanges.emit({
             storePath: retained.database.path,
             sessionKey: completed.result.sessionKey,
+            scope: "transcript",
             facts: { kind: "unchanged" },
           });
         }
@@ -357,12 +353,6 @@ async function archiveSessionColdBatch(
       if (!batch) {
         throw new Error("Cold archive worker returned no prepared batch");
       }
-      const empty: SessionColdBatchResult = {
-        archivedTranscripts: 0,
-        externalizedTranscripts: 0,
-        envelopeBytes: 0,
-        attemptedTranscripts: 0,
-      };
       for (const sessionId of batch.oversizedSessionIds) {
         oversizedUntil.set(`${storePath}\0${sessionId}`, Date.now() + RESTORE_COOLDOWN_MS);
         log.warn("Transcript remains in SQLite because its archive exceeds the 64 MiB limit", {
@@ -394,11 +384,7 @@ async function archiveSessionColdBatch(
                     ...iterateProjectedAgentRunSessionKeys(buildProjectedAgentRunIndex()),
                   ].some((identity) =>
                     batch.protectionKeys.includes(normalizeStoreSessionKey(identity)),
-                  )
-                ) {
-                  throw new Error("Transcript became active; cold archival was canceled");
-                }
-                if (
+                  ) ||
                   included.some(
                     (id) =>
                       admissions?.has(id) ||
@@ -414,7 +400,7 @@ async function archiveSessionColdBatch(
                 { kind: "cold-maintain", databaseOptions: input.databaseOptions },
                 assertCurrent,
               )
-            : empty;
+            : { archivedTranscripts: 0, externalizedTranscripts: 0 };
       assertCurrent();
       return {
         archivedTranscripts: result.archivedTranscripts,

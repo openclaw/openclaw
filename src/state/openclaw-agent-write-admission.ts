@@ -1,11 +1,14 @@
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
+import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import type { SqliteWorkerEphemeralTarget } from "../infra/sqlite-worker-contract.js";
 import {
+  assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { getChildLogger } from "../logging/logger.js";
+import { runStoreWriterAcquisitions } from "../shared/store-writer-acquisitions.js";
 import {
   isActiveStoreWriter,
   runQueuedStoreWrite,
@@ -76,16 +79,33 @@ export function runOpenClawAgentWriteAdmission<T>(
   timing?: StoreWriterTiming,
   signal?: AbortSignal,
 ): Promise<T> {
-  const pathname = resolveOpenClawAgentSqlitePath(options);
+  return runOpenClawAgentPathWriteAdmission(
+    resolveOpenClawAgentSqlitePath(options),
+    run,
+    reentrant,
+    timing,
+    signal,
+  );
+}
+
+/** A captured physical actor needs no logical agent or ambient path resolution. */
+export function runOpenClawAgentPathWriteAdmission<T>(
+  pathname: string,
+  run: (identity: DatabasePathIdentity, assertCurrent: () => void) => Promise<T> | T,
+  reentrant = false,
+  timing?: StoreWriterTiming,
+  signal?: AbortSignal,
+): Promise<T> {
   const identity = readDatabasePathIdentitySync(pathname);
   const storePath = identity.canonicalPath;
   const assertCurrent = () => {
-    const current = readDatabasePathIdentitySync(pathname);
-    if (
-      current.canonicalPath !== storePath ||
-      (identity.key.startsWith("file:") &&
-        (current.key !== identity.key || current.birthtime !== identity.birthtime))
-    ) {
+    if (identity.key.startsWith("file:")) {
+      try {
+        assertExistingDatabaseIdentity(pathname, identity.key, identity.birthtime);
+      } catch (cause) {
+        throw new Error("Agent database target changed before write admission", { cause });
+      }
+    } else if (readDatabasePathIdentitySync(pathname).canonicalPath !== storePath) {
       throw new Error("Agent database target changed before write admission");
     }
   };
@@ -108,14 +128,27 @@ export function runOpenClawAgentWriteAdmission<T>(
 }
 
 /** Reserve a native write permit without admitting inherited foreground callbacks. */
-export function runOpenClawAgentWorkerWrite<T>(
+export async function runOpenClawAgentWorkerWrite<T>(
   options:
     | OpenClawAgentDatabaseOptions
     | { target: Readonly<SqliteWorkerEphemeralTarget>; assertCurrent(): void },
   run: () => Promise<T>,
   timing?: StoreWriterTiming,
   signal?: AbortSignal,
+  priority?: "background",
 ): Promise<T> {
+  if (priority === "background") {
+    const storePath =
+      "target" in options
+        ? `ephemeral:${options.target.handle}:${options.target.incarnation}`
+        : readDatabasePathIdentitySync(resolveOpenClawAgentSqlitePath(options)).canonicalPath;
+    // Rebuildable work waits outside the FIFO until existing foreground work drains.
+    // Once admitted, its bounded transaction settles under the ordinary writer rules.
+    let draining: Promise<void> | null | undefined;
+    while ((draining = admission.queues.get(storePath)?.drainPromise)) {
+      await racePromiseWithAbortSignal(draining, signal, (aborted) => aborted.reason);
+    }
+  }
   return observeWriteAdmission("worker", timing, (observed) => {
     if ("target" in options) {
       const { handle, incarnation } = options.target;
@@ -180,19 +213,12 @@ export async function runOpenClawAgentWriteAdmissions<T>(
   if (paths.some((pathname) => inherited.some((held) => held > pathname))) {
     throw new Error("Session read batch would invert inherited SQLite writer admission order");
   }
-  const acquire = (index: number): Promise<T> => {
+  return await runStoreWriterAcquisitions((index, next) => {
     const pathname = paths[index];
     return pathname === undefined
       ? Promise.resolve().then(run)
       : observeWriteAdmission("ordered-read", undefined, (timing) =>
-          runOpenClawAgentWriteAdmission(
-            selected.get(pathname)!,
-            () => acquire(index + 1),
-            true,
-            timing,
-            signal,
-          ),
+          runOpenClawAgentWriteAdmission(selected.get(pathname)!, next, true, timing, signal),
         );
-  };
-  return await acquire(0);
+  });
 }

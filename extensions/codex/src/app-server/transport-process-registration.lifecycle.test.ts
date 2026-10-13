@@ -94,8 +94,9 @@ describe("Codex registration settlement", () => {
     };
     state.rows.set("live-owner", existing);
     state.entries.mockReturnValue(reading.promise);
-    let now = Date.now();
-    vi.spyOn(Date, "now").mockImplementation(() => now);
+    // Advance the owner's clock to prove durable reads do not consume its inspection budget.
+    let now = performance.now();
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     const spawned = child();
     state.spawn.mockImplementation(() => {
       queueMicrotask(() => spawned.emit("spawn"));

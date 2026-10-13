@@ -21,7 +21,7 @@ import { createNoisyPngBuffer, createSolidPngBuffer } from "../../test/helpers/i
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import { resolveExistingAgentSessionStoreTargetsReadOnlyResult } from "../config/sessions/targets-read-availability.js";
+import { resolveExistingAgentSessionStoreTargetsReadOnlyResult } from "../config/sessions/targets-read-availability.worker.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   completeSessionDelivery,
@@ -131,8 +131,9 @@ vi.mock("./http-utils.js", () => ({
   resolveOpenAiCompatibleHttpSenderIsOwner: resolveOpenAiCompatibleHttpSenderIsOwnerMock,
 }));
 
-vi.mock("./session-utils.js", () => ({
-  loadSessionEntry: loadSessionEntryMock,
+vi.mock("./session-utils-store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils-store.js")>()),
+  loadGatewaySessionEntry: loadSessionEntryMock,
   loadGatewaySessionEntryReadOnly: loadSessionEntryMock,
 }));
 
@@ -859,10 +860,16 @@ describe("createManagedOutgoingImageBlocks", () => {
       const filePath = path.join(stateDir, name);
       await fs.writeFile(filePath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
       const sourcePath = await fs.realpath(filePath);
+      const sourceStat = await fs.stat(sourcePath);
       pending.push(
         actual.resolvePlaybackMetadataForSource({
           sourcePath,
-          sourceStat: await fs.stat(sourcePath),
+          sourceStat: {
+            size: sourceStat.size,
+            mtimeMs: sourceStat.mtimeMs,
+            ctimeMs: sourceStat.ctimeMs,
+            exactIdentity: await fs.stat(sourcePath, { bigint: true }),
+          },
           mimeType: "audio/mpeg",
           kind: "audio",
         }),

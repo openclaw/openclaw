@@ -117,26 +117,12 @@ export async function prepareSkillLibraryNodeProcess(
           }
           return (await admin.request<{ nodes: ListedNode[] }>("node.list", {})).nodes;
         };
-        // Loopback device approval belongs to the Gateway; racing it can consume a stale request ID.
+        // The Gateway owns local device and initial command-surface approval.
         const admission = await waitFor("proof node device admission", async () => {
           const nodes = await readNodes();
           const listed = nodes.find((entry) => entry.nodeId === nodeId);
           return listed ? { nodeId: listed.nodeId } : undefined;
         });
-        const approval = await waitFor("proof node command approval", async () => {
-          const listed = (await readNodes()).find((entry) => entry.nodeId === admission.nodeId);
-          if (listed?.approvalState === "approved") {
-            return { approved: true as const };
-          }
-          const pending = await admin.request<{
-            pending: Array<{ requestId: string; nodeId: string }>;
-          }>("node.pair.list", {});
-          const request = pending.pending.find((entry) => entry.nodeId === admission.nodeId);
-          return request ? { approved: false as const, requestId: request.requestId } : undefined;
-        });
-        if (!approval.approved) {
-          await admin.request("node.pair.approve", { requestId: approval.requestId });
-        }
         await waitFor("proof node worker inventory", async () => {
           const listed = (await readNodes()).find((entry) => entry.nodeId === admission.nodeId);
           return listed?.approvalState === "approved" &&

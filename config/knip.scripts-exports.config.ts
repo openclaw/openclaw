@@ -68,6 +68,10 @@ const config = {
     ],
     // Oxlint consumes this required default export through a JSON config path.
     "scripts/oxlint-boundary-guards.mjs": ["exports"],
+    // Boundary lint requires this sole default export; remove with that config entry.
+    "scripts/oxlint-solid-migration.mjs": ["exports"],
+    // Oxlint consumes this required default export through a JSON config path.
+    "tools/solid-lint/index.mjs": ["exports"],
     // Vitest consumes this required default export through the reporter CLI path.
     "scripts/lib/vitest-resource-reporter.mts": ["exports"],
     // Wrangler consumes the Worker default export and instantiates the Durable

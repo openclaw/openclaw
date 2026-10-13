@@ -209,12 +209,9 @@ export function createMSTeamsIngress(options: MSTeamsIngressOptions) {
       if (liveContext && installedLiveContext) {
         liveContexts.set(facts.eventId, liveContext);
       }
-      // Identity-guarded uninstall: only remove OUR context so a concurrent
-      // redelivery's fresh install is never clobbered. A failed or
-      // tombstoned-duplicate append leaves no claim to consume the entry, and
-      // a later retry must not dispatch this request's stale context.
+      // A rejected append has no delivery that can consume the context.
       const uninstallLiveContext = () => {
-        if (installedLiveContext && liveContexts.get(facts.eventId) === liveContext) {
+        if (installedLiveContext) {
           liveContexts.delete(facts.eventId);
         }
       };

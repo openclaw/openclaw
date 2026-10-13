@@ -16,6 +16,7 @@ import { MAX_CACHED_CHAT_SESSIONS } from "./session-cache.ts";
 import {
   appendChatMessageToCache,
   cacheChatSessionSnapshot,
+  projectChatTranscriptMetadata,
   readChatSessionSnapshot,
   type ChatMessageCache,
   type ChatSessionSnapshot,
@@ -312,6 +313,7 @@ class SessionPrefetcher {
             ? { displayedLeafEntryId: result.sessionInfo.activeLeafEntryId?.trim() || null }
             : {}),
           sessionId: result.sessionInfo.sessionId?.trim() || updated.sessionId,
+          transcriptMetadata: projectChatTranscriptMetadata(result.sessionInfo),
         };
       } else if (result.kind === "snapshot") {
         cached = result.snapshot;

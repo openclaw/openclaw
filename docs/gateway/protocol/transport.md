@@ -80,6 +80,18 @@ after reconnect; the Gateway sends a complete snapshot with the next text frame
 for each observed run. Run-local payload sequences can skip numbers because text
 is paced and coalesced; they are not the outer connection sequence.
 
+Canonical `agent` events with `stream: "item"` and `data.kind: "preamble"`
+include optional `preamble` metadata. When the item replaces a live preview,
+`preamble.retainedText` supplies the producer's remaining answer projection,
+including an empty string when no answer prefix remains. An empty `preamble`
+object means this event carries no new retirement projection. Earlier preview
+credit can still cover later item IDs and completion echoes. Append-only clients
+can preserve a preview they already delivered, carry its credit across those
+identities, and rebase their final-answer state. Chat and raw assistant
+frames are paced independently; their arrival order and payload sequence numbers
+are not a reclassification identity. Older clients can ignore this additive
+metadata. ACP commentary reconciliation requires an updated Gateway and bridge.
+
 Retirement uses assistant occurrence identity, never text-prefix matching.
 Producers correlate live occurrences with committed transcript idempotency keys
 or the host's exact source receipts. Native harnesses that persist part of a

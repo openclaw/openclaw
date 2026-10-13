@@ -57,6 +57,26 @@ describe("snapshot write serialization and scheduling", () => {
 
   it.each([
     {
+      name: "transcript display facts and progress",
+      value: {
+        ...snapshot(),
+        transcriptMetadata: {
+          key: "agent:main:notes",
+          kind: "direct",
+          status: "done",
+          lastRunId: "run-1",
+          runtimeMs: 65000,
+          participants: [{ identity: { type: "profile", id: "reader" }, label: "Reader" }],
+        },
+        progressCard: {
+          sessionKey: "agent:main:notes",
+          revision: 3,
+          updatedAt: 100,
+          markdown: "Reviewing results",
+        },
+      },
+    },
+    {
       name: "nested non-JSON values",
       value: {
         ...snapshot(),
@@ -106,7 +126,7 @@ describe("snapshot write serialization and scheduling", () => {
       // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON omission/conversion is the persisted storage contract.
       const sanitized: ChatSessionSnapshot = JSON.parse(JSON.stringify(value));
       const envelope = {
-        projectionVersion: 1,
+        projectionVersion: 2,
         savedAt: Date.now(),
         sessionId: value.sessionId,
         sessionKey,
@@ -187,7 +207,7 @@ describe("snapshot write serialization and scheduling", () => {
       const transaction = database.transaction(CHAT_SNAPSHOT_STORE_NAME, "readwrite");
       const completed = transactionComplete(transaction);
       transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).put({
-        projectionVersion: 1,
+        projectionVersion: 2,
         savedAt: 1,
         sessionId: "session-1",
         sessionKey,

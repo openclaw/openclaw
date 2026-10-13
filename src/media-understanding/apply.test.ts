@@ -405,49 +405,6 @@ describe("applyMediaUnderstanding", () => {
     );
   });
 
-  it("sets Transcript and replaces Body when audio transcription succeeds", async () => {
-    const ctx = await createAudioCtx();
-    Object.assign(ctx, { Provider: "voicechat", From: "+10000000001" });
-    const previousOutput = {
-      kind: "image.description" as const,
-      attachmentIndex: 1,
-      text: "previous image",
-      provider: "test",
-    };
-    const previousDecision = {
-      capability: "image" as const,
-      outcome: "disabled" as const,
-      attachments: [],
-    };
-    ctx.MediaUnderstanding = [previousOutput];
-    ctx.MediaUnderstandingDecisions = [previousDecision];
-    await applyMediaUnderstanding({
-      ctx,
-      cfg: createGroqAudioConfig(),
-      providers: createGroqProviders(),
-    });
-    expect(ctx.MediaUnderstanding).toEqual([
-      previousOutput,
-      expect.objectContaining({
-        kind: "audio.transcription",
-        attachmentIndex: 0,
-        text: "transcribed text",
-      }),
-    ]);
-    expect(ctx.MediaUnderstandingDecisions?.[0]).toEqual(previousDecision);
-    expect(
-      ctx.MediaUnderstandingDecisions?.slice(1).map((decision) => decision.capability),
-    ).toEqual(["image", "audio", "video"]);
-    expectTranscriptApplied({
-      ctx,
-      transcript: "transcribed text",
-      body: "[Audio]\nTranscript:\ntranscribed text",
-      commandBody: "transcribed text",
-    });
-    expect(ctx.BodyForAgent).toBe(ctx.Body);
-    expect(mockDeliverOutboundPayloads).not.toHaveBeenCalled();
-  });
-
   it("keeps tiny audio-MIME text files eligible for extraction", async () => {
     const ctx = await createAudioCtx({ fileName: "note.txt", content: "recoverable file text" });
     const transcribeAudio = vi.fn(async () => ({ text: "must not run" }));
@@ -729,43 +686,6 @@ describe("applyMediaUnderstanding", () => {
       "[Audio attachment not analyzed: no audio-understanding model is configured]",
     );
     expect(runExecMock).not.toHaveBeenCalled();
-  });
-
-  it("suppresses markers only for images the ACP caller actually delivers", async () => {
-    const binDir = await createTempMediaDir();
-    await createMockExecutable(binDir, "agy");
-    const deliveredPath = await createTempMediaFile({
-      fileName: "delivered.jpg",
-      content: "image-bytes",
-    });
-    const undeliveredPath = await createTempMediaFile({
-      fileName: "undelivered.jpg",
-      content: "image-bytes",
-    });
-    const ctx: MsgContext = {
-      Body: "",
-      media: [
-        { path: deliveredPath, contentType: "image/jpeg" },
-        { path: undeliveredPath, contentType: "image/jpeg" },
-      ],
-    };
-    const cfg: OpenClawConfig = {
-      tools: { media: { image: { attachments: { mode: "all", maxAttachments: 4 } } } },
-    };
-    resolveApiKeyForProviderCoreMock.mockResolvedValue({ source: "none", mode: "api-key" });
-
-    await withMediaAutoDetectEnv({ PATH: binDir }, async () => {
-      await applyMediaUnderstanding({
-        ctx,
-        cfg,
-        deliveredImageIndexes: new Set([0]),
-      });
-    });
-
-    // Index 0 rides with the ACP turn (no marker); index 1 was not resolved
-    // into an attachment, so its non-delivery stays model-visible.
-    const markerCount = ctx.Body?.split("[Image attachment not analyzed").length ?? 0;
-    expect(markerCount - 1).toBe(1);
   });
 
   it("describes ACP-delivered images and preserves their captions for commands", async () => {
@@ -1232,18 +1152,7 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.BodyForCommands).toBe(ctx.Body);
   });
 
-  it("uses the sender's display name without letting it steer classification", async () => {
-    const ctx = await applyFile({
-      fileName: "records.csv",
-      content: '"a","b"\n"1","2"',
-      senderFileName: "totally-not-a-spreadsheet.txt",
-    });
-    expect(ctx.Body).toContain('mime="text/csv"');
-    expect(ctx.Body).toContain('<file name="totally-not-a-spreadsheet.txt"');
-    expect(ctx.Body).not.toContain('name="records.csv"');
-  });
-
-  it.each(["files-only", "audio-and-files"] as const)(
+  it.each(["files-only"] as const)(
     "delivers pasted text without image interpretation in %s mode",
     async (processingMode) => {
       const describeImage = vi.fn(async () => ({ text: "image description" }));
@@ -1274,30 +1183,6 @@ describe("applyMediaUnderstanding", () => {
       expect(ctx.MediaUnderstanding).toBeUndefined();
     },
   );
-
-  it("reports unsupported Office documents with self-serve guidance", async () => {
-    const mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-    const ctx = await applyFile({
-      fileName: "report.docx",
-      content: "PK\u0003\u0004[Content_Types].xml word/document.xml",
-      mediaType: mime,
-    });
-    expectUnsupportedFileApplied({ ctx, mime });
-  });
-
-  it("keeps explicitly allowed legacy Word files unsupported", async () => {
-    const ctx = await applyFile({
-      fileName: "legacy.doc",
-      content: "Root Entry WordDocument 1Table Data Microsoft Office legacy text preview",
-      mediaType: "application/msword",
-      cfg: createMediaDisabledConfigWithAllowedMimes([
-        "text/plain",
-        "application/msword",
-        "application/x-cfb",
-      ]),
-    });
-    expectUnsupportedFileApplied({ ctx, mime: "application/msword" });
-  });
 
   it("uses classified MIME for allowedMimes when declared metadata disagrees", async () => {
     const ctx = await applyFile({

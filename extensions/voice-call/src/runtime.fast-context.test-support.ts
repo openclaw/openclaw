@@ -23,18 +23,22 @@ export function createMockSessionRuntime(sessionStore: Record<string, unknown>) 
     getSessionEntry: vi.fn(
       ({ sessionKey }: { sessionKey: string }) => sessionStore[sessionKey] as MockSessionEntry,
     ),
-    patchSessionEntry: vi.fn(
+    getSessionEntryAsync: vi.fn(
+      async ({ sessionKey }: { sessionKey: string }) =>
+        sessionStore[sessionKey] as MockSessionEntry,
+    ),
+    prepareSessionEntryPatch: vi.fn(
       async ({
         sessionKey,
         fallbackEntry,
-        update,
+        prepare,
       }: {
         sessionKey: string;
         fallbackEntry: MockSessionEntry;
-        update: (entry: MockSessionEntry) => Promise<MockSessionEntry> | MockSessionEntry;
+        prepare: (entry: MockSessionEntry) => Promise<MockSessionEntry> | MockSessionEntry;
       }) => {
         const current = (sessionStore[sessionKey] as MockSessionEntry | undefined) ?? fallbackEntry;
-        const patch = await update(current);
+        const patch = await prepare(current);
         const next = { ...current, ...patch };
         sessionStore[sessionKey] = next;
         return next;

@@ -68,7 +68,7 @@ export async function createAdmittedWizardSession(
     return undefined;
   }
   wizardSessionInProgress = true;
-  // Capture this generation before target-lock acquisition can yield or reset.
+  // Keep the runner attached to the Gateway shutdown that admitted it.
   const gatewaySignal = getAsyncWorkSignal();
   const drainSignal = getGatewayRestartDrainSignal();
   const signal = gatewaySignal ? AbortSignal.any([gatewaySignal, drainSignal]) : drainSignal;
@@ -91,10 +91,6 @@ export async function createAdmittedWizardSession(
         );
       signal.addEventListener("abort", close, { once: true });
       removeCloseListener = () => signal.removeEventListener("abort", close);
-      // Construction can commit or close the Gateway before the listener exists.
-      if (signal.aborted) {
-        close();
-      }
       return session;
     };
     let admissionSettled: Promise<unknown> | undefined;

@@ -171,7 +171,7 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     params.sessionRouteMode === "allow-fallback"
       ? resolveChannelDefaultAccountId({ plugin, cfg: params.cfg })
       : undefined;
-  const normalizedTarget = resolveOutboundTarget({
+  const normalizedTarget = await resolveOutboundTarget({
     channel: resolvedChannel,
     plugin,
     to: plan.resolvedTo,
@@ -324,15 +324,15 @@ export async function resolveAgentExplicitRecipientSession(params: {
   };
 }
 
-export function resolveAgentOutboundTarget(params: {
+export async function resolveAgentOutboundTarget(params: {
   cfg: OpenClawConfig;
   plan: AgentDeliveryPlan;
   targetMode?: ChannelOutboundTargetMode;
   validateExplicitTarget?: boolean;
-}): {
+}): Promise<{
   resolvedTarget: OutboundTargetResolution | null;
   resolvedTo?: string;
-} {
+}> {
   const targetMode =
     params.targetMode ??
     params.plan.deliveryTargetMode ??
@@ -352,7 +352,7 @@ export function resolveAgentOutboundTarget(params: {
       resolvedTo: params.plan.resolvedTo,
     };
   }
-  const resolvedTarget = resolveOutboundTarget({
+  const resolvedTarget = await resolveOutboundTarget({
     channel: params.plan.resolvedChannel,
     ...(params.plan.plugin ? { plugin: params.plan.plugin } : {}),
     to: params.plan.resolvedTo,

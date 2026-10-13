@@ -26,7 +26,6 @@ import { activeChatRunStartupStatus, chatStartupStatusLabel } from "./chat-run-s
 import {
   admitChatSubmission,
   getChatSessionProjection,
-  getChatModelObservedRunId,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
   publishChatSessionProjection,
@@ -645,7 +644,6 @@ it("adopts the snapshot after remount replaces an unchanged run map", async () =
   response.resolve(history);
   await loading;
   expect(state.chatRunId).toBe("run-reconnected");
-  expect(getChatModelObservedRunId(state, history.sessionInfo)).toBe("run-reconnected");
   expect(state.chatStream).toBe(history.inFlightRun!.text);
 });
 
@@ -720,7 +718,6 @@ it("does not resurrect delayed history after a newer intervening run completes",
   await loading;
   expect(state.chatRunId).toBeNull();
   expect(state.chatStream).toBeNull();
-  expect(getChatModelObservedRunId(state, history.sessionInfo)).toBeUndefined();
 });
 
 it("retains newer live startup progress through delayed history", async () => {

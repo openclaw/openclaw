@@ -1,29 +1,27 @@
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
-import { createAccountScopedConversationBindingManager } from "./account-scoped-conversation-bindings.js";
 import {
+  bindCurrentConversationRecordAsync,
   deleteCurrentConversationBindingRecordsBySession,
   inspectCurrentConversationBindingRecords,
   listCurrentConversationBindingRecordsBySession,
   resolveCurrentConversationBindingRecord,
+  removeCurrentConversationBindingsAsync,
   updateCurrentConversationBindingRecord,
 } from "./current-conversation-bindings.js";
-import { currentConversationBindingPublication } from "./current-conversation-bindings.publication.js";
 import {
-  inspectSessionBindingsByConversations,
-  registerSessionBindingAdapter,
-  unregisterSessionBindingAdapter,
-} from "./session-binding-service.js";
+  readCurrentConversationBindingListsInDatabase,
+  readCurrentConversationBindingSelectionInDatabase,
+} from "./current-conversation-bindings.kernel.js";
+import { currentConversationBindingPublication } from "./current-conversation-bindings.publication.js";
 import type { SessionBindingRecord } from "./session-binding.types.js";
 
 type CurrentConversationBindingPublication = Parameters<
@@ -47,6 +45,53 @@ function binding(id: string, accountId = "default", generic = false): SessionBin
 function writeBinding(record: SessionBindingRecord) {
   return updateCurrentConversationBindingRecord(record.conversation, () => record).current;
 }
+
+it("reads ordered binding selections and target batches in one statement after committed writes", async () => {
+  await withOpenClawTestState({ label: "binding-single-statement-selection" }, async () => {
+    const original = binding("current");
+    const missing = binding("missing");
+    writeBinding(original);
+    const { db } = openOpenClawStateDatabase();
+    const statements = trackSqliteStatementExecutions(db, ["statement"], () => "statement");
+    const refs = [missing.conversation, original.conversation, original.conversation];
+    try {
+      expect(readCurrentConversationBindingSelectionInDatabase(db, refs)).toEqual([
+        null,
+        original,
+        original,
+      ]);
+      expect(statements.counts.statement).toBe(1);
+      const replacement = { ...original, targetSessionKey: "agent:other:replacement" };
+      writeBinding(replacement);
+      const before = statements.counts.statement;
+      expect(readCurrentConversationBindingSelectionInDatabase(db, refs)).toEqual([
+        null,
+        replacement,
+        replacement,
+      ]);
+      expect(statements.counts.statement - before).toBe(1);
+      writeBinding(missing);
+      const listBefore = statements.counts.statement;
+      const targets = [
+        replacement.targetSessionKey,
+        missing.targetSessionKey,
+        replacement.targetSessionKey,
+      ];
+      expect(
+        readCurrentConversationBindingListsInDatabase(db, targets, {
+          channel: "demo",
+          accountId: "default",
+        }).map((list) => list.records),
+      ).toEqual([[replacement], [missing], [replacement]]);
+      expect(statements.counts.statement - listBefore).toBe(1);
+      expect(readCurrentConversationBindingListsInDatabase(db, targets)).toEqual(
+        targets.map(() => ({ records: [], requiresPrune: false })),
+      );
+    } finally {
+      statements.restore();
+    }
+  });
+});
 
 it("reads current bindings without recompiling fixed queries after warmup", async () => {
   await withOpenClawTestState({ label: "binding-query-budget" }, async () => {
@@ -85,46 +130,39 @@ it("reads current bindings without recompiling fixed queries after warmup", asyn
   });
 });
 
-it("observes another SQLite connection after warm reads and database reopen", async () => {
+it("invalidates warm main-thread binding rows after worker receipts and database reopen", async () => {
   await withOpenClawTestState({ label: "binding-query-freshness" }, async () => {
-    const original = binding("external");
+    const original = binding("worker-written");
     writeBinding(original);
     const inspect = () => inspectCurrentConversationBindingRecords([original.conversation])[0];
     expect(inspect()).toEqual(original);
     expect(inspect()).toEqual(original);
     const owned = openOpenClawStateDatabase();
-    const external = new DatabaseSync(owned.path);
+    const executions = trackSqliteStatementExecutions(owned.db, ["freshness"], (query) =>
+      /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(query)
+        ? "freshness"
+        : null,
+    );
     try {
-      const sql = getNodeSqliteKysely<Pick<DB, "current_conversation_bindings">>(external);
       const replacement = {
         ...original,
         targetSessionKey: "agent:other:replacement",
         metadata: { opaque: { fresh: [1, 2] } },
       };
-      executeSqliteQuerySync(
-        external,
-        sql
-          .updateTable("current_conversation_bindings")
-          .set({
-            target_session_key: replacement.targetSessionKey,
-            record_json: JSON.stringify(replacement),
-            metadata_json: JSON.stringify(replacement.metadata),
-          })
-          .where("binding_id", "=", original.bindingId),
+      expect(await bindCurrentConversationRecordAsync({ record: replacement })).toEqual(
+        replacement,
       );
       expect(inspect()).toEqual(replacement);
-      closeOpenClawStateDatabaseForTest();
+      expect(executions.counts.freshness).toBe(0);
+      await closeOpenClawStateDatabaseAsync();
       expect(openOpenClawStateDatabase().db === owned.db).toBe(false);
       expect(inspect()).toEqual(replacement);
-      executeSqliteQuerySync(
-        external,
-        sql
-          .deleteFrom("current_conversation_bindings")
-          .where("binding_id", "=", original.bindingId),
-      );
+      expect(
+        await removeCurrentConversationBindingsAsync({ conversation: original.conversation }),
+      ).toEqual([replacement]);
       expect(inspect()).toBeNull();
     } finally {
-      external.close();
+      executions.restore();
     }
   });
 });
@@ -157,7 +195,7 @@ it("reuses unchanged binding rows while local updates, expiry, and returned obje
       expect(inspect()).toEqual([original, null]);
       expect(inspect()).toEqual([original, null]);
       expect(executions.counts.selection).toBe(1);
-      expect(executions.counts.freshness).toBe(3);
+      expect(executions.counts.freshness).toBe(0);
 
       const replacement = { ...original, targetSessionKey: "agent:other:replacement" };
       writeBinding(replacement);
@@ -306,124 +344,6 @@ it("preserves the committed row when a metadata update cannot be serialized", as
     ).toThrow(TypeError);
     expect(readRow()).toEqual(before);
     expect(resolveCurrentConversationBindingRecord(original.conversation)).toEqual(original);
-  });
-});
-
-it("inspects mixed owner batches once without replacing exact rows by legacy fallbacks", async () => {
-  await withOpenClawTestState({ label: "binding-batch-authority" }, async () => {
-    const { db } = openOpenClawStateDatabase();
-    const sql = getNodeSqliteKysely<Pick<DB, "current_conversation_bindings">>(db);
-    const value = (id: string): SessionBindingRecord => ({
-      ...binding(id),
-      bindingId: `generic:${INTERNAL_MESSAGE_CHANNEL}␟default␟␟${id}`,
-      conversation: { channel: INTERNAL_MESSAGE_CHANNEL, accountId: "default", conversationId: id },
-    });
-    const seed = (record: SessionBindingRecord, parent?: string, malformed = false) => {
-      const conversation = {
-        ...record.conversation,
-        ...(parent ? { parentConversationId: parent } : {}),
-      };
-      // Seed physical legacy and malformed rows outside the normalizing writer.
-      executeSqliteQuerySync(
-        db,
-        sql.insertInto("current_conversation_bindings").values({
-          binding_key: [
-            conversation.channel,
-            conversation.accountId,
-            parent ?? "",
-            conversation.conversationId,
-          ].join("␟"),
-          binding_id: record.bindingId,
-          target_session_key: record.targetSessionKey,
-          channel: conversation.channel,
-          account_id: conversation.accountId,
-          conversation_kind: "current",
-          parent_conversation_id: parent ?? null,
-          conversation_id: conversation.conversationId,
-          target_kind: record.targetKind,
-          status: record.status,
-          bound_at: record.boundAt,
-          expires_at: record.expiresAt ?? null,
-          metadata_json: record.metadata ? JSON.stringify(record.metadata) : null,
-          record_json: malformed ? "{" : JSON.stringify({ ...record, conversation }),
-          updated_at: Date.now(),
-        }),
-      );
-    };
-    const exact = value("exact"),
-      legacy = value("legacy"),
-      malformed = value("malformed"),
-      expired = value("expired");
-    seed(exact);
-    seed(legacy, " legacy ", true);
-    seed(legacy, "legacy");
-    seed(malformed, undefined, true);
-    seed(malformed, "malformed");
-    seed({ ...expired, expiresAt: 1 });
-    seed(expired, "expired");
-    const manager = createAccountScopedConversationBindingManager({
-      channel: "fixture",
-      accountId: "owner",
-      cfg: {},
-      stateKey: Symbol("batch-owner"),
-      toStoredTargetKind: (kind) => kind,
-      toSessionBindingTargetKind: (kind) => kind,
-    });
-    const account = {
-      ...binding("account", "owner"),
-      bindingId: "owner:account",
-      conversation: { channel: "fixture", accountId: "owner", conversationId: "account" },
-    };
-    seed(account);
-    const external = {
-      ...value("external"),
-      bindingId: "external-owned",
-      conversation: { channel: "external", accountId: "default", conversationId: "room" },
-    };
-    const adapter = {
-      channel: "external",
-      accountId: "default",
-      listBySession: () => [external],
-      resolveByConversation: () => external,
-    };
-    registerSessionBindingAdapter(adapter);
-    const executions = trackSqliteStatementExecutions(db, ["selection"], (query) =>
-      query.startsWith("with ") && query.includes('"current_conversation_bindings"')
-        ? "selection"
-        : null,
-    );
-    try {
-      const refs = [
-        exact,
-        value("missing"),
-        legacy,
-        malformed,
-        expired,
-        account,
-        external,
-        exact,
-      ].map((record) => record.conversation);
-      const selected = inspectSessionBindingsByConversations(refs);
-      expect(
-        selected.map((item) =>
-          item.status === "available" ? (item.binding?.bindingId ?? null) : item.status,
-        ),
-      ).toEqual([
-        exact.bindingId,
-        null,
-        legacy.bindingId,
-        null,
-        null,
-        account.bindingId,
-        external.bindingId,
-        exact.bindingId,
-      ]);
-      expect(executions.counts.selection).toBe(1);
-    } finally {
-      executions.restore();
-      unregisterSessionBindingAdapter({ ...adapter, adapter });
-      manager.stop();
-    }
   });
 });
 

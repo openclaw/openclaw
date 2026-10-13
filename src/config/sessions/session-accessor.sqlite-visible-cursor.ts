@@ -55,7 +55,9 @@ export function createVisibleMessageCursor(params: {
   sessionId: string;
 }): VisibleMessageCursor {
   return {
-    ...params,
+    agentId: params.agentId,
+    generation: params.generation,
+    sessionId: params.sessionId,
     lastEventSeq: -1,
     lastMessagePosition: -1,
     version: VISIBLE_MESSAGE_CURSOR_VERSION,

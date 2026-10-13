@@ -12,8 +12,8 @@ import {
 import {
   parseSessionTranscriptAuthorityReceipts,
   retainSessionTranscriptWorkerPublication,
-  type SessionTranscriptAuthorityReceipt,
 } from "../../config/sessions/session-transcript-authority.js";
+import type { SessionTranscriptAuthorityReceipt } from "../../config/sessions/session-transcript-authority.types.js";
 import type { InitialSessionTranscriptWriter } from "../../config/sessions/transcript-write-context.js";
 import {
   observeSqliteWorkerCommittedFacts,
@@ -28,6 +28,14 @@ export type SessionManagerAuthorityPublication = {
   transcriptPublication: readonly SessionTranscriptAuthorityReceipt[];
   entryPublication: readonly SessionEntryMetadataReceipt[];
 };
+
+export function unwrapSessionManagerPublication(
+  request: SqliteWorkerAdmissionRequest,
+): SqliteWorkerAdmissionRequest {
+  return isRecord(request.facts) && request.facts.kind === "session-manager-authority"
+    ? { ...request, facts: request.facts.domainFacts }
+    : request;
+}
 
 /** Entry and transcript postimages share one native receipt and one observer boundary. */
 export function createSessionManagerPublicationHooks(params: {
@@ -45,11 +53,7 @@ export function createSessionManagerPublicationHooks(params: {
   };
   let pending: Pending | undefined;
   return {
-    unwrap: (request: SqliteWorkerAdmissionRequest): SqliteWorkerAdmissionRequest => {
-      return isRecord(request.facts) && request.facts.kind === "session-manager-authority"
-        ? { ...request, facts: request.facts.domainFacts }
-        : request;
-    },
+    unwrap: unwrapSessionManagerPublication,
     onAdmitted: (request: SqliteWorkerAdmissionRequest) => {
       if (
         request.stage !== "commit" ||
@@ -95,6 +99,14 @@ export function createSessionManagerPublicationHooks(params: {
           entryPublication.flatMap((receipt) => Array.from(receipt.facts.keys())),
           new Map(),
           unchanged,
+          undefined,
+          new Map(
+            entryPublication.flatMap((receipt) =>
+              [...receipt.facts].flatMap(([key, fact]) =>
+                fact.kind === "postimage" ? [[key, fact.value.entry] as const] : [],
+              ),
+            ),
+          ),
         );
       }
       pending.transcript.begin(transcriptPublication);

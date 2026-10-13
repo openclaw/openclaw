@@ -37,7 +37,7 @@ describe("file path tooltip", () => {
     expect(card()?.textContent?.trim()).toBe(filePath);
     await copyButton().hover();
     await Promise.all([
-      expect.element(page.getByRole("status")).toHaveTextContent("Copied!"),
+      expect.poll(() => card()?.querySelector('[role="status"]')?.textContent).toBe("Copied!"),
       copyButton().click(),
     ]);
     expect(write).toHaveBeenCalledWith(filePath);

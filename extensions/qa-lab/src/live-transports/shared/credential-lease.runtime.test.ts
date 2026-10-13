@@ -122,8 +122,9 @@ describe("credential lease runtime", () => {
     vi.useRealTimers();
   });
 
-  it("releases a credential that expired while its payload was being hydrated", async () => {
+  it("releases a credential whose TTL expires while the host monotonic clock is paused", async () => {
     vi.useFakeTimers();
+    vi.spyOn(performance, "now").mockReturnValue(42);
     const operations: string[] = [];
     await expect(
       acquireQaCredentialLease({
@@ -158,6 +159,7 @@ describe("credential lease runtime", () => {
         },
       }),
     ).rejects.toThrow("could not be confirmed before use");
+    expect(performance.now()).toBe(42);
     expect(operations).toEqual(["acquire", "release"]);
   });
 

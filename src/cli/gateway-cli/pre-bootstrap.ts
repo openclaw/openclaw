@@ -7,8 +7,10 @@ import {
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "../../config/gateway-env-selection.js";
 import { CONFIG_AUDIT_STORE_LABEL } from "../../config/io.audit.js";
+import type { ConfigSnapshotReadOptions } from "../../config/io.js";
 import { describeConfigSnapshotInputChange } from "../../config/snapshot-inputs.js";
 import type { ConfigFileSnapshot } from "../../config/types.js";
+import type { DeferredPluginMigration } from "../../infra/deferred-plugin-migrations.js";
 import {
   clearFsSafeEnvFallback,
   fsSafeEnvInput,
@@ -44,6 +46,7 @@ let lastGuardedGatewayRunSnapshot: ConfigFileSnapshot | undefined;
 let preparedGatewayRunBootstrap:
   | (Pick<GatewayRunOpts, "allowUnconfigured" | "dev"> & {
       snapshot: ConfigFileSnapshot;
+      acceptedPluginMigrations?: readonly DeferredPluginMigration[];
     })
   | undefined;
 let preparedGatewayRunReset: PreparedGatewayRunReset | undefined;
@@ -404,6 +407,35 @@ export async function recheckGatewayRunReset(params: GatewayRunGuardParams): Pro
     return await rejectDrift();
   }
   return true;
+}
+
+/**
+ * Config readiness accepted the startup preflight's admitted shared-state generation. The final
+ * reread already reuses that generation's plugin metadata; its migration rows belong with it.
+ * No Gateway owns state yet, so a later pre-ownership read would be no fresher in kind.
+ */
+export function acceptGatewayRunPreflightMigrations(
+  pending: readonly DeferredPluginMigration[],
+): void {
+  if (preparedGatewayRunBootstrap) {
+    preparedGatewayRunBootstrap = {
+      ...preparedGatewayRunBootstrap,
+      acceptedPluginMigrations: pending,
+    };
+  }
+}
+
+/** One start attempt consumes the accepted facts; a retry after in-process repair reads rows. */
+export function takeAcceptedGatewayRunMigrations(): Pick<
+  ConfigSnapshotReadOptions,
+  "deferredPluginMigrations"
+> {
+  if (!preparedGatewayRunBootstrap?.acceptedPluginMigrations) {
+    return {};
+  }
+  const { acceptedPluginMigrations, ...prepared } = preparedGatewayRunBootstrap;
+  preparedGatewayRunBootstrap = prepared;
+  return { deferredPluginMigrations: acceptedPluginMigrations };
 }
 
 export async function applyFinalGatewayRunConfigEnv(params: {

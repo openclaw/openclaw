@@ -456,8 +456,11 @@ describe("backup run records", () => {
     withExistingOpenClawStateDatabaseReadOnly(() => undefined, { env });
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    const pathname = resolveOpenClawStateSqlitePath(env);
+    fsSync.renameSync(pathname, `${pathname}.seed`);
+    fsSync.copyFileSync(`${pathname}.seed`, pathname);
     const { DatabaseSync } = await import("node:sqlite");
-    const raw = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
+    const raw = new DatabaseSync(pathname);
     raw.exec("DROP TABLE backup_runs");
     raw.close();
     expect(await readBackupRunFreshness(env)).toEqual({});

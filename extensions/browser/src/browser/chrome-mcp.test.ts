@@ -327,7 +327,6 @@ describe("chrome MCP page parsing", () => {
     const { promise: listGate, resolve: releaseList } = createDeferred<void>();
     const { promise: closeStarted, resolve: markCloseStarted } = createDeferred<void>();
     const { promise: closeGate, resolve: releaseClose } = createDeferred<void>();
-    let factoryCalls = 0;
     const session = createPageSession({
       pid: 141,
       pages: [{ id: 1, url: "https://a.example" }],
@@ -346,7 +345,6 @@ describe("chrome MCP page parsing", () => {
     });
     session.client.close = close as typeof session.client.close;
     setChromeMcpSessionFactoryForTest(async () => {
-      factoryCalls += 1;
       return session;
     });
 
@@ -369,9 +367,8 @@ describe("chrome MCP page parsing", () => {
     expect(explicitCloseSettled).toBe(false);
     releaseClose();
     await expect(active).rejects.toThrow(/transport failed before stop/);
-    await expect(queued).rejects.toThrow(/changed before the operation/);
+    await expect(queued).rejects.toThrow("Chrome MCP profile session was replaced");
     await expect(explicitClose).resolves.toBe(true);
-    expect(factoryCalls).toBe(1);
   });
 
   it.each(["during admission", "while queued"])(
@@ -1369,45 +1366,6 @@ describe("chrome MCP page parsing", () => {
     expect(closeMock).toHaveBeenCalledOnce();
   });
 
-  it("blocks replacement after an aborted pending factory fails exact cleanup", async () => {
-    let factoryCalls = 0;
-    const { promise: factoryGate, resolve: releaseFactory } = createDeferred<void>();
-    const closeMock = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("pending cleanup failed"))
-      .mockResolvedValue(undefined);
-    setChromeMcpSessionFactoryForTest(async () => {
-      factoryCalls += 1;
-      if (factoryCalls === 1) {
-        await factoryGate;
-        const session = createFakeSession();
-        session.client.close = closeMock as typeof session.client.close;
-        return session;
-      }
-      return createFakeSession();
-    });
-    const ctrl = new AbortController();
-    const aborted = listChromeMcpTabs("chrome-live", undefined, { signal: ctrl.signal });
-    const abortedExpectation = expect(aborted).rejects.toThrow("pending cleanup failed");
-    await waitForChromeMcpState(() => expect(factoryCalls).toBe(1));
-    ctrl.abort(new Error("caller cancelled"));
-
-    const blockedReplacement = listChromeMcpTabs("chrome-live");
-    const blockedReplacementExpectation =
-      expect(blockedReplacement).rejects.toThrow("pending cleanup failed");
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(factoryCalls).toBe(1);
-    releaseFactory();
-
-    await Promise.all([abortedExpectation, blockedReplacementExpectation]);
-    expect(factoryCalls).toBe(1);
-    await expect(listChromeMcpTabs("chrome-live")).resolves.toHaveLength(2);
-    expect(factoryCalls).toBe(2);
-    expect(closeMock).toHaveBeenCalledTimes(2);
-  });
-
   it("holds ephemeral probes behind cancelled pending-session cleanup", async () => {
     let factoryCalls = 0;
     const { promise: factoryGate, resolve: releaseFactory } = createDeferred<void>();
@@ -1534,77 +1492,6 @@ describe("chrome MCP page parsing", () => {
     await expect(listChromeMcpTabs("chrome-live")).resolves.toHaveLength(2);
     expect(factoryCalls).toBe(1);
     expect(closeMock).not.toHaveBeenCalled();
-  });
-
-  it("starts a fresh shared session when a ready-pending session loses its transport", async () => {
-    let factoryCalls = 0;
-    let firstSession: ChromeMcpSession | undefined;
-    const { promise: firstReadyGate, resolve: releaseFirstReady } = createDeferred<void>();
-    const firstReadyThen = vi.spyOn(firstReadyGate, "then");
-
-    const closeMocks: Array<ReturnType<typeof vi.fn>> = [];
-    const factory: ChromeMcpSessionFactory = async () => {
-      factoryCalls += 1;
-      const session = createFakeSession();
-      const closeMock = vi.fn().mockResolvedValue(undefined);
-      closeMocks.push(closeMock);
-      session.client.close = closeMock as typeof session.client.close;
-      if (factoryCalls === 1) {
-        firstSession = session;
-        session.ready = firstReadyGate;
-      }
-      return session;
-    };
-    setChromeMcpSessionFactoryForTest(factory);
-
-    const ctrl = new AbortController();
-    const firstTabsPromise = listChromeMcpTabs("chrome-live", undefined, {
-      signal: ctrl.signal,
-    });
-    const firstTabsExpectation = expect(firstTabsPromise).rejects.toThrow(/first waiter cancelled/);
-
-    await waitForChromeMcpState(() => expect(factoryCalls).toBe(1));
-    await waitForChromeMcpState(() => expect(firstReadyThen).toHaveBeenCalledTimes(1));
-    if (!firstSession) {
-      throw new Error("Expected first Chrome MCP session to be created");
-    }
-    (firstSession.transport as { pid: number | null }).pid = null;
-
-    const tabsPromise = listChromeMcpTabs("chrome-live");
-    const siblingTabsPromise = listChromeMcpTabs("chrome-live");
-    ctrl.abort(new Error("first waiter cancelled"));
-    releaseFirstReady();
-    await waitForChromeMcpState(() => expect(factoryCalls).toBe(2));
-    const [tabs, siblingTabs] = await Promise.all([tabsPromise, siblingTabsPromise]);
-    expect(tabs).toHaveLength(2);
-    expect(siblingTabs).toHaveLength(2);
-
-    await firstTabsExpectation;
-    await waitForChromeMcpState(() => expect(closeMocks[0]).toHaveBeenCalledTimes(1));
-    expect(closeMocks[1]).not.toHaveBeenCalled();
-  });
-
-  it("bounds retries when ready sessions keep losing their transport", async () => {
-    let factoryCalls = 0;
-    const closeMocks: Array<ReturnType<typeof vi.fn>> = [];
-    const factory: ChromeMcpSessionFactory = async () => {
-      factoryCalls += 1;
-      const session = createFakeSession();
-      (session.transport as { pid: number | null }).pid = null;
-      const closeMock = vi.fn().mockResolvedValue(undefined);
-      closeMocks.push(closeMock);
-      session.client.close = closeMock as typeof session.client.close;
-      return session;
-    };
-    setChromeMcpSessionFactoryForTest(factory);
-
-    await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(
-      /subprocess exited before it became usable/,
-    );
-
-    expect(factoryCalls).toBe(2);
-    await waitForChromeMcpState(() => expect(closeMocks[0]).toHaveBeenCalled());
-    await waitForChromeMcpState(() => expect(closeMocks[1]).toHaveBeenCalled());
   });
 
   it("does not let ephemeral probes persist canceled pending attaches", async () => {

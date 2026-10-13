@@ -13,6 +13,10 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
   clearSessionStoreCacheForTest,
   resolveStorePath,
   upsertSessionEntry,
@@ -66,6 +70,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   clearRuntimeAuthProfileStoreSnapshots();
+  clearRuntimeConfigSnapshot();
   clearSessionStoreCacheForTest();
   await fs.rm(root, { recursive: true, force: true });
 });
@@ -128,6 +133,7 @@ async function fixture(stableAccount = true) {
     requestConversationBinding: async () => ({ status: "error", message: "unused" }),
     detachConversationBinding: async () => ({ removed: false }),
   };
+  setRuntimeConfigSnapshot(ctx.config);
   await upsertSessionEntry({
     agentId: "second",
     sessionKey: ctx.sessionKey!,
@@ -225,7 +231,7 @@ describe("Codex plugin command context", () => {
     expect(test.request).toHaveBeenCalledWith(
       "account/login/start",
       expect.objectContaining({ type: "chatgptAuthTokens" }),
-      { assertCurrent: undefined },
+      expect.objectContaining({ assertCurrent: undefined }),
     );
     expect(test.release).toHaveBeenCalledOnce();
   });
@@ -352,6 +358,7 @@ describe("Codex plugin command context", () => {
           });
         }
         await vi.advanceTimersByTimeAsync(response === "overload" ? 1_000 : 0);
+        await pending;
         expect(test.harness.writes).toHaveLength(2);
         expect(String(failure)).toContain(
           change === "session"

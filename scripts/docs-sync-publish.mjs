@@ -34,6 +34,7 @@ const SYNC_SUPPORT_FILES = [
     "lib/arg-utils.runtime.mjs",
     "lib/tsx-cli-shim.mjs",
     "lib/local-check-runtime.mts",
+    "lib/managed-cleanup-handoff.mts",
     "tsx.mjs",
   ].map((file) => ({
     source: new URL(`./${file}`, import.meta.url),

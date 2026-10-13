@@ -281,7 +281,7 @@ export function createEventManagerHarness() {
       activeCalls: new Map(),
       providerCallIdMap: new Map(),
       processedEventIds: new Set(),
-      rejectedProviderCallIds: new Map(),
+      rejectedProviderCallIds: new Set(),
       provider: null,
       config: VoiceCallConfigSchema.parse({
         enabled: true,

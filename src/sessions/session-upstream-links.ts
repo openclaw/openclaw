@@ -1,6 +1,7 @@
 /** Best-effort shared-state registry for adopted upstream sessions. */
 import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
@@ -31,14 +32,17 @@ export function upsertSessionUpstreamLink(
     assertCommitAllowed?: () => void;
   } = {},
 ): boolean {
+  warnPluginSdkDeprecation({
+    family: "session-upstream-links",
+    method: "session-catalog.upsertSessionUpstreamLink",
+    replacement: "await upsertSessionUpstreamLinkAsync",
+    code: "DEP_SESSION_PERSISTENCE",
+  });
   const now = options.now ?? Date.now();
   try {
     return runOpenClawStateWriteTransaction(({ db }) => {
       options.assertCommitAllowed?.();
-      const written = upsertSessionUpstreamLinkInDatabase(db, input, now, options.ifAbsent);
-      // Revalidate before COMMIT: a lifecycle change must roll back this link write.
-      options.assertCommitAllowed?.();
-      return written;
+      return upsertSessionUpstreamLinkInDatabase(db, input, now, options.ifAbsent);
     }, options);
   } catch (error) {
     if (options.ifAbsent) {
@@ -58,14 +62,16 @@ export function deleteSessionUpstreamLink(
     assertCommitAllowed?: () => void;
   } = {},
 ): "deleted" | "absent" | "changed" | undefined {
+  warnPluginSdkDeprecation({
+    family: "session-upstream-links",
+    method: "session-catalog.deleteSessionUpstreamLink",
+    replacement: "await deleteSessionUpstreamLinkAsync",
+    code: "DEP_SESSION_PERSISTENCE",
+  });
   try {
     return runOpenClawStateWriteTransaction(({ db }) => {
       options.assertCommitAllowed?.();
-      const result = deleteSessionUpstreamLinkInDatabase(db, sessionKey, agentId, options.expected);
-      if (result === "deleted") {
-        options.assertCommitAllowed?.();
-      }
-      return result;
+      return deleteSessionUpstreamLinkInDatabase(db, sessionKey, agentId, options.expected);
     }, options);
   } catch (error) {
     // Exact creation compensation must report an unverified cleanup, not claim success.

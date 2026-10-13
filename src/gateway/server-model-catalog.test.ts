@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import {
   preparePublishedModelCatalogOwnerIdentity,
@@ -6,7 +6,10 @@ import {
 } from "../agents/prepared-model-catalog-owner.js";
 import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
 import { bindPreparedModelRuntimeAuth } from "../agents/prepared-model-runtime-auth.js";
-import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as currentPluginMetadata from "../plugins/current-plugin-metadata-state.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -21,7 +24,6 @@ import {
   readPreparedGatewayModelMetadata,
 } from "./server-model-catalog-view.js";
 import {
-  loadGatewayModelCatalog,
   loadGatewayModelCatalogSnapshot,
   loadPreparedGatewayModelCatalogSnapshot,
   type GatewayModelCatalogSnapshot,
@@ -433,92 +435,6 @@ describe("gateway prepared model catalog", () => {
     ).rejects.toBe(error);
   });
 
-  it("retries the whole owner projection when deferred auth supersedes its generation", async () => {
-    const staleConfig = ownerConfig("main", { logging: { level: "info" } });
-    const currentConfig = ownerConfig("main", { logging: { level: "debug" } });
-    const staleCatalog: ModelCatalogSnapshot = {
-      entries: [{ provider: "openai", id: "stale", name: "Stale" }],
-      routeVariants: [],
-    };
-    const currentCatalog: ModelCatalogSnapshot = {
-      entries: [{ provider: "openai", id: "current", name: "Current" }],
-      routeVariants: [],
-    };
-    const stale = {
-      ...ownerSnapshot(staleConfig, staleCatalog),
-      authModes: { openai: "oauth" as const },
-      authStore: {
-        version: 1 as const,
-        profiles: {
-          "openai:stale": {
-            type: "token" as const,
-            provider: "openai",
-            token: "stale-token-not-real",
-          },
-        },
-      },
-    };
-    const current = {
-      ...ownerSnapshot(currentConfig, currentCatalog),
-      authModes: { openai: "api_key" as const },
-      authStore: {
-        version: 1 as const,
-        profiles: {
-          "openai:current": {
-            type: "api_key" as const,
-            provider: "openai",
-            key: "current-key-not-real",
-          },
-        },
-      },
-    };
-    bindPreparedModelRuntimeAuth(stale, {
-      load: async () => {
-        throw new PreparedModelRuntimePublicationSupersededError("superseded");
-      },
-    });
-    const loadPublishedPreparedModelCatalogOwnerSnapshot = vi
-      .fn()
-      .mockResolvedValueOnce(stale)
-      .mockResolvedValueOnce(current);
-
-    await expect(
-      loadPreparedGatewayModelCatalogSnapshot({
-        getConfig: () => staleConfig,
-        loadPublishedPreparedModelCatalogOwnerSnapshot,
-        refreshAuth: true,
-      }),
-    ).resolves.toMatchObject({
-      config: currentConfig,
-      entries: currentCatalog.entries,
-      authModes: { openai: "api_key" },
-      authStore: {
-        profiles: { "openai:current": expect.any(Object) },
-      },
-    });
-    expect(loadPublishedPreparedModelCatalogOwnerSnapshot).toHaveBeenCalledTimes(2);
-  });
-
-  it("retries owner acquisition when a cached catalog generation is superseded", async () => {
-    const config = ownerConfig();
-    const currentCatalog: ModelCatalogSnapshot = {
-      entries: [{ provider: "openai", id: "current", name: "Current" }],
-      routeVariants: [],
-    };
-    const loadPublishedPreparedModelCatalogOwnerSnapshot = vi
-      .fn()
-      .mockRejectedValueOnce(new PreparedModelRuntimePublicationSupersededError("superseded"))
-      .mockResolvedValueOnce(ownerSnapshot(config, currentCatalog));
-
-    await expect(
-      loadGatewayModelCatalog({
-        getConfig: () => config,
-        loadPublishedPreparedModelCatalogOwnerSnapshot,
-      }),
-    ).resolves.toEqual(currentCatalog.entries);
-    expect(loadPublishedPreparedModelCatalogOwnerSnapshot).toHaveBeenCalledTimes(2);
-  });
-
   it("selects the full prepared owner when requested", async () => {
     const config = ownerConfig();
     const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () => ownerSnapshot(config));
@@ -539,6 +455,8 @@ describe("gateway prepared model catalog", () => {
   });
 
   it("does not hide lifecycle publication failures behind stale data", async () => {
+    setRuntimeConfigSnapshot({});
+    onTestFinished(clearRuntimeConfigSnapshot);
     const error = new Error("generation failed");
     const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () => {
       throw error;

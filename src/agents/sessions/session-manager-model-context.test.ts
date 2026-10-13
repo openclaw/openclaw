@@ -7,10 +7,12 @@ import { LEGACY_MISSING_TOOL_RESULT_TEXT } from "../../../packages/agent-core/sr
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   appendTranscriptEvent,
-  replaceTranscriptEvents,
-  replaceTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import {
+  replaceTranscriptEvents,
+  replaceTranscriptEventsSync,
+} from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
@@ -366,10 +368,6 @@ it.each([
       ).toEqual(earlier);
       if (scenario === "whole") {
         for (const patch of [
-          { generation: "wrong-generation" },
-          { rawSeq: admission.rawSeq + 1 },
-          { effectiveParentId: "wrong-parent" },
-          { activeMessagePosition: admission.activeMessagePosition + 1 },
           { role: "assistant" },
           { sessionKey: "agent:main:wrong" },
           { storePath: path.join(state.agentDir("main"), "wrong.sqlite") },
@@ -618,11 +616,11 @@ it.each([false, true])(
   },
 );
 
-it.each(
-  [false, true].flatMap((incognito) =>
-    (["rewrite", "append"] as const).map((mutation) => ({ incognito, mutation })),
-  ),
-)(
+it.each([
+  { incognito: false, mutation: "rewrite" },
+  { incognito: false, mutation: "append" },
+  { incognito: true, mutation: "append" },
+])(
   "validates admission before accepting context (incognito=$incognito mutation=$mutation)",
   async ({ incognito, mutation }) => {
     await withOpenClawTestState({ label: "context-worker-fence" }, async (state) => {

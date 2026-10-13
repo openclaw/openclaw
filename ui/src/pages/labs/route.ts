@@ -7,7 +7,7 @@ export const page = definePage({
   ...routePageSpec("labs"),
   loader: (context: ApplicationContext) => context.runtimeConfig.ensureLoaded(),
   component: () =>
-    import("./labs-page.ts").then(() => ({
+    import("./labs-page.tsx").then(() => ({
       header: true,
       render: () => html`<openclaw-labs-page></openclaw-labs-page>`,
     })),

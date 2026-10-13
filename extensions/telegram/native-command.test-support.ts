@@ -17,7 +17,7 @@ import {
 import { setTelegramRuntime } from "./src/runtime.js";
 import { clearTelegramRuntimeForTest } from "./src/runtime.test-support.js";
 
-export function createTelegramNativeCommandTestDriver(options: {
+export async function createTelegramNativeCommandTestDriver(options: {
   cfg: OpenClawConfig;
   runtime: PluginRuntime;
 }) {
@@ -34,7 +34,7 @@ export function createTelegramNativeCommandTestDriver(options: {
     },
   });
   setTelegramRuntime(options.runtime);
-  registerTelegramNativeCommands(params);
+  await registerTelegramNativeCommands(params);
   return {
     invoke(
       input: {

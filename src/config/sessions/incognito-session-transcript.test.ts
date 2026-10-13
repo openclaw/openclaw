@@ -14,6 +14,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import {
   createSessionEntryWithTranscript,
@@ -25,7 +26,7 @@ import {
   resolveSessionEntryCandidateTarget,
   resolveSessionTranscriptRuntimeTarget,
 } from "./session-accessor.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 
 const sessionKey = "agent:main:dashboard:incognito-round-trip";
 
@@ -45,6 +46,7 @@ describe("session creation scope", () => {
       prefix: "session-creation-env-explicit-",
       applyEnv: false,
     });
+    setRuntimeConfigSnapshot({});
   });
 
   afterEach(async () => {

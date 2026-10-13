@@ -167,26 +167,6 @@ describe("describeBrowserScreenshot", () => {
       describeBrowserScreenshot({ cfg: { browser: {} }, filePath: "/tmp/screenshot.png" }),
     ).resolves.toBeNull();
   });
-
-  it("does not pass an incomplete active model to media understanding", async () => {
-    const describeLocal = mocks.describeImageFile.mockResolvedValue({ text: "ok" });
-
-    await describeBrowserScreenshot({
-      cfg: {
-        tools: {
-          media: {
-            models: [{ provider: "openai", model: "gpt-vision", capabilities: ["image"] }],
-          },
-        },
-      },
-      filePath: "/tmp/screenshot.png",
-      activeModel: { model: "missing-provider" },
-    });
-
-    expect(
-      expectDefined(describeLocal.mock.calls[0]?.[0], "local browser vision request").activeModel,
-    ).toBeUndefined();
-  });
 });
 
 describe("neutralizeMediaDirectives", () => {

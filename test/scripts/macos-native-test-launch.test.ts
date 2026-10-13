@@ -74,7 +74,7 @@ const keychains = path.join(env.HOME, 'Library/Keychains');
 const settingsPath = path.join(preferences, 'fixture-keychain.json');
 const settings = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf8')) : {};
 const keychain = settings.default && fs.existsSync(settings.default) ? JSON.parse(fs.readFileSync(settings.default, 'utf8')) : null;
-fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({tool, args, env, present, cache, settings, keychain, pid: process.pid}) + '\\n');
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({tool, args, env, present, cache, settings, keychain, pid: process.pid, ppid: process.ppid}) + '\\n');
 function awaitSignal(ownedKeychain) {
   process.on('SIGTERM', () => {
     fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({tool: 'shutdown', resourcesPresent: fs.existsSync(env.HOME) && fs.existsSync(env.OPENCLAW_STATE_DIR), keychainPresent: !!ownedKeychain && fs.existsSync(ownedKeychain)}) + '\\n');
@@ -286,6 +286,7 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
       ]);
       expect(build.env.HOME).toBe(f.env.HOME);
       const roots = new Set<string>();
+      const cleanupTokens = new Set<string>();
       for (const [index, test] of tests.entries()) {
         expect(test.args).toEqual([
           "test",
@@ -339,8 +340,22 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
         expect(partition[0].args[0]).toBe("create-keychain");
         expect(partition.at(-2).tool).toBe("swift");
         expect(partition.at(-1).args).toEqual(["delete-keychain", ownedKeychain]);
+        for (const call of partition) {
+          expect(call.ppid).toBe(test.ppid);
+          expect(call.env).toEqual({
+            ...test.env,
+            OPENCLAW_MANAGED_CLEANUP_PARENT: expect.stringMatching(
+              new RegExp(
+                `^${test.ppid}:3:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`,
+                "u",
+              ),
+            ),
+          });
+          const token = call.env.OPENCLAW_MANAGED_CLEANUP_PARENT.split(":")[2];
+          expect(cleanupTokens.has(token)).toBe(false);
+          cleanupTokens.add(token);
+        }
         for (const call of partition.filter((entry) => entry.tool === "security")) {
-          expect(call.env).toEqual(test.env);
           expect(call.args.at(-1)).toBe(ownedKeychain);
         }
         expect(test.cache).toBe("reusable build cache");

@@ -142,40 +142,54 @@ export async function recordMemoryArtifactWriteProvenance(params: {
   }
   const store = openStore();
   const reservationId = randomUUID();
+  const beforeHash = sha256Hex(params.contentBefore);
+  const afterHash = sha256Hex(params.contentAfter);
   let previous: StoredMemoryArtifactProvenance | undefined;
-  await store.update(address.storeKey, (current) => {
-    previous = normalizeStoredProvenance(current, address);
+  let observation = await store.observe(address.storeKey);
+  for (;;) {
+    previous = normalizeStoredProvenance(observation.value, address);
     const originClass =
       params.originClass === "agent" &&
-      (!previous ||
-        (previous.originClass === "agent" && previous.fileHash === sha256Hex(params.contentBefore)))
+      (!previous || (previous.originClass === "agent" && previous.fileHash === beforeHash))
         ? "agent"
         : "untrusted";
-    return {
-      version: 1,
-      workspaceKey: address.workspaceKey,
-      relativePath: address.relativePath,
-      fileHash: sha256Hex(params.contentAfter),
-      originClass,
-      observedAt: params.observedAt,
-      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-      reservationId,
-    };
-  });
+    const result = await store.compareAndApply(address.storeKey, observation.comparison, {
+      operation: "update",
+      action: "set",
+      value: {
+        version: 1,
+        workspaceKey: address.workspaceKey,
+        relativePath: address.relativePath,
+        fileHash: afterHash,
+        originClass,
+        observedAt: params.observedAt,
+        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+        reservationId,
+      },
+    });
+    if (result.status !== "conflict") {
+      break;
+    }
+    observation = result.current;
+  }
 
   return async () => {
     const rollbackStore = openStore();
-    if (previous) {
-      await rollbackStore.update(address.storeKey, (current) =>
-        current?.reservationId === reservationId ? previous : undefined,
+    let current = await rollbackStore.observe(address.storeKey);
+    while (current.value?.reservationId === reservationId) {
+      const result = await rollbackStore.compareAndApply(
+        address.storeKey,
+        current.comparison,
+        previous
+          ? { operation: "update", action: "set", value: previous }
+          : { operation: "delete", action: "delete" },
       );
-      return;
+      if (result.status !== "conflict") {
+        return;
+      }
+      current = result.current;
     }
-    await rollbackStore.deleteIf(
-      address.storeKey,
-      (current) => current.reservationId === reservationId,
-    );
   };
 }
 
@@ -189,7 +203,18 @@ export async function clearMemoryArtifactProvenance(params: {
     return;
   }
   const expectedHash = sha256Hex(params.contentBefore);
-  await openStore().deleteIf(address.storeKey, (current) => current.fileHash === expectedHash);
+  const store = openStore();
+  let observation = await store.observe(address.storeKey);
+  while (observation.value?.fileHash === expectedHash) {
+    const result = await store.compareAndApply(address.storeKey, observation.comparison, {
+      operation: "delete",
+      action: "delete",
+    });
+    if (result.status !== "conflict") {
+      return;
+    }
+    observation = result.current;
+  }
 }
 
 export async function readMemoryArtifactProvenance(params: {

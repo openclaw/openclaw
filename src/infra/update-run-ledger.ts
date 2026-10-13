@@ -10,6 +10,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
 import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
 import {
@@ -35,6 +36,7 @@ import {
   finishUpdateRunRecord,
   isAbandonedUpdateRun,
   isUnacknowledgedPackageOwnerRefusal,
+  type CreateUpdateRunInput,
   type UpdateRunRecord,
   type UpdateRunPhase,
   type UpdateRunStep,
@@ -45,9 +47,11 @@ import { recordUpdateRunVerificationRecord } from "./update-run-verification.js"
 import {
   applyUpdateRunPhase,
   applyUpdateRunStep,
+  isRequiredUpdateRunStep,
   mutateRun,
   mutateRunInTransaction,
   persistRun,
+  UPDATE_RUN_BOOKKEEPING_TIMEOUT_MS,
   updateRunLedgerSchema as schema,
   upsertStep,
 } from "./update-run-write.js";
@@ -71,16 +75,9 @@ export { finishUpdateRun, recordUpdateRunDiagnostics } from "./update-run-write.
 
 type LedgerDatabase = Pick<DB, "update_runs">;
 export function createUpdateRun(
-  input: RunPatch & {
-    runId?: string;
-    trigger: UpdateRunRecord["trigger"];
-    supersedeStaleIdentityless?: boolean;
-    /** Preview history must not repair canonical task data. */
-    preview?: boolean;
-    /** Record an already completed repair without publishing a transient running row. */
-    settlement?: { reason: string; detail: string };
-  },
+  input: CreateUpdateRunInput,
   options: LedgerOptions = {},
+  assertCurrent?: (stage: "transaction" | "commit") => void,
 ): UpdateRunRecord {
   const now = Date.now();
   const initial: UpdateRunRecord = {
@@ -168,6 +165,7 @@ export function createUpdateRun(
     },
     options,
     !input.preview,
+    assertCurrent,
   );
 }
 
@@ -304,8 +302,28 @@ export function recordUpdateRunStep(
   runId: string,
   step: UpdateRunStep & { reason?: string },
   options: LedgerOptions = {},
-): UpdateRunRecord {
-  return mutateRun(runId, (record) => applyUpdateRunStep(record, step), options);
+): UpdateRunRecord | undefined {
+  const required = isRequiredUpdateRunStep(step);
+  const current = required
+    ? options
+    : {
+        ...options,
+        busyTimeoutMs: Math.min(
+          options.busyTimeoutMs ?? UPDATE_RUN_BOOKKEEPING_TIMEOUT_MS,
+          UPDATE_RUN_BOOKKEEPING_TIMEOUT_MS,
+        ),
+      };
+  try {
+    return mutateRun(runId, (record) => applyUpdateRunStep(record, step), current);
+  } catch (error) {
+    if (required || !isSqliteLockError(error)) {
+      throw error;
+    }
+    console.warn(
+      "[update] History database is locked; bookkeeping was not recorded. The update will continue.",
+    );
+    return undefined;
+  }
 }
 
 export function recordUpdateRunRepairContinuation(

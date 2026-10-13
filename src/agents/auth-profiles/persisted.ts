@@ -16,11 +16,7 @@ import { hasUsableOAuthCredential } from "./credential-state.js";
 import { hasOidcRegistration, isSafeToCopyOAuthIdentity } from "./oauth-identity.js";
 import { hasOAuthIdentity, isSafeToAdoptMainStoreOAuthIdentity } from "./oauth-shared.js";
 import { normalizeRawCredentialEntry } from "./persisted-credential.js";
-import {
-  getRuntimeExternalCliProfileIds,
-  removePersonalAuthProfileReferences,
-  setRuntimeExternalCliProfileIds,
-} from "./runtime-external-profile-references.js";
+import { removePersonalAuthProfileReferences } from "./runtime-external-profile-references.js";
 import {
   inspectAuthProfileJsonCellReadOnly,
   readPersistedAuthProfileStateRaw,
@@ -390,12 +386,6 @@ function replaceMergedProfileReferences(params: {
     lastGood: lastGood && Object.keys(lastGood).length > 0 ? lastGood : undefined,
     usageStats: usageStats && Object.keys(usageStats).length > 0 ? usageStats : undefined,
   };
-  setRuntimeExternalCliProfileIds(
-    next,
-    getRuntimeExternalCliProfileIds(store).map(
-      (profileId) => replacements.get(profileId) ?? profileId,
-    ),
-  );
   return next;
 }
 
@@ -444,8 +434,7 @@ export function mergeAuthProfileStores(
     override.runtimeLocalOrderProviderIds === undefined &&
     override.runtimeInheritsMainState === undefined &&
     override.runtimeExternalProfileIds === undefined &&
-    override.runtimeExternalProfileIdsAuthoritative !== true &&
-    getRuntimeExternalCliProfileIds(override).length === 0
+    override.runtimeExternalProfileIdsAuthoritative !== true
   ) {
     return base;
   }
@@ -538,13 +527,6 @@ export function mergeAuthProfileStores(
             : {}),
         }
       : {};
-  const runtimeExternalCliProfileIds = [
-    ...getRuntimeExternalCliProfileIds(base).filter(
-      (profileId) =>
-        !overrideProfileIds.has(profileId) && !removedRuntimeExternalProfileIds.has(profileId),
-    ),
-    ...getRuntimeExternalCliProfileIds(override),
-  ];
   const result = reconcileMainStoreOAuthProfileDrift({
     base,
     override,
@@ -566,7 +548,6 @@ export function mergeAuthProfileStores(
       ...runtimeExternalProfileMetadata,
     },
   }) as RuntimeAuthProfileStore;
-  setRuntimeExternalCliProfileIds(result, runtimeExternalCliProfileIds);
   if (base.runtimeCredentialSources || override.runtimeCredentialSources) {
     // Reconciliation can select main's OAuth row instead of the local override.
     result.runtimeCredentialSources = Object.fromEntries(

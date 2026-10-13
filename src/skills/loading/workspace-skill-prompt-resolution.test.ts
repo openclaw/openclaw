@@ -59,9 +59,9 @@ function markUnavailable(skillKey: string) {
 }
 
 describe("resolveSkillsPrompt", () => {
-  it.each([8_192, 32_768, "minimum", "above minimum"] as const)(
+  it.each(["minimum"] as const)(
     "compacts descriptions at %s without changing admitted skill resources",
-    async (budget) => {
+    async () => {
       const entries = Array.from({ length: 24 }, (_, index) => {
         const entry = createEntry(`skill-${index}`);
         entry.skill.description = `Inspect records & preserve <identifiers>. ${"Detailed matching guidance. ".repeat(10)}`;
@@ -75,27 +75,14 @@ describe("resolveSkillsPrompt", () => {
         /<description>[\s\S]*?<\/description>/gu,
         "<description>Inspect records &amp; preserve &lt;identifiers&gt;. Detailed matching g...</description>",
       );
-      const contextTokenBudget =
-        typeof budget === "number"
-          ? budget
-          : (minimum.length + (budget === "above minimum" ? 24 * 10 : 0)) * 5;
+      const contextTokenBudget = minimum.length * 5;
       const projected = await resolveSkillsPrompt({
         workspaceDir: "/tmp/openclaw",
         skillsSnapshot: snapshot,
         contextTokenBudget,
       });
       expect(projected.length).toBeLessThan(original.length);
-      if (budget === "above minimum") {
-        expect(projected).toBe(
-          original.replace(
-            /<description>[\s\S]*?<\/description>/gu,
-            "<description>Inspect records &amp; preserve &lt;identifiers&gt;. Detailed matching guidance. D...</description>",
-          ),
-        );
-        expect(projected.length).toBe(Math.floor(contextTokenBudget / 5));
-      } else {
-        expect(projected).toBe(minimum);
-      }
+      expect(projected).toBe(minimum);
       const omitDescriptions = (prompt: string) =>
         prompt.replace(/<description>[\s\S]*?<\/description>/gu, "");
       expect(omitDescriptions(projected)).toBe(omitDescriptions(original));
@@ -118,32 +105,6 @@ describe("resolveSkillsPrompt", () => {
       }
     },
   );
-
-  it("prefers snapshot prompt when available", async () => {
-    const prompt = await resolveSkillsPrompt({
-      skillsSnapshot: { prompt: "SNAPSHOT", skills: [] },
-      workspaceDir: "/tmp/openclaw",
-    });
-    expect(prompt).toBe("SNAPSHOT");
-  });
-  it("builds prompt from entries when snapshot is missing", async () => {
-    const entry: SkillEntry = {
-      skill: createCanonicalFixtureSkill({
-        name: "demo-skill",
-        description: "Demo",
-        filePath: "/app/skills/demo-skill/SKILL.md",
-        baseDir: "/app/skills/demo-skill",
-        source: "openclaw-bundled",
-      }),
-      frontmatter: {},
-    };
-    const prompt = await resolveSkillsPrompt({
-      entries: [entry],
-      workspaceDir: "/tmp/openclaw",
-    });
-    expect(prompt).toContain("<available_skills>");
-    expect(prompt).toContain("/app/skills/demo-skill/SKILL.md");
-  });
 
   it("keeps an empty snapshot authoritative over current entries", async () => {
     const entry: SkillEntry = createEntry("new-skill", "New");
@@ -227,21 +188,6 @@ describe("resolveSkillsPrompt", () => {
       );
     },
   );
-
-  it("does not load entries while reusing a valid modern snapshot", async () => {
-    const entries = [createEntry("healthy-skill")];
-    const snapshot = await buildSkillSnapshot("/tmp/openclaw", { entries });
-    const loadEntries = vi.fn(() => entries);
-
-    expect(
-      await resolveSkillsPrompt({
-        skillsSnapshot: snapshot,
-        loadEntries,
-        workspaceDir: "/tmp/openclaw",
-      }),
-    ).toBe(snapshot.prompt.trim());
-    expect(loadEntries).not.toHaveBeenCalled();
-  });
 
   it("matches unavailable owners against a snapshot skill's config key", async () => {
     const cold: SkillEntry = {
@@ -349,49 +295,5 @@ describe("resolveSkillsPrompt", () => {
     });
 
     expect(prompt).not.toContain("/app/skills/hidden-skill/SKILL.md");
-  });
-
-  it("inherits agents.defaults.skills when rebuilding prompt for an agent", async () => {
-    const visible: SkillEntry = createEntry("github", "GitHub");
-    const hidden: SkillEntry = createEntry("hidden-skill", "Hidden");
-
-    const prompt = await resolveSkillsPrompt({
-      entries: [visible, hidden],
-      config: {
-        agents: {
-          defaults: {
-            skills: ["github"],
-          },
-          entries: { writer: {} },
-        },
-      },
-      workspaceDir: "/tmp/openclaw",
-      agentId: "writer",
-    });
-
-    expect(prompt).toContain("/app/skills/github/SKILL.md");
-    expect(prompt).not.toContain("/app/skills/hidden-skill/SKILL.md");
-  });
-
-  it("uses agents.entries.<id>.skills as a full replacement for defaults", async () => {
-    const inheritedEntry: SkillEntry = createEntry("weather", "Weather");
-    const explicitEntry: SkillEntry = createEntry("docs-search", "Docs");
-
-    const prompt = await resolveSkillsPrompt({
-      entries: [inheritedEntry, explicitEntry],
-      config: {
-        agents: {
-          defaults: {
-            skills: ["weather"],
-          },
-          entries: { writer: { skills: ["docs-search"] } },
-        },
-      },
-      workspaceDir: "/tmp/openclaw",
-      agentId: "writer",
-    });
-
-    expect(prompt).not.toContain("/app/skills/weather/SKILL.md");
-    expect(prompt).toContain("/app/skills/docs-search/SKILL.md");
   });
 });

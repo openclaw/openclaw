@@ -78,22 +78,33 @@ function expectedUnsafeSqliteError(version: string, shared: boolean): string {
 
 describe("node SQLite locations", () => {
   const dirs = useAutoCleanupTempDirTracker(afterEach);
-  it("writes existing URI-escaped paths but never creates a missing database", () => {
-    const pathname = path.join(dirs.make("sqlite-existing-uri-"), "state ?#%.sqlite");
-    const uri = resolveExistingSqliteFileUri(pathname);
-    expect(() => openNodeSqliteDatabase(uri)).toThrow();
-    expect(fs.existsSync(pathname)).toBe(false);
-    const initial = openNodeSqliteDatabase(pathname);
-    initial.exec("CREATE TABLE retained(value TEXT) STRICT");
-    initial.close();
-    const existing = openNodeSqliteDatabase(uri);
-    try {
-      existing.prepare("INSERT INTO retained(value) VALUES(?)").run("written");
-      expect(existing.prepare("SELECT value FROM retained").all()).toEqual([{ value: "written" }]);
-    } finally {
-      existing.close();
-    }
-  });
+  it.each(["absolute", "relative"])(
+    "writes existing %s URI-escaped paths without creating missing databases",
+    (kind) => {
+      const pathname = path.join(
+        dirs.make(".sqlite-existing-uri-", kind === "relative" ? process.cwd() : undefined),
+        "state ?#%.sqlite",
+      );
+      const uri =
+        kind === "relative"
+          ? `file:${path.relative(process.cwd(), pathname).split(path.sep).map(encodeURIComponent).join("/")}?mode=rw`
+          : resolveExistingSqliteFileUri(pathname);
+      expect(() => openNodeSqliteDatabase(uri)).toThrow();
+      expect(fs.existsSync(pathname)).toBe(false);
+      const initial = openNodeSqliteDatabase(uri.replace(/\?mode=rw$/u, ""));
+      initial.exec("CREATE TABLE retained(value TEXT) STRICT");
+      initial.close();
+      const existing = openNodeSqliteDatabase(uri);
+      try {
+        existing.prepare("INSERT INTO retained(value) VALUES(?)").run("written");
+        expect(existing.prepare("SELECT value FROM retained").all()).toEqual([
+          { value: "written" },
+        ]);
+      } finally {
+        existing.close();
+      }
+    },
+  );
   it("preserves Windows long paths in non-creating writable URIs", () => {
     const pathname = String.raw`C:\deep state\openclaw.sqlite`;
     expect(resolveExistingSqliteFileUri(pathname, "win32")).toBe(
@@ -117,8 +128,21 @@ describe("node SQLite locations", () => {
     expect(resolveNodeSqliteLocation("relative/openclaw.sqlite")).toBe("relative/openclaw.sqlite");
   });
 
-  it("opens special locations through the shared connection boundary", () => {
-    const database = openNodeSqliteDatabase(":memory:", { timeout: 5000 });
+  it.each([
+    ":memory:",
+    "file::memory:",
+    "file::memory:?cache=shared",
+    "file:checkonce-memory?mode=memory&cache=shared",
+  ])("opens in-memory location %s without creating a disk file", (location) => {
+    const open = fs.openSync;
+    vi.spyOn(fs, "openSync").mockImplementation((filename, flags, mode) => {
+      // Keep the regression from leaving a literal :memory: file in the checkout.
+      if (filename === ":memory:") {
+        throw new Error("In-memory SQLite attempted to create a disk file");
+      }
+      return open(filename, flags, mode);
+    });
+    const database = openNodeSqliteDatabase(location, { timeout: 5000 });
     try {
       expect(database.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout: 5000 });
       const identity = " a\0🦞 ";
@@ -214,43 +238,34 @@ describe("node SQLite safety", () => {
       expect(captureSqliteNativeRuntimeAdmission()).toMatchObject({
         version: "3.51.3",
         extensionLoadingSupported: omitted === 0,
+        iteratorBehavior: {
+          nextAfterDoneIsTerminal: expect.any(Boolean),
+          returnAfterDoneIsInert: expect.any(Boolean),
+        },
       });
       expect(prepare).toHaveBeenCalledOnce();
     },
   );
 
   it.each([
-    { version: "3.51.3", jsonb: true, walNoop: false },
-    { version: "3.52.0", jsonb: true, walNoop: false },
-    { version: "3.53.0", jsonb: true, walNoop: true },
-    { version: "4.0.0", jsonb: true, walNoop: true },
-    { version: "3.50.7", jsonb: true, walNoop: false },
-    { version: "3.44.6", jsonb: false, walNoop: false },
-    { version: "3.44.7", jsonb: false, walNoop: false },
+    { version: "3.51.3", jsonb: true },
+    { version: "3.52.0", jsonb: true },
+    { version: "3.53.0", jsonb: true },
+    { version: "4.0.0", jsonb: true },
+    { version: "3.50.7", jsonb: true },
+    { version: "3.44.6", jsonb: false },
+    { version: "3.44.7", jsonb: false },
   ])(
-    "accepts patched SQLite $version and reuses its JSONB and WAL capabilities",
-    async ({ version, jsonb, walNoop }) => {
+    "accepts patched SQLite $version and reuses its JSONB capability",
+    async ({ version, jsonb }) => {
       const { requireNodeSqlite, supportsNodeSqliteJsonb, prepare } =
         await loadNodeSqliteWithVersion(version);
-      const { readSqliteWalState } = await import("./sqlite-wal-checkpoint.js");
       expect(() => requireNodeSqlite()).not.toThrow();
       const queries = prepare.mock.calls.length;
       expect(queries).toBe(1);
       expect(supportsNodeSqliteJsonb()).toBe(jsonb);
       expect(supportsNodeSqliteJsonb()).toBe(jsonb);
       expect(prepare.mock.calls).toHaveLength(queries);
-      const database = new DatabaseSync(":memory:");
-      try {
-        for (let observation = 0; observation < 2; observation++) {
-          expect(readSqliteWalState(database) !== undefined).toBe(walNoop);
-        }
-        // WAL state remains fresh; only the already-admitted library capability is reused.
-        expect(prepare.mock.calls.slice(queries).map(([sql]) => sql)).toEqual(
-          walNoop ? ["PRAGMA main.wal_checkpoint(NOOP)", "PRAGMA main.wal_checkpoint(NOOP)"] : [],
-        );
-      } finally {
-        database.close();
-      }
     },
   );
 
@@ -297,6 +312,7 @@ describe("node SQLite safety", () => {
       const native = mockBunSqliteNativeBoundary({ isBun: false });
       const parent = await loadNodeSqliteWithVersion("3.44.6", 1);
       parent.requireNodeSqlite();
+      const iteratorBehavior = parent.captureSqliteNativeRuntimeAdmission()?.iteratorBehavior;
       parent.prepare.mockRestore();
       const receiptKey = "openclaw.sqliteNativeRuntimeAdmission";
       const receipt = native.environment.get(receiptKey);
@@ -340,9 +356,11 @@ describe("node SQLite safety", () => {
       const worker = await loadNodeSqliteWithVersion("3.53.4", 0);
       expect(worker.supportsNodeSqliteJsonb()).toBe(changed !== "unchanged");
       expect(worker.supportsNodeSqliteExtensionLoading()).toBe(changed !== "unchanged");
-      expect(worker.supportsNodeSqliteWalCheckpointNoop()).toBe(changed !== "unchanged");
       if (changed === "unchanged") {
         expect(worker.prepare).not.toHaveBeenCalled();
+        expect(worker.captureSqliteNativeRuntimeAdmission()?.iteratorBehavior).toEqual(
+          iteratorBehavior,
+        );
       } else {
         expect(worker.prepare).toHaveBeenCalled();
       }
@@ -491,7 +509,7 @@ describe("Bun SQLite library selection", () => {
     expect(f.select).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the runtime default when no library exists, including a blank override", () => {
+  it("refuses Apple's runtime library when no library exists, including a blank override", () => {
     const f = fixture({
       exists: vi.fn(() => false),
       probe: vi.fn(() => {
@@ -499,11 +517,30 @@ describe("Bun SQLite library selection", () => {
       }),
       env: { OPENCLAW_SQLITE_LIBRARY: "  " },
     });
-    const selection = f.ensure();
-    expect(selection).toEqual({ source: "runtime" });
-    expect(f.ensure()).toBe(selection);
+    const refusal =
+      `No supported SQLite library for Bun on macOS (${process.arch}). ` +
+      "Apple's system SQLite fails OpenClaw's read-only database connections. " +
+      `Install one with brew install sqlite, or set OPENCLAW_SQLITE_LIBRARY to a libsqlite3.dylib built for ${process.arch}.`;
+    expect(() => f.ensure()).toThrow(refusal);
+    expect(() => f.ensure()).toThrow(refusal);
     expect(f.exists).toHaveBeenCalledTimes(3);
     expect(f.probe).toHaveBeenCalledTimes(3);
+    expect(f.select).not.toHaveBeenCalled();
+  });
+
+  it("names present candidates a translated process cannot load", () => {
+    // An x64 Bun under Rosetta cannot dlopen the arm64-only Homebrew library.
+    const f = fixture({
+      exists: vi.fn((libraryPath) => libraryPath === homebrew),
+      probe: vi.fn((libraryPath) => {
+        throw new Error(
+          libraryPath === homebrew ? "dlopen: incompatible architecture" : "dlopen failed",
+        );
+      }),
+    });
+    expect(() => f.ensure()).toThrow(
+      `No supported SQLite library for Bun on macOS (${process.arch}); unusable: ${homebrew} (dlopen: incompatible architecture). `,
+    );
     expect(f.select).not.toHaveBeenCalled();
   });
 

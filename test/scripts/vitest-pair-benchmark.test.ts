@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   analyzeBenchmark,
   assertEquivalentInventories,
@@ -26,7 +26,13 @@ import {
   withVitestPairDeadline,
 } from "../../scripts/lib/vitest-pair-benchmark.mts";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
+import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
 import { isProcessAlive } from "../helpers/process-wait.js";
+import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 // The managed owner joins terminal process groups, but Darwin may retain a foreign zombie
@@ -41,6 +47,8 @@ async function waitForDescendantReap(pid: number, signal: AbortSignal): Promise<
   }
 }
 
+const deadlineFixtureLifetime = createFixtureLifetime();
+afterEach(() => deadlineFixtureLifetime.cleanup());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const packageManager = {
   executable: "/opt/vitest-pair/pnpm",
@@ -591,59 +599,123 @@ describe("Vitest pair benchmark lifecycle", () => {
 
   it.runIf(process.platform !== "win32")(
     "aborts the active child at the aggregate deadline and starts no successor",
-    async () => {
-      expect(VITEST_PAIR_HARNESS_DEADLINE_MS).toBe(165 * 60 * 1000);
-      const root = tempDirs.make("vitest-pair-deadline-");
-      const pidFile = path.join(root, "active.pid");
-      const successor = path.join(root, "successor.txt");
-      const output = path.join(root, "output");
-      const activeScript = [
-        'const { writeFileSync } = require("node:fs");',
-        `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
+    ({ signal }) =>
+      deadlineFixtureLifetime.run(async () => {
+        expect(VITEST_PAIR_HARNESS_DEADLINE_MS).toBe(165 * 60 * 1000);
+        const root = deadlineFixtureLifetime.createTempDir("vitest-pair-deadline-");
+        const pidFile = path.join(root, "active.pid");
+        const successor = path.join(root, "successor.txt");
+        const output = path.join(root, "output");
+        const observation = await deadlineFixtureLifetime.acquire(async () => {
+          const receipts = await openFixtureReceiptChannel();
+          return { receipts, cleanup: () => receipts.close() };
+        });
+        const activeScript = [
+          'import { renameSync, writeFileSync } from "node:fs";',
+          fixtureReceiptClientSource(observation.receipts.endpoint),
+          `writeFileSync(${JSON.stringify(`${pidFile}.next`)}, String(process.pid));`,
+          `renameSync(${JSON.stringify(`${pidFile}.next`)}, ${JSON.stringify(pidFile)});`,
+          `sendReceipt(${JSON.stringify(pidFile)}, "ready");`,
+          "setInterval(() => {}, 1000);",
+        ].join("\n");
+        const ready = observation.receipts.waitFor(pidFile, "ready");
+        const scheduleTimeout = globalThis.setTimeout;
+        // Eager deadline checks and its timer share one clock until the real child is ready.
+        const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+        let fireDeadline: (() => void) | undefined;
+        const timerSpy = vi
+          .spyOn(globalThis, "setTimeout")
+          .mockImplementation((callback, ms, ...args) => {
+            const timer = scheduleTimeout(callback, ms, ...args);
+            if (ms === 500 && !fireDeadline) {
+              clearTimeout(timer);
+              fireDeadline = () => {
+                fireDeadline = undefined;
+                callback(...args);
+              };
+            }
+            return timer;
+          });
+        const commands: Array<ReturnType<typeof runOwnedCommand>> = [];
+        try {
+          await expect(
+            withTerminalManifest(output, async () => {
+              await withVitestPairDeadline(async (deadline) => {
+                const active = deadlineFixtureLifetime.track(
+                  runOwnedCommand({
+                    bin: process.execPath,
+                    args: ["--input-type=module", "-e", activeScript],
+                    cwd: root,
+                    env: { PATH: process.env.PATH },
+                    logPath: path.join(root, "active.log"),
+                    deadline,
+                    timeoutMs: 10_000,
+                  }),
+                );
+                commands.push(active);
+                await withinTest(
+                  awaitGateBeforeSettlement(
+                    ready,
+                    active,
+                    "benchmark child exited before readiness",
+                  ),
+                  signal,
+                );
+                timerSpy.mockRestore();
+                clock.mockRestore();
+                if (!fireDeadline) {
+                  throw new Error("aggregate deadline was not armed before child readiness");
+                }
+                fireDeadline();
+                await Promise.allSettled([active]);
+                const next = deadlineFixtureLifetime.track(
+                  runOwnedCommand({
+                    bin: process.execPath,
+                    args: [
+                      "-e",
+                      `require("node:fs").writeFileSync(${JSON.stringify(successor)}, "started")`,
+                    ],
+                    cwd: root,
+                    env: { PATH: process.env.PATH },
+                    logPath: path.join(root, "successor.log"),
+                    deadline,
+                    timeoutMs: 10_000,
+                  }),
+                );
+                commands.push(next);
+                await Promise.allSettled([next]);
+              }, 500);
+            }),
+          ).rejects.toThrow("Vitest pair aggregate deadline exceeded");
 
-      await expect(
-        withTerminalManifest(output, async () => {
-          await withVitestPairDeadline(async (deadline) => {
-            await expect(
-              runOwnedCommand({
-                bin: process.execPath,
-                args: ["-e", activeScript],
-                cwd: root,
-                env: { PATH: process.env.PATH },
-                logPath: path.join(root, "active.log"),
-                deadline,
-                timeoutMs: 10_000,
-              }),
-            ).rejects.toThrow("Vitest pair aggregate deadline exceeded");
-            await expect(
-              runOwnedCommand({
-                bin: process.execPath,
-                args: [
-                  "-e",
-                  `require("node:fs").writeFileSync(${JSON.stringify(successor)}, "started")`,
-                ],
-                cwd: root,
-                env: { PATH: process.env.PATH },
-                logPath: path.join(root, "successor.log"),
-                deadline,
-                timeoutMs: 10_000,
-              }),
-            ).rejects.toThrow("Vitest pair aggregate deadline exceeded");
-          }, 500);
-        }),
-      ).rejects.toThrow("Vitest pair aggregate deadline exceeded");
-
-      expect(isProcessAlive(Number.parseInt(readFileSync(pidFile, "utf8"), 10))).toBe(false);
-      expect(existsSync(successor)).toBe(false);
-      expect(
-        JSON.parse(readFileSync(path.join(output, "terminal-manifest.json"), "utf8")),
-      ).toMatchObject({
-        status: "failure",
-        error: "Vitest pair aggregate deadline exceeded after 500ms",
-      });
-    },
+          // Assert outside the deadline owner, which normalizes task errors after cancellation.
+          expect(commands).toHaveLength(2);
+          await expect(commands[0]).rejects.toMatchObject({
+            name: "Error",
+            message: "Managed command aborted",
+            code: "ABORT_ERR",
+          });
+          await expect(commands[1]).rejects.toMatchObject({
+            name: "Error",
+            message: "Vitest pair aggregate deadline exceeded after 500ms",
+            code: "ETIMEDOUT",
+          });
+          expect(isProcessAlive(Number.parseInt(readFileSync(pidFile, "utf8"), 10))).toBe(false);
+          expect(existsSync(successor)).toBe(false);
+          expect(
+            JSON.parse(readFileSync(path.join(output, "terminal-manifest.json"), "utf8")),
+          ).toMatchObject({
+            status: "failure",
+            error: "Vitest pair aggregate deadline exceeded after 500ms",
+          });
+        } finally {
+          timerSpy.mockRestore();
+          clock.mockRestore();
+          fireDeadline?.();
+          await Promise.allSettled(commands);
+          await observation.cleanup();
+        }
+      }),
   );
 
   it.runIf(process.platform !== "win32")("does not retry a failed benchmark child", async () => {

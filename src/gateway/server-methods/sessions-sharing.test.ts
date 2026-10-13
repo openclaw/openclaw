@@ -8,6 +8,7 @@ import {
   type SessionSharingEvidenceEvent,
   type SessionSharingEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import {
   loadSessionEntry,
   replaceSessionEntrySync,
@@ -92,6 +93,7 @@ function sharingEvidenceEvents(broadcast: ReturnType<typeof vi.fn>): SessionShar
 describe("session sharing handlers", () => {
   it("preserves profile actors and distinguishes unknown from absent profileless evidence", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const member = ensureProfileForEmail("sharing-evidence-member@example.com");
       const profiled = identifiedClient("profile-ada", "Ada");
       const unknown = soloClient();
@@ -233,6 +235,7 @@ describe("session sharing handlers", () => {
 
   it("keeps real actor-evidence profile ids while discarding beta synthetic actors", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const sessionKey = "agent:main:sharing-storage-projection";
       const sessionId = "session-sharing-storage-projection";
       await upsertSessionEntryCore({ agentId: "main", sessionKey }, { sessionId, updatedAt: 1 });
@@ -270,6 +273,7 @@ describe("session sharing handlers", () => {
 
   it("admits bare fixed-store keys only through their persisted owner", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const storePath = state.path("shared-sessions.sqlite");
       await upsertSessionEntryCore(
         { agentId: "ops", sessionKey: "global", storePath },
@@ -308,6 +312,7 @@ describe("session sharing handlers", () => {
     "keeps hidden incognito rows from changing non-owner list metadata (search: %s)",
     async (search) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        await captureRuntimeConfigAsyncReader()();
         const incognitoKey = "agent:main:dashboard:incognito-private";
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: "agent:main:main" },
@@ -364,6 +369,7 @@ describe("session sharing handlers", () => {
 
   it("never previews sessions hidden from sessions.list", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const sessionKey = "agent:main:dashboard:incognito-preview";
       await upsertSessionEntryCore(
         {
@@ -407,6 +413,7 @@ describe("session sharing handlers", () => {
 
   it("rejects a visibility mutation when the queued session instance changed", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const sessionKey = "agent:main:stale-sharing-mutation";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
@@ -454,6 +461,7 @@ describe("session sharing handlers", () => {
 
   it("authorizes runs against the resolved session so keyless runs cannot bypass restriction", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const sessionKey = "agent:main:main";
       const owner = { id: "owner@example.com", label: "Owner" };
       const outsider = identifiedClient("outsider");
@@ -501,6 +509,7 @@ describe("session sharing handlers", () => {
     "hides drafts after asynchronous catalog preparation (search: %s)",
     async (search) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        await captureRuntimeConfigAsyncReader()();
         const sessionKey = "agent:main:mid-await-draft";
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey },
@@ -583,6 +592,7 @@ describe("session sharing handlers", () => {
 
   it("refills a paged session list after its first row becomes a draft", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const hiddenKey = "agent:main:mid-await-paged-draft";
       const visibleKey = "agent:main:mid-await-paged-visible";
       await upsertSessionEntryCore(
@@ -637,6 +647,7 @@ describe("session sharing handlers", () => {
 
   it("revokes all member access while a session is draft and restores it when shared", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const sessionKey = "agent:main:member-transition";
       const owner = { id: "owner@example.com", label: "Owner" };
       const memberIdentity = { id: "member@example.com", label: "Member" };
@@ -735,6 +746,7 @@ describe("session sharing handlers", () => {
 
   it("publishes canonical visibility and membership changes without changing the transcript", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const sessionKey = "agent:main:main";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },

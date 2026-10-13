@@ -12,6 +12,7 @@ import type {
   SqliteSessionReclamationResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import type { ParentForkSourceTranscript } from "./session-accessor.sqlite-parent-fork.js";
+import type { SessionActorSettlement } from "./session-actor-state.types.js";
 import type {
   SessionMessageCutIntent,
   SessionMessageCutResult,
@@ -27,7 +28,7 @@ import type { SessionEntry } from "./types.js";
 export type IncognitoLifecycleEntry = { sessionKey: string; entry: SessionEntry };
 export type IncognitoLifecycleSettlement = {
   beforeCommit(): void;
-  settle(outcome: "committed" | "rolled-back" | "unknown"): void;
+  settle(outcome: SessionActorSettlement): void;
 };
 type IncognitoForkPreparation = IncognitoLifecycleEntry & {
   identity: Readonly<SqliteWorkerEphemeralTarget>;
@@ -70,6 +71,7 @@ export type IncognitoLifecycleOperations = {
       target: IncognitoLifecycleEntry;
       reason: "reset" | "deleted";
       expectedPluginOwnerId?: string;
+      expectedAgentHarnessId?: string;
       admissionIdentities: string[];
     };
     output: DeleteSessionEntryLifecycleResult;

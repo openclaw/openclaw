@@ -3,10 +3,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../test/helpers/temp-dir.js";
 import { ExpectedCliError } from "./cli/failure-output.js";
 import { runMainOrRootHelp } from "./entry.js";
+import type { PluginRuntime } from "./plugin-sdk/runtime-store.js";
+import { buildPluginApi } from "./plugins/api-builder.js";
+import { instrumentPluginInstanceApi } from "./plugins/api-facades.js";
+import { PluginInstance } from "./plugins/plugin-instance.js";
+import type { OpenClawPluginCliRegistrar } from "./plugins/plugin-registration.types.js";
 
 describe("entry run-main boundary", () => {
   it("retains JSON console routing through process finalization", async () => {
@@ -45,6 +51,67 @@ describe("entry run-main boundary", () => {
       process.exitCode = previousExitCode;
     }
   });
+
+  it.each([false, true])(
+    "reports a plugin action failure message instead of crash framing (JSON: %s)",
+    async (json) => {
+      const message = "--limit must be a positive integer";
+      const instance = new PluginInstance("fixture");
+      let registrar: OpenClawPluginCliRegistrar | undefined;
+      const api = instrumentPluginInstanceApi(
+        buildPluginApi({
+          id: "fixture",
+          name: "fixture",
+          source: "test",
+          registrationMode: "discovery",
+          config: {},
+          runtime: {} as PluginRuntime,
+          resolvePath: (value) => value,
+          logger: { info() {}, warn() {}, error() {}, debug() {} },
+          handlers: { registerCli: (value) => (registrar = value) },
+        }),
+        instance,
+      );
+      api.registerCli(
+        ({ program }) => {
+          program
+            .command("fail")
+            .option("--json")
+            .action(() => {
+              throw new Error(message);
+            });
+        },
+        { commands: ["fail"] },
+      );
+      const host = new Command();
+      await registrar?.({ program: host, parentPath: [], config: {}, logger: api.logger });
+      const previousExitCode = process.exitCode;
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+      process.exitCode = undefined;
+      try {
+        await runMainOrRootHelp(["node", "openclaw", "fail", ...(json ? ["--json"] : [])], {
+          loadRunCli: async () => ({
+            runCli: async (argv) => {
+              await host.parseAsync(argv);
+            },
+          }),
+        });
+
+        expect(process.exitCode).toBe(1);
+        expect(errorSpy.mock.calls).toEqual([[message]]);
+        const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join("");
+        expect(json ? JSON.parse(output) : output).toEqual(
+          json ? { ok: false, error: { type: "cli_error", message } } : "",
+        );
+      } finally {
+        errorSpy.mockRestore();
+        stdout.mockRestore();
+        process.exitCode = previousExitCode;
+        await instance.dispose();
+      }
+    },
+  );
 
   it("frames a failure before the command runs as a startup failure", async () => {
     const previousExitCode = process.exitCode;

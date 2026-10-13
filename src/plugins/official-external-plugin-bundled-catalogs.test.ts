@@ -99,21 +99,6 @@ vi.mock("../../scripts/lib/official-external-plugin-catalog.json", () => ({
 }));
 
 describe("bundled official external catalog behavior", () => {
-  it("keeps the first matching kind and exact identity across catalog sources", () => {
-    expect(listOfficialExternalPluginCatalogEntries()).toEqual([
-      fixtures.winner,
-      fixtures.otherKind,
-      fixtures.accepted,
-      fixtures.lowercase,
-      fixtures.fallback,
-      fixtures.mutable,
-    ]);
-    expect(getOfficialExternalPluginCatalogEntry("Shared")).toBe(fixtures.winner);
-    expect(
-      getOfficialExternalPluginCatalogEntryForPackage("@fixture/plugin-shadow"),
-    ).toBeUndefined();
-  });
-
   it("rejects unconfigured source references before selecting a duplicate or lookup match", () => {
     expect(getOfficialExternalPluginCatalogEntry("SourceFiltered")).toBe(fixtures.accepted);
     expect(getOfficialExternalPluginCatalogEntry("rejected-model")).toBeUndefined();

@@ -1,8 +1,10 @@
 /* @vitest-environment jsdom */
 import { render, type ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { ChatStateController } from "../chat-state-controller.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
+import { projectChatTranscriptMetadata } from "../session-message-cache.ts";
 import { renderChatThread } from "./chat-thread.ts";
 import {
   flushDeferredRowPrune,
@@ -48,6 +50,9 @@ describe("completed-work duration", () => {
         runtimeMs: 1_655_000,
         updatedAt: 1_656_000,
       };
+      const liveSession = props.selectedSession;
+      props.transcriptMetadata = projectChatTranscriptMetadata(liveSession);
+      props.selectedSession = { key: sessionKey, kind: "direct", updatedAt: 1 };
       const transcript = createTestTranscript();
       const container = document.body.appendChild(document.createElement("div"));
       const rerender = () => {
@@ -61,6 +66,8 @@ describe("completed-work duration", () => {
         await flushDeferredRowPrune();
         const duration = () => container.querySelector(".chat-activity-group__label");
         expect(duration()?.textContent).toBe("Worked for 27 minutes, 35 seconds");
+        props.transcriptMetadata = undefined;
+        props.selectedSession = liveSession;
         props.selectedSession.runtimeMs = 1_660_000;
         rerender();
         expect(duration()?.textContent).toBe("Worked for 27 minutes, 40 seconds");
@@ -143,9 +150,11 @@ describe("completed-work duration", () => {
       expect(disclosure).not.toBeNull();
       expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
       disclosure?.click();
+      await vi.advanceTimersByTimeAsync(0);
       expect(disclosure?.getAttribute("aria-expanded")).toBe("true");
       expect(container.textContent).toContain("read");
       disclosure?.click();
+      await vi.advanceTimersByTimeAsync(0);
       expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
       expect(container.textContent).not.toContain("read");
       expect(container.textContent).toContain("Inspection complete");
@@ -288,6 +297,7 @@ describe("live progress placement", () => {
       render(renderChatThread(props, transcript), container);
       transcript.hostConnected();
       transcript.hostUpdated();
+      flush();
       const progress = container.querySelector(".chat-working-indicator")!;
       const answer = container.querySelector('[data-entry-id="latest-answer"]')!;
       const activity = container.querySelector('[data-entry-id="latest-tool"]')!;

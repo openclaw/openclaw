@@ -18,6 +18,7 @@ import * as registry from "./registry.js";
 import { updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import * as leases from "./run-lease.js";
+import { hasLiveWorktreeRunLease } from "./run-lease.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 import {
   materializeManagedWorktreeFixture,
@@ -314,13 +315,13 @@ describe("exact-state retirement admission and recovery", () => {
         await expect(leases.acquireWorktreeRunLease(f.record.id, { env })).rejects.toThrow(
           "Worktree removal is incomplete",
         );
-        expect(leases.hasLiveWorktreeRunLease(env, f.record.id)).toBe(false);
+        expect(hasLiveWorktreeRunLease(env, f.record.id)).toBe(false);
       }
       if (phase === "cleanup-ack") {
         const liveRun = await leases.acquireWorktreeRunLease(f.record.id, { env });
         try {
           await expect(recover()).rejects.toThrow(/busy|locked by live pid/);
-          expect(leases.hasLiveWorktreeRunLease(env, f.record.id)).toBe(true);
+          expect(hasLiveWorktreeRunLease(env, f.record.id)).toBe(true);
         } finally {
           await liveRun.release();
         }
@@ -334,7 +335,7 @@ describe("exact-state retirement admission and recovery", () => {
         expect(await refNames("refs/openclaw/removals/" + f.record.id)).toBe("");
         if (phase === "move-ack") {
           admitted = await leases.acquireWorktreeRunLease(f.record.id, { env });
-          expect(leases.hasLiveWorktreeRunLease(env, f.record.id)).toBe(true);
+          expect(hasLiveWorktreeRunLease(env, f.record.id)).toBe(true);
         }
       } finally {
         await admitted?.release();

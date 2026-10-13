@@ -162,7 +162,12 @@ it("checks fallback versions before loading through the watcher child and preser
       imports: { "#source": "./scripts/local-source.mjs" },
     }),
   );
-  for (const file of ["tsx-cli-shim.mjs", "local-check-runtime.mts", "tooling-dependencies.mjs"]) {
+  for (const file of [
+    "tsx-cli-shim.mjs",
+    "local-check-runtime.mts",
+    "tooling-dependencies.mjs",
+    "managed-cleanup-handoff.mts",
+  ]) {
     copyFileSync(resolve("scripts/lib", file), join(lib, file));
   }
   copyFileSync(resolve("scripts/watch-pr-ci.mjs"), join(checkout, "scripts/watch-pr-ci.mjs"));

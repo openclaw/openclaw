@@ -41,6 +41,7 @@ import {
   sanitizeExtraParamsRecord,
 } from "../model-extra-params.js";
 import { createOpenAICompletionsPayloadPolicyWrapper } from "../openai-completions-payload-policy.js";
+import type { ModelCallUrgency } from "../run-trigger.js";
 import type { AgentRuntimeTransport } from "../runtime-plan/types.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { SettingsManager } from "../sessions/index.js";
@@ -284,10 +285,8 @@ function createStreamFnWithExtraParams(
   }
 
   const streamParams: CacheRetentionStreamOptions = {};
-  for (const key of ["temperature", "topP"] as const) {
-    if (typeof extraParams[key] === "number") {
-      streamParams[key] = extraParams[key];
-    }
+  if (typeof extraParams.temperature === "number") {
+    streamParams.temperature = extraParams.temperature;
   }
   if (typeof extraParams.streaming === "boolean") {
     streamParams.streaming = extraParams.streaming;
@@ -322,9 +321,10 @@ function createStreamFnWithExtraParams(
     streamParams.cachedContent = cachedContent;
   }
 
-  // Camel-case request overrides win over configured snake-case penalties.
+  // Camel-case request overrides win over configured snake-case sampling values.
   // Transports still decide which API accepts each sampling parameter.
   for (const keys of [
+    ["topP", "top_p"],
     ["frequencyPenalty", "frequency_penalty"],
     ["presencePenalty", "presence_penalty"],
   ] as const) {
@@ -536,6 +536,7 @@ export function applyExtraParamsToAgent(
   resolvedTransport?: AgentRuntimeTransport,
   options?: {
     preparedExtraParams?: Record<string, unknown>;
+    modelCallUrgency?: ModelCallUrgency;
     auth?: ProviderPrepareExtraParamsContext["auth"];
     nativeWebSearchPolicyContext?: NativeWebSearchToolPolicyParams;
   },
@@ -573,6 +574,12 @@ export function applyExtraParamsToAgent(
         ...options.nativeWebSearchPolicyContext,
       })
     : undefined;
+  const { modelParams, agentModelParams } = resolveModelExtraParamSources({
+    config: cfg,
+    provider,
+    modelId,
+    agentId,
+  });
   const pluginWrappedStreamFn =
     providerRuntimeHandle.plugin?.wrapStreamFn?.({
       config: cfg,
@@ -583,6 +590,8 @@ export function applyExtraParamsToAgent(
       nativeWebSearchAllowedByToolPolicy,
       ...selectedModel,
       extraParams: effectiveExtraParams,
+      modelParams: { ...modelParams, ...agentModelParams },
+      modelCallUrgency: options?.modelCallUrgency,
       thinkingLevel,
       model,
       streamFn: providerStreamBase,
@@ -619,7 +628,9 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createSiliconFlowThinkingWrapper(agent.streamFn);
   }
   const providerWrapperHandled =
-    pluginWrappedStreamFn !== undefined && pluginWrappedStreamFn !== providerStreamBase;
+    pluginWrappedStreamFn !== undefined &&
+    pluginWrappedStreamFn !== providerStreamBase &&
+    !pluginWrappedStreamFn.preservesGenericCompatibility;
   const cacheStreamParams = override
     ? { ...effectiveExtraParams, ...override }
     : effectiveExtraParams;

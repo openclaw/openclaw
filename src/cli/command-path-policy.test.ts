@@ -117,6 +117,12 @@ describe("command-path-policy", () => {
       });
     }
     for (const commandPath of [
+      ["agents", "add"],
+      ["agents", "team", "create"],
+    ]) {
+      expectResolvedPolicy(commandPath, { configGuard: "defer", networkProxy: "bypass" });
+    }
+    for (const commandPath of [
       ["agents", "bind"],
       ["agents", "unbind"],
       ["agents", "set-identity"],
@@ -212,7 +218,10 @@ describe("command-path-policy", () => {
       ownsProtocolStdout: true,
       networkProxy: "bypass",
     });
-    expectResolvedPolicy(["config", "set"], { networkProxy: "bypass" });
+    expectResolvedPolicy(["config", "set"], {
+      configGuard: "defer",
+      networkProxy: "bypass",
+    });
     const doctorPolicy = resolveCliCommandPathPolicy(["doctor"]);
     expectNetworkProxyResolver(doctorPolicy);
     expect(doctorPolicy).toMatchObject({

@@ -26,6 +26,7 @@ suite.define(() => {
         methodResponses: {
           "sessions.list": sessionsListResponse([
             sessionRow("agent:main:rename-me", "Rename me", Date.now()),
+            ...(concurrent ? [sessionRow("agent:main:archive-me", "Archive me", Date.now())] : []),
           ]),
         },
         sessionKey: "agent:main:rename-me",
@@ -36,10 +37,18 @@ suite.define(() => {
         const row = page.locator('[data-session-key="agent:main:rename-me"]');
         await row.waitFor({ state: "visible", timeout: 10_000 });
         await row.hover();
-        let pendingPin: MockGatewayRequest | null = null;
+        let pendingArchive: MockGatewayRequest | null = null;
         if (concurrent) {
-          await row.getByRole("button", { name: "Pin session", exact: true }).click();
-          pendingPin = await gateway.waitForRequest("sessions.patch");
+          // Personal pins no longer publish shared-session errors. Keep an independent
+          // shared mutation in flight to prove duplicate-rename errors stay in the dialog.
+          const archiveRow = page.locator('[data-session-key="agent:main:archive-me"]');
+          await archiveRow.hover();
+          await archiveRow
+            .getByRole("button", { name: "Archive session: Archive me", exact: true })
+            .click();
+          pendingArchive = await gateway.waitForRequest("sessions.patch", {
+            match: { key: "agent:main:archive-me", archived: true },
+          });
           await gateway.deferNext("sessions.patch");
         }
         await row.click({ button: "right" });
@@ -50,9 +59,9 @@ suite.define(() => {
         const rename = await gateway.waitForRequest("sessions.patch", {
           after: concurrent ? 1 : 0,
         });
-        if (pendingPin) {
+        if (pendingArchive) {
           await page.evaluate(
-            ({ renameId, pinId }) => {
+            ({ renameId, archiveId }) => {
               const mock = (window as MockGatewayWindow).openclawControlUiE2eGateway;
               if (!mock) {
                 throw new Error("Mock Gateway is not installed");
@@ -68,15 +77,15 @@ suite.define(() => {
               });
               mock.deliverLatest({
                 type: "res",
-                id: pinId,
+                id: archiveId,
                 ok: false,
                 error: {
                   code: "UNAVAILABLE",
-                  message: "pin rejected",
+                  message: "archive rejected",
                 },
               });
             },
-            { renameId: rename.id, pinId: pendingPin.id },
+            { renameId: rename.id, archiveId: pendingArchive.id },
           );
         } else {
           await gateway.rejectDeferred("sessions.patch", {
@@ -90,7 +99,7 @@ suite.define(() => {
           .poll(() => dialog.getByRole("alert").textContent())
           .toContain("A session with this name already exists.");
         if (concurrent) {
-          await expect.poll(() => error.textContent()).toContain("pin rejected");
+          await expect.poll(() => error.textContent()).toContain("archive rejected");
         } else {
           await expect.poll(() => error.count()).toBe(0);
         }

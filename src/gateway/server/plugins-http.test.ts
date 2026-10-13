@@ -48,7 +48,6 @@ import {
   createGatewayPluginRequestHandler,
   createGatewayPluginUpgradeHandler,
   isPluginAuthenticatedRoutePath,
-  findRegisteredPluginHttpRoute,
   shouldEnforceGatewayAuthForPluginPath,
 } from "./plugins-http.js";
 
@@ -704,9 +703,7 @@ describe("plugin HTTP routing", () => {
         },
       }),
     ]);
-    const server = createServer((req, res) => {
-      void handler(req, res);
-    });
+    const server = createServer((req, res) => void handler(req, res));
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(0, "127.0.0.1", () => resolve());
@@ -762,17 +759,6 @@ describe("plugin HTTP routing", () => {
 
 describe("plugin HTTP route auth checks", () => {
   const decodeOverflowPublicPath = `/googlechat%${"25".repeat(39)}2fpublic`;
-  it("matches canonicalized variants and observes direct route mutation", () => {
-    const entry = route({ path: "/api/demo" });
-    const { registry } = setup([entry]);
-    expect(findRegisteredPluginHttpRoute(registry, "/api//demo")).toBe(entry);
-    expect(findRegisteredPluginHttpRoute(registry, "/API/demo")).toBe(entry);
-    expect(findRegisteredPluginHttpRoute(registry, "/api/%2564emo")).toBe(entry);
-    entry.path = "/api/other";
-    expect(findRegisteredPluginHttpRoute(registry, "/api/demo")).toBeUndefined();
-    expect(findRegisteredPluginHttpRoute(registry, "/api/%256fther")).toBe(entry);
-  });
-
   it("enforces auth for protected, encoded, and overlapping gateway routes", () => {
     const { registry } = setup([
       route({ path: "/googlechat", match: "prefix" }),
@@ -923,6 +909,7 @@ describe("plugin suspension admission", () => {
         getSuspensionBlockerCount: vi.fn(() => 0),
       };
       const context = {
+        getRuntimeConfig: () => ({}),
         trackExecution: trackAsyncWork,
         cron,
         logGateway: { warn: vi.fn() },
