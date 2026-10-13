@@ -3274,8 +3274,9 @@ authority without rereading the same database. The existing native receipt publi
 entry facts before releasing FIFO custody, and close joins accepted persistence.
 Receipt insertion checks capacity in the same SQL statement; rejection rolls back
 the Goal and turn without evicting a still-valid retry receipt.
-Incognito Goals use the memory actor. Maintenance and opaque or cross-store
-SDK guards retain native atomicity for durable storage.
+Incognito Goals use the memory actor. All durable management calls use the writer;
+opaque SDK lifetime guards run through its existing host grants rather than a native
+fallback. Prepared storage predicates must belong to the selected agent store.
 Receipt validity, retry behavior, schemas, retention, and update behavior are unchanged.
 
 Durable Board writes prepare exact session existence in the session reader and carry

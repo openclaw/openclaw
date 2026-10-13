@@ -18,7 +18,6 @@ import {
   withSessionEntryCreationPublication,
   runWithSessionEntryCreationPublication,
 } from "./session-accessor.sqlite-entry-cache.js";
-import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
 import { applySessionEntryCreationReplacement } from "./session-accessor.sqlite-replacement-projection.js";
 import {
   initializeSessionTranscriptInWorker,
@@ -31,7 +30,6 @@ import {
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
-import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import type {
   SessionEntryCreateWithTranscriptContext,
   SessionEntryCreateWithTranscriptOptions,
@@ -257,17 +255,9 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
               assertCurrent();
               assertSessionCreationLabelAvailable(source.database, normalizedKey, options.label);
             },
-            afterFreshUpsertsInTransaction: (database) => {
-              if (created.transcriptEvents) {
-                appendTranscriptEventsInTransaction(
-                  database,
-                  { ...scope, sessionKey: normalizedKey, sessionId: created.entry.sessionId },
-                  created.transcriptEvents,
-                );
-              }
-              if (owner && !replaceSessionOwnerInTransaction(database, normalizedKey, owner)) {
-                throw new Error(`Session owner assignment lost its target: ${normalizedKey}`);
-              }
+            creation: {
+              preparedTranscript,
+              ownerAssignment: owner ? { sessionKey: normalizedKey, owner } : undefined,
             },
             onLifecycleCommitted: () => options.onLifecycleCommitted?.(created.entry),
             afterCommitted,
