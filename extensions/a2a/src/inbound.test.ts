@@ -96,6 +96,50 @@ describe("A2A channel inbound dispatch", () => {
     fixture.store.stop();
   });
 
+  it("matches interleaved same-context replies to their originating tasks", async () => {
+    const fixture = createA2aInboundFixture();
+    const second = fixture.store.create(fixture.task.contextId, "hermes");
+    const turns: Parameters<typeof fixture.runtime.channel.inbound.dispatch>[0][] = [];
+    vi.mocked(fixture.runtime.channel.inbound.dispatch).mockImplementation(async (turn) => {
+      turns.push(turn);
+      return {
+        admission: { kind: "dispatch" },
+        dispatched: true,
+        ctxPayload: turn.ctxPayload,
+        routeSessionKey: turn.route.sessionKey,
+        dispatchResult: { ...createA2aDispatchResult(false), deferredToActiveRun: "followup" },
+      };
+    });
+    try {
+      await dispatchA2aInbound(fixture.params);
+      await dispatchA2aInbound({ ...fixture.params, taskId: second.id, messageId: "second" });
+      await turns[1]!.delivery.deliver({ text: "second reply" }, { kind: "final" });
+      await turns[0]!.delivery.deliver({ text: "first reply" }, { kind: "final" });
+      expect(fixture.task.artifacts[0]?.parts).toEqual([{ text: "first reply" }]);
+      expect(second.artifacts[0]?.parts).toEqual([{ text: "second reply" }]);
+    } finally {
+      fixture.store.stop();
+    }
+  });
+
+  it("settles a dispatched turn that ends without a final reply", async () => {
+    const fixture = createA2aInboundFixture();
+    vi.mocked(fixture.runtime.channel.inbound.dispatch).mockImplementation(async (turn) => ({
+      admission: { kind: "dispatch" },
+      dispatched: true,
+      ctxPayload: turn.ctxPayload,
+      routeSessionKey: turn.route.sessionKey,
+      dispatchResult: createA2aDispatchResult(false),
+    }));
+    try {
+      await dispatchA2aInbound(fixture.params);
+      expect(fixture.task.status.state).toBe("TASK_STATE_COMPLETED");
+      expect(fixture.task.artifacts).toEqual([]);
+    } finally {
+      fixture.store.stop();
+    }
+  });
+
   it("records dispatch failures on their task", async () => {
     const fixture = createA2aInboundFixture();
     vi.mocked(fixture.runtime.channel.inbound.dispatch).mockRejectedValue(
