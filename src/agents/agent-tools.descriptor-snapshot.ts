@@ -5,6 +5,7 @@ import {
   prepareAnthropicInputSchema,
   publishRuntimeToolInputSchema,
 } from "@openclaw/ai/internal/tool-schema";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -45,12 +46,15 @@ registerPluginMetadataProcessMemoLifecycleClear(() => snapshots.clear());
 function publishParameters(parameters: AnyAgentTool["parameters"], name: string) {
   const projected = publishRuntimeToolInputSchema(parameters, `${name}.parameters`, name);
   // Invalid schemas remain with the existing runtime quarantine owner.
-  return projected.violations.length === 0
-    ? (projected.schema as AnyAgentTool["parameters"])
+  return projected.violations.length === 0 && isRecord(projected.schema)
+    ? projected.schema
     : undefined;
 }
 
-function prewarmOpenAIDescriptor(descriptor: Readonly<ToolDescriptor>, compat?: ModelCompatConfig) {
+function prewarmOpenAIDescriptor(
+  descriptor: Readonly<ToolDescriptor & { parameters: Record<string, unknown> }>,
+  compat?: ModelCompatConfig,
+) {
   for (const strict of [false, true]) {
     if (strict && !isStrictOpenAIJsonSchemaCompatible(descriptor.parameters)) {
       continue;
@@ -123,8 +127,10 @@ export function prepareAgentToolDescriptorSnapshot(inputs: SnapshotInputs) {
       }
       // Capture only descriptor data before returning to the attempt.
       const pending = finalized.map((tool, index) => ({
-        source: sources[index],
-        normalized: normalized[index],
+        // SAFETY: Finalization maps the same ordered tools without filtering or reordering.
+        source: sources[index]!,
+        // SAFETY: Normalized schemas are captured from that same positional finalization pass.
+        normalized: normalized[index]!,
         finalSource: tool.parameters,
         outputSource: tool.outputSchema,
         descriptor: {

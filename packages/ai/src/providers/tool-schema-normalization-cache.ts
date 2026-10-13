@@ -82,6 +82,7 @@ export function createToolSchemaNormalizationCache<T>(maxEntries: number) {
         return directCache.remember(
           source,
           key,
+          // SAFETY: This cache only stores JSON-schema outputs; publication preserves their structural type.
           published?.violations.length === 0 ? (published.schema as T) : result,
         );
       }

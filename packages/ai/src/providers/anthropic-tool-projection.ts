@@ -196,8 +196,9 @@ export function prepareAnthropicInputSchema(
   if (!published) {
     return inputSchema;
   }
-  const result = publishRuntimeToolInputSchema(inputSchema)
-    .schema as AnthropicProjectedTool["inputSchema"];
+  const projection = publishRuntimeToolInputSchema(inputSchema);
+  // SAFETY: Publication preserves the validated object root, properties map, and string required entries.
+  const result = projection.schema as AnthropicProjectedTool["inputSchema"];
   publishedAnthropicSchemas.set(schema, result);
   return result;
 }
