@@ -10,6 +10,7 @@ const { createSqliteMirrorTarget } = createTranscriptMirrorTestHarness();
 
 it("releases fixture validation watchers before removing the database directory", async () => {
   const watch = vi.spyOn(fs, "watch");
+  onTestFinished(() => watch.mockRestore());
   const target = await createSqliteMirrorTarget("openclaw-codex-mirror-cleanup-");
   await readMirrorMessages(target);
   const root = path.dirname(target.storePath);
@@ -20,9 +21,10 @@ it("releases fixture validation watchers before removing the database directory"
     throw new Error("Expected the fixture's validation watcher");
   }
   const close = vi.spyOn(watched.value, "close");
+  onTestFinished(() => close.mockRestore());
   const remove = fs.rmSync;
   let removed = false;
-  vi.spyOn(fs, "rmSync").mockImplementation((directory, options) => {
+  const removeSpy = vi.spyOn(fs, "rmSync").mockImplementation((directory, options) => {
     if (directory === root) {
       const closed = close.mock.calls.length > 0;
       remove(directory, options);
@@ -32,5 +34,6 @@ it("releases fixture validation watchers before removing the database directory"
     }
     remove(directory, options);
   });
+  onTestFinished(() => removeSpy.mockRestore());
   onTestFinished(() => expect(removed).toBe(true));
 });
