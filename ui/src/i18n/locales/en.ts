@@ -3974,6 +3974,7 @@ export const en: TranslationMap & {
     },
     voice: {
       asking: "Asking OpenClaw...",
+      replyFailed: "The voice reply was interrupted. Start Talk again to retry.",
       preparing: "Preparing voice session...",
       connecting: "Connecting voice input...",
       listening: "Listening...",

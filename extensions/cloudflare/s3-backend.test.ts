@@ -1,3 +1,4 @@
+/// <reference lib="esnext.array" />
 /// <reference lib="es2024.promise" />
 import {
   AbortMultipartUploadCommand,
@@ -43,6 +44,34 @@ function fixture() {
   const send = vi.fn();
   const destroy = vi.fn();
   return { send, destroy, backend: createR2Backend(settings, { send, destroy }) };
+}
+
+function downloadBody(source: AsyncIterable<Uint8Array>) {
+  return {
+    transformToWebStream() {
+      const iterator = source[Symbol.asyncIterator]();
+      return new ReadableStream<Uint8Array>(
+        {
+          async pull(controller) {
+            try {
+              const next = await iterator.next();
+              if (next.done) {
+                controller.close();
+              } else {
+                controller.enqueue(next.value);
+              }
+            } catch (error) {
+              controller.error(error);
+            }
+          },
+          async cancel() {
+            await iterator.return?.();
+          },
+        },
+        { highWaterMark: 0 },
+      );
+    },
+  };
 }
 
 describe("R2 object transport", () => {
@@ -258,12 +287,149 @@ describe("R2 object transport", () => {
       },
       { highWaterMark: 0 },
     );
-    send.mockResolvedValue({ Body: { transformToWebStream: () => stream } });
+    send.mockResolvedValueOnce({ ETag: '"original"', ContentLength: 10 }).mockResolvedValue({
+      ETag: '"original"',
+      ContentRange: "bytes 0-9/10",
+      Body: { transformToWebStream: () => stream },
+    });
     const body = await backend.getObject("object");
     const iterator = body![Symbol.asyncIterator]();
     expect(await iterator.next()).toMatchObject({ value: Buffer.from("first") });
-    await expect(iterator.next()).rejects.toThrow("R2 download failed");
-    expect(send.mock.calls[0]?.[0]).toBeInstanceOf(GetObjectCommand);
+    const failure = iterator.next();
+    await expect(failure).rejects.toThrow("R2 download failed");
+    await expect(failure).rejects.toThrow("after 5 of 10 bytes (next offset 5)");
+    await expect(failure).rejects.not.toThrow("private-credential-value");
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it("resumes ranged downloads after stream resets, timeouts, and retryable HTTP errors", async () => {
+    const { send, backend } = fixture();
+    let request = 0;
+    send.mockImplementation(async (command) => {
+      if (command instanceof HeadObjectCommand) {
+        return { ETag: '"original"', ContentLength: 10 };
+      }
+      expect(command).toBeInstanceOf(GetObjectCommand);
+      expect(command.input.IfMatch).toBe('"original"');
+      request++;
+      if (request === 2) {
+        throw serviceError("ServiceUnavailable", 503);
+      }
+      const start = request === 1 ? 0 : request === 3 ? 3 : 5;
+      expect(command.input.Range).toBe(`bytes=${start}-9`);
+      const attempt = request;
+      async function* source() {
+        yield Buffer.from(attempt === 1 ? "abc" : attempt === 3 ? "de" : "fghij");
+        if (attempt !== 4) {
+          throw Object.assign(new Error("private-credential-value"), {
+            code: attempt === 1 ? "ECONNRESET" : "ETIMEDOUT",
+          });
+        }
+      }
+      return {
+        ETag: '"original"',
+        ContentRange: `bytes ${start}-9/10`,
+        Body: downloadBody(source()),
+      };
+    });
+    const body = await backend.getObject("object");
+    expect(Buffer.concat(await Array.fromAsync(body!)).toString()).toBe("abcdefghij");
+    expect(request).toBe(4);
+  });
+
+  it("advances bounded ranges and resumes a short response without duplicating bytes", async () => {
+    const { send, backend } = fixture();
+    send
+      .mockResolvedValueOnce({ ETag: '"original"', ContentLength: PART_BYTES + 3 })
+      .mockResolvedValueOnce({
+        ETag: '"original"',
+        ContentRange: `bytes 0-${PART_BYTES - 1}/${PART_BYTES + 3}`,
+        Body: downloadBody(bytes(Buffer.alloc(PART_BYTES))),
+      })
+      .mockResolvedValueOnce({
+        ETag: '"original"',
+        ContentRange: `bytes ${PART_BYTES}-${PART_BYTES + 2}/${PART_BYTES + 3}`,
+        Body: downloadBody(bytes(Buffer.from("a"))),
+      })
+      .mockResolvedValueOnce({
+        ETag: '"original"',
+        ContentRange: `bytes ${PART_BYTES + 1}-${PART_BYTES + 2}/${PART_BYTES + 3}`,
+        Body: downloadBody(bytes(Buffer.from("bc"))),
+      });
+    const body = await backend.getObject("object");
+    const chunks = await Array.fromAsync(body!);
+    expect(chunks.map((chunk) => chunk.byteLength)).toEqual([PART_BYTES, 1, 2]);
+    expect(Buffer.concat(chunks.slice(1)).toString()).toBe("abc");
+    expect(send.mock.calls.slice(1).map(([command]) => command.input.Range)).toEqual([
+      `bytes=0-${PART_BYTES - 1}`,
+      `bytes=${PART_BYTES}-${PART_BYTES + 2}`,
+      `bytes=${PART_BYTES + 1}-${PART_BYTES + 2}`,
+    ]);
+  });
+
+  it.each(["precondition", "etag", "range"])(
+    "rejects a changed object or wrong resumed range (%s)",
+    async (failure) => {
+      const { send, backend } = fixture();
+      async function* interrupted() {
+        yield Buffer.from("abc");
+        throw Object.assign(new Error("reset"), { code: "ECONNRESET" });
+      }
+      send.mockResolvedValueOnce({ ETag: '"original"', ContentLength: 6 }).mockResolvedValueOnce({
+        ETag: '"original"',
+        ContentRange: "bytes 0-5/6",
+        Body: downloadBody(interrupted()),
+      });
+      if (failure === "precondition") {
+        send.mockRejectedValueOnce(serviceError("PreconditionFailed", 412));
+      } else {
+        send.mockResolvedValueOnce({
+          ETag: failure === "etag" ? '"replacement"' : '"original"',
+          ContentRange: failure === "range" ? "bytes 0-5/6" : "bytes 3-5/6",
+          Body: downloadBody(bytes(Buffer.from("def"))),
+        });
+      }
+      const body = await backend.getObject("object");
+      const iterator = body![Symbol.asyncIterator]();
+      expect(await iterator.next()).toMatchObject({ value: Buffer.from("abc") });
+      const rejected = iterator.next();
+      await expect(rejected).rejects.toThrow(
+        failure === "range" ? "unexpected byte range" : "object changed",
+      );
+      await expect(rejected).rejects.toThrow("after 3 of 6 bytes (next offset 3)");
+      expect(send).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  it("bounds stalled download retries and includes a safe cause and byte offset", async () => {
+    const { send, backend } = fixture();
+    send
+      .mockResolvedValueOnce({ ETag: '"original"', ContentLength: 6 })
+      .mockRejectedValue(
+        Object.assign(new Error("private-credential-value"), { code: "ECONNRESET" }),
+      );
+    const body = await backend.getObject("object");
+    const rejected = Array.fromAsync(body!);
+    await expect(rejected).rejects.toThrow("after 0 of 6 bytes (next offset 0; ECONNRESET)");
+    await expect(rejected).rejects.not.toThrow("private-credential-value");
+    expect(send).toHaveBeenCalledTimes(10);
+  });
+
+  it("does not retry permission errors or an aborted download", async () => {
+    const { send, backend } = fixture();
+    send
+      .mockResolvedValueOnce({ ETag: '"original"', ContentLength: 6 })
+      .mockRejectedValueOnce(serviceError("AccessDenied", 403));
+    const denied = await backend.getObject("object");
+    await expect(Array.fromAsync(denied!)).rejects.toThrow("R2 access denied");
+    expect(send).toHaveBeenCalledTimes(2);
+
+    const controller = new AbortController();
+    send.mockResolvedValueOnce({ ETag: '"original"', ContentLength: 6 });
+    const aborted = await backend.getObject("object", { signal: controller.signal });
+    controller.abort();
+    await expect(Array.fromAsync(aborted!)).rejects.toMatchObject({ name: "AbortError" });
+    expect(send).toHaveBeenCalledTimes(3);
   });
 
   it("paginates within the configured namespace and returns relative keys", async () => {

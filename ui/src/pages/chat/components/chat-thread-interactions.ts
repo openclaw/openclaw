@@ -10,6 +10,7 @@ import type {
   GatewaySessionRow,
   SessionsListResult,
 } from "../../../api/types.ts";
+import type { ApplicationContext } from "../../../app/context.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
 import { copyMarkdownLabel, handleCopyButton } from "../../../components/copy-button.ts";
@@ -109,6 +110,7 @@ type ReplyMessageAccess = {
 
 export type ChatThreadProps = ChatSendStatusActions &
   SubagentRoster & {
+    applicationContext?: ApplicationContext;
     messageReactions?: ReadonlyMap<string, MessageReactionSummary[]>;
     onReact?: (messageId: string, emoji: string, remove: boolean) => void;
     branding?: ThemeBranding;
@@ -545,6 +547,7 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
     ...(group?.querySelectorAll<HTMLElement>("[data-message-actions-for]") ?? []),
   ].find((element) => element.dataset.messageActionsFor === messageId);
   const copyButton = actionOwner?.querySelector<HTMLButtonElement>(".chat-copy-btn");
+  const readAloudButton = actionOwner?.querySelector<HTMLButtonElement>(".chat-read-aloud-btn");
   const ownsRunFrame = group?.dataset.chatRowKey?.startsWith("agent-run:") === true;
   const canReply = Boolean(replyTarget && props.onSetReply && (!ownsRunFrame || actionOwner));
   const canRewind = isUserMessage && typeof props.onRewindMessage === "function";
@@ -655,6 +658,17 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
       onClick: () => {
         removeReplyContextMenu();
         copyButton?.click();
+      },
+    });
+  }
+  if (readAloudButton) {
+    const label = readAloudButton.getAttribute("aria-label") ?? t("chat.messages.readAloud");
+    appendAction({
+      label,
+      tooltip: label,
+      onClick: () => {
+        removeReplyContextMenu();
+        readAloudButton.click();
       },
     });
   }

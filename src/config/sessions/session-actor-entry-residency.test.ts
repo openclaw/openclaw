@@ -12,6 +12,7 @@ import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { withActor, type Mutation } from "./session-actor-worker.test-support.js";
 import type { SessionEntryPatchGuard } from "./session-entry-patch.types.js";
+import { readSessionEntryPatchSnapshot } from "./session-entry-patch.worker.js";
 
 // mock-isolation: Actor ownership proof must not schedule unrelated background maintenance.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -312,3 +313,91 @@ it("keeps transcript residency across entry patches without losing either owner'
     expect(replaced.hasBoard).toBe(true);
   });
 });
+
+it.each(["entry", "target"] as const)(
+  "patches %s from current actor facts without losing intervening writes or publishing a rollback",
+  async (kind) => {
+    await withActor((f) => {
+      f.read();
+      const selection =
+        kind === "entry"
+          ? { kind, sessionKey: f.target.sessionKey, exact: false }
+          : {
+              kind,
+              target: { canonicalKey: f.target.sessionKey, storeKeys: [f.target.sessionKey] },
+            };
+      if (kind === "entry") {
+        expect(
+          readSessionEntryPatchSnapshot(f.database, {
+            kind,
+            sessionKey: ` ${f.target.sessionKey} `,
+            exact: true,
+          }),
+        ).toEqual([]);
+        expect(
+          readSessionEntryPatchSnapshot(f.database, {
+            kind,
+            sessionKey: ` ${f.target.sessionKey} `,
+            exact: false,
+          })[0]?.sessionKey,
+        ).toBe(f.target.sessionKey);
+      }
+      const snapshot = () => readSessionEntryPatchSnapshot(f.database, selection);
+      const prepare = (label: string) => {
+        const prepared = snapshot();
+        const writeBase = prepared[0]!.entry;
+        return {
+          selection,
+          prepared,
+          writeBase,
+          next: { ...writeBase, label },
+          sessionKey: f.target.sessionKey,
+          operationLabel: "session-entry.patch" as const,
+          validateCanonicalKeys: false,
+        };
+      };
+      // Warm publication setup before measuring ordinary patches.
+      f.patchEntry(prepare("warm publication"));
+      const reads = trackSqliteStatementExecutions(f.database.db, ["select"], (sql) =>
+        /^select\b/iu.test(sql) ? "select" : null,
+      );
+      try {
+        const stale = prepare("stale replacement");
+        f.patchEntry(prepare("first committed patch"));
+        expect(snapshot()[0]?.entry.label).toBe("first committed patch");
+        expect(() => f.patchEntry(stale)).toThrow(/changed|conflict/i);
+        f.patchEntry(prepare("second committed patch"));
+        expect(snapshot()[0]?.entry.label).toBe("second committed patch");
+        expect(reads.counts.select).toBe(0);
+
+        const refused = prepare("must roll back");
+        f.hooks.admit = (stage) => {
+          if (stage === "commit") {
+            throw new Error("patch commit refused");
+          }
+        };
+        expect(() => f.patchEntry(refused)).toThrow("patch commit refused");
+        delete f.hooks.admit;
+        expect(snapshot()[0]?.entry.label).toBe("second committed patch");
+      } finally {
+        reads.restore();
+      }
+      expect(f.nativeEntry()?.label).toBe("second committed patch");
+
+      const beforeExternalWrite = prepare("stale after another owner writes");
+      runSqliteImmediateTransactionSync(f.database.db, () =>
+        writeSessionEntry(f.database, f.target.sessionKey, {
+          ...f.nativeEntry()!,
+          model: "other owner model",
+        }),
+      );
+      expect(() => f.patchEntry(beforeExternalWrite)).toThrow(/changed|conflict/i);
+      expect(snapshot()[0]?.entry.model).toBe("other owner model");
+      f.restartActor();
+      expect(snapshot()[0]?.entry).toMatchObject({
+        label: "second committed patch",
+        model: "other owner model",
+      });
+    });
+  },
+);

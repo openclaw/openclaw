@@ -24,7 +24,10 @@ const reviewed = new Map<string, readonly string[]>([
       "sdkRunSqliteImmediateTransaction",
     ],
   ],
-  ["src/sessions/session-upstream-links.ts", ["deleteSessionUpstreamLink"]],
+  [
+    "src/sessions/session-upstream-links.ts",
+    ["deleteSessionUpstreamLink", "upsertSessionUpstreamLink"],
+  ],
   ["src/sessions/stored-model-overrides.ts", ["resolveStoredModelOverride"]],
   [
     "src/gateway/session-catalog-identity.ts",
@@ -93,6 +96,19 @@ const reviewed = new Map<string, readonly string[]>([
 
 // Mixed SDK receivers retain only these deprecated members, never their live factories.
 const reviewedMembers = new Map<string, readonly string[]>([
+  [
+    "src/agents/harness/native-session/initialization.ts",
+    ["createNativeSessionInitializationOwner.prepare.link"],
+  ],
+  [
+    "src/infra/outbound/account-scoped-conversation-bindings.ts",
+    [
+      "createAccountBindingManager.listBySession",
+      "createAccountBindingManager.resolveByConversation",
+      "createAccountBindingManager.touch",
+      "createAccountBindingManager.inspectByConversation",
+    ],
+  ],
   [
     "src/agents/harness/host-capability.ts",
     ["createAgentHarnessHostCapabilities.createToolSurface"],

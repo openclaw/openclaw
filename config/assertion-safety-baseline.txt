@@ -2320,7 +2320,6 @@ src/plugin-sdk/ssrf-policy.ts	1
 src/plugin-sdk/status-helpers.ts	7
 src/plugin-sdk/tool-plugin.ts	10
 src/plugin-sdk/windows-spawn.ts	1
-src/plugin-state/plugin-state-store.ts	5
 src/plugin-state/plugin-store-validation.ts	1
 src/plugins/agent-tool-result-middleware.ts	1
 src/plugins/api-facades.ts	1
@@ -2701,7 +2700,6 @@ ui/src/pages/chat/components/chat-thread-interactions.ts	2
 ui/src/pages/chat/components/chat-voice-activity.ts	1
 ui/src/pages/chat/components/widget-card.ts	3
 ui/src/pages/chat/components/widget-export.ts	1
-ui/src/pages/chat/composer-dictation.ts	1
 ui/src/pages/chat/connect-error.ts	1
 ui/src/pages/chat/export.ts	1
 ui/src/pages/chat/input-history.ts	1
