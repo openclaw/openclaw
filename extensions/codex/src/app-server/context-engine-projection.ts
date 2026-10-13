@@ -117,6 +117,7 @@ export async function projectContextEngineAssemblyForCodex(params: {
   toolPayloadMode?: "elide" | "preserve";
   prepareFileContext?: PrepareContextFile;
   currentUserTurnIdempotencyKey?: string;
+  currentUserMessage?: AgentMessage;
 }): Promise<CodexContextProjection> {
   const prompt = params.prompt.trim();
   const maxRenderedContextChars = normalizeRenderedContextMaxChars(params.maxRenderedContextChars);
@@ -139,8 +140,17 @@ export async function projectContextEngineAssemblyForCodex(params: {
   const promptPrefix = boundedContext
     ? [CONTEXT_HEADER, CONTEXT_SAFETY_NOTE, "", CONTEXT_OPEN].join("\n") + "\n"
     : undefined;
-  const promptSuffix = boundedContext ? `\n${CONTEXT_CLOSE}\n\n${REQUEST_HEADER}\n${prompt}` : "";
-  const promptText = boundedContext ? `${promptPrefix}${boundedContext}${promptSuffix}` : prompt;
+  const currentUserSenderSuffix = params.currentUserMessage
+    ? formatCodexContextSenderSuffix(params.currentUserMessage)
+    : "";
+  const currentUserSenderLabel = currentUserSenderSuffix ? `[user${currentUserSenderSuffix}]` : "";
+  const currentRequest = currentUserSenderLabel ? `${currentUserSenderLabel}\n${prompt}` : prompt;
+  const promptSuffix = boundedContext
+    ? `\n${CONTEXT_CLOSE}\n\n${REQUEST_HEADER}\n${currentRequest}`
+    : "";
+  const promptText = boundedContext
+    ? `${promptPrefix}${boundedContext}${promptSuffix}`
+    : currentRequest;
   const promptContextRange =
     promptPrefix && boundedContext
       ? { start: promptPrefix.length, end: promptPrefix.length + boundedContext.length }
