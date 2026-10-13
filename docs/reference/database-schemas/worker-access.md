@@ -246,6 +246,15 @@ Generic callbacks retain their prepare-and-compare contract, and source and
 conversation authority still apply at the mutation boundary. These operations
 change no schemas, stored formats, retention, or update behavior.
 
+Fresh isolated same-agent subagents commit first-admission metadata with their
+creation entry. The host-bound launch carries that postimage into first admission,
+avoiding a second load, generic reuse preparation, and metadata patch. The receipt
+is consumed once and grants no authority: the work lease still loads the current
+entry and rejects replacement or reset before execution. Current policy and
+metadata writes therefore survive admission. Forks, resumed children, incognito
+storage, collectors, thread binding, and cross-agent admission keep their existing
+paths.
+
 Observer digests and activity recaps also use closed entry operations. Their writer
 checks the current lifecycle, digest revision, recap eligibility, and transcript
 predicate while merging the field into the current row, without a separate patch

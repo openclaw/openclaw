@@ -8,6 +8,10 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import {
+  bindInProcessSessionRun,
+  takeInProcessFreshChildSession,
+} from "../../../gateway/in-process-session-run.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
@@ -322,3 +326,59 @@ async function createFromParent(
   });
   return createInitialSubagentSession({ ...input, parentTarget });
 }
+
+it("commits group and delivery facts with creation for one host-bound admission", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const sessionKey = "agent:main:discord:channel:group-one";
+    const childSessionKey = "agent:main:subagent:fresh-child";
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    await upsertSessionEntryCore(
+      { storePath, sessionKey },
+      {
+        sessionId: "parent",
+        groupId: "group-one",
+        groupChannel: "discord",
+        space: "workspace-one",
+      },
+    );
+    const result = await createFromParent({
+      ...lineageSpawnParams(sessionKey, childSessionKey, { senderIsOwner: true }),
+      firstAdmission: {
+        delivery: { channel: "discord", to: "channel:group-one", accountId: "default" },
+        group: { groupId: "group-one" },
+      },
+    });
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok" || !result.freshChild) {
+      throw new Error("Fresh child creation did not return its committed entry");
+    }
+    const { entry } = result.freshChild;
+    expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toMatchObject({
+      sessionId: entry.sessionId,
+      createdVia: "spawn",
+      parentSessionKey: sessionKey,
+      groupId: "group-one",
+      groupChannel: "discord",
+      space: "workspace-one",
+      sessionStartedAt: expect.any(Number),
+      lastInteractionAt: expect.any(Number),
+      delivery: {
+        kind: "external",
+        context: { channel: "discord", to: "channel:group-one", accountId: "default" },
+      },
+    });
+    const request = bindInProcessSessionRun(
+      { sessionKey: childSessionKey, idempotencyKey: "first-run" },
+      {
+        sessionKey: childSessionKey,
+        sessionId: entry.sessionId,
+        lifecycleRevision: entry.lifecycleRevision ?? null,
+        runId: "first-run",
+        freshChild: result.freshChild,
+      },
+    );
+    expect(takeInProcessFreshChildSession({ ...request })).toBeUndefined();
+    expect(takeInProcessFreshChildSession(request)).toEqual(result.freshChild);
+    expect(takeInProcessFreshChildSession(request)).toBeUndefined();
+  });
+});

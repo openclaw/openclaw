@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveTrustedGroupId } from "../../agents/agent-tools.policy.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -37,7 +38,7 @@ function resolveSessionKeyGroupId(sessionKey: string): string | undefined {
   return conversation.rawId;
 }
 
-export function resolveTrustedGroupMetadata(params: {
+function resolveTrustedGroupMetadata(params: {
   sessionKey: string;
   spawnedBy?: string;
   stored: TrustedGroupMetadata;
@@ -55,7 +56,43 @@ export function resolveTrustedGroupMetadata(params: {
   };
 }
 
-export function requestGroupMatchesTrusted(params: {
+export function resolveAgentSessionGroup(params: {
+  sessionKey: string;
+  spawnedBy?: string;
+  stored: TrustedGroupMetadata;
+  inherited?: TrustedGroupMetadata;
+  requested: TrustedGroupMetadata;
+}): {
+  groupId: string | undefined;
+  groupChannel: string | undefined;
+  groupSpace: string | undefined;
+} {
+  const trusted = resolveTrustedGroupMetadata(params);
+  const validated = trusted.groupId
+    ? resolveTrustedGroupId({
+        groupId: trusted.groupId,
+        sessionKey: params.sessionKey,
+        spawnedBy: params.spawnedBy,
+      })
+    : undefined;
+  const trustSelectors =
+    Boolean(trusted.groupId) &&
+    requestGroupMatchesTrusted({
+      requestGroupId: params.requested.groupId,
+      trustedGroupId: trusted.groupId,
+    });
+  return validated?.dropped
+    ? { groupId: undefined, groupChannel: undefined, groupSpace: undefined }
+    : {
+        groupId: trusted.groupId,
+        groupChannel:
+          trusted.groupChannel ?? (trustSelectors ? params.requested.groupChannel : undefined),
+        groupSpace:
+          trusted.groupSpace ?? (trustSelectors ? params.requested.groupSpace : undefined),
+      };
+}
+
+function requestGroupMatchesTrusted(params: {
   requestGroupId?: string;
   trustedGroupId?: string;
 }): boolean {
