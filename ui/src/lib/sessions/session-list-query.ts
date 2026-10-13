@@ -410,6 +410,7 @@ export type ManagedSessionList = ObservedSessionList & {
   /** Invalidation retires remaining pages without cancelling the correlated RPC. */
   readGeneration: number;
   readRevision: number;
+  readAppend: boolean;
   coordinator: ReturnType<typeof createSessionEventRefreshCoordinator>;
   pending: Promise<void> | null;
   queued: ManagedSessionListRefresh | null;
