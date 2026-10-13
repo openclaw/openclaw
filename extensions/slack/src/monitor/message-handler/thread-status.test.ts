@@ -58,37 +58,93 @@ describe("Slack thread status lifecycle", () => {
     expect(publish.mock.calls).toEqual([["processing", "Queued"], ["active"]]);
   });
 
-  it("reasserts processing when an older stop lands after the successor started", async () => {
-    const gate = createSlackThreadStatusGate();
-    gate.bind(() => ({ delivery: false, preview: false }));
-    let releaseActive: (() => void) | undefined;
-    const publish = vi.fn(
-      (status: "processing" | "active") =>
-        new Promise<boolean>((resolve) => {
-          if (status === "active" && !releaseActive) {
-            releaseActive = () => resolve(true);
-            return;
-          }
-          resolve(true);
-        }),
-    );
-    const cycle = createSlackSessionStatusCycle({
-      gate,
-      publish,
-      onActiveRestoreFailed: vi.fn(),
-    });
+  it("keeps the successor processing after a delayed predecessor active write settles", async () => {
+    const { cycle, settled, pendingCount, releaseNext } = createDeferredCycle();
 
-    await cycle.start("First");
+    const started = cycle.start("First");
+    await releaseNext();
+    await started;
     const stopping = cycle.stop();
     cycle.beginGeneration();
-    await cycle.start("Queued");
-    releaseActive?.();
-    await stopping;
+    const successor = cycle.start("Queued");
+    await waitForPending(pendingCount);
 
-    expect(publish.mock.calls.map((call) => call[0])).toEqual([
-      "processing",
-      "active",
-      "processing",
-    ]);
+    expect(pendingCount()).toBe(1);
+    expect(settled).toEqual(["processing"]);
+
+    await releaseNext();
+    await releaseNext();
+    await stopping;
+    await successor;
+
+    expect(settled).toEqual(["processing", "active", "processing"]);
+  });
+
+  it("does not restart processing after the successor has finished", async () => {
+    const { cycle, settled, pendingCount, releaseSettled } = createDeferredCycle();
+
+    const started = cycle.start("First");
+    await releaseSettled();
+    await started;
+    const predecessorStop = cycle.stop();
+    cycle.beginGeneration();
+    const successorStart = cycle.start("Queued");
+    const successorStop = cycle.stop();
+    await releaseSettled();
+    for (let tick = 0; tick < 20; tick += 1) {
+      await Promise.resolve();
+    }
+
+    expect(pendingCount()).toBe(0);
+    expect(settled).toEqual(["processing", "active", "processing", "active"]);
+    await Promise.all([predecessorStop, successorStart, successorStop, cycle.stop()]);
   });
 });
+
+function createDeferredCycle() {
+  const gate = createSlackThreadStatusGate();
+  gate.bind(() => ({ delivery: false, preview: false }));
+  const settled: Array<"processing" | "active"> = [];
+  const pending: Array<() => void> = [];
+  const publish = vi.fn((status: "processing" | "active") => {
+    return new Promise<boolean>((resolve) => {
+      pending.push(() => {
+        settled.push(status);
+        resolve(true);
+      });
+    });
+  });
+  const cycle = createSlackSessionStatusCycle({
+    gate,
+    publish,
+    onActiveRestoreFailed: vi.fn(),
+  });
+  return {
+    cycle,
+    settled,
+    pendingCount: () => pending.length,
+    async releaseNext() {
+      await waitForPending(() => pending.length);
+      const release = pending.shift();
+      if (!release) {
+        throw new Error("no status write is waiting");
+      }
+      release();
+    },
+    async releaseSettled() {
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        await waitForPending(() => pending.length);
+        if (pending.length === 0) {
+          return;
+        }
+        pending.shift()?.();
+      }
+    },
+  };
+}
+
+async function waitForPending(pendingCount: () => number, minimum = 1) {
+  for (let attempt = 0; attempt < 20 && pendingCount() < minimum; attempt += 1) {
+    await Promise.resolve();
+  }
+}
