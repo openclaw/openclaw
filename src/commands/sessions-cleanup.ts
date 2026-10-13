@@ -252,6 +252,8 @@ async function maybeRunGatewayCleanup(
       config: cfg,
       expectUrl: url,
       method: "sessions.cleanup",
+      // Multi-store maintenance can outlast the ordinary metadata request deadline.
+      timeoutMs: 120_000,
       params: {
         agent: opts.agent,
         allAgents: opts.allAgents,
