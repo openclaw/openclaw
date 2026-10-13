@@ -6,12 +6,13 @@ import fsp from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { getEnvironmentData, Worker } from "node:worker_threads";
+import type { WorkboardDatabasePortApi } from "@openclaw/workboard-contract";
 import { Client } from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { admitWorkboardPort } from "../../../extensions/workboard/api.js";
 import { doctorDatabasePort } from "../../commands/doctor-database-port.js";
 import * as configIo from "../../config/io.js";
 import * as pluginMetadata from "../../plugins/plugin-metadata-snapshot.js";
+import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
 import { readBackupEngine } from "../../snapshot/database-backup.js";
 import {
   withOpenClawTestState,
@@ -128,7 +129,15 @@ async function fixture(
           postgres: { connection: "${OPENCLAW_P36_TEST_DATABASE_URL}" },
         },
       });
-      admitWorkboardPort(source);
+      loadBundledPluginPublicArtifactModuleSync<{
+        workboardDatabasePortApi: WorkboardDatabasePortApi<
+          ReturnType<typeof openNodeSqliteDatabase>,
+          never
+        >;
+      }>({
+        dirName: "workboard",
+        artifactBasename: "database-port-api.js",
+      }).workboardDatabasePortApi.admitWorkboardPort(source);
       {
         using db = openNodeSqliteDatabase(source);
         db.exec("UPDATE workboard_schema_migrations SET applied_at = 17");

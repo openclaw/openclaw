@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { WorkboardDatabasePortApi } from "@openclaw/workboard-contract";
 import type { DatabaseEngineInput } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   admitSqliteSchema,
@@ -7,10 +8,10 @@ import {
 import { createWorkboardDatabase } from "./src/sqlite-store-schema.js";
 import { SCHEMA_VERSION } from "./src/workboard-schema.js";
 
-export class WorkboardPortSchemaError extends Error {}
+class WorkboardPortSchemaError extends Error {}
 
 /** Read-only version evidence before the owner is allowed to migrate a private copy. */
-export function inspectWorkboardPortSource(db: DatabaseSync) {
+function inspectWorkboardPortSource(db: DatabaseSync) {
   admitSqliteSchema(db);
   const userVersion = getAdmittedSqliteSchemaFacts(db)?.userVersion ?? 0;
   if (userVersion > SCHEMA_VERSION) {
@@ -40,6 +41,12 @@ export function inspectWorkboardPortSource(db: DatabaseSync) {
 }
 
 /** Only private copies/staged destinations: reuse the normal owner's migrations and admission. */
-export function admitWorkboardPort(dbPath: string, input?: DatabaseEngineInput): void {
+function admitWorkboardPort(dbPath: string, input?: DatabaseEngineInput): void {
   createWorkboardDatabase(dbPath, undefined, input).close();
 }
+export const workboardDatabasePortApi: WorkboardDatabasePortApi<DatabaseSync, DatabaseEngineInput> =
+  {
+    inspectWorkboardPortSource,
+    admitWorkboardPort,
+    WorkboardPortSchemaError,
+  };

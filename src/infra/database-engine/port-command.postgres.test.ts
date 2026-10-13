@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -147,7 +148,8 @@ describe.skipIf(!connection)("workboard port PostgreSQL refusal boundaries", () 
           "SELECT pg_get_indexdef($1::regclass) AS definition",
           [`"${namespace}".workboard_cards_session_idx`],
         )
-      ).rows[0].definition;
+      ).rows[0]?.definition;
+      assert(originalIndex, "Fixture must have the original workboard session index");
       await client.query(
         `DROP INDEX "${namespace}".workboard_cards_session_idx; CREATE INDEX workboard_cards_session_idx ON "${namespace}".workboard_cards (run_id, session_key)`,
       );
