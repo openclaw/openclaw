@@ -488,7 +488,12 @@ setPhase("preparation");
   return {
     command:
       ((params.target ?? "linux") === "linux" ? (linuxToolchainSetup ?? "") : "") +
-      wrapCrabboxNodeScript(script.trimEnd(), params.target, "CRABBOX_NODE_ENROLLMENT_SCRIPT"),
+      wrapCrabboxNodeScript(
+        script.trimEnd(),
+        params.target,
+        "CRABBOX_NODE_ENROLLMENT_SCRIPT",
+        "bootstrap",
+      ),
     forwardedEnv: {
       [CLOUD_BOOTSTRAP_TOKEN_ENV]: JSON.stringify({
         nodeBootstrap: token,
