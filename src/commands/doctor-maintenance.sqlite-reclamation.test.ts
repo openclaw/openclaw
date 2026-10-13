@@ -7,13 +7,11 @@ import * as walAdmission from "../infra/sqlite-wal-write-admission.js";
 import { readUpdatePhysicalDatabaseGenerations } from "../infra/update-database-generations.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import { prepareOpenClawStateCurrentReader } from "../state/openclaw-state-db-current-reader.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDoctorMaintenanceState } from "./doctor-maintenance-state.js";
 
@@ -69,10 +67,9 @@ it("drains inherited shared-state WAL maintenance before opening Doctor resource
 it("settles the inherited WAL owner without closing an independent same-database reader", async () => {
   await withOpenClawTestState({ scenario: "external-service" }, async (state) => {
     openOpenClawStateDatabase({ env: state.env });
-    const reader = await prepareOpenClawStateCurrentReader(
-      captureOpenClawStateWorkerContext({ env: state.env }),
-    );
-    expect(reader).toBeDefined();
+    const reader = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath(state.env), {
+      readOnly: true,
+    });
     const maintenance = await createDoctorMaintenanceState({
       params: {
         root: null,
@@ -91,11 +88,9 @@ it("settles the inherited WAL owner without closing an independent same-database
       await maintenance.acquire();
       await maintenance.release();
       released = true;
-      expect(reader!.read(({ db }) => db.prepare("SELECT 1 AS one").get())).toEqual({
-        one: 1,
-      });
+      expect(reader.prepare("SELECT 1 AS one").get()).toEqual({ one: 1 });
     } finally {
-      reader?.dispose();
+      reader.close();
       if (!released) {
         await maintenance.release();
       }
