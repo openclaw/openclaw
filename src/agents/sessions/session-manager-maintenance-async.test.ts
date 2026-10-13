@@ -245,7 +245,7 @@ it.each(["same", "independent"] as const)(
     }
     await manager.reloadPersistedTranscriptAsync();
     const source = manager.getEntry(sourceId);
-    if (source?.type !== "message") {
+    if (source?.type !== "message" || source.message.role !== "user") {
       throw new Error("Missing hydrated source message");
     }
     expect(Object.isFrozen(source)).toBe(false);
@@ -255,7 +255,7 @@ it.each(["same", "independent"] as const)(
     });
     const rewrite = await manager.prepareTranscriptRewriteAsync();
     const snapshot = rewrite.sessionManager.getEntry(sourceId);
-    if (snapshot?.type !== "message") {
+    if (snapshot?.type !== "message" || snapshot.message.role !== "user") {
       throw new Error("Missing rewrite source message");
     }
     expect(snapshot).not.toBe(source);
