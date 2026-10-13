@@ -623,9 +623,10 @@ describe("forwardClickClackQuestionAnswer", () => {
     );
     // The Gateway re-authorizes right before its write, after the awaited read.
     hoisted.cancelQuestion.mockImplementationOnce(
-      async (params: { authorize: () => Promise<boolean> }) => {
+      async (params: { authorize: () => (() => boolean) | null }) => {
         accountStart.abort();
-        return (await params.authorize()) ? { status: "cancelled" } : { status: "denied" };
+        const isCurrent = await params.authorize();
+        return isCurrent?.() ? { status: "cancelled" } : { status: "denied" };
       },
     );
 

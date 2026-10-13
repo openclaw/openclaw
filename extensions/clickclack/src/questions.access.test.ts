@@ -61,8 +61,9 @@ it.each([false, true])(
     };
     hoisted.client.message.mockResolvedValue(submittedCard(account.botUserId!));
     hoisted.resolveAnswers.mockImplementationOnce(
-      async ({ authorize }: { authorize: () => Promise<boolean> }) => {
-        if (!(await authorize())) {
+      async ({ authorize }: { authorize: () => (() => boolean) | null }) => {
+        const isCurrent = await authorize();
+        if (!isCurrent?.()) {
           return { status: "denied" };
         }
         hoisted.gatewayWrite();
@@ -95,20 +96,23 @@ it.each(["answer", "skip"] as const)(
     };
     hoisted.client.message.mockResolvedValue(submittedCard(account.botUserId!, action === "skip"));
     const resolve = action === "skip" ? hoisted.cancelQuestion : hoisted.resolveAnswers;
-    resolve.mockImplementationOnce(async ({ authorize }: { authorize: () => Promise<boolean> }) => {
-      // The old transport is still alive during config publication. Its captured
-      // wildcard ingress remains allowed, but the current sender policy does not.
-      publishInboundAccountConfig(runtime, {
-        ...account,
-        allowFrom: ["usr_someone_else"],
-        config: { ...account.config, allowFrom: ["usr_someone_else"] },
-      });
-      if (!(await authorize())) {
-        return { status: "denied" };
-      }
-      hoisted.gatewayWrite();
-      return { status: action === "skip" ? "cancelled" : "answered" };
-    });
+    resolve.mockImplementationOnce(
+      async ({ authorize }: { authorize: () => (() => boolean) | null }) => {
+        // The old transport is still alive during config publication. Its captured
+        // wildcard ingress remains allowed, but the current sender policy does not.
+        publishInboundAccountConfig(runtime, {
+          ...account,
+          allowFrom: ["usr_someone_else"],
+          config: { ...account.config, allowFrom: ["usr_someone_else"] },
+        });
+        const isCurrent = await authorize();
+        if (!isCurrent?.()) {
+          return { status: "denied" };
+        }
+        hoisted.gatewayWrite();
+        return { status: action === "skip" ? "cancelled" : "answered" };
+      },
+    );
 
     await forwardClickClackQuestionAnswer({ lifetime, messageId: "msg_card" });
 

@@ -398,11 +398,11 @@ export async function deliverClickClackQuestionPrompt(params: {
   return true;
 }
 
-async function responderMayAnswer(params: {
+async function prepareResponderAdmission(params: {
   lifetime: ClickClackAccountLifetime;
   message: ClickClackMessage;
   responder: ClickClackUser;
-}): Promise<boolean> {
+}): Promise<(() => boolean) | null> {
   // Card answers follow the same sender policy as a typed reply in that conversation.
   const access = await resolveClickClackInboundAccess({
     account: params.lifetime.account,
@@ -416,11 +416,10 @@ async function responderMayAnswer(params: {
       question: undefined,
     },
   });
-  return (
-    !access.preparedRoute.revoked &&
-    access.channelIngress?.senderAccess.allowed === true &&
-    access.isSenderCurrent()
-  );
+  if (access.preparedRoute.revoked || access.channelIngress?.senderAccess.allowed !== true) {
+    return null;
+  }
+  return () => !params.lifetime.abortSignal.aborted && access.isSenderCurrent();
 }
 
 const REOPEN_FOR_ALLOWED_RESPONDER: CardOutcome = {
@@ -464,21 +463,18 @@ async function forwardSubmittedCard(params: {
   ) {
     return;
   }
-  // The Gateway asks again right before it records the answer, so a responder
-  // who lost access or an account start that stopped cannot resolve it.
-  const authorize = async () =>
-    !lifetime.abortSignal.aborted &&
-    (await responderMayAnswer({ lifetime, message, responder })) &&
-    !lifetime.abortSignal.aborted;
+  // Prepare once, then carry the synchronous policy and account assertion
+  // through Gateway preparation to the QuestionManager's actual commit.
+  const isCurrent = await prepareResponderAdmission({ lifetime, message, responder });
   const gateway = {
     cfg: lifetime.cfg,
     questionId,
     senderId: `clickclack:${responder.id}`,
     clientDisplayName: `ClickClack question (${responder.id})`,
-    authorize,
+    authorize: () => isCurrent,
   };
   let outcome: CardOutcome;
-  if (!(await authorize())) {
+  if (!isCurrent?.()) {
     outcome = REOPEN_FOR_ALLOWED_RESPONDER;
   } else if (card.response?.skipped) {
     const result = await questionGatewayRuntime.cancelQuestion(gateway);

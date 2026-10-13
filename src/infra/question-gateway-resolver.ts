@@ -4,7 +4,10 @@ import type {
   QuestionRecord,
   QuestionResolveResult,
 } from "../../packages/gateway-protocol/src/schema/questions.js";
-import { bindAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.js";
+import {
+  bindAgentToolGatewayRequest,
+  hasGatewayToolRoutingContext,
+} from "../agents/tools/in-process-gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 
@@ -20,6 +23,36 @@ export type ResolveQuestionOverGatewayResult =
  * write, so access lost during that window cannot answer.
  */
 export type QuestionResolutionAuthorizer = () => boolean | Promise<boolean>;
+
+/** Prepare channel policy asynchronously, then retain its live assertion at commit. */
+export type PreparedQuestionResolutionAuthorizer = () =>
+  | (() => boolean)
+  | null
+  | Promise<(() => boolean) | null>;
+
+class QuestionResolutionDeniedError extends Error {
+  constructor() {
+    super("Question responder authority changed before resolution");
+    this.name = "QuestionResolutionDeniedError";
+  }
+}
+
+async function prepareQuestionResolutionCommitGuard(
+  authorize: PreparedQuestionResolutionAuthorizer,
+): Promise<(() => void) | null> {
+  const isCurrent = await authorize();
+  if (isCurrent === null) {
+    return null;
+  }
+  if (typeof isCurrent !== "function") {
+    throw new Error("Question resolution requires a prepared synchronous authority assertion");
+  }
+  return () => {
+    if (isCurrent() !== true) {
+      throw new QuestionResolutionDeniedError();
+    }
+  };
+}
 
 /** Only a caller that supplies an authorizer can receive this. */
 export type ResolveQuestionOverGatewayDenial = { status: "denied" };
@@ -79,9 +112,12 @@ type QuestionGatewayCallParams = {
   clientDisplayName?: string;
 };
 
-function createQuestionGatewayCaller(params: QuestionGatewayCallParams) {
+function createQuestionGatewayCaller(params: QuestionGatewayCallParams, requireHosted = false) {
   if (!QUESTION_RECORD_ID_PATTERN.test(params.questionId)) {
     throw new Error("question resolution requires a valid question record id");
+  }
+  if (requireHosted && (params.gatewayUrl?.trim() || !hasGatewayToolRoutingContext())) {
+    throw new Error("Guarded question resolution requires its admitted in-process Gateway");
   }
   const gatewayOptions = {
     config: params.cfg,
@@ -93,8 +129,29 @@ function createQuestionGatewayCaller(params: QuestionGatewayCallParams) {
   const request = params.gatewayUrl?.trim()
     ? callGateway
     : bindAgentToolGatewayRequest({ hostedOnly: true });
-  return <T>(method: "question.get" | "question.resolve", methodParams: Record<string, unknown>) =>
-    request<T>({ ...gatewayOptions, method, params: methodParams });
+  const guardedWriteRequest = requireHosted
+    ? bindAgentToolGatewayRequest({ hostedOnly: true, revalidateOnCompletion: false })
+    : undefined;
+  return <T>(
+    method: "question.get" | "question.resolve",
+    methodParams: Record<string, unknown>,
+    commitGuard?: () => void,
+  ) => {
+    if (commitGuard) {
+      if (!guardedWriteRequest) {
+        throw new Error("Guarded question resolution requires its admitted in-process Gateway");
+      }
+      return guardedWriteRequest<T>({
+        ...gatewayOptions,
+        method,
+        params: methodParams,
+        // Target policy is checked by the native request authority at commit.
+        // This also refuses transport fallback, where the assertion cannot travel.
+        sessionMutationCommitGuard: commitGuard,
+      });
+    }
+    return request<T>({ ...gatewayOptions, method, params: methodParams });
+  };
 }
 
 /** Params for the overload that re-checks access before the resolve write. */
@@ -218,10 +275,10 @@ export type ResolveQuestionAnswersOverGatewayResult =
 export async function resolveQuestionAnswersOverGateway(
   params: QuestionGatewayCallParams & {
     answers: Record<string, string[]>;
-    authorize: QuestionResolutionAuthorizer;
+    authorize: PreparedQuestionResolutionAuthorizer;
   },
 ): Promise<ResolveQuestionAnswersOverGatewayResult> {
-  const call = createQuestionGatewayCaller(params);
+  const call = createQuestionGatewayCaller(params, true);
   const record = await readQuestionRecord(call, params.questionId);
   if (!record) {
     return { status: "already-terminal", reason: "not-found" };
@@ -232,16 +289,25 @@ export async function resolveQuestionAnswersOverGateway(
   if (record.questions.some((question) => question.isSecret || question.secretStore)) {
     throw new Error("question answer resolution does not accept secret questions");
   }
-  if (!(await params.authorize())) {
+  const commitGuard = await prepareQuestionResolutionCommitGuard(params.authorize);
+  if (!commitGuard) {
     return { status: "denied" };
   }
   try {
-    await call<QuestionResolveResult>("question.resolve", {
-      id: params.questionId,
-      answers: { answers: params.answers },
-      resolvedBy: params.senderId?.trim() || undefined,
-    });
+    commitGuard();
+    await call<QuestionResolveResult>(
+      "question.resolve",
+      {
+        id: params.questionId,
+        answers: { answers: params.answers },
+        resolvedBy: params.senderId?.trim() || undefined,
+      },
+      commitGuard,
+    );
   } catch (error) {
+    if (error instanceof QuestionResolutionDeniedError) {
+      return { status: "denied" };
+    }
     const terminal = readTerminalReason(error);
     if (terminal) {
       return { status: "already-terminal", reason: terminal };
@@ -261,9 +327,9 @@ export type CancelQuestionOverGatewayResult =
 
 /** Cancels a pending question, such as when a person skips a native form. */
 export async function cancelQuestionOverGateway(
-  params: QuestionGatewayCallParams & { authorize: QuestionResolutionAuthorizer },
+  params: QuestionGatewayCallParams & { authorize: PreparedQuestionResolutionAuthorizer },
 ): Promise<CancelQuestionOverGatewayResult> {
-  const call = createQuestionGatewayCaller(params);
+  const call = createQuestionGatewayCaller(params, true);
   const record = await readQuestionRecord(call, params.questionId);
   if (!record) {
     return { status: "already-terminal", reason: "not-found" };
@@ -271,16 +337,25 @@ export async function cancelQuestionOverGateway(
   if (record.status !== "pending") {
     return { status: "already-terminal", reason: "already-terminal" };
   }
-  if (!(await params.authorize())) {
+  const commitGuard = await prepareQuestionResolutionCommitGuard(params.authorize);
+  if (!commitGuard) {
     return { status: "denied" };
   }
   try {
-    await call<QuestionResolveResult>("question.resolve", {
-      id: params.questionId,
-      cancel: true,
-      resolvedBy: params.senderId?.trim() || undefined,
-    });
+    commitGuard();
+    await call<QuestionResolveResult>(
+      "question.resolve",
+      {
+        id: params.questionId,
+        cancel: true,
+        resolvedBy: params.senderId?.trim() || undefined,
+      },
+      commitGuard,
+    );
   } catch (error) {
+    if (error instanceof QuestionResolutionDeniedError) {
+      return { status: "denied" };
+    }
     const terminal = readTerminalReason(error);
     if (terminal) {
       return { status: "already-terminal", reason: terminal };
