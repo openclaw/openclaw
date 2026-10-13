@@ -79,6 +79,8 @@ function configPage(id: ConfigPageId) {
     component: () =>
       import("./config-page.tsx").then((module) => ({
         header: true,
+        // Keep the current owner while another Settings subpage loads its data.
+        renderOwnerKey: () => "settings-config",
         renderSolid: module.ConfigRoute,
       })),
   });

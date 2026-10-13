@@ -1,13 +1,15 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { createComponent, createSignal } from "solid-js";
+import { createRouter } from "@openclaw/uirouter";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { mountRouterOutlet } from "../../app/router-outlet.test-support.tsx";
 import { resetServerUiPrefsSync } from "../../app/server-prefs.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { createGatewayHarness } from "../../lib/config/config-test-harness.ts";
@@ -286,54 +288,96 @@ describe("ConfigPage navigation", () => {
     );
   });
 
-  it("keeps one config host while the shared route renderer changes subpages", async () => {
+  it("keeps the config owner through a pending subpage loader in the real outlet", async () => {
+    const context = completeConfigContext(routeContext());
+    const configPages = pages.filter((route) => route.id !== "settings" && route.id !== "config");
     const communications = expectDefined(
-      pages.find((route) => route.id === "communications"),
+      configPages.find((route) => route.id === "communications"),
       "communications route",
     );
     const advanced = expectDefined(
-      pages.find((route) => route.id === "advanced"),
+      configPages.find((route) => route.id === "advanced"),
       "advanced route",
     );
-    const firstModule = await communications.component();
-    const nextModule = await advanced.component();
-    const render = expectDefined(firstModule.renderSolid, "config renderer");
-    expect(nextModule.renderSolid).toBe(render);
-    const [data, setData] = createSignal<ConfigPageRouteData>({
-      ...configRouteData({
-        pathname: "/settings/communications",
-        search: "?section=tts",
-        hash: "",
-      }),
-      pageId: "communications",
-    });
-    const provider = createSolidApplicationContextProvider(completeConfigContext(routeContext()));
-    const { container } = mountSolid(
-      () =>
-        createComponent(render, {
-          get data() {
-            return data();
+    const loadAdvanced = expectDefined(advanced.loader, "advanced loader");
+    const releaseAdvanced = deferred();
+    const provider = createSolidApplicationContextProvider(context);
+    const productionModule = await communications.component();
+    const render = productionModule.renderSolid;
+    expect((await advanced.component()).renderSolid).toBe(render);
+    const module = {
+      ...productionModule,
+      renderSolid: (props: Parameters<typeof render>[0]) =>
+        createComponent(provider.wrapper, {
+          get children() {
+            return createComponent(render, props);
           },
-          loaderPending: false,
-          presented: true,
         }),
-      { wrapper: provider.wrapper },
-    );
-    flush();
-    const host = expectDefined(container.querySelector("openclaw-config-page"), "config host");
-    expect(Reflect.get(host, "pageId")).toBe("communications");
-    expect(host.querySelector("#config-section-tts")).not.toBeNull();
-
-    setData({
-      ...configRouteData({ pathname: "/settings/advanced", search: "", hash: "" }),
-      pageId: "advanced",
+    };
+    const router = createRouter<
+      ConfigPageId,
+      ApplicationContext,
+      typeof module,
+      ConfigPageRouteData
+    >({
+      routes: [
+        { ...communications, component: () => module },
+        {
+          ...advanced,
+          component: () => module,
+          loader: async (...args: Parameters<typeof loadAdvanced>) => {
+            const data = loadAdvanced(...args);
+            await releaseAdvanced.promise;
+            return data;
+          },
+        },
+      ],
     });
-    flush();
-    expect(container.querySelector("openclaw-config-page")).toBe(host);
-    expect(Reflect.get(host, "pageId")).toBe("advanced");
-    expect(host.querySelector(".content-header--settings .page-title")?.textContent).toBe(
-      "Advanced",
-    );
+    const mounted = mountRouterOutlet({ router, retryContext: context });
+    try {
+      await router.navigate(
+        "communications",
+        context,
+        {},
+        {
+          pathname: "/settings/communications",
+          search: "?section=tts",
+          hash: "",
+        },
+      );
+      await waitForSolid(() => {
+        expect(mounted.querySelector("#config-section-tts")).not.toBeNull();
+      });
+      const host = expectDefined(mounted.querySelector("openclaw-config-page"), "config host");
+      expect(Reflect.get(host, "pageId")).toBe("communications");
+
+      const navigation = router.navigate("advanced", context);
+      await waitForSolid(() => {
+        const pending = router.getState().matches[0];
+        expect(pending?.routeId).toBe("advanced");
+        expect(pending?.status).toBe("pending");
+        expect(pending?.module).toBeDefined();
+        expect(pending?.data).toBeUndefined();
+      });
+      expect(mounted.querySelector("openclaw-config-page")).toBe(host);
+      expect(host.isConnected).toBe(true);
+      expect(Reflect.get(host, "pageId")).toBe("communications");
+
+      releaseAdvanced.resolve(undefined);
+      await navigation;
+      await waitForSolid(() => {
+        expect(Reflect.get(host, "pageId")).toBe("advanced");
+        expect(host.querySelector(".content-header--settings .page-title")?.textContent).toBe(
+          "Advanced",
+        );
+      });
+      expect(mounted.querySelector("openclaw-config-page")).toBe(host);
+      expect(host.isConnected).toBe(true);
+    } finally {
+      releaseAdvanced.resolve(undefined);
+      mounted.dispose();
+      router.stop();
+    }
   });
 
   describe("ConfigPage pending section navigation", () => {
