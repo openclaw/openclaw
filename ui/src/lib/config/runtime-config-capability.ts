@@ -150,6 +150,9 @@ export function createRuntimeConfigCapability(
   });
 
   const ensureLoaded = async () => {
+    if (!hasOperatorReadAccess(gateway.snapshot.hello?.auth ?? null)) {
+      return;
+    }
     if (!state.configSnapshot) {
       await loadOnce("config", () => loadConfig(state, { draftWrites: writes }));
     }
@@ -192,6 +195,9 @@ export function createRuntimeConfigCapability(
     ensureLoaded,
     ensureSchemaLoaded,
     refresh: async (options?: { background?: boolean }) => {
+      if (!hasOperatorReadAccess(gateway.snapshot.hello?.auth ?? null)) {
+        return;
+      }
       appliedRefresh.cancel();
       try {
         await run(() => loadConfig(state, { ...options, draftWrites: writes }), "config");
