@@ -63,6 +63,11 @@ export async function runEmbeddedFallbackCandidate(
       directBlockDeliveries: params.directBlockDeliveries,
       minimumAssistantMessageIndex,
       resolveReplyDelivery: async (minimum) => {
+        const facts = await turn.opts?.resolveReplyDeliveryFacts?.(minimum);
+        if (facts) {
+          source = facts.source;
+          return facts.terminal;
+        }
         source = (await turn.opts?.resolveReplyDelivery?.(minimum)) ?? "missing";
         return source;
       },

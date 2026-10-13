@@ -6,6 +6,8 @@ import {
 } from "./worker-operation-registry.js";
 
 const loaders = {
+  projects: () =>
+    import("../projects/project-registry.kernel.js").then((m) => m.projectRegistryReadOperations),
   agentDeletion: () =>
     import("../agents/agent-delete-session-store-safety.kernel.js").then(
       (m) => m.agentDeletionSessionStoreReadOperations,

@@ -447,6 +447,16 @@ export function canDeleteSessionRows(
   );
 }
 
+/** Native catalog adoptions retain their provider transcript outside OpenClaw's delete lifecycle. */
+export function isNativeCatalogAdoptionSessionKey(key: string): boolean {
+  const rest = parseAgentSessionKey(key)?.rest ?? key;
+  return (
+    rest.startsWith("plugin:anthropic:catalog-adopt:claude:") ||
+    rest.startsWith("harness:codex:supervision:") ||
+    rest.startsWith("harness:codex:node-session:")
+  );
+}
+
 export function isSessionKeyTiedToAgent(
   sessionKey: string | undefined | null,
   agentId: string,

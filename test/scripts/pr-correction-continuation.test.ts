@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -49,30 +48,7 @@ describePosix("published correction continuation through the canonical wrapper",
     f = createBaselineFixture(dirs.make("openclaw-pr-continuation-"), 1);
     // Publish through the real owner to a private Git remote. GitHub is the only
     // external adapter; the fixture does not manufacture publication receipts.
-    f.git(f.repo, "config", `url.${f.repo}.insteadOf`, "https://github.com/fixture/repo.git");
-    writeFileSync(
-      f.local("pr-meta.env"),
-      `${readFileSync(f.local("pr-meta.env"), "utf8")}PR_HEAD_REPO_URL=https://github.com/fixture/repo\n`,
-    );
-    const published = f.git(f.worktree, "rev-parse", "HEAD");
-    const stamp = spawnSync(
-      "bash",
-      [
-        "-c",
-        'source "$1"; write_gates_env_stamp 42 true false github_pending "" "" "$2" "" "" "" ""',
-        "fixture-gates",
-        join(f.repo, "scripts/pr-lib/gates.sh"),
-        published,
-      ],
-      { cwd: f.worktree, env: f.env, encoding: "utf8" },
-    );
-    expect(stamp.status, stamp.stderr).toBe(0);
-    f.pass("prepare-push");
-    incoming = f.git(f.repo, "rev-parse", "topic");
-    expect(incoming).toBe(published);
-    expect(readFileSync(f.local("prepare-push-result.env"), "utf8")).toContain(
-      `PUSHED_FROM_SHA=${f.incoming}`,
-    );
+    incoming = f.publish();
     // A new signed fix follows the already published correction. The fresh
     // hosted review deliberately disagrees with the historical READY verdict.
     writeFileSync(join(f.worktree, f.product[0]!), "later correction\n");

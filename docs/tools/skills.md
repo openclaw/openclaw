@@ -643,11 +643,15 @@ metadata:
     - **Download:** `url` (required), `sha256` (optional 64-character hexadecimal
       digest, verified after download and before the file is installed or extracted),
       `archive` (`tar.gz` | `tar.bz2` | `zip`), `extract` (default: auto when
-      archive detected), `stripComponents`, `targetDir` (default:
+      the recipe or URL identifies an archive), `stripComponents`, `targetDir` (default:
       `~/.openclaw/tools/<skillKey>`). Existing specs without `sha256` keep the
       previous download behavior. Response bodies are capped at 256 MiB; larger
       transfers are aborted while streaming, and partial staging data is removed.
       Archive extraction does not require a system `tar` command.
+      With `extract: true`, a valid `Content-Disposition` filename can identify
+      an archive served from an extensionless URL. Invalid or empty response
+      filenames fall back to the URL; response headers do not enable extraction
+      for recipes that omit `extract`.
   </Accordion>
   <Accordion title="Sandboxing notes">
     `requires.bins` is checked on the **host** at skill load time. If an agent

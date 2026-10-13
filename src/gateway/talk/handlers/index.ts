@@ -94,21 +94,23 @@ type TalkSpeakReason =
   | "synthesis_failed"
   | "invalid_audio_result";
 
-async function resolveCatalogProviderSelection(
+async function resolveCatalogProviderSelection<T extends { provider: { id: string } }>(
   configuredProvider: string | undefined,
-  resolveAutomaticProvider: () => string | Promise<string>,
-): Promise<{ activeProvider?: string; ready: boolean }> {
+  resolveAutomaticProvider: () => Promise<T>,
+) {
   // Provider priority belongs to the runtime resolver; catalog consumers must not infer it from row order.
   try {
     const resolvedProvider = await resolveAutomaticProvider();
     return {
-      activeProvider: resolvedProvider,
+      activeProvider: resolvedProvider.provider.id,
       ready: true,
+      resolved: resolvedProvider,
     };
   } catch {
     return {
       ...(configuredProvider ? { activeProvider: configuredProvider } : {}),
       ready: false,
+      resolved: undefined,
     };
   }
 }
@@ -235,15 +237,13 @@ async function buildTalkCatalog(config: OpenClawConfig, params: TalkCatalogParam
   const transcriptionConfig = await buildTalkTranscriptionConfig(config);
   const transcriptionSelection = await resolveCatalogProviderSelection(
     canonicalizeRealtimeTranscriptionProviderId(transcriptionConfig.provider, config),
-    async () =>
-      (
-        await resolveConfiguredRealtimeTranscriptionProvider({
-          config,
-          configuredProviderId: transcriptionConfig.provider,
-          providerConfigs: transcriptionConfig.providers,
-          defaultModel: transcriptionConfig.model,
-        })
-      ).provider.id,
+    () =>
+      resolveConfiguredRealtimeTranscriptionProvider({
+        config,
+        configuredProviderId: transcriptionConfig.provider,
+        providerConfigs: transcriptionConfig.providers,
+        defaultModel: transcriptionConfig.model,
+      }),
   );
   const activeTranscriptionProvider = transcriptionSelection.activeProvider;
   const requestedProvider = normalizeOptionalString(params.provider);
@@ -274,15 +274,13 @@ async function buildTalkCatalog(config: OpenClawConfig, params: TalkCatalogParam
     canonicalizeRealtimeVoiceProviderId(realtimeConfig.provider, config),
     async () => {
       assertSecretOwnerAvailable("capability", "talk:realtime");
-      return (
-        await resolveConfiguredRealtimeVoiceProviderAsync({
-          ...realtimeResolveContext,
-          configuredProviderId: realtimeConfig.provider,
-          providerConfigs: realtimeConfig.providers,
-          ...realtimeModelOverride,
-          defaultModel: realtimeConfig.model,
-        })
-      ).provider.id;
+      return resolveConfiguredRealtimeVoiceProviderAsync({
+        ...realtimeResolveContext,
+        configuredProviderId: realtimeConfig.provider,
+        providerConfigs: realtimeConfig.providers,
+        ...realtimeModelOverride,
+        defaultModel: realtimeConfig.model,
+      });
     },
   );
   const activeRealtimeProvider = realtimeSelection.activeProvider;
@@ -368,6 +366,10 @@ async function buildTalkCatalog(config: OpenClawConfig, params: TalkCatalogParam
     Promise.all(
       listRealtimeVoiceProviders(config, realtimeProviderIds).map(async (provider) => {
         const available = isSecretOwnerAvailable("capability", "talk:realtime");
+        const selected =
+          available && provider.id === activeRealtimeProvider
+            ? realtimeSelection.resolved
+            : undefined;
         const rawConfig = resolveProviderRawConfig({
           providerConfigs: realtimeConfig.providers ?? {},
           providerId: provider.id,
@@ -390,34 +392,43 @@ async function buildTalkCatalog(config: OpenClawConfig, params: TalkCatalogParam
                 provider.resolveConfig?.({ ...realtimeResolveContext, rawConfig: rawInput }))) ??
               rawInput)
             : rawInput;
-        const defaultProviderConfig = await resolveConfig(defaultRawConfig);
+        // Selection already prepared this request's effective config and capabilities.
+        // Only an explicit model needs a separate discovery-default resolution.
+        const defaultProviderConfig =
+          selected && rawConfigWithModel.model === undefined
+            ? selected.providerConfig
+            : await resolveConfig(defaultRawConfig);
         const providerConfig =
-          available && rawConfigWithModel.model === undefined
+          selected?.providerConfig ??
+          (available && rawConfigWithModel.model === undefined
             ? defaultProviderConfig
-            : await resolveConfig(rawConfigWithModel);
-        const capabilities: InternalRealtimeVoiceProviderCapabilities | undefined = available
-          ? await resolveRealtimeVoiceProviderCapabilitiesAsync({
-              provider,
-              providerConfig,
-              cfg: config,
-              agentId: realtimeAgentId,
-              surface: realtimeSurface,
-            })
-          : provider.capabilities;
+            : await resolveConfig(rawConfigWithModel));
+        const capabilities: InternalRealtimeVoiceProviderCapabilities | undefined = selected
+          ? selected.capabilities
+          : available
+            ? await resolveRealtimeVoiceProviderCapabilitiesAsync({
+                provider,
+                providerConfig,
+                cfg: config,
+                agentId: realtimeAgentId,
+                surface: realtimeSurface,
+              })
+            : provider.capabilities;
         const entry: Record<string, unknown> = {
           id: provider.id,
           label: provider.label,
           configured:
             available &&
-            (await configuredOrFalseAsync(() =>
-              isRealtimeVoiceProviderConfiguredAsync({
-                provider,
-                cfg: config,
-                providerConfig,
-                agentId: realtimeAgentId,
-                surface: realtimeSurface,
-              }),
-            )),
+            (selected !== undefined ||
+              (await configuredOrFalseAsync(() =>
+                isRealtimeVoiceProviderConfiguredAsync({
+                  provider,
+                  cfg: config,
+                  providerConfig,
+                  agentId: realtimeAgentId,
+                  surface: realtimeSurface,
+                }),
+              ))),
           modes: ["realtime"],
           brains:
             capabilities?.supportsToolCalls === false && capabilities.handlesAgentConsult !== true

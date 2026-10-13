@@ -35,6 +35,7 @@ import {
   assertPersistedStateDatabaseAccessAllowed,
   defaultPayload,
   isGatewayStateOwnerDefinitelyStale,
+  StateDatabaseAccessError,
   StateDatabaseAdmissionPendingError,
 } from "./gateway-state-owner-record.js";
 import { normalizeSqliteNonNegativeInteger } from "./sqlite-busy-timeout.js";
@@ -686,7 +687,7 @@ export function assertStateDatabaseAccessAllowed(
     }
     const scope = captured ? captured.maintenanceScope : getOpenClawDatabaseMaintenanceScope();
     if (!scope) {
-      throw new Error(
+      throw new StateDatabaseAccessError(
         `OpenClaw state at ${databasePath} is undergoing offline maintenance; retry when it finishes.`,
       );
     }
