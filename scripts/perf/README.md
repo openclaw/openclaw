@@ -121,6 +121,8 @@ counted separately. A fixed 10-second post-readiness delay allows retained-run
 startup recovery to settle before setup. One concurrent round
 warms the Gateway before five measured rounds. `--port`, `--mock-port`,
 `--chunks`, `--clients`, `--runs`, and `--rounds` adjust the workload.
+Warmup and each measured round drain until no model streams remain and all
+subscriber events have been quiet for one second, with a 15-second timeout.
 
 Results under the fixture's `broadcast-measure-*` directory include Gateway
 logs, event counts, peak concurrent model streams, and CPU snapshots from the
@@ -131,7 +133,8 @@ incomplete per-client transcript/list fanout, or an incorrect primary request or
 overlap count fail the measurement. `mainThreadMsPerSessionEvent` divides by
 the validated `session.message` plus `sessions.changed` copies per client;
 other event counts remain in the report. It includes all Gateway work during the
-round, so it does not isolate broadcast CPU. Compare the same event counts and
+round, including the drain interval, so it does not isolate broadcast CPU and
+CPU per second includes that quiet interval. Compare the same event counts and
 concurrency on both revisions, and report the actual database size. For a roughly 5 GiB fixture, seed with
 `--transcript-mib 1500` rather than the 64 MiB logical-text default. The driver
 stops its Gateway and model fixture on completion or interruption and retains

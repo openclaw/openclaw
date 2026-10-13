@@ -214,6 +214,7 @@ const clients: ReturnType<typeof createGatewayWsClient>[] = [];
 const counters = new Map<string, number>();
 const perClientCounters: Map<string, number>[] = [];
 let measuring = false;
+let lastSubscriberEventAt = performance.now();
 let closing = false;
 let subscriberFailure: Error | undefined;
 let gateway: ChildProcess | undefined;
@@ -354,6 +355,17 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>) {
     current.release();
   }
 }
+async function drainEvents() {
+  const started = performance.now();
+  while (performance.now() - started < 15_000) {
+    assertGatewayAlive();
+    if (activeStreams === 0 && performance.now() - lastSubscriberEventAt >= 1000) {
+      return;
+    }
+    await delay(50);
+  }
+  throw new Error("model streams and subscriber events did not drain within 15s");
+}
 let cleanupPromise: Promise<void> | undefined;
 function cleanup() {
   return (cleanupPromise ??= (async () => {
@@ -413,6 +425,7 @@ try {
     const client = createGatewayWsClient({
       url: `ws://127.0.0.1:${port}`,
       onEvent: (event) => {
+        lastSubscriberEventAt = performance.now();
         if (event.seq !== undefined) {
           if (previousSeq !== undefined && event.seq !== previousSeq + 1) {
             subscriberFailure ??= new Error(
@@ -484,7 +497,7 @@ try {
   console.log("PHASE subscribed-and-reset");
   await runRound(sender);
   console.log("PHASE warmed");
-  await delay(1000);
+  await drainEvents();
   const samples = [];
   for (let round = 0; round < rounds; round++) {
     counters.clear();
@@ -498,7 +511,7 @@ try {
     const before = await readGatewayCpuUsage(gateway);
     measuring = true;
     await runRound(sender);
-    await delay(250);
+    await drainEvents();
     measuring = false;
     assertGatewayAlive();
     if (clients.some((client) => client.ws.readyState !== client.ws.OPEN)) {
