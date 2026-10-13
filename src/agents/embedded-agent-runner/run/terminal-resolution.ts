@@ -335,7 +335,7 @@ export async function resolveEmbeddedRunTerminal(input: {
           hasIntentionalTerminalCompletion: intentionalTerminalCompletion,
           terminalAuthFailure: input,
         });
-  const incompleteTurnFallbackSafe = Boolean(
+  const incompleteTurnReplaySafe = Boolean(
     incompleteTurnText &&
     !terminalInterrupted &&
     !promptError &&
@@ -344,7 +344,10 @@ export async function resolveEmbeddedRunTerminal(input: {
     !terminalAssistantError &&
     !input.replayState.hadPotentialSideEffects,
   );
-  const terminalToolPresentation = incompleteTurnFallbackSafe
+  // Replay safety does not make a normal empty completion a model-capability failure.
+  const incompleteTurnFallbackSafe =
+    incompleteTurnReplaySafe && input.attemptAssistant?.stopReason !== "stop";
+  const terminalToolPresentation = incompleteTurnReplaySafe
     ? availableTerminalToolPresentation
     : undefined;
   if (

@@ -4,10 +4,13 @@ import { classifyAgentExecResult } from "../../../commands/agent-exec-result.js"
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { createMediaGenerationOperation } from "../../media-generation-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../media-generation-activity.test-support.js";
+import { runWithModelFallback } from "../../model-fallback-runner.js";
 import {
   buildEmbeddedRunnerAssistant,
+  createMockUsage,
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { classifyEmbeddedAgentRunResultForModelFallback } from "../result-fallback-classifier.js";
 import { createUsageAccumulator } from "../usage-accumulator.js";
 import {
   markEmbeddedRunAuthProfileSuccess,
@@ -33,6 +36,73 @@ describe("terminal resolution", () => {
     vi.clearAllMocks();
     resetGeneratedMediaTaskActivityForTests();
   });
+
+  it.each(["optional", "required"] as const)(
+    "keeps a blank normal stop on the selected model when the reply is %s",
+    async (expectation) => {
+      const prompt = "The result is already incorporated. No new update.";
+      const provenance = { kind: "inter_session" as const, sourceTool: "sessions_send" };
+      // Recorded shape: fresh inter-session input, response.completed, blank text,
+      // four output tokens, no tool calls or compaction. Content is synthetic.
+      const assistant = emptyAssistant({
+        stopReason: "stop",
+        usage: createMockUsage(89, 4),
+      });
+      let modelRequests = 0;
+      const run = vi.fn(async () => {
+        const attempt = makeEmbeddedRunnerAttempt({
+          assistantTexts: [],
+          messagesSnapshot: [
+            { role: "user", content: prompt, timestamp: 0, provenance },
+            assistant,
+          ],
+          lastAssistant: assistant,
+          currentAttemptAssistant: assistant,
+          currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        });
+        const input = makeTerminalInput({
+          attempt,
+          runParams: {
+            prompt,
+            inputProvenance: provenance,
+            ...(expectation === "required" ? { terminalReplyExpectation: expectation } : {}),
+          },
+        });
+        for (;;) {
+          modelRequests += 1;
+          const terminal = await resolveEmbeddedRunTerminal(input);
+          if (terminal.action === "complete") {
+            return terminal.result;
+          }
+        }
+      });
+
+      const result = await runWithModelFallback({
+        cfg: undefined,
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        fallbacksOverride: ["openai/gpt-5.6-terra", "openai/gpt-5.6-luna"],
+        skipAuthProfileRuntime: true,
+        classifyResult: classifyEmbeddedAgentRunResultForModelFallback,
+        run,
+      });
+
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(modelRequests).toBe(expectation === "optional" ? 1 : 2);
+      expect(result.model).toBe("gpt-5.6-sol");
+      expect(result.attempts).toEqual([]);
+      if (expectation === "optional") {
+        expect(result.result.meta.error).toBeUndefined();
+        expect(result.result.meta.terminalReplyKind).toBe("silent-empty");
+        expect(result.result.payloads).toEqual([{ text: SILENT_REPLY_TOKEN }]);
+      } else {
+        expect(result.result.meta.error?.kind).toBe("incomplete_turn");
+        expect(result.result.payloads).toEqual([
+          { text: "⚠️ Agent couldn't generate a response. Please try again.", isError: true },
+        ]);
+      }
+    },
+  );
 
   it("completes an empty post-tool turn after committed media delivery", async () => {
     const hasToolMediaBlockReply = true;
@@ -517,7 +587,7 @@ describe("terminal resolution", () => {
     ]);
     expect(exhausted.result.meta.error).toMatchObject({
       kind: "incomplete_turn",
-      fallbackSafe: true,
+      fallbackSafe: false,
       terminalPresentation: true,
     });
   });
