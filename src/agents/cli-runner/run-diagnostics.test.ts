@@ -74,6 +74,44 @@ describe("Claude CLI run diagnostics", () => {
     }
   });
 
+  it("stamps the requesting session on runs started by another session", async () => {
+    const sent = captureLifecycle("sent-run");
+    const spawned = captureLifecycle("spawned-run");
+    try {
+      await runClaudeCliAgentTurnWithDiagnostics(
+        {
+          runId: "sent-run",
+          sessionId: "forge-session",
+          sessionKey: "agent:forge:main",
+          inputProvenance: {
+            kind: "inter_session",
+            sourceSessionKey: "agent:main:main",
+            sourceTool: "sessions_send",
+          },
+        },
+        async () => ({ payloads: [{ text: "done" }], meta: { durationMs: 1 } }),
+      );
+      await runClaudeCliAgentTurnWithDiagnostics(
+        {
+          runId: "spawned-run",
+          sessionId: "child-session",
+          sessionKey: "agent:main:subagent:child",
+          sessionEntry: { sessionId: "child-session", updatedAt: 1, spawnedBy: "agent:main:main" },
+        },
+        async () => ({ payloads: [{ text: "done" }], meta: { durationMs: 1 } }),
+      );
+      await flushDiagnosticEvents();
+      for (const { event } of [...sent.events, ...spawned.events]) {
+        expect(event).toMatchObject({ requesterSessionKey: "agent:main:main" });
+      }
+      expect(sent.events).toHaveLength(4);
+      expect(spawned.events).toHaveLength(4);
+    } finally {
+      sent.unsubscribe();
+      spawned.unsubscribe();
+    }
+  });
+
   it("nests model calls beneath synthetic run and harness spans", async () => {
     const runId = "run-claude-hierarchy";
     const diagnostics = captureLifecycle(runId);

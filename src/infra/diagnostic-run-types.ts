@@ -2,6 +2,8 @@ export type DiagnosticRunScopeFields = {
   runId: string;
   sessionKey?: string;
   sessionId?: string;
+  /** Session that started this run through sessions_send or sessions_spawn. */
+  requesterSessionKey?: string;
   agentId?: string;
   provider?: string;
   model?: string;

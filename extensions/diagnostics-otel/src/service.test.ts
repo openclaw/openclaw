@@ -2726,6 +2726,37 @@ describe("diagnostics-otel service", () => {
     );
   });
 
+  test("exports session identity on run and tool spans only when opted in", async () => {
+    await startServiceFixture(["traces"], (serviceContext) => {
+      serviceContext.config.diagnostics!.otel!.captureSessionIdentity = true;
+    });
+
+    emitEvent("run.completed", {
+      runId: "run-1",
+      sessionKey: "agent:forge:main",
+      requesterSessionKey: "agent:main:main",
+      agentId: "forge",
+      ...MODEL_FIXTURE,
+      trace: createTestTrace(SPAN_ID),
+    });
+    await emitEventAndFlush("tool.execution.completed", {
+      sessionKey: "agent:main:subagent:child",
+      agentId: "main",
+      toolCallId: "tool-1",
+      trace: createTestTrace(CHILD_SPAN_ID, SPAN_ID),
+    });
+
+    expect(startedSpanOptions("openclaw.run")?.attributes).toMatchObject({
+      "gen_ai.conversation.id": "agent:forge:main",
+      "gen_ai.agent.id": "forge",
+      "openclaw.requester.conversation.id": "agent:main:main",
+    });
+    expect(startedSpanOptions("openclaw.tool.execution")?.attributes).toMatchObject({
+      "gen_ai.conversation.id": "agent:main:subagent:child",
+      "gen_ai.agent.id": "main",
+    });
+  });
+
   test("exports run, model call, and tool execution lifecycle spans", async () => {
     await startServiceFixture(["traces", "metrics"]);
 
@@ -2801,6 +2832,7 @@ describe("diagnostics-otel service", () => {
       "openclaw.runId",
       "openclaw.sessionKey",
       "openclaw.traceId",
+      "gen_ai.conversation.id",
     );
     expect(runOptions?.startTime).toBeTypeOf("number");
 

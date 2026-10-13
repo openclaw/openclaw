@@ -58,6 +58,7 @@ paths.
       sampleRate: 0.2, // root-span sampler, 0.0..1.0
       flushIntervalMs: 60000, // metric export interval (min 1000ms)
       captureContent: false,
+      captureSessionIdentity: false, // session key + agent id on spans
     },
   },
 }
