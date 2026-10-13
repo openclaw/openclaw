@@ -498,44 +498,44 @@ export function createSessionsSearchTool(opts?: {
           offset += SESSIONS_SEARCH_MAX_SESSION_KEYS
         ) {
           const chunk = candidates.slice(offset, offset + SESSIONS_SEARCH_MAX_SESSION_KEYS);
-          const runSearch = async () => {
-            try {
-              return await gatewayCall<{
-                results?: GatewaySearchHit[];
-                indexing?: boolean;
-                archivedTranscriptsExcluded?: number;
-                truncated?: boolean;
-              }>({
-                method: "sessions.search",
-                // Transcript readers own a 60-second budget, including worker admission.
-                timeoutMs: 60_000,
-                params: {
-                  agentId,
-                  query,
-                  limit: SESSIONS_SEARCH_MAX_LIMIT,
-                  sessionKeys: chunk.map((candidate) => candidate.key),
-                },
-              });
-            } catch (error) {
-              if (error instanceof GatewayProtocolRequestTimeoutError) {
-                throw new Error(
-                  "Session transcript search timed out. Retry sessions_search with a sessionKey to search one session or more specific query keywords. A timeout does not mean that no matching conversation exists.",
-                  { cause: error },
-                );
-              }
-              throw error;
-            }
-          };
-          const scopedCandidate = chunk.length === 1 ? chunk[0] : undefined;
-          const result = scopedCandidate?.expectedSessionId
-            ? await runWithScopedSessionAccess({
-                cfg,
+          const runSearch = () =>
+            gatewayCall<{
+              results?: GatewaySearchHit[];
+              indexing?: boolean;
+              archivedTranscriptsExcluded?: number;
+              truncated?: boolean;
+            }>({
+              method: "sessions.search",
+              // Transcript readers own a 60-second budget, including worker admission.
+              timeoutMs: 60_000,
+              params: {
                 agentId,
-                expectedSessionId: scopedCandidate.expectedSessionId,
-                targetSessionKey: scopedCandidate.key,
-                run: runSearch,
-              })
-            : await runSearch();
+                query,
+                limit: SESSIONS_SEARCH_MAX_LIMIT,
+                sessionKeys: chunk.map((candidate) => candidate.key),
+              },
+            });
+          const scopedCandidate = chunk.length === 1 ? chunk[0] : undefined;
+          let result: Awaited<ReturnType<typeof runSearch>>;
+          try {
+            result = scopedCandidate?.expectedSessionId
+              ? await runWithScopedSessionAccess({
+                  cfg,
+                  agentId,
+                  expectedSessionId: scopedCandidate.expectedSessionId,
+                  targetSessionKey: scopedCandidate.key,
+                  run: runSearch,
+                })
+              : await runSearch();
+          } catch (error) {
+            if (error instanceof GatewayProtocolRequestTimeoutError) {
+              throw new Error(
+                "Session transcript search timed out. Retry sessions_search with a sessionKey to search one session or more specific query keywords. A timeout does not mean that no matching conversation exists.",
+                { cause: error },
+              );
+            }
+            throw error;
+          }
           indexing ||= result.indexing === true;
           archivedTranscriptsExcluded += result.archivedTranscriptsExcluded ?? 0;
           backendTruncated ||= result.truncated === true;
