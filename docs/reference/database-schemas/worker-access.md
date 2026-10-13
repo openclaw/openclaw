@@ -1600,8 +1600,13 @@ transcript receipts cannot certify complete pending-input and model-context
 facts. Native, SDK, recovery, and maintenance writers keep their existing
 publication and final-authority guards during this incremental cutover.
 
-Closed entry patches reuse an already resident actor when the session and
-lifecycle stay unchanged. The entry writer supplies its complete row and window
+Entry patch preparation and commit reuse the resident actor's current canonical
+row, window, membership, and board facts. Prepared replacements still compare
+against the current snapshot before writing, so an intervening patch cannot lose
+updates. Singleton canonical targets share this path; alias selections and missing
+residency retain their SQL readers.
+Patches reuse the actor after writing when the session and lifecycle stay
+unchanged. The entry writer supplies its complete row and window
 postimages; the actor keeps the untouched pending inputs and transcript facts,
 then publishes its full hot state through the same commit receipt. A rollback
 preserves the stored preimage; conservative receipt invalidation can require a
