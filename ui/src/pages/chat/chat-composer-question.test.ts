@@ -9,7 +9,7 @@ import {
   renderComposerFixture as renderComposer,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.ts";
+import { renderChatComposer } from "./components/chat-composer.tsx";
 import { questionPanelIn } from "./components/chat-question-card.test-support.ts";
 
 function questionPrompt(id: string, question: string): QuestionPrompt {
@@ -74,7 +74,7 @@ describe("composer question takeover", () => {
       )!;
       progress.querySelector("summary")!.click();
       expect(progress.open).toBe(progressOpen);
-      const progressWrapper = progress.parentElement!;
+      const progressWrapper = progress.closest<HTMLElement>(".agent-chat__progress-float")!;
       expect(progressWrapper.hidden).toBe(false);
       const initialTextarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
       initialTextarea.focus();

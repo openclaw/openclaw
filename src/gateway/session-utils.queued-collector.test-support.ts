@@ -11,7 +11,7 @@ import { spawnSubagentDirect } from "../agents/subagents/spawn/subagent-spawn.js
 import { testing as spawnTesting } from "../agents/subagents/spawn/subagent-spawn.test-support.js";
 import { closeSwarmScheduler, reserveSwarmRun } from "../agents/subagents/swarm/swarm-scheduler.js";
 import { testing as schedulerTesting } from "../agents/subagents/swarm/swarm-scheduler.test-support.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../config/config.js";
 import { resolveSessionResetPolicy } from "../config/sessions.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
@@ -33,6 +33,7 @@ import type {
 } from "./server-methods/types.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 
@@ -88,6 +89,7 @@ export function useQueuedCollectorFixture() {
         entries: { main: { workspace: state.workspaceDir } },
       },
     });
+    await captureRuntimeConfigAsyncReader()();
     spawnTesting.setDepsForTest({
       hasInProcessGatewayContext: () => true,
       dispatchGatewayMethodInProcess: async <T>(
@@ -255,25 +257,35 @@ export function useQueuedCollectorFixture() {
     const runId = `${name}-collector`;
     const groupId = `swarm:${parentKey}:parent-turn`;
     reserveSwarmRun({ runId, groupId, maxConcurrent: 1, activeRunIds: [] });
-    expect(
-      await createInitialSubagentSession({
+    const created = await createInitialSubagentSession({
+      cfg: getRuntimeConfig(),
+      requesterAgentId: "main",
+      targetAgentId: "main",
+      childSessionKey,
+      label: "Reserved collector",
+      incognito: false,
+      requesterInternalKey: parentKey,
+      parentTarget: await resolveGatewaySessionStoreTargetInWorker({
         cfg: getRuntimeConfig(),
-        requesterAgentId: "main",
-        targetAgentId: "main",
-        childSessionKey,
-        label: "Reserved collector",
-        incognito: false,
-        requesterInternalKey: parentKey,
-        completionOwnerSessionKey: parentKey,
-        creationPolicy,
-        modelPatch: {},
-        swarmGroupId: groupId,
-        collect: true,
+        key: parentKey,
+        agentId: "main",
+        projection: "full",
       }),
-    ).toMatchObject({ status: "ok" });
+      completionOwnerSessionKey: parentKey,
+      creationPolicy,
+      modelPatch: {},
+      swarmGroupId: groupId,
+      collect: true,
+    });
+    expect(created.status).toBe("ok");
+    if (created.status !== "ok") {
+      throw new Error(created.error);
+    }
     const registration = {
       runId,
       childSessionKey,
+      childAgentId: "main",
+      sessionEntry: expectDefined(created.entry, "created reservation identity"),
       requesterSessionKey: parentKey,
       requesterTurnRunId: "parent-turn",
       requesterDisplayKey: parentKey,

@@ -33,12 +33,7 @@ import type {
   OpenClawStateReadRequest,
 } from "../../../state/openclaw-state-read.types.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
-import {
-  conflictingSubagentRunVersions,
-  writeSubagentRunValuesInDatabase,
-  type SubagentRegistryWrite,
-  type SubagentRegistryWriteReceipt,
-} from "./subagent-registry.store.kernel.js";
+import { writeSubagentRunValuesInDatabase } from "./subagent-registry.store.kernel.js";
 import { subagentRunRowVersion } from "./subagent-registry.store.row.js";
 import {
   loadSubagentMaintenanceRunsInDatabase,
@@ -46,6 +41,10 @@ import {
   loadVersionedSubagentRunsInDatabase,
   loadSubagentRunsForSessionFromSqlite,
 } from "./subagent-registry.store.sqlite.js";
+import type {
+  SubagentRegistryWrite,
+  SubagentRegistryWriteReceipt,
+} from "./subagent-registry.store.types.js";
 
 const log = createSubsystemLogger("state/worker");
 
@@ -54,12 +53,10 @@ export function readSubagentRunsInWorker(
   command: Extract<OpenClawStateReadCommand, { type: "subagents.runs" }>,
 ): Extract<OpenClawStateReadResult, { type: "subagents.runs" }> {
   if (command.scope.kind === "maintenance") {
-    const maintenance = loadSubagentMaintenanceRunsInDatabase({ db });
     return {
       type: command.type,
       projection: "maintenance",
-      runs: maintenance.runs,
-      maintenanceDigest: maintenance.digest,
+      runs: loadSubagentMaintenanceRunsInDatabase({ db }),
     };
   }
   if (command.scope.kind === "descendants") {
@@ -71,8 +68,7 @@ export function readSubagentRunsInWorker(
     return {
       type: command.type,
       runs: descendants.runs,
-      descendantBasis: {
-        digest: descendants.digest,
+      descendants: {
         sessionKeys: descendants.sessionKeys,
         runIds: descendants.runIds,
       },
@@ -155,28 +151,16 @@ export async function streamSubagentRegistryInWorker(
   return count;
 }
 
-/** The row owner's worker adapter commits selected versions and terminal signals together. */
+/** The row owner's worker adapter commits FIFO-planned rows and terminal signals together. */
 export function persistSubagentRunChangesInWorker(
   input: SubagentRegistryWrite,
   writeOptions: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
 ): SubagentRegistryWriteReceipt {
-  const { writeId, values, deleteRunIds, versions, terminalEvents = [] } = input;
-  const admittedRunIds = new Set(versions.map(({ runId }) => runId));
-  if (
-    [...values.map((row) => row.run_id), ...deleteRunIds].some(
-      (runId) => !admittedRunIds.has(runId),
-    )
-  ) {
-    throw new Error("Subagent registry write is missing a row version");
-  }
+  const { writeId, values, deleteRunIds, terminalEvents = [] } = input;
   let committedReceipt: SubagentRegistryWriteReceipt | undefined;
   try {
     return runOpenClawStateWriteTransaction((writer): SubagentRegistryWriteReceipt => {
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: writeId });
-      const conflictRunIds = conflictingSubagentRunVersions(writer, versions);
-      if (conflictRunIds.length > 0) {
-        return { writeId, conflictRunIds };
-      }
       const admitEvents = (stage: "transaction" | "commit") => {
         for (const [eventIndex, event] of terminalEvents.entries()) {
           requestSessionEntryCurrentAdmission(event.sessionEntryCurrentSource, {

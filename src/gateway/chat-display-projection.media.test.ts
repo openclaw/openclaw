@@ -2,6 +2,10 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { readTranscriptEventRows } from "../config/sessions/session-accessor.sqlite-read.js";
 import {
@@ -132,7 +136,11 @@ it("preserves error-turn media after a later reply", () => {
     __openclaw: { runId: "run-retry", media },
   });
   const recovered = assistant({ stopReason: "stop", __openclaw: { runId: "run-retry" } });
-  expect(project([user, failed, recovered])).toEqual([user, { ...failed, content: [] }, recovered]);
+  expect(project([user, failed, recovered])).toEqual([
+    user,
+    { role: "assistant", content: [], __openclaw: { runId: "run-retry", media } },
+    recovered,
+  ]);
 });
 
 const managedUrl = "./attachment-catalog-tiny/demo.jpg";
@@ -172,6 +180,7 @@ describe("correlated channel mirrors in Gateway history", () => {
   let scope: { agentId: string; sessionId: string; sessionKey: string; storePath: string };
   beforeEach(async () => {
     state = await createOpenClawTestState({ prefix: "openclaw-mirror-history-", applyEnv: false });
+    setRuntimeConfigSnapshot({});
     scope = {
       agentId: "main",
       sessionId: "mirror-history-session",
@@ -183,6 +192,7 @@ describe("correlated channel mirrors in Gateway history", () => {
   afterEach(async () => {
     closeOpenClawAgentDatabasesForTest();
     await state.cleanup();
+    clearRuntimeConfigSnapshot();
   });
   const append = (eventId: string, message: Record<string, unknown>) =>
     appendSessionTranscriptMessageByIdentity({ ...scope, eventId, message });

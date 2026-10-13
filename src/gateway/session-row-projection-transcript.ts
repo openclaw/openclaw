@@ -2,11 +2,7 @@ import { readSessionActivitySummary } from "../config/sessions/activity-summary.
 import { readPreparedSessionEntryPublicationSource } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import { readPreparedSessionTranscriptChange } from "../config/sessions/session-transcript-authority.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
-import {
-  onInternalSessionTranscriptUpdate,
-  type InternalSessionTranscriptUpdate,
-} from "../sessions/transcript-events.js";
-import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import {
   identity,
   isPreparedSessionRowDatabaseFacts,
@@ -18,33 +14,19 @@ import {
 
 const TRANSCRIPT_REFRESH_WINDOW_MS = 1_000;
 
-function retainedTranscriptFacts(row: Row, update?: InternalSessionTranscriptUpdate) {
+function retainedTranscriptFacts(row: Row) {
   const facts = row.retainedDatabaseFacts ?? row.pendingDatabaseFacts;
-  const authority = row.transcriptAuthority;
-  const covered =
-    authority &&
-    authority.sessionId === facts?.entry?.sessionId &&
-    (!update ||
-      (update.messageId !== undefined &&
-        update.messageId === authority.leafEventId &&
-        (update.messageSeq === undefined || update.messageSeq === authority.activeMessageCount)));
-  if (!isPreparedSessionRowDatabaseFacts(facts) || facts.entry !== row.storedEntry) {
-    return undefined;
-  }
-  return covered
+  return isPreparedSessionRowDatabaseFacts(facts) && facts.entry === row.storedEntry
     ? facts
-    : !readSessionActivitySummary(facts.entry)
-      ? { ...facts, activitySummaryWatermark: undefined }
-      : undefined;
+    : undefined;
 }
 
-/** Transcript notifications share the projection's lifetime and exact row generations. */
+/** Transcript notifications refresh presentation using installed row facts. */
 export function createSessionRowProjectionTranscriptUpdates(params: {
   matching: (query: Query, kind?: string) => Row[];
   mark: (change: SessionRowChange) => void;
   read: (id: string) => Row | undefined;
   store: (path: string) => SessionRowStore | undefined;
-  invalidate: (id: string) => void;
   refresh: (id: string, retained?: PreparedSessionRowDatabaseFacts) => void;
 }) {
   const windows = new Map<string, { timer: ReturnType<typeof setTimeout>; pending: boolean }>();
@@ -88,23 +70,12 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
     }
     for (const row of found) {
       const id = identity(row);
-      params.invalidate(id);
       const pending = row.pendingDatabaseFacts !== undefined;
-      const retained =
-        row.storedEntry?.sessionId === change.sessionId &&
-        (update.lifecycleRevision === undefined ||
-          row.storedEntry.lifecycleRevision === update.lifecycleRevision)
-          ? retainedTranscriptFacts(row, update)
-          : undefined;
-      // Notifications reuse only the exact canonical receipt. An unpaired update
-      // still falls back to bounded acquisition instead of guessing transcript order.
+      const retained = retainedTranscriptFacts(row);
+      // Delayed or message-less notifications refresh the current committed facts.
       row.retainedDatabaseFacts = retained;
-      if (!retained?.activitySummaryWatermark) {
-        row.transcriptAuthority = undefined;
-      }
       row.databaseFactsRevision++;
-      // Accepted snapshots must install the committed watermark or revoke it before
-      // cold-row or throttle suppression; an exact read may resume before the next window.
+      // Refresh pending presentation before cold-row or throttle suppression.
       if (pending) {
         params.refresh(id, retained);
       }
@@ -141,25 +112,27 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
         }
         const pending = row.pendingDatabaseFacts !== undefined;
         const facts = row.retainedDatabaseFacts ?? row.pendingDatabaseFacts;
-        const authority =
+        const retained =
           !change.factsInvalidated &&
           fact.kind === "postimage" &&
-          fact.value.sessionId === facts?.entry?.sessionId
-            ? freezeJsonSnapshot(fact.value)
-            : undefined;
-        const retained =
-          authority && isPreparedSessionRowDatabaseFacts(facts)
+          fact.value.sessionId === facts?.entry?.sessionId &&
+          isPreparedSessionRowDatabaseFacts(facts)
             ? {
                 ...facts,
                 activitySummaryWatermark: {
-                  generation: authority.generation,
-                  maxSeq: authority.rawSeq,
+                  generation: fact.value.generation,
+                  maxSeq: fact.value.rawSeq,
                 },
+                transcriptPreview: fact.value.lastMessagePreview,
               }
             : undefined;
-        row.transcriptAuthority = authority;
         row.retainedDatabaseFacts = retained;
-        if (!retained || pending || readSessionActivitySummary(facts?.entry)) {
+        if (
+          !retained ||
+          pending ||
+          retained.transcriptPreview !== undefined ||
+          readSessionActivitySummary(facts?.entry)
+        ) {
           params.refresh(identity(row), retained);
         } else {
           row.databaseFactsRevision++;

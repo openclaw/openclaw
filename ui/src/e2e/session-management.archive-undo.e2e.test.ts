@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { pauseVirtualClock, reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -178,6 +178,7 @@ suite.define(() => {
     async (queued) => {
       const context = await suite.browser.newContext(createControlUiE2eContextOptions());
       const page = await context.newPage();
+      await page.clock.install();
       const archived = sessionRow("agent:main:undo-cross-agent", "Restored original", 3, {
         pinned: true,
       });
@@ -249,7 +250,10 @@ suite.define(() => {
             await gateway.getRequests("sessions.list", { agentId: "main", includeGlobal: true })
           ).length;
           await gateway.deferNext("sessions.list", { agentId: "main", includeGlobal: true });
+          await pauseVirtualClock(page);
           await gateway.emitGatewayEvent("sessions.changed", { agentId: "main", reason: "update" });
+          await page.clock.fastForward(5_001);
+          await page.clock.resume();
           await gateway.waitForRequest("sessions.list", {
             after: listsBefore,
             match: { agentId: "main", includeGlobal: true },

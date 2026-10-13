@@ -128,8 +128,6 @@ const writeGatewayRestartHandoff = vi.fn<
   restartKind: "full-process",
   supervisorMode: "external",
 }));
-const prepareGatewayRestartHandoffRuntime =
-  vi.fn<typeof import("../../infra/restart-handoff.js").prepareGatewayRestartHandoffRuntime>();
 const scheduleGatewayRestart = vi.fn((_opts?: { delayMs?: number; reason?: string }) => ({
   ok: true,
   pid: process.pid,
@@ -301,7 +299,6 @@ vi.mock("../../infra/restart-handoff.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/restart-handoff.js")>()),
   writeGatewayRestartHandoff: (...args: Parameters<typeof writeGatewayRestartHandoff>) =>
     writeGatewayRestartHandoff(...args),
-  prepareGatewayRestartHandoffRuntime: () => prepareGatewayRestartHandoffRuntime(),
 }));
 
 vi.mock("../../infra/gateway-active-work.js", () => ({
@@ -324,8 +321,10 @@ vi.mock("../../cron/service/active-run-cancellation.js", () => ({
   waitForActiveCronTaskRuns: (timeoutMs: number) => waitForActiveCronTaskRuns(timeoutMs),
 }));
 
+// mock-isolation: Run-loop fixtures own config and lifecycle state without a live snapshot.
 vi.mock("../../config/runtime-snapshot.js", () => ({
   clearRuntimeConfigSnapshot: () => clearRuntimeConfigSnapshot(),
+  getRuntimeConfigSnapshot: () => null,
   getRuntimeConfigSourceSnapshot: () => null,
   registerRuntimeConfigSnapshotPreparer: vi.fn(),
 }));
@@ -462,8 +461,6 @@ beforeEach(async () => {
   consumeGatewayRestartIntent.mockReturnValue(null);
   peekGatewayRestartReason.mockReset();
   peekGatewayRestartReason.mockReturnValue(undefined);
-  prepareGatewayRestartHandoffRuntime.mockReset();
-  prepareGatewayRestartHandoffRuntime.mockReturnValue(undefined);
   restartGatewayProcessWithFreshPid.mockReset();
   restartGatewayProcessWithFreshPid.mockReturnValue({ mode: "disabled" });
   respawnGatewayProcessForUpdate.mockReset();
@@ -548,7 +545,6 @@ export const runLoopFixture = {
   markGatewayRestartHandled,
   markUpdateRestartSentinelFailure,
   peekGatewayRestartReason,
-  prepareGatewayRestartHandoffRuntime,
   readCgroup,
   readLaunchdStopTimeout,
   readRestartSentinelReadOnly,

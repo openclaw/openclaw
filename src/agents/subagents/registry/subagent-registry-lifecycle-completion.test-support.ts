@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -14,6 +15,7 @@ import {
 } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
+  SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
 import {
@@ -31,11 +33,8 @@ import {
   countPendingDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
 } from "./subagent-registry-read.js";
-import {
-  bindSubagentRunRecord,
-  rowToSubagentRunRecord,
-  subagentRunRecordVersion,
-} from "./subagent-registry.store.codec.js";
+import { bindSubagentRunRecord, rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
+import { subagentRunRowVersion } from "./subagent-registry.store.row.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
@@ -62,11 +61,12 @@ function policyReceipt(
       if (!entry) {
         return [];
       }
-      const subagent = rowToSubagentRunRecord(bindSubagentRunRecord(entry))!;
+      const row = bindSubagentRunRecord(entry);
+      const subagent = rowToSubagentRunRecord(row)!;
       return [
         {
           subagent,
-          version: subagentRunRecordVersion(subagent)!,
+          version: expectDefined(subagentRunRowVersion(row), "subagent completion row version"),
           cleanupHandled: entry.cleanupHandled,
         },
       ];
@@ -361,6 +361,57 @@ export function registerPrivateCompletionSettlementTests({
       }
     },
   );
+}
+
+type RestartRecoveryReceipt = NonNullable<SubagentRunRecord["execution"]["restartRecovery"]>;
+
+export function makeRestartRecoveryReceipt(
+  overrides: Partial<RestartRecoveryReceipt> = {},
+): RestartRecoveryReceipt {
+  return {
+    sessionId: "session-id",
+    sessionMarker: "session-id:1",
+    idempotencyKey: "recovery-run",
+    phase: "accepted",
+    ...overrides,
+  };
+}
+
+export function makeSubagentCompletion(
+  entry: SubagentRunRecord,
+  overrides: Omit<Partial<SubagentCompletionRequest>, "runId"> = {},
+): SubagentCompletionRequest {
+  return {
+    runId: entry.runId,
+    endedAt: 4_000,
+    outcome: { status: "ok" },
+    reason: SUBAGENT_ENDED_REASON_COMPLETE,
+    triggerCleanup: false,
+    ...overrides,
+  };
+}
+
+export function makeKilledSubagentCompletion(
+  entry: SubagentRunRecord,
+  overrides: Omit<Partial<SubagentCompletionRequest>, "runId"> = {},
+): SubagentCompletionRequest {
+  return makeSubagentCompletion(entry, {
+    outcome: { status: "error", error: "agent run aborted" },
+    reason: SUBAGENT_ENDED_REASON_KILLED,
+    ...overrides,
+  });
+}
+
+export function makeInterruptedSubagentCompletion(
+  entry: SubagentRunRecord,
+  overrides: Omit<Partial<SubagentCompletionRequest>, "runId"> = {},
+): SubagentCompletionRequest {
+  return makeSubagentCompletion(entry, {
+    outcome: { status: "error", error: "restart interrupted run" },
+    reason: SUBAGENT_ENDED_REASON_ERROR,
+    recoverInterrupted: true,
+    ...overrides,
+  });
 }
 
 export function registerNativeCompletionAuthorityTest({

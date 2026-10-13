@@ -1,3 +1,4 @@
+import type { JSX } from "@solidjs/web";
 import { createMemo, For, Match, Show, Switch } from "solid-js";
 import { t } from "../i18n/index.ts";
 import { EDITOR_IDS, EDITOR_LABELS } from "../lib/editor-links.ts";
@@ -58,6 +59,7 @@ export function useSessionMenuView(
   actions: SessionMenuActions,
   readState: () => MenuState,
   revision: () => number,
+  options: { renderOpenInExtra?: (inline: boolean) => JSX.Element } = {},
 ) {
   const state = readState();
   const batch = () => state.selectionCount > 1;
@@ -369,6 +371,7 @@ export function useSessionMenuView(
           inline={props.inline}
         />
       </Show>
+      {options.renderOpenInExtra?.(props.inline ?? false)}
       <Show when={state.worktreePath}>
         <div slot={props.inline ? undefined : "submenu"} class="session-menu__info">
           {t("sessionsView.workspaceEditors")}
@@ -413,7 +416,9 @@ export function useSessionMenuView(
         icon="copy"
         inline={props.inline}
       />
-      <Show when={Boolean(state.navigationAllowed || state.worktreePath)}>
+      <Show
+        when={Boolean(state.navigationAllowed || state.worktreePath || options.renderOpenInExtra)}
+      >
         <Submenu
           view="open-in"
           label={t("sessionsView.openInEditorMenu")}

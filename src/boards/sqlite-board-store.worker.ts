@@ -1,6 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { SessionSourcePredicate } from "../config/sessions/session-source-authority.js";
-import { readSessionSourceValidation } from "../config/sessions/session-source-predicate.worker.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 import {
   assertTransactionUsable,
@@ -28,7 +25,6 @@ export type BoardWorkerInput =
       agentId: string;
       sessionKey: string;
       expectedSession: BoardSessionIdentity;
-      sources: SessionSourcePredicate[];
     }
   | undefined;
 
@@ -49,30 +45,6 @@ export function bindSqliteWorkerBackend(
   if (input && (!canonical || canonical.db !== context.database)) {
     throw new Error("Board publication lost its canonical database owner");
   }
-  const admission = {
-    ...context,
-    admit(stage: "transaction" | "commit") {
-      const validation =
-        input && canonical && readSessionSourceValidation(canonical, input.sources);
-      context.admit(
-        stage,
-        validation
-          ? (request, dispatch) => {
-              if (!isRecord(request.facts)) {
-                throw new Error("Board admission omitted its database identity");
-              }
-              dispatch({
-                ...request,
-                facts: { ...request.facts, boardSourceValidation: validation },
-              });
-            }
-          : undefined,
-      );
-      if (validation?.refusedSource) {
-        throw new Error("Board source refusal was not rejected");
-      }
-    },
-  };
   ensureBoardSchema(database);
   let closed = false;
   return {
@@ -87,7 +59,7 @@ export function bindSqliteWorkerBackend(
       const { result: value, changes } = captureSessionRowChanges(database.db, () =>
         withSqlitePostCommitPublications(database.db, () =>
           runSqliteWorkerTransactionSync(
-            admission,
+            context,
             () => {
               if (command.type === "boards.applyOps") {
                 return applyBoardOpsToDatabase(

@@ -36,6 +36,7 @@ import {
   normalizeWorkerSshEndpoint,
   requireWorkerEnvironmentString,
 } from "./store-validation.js";
+import { executeWorkerEnvironmentWrite } from "./store-write.js";
 import type { WorkerEnvironmentMutationInput } from "./store.types.js";
 
 function resolveNullablePatch<T>(
@@ -118,7 +119,7 @@ export function createWorkerEnvironmentTransitionOps(db: DatabaseSync, now: () =
         ) {
           throw new Error("Cannot refresh a worker runtime while its session is moving");
         }
-        executeSqliteQuerySync(
+        executeWorkerEnvironmentWrite(
           db,
           queryWorkerEnvironmentStore(db)
             .updateTable("worker_session_placements")

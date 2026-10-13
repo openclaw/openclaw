@@ -108,9 +108,6 @@ async function readUpdateRunAsync(
   if (!reply) {
     return undefined;
   }
-  if (!reply.ok || reply.type !== "updateRuns.get") {
-    throw new Error("Unexpected update run lookup result");
-  }
   return reply.run;
 }
 
@@ -192,13 +189,6 @@ async function readUpdateRunStatusAsync(
   if (!reply) {
     return {};
   }
-  if (!reply.ok || reply.type !== type) {
-    throw new Error(
-      type === "updateRuns.status"
-        ? "Unexpected update run status result"
-        : "Unexpected update run history status result",
-    );
-  }
   return reply.status;
 }
 
@@ -216,9 +206,6 @@ export async function listUpdateRunsAsync(
   );
   if (!reply) {
     return [];
-  }
-  if (!reply.ok || reply.type !== "updateRuns.list") {
-    throw new Error("Unexpected update run list result");
   }
   return reply.runs;
 }

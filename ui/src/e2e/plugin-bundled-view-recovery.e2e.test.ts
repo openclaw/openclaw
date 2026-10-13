@@ -86,7 +86,7 @@ suite.define(() => {
         await route.fulfill({ status: 200 });
       });
       await page.route(
-        controlUiE2eBuiltModuleRequest("ui/src/pages/plugin/logbook-view.ts"),
+        controlUiE2eBuiltModuleRequest("ui/src/pages/plugin/logbook-view.tsx"),
         failBundledChunkTwice,
       );
       const sidebar = page.locator("openclaw-app-sidebar");

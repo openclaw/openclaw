@@ -187,13 +187,18 @@ describe("pending-final delivery completion", () => {
     ).resolves.toMatchObject({ transition: { kind: "rejected", reason: "stale_revision" } });
   });
 
-  it("settles native incognito custody on its retained memory owner", async () => {
+  it("settles incognito custody on its retained memory owner", async () => {
+    const incognitoKey = "agent:main:dashboard:incognito-delivery";
     const nativePath = resolveIncognitoOpenClawAgentSqlitePath({
       agentId: "main",
       env: { OPENCLAW_STATE_DIR: tmpDir },
     });
-    const scope = { sessionKey, storePath: nativePath, env: { OPENCLAW_STATE_DIR: tmpDir } };
-    const nativeCompletion = { ...completion, storePath: nativePath };
+    const scope = {
+      sessionKey: incognitoKey,
+      storePath: nativePath,
+      env: { OPENCLAW_STATE_DIR: tmpDir },
+    };
+    const nativeCompletion = { ...completion, sessionKey: incognitoKey, storePath: nativePath };
     try {
       await replaceSessionEntry(scope, {
         sessionId: completion.sessionId,
@@ -243,6 +248,49 @@ describe("pending-final delivery completion", () => {
       },
     });
     expect(recoveryMocks.scheduleMainSessionRecoveryPendingTarget).not.toHaveBeenCalled();
+  });
+
+  it("rolls back settled delivery and cleanup together without losing an intervening write", async () => {
+    const scope = { sessionKey, storePath };
+    const initial = loadSessionEntry(scope)!;
+    let writeBeforeCommand = true;
+    let failCommit = true;
+    const observed = observeActorCommands({
+      beforeCommand() {
+        if (writeBeforeCommand) {
+          writeBeforeCommand = false;
+          replaceSessionEntrySync(scope, { ...initial, label: "committed while delivery settled" });
+        }
+      },
+      beforeCommit() {
+        if (failCommit) {
+          throw new Error("synthetic crash before delivery cleanup commit");
+        }
+      },
+    });
+    const options = { preserveActivity: true, clearAfterSettled: {} };
+    try {
+      await expect(
+        settlePendingFinalDelivery(completion, "delivered", ["prepared"], options),
+      ).rejects.toThrow("synthetic crash before delivery cleanup commit");
+      expect(loadSessionEntry(scope)).toMatchObject({
+        label: "committed while delivery settled",
+        pendingFinalDelivery: initial.pendingFinalDelivery,
+        updatedAt: initial.updatedAt,
+      });
+      expect(recoveryMocks.scheduleMainSessionRecoveryPendingTarget).not.toHaveBeenCalled();
+
+      failCommit = false;
+      await expect(
+        settlePendingFinalDelivery(completion, "delivered", ["prepared"], options),
+      ).resolves.toEqual({ state: "delivered" });
+      const settled = loadSessionEntry(scope);
+      expect(settled?.pendingFinalDelivery).toBeUndefined();
+      expect(settled?.label).toBe("committed while delivery settled");
+      expect(settled?.updatedAt).toBe(initial.updatedAt);
+    } finally {
+      observed.restore();
+    }
   });
 
   it("settles queued final custody through an actor rebase while participant writes queue", async () => {

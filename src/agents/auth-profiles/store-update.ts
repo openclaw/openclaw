@@ -9,6 +9,8 @@ import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycl
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
+  observeSqliteWorkerCommittedFacts,
+  type SqliteWorkerAdmissionFactory,
   type SqliteWorkerAdmissionRequest,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
@@ -19,6 +21,7 @@ import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import { authProfileCredentialPublication } from "../../state/user-model-account-authority.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import {
   AUTH_STORE_VERSION,
@@ -66,7 +69,6 @@ import { watchAuthProfileNativeCommits } from "./store-update-commit.js";
 import type {
   AuthStoreUpdatePrepared,
   AuthStoreUpdateCommitted,
-  AuthStoreUpdateCommittedWire,
   AuthStoreUpdateResponse,
 } from "./store-update-kernel.js";
 import { publishAuthProfileStoreUpdate } from "./store-update-publication.js";
@@ -282,22 +284,49 @@ async function runPreparedAuthProfileStoreUpdate(
       if (exchangePort) {
         // SAFETY: The paired worker queues canonical fields before requesting its commit grant.
         const received = receiveAuthProfileUpdateValue(exchangePort) as
-          | AuthStoreUpdateCommittedWire
+          | AuthStoreUpdateCommitted
           | undefined;
-        committed = received && {
-          ...received,
-          publication: {
-            ...received.publication,
-            oauthRefreshClaimIds: new Map(
-              received.publication.oauthRefreshClaimIds.map(([profileId, claimId]) => [
-                profileId,
-                claimId ?? undefined,
-              ]),
-            ),
-          },
-        };
+        committed = received;
       }
     };
+    const withCredentialPublication =
+      (
+        createAdmission: (collect: () => void) => SqliteWorkerAdmissionFactory,
+      ): SqliteWorkerAdmissionFactory =>
+      (operation) => {
+        let publication: ReturnType<typeof authProfileCredentialPublication.begin> | undefined;
+        const retained = createAdmission(() => {
+          collectCommitted();
+          const facts = committed?.credentialFacts;
+          if (facts) {
+            publication = authProfileCredentialPublication.begin({
+              identity: "source" in facts ? facts.source.identity : facts.identity,
+              canonicalPath: facts.canonicalPath,
+              assertCurrent: assertAuthority,
+            });
+          }
+        })(operation);
+        const { admission } = retained;
+        observeSqliteWorkerCommittedFacts(admission, ({ facts }) => {
+          publication?.committed(isRecord(facts) ? facts.authCredentials : undefined);
+        });
+        const finish = admission.finish.bind(admission);
+        admission.finish = () => {
+          try {
+            finish();
+          } finally {
+            if (admission.settlement) {
+              const confirmed = admission.settlement.kind === "completed";
+              publication?.finish(confirmed, confirmed && !admission.committed);
+            }
+          }
+        };
+        void operation.settled.then((outcome) => {
+          const known = outcome.kind !== "unknown";
+          publication?.finish(known, known && !admission.committed);
+        });
+        return retained;
+      };
     const input = {
       owner: {
         databasePath: owner.databasePath,
@@ -330,7 +359,7 @@ async function runPreparedAuthProfileStoreUpdate(
         },
         {
           assertCurrent: assertOwner,
-          createAdmission: () => {
+          createAdmission: withCredentialPublication((collect) => () => {
             let phase: "waiting" | "transaction" | "commit" = "waiting";
             return {
               nativeLocations: [owner.databasePath],
@@ -340,7 +369,7 @@ async function runPreparedAuthProfileStoreUpdate(
                   assertRequest();
                   phase = "transaction";
                 } else if (phase === "transaction" && request.stage === "commit") {
-                  collectCommitted();
+                  collect();
                   assertRequest();
                   phase = "commit";
                 } else {
@@ -352,7 +381,7 @@ async function runPreparedAuthProfileStoreUpdate(
                 commitGranted ||= request.stage === "commit";
               }),
             };
-          },
+          }),
         },
       );
     }
@@ -365,7 +394,7 @@ async function runPreparedAuthProfileStoreUpdate(
     const source: AgentDatabaseRequestExecutionSource = {
       assertCurrent,
       createAdmission(binding) {
-        return () => {
+        return withCredentialPublication((collect) => () => {
           let transactionFacts: unknown;
           return {
             nativeLocations: binding.nativeLocations,
@@ -391,7 +420,7 @@ async function runPreparedAuthProfileStoreUpdate(
                 binding.authorize(request);
               }
               if (request.stage === "commit") {
-                collectCommitted();
+                collect();
               }
               assertRequest();
               if (!grant()) {
@@ -400,7 +429,7 @@ async function runPreparedAuthProfileStoreUpdate(
               commitGranted ||= request.stage === "commit";
             }, binding.attachment),
           };
-        };
+        });
       },
     };
     let outcome: Result<void, unknown>;

@@ -19,9 +19,6 @@ export async function ensureProfileIdForEmail(
   });
   context.admission.assertCurrent();
   assertCurrent?.();
-  if (observed && (!observed.ok || observed.type !== "userProfiles.email.resolve")) {
-    throw new Error("Unexpected profile email lookup reply");
-  }
   if (observed?.profileId) {
     return observed.profileId;
   }

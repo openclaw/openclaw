@@ -10,7 +10,6 @@ import {
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionPath,
-  controlUiSessionUrl,
   installMockGateway,
   waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
@@ -120,7 +119,7 @@ suite.define(() => {
                 key,
                 JSON.stringify({
                   sidebarAgentsMode: "roster",
-                  sidebarEntries: ["route:agents-home", leadEntry, "route:cron"],
+                  railShortcuts: ["route:agents-home", leadEntry, "route:cron"],
                 }),
               ),
             { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), leadEntry: entry },
@@ -652,8 +651,8 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await expect.poll(() => paletteInput.isVisible()).toBe(false);
 
-      // Collapsing the list retains the personal icon rail; the content chrome
-      // provides the matching expand control.
+      // Collapsing the list retains the personal icon rail; its view buttons
+      // provide the matching expand controls.
       const collapseButton = page.locator('[data-navigation-view][aria-pressed="true"]');
       await collapseButton.click();
       await expect
@@ -670,8 +669,7 @@ suite.define(() => {
       await expect.poll(() => sidebar.isVisible()).toBe(true);
       await expect.poll(() => sidebar.locator(".sidebar-shell").isVisible()).toBe(false);
       await expect.poll(() => sidebar.locator(".sidebar-rail").isVisible()).toBe(true);
-      const navExpand = page.locator(".shell-chrome-controls__nav-toggle");
-      await expect.poll(() => navExpand.isVisible()).toBe(true);
+      await expect.poll(() => pagesButton.isVisible()).toBe(true);
       await page.reload();
       // Sidebar visibility is tab-local and intentionally not persisted; width is.
       await expect.poll(() => collapseButton.isVisible()).toBe(true);
@@ -752,30 +750,6 @@ suite.define(() => {
         );
       }
     }
-  });
-
-  it("opens the start screen from the sidebar action without carrying the active session", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1440 },
-      },
-      async ({ page }) => {
-        await installMockGateway(page);
-
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:work"));
-        await page
-          .locator("openclaw-app-sidebar .sidebar-session-toolbar .sidebar-new-session")
-          .click();
-
-        await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-        await expect.poll(() => new URL(page.url()).searchParams.get("agent")).toBe("main");
-        await expect.poll(() => new URL(page.url()).searchParams.has("session")).toBe(false);
-        await expect.poll(() => page.locator(".new-session-page").isVisible()).toBe(true);
-        await captureUiProof(page, "07-sidebar-start-screen.png");
-      },
-    );
   });
 
   it("keeps Home activity and unsent attention stable while rail controls appear", async () => {

@@ -49,6 +49,7 @@ export const ConfigApplyParamsSchema = closedObject(ConfigApplyLikeParamProperti
 export const ConfigPatchParamsSchema = closedObject({
   ...ConfigApplyLikeParamProperties,
   replacePaths: Type.Optional(Type.Array(NonEmptyString, { maxItems: 256 })),
+  response: Type.Optional(Type.Literal("summary")),
 });
 
 /** Empty request payload for fetching the generated config schema. */

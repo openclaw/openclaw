@@ -66,8 +66,8 @@ async function withQuestion(
     sessionId: run.run.sessionId,
     resetTriggered: false,
   });
-  operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
-  const fingerprint = operation.bindToolAuthorityRoute({
+  await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
+  const fingerprint = await operation.bindToolAuthorityRouteAsync({
     provider: run.run.provider,
     model: run.run.model,
   });

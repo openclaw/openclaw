@@ -36,7 +36,7 @@ export function warnPluginSdkDeprecation(params: {
   }
   warned.add(key);
   process.emitWarning(
-    `${pluginId ? `Plugin ${pluginId}` : "Plugin SDK"}: ${params.method} is deprecated; use ${params.replacement} instead. ${params.compatibility ?? "The legacy contract remains supported in the current Plugin SDK major."} It will be removed in the next Plugin SDK major.`,
+    `${pluginId ? `Plugin ${pluginId}` : "Plugin SDK"}: ${params.method} is deprecated; use ${params.replacement} instead. ${params.compatibility ?? "The legacy contract remains supported during its deprecation period."} It will be removed in a later release after stable deprecation.`,
     { code: params.code ?? "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
   );
 }

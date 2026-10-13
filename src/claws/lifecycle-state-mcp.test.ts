@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { readSourceConfigSnapshot } from "../config/io.js";
+import { captureRuntimeConfigAsyncReader, readSourceConfigSnapshot } from "../config/io.js";
 import * as configMutate from "../config/mutate.js";
 import { withTempHomeConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -308,6 +308,7 @@ describe("Claw MCP removal", () => {
     await withTempHomeConfig(current.getConfig(), async ({ configPath }) => {
       setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
       setTestEnvValue("OPENCLAW_STATE_DIR", current.env.OPENCLAW_STATE_DIR);
+      await captureRuntimeConfigAsyncReader()();
       const missing = listedMcpServers(current.getConfig(), {});
       const restored = listedMcpServers(
         { ...current.getConfig(), mcp: { servers: { docs: sourceServer } } },
@@ -358,6 +359,7 @@ describe("Claw MCP removal", () => {
     await withTempHomeConfig(current.getConfig(), async ({ configPath }) => {
       setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
       setTestEnvValue("OPENCLAW_STATE_DIR", current.env.OPENCLAW_STATE_DIR);
+      await captureRuntimeConfigAsyncReader()();
       const missing = listedMcpServers(current.getConfig(), {});
       const restored = listedMcpServers(
         { ...current.getConfig(), mcp: { servers: { docs: replacementServer } } },

@@ -14,7 +14,6 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "../session-utils-store-lookup.js";
 import { createDeviceWorkerRuntime } from "../worker-environments/device-provider.js";
 import type { WorkerPlacementDispatchService } from "../worker-environments/placement-dispatch.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
@@ -81,7 +80,6 @@ export function registerNativeDeviceDispatchTests({
         prepareInstallation: async () => BUNDLE_ARTIFACT,
         bootstrapWorker,
         ensureNodeWorkerBundle,
-        executeInference: vi.fn(),
       });
       const previousRegistry = getActivePluginRegistry();
       // Core device placement must not require a fabricated plugin owner/manifest.
@@ -98,8 +96,11 @@ export function registerNativeDeviceDispatchTests({
             worktree: { id: "worktree-1", branch: "openclaw/device-test", repoRoot: "/repo" },
           },
         );
+        const { resolveGatewaySessionStoreTargetInWorker } = await vi.importActual<
+          typeof import("../session-utils-store-worker.js")
+        >("../session-utils-store-worker.js");
         getDispatchTestMocks().resolveTarget.mockImplementation(
-          resolveGatewaySessionStoreTargetWithStore,
+          resolveGatewaySessionStoreTargetInWorker,
         );
         // Exercise RPC admission and the real profile/provider lifecycle; workspace sync
         // and placement activation remain the existing dispatch fixture boundary.
@@ -235,7 +236,7 @@ export function registerNativeDeviceDispatchTests({
       { deviceId: "device-1" },
     );
 
-    expect(dispatch).toHaveBeenCalledWith(
+    expect(dispatch, JSON.stringify(vi.mocked(respond).mock.calls)).toHaveBeenCalledWith(
       expect.objectContaining({
         profileId: "device:device-1",
         deviceId: "device-1",

@@ -9,14 +9,17 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import {
+  areDiagnosticsEnabledForProcess,
+  getInternalDiagnosticEventSequence,
+  onInternalDiagnosticEvent,
+  setDiagnosticsEnabledForProcess,
+} from "../infra/diagnostic-events.js";
+import {
   withPluginRuntimeGatewayRequestScope,
   withPluginRuntimePluginScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
-import {
-  createBackgroundWorkOwner,
-  getBackgroundWorkSnapshot,
-} from "../process/background-work.js";
+import { createBackgroundWorkOwner } from "../process/background-work.js";
 import * as commandQueue from "../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
 import { CommandLane } from "../process/lanes.js";
@@ -30,7 +33,6 @@ import {
   createGatewaySubagentRuntime,
   resolvePluginSubagentOverridePolicies,
 } from "./server-plugin-subagent-runtime.js";
-
 const isolated = vi.hoisted(() => vi.fn<typeof runIsolatedCompletion>());
 const normalizeProviderModelIdWithRuntime = vi.hoisted(() =>
   vi.fn<(params: { provider: string; context: { modelId: string } }) => string | undefined>(
@@ -41,13 +43,11 @@ vi.mock("../agents/isolated-completion.js", () => ({ runIsolatedCompletion: isol
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime,
 }));
-
 const PLUGIN_ID = "test-completion";
 type CompleteParams = Parameters<PluginRuntime["subagent"]["complete"]>[0];
 let config: OpenClawConfig;
 let context: GatewayRequestContext | undefined;
 let lifetime: AbortController;
-
 function createRuntime() {
   return createGatewaySubagentRuntime(
     () => context,
@@ -55,13 +55,11 @@ function createRuntime() {
     lifetime.signal,
   );
 }
-
 function complete(runtime: PluginRuntime["subagent"], params: Partial<CompleteParams> = {}) {
   return withPluginRuntimePluginScope({ pluginId: PLUGIN_ID }, () =>
     runtime.complete({ agentId: "research", message: "Review these notes", ...params }),
   );
 }
-
 function completeScoped(
   client: GatewayRequestOptions["client"],
   params: Partial<CompleteParams> = {},
@@ -72,14 +70,12 @@ function completeScoped(
     () => runtime.complete({ agentId: "research", message: "Review these notes", ...params }),
   );
 }
-
 const operatorProfile = {
   profileId: "completion-operator",
   displayName: "Completion operator",
   hasAvatar: false,
   updatedAt: 1,
 };
-
 function restrictOperatorAgents() {
   config.gateway = {
     roles: {
@@ -90,16 +86,17 @@ function restrictOperatorAgents() {
     },
   };
 }
-
-function blockBackgroundSlots(count: number) {
-  const owner = createBackgroundWorkOwner({ owner: "core:completion-test", maxConcurrent: 3 });
+function blockSubagentSlots(count: number) {
   const gate = createDeferred();
-  const work = Array.from({ length: count }, () => owner.enqueue(async () => await gate.promise));
+  const work = Array.from({ length: count }, () =>
+    commandQueue.enqueueCommandInLane(CommandLane.Subagent, () => gate.promise),
+  );
   return { release: () => gate.resolve(), settled: () => Promise.all(work) };
 }
 
 beforeEach(() => {
   resetCommandQueueStateForTest();
+  commandQueue.setCommandLaneConcurrency(CommandLane.Subagent, 3);
   normalizeProviderModelIdWithRuntime.mockReset().mockImplementation(() => undefined);
   isolated.mockReset().mockImplementation(async (params) => ({
     text: `${params.agentId}:${params.provider}/${params.model}`,
@@ -129,6 +126,55 @@ afterEach(() => {
 });
 
 describe("plugin background completions", () => {
+  it("queues plugin completions behind the configured subagent cap", async () => {
+    commandQueue.setCommandLaneConcurrency(CommandLane.Subagent, 1);
+    const slot = createDeferred();
+    const active = commandQueue.enqueueCommandInLane(CommandLane.Subagent, () => slot.promise);
+    const background = createBackgroundWorkOwner({
+      owner: "core:completion-test",
+      maxConcurrent: 3,
+    });
+    const backgroundWork = Promise.all(
+      Array.from({ length: 3 }, () => background.enqueue(() => slot.promise)),
+    );
+    const enqueued = createDeferred();
+    const diagnosticsEnabled = areDiagnosticsEnabledForProcess();
+    const cursor = getInternalDiagnosticEventSequence();
+    let count = 0;
+    setDiagnosticsEnabledForProcess(true);
+    const stopObserving = onInternalDiagnosticEvent((event) => {
+      if (event.type === "queue.lane.enqueue" && event.seq > cursor && ++count === 2) {
+        enqueued.resolve();
+      }
+    });
+    const controller = new AbortController();
+    const runtime = createRuntime();
+    const first = complete(runtime, { signal: controller.signal });
+    const second = withPluginRuntimePluginScope({ pluginId: "other-plugin" }, () =>
+      runtime.complete({ agentId: "research", message: "Review", signal: controller.signal }),
+    );
+    try {
+      await awaitGateBeforeSettlement(enqueued.promise, Promise.all([first, second]), "not queued");
+      expect(commandQueue.getCommandLaneSnapshot(CommandLane.Subagent)).toMatchObject({
+        activeCount: 1,
+        queuedCount: 2,
+        maxConcurrent: 1,
+      });
+      expect(isolated).not.toHaveBeenCalled();
+    } finally {
+      stopObserving();
+      setDiagnosticsEnabledForProcess(diagnosticsEnabled);
+      controller.abort(new Error("completion cancelled"));
+      slot.resolve();
+      await Promise.all([
+        expect(first).rejects.toThrow("completion cancelled"),
+        expect(second).rejects.toThrow("completion cancelled"),
+        active,
+        backgroundWork,
+      ]);
+    }
+  });
+
   it.each([
     {
       name: "untrusted plugin",
@@ -258,7 +304,7 @@ describe("plugin background completions", () => {
       restrictOperatorAgents();
       const profile = ensureProfileForEmail("completion-mutation@example.com");
       config.agents!.entries!.main!.model = "test-provider/main-model@main-profile";
-      const blockers = blockBackgroundSlots(3);
+      const blockers = blockSubagentSlots(3);
       const queued = createDeferred();
       const enqueue = commandQueue.enqueueCommandInLane;
       vi.spyOn(commandQueue, "enqueueCommandInLane").mockImplementation((lane, task, options) =>
@@ -266,7 +312,7 @@ describe("plugin background completions", () => {
           ...options,
           onQueued: () => {
             options?.onQueued?.();
-            if (lane === `${CommandLane.Background}:plugin:${PLUGIN_ID}`) {
+            if (lane === "subagent") {
               queued.resolve();
             }
           },
@@ -293,7 +339,7 @@ describe("plugin background completions", () => {
         result,
         "Completion settled before its queue admission",
       );
-      expect(getBackgroundWorkSnapshot().queuedCount).toBe(1);
+      expect(commandQueue.getCommandLaneSnapshot(CommandLane.Subagent).queuedCount).toBe(1);
       request.agentId = "research";
       blockers.release();
       await blockers.settled();
@@ -350,7 +396,7 @@ describe("plugin background completions", () => {
           ...operatorProfile,
           profileId: ensureProfileForEmail("inherited-completion@example.test").id,
         };
-        const blockers = blockBackgroundSlots(phase === "queued" ? 3 : 0);
+        const blockers = blockSubagentSlots(phase === "queued" ? 3 : 0);
         const started = createDeferred();
         const cleanup = createDeferred();
         let runningSignal: AbortSignal | undefined;
@@ -374,7 +420,11 @@ describe("plugin background completions", () => {
             const result = complete(createRuntime());
             rejected = expect(result).rejects.toThrow("operator tool invocation authority expired");
             if (phase === "queued") {
-              await vi.waitFor(() => expect(getBackgroundWorkSnapshot().queuedCount).toBe(1));
+              await vi.waitFor(() =>
+                expect(commandQueue.getCommandLaneSnapshot(CommandLane.Subagent).queuedCount).toBe(
+                  1,
+                ),
+              );
             } else {
               await started.promise;
             }
@@ -420,13 +470,15 @@ describe("plugin background completions", () => {
   it.each(["caller cancellation", "runtime retirement", "binding replacement"])(
     "never starts queued inference after %s",
     async (reason) => {
-      const blockers = blockBackgroundSlots(3);
+      const blockers = blockSubagentSlots(3);
       const controller = new AbortController();
       const result = complete(createRuntime(), { signal: controller.signal });
       const rejected = expect(result).rejects.toThrow(
         /cancelled|retired|current gateway instance binding/u,
       );
-      await vi.waitFor(() => expect(getBackgroundWorkSnapshot().queuedCount).toBe(1));
+      await vi.waitFor(() =>
+        expect(commandQueue.getCommandLaneSnapshot(CommandLane.Subagent).queuedCount).toBe(1),
+      );
       if (reason === "caller cancellation") {
         controller.abort(new Error("caller cancelled"));
       } else if (reason === "runtime retirement") {
@@ -437,14 +489,17 @@ describe("plugin background completions", () => {
       blockers.release();
       await Promise.all([rejected, blockers.settled()]);
       expect(isolated).not.toHaveBeenCalled();
-      expect(getBackgroundWorkSnapshot()).toMatchObject({ activeCount: 0, queuedCount: 0 });
+      expect(commandQueue.getCommandLaneSnapshot(CommandLane.Subagent)).toMatchObject({
+        activeCount: 0,
+        queuedCount: 0,
+      });
     },
   );
 
   it.each(["caller cancellation", "timeout"])(
     "holds capacity through cleanup after %s and rejects late output",
     async (reason) => {
-      const blockers = blockBackgroundSlots(2);
+      const blockers = blockSubagentSlots(2);
       const started = createDeferred();
       const aborted = createDeferred();
       const cleanup = createDeferred();
@@ -469,7 +524,9 @@ describe("plugin background completions", () => {
       });
       await started.promise;
       const second = complete(runtime);
-      await vi.waitFor(() => expect(getBackgroundWorkSnapshot().queuedCount).toBe(1));
+      await vi.waitFor(() =>
+        expect(commandQueue.getCommandLaneSnapshot(CommandLane.Subagent).queuedCount).toBe(1),
+      );
       const rejected =
         reason === "timeout"
           ? expect(first).rejects.toMatchObject({ name: "TimeoutError" })
@@ -480,7 +537,10 @@ describe("plugin background completions", () => {
       await aborted.promise;
       expect(runningSignal?.aborted).toBe(true);
       expect(isolated).toHaveBeenCalledOnce();
-      expect(getBackgroundWorkSnapshot()).toMatchObject({ activeCount: 3, queuedCount: 1 });
+      expect(commandQueue.getCommandLaneSnapshot(CommandLane.Subagent)).toMatchObject({
+        activeCount: 3,
+        queuedCount: 1,
+      });
       cleanup.resolve();
       await rejected;
       await expect(second).resolves.toEqual({ text: "research:test-provider/research-model" });

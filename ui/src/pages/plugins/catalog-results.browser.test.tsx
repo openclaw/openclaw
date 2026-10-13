@@ -9,10 +9,10 @@ import {
   renderPluginCatalogResults as PluginCatalogResults,
   type PluginCatalogResultsProps,
 } from "./catalog-results.tsx";
-import { renderArtTile } from "./consent-dialog.tsx";
+import { PluginArtTile } from "./consent-dialog.tsx";
 import { renderPluginDetailShell } from "./detail-shell.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
-import { renderPluginMcpServers } from "./overview.tsx";
+import { renderPluginContentCapabilities } from "./overview.tsx";
 import baseStyles from "../../styles/base.css?inline";
 import componentStyles from "../../styles/components.css?inline";
 import pluginStyles from "../../styles/plugins.css?inline";
@@ -196,11 +196,21 @@ it.each([
       () => (
         <>
           {whiteBackground ? (
-            renderArtTile("official", "Official", { iconUrl: icon, whiteBackground })
+            <PluginArtTile
+              slug="official"
+              name="Official"
+              iconUrl={icon}
+              whiteBackground={whiteBackground}
+            />
           ) : (
             <>
               <span class="installed-plugins-card__art">
-                {renderArtTile("demo", "Demo", { iconUrl: icon, whiteBackground })}
+                <PluginArtTile
+                  slug="demo"
+                  name="Demo"
+                  iconUrl={icon}
+                  whiteBackground={whiteBackground}
+                />
               </span>
               {renderPluginDetailShell({
                 id: "demo",
@@ -210,7 +220,14 @@ it.each([
                 onBack: vi.fn(),
                 identity: <></>,
                 panel: <></>,
-                icon: renderArtTile("demo", "Demo", { iconUrl: icon, whiteBackground }),
+                icon: (
+                  <PluginArtTile
+                    slug="demo"
+                    name="Demo"
+                    iconUrl={icon}
+                    whiteBackground={whiteBackground}
+                  />
+                ),
               })}
             </>
           )}
@@ -313,9 +330,12 @@ it.each([390, 768, 1366, 1440])(
           backLabel: "Plugins",
           onBack: vi.fn(),
           identity: undefined,
-          panel: renderPluginMcpServers(
-            ["workspace", "local"],
-            [
+          panel: renderPluginContentCapabilities({
+            contracts: undefined,
+            skills: [],
+            tools: [],
+            mcpServers: ["workspace", "local"],
+            mcpServerDetails: [
               {
                 name: "workspace",
                 url: "https://mcp.example.com/" + "long-path/".repeat(35),
@@ -325,7 +345,7 @@ it.each([390, 768, 1366, 1440])(
                 setup: "Connect your workspace in OpenClaw.",
               },
             ],
-          ),
+          }),
           sidebar: (
             <>
               <div style={{ "min-height": "900px" }}>Release and security metadata</div>

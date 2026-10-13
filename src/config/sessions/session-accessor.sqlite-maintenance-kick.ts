@@ -46,6 +46,7 @@ import {
   toDatabaseOptions,
   type ResolvedSqliteReadScope,
 } from "./session-accessor.sqlite-scope.js";
+import { assertMaintenancePreservationCompatible } from "./store-maintenance-preserve-snapshot.js";
 import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
@@ -389,10 +390,9 @@ function startPendingMaintenance(databasePath: string, owner: SessionEntryMainte
       retireMaintenanceOwner(databasePath, owner);
       return;
     }
-    // Detach turn context, but keep Doctor/temporary-command database custody
-    // so background borrowing cannot move handles outside their cleanup scope.
+    // Keep command cleanup custody while automatic work uses the runtime worker path.
     const run = () => runPendingMaintenance(databasePath, owner);
-    await (owner.maintenanceResource ? owner.maintenanceResource.run(run) : run());
+    await (owner.maintenanceResource ? owner.maintenanceResource.runWorker(run) : run());
   });
 }
 
@@ -471,7 +471,6 @@ async function runPendingMaintenance(
       }
       return;
     }
-    let admitted = false;
     const assertInputsCurrent = () => {
       if (!isCurrent()) {
         if (getGatewayRestartDrainSignal().aborted) {
@@ -480,18 +479,6 @@ async function runPendingMaintenance(
         planningChanged = true;
         throw new SqliteReclamationInputsChangedError("SQLite automatic maintenance owner retired");
       }
-      if (
-        (admitted &&
-          [...owner.activeSessionKeys].some((key) => !activeSessionKeys.includes(key))) ||
-        (admitted &&
-          operation.input.preservation !== null &&
-          !isDeepStrictEqual(operation.input.preservation, capturePreservation()))
-      ) {
-        planningChanged = true;
-        throw new SqliteReclamationInputsChangedError(
-          "SQLite automatic maintenance inputs changed before commit",
-        );
-      }
     };
     const runPlanning = async () => {
       const pending = capturePendingAgeChanges(owner);
@@ -499,22 +486,41 @@ async function runPendingMaintenance(
       const result = await runSqliteSessionReclamation({
         diagnostics: { kind: "maintenance-plan" },
         assertCommitAllowed: assertInputsCurrent,
+        assertMaintenanceCommitAllowed(plans) {
+          assertInputsCurrent();
+          try {
+            // A late kick can protect an ancestor; the next writer refresh resolves that ancestry.
+            if ([...owner.activeSessionKeys].some((key) => !activeSessionKeys.includes(key))) {
+              throw new SqliteReclamationInputsChangedError(
+                "SQLite maintenance active keys changed",
+              );
+            }
+            const currentPreservation = capturePreservation();
+            if (operation.input.preservation !== null && currentPreservation !== null) {
+              assertMaintenancePreservationCompatible(
+                operation.input.preservation,
+                currentPreservation,
+                plans,
+              );
+            }
+          } catch (error) {
+            planningChanged = true;
+            throw error;
+          }
+        },
         consumeReadOnlyMaintenancePlan() {
           pending.acknowledge();
         },
         refreshMaintenanceProtection: () => {
-          // Refresh only at writer admission; commit still checks this exact live capture.
-          admitted = false;
+          // Preparation can yield to foreground writes; commit checks only affected protection.
           assertInputsCurrent();
           activeSessionKeys = [...new Set([...activeSessionKeys, ...owner.activeSessionKeys])];
           operation.input.activeSessionKeys = activeSessionKeys;
           if (operation.input.preservation !== null) {
             operation.input.preservation = capturePreservation();
           }
-          admitted = true;
           return { activeSessionKeys, preservation: operation.input.preservation };
         },
-        forceInProcess: false,
         plan: operation,
       });
       if (result.kind === "maintenance-plan") {
@@ -552,7 +558,6 @@ async function runPendingMaintenance(
       const age = await runSqliteSessionReclamation({
         diagnostics: { kind: "maintenance-age" },
         assertCommitAllowed: assertInputsCurrent,
-        forceInProcess: false,
         plan: {
           kind: "maintenance-age",
           databaseOptions: operation.databaseOptions,
@@ -618,9 +623,7 @@ async function runPendingMaintenance(
           { error, path: databasePath, rejections: owner.rejections },
         );
       } else {
-        owner.running = true;
-        owner.retryDelayMs = undefined;
-        await runPendingMaintenance(databasePath, owner);
+        scheduleMaintenanceAfterWriteQuiet(databasePath, owner);
       }
       return;
     }

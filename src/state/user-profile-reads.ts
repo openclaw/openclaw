@@ -19,9 +19,6 @@ export async function prepareCurrentUserProfileAliases(
     { current: true },
   );
   context.admission.assertCurrent();
-  if (reply && (!reply.ok || reply.type !== "userProfiles.aliases.resolve")) {
-    throw new Error("Profile alias reader returned an unexpected result");
-  }
   const isCurrent = authority.bind([profileId, reply?.profileId ?? profileId]);
   const assertCurrent = () => {
     if (!isCurrent?.()) {
@@ -42,9 +39,6 @@ export async function resolveCanonicalCachedGitHubIdentity(
   });
   if (!reply) {
     return undefined;
-  }
-  if (!reply.ok || reply.type !== "userProfiles.githubIdentity.cached") {
-    throw new Error("Cached GitHub identity reader returned an unexpected result");
   }
   return reply.identity;
 }

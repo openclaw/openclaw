@@ -256,21 +256,31 @@ describe("device-pair notify persistence", () => {
     },
   );
 
-  it("counts unrelated corrupt subscriber rows but still validates the selected chat", async () => {
+  it.each([false, true])("validates subscriber corruption (selected: %s)", async (selected) => {
     const subscriber: NotifySubscription = { to: "chat-123", mode: "once", addedAtMs: 1 };
-    const subscriberStore = openSubscriberStore();
-    await subscriberStore.register(notifySubscriberStoreKey(subscriber), subscriber);
-    await subscriberStore.register("unrelated", subscriber);
     const { db } = openOpenClawStateDatabase({ env });
-    const corrupt = db.prepare(
-      "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
+    // Corruption is a cold-storage fixture, not an external update to a live cached row.
+    const insert = db.prepare(
+      "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at, expires_at) VALUES ('device-pair', ?, ?, ?, 1, NULL)",
     );
-    corrupt.run("{", "device-pair", DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE, "unrelated");
+    insert.run(
+      DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
+      notifySubscriberStoreKey(subscriber),
+      selected ? "{" : JSON.stringify(subscriber),
+    );
+    insert.run(DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE, "unrelated", "{");
     const command = {
       api: createApi(),
       ctx: { channel: "telegram", senderId: "chat-123" },
       action: "status",
     };
+    if (selected) {
+      await expect(handleNotifyCommand(command)).rejects.toMatchObject({
+        code: "PLUGIN_STATE_CORRUPT",
+        operation: "lookup",
+      });
+      return;
+    }
     const status = await handleNotifyCommand(command);
     expect(status.text).toContain("Mode: once");
     expect(status.text).toContain("Subscribers: 2");
@@ -281,16 +291,6 @@ describe("device-pair notify persistence", () => {
     await expect(handleNotifyCommand({ ...command, api: olderApi })).rejects.toMatchObject({
       code: "PLUGIN_STATE_CORRUPT",
       operation: "entries",
-    });
-    corrupt.run(
-      "{",
-      "device-pair",
-      DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
-      notifySubscriberStoreKey(subscriber),
-    );
-    await expect(handleNotifyCommand(command)).rejects.toMatchObject({
-      code: "PLUGIN_STATE_CORRUPT",
-      operation: "lookup",
     });
   });
 
@@ -318,7 +318,7 @@ describe("device-pair notify persistence", () => {
     "subscriber command",
     "subscriber command from another API",
     "persisted seen receipt on restart",
-  ] as const)("reuses empty notifier state and observes a later %s", async (addition) => {
+  ] as const)("sleeps with empty notifier state and observes a later %s", async (addition) => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const clock = createGatewaySchedulerClock(1_000);
@@ -339,8 +339,10 @@ describe("device-pair notify persistence", () => {
       expect(warn).not.toHaveBeenCalled();
       await expect(Promise.all(storage.takeStoreReads())).resolves.toEqual([[], []]);
       expect(listDevicePairingMock).not.toHaveBeenCalled();
+      expect(gatewayScheduler.nextWakeAtMs).toBeNull();
       await clock.advanceBy(20_000);
       expect(storage.takeStoreReads()).toEqual([]);
+      expect(gatewayScheduler.nextWakeAtMs).toBeNull();
 
       const isSubscriberCommand = addition !== "persisted seen receipt on restart";
       if (isSubscriberCommand) {

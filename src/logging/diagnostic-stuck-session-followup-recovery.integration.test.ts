@@ -41,6 +41,14 @@ import { recoverStuckDiagnosticSession } from "./diagnostic-stuck-session-recove
 import { startGatewayDiagnosticHeartbeat, stopGatewayDiagnosticHeartbeat } from "./diagnostic.js";
 import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
 
+// These queue-only fixtures have no persisted session; force-clear persistence has its own suite.
+vi.mock("../agents/embedded-agent-runner/force-clear-session-state.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../agents/embedded-agent-runner/force-clear-session-state.js")
+  >()),
+  tryLoadForceClearSessionSnapshot: async () => undefined,
+}));
+
 describe("stuck session follow-up recovery", () => {
   const queueKeys = new Set<string>();
 
@@ -182,6 +190,7 @@ describe("stuck session follow-up recovery", () => {
       }
       dispatchRecovery.resolve();
       await vi.advanceTimersByTimeAsync(0);
+      await recover.mock.results[0]?.value;
       if (testCase.progress !== "none") {
         expect(outcomes).toMatchObject([{ status: "skipped" }]);
         expect(abort).not.toHaveBeenCalled();

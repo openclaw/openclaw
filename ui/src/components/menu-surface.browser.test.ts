@@ -1,12 +1,14 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
+import { solidTemplate } from "../pages/chat/components/chat-composer-controls.ts";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
-import { renderComposerLibraryMenu } from "../pages/chat/components/chat-composer-library-menu.ts";
-import { renderChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.ts";
+import { renderComposerLibraryMenuSolid } from "../pages/chat/components/chat-composer-library-menu.tsx";
+import { renderComposerMenuOption } from "../pages/chat/components/chat-composer-menu.tsx";
 import "../pages/chat/components/browser-tab-card.tsx";
-import { renderComposerMenuOption } from "./composer-menu.ts";
+import { renderChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.tsx";
 import "../test-helpers/load-styles.ts";
+import "./agent-select-registration.ts";
 import "./menu-surface.ts";
 import "./resizable-divider.ts";
 import "./web-awesome.ts";
@@ -124,20 +126,6 @@ async function expectMenuInTopLayer(dropdown: Dropdown) {
   await expect.poll(() => surface?.matches(":popover-open")).toBe(true);
 }
 
-async function pauseMenuOpening(dropdown: Dropdown, trigger: HTMLElement) {
-  const surface = await settledMenuSurface(dropdown);
-  surface.style.setProperty("--show-duration", "1s");
-  trigger.click();
-  await expect.poll(() => surface.getAnimations().length).toBe(1);
-  const animation = surface.getAnimations()[0];
-  if (!animation) {
-    throw new Error("expected the menu to be animating");
-  }
-  animation.pause();
-  animation.currentTime = 500;
-  return surface;
-}
-
 async function browserCardMenu(card: HTMLElementTagNameMap["openclaw-browser-tab-card"]) {
   await card.updateComplete;
   const dropdown = card.querySelector("wa-dropdown");
@@ -229,16 +217,18 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
 describe.skipIf(!hasPopoverApi)("agent picker surface", () => {
   it("stays opaque while the menu animates open", async () => {
     await useDesktopViewport();
-    const dropdown = document.createElement("wa-dropdown");
-    dropdown.className = "agent-select";
-    const trigger = document.createElement("button");
-    trigger.slot = "trigger";
-    trigger.textContent = "Agent";
-    const item = document.createElement("wa-dropdown-item");
-    item.textContent = "All agents";
-    dropdown.append(trigger, item);
-    document.body.append(dropdown);
-    const menu = await pauseMenuOpening(dropdown, trigger);
+    const picker = document.createElement("openclaw-agent-select");
+    picker.options = [{ value: "all", label: "All agents" }];
+    document.body.append(picker);
+    await picker.updateComplete;
+    const menu = picker.querySelector<HTMLElement>(".agent-select__menu")!;
+    menu.style.setProperty("--oc-overlay-show-duration", "1s");
+    picker.querySelector<HTMLButtonElement>(".agent-select__trigger")!.click();
+    await expect.poll(() => menu.getAnimations().length).toBeGreaterThan(0);
+    for (const animation of menu.getAnimations()) {
+      animation.pause();
+      animation.currentTime = 500;
+    }
     expect(getComputedStyle(menu).opacity).toBe("1");
     expect(getComputedStyle(menu).scale).not.toBe("1");
   });
@@ -318,6 +308,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
   async function hoverBackground(element: HTMLElement, expected: string) {
     const { page } = await import("vitest/browser");
     await page.elementLocator(element).hover();
+    await Promise.all(element.getAnimations().map((animation) => animation.finished));
     await expect.poll(() => getComputedStyle(element).backgroundColor).toBe(expected);
   }
 
@@ -380,7 +371,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       render(
         html`<wa-dropdown>
           <button slot="trigger">Library</button>
-          ${renderComposerLibraryMenu({
+          ${solidTemplate(renderComposerLibraryMenuSolid, {
             result: null,
             loading: false,
             busy: false,
@@ -453,7 +444,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       document.body.append(host);
       const renderOption = (active: boolean) => {
         render(
-          renderComposerMenuOption({
+          solidTemplate(renderComposerMenuOption, {
             id: "hover-command",
             active,
             select: () => {},

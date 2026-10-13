@@ -2,16 +2,17 @@ import { existsSync, renameSync } from "node:fs";
 import { backup } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.entry.js";
 import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { addSessionSuggestionInWorker as addSessionSuggestion } from "../../config/sessions/session-metadata-write.async.js";
 import {
   addSessionMember,
-  listSessionMembers,
+  readSessionMembersInWorker,
 } from "../../config/sessions/session-sharing-store.js";
-import { addSessionSuggestion } from "../../config/sessions/session-suggestion-store.js";
 import { listSessionSuggestions } from "../../config/sessions/session-suggestion-store.read.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -58,6 +59,7 @@ const handlers: GatewayRequestHandlers = {
 afterEach(() => flushPendingSessionsChangedEvents());
 
 async function seedMetadata(state: OpenClawTestState) {
+  setRuntimeConfigSnapshot({});
   const owner = ensureProfileForEmail("metadata-owner@example.test");
   const other = ensureProfileForEmail("metadata-other@example.test");
   const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:metadata" };
@@ -117,7 +119,16 @@ describe("session metadata writer admission", () => {
           sessionKey: scope.sessionKey,
           agentId: scope.agentId,
         })!;
-        expect(resolveSessionSharingRole({ cfg: {}, client: viewer, target })).toBe("viewer");
+        expect(
+          resolveSessionSharingRole({
+            cfg: {},
+            client: viewer,
+            target,
+            isMember: (await readSessionMembersInWorker(scope)).members.some(
+              (member) => member.identityId === other.id,
+            ),
+          }),
+        ).toBe("viewer");
         const context = sessionSharingTestContext(vi.fn());
         await initializeSessionReadContext(context);
         const request = invoke(
@@ -136,9 +147,16 @@ describe("session metadata writer admission", () => {
           agentId: scope.agentId,
         })!;
         expect(current.entry.createdActor?.id).toBe(owner.id);
-        expect(resolveSessionSharingRole({ cfg: {}, client: viewer, target: current })).toBe(
-          "viewer",
-        );
+        expect(
+          resolveSessionSharingRole({
+            cfg: {},
+            client: viewer,
+            target: current,
+            isMember: (await readSessionMembersInWorker(scope)).members.some(
+              (member) => member.identityId === other.id,
+            ),
+          }),
+        ).toBe("viewer");
       });
     },
   );
@@ -156,6 +174,7 @@ describe("session metadata writer admission", () => {
         let cfg: OpenClawConfig = { session: { store: options.path } };
         const context = sessionSharingTestContext(vi.fn());
         context.getRuntimeConfig = () => cfg;
+        setRuntimeConfigSnapshot(cfg);
         await initializeSessionReadContext(context);
         const entered = createDeferredCore();
         const release = createDeferredCore();
@@ -176,6 +195,7 @@ describe("session metadata writer admission", () => {
           expect(request.respond).not.toHaveBeenCalled();
           // External retirement must not inherit the writer whose waiting mutation it revokes.
           cfg = { session: { store: replacement.storePath } };
+          setRuntimeConfigSnapshot(cfg);
           expect(await disposeOpenClawAgentDatabaseByPath(options.path, { env: state.env })).toBe(
             true,
           );
@@ -189,7 +209,7 @@ describe("session metadata writer admission", () => {
           expect(existsSync(options.path)).toBe(false);
           for (const target of [retired, replacement]) {
             expect(loadSessionEntry(target)).toEqual(originalEntry);
-            expect(listSessionMembers(target)).toEqual([]);
+            expect((await readSessionMembersInWorker(target)).members).toEqual([]);
             expect(await listSessionSuggestions(target)).toEqual([]);
           }
         } finally {
@@ -208,7 +228,7 @@ describe("session metadata writer admission", () => {
         await addSessionMember(scope, { identityId: other.id, addedBy: owner.id });
       }
       if (method === "session.suggestions.resolve") {
-        addSessionSuggestion(scope, {
+        await addSessionSuggestion(scope, {
           id: "pending",
           authorId: owner.id,
           text: "synthetic suggestion",
@@ -224,7 +244,7 @@ describe("session metadata writer admission", () => {
               : { sessionKey: scope.sessionKey, identityId: other.id };
       const read = async () => ({
         owner: loadSessionEntry(scope)?.owner,
-        members: listSessionMembers(scope),
+        members: (await readSessionMembersInWorker(scope)).members,
         suggestions: await listSessionSuggestions(scope),
       });
       const before = structuredClone(await read());
@@ -249,9 +269,9 @@ describe("session metadata writer admission", () => {
         if (method === "sessions.assignOwner") {
           expect(loadSessionEntry(scope)?.owner?.actor).toEqual({ type: "human", id: other.id });
         } else if (method.startsWith("session.members")) {
-          expect(listSessionMembers(scope).map((member) => member.identityId)).toEqual(
-            method === "session.members.add" ? [other.id] : [],
-          );
+          expect(
+            (await readSessionMembersInWorker(scope)).members.map((member) => member.identityId),
+          ).toEqual(method === "session.members.add" ? [other.id] : []);
         } else {
           expect(await listSessionSuggestions(scope)).toEqual([
             expect.objectContaining({
@@ -275,6 +295,7 @@ describe("session metadata writer admission", () => {
           kind === "owner" ? { agents: { entries: { main: {}, research: {} } } } : {};
         const context = sessionSharingTestContext(vi.fn());
         context.getRuntimeConfig = () => cfg;
+        setRuntimeConfigSnapshot(cfg);
         await initializeSessionReadContext(context);
         const entered = createDeferredCore();
         const release = createDeferredCore();
@@ -283,6 +304,7 @@ describe("session metadata writer admission", () => {
           await release.promise;
           if (kind === "owner") {
             cfg = { agents: { entries: { main: {} } } };
+            setRuntimeConfigSnapshot(cfg);
             expect(cfg.agents?.entries).not.toHaveProperty("research");
           } else if (kind === "config") {
             cfg = {
@@ -299,6 +321,7 @@ describe("session metadata writer admission", () => {
                 },
               },
             };
+            setRuntimeConfigSnapshot(cfg);
           } else {
             const entry = loadSessionEntry(scope)!;
             replaceSessionEntrySync(scope, {
@@ -325,7 +348,7 @@ describe("session metadata writer admission", () => {
           expect(request.errors.length === 1 || request.respond.mock.calls[0]?.[0] === false).toBe(
             true,
           );
-          expect(listSessionMembers(scope)).toEqual([]);
+          expect((await readSessionMembersInWorker(scope)).members).toEqual([]);
           expect(await listSessionSuggestions(scope)).toEqual([]);
           if (kind === "owner") {
             expect(loadSessionEntry(scope)?.owner).toBeUndefined();

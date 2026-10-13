@@ -32,10 +32,6 @@ export type UserProfileAvatarReadCommand =
       expected: UserProfileAvatarRepresentation;
     };
 
-export type UserProfileAvatarReadReply =
-  | { type: "userProfiles.avatar.inspect"; inspection: UserProfileAvatarInspection }
-  | { type: "userProfiles.avatar.read"; avatar: UserProfileAvatar | undefined };
-
 export type UserProfileAvatarAdmission = { kind: "profile-avatar"; before: ProfileDisplayRow };
 
 export function isUserProfileAvatarAdmission(value: unknown): value is UserProfileAvatarAdmission {

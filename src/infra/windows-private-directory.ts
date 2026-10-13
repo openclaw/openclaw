@@ -10,7 +10,7 @@ import { markPrivateDirectoryCreationRefused } from "./private-directory-creatio
 export function createPrivateWindowsDirectory(directoryPath: string): void {
   let attempted = false;
   try {
-    createDirectorySync(path.toNamespacedPath(path.resolve(directoryPath)), {
+    createDirectorySync(path.resolve(directoryPath), {
       private: true,
       assertBeforeMutation() {
         attempted = true;
@@ -27,6 +27,5 @@ export function createPrivateWindowsDirectory(directoryPath: string): void {
 }
 
 export function createPrivateWindowsFile(filePath: string): OwnedFileDescriptorSync {
-  // fs-safe 0.26.0 also needs the prefix when its sibling staging path exceeds MAX_PATH.
-  return createFileSync(path.toNamespacedPath(path.resolve(filePath)), { private: true });
+  return createFileSync(path.resolve(filePath), { private: true });
 }

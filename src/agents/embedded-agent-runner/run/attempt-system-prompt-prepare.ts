@@ -16,6 +16,7 @@ import {
   buildBootstrapPromptWarningNotice,
   buildBootstrapTruncationReportMeta,
 } from "../../bootstrap-budget.js";
+import { buildCodeModeCatalogPrompt } from "../../code-mode.js";
 import { resolveOpenClawReferencePaths } from "../../docs-path.js";
 import { prepareAgentMemoryPrompt } from "../../memory-prompt-prepare.js";
 import { buildModelToolsUnavailablePrompt } from "../../model-tool-support.js";
@@ -146,20 +147,30 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   });
   const resolveToolSchemaDirectoryPrompt = () =>
     params.toolSchemaDirectoryPrompt?.() ??
-    (params.toolSearchDirectoryEnabled && params.toolSearchCatalogRef?.current?.entries.length
-      ? buildToolSchemaDirectoryPrompt(
+    (params.codeModeActive
+      ? buildCodeModeCatalogPrompt(
           {
             config: attempt.config,
-            runtimeConfig: params.toolSearchRuntimeConfig,
+            catalogRef: params.toolSearchCatalogRef,
             agentId: params.setup.sessionAgentId,
             sessionKey: params.setup.sandboxSessionKey,
-            sessionId: attempt.sessionId,
-            runId: attempt.runId,
-            catalogRef: params.toolSearchCatalogRef,
           },
-          { contextTokenBudget: attempt.contextTokenBudget },
+          params.toolSearchCatalogRef?.current?.entries ?? [],
         )
-      : undefined);
+      : params.toolSearchDirectoryEnabled && params.toolSearchCatalogRef?.current?.entries.length
+        ? buildToolSchemaDirectoryPrompt(
+            {
+              config: attempt.config,
+              runtimeConfig: params.toolSearchRuntimeConfig,
+              agentId: params.setup.sessionAgentId,
+              sessionKey: params.setup.sandboxSessionKey,
+              sessionId: attempt.sessionId,
+              runId: attempt.runId,
+              catalogRef: params.toolSearchCatalogRef,
+            },
+            { contextTokenBudget: attempt.contextTokenBudget },
+          )
+        : undefined);
 
   const toolSchemaDirectoryPrompt = resolveToolSchemaDirectoryPrompt();
 

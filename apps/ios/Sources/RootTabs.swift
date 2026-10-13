@@ -61,7 +61,7 @@ struct RootTabs: View {
     @State private var showGatewayProblemDetails: Bool = false
     @State private var gatewayToastDragOffset: CGFloat = 0
     @State private var gatewayRetryFailure: String?
-    // Swipe-up hides the toast only until the next problem report.
+    // Swipe-up hides the current problem until it changes or resolves.
     @State private var isGatewayToastSwipeDismissed: Bool = false
     @State private var showOnboarding: Bool = false
     @State private var didEvaluateOnboarding: Bool = false
@@ -489,9 +489,8 @@ struct RootTabs: View {
     }
 
     private var activeGatewayProblemToast: GatewayConnectionProblem? {
-        // Operator-scope auth/pairing failures can coexist with a connected node.
-        // The problem itself, not aggregate gateway status, owns toast visibility.
-        guard let problem = appModel.lastGatewayProblem,
+        // Auth and pairing failures remain actionable even if another route is connected.
+        guard let problem = appModel.gatewayProblemForToast,
               !self.isGatewayToastSwipeDismissed
         else { return nil }
         return problem
@@ -605,12 +604,7 @@ struct RootTabs: View {
 
     private func rootGatewayProblemLifecycle(_ content: some View) -> some View {
         content
-            .onChange(of: self.appModel.lastGatewayProblem) { _, newValue in
-                if newValue == nil {
-                    self.isGatewayToastSwipeDismissed = false
-                }
-            }
-            .onChange(of: self.appModel.gatewayProblemReportCount) { _, _ in
+            .onChange(of: self.appModel.gatewayProblemForToast) { _, _ in
                 self.isGatewayToastSwipeDismissed = false
             }
     }

@@ -754,10 +754,10 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
   });
 });
 
-describe("buildContextEngineCompactionSessionTarget", () => {
-  it("derives the agent from a scoped session key", () => {
+describe("buildContextEngineCompactionSessionTarget", async () => {
+  it("derives the agent from a scoped session key", async () => {
     expect(
-      buildContextEngineCompactionSessionTarget({
+      await buildContextEngineCompactionSessionTarget({
         config: { session: { store: "/tmp/agents/{agentId}/sessions.json" } },
         sessionFile: "agent:helper:main",
         sessionId: "helper-session",
@@ -770,12 +770,12 @@ describe("buildContextEngineCompactionSessionTarget", () => {
     });
   });
 
-  it("leaves the key absent when a marker store has no mapped row", () => {
+  it("leaves the key absent when a marker store has no mapped row", async () => {
     const storePath = path.join(compactionTempDirs.make("compaction-marker-"), "sessions.json");
     const sessionId = "legacy-unmapped-session";
 
     expect(
-      buildContextEngineCompactionSessionTarget({
+      await buildContextEngineCompactionSessionTarget({
         sessionFile: formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath }),
         sessionId,
       }),

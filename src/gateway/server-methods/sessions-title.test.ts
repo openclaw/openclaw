@@ -75,6 +75,7 @@ let testState: OpenClawTestState;
 let ownerId: string;
 let otherId: string;
 let personalAccountId: string;
+let releaseProfileCatalog: (() => void) | undefined;
 
 function connectedClient(profileId?: string): GatewayClient {
   return {
@@ -137,6 +138,7 @@ describe("sessions.title.prepare", () => {
     testState = await createOpenClawTestState({ scenario: "minimal" });
     ownerId = ensureProfileForEmail("title-owner@example.test").id;
     otherId = ensureProfileForEmail("title-other@example.test").id;
+    releaseProfileCatalog = (await profileReader.prepareUserProfileCatalog()).release;
     personalAccountId = connectUserModelAccount({
       ownerProfileId: ownerId,
       credential: { type: "token", provider: "title-test", token: "synthetic-title-token" },
@@ -145,6 +147,7 @@ describe("sessions.title.prepare", () => {
   });
 
   afterAll(async () => {
+    releaseProfileCatalog?.();
     await testState.cleanup();
   });
 

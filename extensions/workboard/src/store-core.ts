@@ -34,6 +34,7 @@ import type {
   WorkboardLinkedCreateInput,
   WorkboardListOptions,
   WorkboardMutationScope,
+  WorkboardOwnedCardPatch,
   WorkboardStatsResult,
   WorkboardUpdateCardOptions,
 } from "./store-inputs.js";
@@ -69,15 +70,19 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
   private compensationJournal?: WorkboardMutationJournalEntry[];
 
   protected async withCardCompensation<T>(run: () => Promise<T>): Promise<T> {
-    if (this.compensationJournal) {
-      return await run();
-    }
     const journal: WorkboardMutationJournalEntry[] = [];
     this.compensationJournal = journal;
     try {
       return await run();
     } catch (operationError) {
-      const compensationErrors = await this.rollbackCardMutations(journal);
+      const compensationErrors: unknown[] = [];
+      for (const { before, after } of journal.toReversed()) {
+        try {
+          await this.rollbackCardMutation(before, after);
+        } catch (error) {
+          compensationErrors.push(error);
+        }
+      }
       if (compensationErrors.length > 0) {
         const message =
           operationError instanceof Error ? operationError.message : String(operationError);
@@ -94,20 +99,6 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
   private recordCardMutation(before: WorkboardCard | undefined, after: WorkboardCard): void {
     // Undo later steps first so each saved state is restored before its predecessor.
     this.compensationJournal?.push({ before, after });
-  }
-
-  private async rollbackCardMutations(
-    journal: WorkboardMutationJournalEntry[],
-  ): Promise<unknown[]> {
-    const errors: unknown[] = [];
-    for (const entry of journal.toReversed()) {
-      try {
-        await this.rollbackCardMutation(entry.before, entry.after);
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    return errors;
   }
 
   async compensateWorkspaceMutation(before: WorkboardCard, after: WorkboardCard): Promise<void> {
@@ -171,7 +162,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
 
   protected async updateLatestCard(
     id: string,
-    buildPatch: (current: WorkboardCard) => WorkboardCardPatch | undefined,
+    buildPatch: (current: WorkboardCard) => WorkboardOwnedCardPatch | undefined,
     options: WorkboardUpdateCardOptions = {},
   ): Promise<{ card: WorkboardCard; updated: boolean }> {
     const current = await this.requireCard(id);
@@ -181,12 +172,14 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     ) {
       throw new WorkboardCardConflictError(current);
     }
-    const patch = buildPatch(current);
-    if (!patch) {
+    const ownedPatch = buildPatch(current);
+    if (!ownedPatch) {
       return { card: current, updated: false };
     }
+    const { ownedLaunch, ...patch } = ownedPatch;
     const card = await this.updateCard(current, patch, {
       ...options,
+      automationLaunch: ownedLaunch,
       expectedUpdatedAt: current.updatedAt,
     });
     return { card, updated: card.updatedAt !== current.updatedAt };
@@ -527,168 +520,152 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     ) {
       throw new WorkboardCardConflictError(existing);
     }
-    let next: WorkboardCard;
-    try {
-      const lifecycleStatusSourceUpdatedAt = lifecycleStatusSourceUpdatedAtFromPatch(
-        patch.metadata,
+    const lifecycleStatusSourceUpdatedAt = lifecycleStatusSourceUpdatedAtFromPatch(patch.metadata);
+    const existingLifecycleStatusSourceUpdatedAt =
+      existing.metadata?.lifecycleStatusSourceUpdatedAt;
+    const hasFreshLifecycleStatusSource =
+      lifecycleStatusSourceUpdatedAt !== undefined &&
+      lifecycleStatusSourceUpdatedAt !== existingLifecycleStatusSourceUpdatedAt;
+    let effectivePatch = patch;
+    if (
+      patch.status !== undefined &&
+      lifecycleStatusSourceUpdatedAt !== undefined &&
+      shouldSkipPersistedLifecycleStatusUpdate(existing, lifecycleStatusSourceUpdatedAt)
+    ) {
+      // Ignore stale lifecycle status writes, but still accept any non-status updates in the patch.
+      effectivePatch = { ...patch, status: undefined };
+      if (isRecord(patch.metadata)) {
+        const { lifecycleStatusSourceUpdatedAt: _ignored, ...rest } = patch.metadata;
+        effectivePatch.metadata = Object.keys(rest).length > 0 ? rest : undefined;
+      }
+      const hasSemanticPatch = Object.entries(effectivePatch).some(
+        ([key, value]) => key !== "status" && key !== "metadata" && value !== undefined,
       );
-      const existingLifecycleStatusSourceUpdatedAt =
-        existing.metadata?.lifecycleStatusSourceUpdatedAt;
-      const hasFreshLifecycleStatusSource =
-        lifecycleStatusSourceUpdatedAt !== undefined &&
-        lifecycleStatusSourceUpdatedAt !== existingLifecycleStatusSourceUpdatedAt;
-      let effectivePatch = patch;
-      if (
-        patch.status !== undefined &&
-        lifecycleStatusSourceUpdatedAt !== undefined &&
-        shouldSkipPersistedLifecycleStatusUpdate(existing, lifecycleStatusSourceUpdatedAt)
-      ) {
-        // Ignore stale lifecycle status writes, but still accept any non-status updates in the patch.
-        effectivePatch = { ...patch, status: undefined };
-        if (isRecord(patch.metadata)) {
-          const { lifecycleStatusSourceUpdatedAt: _ignored, ...rest } = patch.metadata;
-          effectivePatch.metadata = Object.keys(rest).length > 0 ? rest : undefined;
-        }
-        const hasSemanticPatch = Object.entries(effectivePatch).some(
-          ([key, value]) => key !== "status" && key !== "metadata" && value !== undefined,
-        );
-        if (!hasSemanticPatch && effectivePatch.metadata === undefined) {
-          return existing;
-        }
+      if (!hasSemanticPatch && effectivePatch.metadata === undefined) {
+        return existing;
       }
-      const status = normalizeStatus(effectivePatch.status, existing.status);
-      const now = Math.max(Date.now(), existing.updatedAt + 1);
-      const startedAt =
-        effectivePatch.startedAt === undefined
-          ? status === "running"
-            ? (existing.startedAt ?? now)
-            : existing.startedAt
-          : normalizeTimestamp(effectivePatch.startedAt, 0) || undefined;
-      const completedAt =
-        effectivePatch.completedAt === undefined
-          ? status === "done"
-            ? (existing.completedAt ?? now)
-            : undefined
-          : normalizeTimestamp(effectivePatch.completedAt, 0) || undefined;
-      const sessionKey =
-        effectivePatch.sessionKey === undefined
-          ? existing.sessionKey
-          : normalizeOptionalString(effectivePatch.sessionKey);
-      const execution =
-        effectivePatch.execution === undefined
-          ? effectivePatch.sessionKey === undefined
-            ? existing.execution
-            : syncExecutionSessionKey(existing.execution, sessionKey)
-          : normalizeExecution(effectivePatch.execution);
-      let metadata = normalizeMetadata(effectivePatch.metadata, existing.metadata, {
-        allowAutomationLaunch: options.allowAutomationLaunch,
-        allowDependencyLinks: options.allowMetadataDependencyLinks !== false,
-        preserveProofId: options.preserveProofId,
-      });
-      if (status !== existing.status && !hasFreshLifecycleStatusSource) {
-        // Status patches often spread existing metadata. Only a newly supplied
-        // lifecycle source is provenance; copied markers must not survive a manual transition.
-        metadata = { ...metadata, lifecycleStatusSourceUpdatedAt: undefined };
+    }
+    const status = normalizeStatus(effectivePatch.status, existing.status);
+    const now = Math.max(Date.now(), existing.updatedAt + 1);
+    const startedAt =
+      effectivePatch.startedAt === undefined
+        ? status === "running"
+          ? (existing.startedAt ?? now)
+          : existing.startedAt
+        : normalizeTimestamp(effectivePatch.startedAt, 0) || undefined;
+    const completedAt =
+      effectivePatch.completedAt === undefined
+        ? status === "done"
+          ? (existing.completedAt ?? now)
+          : undefined
+        : normalizeTimestamp(effectivePatch.completedAt, 0) || undefined;
+    const sessionKey =
+      effectivePatch.sessionKey === undefined
+        ? existing.sessionKey
+        : normalizeOptionalString(effectivePatch.sessionKey);
+    const execution =
+      effectivePatch.execution === undefined
+        ? effectivePatch.sessionKey === undefined
+          ? existing.execution
+          : syncExecutionSessionKey(existing.execution, sessionKey)
+        : normalizeExecution(effectivePatch.execution);
+    let metadata = normalizeMetadata(effectivePatch.metadata, existing.metadata, {
+      automationLaunch: options.automationLaunch,
+      allowDependencyLinks: options.allowMetadataDependencyLinks !== false,
+      preserveProofId: options.preserveProofId,
+    });
+    if (status !== existing.status && !hasFreshLifecycleStatusSource) {
+      // Status patches often spread existing metadata. Only a newly supplied
+      // lifecycle source is provenance; copied markers must not survive a manual transition.
+      metadata = { ...metadata, lifecycleStatusSourceUpdatedAt: undefined };
+    }
+    const automationPatch: Record<string, unknown> = {};
+    for (const key of [
+      "tenant",
+      "boardId",
+      "createdByCardId",
+      "idempotencyKey",
+      "skills",
+      "workspace",
+      "workspaceAccess",
+      "maxRuntimeSeconds",
+      "maxRetries",
+      "scheduledAt",
+    ] as const) {
+      if (Object.hasOwn(effectivePatch, key) && effectivePatch[key] !== undefined) {
+        automationPatch[key] = effectivePatch[key];
       }
-      const automationPatch: Record<string, unknown> = {};
-      for (const key of [
-        "tenant",
-        "boardId",
-        "createdByCardId",
-        "idempotencyKey",
-        "skills",
-        "workspace",
-        "workspaceAccess",
-        "maxRuntimeSeconds",
-        "maxRetries",
-        "scheduledAt",
-      ] as const) {
-        if (Object.hasOwn(effectivePatch, key) && effectivePatch[key] !== undefined) {
-          automationPatch[key] = effectivePatch[key];
-        }
-      }
-      if (Object.keys(automationPatch).length > 0) {
-        metadata = trimMetadataToBudget(
-          {
-            ...metadata,
-            automation: normalizeAutomationPatch(automationPatch, metadata.automation),
-          },
-          options,
-        );
-      }
-      next = removeUndefinedCardFields({
-        ...existing,
-        title:
-          effectivePatch.title === undefined
-            ? existing.title
-            : normalizeTitle(effectivePatch.title),
-        notes:
-          effectivePatch.notes === undefined
-            ? existing.notes
-            : normalizeNotes(effectivePatch.notes),
-        status,
-        priority: normalizePriority(effectivePatch.priority, existing.priority),
-        labels:
-          effectivePatch.labels === undefined
-            ? existing.labels
-            : normalizeCappedStringList(effectivePatch.labels, "labels"),
-        agentId:
-          effectivePatch.agentId === undefined
-            ? existing.agentId
-            : normalizeOptionalString(effectivePatch.agentId),
-        sessionKey,
-        runId:
-          effectivePatch.runId === undefined
-            ? existing.runId
-            : normalizeOptionalString(effectivePatch.runId),
-        sourceUrl:
-          effectivePatch.sourceUrl === undefined
-            ? existing.sourceUrl
-            : normalizeOptionalString(effectivePatch.sourceUrl),
-        execution,
-        metadata:
-          effectivePatch.templateId === undefined
-            ? metadata
-            : { ...metadata, templateId: normalizeTemplateId(effectivePatch.templateId) },
-        position:
-          effectivePatch.position === undefined
-            ? existing.position
-            : resolveNonNegativeIntegerOption(effectivePatch.position, existing.position),
-        updatedAt: now,
-        ...(startedAt ? { startedAt } : {}),
-        ...(completedAt ? { completedAt } : {}),
-      });
-      next.metadata = trimMetadataToBudget(
-        syncExecutionAttemptMetadata(next.metadata ?? {}, execution, now),
+    }
+    if (Object.keys(automationPatch).length > 0) {
+      metadata = trimMetadataToBudget(
+        {
+          ...metadata,
+          automation: normalizeAutomationPatch(automationPatch, metadata.automation),
+        },
         options,
       );
-      next.events = appendEvent(
-        next,
-        options.event ?? updateEvent(existing, next),
-        options.eventAt ?? now,
-      );
-      if (options.enforceStatusHolds && effectivePatch.status !== undefined) {
-        await this.assertActiveStatusAllowed(existing, next, now);
-      }
-      if (status !== "done") {
-        delete next.completedAt;
-      }
-      if (effectivePatch.startedAt !== undefined && !startedAt) {
-        delete next.startedAt;
-      }
-      if (effectivePatch.completedAt !== undefined && !completedAt) {
-        delete next.completedAt;
-      }
-      if (metadataIsEmpty(next.metadata)) {
-        delete next.metadata;
-      }
-    } catch (error) {
-      // A concurrent edit can invalidate preparation; report its revision before validation errors.
-      const current = await this.requireCard(existing.id);
-      if (current.updatedAt !== existing.updatedAt) {
-        throw new WorkboardCardConflictError(current);
-      }
-      throw error;
+    }
+    const next = removeUndefinedCardFields({
+      ...existing,
+      title:
+        effectivePatch.title === undefined ? existing.title : normalizeTitle(effectivePatch.title),
+      notes:
+        effectivePatch.notes === undefined ? existing.notes : normalizeNotes(effectivePatch.notes),
+      status,
+      priority: normalizePriority(effectivePatch.priority, existing.priority),
+      labels:
+        effectivePatch.labels === undefined
+          ? existing.labels
+          : normalizeCappedStringList(effectivePatch.labels, "labels"),
+      agentId:
+        effectivePatch.agentId === undefined
+          ? existing.agentId
+          : normalizeOptionalString(effectivePatch.agentId),
+      sessionKey,
+      runId:
+        effectivePatch.runId === undefined
+          ? existing.runId
+          : normalizeOptionalString(effectivePatch.runId),
+      sourceUrl:
+        effectivePatch.sourceUrl === undefined
+          ? existing.sourceUrl
+          : normalizeOptionalString(effectivePatch.sourceUrl),
+      execution,
+      metadata:
+        effectivePatch.templateId === undefined
+          ? metadata
+          : { ...metadata, templateId: normalizeTemplateId(effectivePatch.templateId) },
+      position:
+        effectivePatch.position === undefined
+          ? existing.position
+          : resolveNonNegativeIntegerOption(effectivePatch.position, existing.position),
+      updatedAt: now,
+      ...(startedAt ? { startedAt } : {}),
+      ...(completedAt ? { completedAt } : {}),
+    });
+    next.metadata = trimMetadataToBudget(
+      syncExecutionAttemptMetadata(next.metadata ?? {}, execution, now),
+      options,
+    );
+    next.events = appendEvent(
+      next,
+      options.event ?? updateEvent(existing, next),
+      options.eventAt ?? now,
+    );
+    if (options.enforceStatusHolds && effectivePatch.status !== undefined) {
+      await this.assertActiveStatusAllowed(existing, next, now);
+    }
+    if (status !== "done") {
+      delete next.completedAt;
+    }
+    if (effectivePatch.startedAt !== undefined && !startedAt) {
+      delete next.startedAt;
+    }
+    if (effectivePatch.completedAt !== undefined && !completedAt) {
+      delete next.completedAt;
+    }
+    if (metadataIsEmpty(next.metadata)) {
+      delete next.metadata;
     }
     const expectedUpdatedAt = options.expectedUpdatedAt ?? existing.updatedAt;
     const nextEntry: PersistedWorkboardCard = { version: 1, card: next };

@@ -222,10 +222,17 @@ async function runStateLeaseOwnerInScope<T>(
       operationLabel: validated.operationLabel,
     };
     const execution = workerOperations;
+    // Runtime cleanup joins the worker writer queue; native contention must not abandon its lease.
+    // Existing-schema maintenance keeps its subset writer's no-migration contract.
+    const cleanupStorage =
+      workerStorage ??
+      (nativeLeaseSource && validated.database.schemaPolicy !== "existing"
+        ? createOpenClawStateLeaseWorkerStorage(nativeLeaseSource.context)
+        : undefined);
     await releaseBestEffort(
       params,
-      workerStorage && execution
-        ? () => workerStorage.release(execution, validated.operationLabel)
+      cleanupStorage && execution
+        ? () => cleanupStorage.release(execution, validated.operationLabel)
         : undefined,
     );
     await execution?.settle();
@@ -588,7 +595,13 @@ async function runStateLeaseOwnerInScope<T>(
           databasePath: resolveLeaseDatabasePath(validated.database),
           sourceContext: nativeLeaseSource?.context,
           sourceIdentity: nativeLeaseSource?.identity,
-          assertCurrent: () => {
+          assertCurrent: (purpose) => {
+            if (purpose === "release") {
+              if (disposed || phase !== "draining" || !heartbeatStopped) {
+                throw new Error("State lease cleanup has not joined its heartbeat");
+              }
+              return;
+            }
             assertActive();
             if (validated.database.schemaPolicy === "existing") {
               throw new Error("This lease mode does not support worker writes");

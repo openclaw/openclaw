@@ -12,6 +12,10 @@ import {
 } from "../config/sessions/session-accessor.sqlite-read.js";
 import { appendTranscriptEventsInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
+import {
+  createTranscriptPayloadUpdater,
+  prepareTranscriptPayload,
+} from "../config/sessions/transcript-payload.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as agentDatabase from "../state/openclaw-agent-db.js";
 import {
@@ -296,11 +300,13 @@ describe("doctor SQLite session transcript label migration", () => {
     vi.spyOn(agentDatabase, "runOpenClawAgentWriteTransaction").mockImplementationOnce(
       (write, options, transactionOptions) => {
         transaction((db) => {
-          db.db
-            .prepare(
-              "UPDATE transcript_events SET event_json = '{}' WHERE session_id = ? AND seq = 2",
-            )
-            .run(SESSION_ID);
+          createTranscriptPayloadUpdater(
+            db.db,
+            SESSION_ID,
+          )({
+            seq: 2,
+            ...prepareTranscriptPayload(db.db, "{}"),
+          });
         }, databaseOptions);
         return transaction(write, options, transactionOptions);
       },

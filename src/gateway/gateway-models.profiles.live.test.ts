@@ -14,7 +14,7 @@ import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderCatNoncePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { installTestEnv } from "../../test/test-env.js";
-import { discoverAuthStorageFacts, discoverModels } from "../agents/agent-model-discovery.js";
+import { discoverAuthStorageFacts, discoverModelsAsync } from "../agents/agent-model-discovery.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import {
   ensureAuthProfileStore,
@@ -5184,8 +5184,8 @@ async function loadAuthBackedLiveModelRegistry(params: {
   providerList: string[] | undefined;
 }): Promise<{
   authProfileStore: AuthProfileStore;
-  authStorage: ReturnType<typeof discoverAuthStorageFacts>["authStorage"];
-  modelRegistry: ReturnType<typeof discoverModels>;
+  authStorage: Awaited<ReturnType<typeof discoverAuthStorageFacts>>["authStorage"];
+  modelRegistry: Awaited<ReturnType<typeof discoverModelsAsync>>;
   all: Array<Model>;
 }> {
   const authProfileStore = await withGatewayLiveSetupTimeout(
@@ -5216,7 +5216,7 @@ async function loadAuthBackedLiveModelRegistry(params: {
     "[all-models] load auth storage",
   );
   logProgress("[all-models] loading model registry");
-  const modelRegistry = discoverModels(authStorage, params.agentDir);
+  const modelRegistry = await discoverModelsAsync(authStorage, params.agentDir);
   const all = await withGatewayLiveSetupTimeout(
     Promise.resolve().then(() => modelRegistry.getAll()),
     "[all-models] load model registry",
@@ -5356,7 +5356,7 @@ async function resolveGatewayLiveRequestedModels(): Promise<string | undefined> 
     platform: "linux",
     deps: {
       probeLocalCommand: async (command) => ({ command, found: false }),
-      readCodexCliCredentials: () => null,
+      hasCodexCliAuthFile: () => false,
       readGeminiCliCredentials: () => null,
     },
   });
@@ -6858,8 +6858,8 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       const hostStore = ensureAuthProfileStore(agentDir, {
         allowKeychainPrompt: false,
       });
-      const { authStorage } = discoverAuthStorageFacts(agentDir);
-      const modelRegistry = discoverModels(authStorage, agentDir);
+      const { authStorage } = await discoverAuthStorageFacts(agentDir);
+      const modelRegistry = await discoverModelsAsync(authStorage, agentDir);
       const anthropic = modelRegistry.find("anthropic", "claude-opus-4-6") as Model | null;
       const zai = modelRegistry.find("zai", "glm-5.1") as Model | null;
 

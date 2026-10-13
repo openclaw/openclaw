@@ -189,6 +189,25 @@ it("retains synchronous placement and publication contracts from the released Ga
   expectTypeOf<ReturnType<Publications["listUnreportedResultsAsync"]>>().toEqualTypeOf<
     Promise<ReturnType<Publications["listUnreportedResults"]>>
   >();
+  expectTypeOf<Parameters<Publications["personalStatusAsync"]>>().toEqualTypeOf<
+    Parameters<Publications["personalStatus"]>
+  >();
+  expectTypeOf<ReturnType<Publications["personalStatusAsync"]>>().toEqualTypeOf<
+    Promise<ReturnType<Publications["personalStatus"]>>
+  >();
+  type ManagedGitHub = NonNullable<NonNullable<Context>["githubOAuthService"]>;
+  expectTypeOf<ReturnType<ManagedGitHub["cancelAuthorization"]>>().toEqualTypeOf<boolean>();
+  expectTypeOf<ReturnType<ManagedGitHub["retireProfile"]>>().toEqualTypeOf<void>();
+  expectTypeOf<Parameters<ManagedGitHub["cancelAuthorizationAsync"]>>().toEqualTypeOf<
+    Parameters<ManagedGitHub["cancelAuthorization"]>
+  >();
+  expectTypeOf<Parameters<ManagedGitHub["retireProfileAsync"]>>().toEqualTypeOf<
+    Parameters<ManagedGitHub["retireProfile"]>
+  >();
+  expectTypeOf<ReturnType<ManagedGitHub["cancelAuthorizationAsync"]>>().toEqualTypeOf<
+    Promise<boolean>
+  >();
+  expectTypeOf<ReturnType<ManagedGitHub["retireProfileAsync"]>>().toEqualTypeOf<Promise<void>>();
   type PersonalGitHub = NonNullable<NonNullable<Context>["githubOAuthService"]>["personal"];
   expectTypeOf<Parameters<PersonalGitHub["cancelAuthorization"]>>().toEqualTypeOf<
     [action: ReleasedPersonalConnectionAction, requestId: string]

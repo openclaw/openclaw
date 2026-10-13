@@ -230,7 +230,6 @@ it("refreshes previews after reconciliation without metadata mutation or clean-r
 
       const expected = {
         key: scope.sessionKey,
-        derivedTitle: undefined,
         lastMessagePreview: "The existing reply is available again.",
       };
       await vi.waitFor(() =>

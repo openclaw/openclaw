@@ -5,6 +5,7 @@ import {
   VLLM_MODEL_PLACEHOLDER,
   VLLM_PROVIDER_LABEL,
 } from "./api.js";
+import { wrapVllmPriorityStream } from "./priority.js";
 import { normalizeVllmResolvedModel, wrapVllmProviderStream } from "./stream.js";
 import { resolveThinkingProfile } from "./thinking-policy.js";
 
@@ -24,5 +25,6 @@ export default defineSelfHostedOpenAICompatibleProvider({
     resolveThinkingProfile,
     normalizeResolvedModel: normalizeVllmResolvedModel,
     wrapStreamFn: wrapVllmProviderStream,
+    wrapSimpleCompletionStreamFn: wrapVllmPriorityStream,
   },
 });

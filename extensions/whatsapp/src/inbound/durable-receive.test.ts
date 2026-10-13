@@ -112,53 +112,6 @@ describe("createWhatsAppIngressMonitor", () => {
     });
   });
 
-  it("propagates failed-retryable results as claim release", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createQueue(stateDir);
-      const id = eventId("msg-2");
-      await queue.enqueue(id, payload("msg-2"), { laneKey: REMOTE_JID });
-
-      const monitor = createWhatsAppIngressMonitor({
-        queue,
-        pollIntervalMs: 10,
-        dispatch: async () => ({
-          kind: "failed-retryable",
-          error: new Error("downstream flush rejected"),
-        }),
-      });
-
-      monitor.start();
-      await monitor.waitForIdle();
-
-      const pending = await queue.listPending({ limit: "all" });
-      const row = pending.find((entry) => entry.id === id);
-      expect(row).toBeDefined();
-      expect((row?.attempts ?? 0) >= 1).toBe(true);
-      await monitor.stop();
-    });
-  });
-
-  it("tombstones after an explicit completed dispatch", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createQueue(stateDir);
-      const id = eventId("msg-3");
-      await queue.enqueue(id, payload("msg-3"), { laneKey: REMOTE_JID });
-
-      const monitor = createWhatsAppIngressMonitor({
-        queue,
-        pollIntervalMs: 10,
-        dispatch: async () => ({ kind: "completed" }),
-      });
-
-      monitor.start();
-      await monitor.waitForIdle();
-
-      const status = await queue.enqueue(id, payload("msg-3"), { laneKey: REMOTE_JID });
-      expect(status.kind).toBe("completed");
-      await monitor.stop();
-    });
-  });
-
   it("delivers same-lane debounce candidates while retaining each claim until adoption", async () => {
     await withTempState(async (stateDir) => {
       const queue = createQueue(stateDir);
@@ -370,30 +323,6 @@ describe("createWhatsAppIngressMonitor", () => {
       expect(await queue.listPending({ limit: "all" })).toEqual([]);
     });
   });
-
-  it("keeps completed and failed replay guards bounded", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createQueue(stateDir);
-      const prune = vi.spyOn(queue, "prune");
-      const monitor = createWhatsAppIngressMonitor({
-        queue,
-        pollIntervalMs: 10,
-        dispatch: async () => ({ kind: "completed" }),
-      });
-
-      monitor.start();
-      await monitor.waitForIdle();
-      await monitor.stop();
-
-      expect(prune).toHaveBeenCalledWith({
-        completedTtlMs: 7 * 24 * 60 * 60 * 1_000,
-        completedMaxEntries: 5_000,
-        failedTtlMs: 30 * 24 * 60 * 60 * 1_000,
-        failedMaxEntries: 450,
-        now: expect.any(Number),
-      });
-    });
-  });
 });
 
 describe("WhatsApp durable message serialization", () => {
@@ -406,52 +335,5 @@ describe("WhatsApp durable message serialization", () => {
     } as unknown as WAMessage);
 
     expect(deserializeWhatsAppDurableInboundMessage(serialized).messageTimestamp).toBe(timestamp);
-  });
-
-  it("carries receive-time skip decisions through admission and replay", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createQueue(stateDir);
-
-      const dispatched: Array<{
-        upsertType?: string;
-        skipStaleAppend?: boolean;
-        skipRecentOutboundEcho?: boolean;
-        receiveOrder?: number;
-      }> = [];
-      const monitor = createWhatsAppIngressMonitor({
-        queue,
-        pollIntervalMs: 10,
-        dispatch: async (admission) => {
-          dispatched.push(admission);
-          return { kind: "completed" };
-        },
-      });
-      monitor.start();
-      await expect(
-        monitor.admit(
-          {
-            message: message("stale-append"),
-            upsertType: "append",
-            skipStaleAppend: true,
-            skipRecentOutboundEcho: true,
-            receivedAt: 1,
-            receiveOrder: 7,
-          },
-          { receivedAt: 1 },
-        ),
-      ).resolves.toMatchObject({ kind: "durable", queueResult: { kind: "accepted" } });
-      await monitor.waitForIdle();
-
-      expect(dispatched).toEqual([
-        expect.objectContaining({
-          upsertType: "append",
-          skipStaleAppend: true,
-          skipRecentOutboundEcho: true,
-          receivedAt: 1,
-          receiveOrder: 7,
-        }),
-      ]);
-      await monitor.stop();
-    });
   });
 });

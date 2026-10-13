@@ -27,9 +27,6 @@ function readAssistantDeliveryFacts(value: unknown): AssistantDeliveryFacts | un
       facts.mediaUrls = mediaUrls;
     }
   }
-  if (value.textPhaseRequiresTerminal === true) {
-    facts.textPhaseRequiresTerminal = true;
-  }
   if (isRecord(value.tts) && value.tts.tagged === true) {
     const tts: AssistantDeliveryTtsFacts = { tagged: true };
     if (typeof value.tts.text === "string") {
@@ -56,6 +53,23 @@ function readAssistantDeliveryFacts(value: unknown): AssistantDeliveryFacts | un
     facts.tts = tts;
   }
   return Object.keys(facts).length ? facts : undefined;
+}
+
+/** Mirror identity retains media references independently of filename-only display text. */
+export function projectAssistantTranscriptMirrorIdentity(message: unknown) {
+  if (!isRecord(message) || message.role !== "assistant" || !Array.isArray(message.content)) {
+    return undefined;
+  }
+  const text = message.content
+    .flatMap((part) =>
+      isRecord(part) && part.type === "text" && typeof part.text === "string" && part.text.trim()
+        ? [part.text.trim()]
+        : [],
+    )
+    .join("\n");
+  return text
+    ? { text, mediaUrls: readAssistantDeliveryFacts(message.openclawDelivery)?.mediaUrls ?? [] }
+    : undefined;
 }
 
 /** SQLite and retained JSONL readers expose the same authored text and delivery facts. */

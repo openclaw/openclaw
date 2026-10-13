@@ -19,10 +19,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { continueMigratedUpdateInFreshProcess } from "./update-command-migrated.js";
-import {
-  finishSuccessfulPackageSwitch,
-  validConfigSnapshot,
-} from "./update-command-post-update.test-support.js";
+import { validConfigSnapshot } from "./update-command-post-update.test-support.js";
 import { assertUpdateCommandPackageFinalization } from "./update-command-recovery.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
 import { resolveSettledUpdateCommandResult } from "./update-command-terminal.js";
@@ -228,18 +225,6 @@ describe("durable terminal finalizer consumer", () => {
       ),
     ).rejects.toMatchObject({ name: "UpdateCommandRecoveryPendingError" });
     expect(f.reload()?.terminal).toBeUndefined();
-  });
-
-  it("refuses retained full-state finalization without committing or cleaning", async () => {
-    const f = await fixture();
-    const before = f.reload();
-    await expect(
-      finishSuccessfulPackageSwitch({ packageRoot: f.live, run: f.opts.run }, { opts: f.opts }),
-    ).rejects.toMatchObject({ name: "UpdateCommandPendingRecoveryFailure" });
-    expect(f.reload()).toEqual(before);
-    expect(getUpdateRun(f.run.runId, f.options)?.status).toBe("running");
-    expect(await fs.stat(f.live)).toBeDefined();
-    expect(await fs.stat(f.backup)).toBeDefined();
   });
 });
 

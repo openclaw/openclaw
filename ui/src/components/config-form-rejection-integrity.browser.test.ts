@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 // Control UI tests cover nested config edit rejection and draft preservation.
-import { renderObjectFixture, renderArrayFixture } from "../test-helpers/config-form-fixtures.ts";
-import { ConfigFormCollectionDraft } from "./config-form-collection-draft.ts";
+import { renderObjectFixture, renderArrayFixture } from "../test-helpers/config-form-fixtures.tsx";
 
 type ConfigFormStructuredDraftElement = HTMLElement & {
   updateComplete: Promise<unknown>;
@@ -37,7 +36,7 @@ describe("config form rejection integrity", () => {
     const arrays = Array.from(container.querySelectorAll<HTMLElement>(".cfg-array"));
     const secondGroup = expectElement(arrays[2], "second auto-default array");
     const draft = expectElement(
-      secondGroup.querySelector<ConfigFormCollectionDraft>("openclaw-config-form-collection-draft"),
+      secondGroup.querySelector("openclaw-config-form-collection-draft"),
       "second auto-default array draft",
     );
     await draft.updateComplete;
@@ -88,7 +87,7 @@ describe("config form rejection integrity", () => {
     const maps = Array.from(container.querySelectorAll<HTMLElement>(".cfg-map"));
     const secondMap = expectElement(maps[1], "second auto-default map");
     const draft = expectElement(
-      secondMap.querySelector<ConfigFormCollectionDraft>("openclaw-config-form-collection-draft"),
+      secondMap.querySelector("openclaw-config-form-collection-draft"),
       "second auto-default map draft",
     );
     await draft.updateComplete;

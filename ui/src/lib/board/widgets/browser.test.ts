@@ -11,7 +11,7 @@ import {
 } from "../../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import type { BoardWidget } from "../types.ts";
-import "./browser.ts";
+import "./browser.tsx";
 
 const sessionKey = "agent:main:dashboard-test";
 function widget(instanceId: string): BoardWidget {

@@ -319,8 +319,8 @@ describe("Codex app-server binding reads", () => {
   });
 });
 
-function importBinding(fields: Record<string, unknown>) {
-  return createStoredCodexAppServerBinding({
+async function importBinding(fields: Record<string, unknown>) {
+  return await createStoredCodexAppServerBinding({
     schemaVersion: 2,
     threadId: "thread-1",
     cwd: "/repo",
@@ -328,23 +328,25 @@ function importBinding(fields: Record<string, unknown>) {
   });
 }
 
-function importPolicy(fields: Record<string, unknown>) {
-  return importBinding({
-    pluginAppPolicyContext: {
-      fingerprint: "policy",
-      apps: {
-        app: {
-          configKey: "app",
-          marketplaceName: "openai-curated",
-          pluginName: "plugin",
-          allowDestructiveActions: true,
-          mcpServerNames: [],
-          ...fields,
+async function importPolicy(fields: Record<string, unknown>) {
+  return (
+    await importBinding({
+      pluginAppPolicyContext: {
+        fingerprint: "policy",
+        apps: {
+          app: {
+            configKey: "app",
+            marketplaceName: "openai-curated",
+            pluginName: "plugin",
+            allowDestructiveActions: true,
+            mcpServerNames: [],
+            ...fields,
+          },
         },
+        pluginAppIds: {},
       },
-      pluginAppIds: {},
-    },
-  })?.binding.pluginAppPolicyContext;
+    })
+  )?.binding.pluginAppPolicyContext;
 }
 
 describe("Codex app-server binding codec", () => {
@@ -364,17 +366,17 @@ describe("Codex app-server binding codec", () => {
     });
   });
 
-  it("rejects unsafe marketplace names in imported plugin app ownership", () => {
-    expect(importPolicy({ marketplaceName: "../unsafe-marketplace" })).toBeUndefined();
+  it("rejects unsafe marketplace names in imported plugin app ownership", async () => {
+    expect(await importPolicy({ marketplaceName: "../unsafe-marketplace" })).toBeUndefined();
   });
 
-  it("normalizes legacy fingerprints without rehashing canonical values", () => {
+  it("normalizes legacy fingerprints without rehashing canonical values", async () => {
     const rawDynamicToolsFingerprint = JSON.stringify([{ name: "legacy_tool" }]);
     const rawUserMcpServersFingerprint = JSON.stringify({
       mcp_servers: { legacy: { command: "node" } },
     });
     const nativeSkillIsolationFingerprint = `sha256:${"b".repeat(64)}`;
-    const imported = importBinding({
+    const imported = await importBinding({
       updatedAt: "2026-01-01T00:00:00.000Z",
       dynamicToolsFingerprint: rawDynamicToolsFingerprint,
       nativeSkillIsolationFingerprint,
@@ -387,7 +389,7 @@ describe("Codex app-server binding codec", () => {
     });
 
     const existingHash = `sha256:${"a".repeat(64)}`;
-    const canonical = importBinding({
+    const canonical = await importBinding({
       updatedAt: "2026-01-01T00:00:00.000Z",
       dynamicToolsFingerprint: "[]",
       userMcpServersFingerprint: existingHash,
@@ -465,7 +467,7 @@ describe("Codex app-server binding codec", () => {
           state: "active",
           binding,
         });
-        const imported = importBinding({
+        const imported = await importBinding({
           ...binding,
           createdAt: "2025-12-31T00:00:00.000Z",
           updatedAt: "2026-01-01T00:00:00.000Z",
@@ -488,7 +490,7 @@ describe("Codex app-server binding codec", () => {
   it.each([
     { destructiveApprovalMode: "ask", appId: "not-allowed" },
     { destructiveApprovalMode: "on-request" },
-  ])("drops invalid imported policy contexts: %j", (fields) => {
-    expect(importPolicy(fields)).toBeUndefined();
+  ])("drops invalid imported policy contexts: %j", async (fields) => {
+    expect(await importPolicy(fields)).toBeUndefined();
   });
 });

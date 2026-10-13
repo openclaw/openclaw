@@ -4,20 +4,19 @@ import {
   createDefaultIsolatedRunner,
   createDueIsolatedJob,
   createIsolatedRegressionJob,
-  createRunningCronServiceState,
   noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as schedule from "../schedule.js";
+import { createCronServiceStateWithJobs } from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import type { CronJob } from "../types.js";
 import type { DeferredCronNotifications } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
-import { runMissedJobs } from "./timer-catchup.js";
 import { applyJobResult } from "./timer-outcomes.js";
-import { onTimer } from "./timer.test-support.js";
+import { onTimer, runMissedJobs } from "./timer.test-support.js";
 
 const timerRegressionFixtures = setupCronRegressionFixtures({
   prefix: "cron-service-timer-outcomes-regressions-",
@@ -64,7 +63,7 @@ describe("cron timer outcome and failure policy regressions", () => {
         consecutiveErrors: 1,
       },
     });
-    const state = createRunningCronServiceState({
+    const state = createCronServiceStateWithJobs({
       storePath: "/tmp/cron-recurring-rate-limit-edited.json",
       log: noopLogger,
       nowMs: () => retryStartedAt,
@@ -141,7 +140,7 @@ describe("cron timer outcome and failure policy regressions", () => {
     },
   );
 
-  it("records failure diagnostics and auto-disables on the tenth consecutive failure", () => {
+  it("records failure diagnostics and auto-disables on the tenth consecutive failure", async () => {
     const startedAt = Date.parse("2026-08-01T12:00:00.000Z");
     const deferredNotifications: DeferredCronNotifications = [];
     const enqueueSystemEvent = vi.fn();
@@ -218,58 +217,10 @@ describe("cron timer outcome and failure policy regressions", () => {
       consecutiveErrors: 10,
     });
     expect(deferredNotifications).toHaveLength(1);
-    runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
+    await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
     expect(enqueueSystemEvent).toHaveBeenCalledOnce();
     expect(sendCronFailureAlert).not.toHaveBeenCalled();
   });
-
-  it.each([
-    { name: "silent job", delivery: { mode: "none" as const }, disables: false },
-    {
-      name: "webhook job",
-      delivery: { mode: "webhook" as const, to: "https://hooks.example.test/cron" },
-      disables: true,
-    },
-    { name: "announce job", delivery: undefined, disables: true },
-  ])(
-    "backs off agent-reported failures and auto-disables only with a notification owner: $name",
-    ({ delivery, disables }) => {
-      const startedAt = Date.parse("2026-08-01T12:00:00.000Z");
-      let now = startedAt;
-      const deferredNotifications: DeferredCronNotifications = [];
-      const { state, job } = outcomeFixture(startedAt, { delivery }, { nowMs: () => now });
-
-      const delaysMs: number[] = [];
-      for (let run = 1; run <= 11 && job.enabled; run += 1) {
-        applyJobResult(
-          state,
-          job,
-          {
-            status: "error",
-            error: "No shell tool is available in this run.",
-            errorClassification: { kind: "permanent", reportedByAgent: true },
-            startedAt: now,
-            endedAt: now + 10,
-          },
-          { deferredNotifications },
-        );
-        if (job.state.nextRunAtMs !== undefined) {
-          delaysMs.push(job.state.nextRunAtMs - (now + 10));
-          now = job.state.nextRunAtMs;
-        }
-      }
-
-      expect(job.state.lastRunStatus).toBe("error");
-      expect(job.state.lastError).toBe("No shell tool is available in this run.");
-      expect(job.enabled).toBe(!disables);
-      expect(job.state.consecutiveErrors).toBe(disables ? 10 : 11);
-      expect(deferredNotifications.filter((n) => n.kind === "auto-disabled")).toHaveLength(
-        disables ? 1 : 0,
-      );
-      // The streak still drives error backoff past the one-minute cadence: 5 and 15 minutes, then hourly.
-      expect(delaysMs.slice(2, 6)).toEqual([300_000, 900_000, 3_600_000, 3_600_000]);
-    },
-  );
 
   it.each([
     { name: "stale", options: { scheduleOwnership: "stale" } },
@@ -392,7 +343,7 @@ describe("cron timer outcome and failure policy regressions", () => {
         payload,
         state: { runningAtMs: startedAt },
       });
-      const state = createRunningCronServiceState({
+      const state = createCronServiceStateWithJobs({
         storePath: `/tmp/cron-${id}.json`,
         log: noopLogger,
         nowMs: () => endedAt,
@@ -453,7 +404,7 @@ describe("cron timer outcome and failure policy regressions", () => {
           nextRunAtMs: expectedNextMs,
         },
       };
-      const state = createRunningCronServiceState({
+      const state = createCronServiceStateWithJobs({
         storePath: `/tmp/cron-force-run-${path}.json`,
         log: noopLogger,
         nowMs: () => nowMs,

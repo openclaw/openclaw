@@ -19,13 +19,12 @@ import {
 import { buildPreparedModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import {
-  getSessionEntry,
   getSessionEntryAsync,
   readSessionUpdatedAtAsync,
-  readAmbientTranscriptWatermark,
+  readAmbientTranscriptWatermarkAsync,
   resolveAmbientTranscriptWatermarkKey,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -81,11 +80,10 @@ export type TelegramBotDeps = RequiredTelegramBotDeps &
 const telegramBotImplementations = {
   getRuntimeConfig,
   resolveStorePath,
-  getSessionEntry,
   getSessionEntryAsync,
   readChannelAllowFromStore,
   readSessionUpdatedAtAsync,
-  readAmbientTranscriptWatermark,
+  readAmbientTranscriptWatermarkAsync,
   resolveAmbientTranscriptWatermarkKey,
   recordInboundSession,
   recordChannelActivity,

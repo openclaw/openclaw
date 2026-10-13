@@ -4,12 +4,13 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { VirtualizerController } from "@tanstack/lit-virtual";
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
 import { renderChatThread } from "./chat-thread.ts";
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
-import { measureConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
+import { readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import {
   flushDeferredRowPrune,
@@ -72,6 +73,7 @@ describe("chat transcript geometry", () => {
           container,
         );
         transcript.hostUpdated();
+        flush();
         return renderRow.mock.calls.length;
       };
       transcript.hostConnected();
@@ -82,7 +84,10 @@ describe("chat transcript geometry", () => {
 
       // The initial tail and saved-reader windows use the same six-row buffer
       // as later frames; presentation never widens it after first paint.
-      expect(renderWindow()).toBe(offset === null ? 7 : 17);
+      const initialRenderCount = renderWindow();
+      expect(initialRenderCount, JSON.stringify(renderRow.mock.calls.map(([row]) => row.key))).toBe(
+        offset === null ? 7 : 17,
+      );
       const mounted = transcriptRows(container).map((row) => Number(row.dataset.index));
       expect(mounted).toEqual(expect.arrayContaining(offset === null ? [99] : [40, 44]));
       // Repeated commits and animation frames keep the same mounted window.
@@ -128,9 +133,11 @@ describe("chat transcript geometry", () => {
     const virtualizer = controller.getVirtualizer();
     virtualizer.getVirtualItems();
     try {
-      expect(measureConnectedTranscriptRows(container, virtualizer)).toBe(true);
+      const commit = readConnectedTranscriptRows(container, virtualizer);
+      expect(virtualizer.itemSizeCache.has("fractional")).toBe(false);
+      expect(commit?.()).toBe(true);
       expect(virtualizer.itemSizeCache.get("fractional")).toBe(100.375);
-      expect(measureConnectedTranscriptRows(container, virtualizer)).toBe(false);
+      expect(readConnectedTranscriptRows(container, virtualizer)?.()).toBe(false);
     } finally {
       controller.hostDisconnected();
     }
@@ -170,9 +177,13 @@ describe("chat transcript geometry", () => {
     "coalesces end geometry across commits and retires disconnected work=%s",
     async (disconnect) => {
       const flushFrames = stubAnimationFrames();
-      const { container, transcript } = await mountTestTranscript("coalesced-end", [
+      const rows = [
         { kind: "content", key: "reply", content: html`<div>Reply</div>` },
-      ]);
+      ] satisfies TranscriptRow[];
+      const { container, transcript, renderRows } = await mountTestTranscript(
+        "coalesced-end",
+        rows,
+      );
       try {
         Object.defineProperties(container, {
           clientHeight: { configurable: true, value: 600 },
@@ -182,7 +193,7 @@ describe("chat transcript geometry", () => {
         // JSDOM does not emit the browser's scroll read-back that settles initial compensation.
         container.dispatchEvent(new Event("scroll"));
         flushFrames();
-        transcript.hostUpdated();
+        renderRows(rows);
         flushFrames();
         const readHeight = vi.fn(() => 1200);
         Object.defineProperty(container, "scrollHeight", {
@@ -190,7 +201,7 @@ describe("chat transcript geometry", () => {
           get: readHeight,
         });
         for (let index = 0; index < 4; index++) {
-          transcript.hostUpdated();
+          renderRows(rows);
         }
         expect(readHeight).not.toHaveBeenCalled();
         if (disconnect) {
@@ -204,7 +215,7 @@ describe("chat transcript geometry", () => {
     },
   );
 
-  it("updates rail geometry for size changes without measuring streamed content or retired transcripts", () => {
+  it("updates rail geometry for size changes without measuring streamed content or retired transcripts", async () => {
     const flushFrames = stubAnimationFrames();
     const transcript = createTestTranscript();
     const region = document.body.appendChild(document.createElement("div"));
@@ -235,6 +246,7 @@ describe("chat transcript geometry", () => {
     const renderTranscript = () => {
       render(renderChatThread(props, transcript), region);
       transcript.hostUpdated();
+      flush();
     };
     const emitResize = (element: Element, width: number, height: number) => {
       for (const observer of resizeObservers) {
@@ -245,6 +257,7 @@ describe("chat transcript geometry", () => {
       renderTranscript();
       transcript.hostConnected();
       transcript.hostUpdated();
+      flush();
       const viewport = expectDefined(transcript.scrollElement, "rail viewport");
       const inner = expectDefined(viewport.querySelector(".chat-thread-inner"), "rail column");
       const column = expectDefined(inner.querySelector(".chat-virtual-sizer"), "column width");
@@ -281,14 +294,13 @@ describe("chat transcript geometry", () => {
       expect(viewport.style.getPropertyValue("--chat-position-rail-viewport-height")).toBe("720px");
       expect(readInnerBounds).toHaveBeenCalledOnce();
 
-      // A restamped shell retires its old column observation and binds the new one.
-      props.loading = true;
-      props.messages = [];
-      props.stream = "";
-      props.runActive = false;
+      // A disconnected shell retires its old column observation before remounting.
+      transcript.hostDisconnected();
       render(nothing, region);
-      transcript.hostUpdated();
+      await flushDeferredRowPrune();
+      transcript.hostConnected();
       renderTranscript();
+      await flushDeferredRowPrune();
       const replacementViewport = expectDefined(
         transcript.scrollElement,
         "replacement rail viewport",
@@ -328,6 +340,7 @@ describe("chat transcript geometry", () => {
 
       transcript.hostConnected();
       renderTranscript();
+      await flushDeferredRowPrune();
       emitResize(region, 1200, regionHeight);
       flushFrames();
       const restored = expectDefined(transcript.scrollElement, "restored rail viewport");
@@ -368,6 +381,7 @@ describe("chat transcript geometry", () => {
       render(renderChatThread(detailProps, detail), detailPanel);
       main.hostUpdated();
       detail.hostUpdated();
+      flush();
     };
 
     renderTranscripts();

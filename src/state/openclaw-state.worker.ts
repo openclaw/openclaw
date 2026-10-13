@@ -26,10 +26,6 @@ import {
   pluginStateWorkerOperations,
 } from "../plugin-state/plugin-state-worker-contract.js";
 import {
-  readPluginMetadataStateRowSync,
-  readPluginMetadataStateRowsSync,
-} from "../plugins/installed-plugin-index-row.js";
-import {
   openClawStateDatabaseCache,
   retainOpenClawStateDatabase,
 } from "./openclaw-state-db-cache.js";
@@ -38,6 +34,7 @@ import type { ExistingOpenClawStateWriter } from "./openclaw-state-db-existing-w
 import { ensureSecretStoreSchema } from "./openclaw-state-db-schema-additive.js";
 import {
   openOpenClawStateDatabase,
+  reconcileOpenClawStateSchemaPublication,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import {
@@ -152,6 +149,18 @@ function createSharedStateWorkerBackend(
   let publicationSourceReader:
     | ReturnType<NonNullable<typeof publicationSource>["createGitHubPublicationSourceWorker"]>
     | undefined;
+  const retainCachedDatabase = () => {
+    // Existing-only operations can acquire their first writable handle through a native owner.
+    if (!nativeDatabase) {
+      const database = openClawStateDatabaseCache.getCachedOpenClawStateDatabase(
+        context.databasePath,
+      );
+      if (database) {
+        borrow = retainOpenClawStateDatabase(database);
+        nativeDatabase = database;
+      }
+    }
+  };
   const retainedDatabase = (): OpenClawStateDatabase => {
     if (!nativeDatabase) {
       const opened = openOpenClawStateDatabase({
@@ -315,9 +324,9 @@ function createSharedStateWorkerBackend(
         });
       }
       if (
-        commandType === "plugins.metadata.read" ||
         commandType === "database.inspectIdle" ||
         commandType === "database.walMaintenance" ||
+        commandType === "database.publishSchema" ||
         commandType === "stateLease.acquire" ||
         commandType === "deviceIdentity.read" ||
         commandType === "deviceIdentity.load" ||
@@ -390,16 +399,7 @@ function createSharedStateWorkerBackend(
             env: stateDatabaseInitializationEnvironment(),
           });
         } finally {
-          // An existing-only actor may acquire its first writable handle through this owner.
-          if (!nativeDatabase) {
-            const database = openClawStateDatabaseCache.getCachedOpenClawStateDatabase(
-              context.databasePath,
-            );
-            if (database) {
-              borrow = retainOpenClawStateDatabase(database);
-              nativeDatabase = database;
-            }
-          }
+          retainCachedDatabase();
         }
       }
       if (command.type === "agentDatabases.releaseExitedLease") {
@@ -426,23 +426,15 @@ function createSharedStateWorkerBackend(
       ) {
         return executeOpenClawStateLeaseCommand(command, open());
       }
-      if (command.type === "plugins.metadata.read") {
-        const options = {
-          path: context.databasePath,
-          env: getSqliteWorkerStateContext().environment,
-        };
-        if ("stateKeys" in command.input) {
-          return readPluginMetadataStateRowsSync(
-            command.input.stateKeys,
-            options,
-            command.input.artifactPreservingReadOnly,
-          );
+      if (command.type === "database.publishSchema") {
+        try {
+          return reconcileOpenClawStateSchemaPublication({
+            path: context.databasePath,
+            env: getSqliteWorkerStateContext().environment,
+          });
+        } finally {
+          retainCachedDatabase();
         }
-        return readPluginMetadataStateRowSync(
-          command.input.selector,
-          options,
-          command.input.artifactPreservingReadOnly,
-        );
       }
       if (command.type === "database.walMaintenance") {
         const database = open();

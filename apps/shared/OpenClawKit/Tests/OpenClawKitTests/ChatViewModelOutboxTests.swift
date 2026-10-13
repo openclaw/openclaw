@@ -1763,6 +1763,9 @@ struct ChatViewModelOutboxTests {
         let vm = await makeOutboxViewModel(transport: transport, outbox: outbox)
 
         await MainActor.run { vm.load() }
+        // Finish offline setup so a late bootstrap cannot start a flush after the terminal drain.
+        await vm.bootstrapTask?.value
+        await waitForObservedState { vm.hasRestoredOutboxMessages }
         try await sendWhileOffline(vm, text: "doomed")
 
         // Gateway is reachable again but rejects the run on every attempt.

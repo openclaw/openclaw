@@ -91,6 +91,7 @@ export function prepareSessionCreateFilesystemRoot(params: {
         cfg: params.cfg,
         agentId: params.targetAgentId,
         sessionKey: params.sessionKey ?? `agent:${params.targetAgentId}:dashboard:pending`,
+        preparedSessionEntry: null,
       });
       // Canonical paths admit workspace aliases while rejecting links that
       // resolve outside the selected agent's workspace.

@@ -1,6 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import * as attachmentFrameBudget from "../../shared/chat-attachment-frame-budget.js";
@@ -19,6 +23,8 @@ import {
   resultImageMessage,
   runtimeContext,
 } from "./artifacts.test-support.js";
+
+afterEach(() => clearRuntimeConfigSnapshot());
 
 const hoisted = vi.hoisted(() => ({
   realSessionFacts: false,
@@ -81,6 +87,8 @@ function createResponder() {
   };
 }
 
+const artifactConfig = { agents: { entries: { main: {} } } };
+
 type ArtifactMethod = "artifacts.list" | "artifacts.get" | "artifacts.download";
 
 async function invokeArtifactHandler(
@@ -90,7 +98,7 @@ async function invokeArtifactHandler(
 ) {
   const responder = createResponder();
   const defaultContext = {
-    getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
+    getRuntimeConfig: () => artifactConfig,
   };
   await artifactsHandlers[method]?.({
     req: { type: "req", id: options.id ?? method, method, params: {} },
@@ -135,6 +143,7 @@ function mockedMessages(messages: unknown[]) {
 describe("artifacts RPC handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setRuntimeConfigSnapshot(artifactConfig);
     hoisted.realSessionFacts = false;
     hoisted.resolveSessionForRun.mockReset();
     hoisted.resolveManagedArtifactDownload.mockResolvedValue(null);
@@ -328,6 +337,7 @@ describe("artifacts RPC handlers", () => {
 describe("managed artifact lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setRuntimeConfigSnapshot(artifactConfig);
     hoisted.realSessionFacts = false;
     hoisted.resolveManagedArtifactDownload.mockResolvedValue(null);
     hoisted.resolveManagedUrlDownload.mockResolvedValue(null);
@@ -352,6 +362,7 @@ describe("managed artifact lifecycle", () => {
 
   it("rechecks managed download after a shared session becomes draft", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       hoisted.realSessionFacts = true;
       const owner = ensureProfileForEmail("artifact-owner@example.test");
       const viewer = ensureProfileForEmail("artifact-viewer@example.test");
@@ -413,6 +424,7 @@ describe("managed artifact lifecycle", () => {
     const artifactId = "artifact_managed_image_11111111-1111-4111-8111-111111111111";
     const calls: Array<{ ok: boolean; error?: unknown }> = [];
 
+    setRuntimeConfigSnapshot({});
     await artifactsHandlers["artifacts.download"]?.({
       req: { type: "req", id: "download", method: "artifacts.download", params: {} },
       params: { sessionKey: "agent:main:main", artifactId },
@@ -454,6 +466,7 @@ describe("managed artifact lifecycle", () => {
     });
     const calls: Array<{ ok: boolean; payload?: unknown }> = [];
 
+    setRuntimeConfigSnapshot({});
     await artifactsHandlers["artifacts.list"]?.({
       req: { type: "req", id: "list", method: "artifacts.list", params: {} },
       params: { sessionKey: "agent:main:main" },
@@ -564,6 +577,7 @@ describe("managed artifact lifecycle", () => {
 describe("artifact download lookup", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setRuntimeConfigSnapshot(artifactConfig);
     hoisted.realSessionFacts = false;
     hoisted.resolveManagedUrlDownload.mockResolvedValue(null);
     hoisted.resolveManagedArtifactDownload.mockResolvedValue(null);

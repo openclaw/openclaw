@@ -49,10 +49,12 @@ import type { createCatalogIoCounters } from "./session-catalog.performance-coun
 import type { GatewayClient } from "./types.js";
 
 const logger = { info() {}, warn() {}, error() {}, debug() {} };
+const SETUP_LIST_MAX_ATTEMPTS = 3;
 
 export async function createComposedCatalogFixture(
   state: OpenClawTestState,
   counters: ReturnType<typeof createCatalogIoCounters>,
+  options: { beforeNativeListResponse?: () => Promise<void> } = {},
 ) {
   const agentDir = state.agentDir("main");
   await fs.mkdir(path.join(agentDir, "codex-home"), { recursive: true });
@@ -139,7 +141,22 @@ export async function createComposedCatalogFixture(
         );
         return;
       }
-      socket.send(JSON.stringify({ id: request.id, result }));
+      const respond = () => socket.send(JSON.stringify({ id: request.id, result }));
+      if (request.method === "thread/list" && options.beforeNativeListResponse) {
+        void options.beforeNativeListResponse().then(respond, (error: unknown) => {
+          socket.send(
+            JSON.stringify({
+              id: request.id,
+              error: {
+                code: -32603,
+                message: error instanceof Error ? error.message : "Synthetic native list failed",
+              },
+            }),
+          );
+        });
+      } else {
+        respond();
+      }
     }),
   );
   await once(server, "listening");
@@ -350,29 +367,45 @@ export async function createComposedCatalogFixture(
     const list = async (params: Partial<SessionsCatalogListParams> = {}) =>
       readHost((await requestList(params)).catalogs.find((value) => value.id === "codex"));
     const setupList = async (params: Partial<SessionsCatalogListParams> = {}) => {
-      const work = new AsyncWorkScope();
-      const progressId = `catalog-setup-${++sequence}`;
-      let published: SessionCatalog | undefined;
-      setupPublications.set(progressId, (catalog) => {
-        if (catalog.id === "codex" && catalog.hosts.every((host) => !host.pending)) {
-          published = catalog;
-        }
-      });
-      try {
-        const result = await work.track(() => requestList({ ...params, progressId }));
-        // The persistence marker can precede this request's provider and host publication.
-        return await work.runWhenIdle(() => {
-          const catalog = result.catalogs.find((value) => value.id === "codex");
-          return readHost(
-            catalog?.error?.code === "catalog_pending" ? (published ?? catalog) : catalog,
-          );
+      for (let attempt = 1; ; attempt++) {
+        const work = new AsyncWorkScope();
+        const progressId = `catalog-setup-${++sequence}`;
+        let published: SessionCatalog | undefined;
+        setupPublications.set(progressId, (catalog) => {
+          if (catalog.id === "codex" && catalog.hosts.every((host) => !host.pending)) {
+            published = catalog;
+          }
         });
-      } finally {
-        setupPublications.delete(progressId);
-        await work.drain();
+        try {
+          const result = await work.track(() => requestList({ ...params, progressId }));
+          // The persistence marker can precede this request's provider and host publication.
+          const catalog = await work.runWhenIdle(() => {
+            const current = result.catalogs.find((value) => value.id === "codex");
+            return current?.error?.code === "catalog_pending" ? (published ?? current) : current;
+          });
+          const host = catalog?.hosts[0];
+          if (
+            attempt < SETUP_LIST_MAX_ATTEMPTS &&
+            !catalog?.error &&
+            catalog?.hosts.length === 1 &&
+            host?.hostId === "gateway:local" &&
+            host.error?.code === "APP_SERVER_UNAVAILABLE" &&
+            host.error.message === "Codex session catalog is still loading. Retry shortly."
+          ) {
+            // Foreground cold-list expiry does not stop index-owned hydration. Retry only
+            // fixture setup; measured list() calls retain the original single-request boundary.
+            await nextTurn();
+            continue;
+          }
+          return readHost(catalog);
+        } finally {
+          setupPublications.delete(progressId);
+          await work.drain();
+        }
       }
     };
     const setupMaintenance = { completed: 0 };
+    let maintenanceReady: ReturnType<typeof observeSessionMaintenanceCompletion> | undefined;
     return {
       api,
       projection,
@@ -383,9 +416,11 @@ export async function createComposedCatalogFixture(
       setupList,
       setupMaintenance,
       async continueSession(hostId: string, threadId: string, sourceHomeId?: string) {
-        const completed = observeSessionMaintenanceCompletion(databasePath, {
+        // Fresh adoptions reuse the first acknowledged maintenance deadline; subsequent
+        // no-op writes need not schedule another pass for the fixture to observe.
+        const completed = (maintenanceReady ??= observeSessionMaintenanceCompletion(databasePath, {
           automatic: true,
-        }).then(() => {
+        })).then(() => {
           setupMaintenance.completed++;
         });
         const [result] = await Promise.all([

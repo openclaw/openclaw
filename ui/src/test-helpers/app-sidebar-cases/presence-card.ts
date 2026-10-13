@@ -80,7 +80,7 @@ describe("AppSidebar person activity card", () => {
         ],
       })),
     });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     const trigger = sidebar.querySelector<HTMLElement>(".sidebar-online__person")!;
     focusSidebarPersonWithKeyboard(trigger);
     await vi.dynamicImportSettled();

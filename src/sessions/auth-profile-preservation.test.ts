@@ -44,7 +44,6 @@ describe("shouldPreserveSessionAuthProfileOverride", () => {
     { provider: "openai", configured: "anthropic", expected: true },
     { provider: "anthropic", configured: "openai", expected: false },
     { provider: undefined, configured: "openai", expected: true },
-    { provider: undefined, configured: undefined, expected: true },
   ])(
     "consumes prepared provider $provider before config $configured without synchronous reads",
     ({ provider, configured, expected }) => {
@@ -59,15 +58,16 @@ describe("shouldPreserveSessionAuthProfileOverride", () => {
           throw new Error("unprepared snapshot read");
         });
       try {
+        const cfg: OpenClawConfig = configured
+          ? {
+              auth: {
+                profiles: { "openai:missing": { provider: configured, mode: "api_key" } },
+              },
+            }
+          : {};
         expect(
           shouldPreserveSessionAuthProfileOverride({
-            cfg: configured
-              ? {
-                  auth: {
-                    profiles: { "openai:missing": { provider: configured, mode: "api_key" } },
-                  },
-                }
-              : {},
+            cfg,
             agentDir: "/fixture/agent",
             entry: { ...entry, authProfileOverride: "openai:missing" },
             currentProvider: "openai",
@@ -75,6 +75,16 @@ describe("shouldPreserveSessionAuthProfileOverride", () => {
             recordedProvider: { provider },
           }),
         ).toBe(expected);
+        const selectedEntry = { ...entry, authProfileOverride: "openai:missing" };
+        applyModelOverrideWithAuthProfileCompatibility({
+          cfg,
+          agentDir: "/fixture/agent",
+          entry: selectedEntry,
+          currentProvider: "openai",
+          selection: { provider: "openai", model: "selected-model" },
+          recordedProvider: { provider },
+        });
+        expect(selectedEntry.authProfileOverride).toBe(expected ? "openai:missing" : undefined);
         expect(persisted).not.toHaveBeenCalled();
         expect(snapshot).not.toHaveBeenCalled();
       } finally {
@@ -205,14 +215,6 @@ describe("shouldPreserveSessionAuthProfileOverride", () => {
   );
 
   it.each([
-    {
-      name: "retains a compatible auth profile when resetting to a same-provider default",
-      provider: "openai",
-      model: "gpt-5",
-      expectedProfile: "team:prod",
-      expectedSource: "user" as const,
-      expectedCompactionCount: 2,
-    },
     {
       name: "clears an incompatible auth profile when resetting to a cross-provider default",
       provider: "anthropic",

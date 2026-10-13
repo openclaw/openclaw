@@ -61,7 +61,7 @@ function resolveCredential(
 }
 
 describe("resolveApiKeyForProfile", () => {
-  it("rejects a persisted Claude CLI token even when legacy metadata marks it external", async () => {
+  it("rejects a persisted Claude CLI token", async () => {
     const profileId = "anthropic:claude-cli";
     const store: RuntimeAuthProfileStore = {
       version: 1,
@@ -75,7 +75,6 @@ describe("resolveApiKeyForProfile", () => {
         },
       },
       runtimePersistedProfileIds: [profileId],
-      runtimeExternalCliProfileIds: [profileId],
     };
     await expect(
       resolveApiKeyForProfile({

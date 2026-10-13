@@ -165,7 +165,7 @@ async function resolveSessionWorkspace(params: {
 }): Promise<WorkerSessionWorkspace | undefined> {
   const article = params.method === "sessions.dispatch" ? "a" : "the";
   try {
-    const resolved = await resolveWorkerPlacementSessionTarget({
+    using resolved = await resolveWorkerPlacementSessionTarget({
       sessionRuntime: await loadWorkerPlacementSessionRuntimeModule(),
       config: params.config,
       sessionId: params.entry.sessionId,

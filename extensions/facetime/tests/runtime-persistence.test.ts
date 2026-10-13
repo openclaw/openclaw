@@ -319,8 +319,7 @@ describe("FaceTime runtime asynchronous persistence", () => {
         stopError = error;
       });
       await helperStopped.promise;
-      // Observe the worker after shutdown reaches its persistence drain.
-      await state.lookup("active");
+      await stopping;
       expect(stopError).toEqual(
         expect.objectContaining({
           message: expect.stringContaining("carrier closure remains unconfirmed"),

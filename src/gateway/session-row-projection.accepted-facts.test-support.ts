@@ -1,7 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { expect, vi } from "vitest";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
-import { getRuntimeConfig } from "../config/io.runtime.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.sqlite-entry-list.read.js";
 import * as canonical from "../config/sessions/session-canonical-key.js";
@@ -45,7 +45,13 @@ export async function withAcceptedSuffix(
   } = {},
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    getRuntimeConfig();
+    const cfg = {
+      agents: {
+        entries: { main: {} },
+        defaults: { utilityModel: "unit-test/small" },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
     const keys = [
       "agent:main:accepted-a",
       options.acpMeta === undefined ? "agent:main:accepted-b" : "agent:main:acp:accepted-b",
@@ -103,12 +109,7 @@ export async function withAcceptedSuffix(
     }
     const releaseForeground = retainSessionListForegroundWork();
     const projection = await createSessionRowProjection({
-      cfg: {
-        agents: {
-          entries: { main: {} },
-          defaults: { utilityModel: "unit-test/small" },
-        },
-      },
+      cfg,
       modelCatalog: [],
     });
     const paused = createDeferredCore();

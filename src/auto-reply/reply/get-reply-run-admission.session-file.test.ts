@@ -14,7 +14,7 @@ import { createQueueTestRun } from "./queue.test-helpers.js";
 import { enqueueFollowupRun } from "./queue/enqueue.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import { createReplyOperation } from "./reply-run-registry.js";
-import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
+import { resolveFollowupRunToolAuthorityFingerprintAsync } from "./reply-tool-authority.test-support.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { createTypingController } from "./typing.js";
 
@@ -147,7 +147,7 @@ function createAdmissionFixture() {
         startupAction: "new",
         ...additions,
       }),
-    refreshInboundContextAfterAdmissionWait: async () => {},
+    refreshInboundContextAfterAdmissionWait: () => {},
   };
   return { context, entry, sessionKey, sessionId };
 }
@@ -155,6 +155,30 @@ function createAdmissionFixture() {
 afterEach(() => vi.clearAllMocks());
 
 describe("prepared reply transcript identity", () => {
+  it("carries an inherited thinking request through admission to candidate selection", async () => {
+    const { context, entry } = createAdmissionFixture();
+    entry.thinkingLevel = "high";
+    const catalog = [{ provider: "fixture", id: "basic", name: "Basic", reasoning: false }];
+    const result = await prepareReplyRunAdmission({
+      ...context,
+      thinkingRuntime: "openclaw",
+      params: {
+        ...context.params,
+        provider: "fixture",
+        model: "basic",
+        resolvedThinkLevel: "high",
+        modelState: {
+          ...context.params.modelState,
+          allowedModelCatalog: catalog,
+          resolveThinkingCatalog: async () => catalog,
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ kind: "ready", resolvedThinkLevel: "high" });
+    expect(entry.thinkingLevel).toBe("high");
+  });
+
   it.each([
     { sessionKey: "global", agentId: "research" },
     { sessionKey: undefined, agentId: "main" },
@@ -276,8 +300,8 @@ describe("prepared reply transcript identity", () => {
               normalizeOptionalString(incoming.run.sessionKey) ?? incoming.run.sessionFile,
           },
         };
-        expect(resolveFollowupRunToolAuthorityFingerprint(incoming)).toBe(
-          resolveFollowupRunToolAuthorityFingerprint(queued),
+        expect(await resolveFollowupRunToolAuthorityFingerprintAsync(incoming)).toBe(
+          await resolveFollowupRunToolAuthorityFingerprintAsync(queued),
         );
         expect(prepared.preparedSessionState.sessionFile).toBe(sessionKey);
       } finally {

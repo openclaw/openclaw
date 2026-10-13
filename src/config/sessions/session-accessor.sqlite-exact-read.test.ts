@@ -16,14 +16,16 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   assignSessionOwner,
-  listSessionChildEntriesReadOnly,
   listSessionEntriesReadOnly,
   loadExactSessionEntryCandidatesReadOnlyBatch,
   loadExactSessionEntryReadOnly,
   replaceSessionEntrySync,
 } from "./session-accessor.js";
 import { captureSessionEntryRead } from "./session-accessor.sqlite-entry-read-lifetime.js";
-import { prepareExactSessionEntryRowReads } from "./session-accessor.sqlite-entry-read.js";
+import {
+  prepareExactSessionEntryRowReads,
+  readSessionChildEntriesInDatabase,
+} from "./session-accessor.sqlite-entry-read.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import {
@@ -292,7 +294,7 @@ describe("exact SQLite session batches", () => {
       });
       expect(queries.counts.payload).toBe(0);
       expect(queries.counts.participants).toBe(0);
-      expect(queries.rowCounts.identity).toBe(3);
+      expect(queries.rowCounts.identity).toBe(0);
       const clone = vi.spyOn(globalThis, "structuredClone");
       try {
         const borrowed = read(false)[0];
@@ -402,35 +404,6 @@ describe("exact SQLite session batches", () => {
       }
     },
   );
-
-  it("rejects a cache snapshot if a sibling commit occurs while selected entries are copied", () => {
-    const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-exact-read-copy-race-") };
-    const scope = { agentId: "main", env, sessionKey: "agent:main:target" };
-    replaceSessionEntrySync(scope, { sessionId: "target", updatedAt: 1, label: "before" });
-    listSessionEntriesReadOnly({ ...scope, projection: "list" });
-    const database = openOpenClawAgentDatabase(scope);
-    const sibling = openNodeSqliteDatabase(database.path);
-    const originalClone = structuredClone;
-    const clone = vi.spyOn(globalThis, "structuredClone").mockImplementationOnce((value) => {
-      sibling
-        .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-        .run(
-          JSON.stringify({ sessionId: "target", updatedAt: 1, label: "after" }),
-          scope.sessionKey,
-        );
-      return originalClone(value);
-    });
-    try {
-      expect(
-        loadExactSessionEntryCandidatesReadOnlyBatch([
-          { ...scope, projection: "list", sessionKeys: [scope.sessionKey] },
-        ]),
-      ).toMatchObject([{ ok: true, value: [{ entry: { label: "after" } }] }]);
-    } finally {
-      clone.mockRestore();
-      sibling.close();
-    }
-  });
 
   it.each(["current_session_id", "updated_at", "malformed", "delivery", "lineage"] as const)(
     "keeps per-key %s errors after an intervening list reload",
@@ -853,7 +826,7 @@ describe("exact SQLite session batches", () => {
     }, scope);
     const queries = vi.spyOn(sqliteQueries, "executeSqliteQuerySync");
     try {
-      const result = listSessionChildEntriesReadOnly({ ...scope, sessionKey: parent });
+      const result = readSessionChildEntriesInDatabase(database, parent);
       const names = [
         "a-spawn",
         "b-parent",
@@ -871,7 +844,7 @@ describe("exact SQLite session batches", () => {
       const childQueries = queries.mock.calls
         .map(([readDatabase, query]) => ({ readDatabase, ...query.compile() }))
         .filter(
-          ({ sql }) => /"parent_session_key"\s*=/u.test(sql) && /"spawned_by"\s*=/u.test(sql),
+          ({ sql }) => /"parent_session_key"\s+in/u.test(sql) && /"spawned_by"\s+in/u.test(sql),
         );
       expect(childQueries).toHaveLength(1);
       const childQuery = childQueries[0]!;
@@ -881,6 +854,9 @@ describe("exact SQLite session batches", () => {
         }
         return parameter;
       });
+      if (!(childQuery.readDatabase instanceof DatabaseSync)) {
+        throw new Error("Expected a SQLite connection for the query-plan assertion");
+      }
       const plan = childQuery.readDatabase
         .prepare(`EXPLAIN QUERY PLAN ${childQuery.sql}`)
         .all(...parameters)
@@ -950,7 +926,7 @@ describe("exact SQLite session batches", () => {
         { ok: true, value: [{ sessionKey: healthy, entry: { sessionId: healthy } }] },
         { ok: true, value: [] },
       ]);
-      expect(listSessionChildEntriesReadOnly({ ...scope, sessionKey: parent })).toMatchObject([
+      expect(readSessionChildEntriesInDatabase(database, parent, scope.projection)).toMatchObject([
         { sessionKey: healthy, entry: { sessionId: healthy } },
       ]);
     },

@@ -3,10 +3,10 @@ import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { invalidateChatAvatarCache, refreshSenderAgentAvatars } from "./chat-avatar.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
-import * as chatMessage from "./components/chat-message-group.ts";
 import { renderChatThread } from "./components/chat-thread.ts";
 import {
   installTranscriptDomMocks,
@@ -71,6 +71,10 @@ describe("forwarded avatar publication", () => {
         props.messages = host.chatMessages;
         props.senderAgentAvatars = host.senderAgentAvatars;
         render(renderChatThread(props, transcript), container);
+        flush();
+        transcript.hostConnected();
+        transcript.hostUpdated();
+        flush();
       };
       try {
         await refreshSenderAgentAvatars(host);
@@ -79,8 +83,11 @@ describe("forwarded avatar publication", () => {
           container.querySelector('[data-entry-id="report-research"]'),
           "forwarded report",
         );
-        const image = researchRow.closest(".chat-group")?.querySelector("img");
-        expect(image?.getAttribute("src")).toBe("blob:avatar-0");
+        const image = expectDefined(
+          researchRow.closest(".chat-group")?.querySelector("img"),
+          "forwarded avatar",
+        );
+        await waitForSolid(() => expect(image.getAttribute("src")).toBe("blob:avatar-0"));
 
         host.chatMessages =
           change === "append"
@@ -92,15 +99,14 @@ describe("forwarded avatar publication", () => {
         }
         // Commit the transcript first, just as the pane does before its avatar refresh.
         rerender();
-        const renderGroup = vi.spyOn(chatMessage, "renderMessageGroup");
         host.requestUpdate.mockClear();
         await refreshSenderAgentAvatars(host);
         rerender();
 
-        expect(renderGroup.mock.calls.length).toBe(0);
         expect(host.requestUpdate).not.toHaveBeenCalled();
         expect(container.querySelector('[data-entry-id="report-research"]')).toBe(researchRow);
-        expect(image?.getAttribute("src")).toBe("blob:avatar-0");
+        expect(researchRow.closest(".chat-group")?.querySelector("img")).toBe(image);
+        expect(image.getAttribute("src")).toBe("blob:avatar-0");
         expect(host.request).toHaveBeenCalledTimes(change === "identity invalidation" ? 4 : 2);
 
         avatarRevision += 1;
@@ -108,12 +114,13 @@ describe("forwarded avatar publication", () => {
         identities.invalidate(["research", "planner"]);
         host.chatMessages = [...host.chatMessages];
         rerender();
-        renderGroup.mockClear();
         await refreshSenderAgentAvatars(host);
         rerender();
-        expect(image?.getAttribute("src")).toBe(host.senderAgentAvatars?.get("research"));
-        expect(image?.getAttribute("src")).not.toBe("blob:avatar-0");
-        expect(renderGroup.mock.calls.length).toBeGreaterThan(0);
+        await waitForSolid(() =>
+          expect(image.getAttribute("src")).toBe(host.senderAgentAvatars?.get("research")),
+        );
+        expect(researchRow.closest(".chat-group")?.querySelector("img")).toBe(image);
+        expect(image.getAttribute("src")).not.toBe("blob:avatar-0");
         expect(host.requestUpdate).toHaveBeenCalledOnce();
       } finally {
         render(nothing, container);

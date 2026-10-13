@@ -5,8 +5,8 @@ import type { renderForwardedAvatar } from "../chat-avatar.ts";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import type { renderGroupedMessage } from "./chat-message-bubble.ts";
-import type { MessageReplyTarget } from "./chat-message-markdown.ts";
-import type { MessageReactionOptions } from "./chat-message-reactions.ts";
+import type { MessageReplyTarget } from "./chat-message-markdown.types.ts";
+import type { MessageReactionOptions } from "./chat-message-reaction-model.ts";
 import type { ChatSendStatusActions } from "./chat-message-send-status.ts";
 import type { StreamGroupOptions, StreamGroupPart } from "./chat-message-stream.ts";
 import type { ReplyLine } from "./chat-reply-attribution.ts";
@@ -44,6 +44,7 @@ export type RenderMessageGroupOptions = Omit<
     /** Routing for peer sender names; absent leaves them plain text. */
     personActivity?: PersonActivityRouting;
     userAvatar?: string | null;
+    channelAvatar?: import("../../../lib/chat/channel-sender-avatar.ts").ChannelSenderAvatarSource;
     avatarPlacement?: "gutter" | "footer" | "none";
     showAssistantAvatar?: boolean;
     contextWindow?: number | null;

@@ -561,7 +561,7 @@ async function prepareConfigCoverageSnapshot(params: {
   });
 
   if (!params.skipConfigCollectors) {
-    collectConfigAssignments({
+    await collectConfigAssignments({
       config: resolvedConfig,
       context,
       loadablePluginOrigins: params.loadablePluginOrigins,

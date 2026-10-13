@@ -12,7 +12,6 @@ import {
   withProgress,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
 import {
-  getRuntimeConfig,
   resolveMemorySearchIndexConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -24,6 +23,7 @@ import {
   resolveMemoryVectorState,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { formatByteSize } from "openclaw/plugin-sdk/number-runtime";
+import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   readSelectedMemoryProviderStatus,
@@ -192,7 +192,7 @@ export async function runMemoryStatus(
   hostOptions?: MemoryCoreRuntimeHost,
 ) {
   setVerbose(Boolean(opts.verbose));
-  const runtimeConfig = getRuntimeConfig({ skipPluginValidation: true });
+  const runtimeConfig = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
   const slotOwner = resolveForeignMemorySlotOwner(runtimeConfig);
   if (slotOwner) {
     await runSelectedMemoryProviderStatus(opts, runtimeConfig, slotOwner);

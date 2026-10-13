@@ -1,5 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+  chmodSync,
   copyFileSync,
   existsSync,
   lstatSync,
@@ -47,6 +48,121 @@ function write(root: string, relative: string, contents: string, mode?: number) 
 }
 
 describe.skipIf(process.platform === "win32")("Crabbox dependency hydration", () => {
+  it.skipIf(process.getuid?.() === 0).each([
+    ["hydrate", 0],
+    ["hydrate-github", 0],
+    ["hydrate", 1],
+  ] as const)("prepares %s UI E2E prerequisites (pnpm exit %s)", (job, pnpmExit) => {
+    // Physical paths: the step walks `pwd -P`, and macOS temp roots sit behind /var symlinks.
+    const root = realpathSync(tempDirs.make("openclaw-ui-e2e-hydrate-"));
+    const lease = path.join(root, "lease");
+    const workspace = path.join(lease, "openclaw");
+    const artifacts = path.join(workspace, ".artifacts");
+    const bin = path.join(root, "bin");
+    const calls = path.join(root, "calls");
+    const chmodCalls = path.join(root, "chmod-calls");
+    mkdirSync(workspace, { recursive: true });
+    chmodSync(lease, 0o775);
+    chmodSync(workspace, 0o775);
+    if (pnpmExit === 0) {
+      mkdirSync(artifacts);
+      chmodSync(artifacts, 0o777);
+    }
+    write(
+      bin,
+      "node",
+      '#!/bin/sh\nprintf "node" >> "$CALLS"\nprintf " <%s>" "$@" >> "$CALLS"\nprintf "\\n" >> "$CALLS"\n',
+      0o755,
+    );
+    write(
+      bin,
+      "pnpm",
+      `#!/bin/sh\nprintf "pnpm" >> "$CALLS"\nprintf " <%s>" "$@" >> "$CALLS"\nprintf "\\n" >> "$CALLS"\nexit ${pnpmExit}\n`,
+      0o755,
+    );
+    write(
+      bin,
+      "chmod",
+      // Record every walked directory but only mutate this test's own tree.
+      '#!/bin/sh\nprintf "%s\\n" "$2" >> "$CHMOD_CALLS"\ncase "$2" in "$ROOT"/*|.artifacts) exec /bin/chmod "$@" ;; esac\n',
+      0o755,
+    );
+    let unowned = workspace;
+    while (lstatSync(unowned).uid === process.getuid?.()) {
+      unowned = path.dirname(unowned);
+    }
+    const unownedMode = lstatSync(unowned).mode;
+    const prepare = workflow.jobs[job].steps.find(
+      (step) => step.name === "Prepare Control UI E2E environment",
+    );
+    expect(prepare?.run).toBeDefined();
+    const result = spawnSync("bash", ["-c", `umask 0002\n${prepare!.run}`], {
+      cwd: workspace,
+      env: {
+        PATH: `${bin}:/usr/bin:/bin`,
+        CALLS: calls,
+        CHMOD_CALLS: chmodCalls,
+        CI: "true",
+        ROOT: root,
+      },
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(pnpmExit);
+    for (const directory of [lease, workspace, artifacts]) {
+      expect(lstatSync(directory).mode & 0o022, directory).toBe(0);
+    }
+    const changedDirectories = readFileSync(chmodCalls, "utf8").trim().split("\n");
+    expect(changedDirectories).not.toContain(unowned);
+    expect(changedDirectories).not.toContain("/");
+    expect(lstatSync(unowned).mode).toBe(unownedMode);
+    expect(readFileSync(calls, "utf8")).toBe(
+      "node <--import> <./scripts/tsx.mjs> <scripts/ensure-playwright-chromium.mts> <--require-playwright-chromium>\n" +
+        "pnpm <--dir> <ui> <exec> <playwright> <install> <--with-deps> <webkit>\n",
+    );
+  });
+
+  it.each(["hydrate", "hydrate-github"] as const)(
+    "%s hands off a POSIX umask without loosening stricter masks",
+    (job) => {
+      const home = tempDirs.make("openclaw-hydrate-umask-");
+      const bin = path.join(home, "bin");
+      write(bin, "docker", "#!/bin/sh\nexit 1\n", 0o755);
+      const ready = workflow.jobs[job].steps.find((step) => step.name === "Mark Crabbox ready");
+      expect(ready?.run).toBeDefined();
+      const env = {
+        HOME: home,
+        PATH: `${bin}:/usr/bin:/bin`,
+        CI: "true",
+        CRABBOX_ID: "ui-e2e",
+        CRABBOX_JOB: job,
+        GITHUB_WORKSPACE: home,
+        GITHUB_RUN_ID: "123",
+      };
+      const marked = spawnSync("bash", ["-c", ready!.run!], { env, encoding: "utf8" });
+      expect(marked.status, marked.stderr).toBe(0);
+      const envFile = path.join(home, ".crabbox/actions/ui-e2e.env.sh");
+      writeFileSync(envFile, `${readFileSync(envFile, "utf8")}export CRABBOX_APPENDED=retained\n`);
+      for (const [initial, expected] of [
+        ["0002", "0022"],
+        ["0077", "0077"],
+      ]) {
+        const restored = spawnSync(
+          "sh",
+          [
+            "-c",
+            `umask ${initial}; . "$ENV_FILE"; umask; printf '%s\\n' "$CI" "$GITHUB_WORKSPACE" "$CRABBOX_APPENDED"`,
+          ],
+          {
+            env: { PATH: "/usr/bin:/bin", ENV_FILE: envFile },
+            encoding: "utf8",
+          },
+        );
+        expect(restored.status, restored.stderr).toBe(0);
+        expect(restored.stdout).toBe(`${expected}\ntrue\n${home}\nretained\n`);
+      }
+    },
+  );
+
   it.each(["true", "false", "invalid"])(
     "preserves frozen policy through pnpm bootstrap and workspace config (%s)",
     (frozen) => {

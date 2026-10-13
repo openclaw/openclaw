@@ -421,7 +421,11 @@ function GitHubConnectionsContent() {
   );
 }
 
-defineSolidBridge("openclaw-github-connections", () => <GitHubConnectionsContent />, {
-  properties: {},
-});
+export const GitHubConnections = defineSolidBridge(
+  "openclaw-github-connections",
+  () => <GitHubConnectionsContent />,
+  {
+    properties: {},
+  },
+);
 registerGitHubEnglish();

@@ -88,6 +88,11 @@ export type PreparedSessionSourceAssertion = SessionSourceAssertion & {
 /** Public boolean callbacks stay callable; bundled owners also carry their prepared writer source. */
 export type SessionSourceCheck = (() => boolean) & { sessionSource?: SessionSourceAssertion };
 
+/** Async effect checks also expose worker predicates and a storage-free host assertion. */
+export type AsyncSessionSourceCheck = (() => Promise<boolean>) & {
+  sessionSource: PreparedSessionSourceAssertion & { assertScopeCurrent: () => void };
+};
+
 export function sessionEntryCommitGuardOptions(source: SessionSourceAssertion | undefined) {
   return source?.nativeSource ? { assertCommitAllowed: source } : { workerGuard: { source } };
 }
@@ -176,47 +181,11 @@ export async function prepareSessionSourceScope(
   return assertion?.prepareSessionSourceScope?.();
 }
 
-export function bindPreparedSessionSourceAssertion(
-  source: SessionSourceAssertion,
-  prepared: PreparedSessionSourceAuthority,
-): SessionSourceAssertion & { release(): Promise<void> } {
-  let active = true;
-  const assertRetained = () => {
-    if (!active) {
-      throw new Error("Session source authority has been released");
-    }
-  };
-  const retainedSource = composeSessionSourceAssertion([source], (assertSource) => {
-    assertRetained();
-    assertSource();
-  });
-  const assertion = composeSessionSourceAssertion([
-    assertRetained,
-    Object.assign(() => prepared.assertCurrent(), {
-      nativeSource: prepared.nativeSource,
-      opaqueCommitGuard: prepared.opaqueCommitGuard,
-      prepareSessionSource: () => {
-        assertRetained();
-        return prepareSessionSourceAuthority(retainedSource);
-      },
-      prepareSessionSourceScope: () => {
-        assertRetained();
-        return prepareSessionSourceScope(retainedSource);
-      },
-    }),
-  ]);
-  return Object.assign(assertion, {
-    release() {
-      active = false;
-      return releaseSessionSourceAuthorities([prepared]);
-    },
-  });
-}
-
 /** A fence owns its live source predicates until all work inside that scope settles. */
 export async function runWithSessionSourceScope<T>(
   assertion: SessionSourceAssertion | undefined,
   run: () => Promise<T>,
+  options: { checkAfter?: boolean } = {},
 ): Promise<T> {
   const prepared = assertion?.prepareSessionSourceScope
     ? await prepareSessionSourceScope(assertion)
@@ -224,7 +193,9 @@ export async function runWithSessionSourceScope<T>(
   if (!assertion || !prepared) {
     assertion?.assertScopeCurrent?.();
     const result = await run();
-    assertion?.assertScopeCurrent?.();
+    if (options.checkAfter !== false) {
+      assertion?.assertScopeCurrent?.();
+    }
     return result;
   }
   const scopes = new Map([
@@ -237,7 +208,9 @@ export async function runWithSessionSourceScope<T>(
     return await sessionSourceScopes.run(scopes, async () => {
       (prepared.assertPreparedCurrent ?? prepared.assertCurrent)();
       const result = await run();
-      (prepared.assertPreparedCurrent ?? prepared.assertCurrent)();
+      if (options.checkAfter !== false) {
+        (prepared.assertPreparedCurrent ?? prepared.assertCurrent)();
+      }
       return result;
     });
   } catch (error) {

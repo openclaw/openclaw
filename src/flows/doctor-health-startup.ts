@@ -128,3 +128,43 @@ export async function prepareDoctorInteractiveMaintenance(params: {
     }),
   };
 }
+
+export async function prepareDoctorMaintenanceArchives(
+  databasePreflight: DoctorDatabasePreflight | undefined,
+  runtime: RuntimeEnv,
+): Promise<DoctorDatabasePreflight["agentDatabaseMigrationDiscovery"]> {
+  let discovery: DoctorDatabasePreflight["agentDatabaseMigrationDiscovery"];
+  try {
+    const { prepareDoctorDatabasePreflight } =
+      await import("../commands/doctor-database-preflight.js");
+    discovery = (databasePreflight ?? (await prepareDoctorDatabasePreflight()))
+      .agentDatabaseMigrationDiscovery;
+    if (discovery) {
+      const { prepareCanonicalTranscriptArchiveMigrations } =
+        await import("../infra/state-migrations.transcript-directives-archives.js");
+      await prepareCanonicalTranscriptArchiveMigrations(discovery);
+    }
+  } catch (error) {
+    // Offline admission still owns repairable schema and discovery failures.
+    runtime.log(`Archive verification preparation deferred: ${String(error)}`);
+  }
+  const { waitForCliSignalExit } = await import("../cli/signal-exit-barrier.js");
+  // Keep an accepted signal during preparation ahead of service custody.
+  await waitForCliSignalExit();
+  return discovery;
+}
+
+export async function prepareDoctorStateSchema(
+  schemas: DoctorDatabasePreflight,
+  shouldRepair: boolean,
+) {
+  if (!shouldRepair || !schemas.pendingMigrations?.some((entry) => entry.kind === "state")) {
+    return undefined;
+  }
+  const { prepareLegacyStateDatabaseSchema } = await import("../infra/state-migrations.doctor.js");
+  const { throwIfDoctorStateMigrationRefused } =
+    await import("../infra/state-migrations.messages.js");
+  const receipt = await prepareLegacyStateDatabaseSchema(process.env);
+  throwIfDoctorStateMigrationRefused([receipt]);
+  return receipt;
+}

@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { CronJob } from "../types.js";
-import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
+import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.test-support.js";
 import {
   createCronServiceState,
   type CronServiceState,
@@ -91,7 +91,7 @@ describe("cron schedule error isolation", () => {
     expect(badJob.enabled).toBe(true);
   });
 
-  it("auto-disables job after 3 consecutive schedule errors", () => {
+  it("auto-disables job after 3 consecutive schedule errors", async () => {
     const badJob = createJob({
       id: "bad-job",
       name: "Bad Job",
@@ -103,7 +103,7 @@ describe("cron schedule error isolation", () => {
     const deferredNotifications: DeferredCronNotifications = [];
     recomputeNextRunsForMaintenance(state, { recomputeExpired: true, deferredNotifications });
     expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
-    runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
+    await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
 
     // After 3rd error, job should be disabled
     expect(badJob.enabled).toBe(false);

@@ -8,7 +8,6 @@ import { resetPreparedModelCatalogStateForTest } from "../agents/prepared-model-
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
-import { redactSensitiveText } from "../logging/redact.js";
 import * as mediaStore from "../media/store.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { waitForAgentCommandCall } from "./agent-command.test-helpers.js";
@@ -386,11 +385,8 @@ describe("gateway server agent", () => {
       storePath: gatewaySuite.sessionStorePath,
     });
     expect(pending.items).toHaveLength(1);
-    // Inbound ids are random; compare the durable fact against its public
-    // redaction contract because an id can resemble sensitive text.
-    const transcriptMediaUrl = media?.[0]?.url ? redactSensitiveText(media[0].url) : undefined;
     expect(pending.items[0]?.message["__openclaw"]?.media).toEqual(
-      expect.arrayContaining([expect.objectContaining({ url: transcriptMediaUrl })]),
+      expect.arrayContaining([expect.objectContaining({ url: media?.[0]?.url })]),
     );
     const inboundAfter = await listInboundMedia();
     expect([...inboundAfter].filter((entry) => !inboundBefore.has(entry))).toHaveLength(1);

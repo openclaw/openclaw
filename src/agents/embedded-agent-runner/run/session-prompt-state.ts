@@ -41,7 +41,7 @@ export async function createEmbeddedRunSessionPromptState(input: {
   let activeSessionId = params.sessionId;
   let activeSessionFile = params.sessionFile;
   let activeSessionTarget: ContextEngineSessionTarget | undefined =
-    buildContextEngineCompactionSessionTarget({
+    await buildContextEngineCompactionSessionTarget({
       agentId: params.agentId ?? sessionAgentId,
       config: params.config,
       sessionFile: activeSessionFile,
@@ -226,8 +226,10 @@ export async function createEmbeddedRunSessionPromptState(input: {
         role: "custom",
         customType: "incomplete-tool-call",
         content:
-          `Runtime notice: The tool call${toolCallId ? ` ${JSON.stringify(toolCallId.slice(0, 200))}` : ""} was cut off at the provider's output limit (max_output_tokens) and was not executed. ` +
-          "Split the remaining work into smaller tool calls with shorter arguments. Earlier actions may have completed; verify their results before continuing and do not repeat completed actions.",
+          (toolCallId
+            ? `Runtime notice: The tool call ${JSON.stringify(toolCallId.slice(0, 200))} was cut off at the provider's output limit (max_output_tokens) and was not executed. Split the remaining work into smaller tool calls with shorter arguments. `
+            : "Runtime notice: The model response reached the provider's output limit (max_output_tokens) before producing an answer. Continue with a shorter response and smaller tool calls. ") +
+          "Earlier actions may have completed; verify their results before continuing and do not repeat completed actions.",
         display: false,
         details: { reason: "max_output_tokens", ...(toolCallId ? { toolCallId } : {}) },
         timestamp: Date.now(),

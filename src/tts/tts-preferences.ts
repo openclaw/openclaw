@@ -7,55 +7,37 @@ import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-
 
 export type PreparedTtsPreferences = Readonly<{ machinePrefsPath?: string }>;
 
-type PendingPath = {
-  assertCurrent: () => void;
-  result: Promise<PreparedTtsPreferences>;
-};
 const pendingPaths = resolveGlobalSingleton(
   Symbol.for("openclaw.pendingTtsPreferencePaths"),
-  () => new Map<string, PendingPath>(),
+  () => new Map<string, Promise<PreparedTtsPreferences>>(),
 );
 
 /** Carry the machine-owned path through one turn; preference-file contents stay fresh. */
 export async function prepareTtsPreferences(): Promise<PreparedTtsPreferences> {
   const databasePath = resolveOpenClawStateSqlitePath();
-  const context = captureOpenClawStateReadWorkerContext({ path: databasePath });
-  context.admission.assertCurrent();
   const admitted = getTtsMachinePathAdmission(databasePath);
   if (admitted) {
     return preparePath(admitted.row?.value_json);
   }
+  const context = captureOpenClawStateReadWorkerContext({ path: databasePath });
   const identity = context.admission.identity;
   if (!identity.key.startsWith("file:")) {
     return loadPath(context);
   }
   const key = `${identity.key}:${identity.birthtime ?? ""}`;
   let pending = pendingPaths.get(key);
-  if (pending) {
-    try {
-      pending.assertCurrent();
-    } catch {
-      pendingPaths.delete(key);
-      pending = undefined;
-    }
-  }
   if (!pending) {
-    const load = {
-      assertCurrent: () => context.admission.assertCurrent(),
-      result: loadPath(context),
-    };
+    const load = loadPath(context);
     pendingPaths.set(key, load);
     const release = () => {
       if (pendingPaths.get(key) === load) {
         pendingPaths.delete(key);
       }
     };
-    void load.result.then(release, release);
+    void load.then(release, release);
     pending = load;
   }
-  const result = await pending.result;
-  context.admission.assertCurrent();
-  return { ...result };
+  return { ...(await pending) };
 }
 
 async function loadPath(context: OpenClawStateWorkerContext): Promise<PreparedTtsPreferences> {
@@ -65,7 +47,6 @@ async function loadPath(context: OpenClawStateWorkerContext): Promise<PreparedTt
     { type: "tts.prefsPath" },
     { context, current: true },
   );
-  context.admission.assertCurrent();
   if (!reply) {
     return {};
   }

@@ -65,7 +65,7 @@ type WakeGroup = {
   event?: PendingWake;
   blockedUntil: number;
 };
-type ActiveWake = { generation: number; controller: AbortController; wakes: PendingWake[] };
+type ActiveWake = { controller: AbortController; wakes: PendingWake[] };
 type WakeAttempt = {
   signal: AbortSignal;
   wake: PendingWake;
@@ -177,7 +177,6 @@ function createSessionEventWakeRuntime() {
   const waiters = new Set<Settlement>();
   const attempts = new AsyncLocalStorage<WakeAttempt>();
   let handler: WakeHandler | null = null;
-  let generation = 0;
   let sequence = 0;
   let timer: NodeJS.Timeout | undefined;
   let timerDueAt = 0;
@@ -398,13 +397,12 @@ function createSessionEventWakeRuntime() {
         }
         // Busy backoff also owns wakes selected before the current attempt began.
         const blockedUntil = pending.get(key)?.blockedUntil ?? 0;
-        if (owner.generation !== generation || blockedUntil > performance.now()) {
+        if (run !== handler || blockedUntil > performance.now()) {
           handOff(wakes, index);
           return;
         }
         const attempt: WakeAttempt = { signal, wake, terminalPollDisposition: false };
         let result: HeartbeatRunResult;
-        let onAbort: (() => void) | undefined;
         try {
           result = await runWithGatewayDetachedWorkAdmission(() => {
             signal.throwIfAborted();
@@ -413,16 +411,6 @@ function createSessionEventWakeRuntime() {
                 entry.onAttemptStarted?.();
               }
             }
-            // Subscribe before calling the handler: it can synchronously replace its owner.
-            const aborted = new Promise<never>((_resolve, reject) => {
-              onAbort = () =>
-                reject(
-                  signal.reason instanceof Error
-                    ? signal.reason
-                    : new Error("Heartbeat handler was replaced"),
-                );
-              signal.addEventListener("abort", onAbort, { once: true });
-            });
             const request: HeartbeatWakeRequest = {
               source: wake.source,
               intent: wake.intent,
@@ -439,24 +427,19 @@ function createSessionEventWakeRuntime() {
               ...(wake.tasks ? { tasks: wake.tasks } : {}),
               ...(wake.retainedWork ? { retainedWork: true } : {}),
             };
-            // A synchronous handler throw must not leave the abort promise unobserved.
-            const running = attempts.run(attempt, async () => run(request, signal));
-            return Promise.race([running, aborted]);
+            // Handler replacement affects queued work; admitted work owns its actual settlement.
+            const currentHandler = handler;
+            if (!currentHandler) {
+              throw new Error("Heartbeat handler is unavailable");
+            }
+            return attempts.run(attempt, () => currentHandler(request, signal));
           }, "heartbeat:wake");
         } catch {
           if (wake.retired) {
             continue;
           }
-          if (owner.generation === generation) {
-            retry(wake);
-          } else {
-            enqueue(wake);
-          }
+          retry(wake);
           continue;
-        } finally {
-          if (onAbort) {
-            signal.removeEventListener("abort", onAbort);
-          }
         }
         if (wake.retired) {
           continue;
@@ -466,11 +449,7 @@ function createSessionEventWakeRuntime() {
           !isTerminalPollAttempt(attempt) &&
           shouldRetain(wake, result)
         ) {
-          if (owner.generation === generation) {
-            retry(wake, result);
-          } else {
-            enqueue(wake);
-          }
+          retry(wake, result);
         } else {
           settle(wake, result);
         }
@@ -501,7 +480,7 @@ function createSessionEventWakeRuntime() {
           }
           // Register the whole batch first so replacement retires unstarted work too.
           const ready = takeReady().map(({ key, wakes }) => {
-            const owner = { generation, controller: new AbortController(), wakes };
+            const owner = { controller: new AbortController(), wakes };
             active.set(key, owner);
             return { key, wakes, owner };
           });
@@ -568,9 +547,6 @@ function createSessionEventWakeRuntime() {
           }
         })
       : undefined;
-    const previousGeneration = generation;
-    generation += 1;
-    const ownedGeneration = generation;
     handler = next;
     if (!next) {
       // Waiters cannot depend on a future runner; shared notifications retain their queue ownership.
@@ -593,15 +569,14 @@ function createSessionEventWakeRuntime() {
         }
       }
     }
-    // Abort listeners can register another handler; retire only the replaced generation.
-    for (const owner of active.values()) {
-      if (owner.generation === previousGeneration) {
+    if (!next) {
+      for (const owner of active.values()) {
         owner.controller.abort();
       }
     }
     schedulePending(COALESCE_MS);
     return () => {
-      if (generation === ownedGeneration) {
+      if (handler === next) {
         setSessionEventWakeHandler(null);
       }
     };

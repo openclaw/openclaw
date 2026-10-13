@@ -43,7 +43,7 @@ describe("runReplyAgent media path normalization", () => {
       followupRun.run.taskSuggestionDeliveryMode = "gateway";
       followupRun.run.approvalReviewerDeviceId = "device-a";
 
-      const params = makeRunReplyAgentParams({
+      const params = await makeRunReplyAgentParams({
         resolvedQueue: { mode: "steer" } as QueueSettings,
         shouldSteer: true,
         shouldFollowup: true,
@@ -88,7 +88,7 @@ describe("runReplyAgent media path normalization", () => {
         prompt: "generate chart",
         run: { permissionMode: "full", approvalReviewerDeviceId: "device-a" },
       });
-      const params = makeRunReplyAgentParams({
+      const params = await makeRunReplyAgentParams({
         resolvedQueue: { mode: "steer" } as QueueSettings,
         shouldSteer: true,
         shouldFollowup: true,
@@ -122,7 +122,7 @@ describe("runReplyAgent media path normalization", () => {
       resetTriggered: false,
     });
     enqueueFollowupRunMock.mockReturnValueOnce(true);
-    const params = makeRunReplyAgentParams({
+    const params = await makeRunReplyAgentParams({
       replyOperation: source,
       sessionKey: "main",
       resolvedQueue: { mode: "steer" },
@@ -167,7 +167,7 @@ describe("runReplyAgent media path normalization", () => {
     ];
 
     await runReplyAgent(
-      makeRunReplyAgentParams({
+      await makeRunReplyAgentParams({
         resolvedQueue: { mode: "steer" } as QueueSettings,
         shouldSteer: true,
         shouldFollowup: true,
@@ -204,7 +204,7 @@ describe("runReplyAgent media path normalization", () => {
     followupRun.images = images;
 
     await runReplyAgent(
-      makeRunReplyAgentParams({
+      await makeRunReplyAgentParams({
         resolvedQueue: { mode: "steer" } as QueueSettings,
         shouldSteer: true,
         shouldFollowup: true,
@@ -235,7 +235,7 @@ describe("runReplyAgent media path normalization", () => {
       resetTriggered: false,
     });
     operation.setPhase("running");
-    operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
+    await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(followupRun));
     expect(operation.acceptedSteeredInboundAudio).toBe(false);
     // An answer sent before this steer must not count as answering it.
     operation.markSourceReplyDelivered();
@@ -247,7 +247,7 @@ describe("runReplyAgent media path normalization", () => {
     }));
 
     await runReplyAgent(
-      makeRunReplyAgentParams({
+      await makeRunReplyAgentParams({
         followupRun,
         replyOperation: operation,
         sessionKey: "agent:main:whatsapp:direct:chat-1",
@@ -273,7 +273,7 @@ describe("runReplyAgent media path normalization", () => {
 
   it("queues active prompts in followup mode without steering", async () => {
     await runReplyAgent(
-      makeRunReplyAgentParams({
+      await makeRunReplyAgentParams({
         resolvedQueue: { mode: "followup" } as QueueSettings,
         shouldSteer: false,
         shouldFollowup: true,
@@ -294,7 +294,7 @@ describe("runReplyAgent media path normalization", () => {
     overrides: Partial<AgentTurnParams> = {},
   ) {
     const { executeAgentTurn } = await import("./agent-runner-execution.js");
-    return await executeAgentTurn({
+    const params: AgentTurnParams = {
       commandBody: prompt,
       followupRun:
         overrides.followupRun ??
@@ -338,7 +338,9 @@ describe("runReplyAgent media path normalization", () => {
         normalizePayload: async (payload) => payload,
       },
       ...overrides,
-    });
+    };
+    setRuntimeConfigSnapshot(params.followupRun.run.config);
+    return await executeAgentTurn(params);
   }
 
   it.each([true, false])(

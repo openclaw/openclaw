@@ -96,7 +96,6 @@ export function registerSessionMaintenancePreparationTests() {
         try {
           const result = await runSqliteSessionReclamation({
             diagnostics,
-            forceInProcess: false,
             onWorkerResult: completed,
             plan,
           });
@@ -158,7 +157,6 @@ export function registerSessionMaintenancePreparationTests() {
           await racePromiseWithAbortSignal(archiveEntered.promise, signal);
           pending = runSqliteSessionReclamation({
             plan,
-            forceInProcess: false,
             diagnostics,
           });
           const result = await racePromiseWithAbortSignal(pending, signal);
@@ -231,7 +229,7 @@ export function registerSessionMaintenancePreparationTests() {
         },
       });
       const sql = observeHostDataSql();
-      const pending = runSqliteSessionReclamation({ forceInProcess: false, plan });
+      const pending = runSqliteSessionReclamation({ plan });
       let foreground: Promise<void> | undefined;
       let retry: ReturnType<typeof runSqliteSessionReclamation> | undefined;
       try {
@@ -268,7 +266,7 @@ export function registerSessionMaintenancePreparationTests() {
         await expect(pending).resolves.toEqual({ kind: "maintenance-plan-stale" });
         expect(released).toEqual([preparations[0]]);
         expect(published).toEqual([stale.sessionKey]);
-        retry = runSqliteSessionReclamation({ forceInProcess: false, plan });
+        retry = runSqliteSessionReclamation({ plan });
         await expect(retry).resolves.toMatchObject({
           kind: "maintenance-plan",
           value: { archived: 1, archivedEntries, entryRemovals: [] },
@@ -333,7 +331,6 @@ export function registerSessionMaintenancePreparationTests() {
         const published = vi.fn();
         const sql = observeHostDataSql();
         const first = runSqliteSessionReclamation({
-          forceInProcess: false,
           plan,
           onWorkerResult: published,
           assertCommitAllowed() {
@@ -370,7 +367,7 @@ export function registerSessionMaintenancePreparationTests() {
             signal,
           );
           expect(settled).toBe(false);
-          second = runSqliteSessionReclamation({ forceInProcess: false, plan });
+          second = runSqliteSessionReclamation({ plan });
           await racePromiseWithAbortSignal(
             Promise.race([
               secondPrepared.promise,
@@ -384,7 +381,7 @@ export function registerSessionMaintenancePreparationTests() {
           expect(preparations[0]).not.toBe(preparations[1]);
           expect(released).toEqual([]);
           expect(published).not.toHaveBeenCalled();
-          excess = runSqliteSessionReclamation({ forceInProcess: false, plan });
+          excess = runSqliteSessionReclamation({ plan });
           await expect(racePromiseWithAbortSignal(excess, signal)).rejects.toThrow(
             "Session maintenance preparation capacity is occupied",
           );
@@ -449,7 +446,7 @@ export function registerSessionMaintenancePreparationTests() {
           },
         });
         const sql = observeHostDataSql();
-        const pending = runSqliteSessionReclamation({ forceInProcess: false, plan });
+        const pending = runSqliteSessionReclamation({ plan });
         const outcome = pending.then(
           (value) => ({ kind: "returned" as const, value, nativeClosed }),
           (error: unknown) => ({ kind: "failed" as const, error, nativeClosed }),
@@ -505,9 +502,7 @@ export function registerSessionMaintenancePreparationTests() {
         }
         expect(loadSessionEntry(stale)).toMatchObject({ sessionId: "stale" });
         expect(loadSessionEntry(stale)?.archivedAt).toBeUndefined();
-        await expect(
-          runSqliteSessionReclamation({ forceInProcess: false, plan }),
-        ).resolves.toMatchObject({
+        await expect(runSqliteSessionReclamation({ plan })).resolves.toMatchObject({
           kind: "maintenance-plan",
           value: { archivedEntries },
         });
@@ -554,7 +549,6 @@ export function registerSessionMaintenancePreparationTests() {
       });
       const sql = observeHostDataSql();
       const pending = runSqliteSessionReclamation({
-        forceInProcess: false,
         plan,
         onWorkerResult: published,
       });

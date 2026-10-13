@@ -60,19 +60,45 @@ function parseSlackQaCaptureObject(payload: string): Record<string, unknown> | u
   return Object.fromEntries(new URLSearchParams(payload));
 }
 
-async function parseSuccessfulSlackCaptureResponse(
+async function indexSlackQaCaptureFlows(
+  events: Array<Record<string, unknown>>,
   store: AsyncDebugProxyCaptureReader,
-  event: Record<string, unknown>,
 ) {
-  if (event.kind !== "response" || event.status !== 200) {
-    return undefined;
+  const responses = new Map<string, Record<string, unknown>>();
+  const rejected = new Set<string>();
+  const uncertain = new Map<string, SlackNativeWrite["reason"]>();
+  for (const event of events) {
+    if (typeof event.flowId !== "string") {
+      continue;
+    }
+    if (event.kind === "error") {
+      uncertain.set(event.flowId, "transport-error");
+      continue;
+    }
+    if (event.kind !== "response") {
+      continue;
+    }
+    const payload = await readSlackQaCapturePayload(store, event);
+    const response = payload ? parseSlackQaCaptureObject(payload) : undefined;
+    if (event.status === 200 && response?.ok === true) {
+      responses.set(event.flowId, response);
+    } else if (
+      typeof event.status === "number" &&
+      event.status >= 200 &&
+      event.status < 500 &&
+      response?.ok === false &&
+      response.error !== "internal_error" &&
+      response.error !== "fatal_error"
+    ) {
+      rejected.add(event.flowId);
+    } else if (!uncertain.has(event.flowId)) {
+      uncertain.set(
+        event.flowId,
+        typeof response?.ok === "boolean" ? "response-indeterminate" : "response-undecodable",
+      );
+    }
   }
-  const payload = await readSlackQaCapturePayload(store, event);
-  if (!payload) {
-    return undefined;
-  }
-  const parsed = parseSlackQaCaptureObject(payload);
-  return parsed?.ok === true ? parsed : undefined;
+  return { responses, rejected, uncertain };
 }
 
 function readSlackQaMethod(event: Record<string, unknown>) {
@@ -170,18 +196,12 @@ async function collectSlackQaMessageWrites(params: {
       typeof event.id === "number" &&
       event.id > params.afterRequestEventId,
   );
-  const responsesByFlowId = new Map<string, Record<string, unknown>>();
-  const settledFlowIds = new Set<string>();
-  for (const event of params.events) {
-    if (event.kind !== "response" || typeof event.flowId !== "string") {
-      continue;
-    }
-    settledFlowIds.add(event.flowId);
-    const response = await parseSuccessfulSlackCaptureResponse(params.store, event);
-    if (response) {
-      responsesByFlowId.set(event.flowId, response);
-    }
-  }
+  const responses = params.events.filter((event) => event.kind === "response");
+  const settledFlowIds = new Set(responses.map((event) => event.flowId));
+  const { responses: responsesByFlowId } = await indexSlackQaCaptureFlows(
+    responses.filter((event) => event.status === 200),
+    params.store,
+  );
   const messages: SlackObservedMessage[] = [];
   for (const request of requests.toReversed()) {
     if (typeof request.flowId !== "string") {
@@ -242,37 +262,7 @@ export async function readSlackQaNativeWrites(params: {
   store: AsyncDebugProxyCaptureReader;
 }): Promise<SlackNativeWrite[]> {
   const events = await readSlackQaCaptureEvents(params);
-  const responses = new Map<string, Record<string, unknown>>();
-  const rejected = new Set<string>();
-  const uncertain = new Map<string, SlackNativeWrite["reason"]>();
-  for (const event of events) {
-    if (typeof event.flowId !== "string") {
-      continue;
-    }
-    if (event.kind === "error") {
-      uncertain.set(event.flowId, "transport-error");
-    } else if (event.kind === "response") {
-      const payload = await readSlackQaCapturePayload(params.store, event);
-      const response = payload ? parseSlackQaCaptureObject(payload) : undefined;
-      if (event.status === 200 && response?.ok === true) {
-        responses.set(event.flowId, response);
-      } else if (
-        typeof event.status === "number" &&
-        event.status >= 200 &&
-        event.status < 500 &&
-        response?.ok === false &&
-        response.error !== "internal_error" &&
-        response.error !== "fatal_error"
-      ) {
-        rejected.add(event.flowId);
-      } else if (!uncertain.has(event.flowId)) {
-        uncertain.set(
-          event.flowId,
-          typeof response?.ok === "boolean" ? "response-indeterminate" : "response-undecodable",
-        );
-      }
-    }
-  }
+  const { responses, rejected, uncertain } = await indexSlackQaCaptureFlows(events, params.store);
   const writes: SlackNativeWrite[] = [];
   for (const event of events.toReversed()) {
     const method = readSlackQaMethod(event);

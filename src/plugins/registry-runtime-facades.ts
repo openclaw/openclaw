@@ -64,7 +64,9 @@ export function createPluginRuntimeFacades(invokeSelectedRuntime: <T>(run: () =>
     ),
     modelAuth: createRuntimeFacade<PluginRuntime["modelAuth"]>(invokeSelectedRuntime, [
       "ensureAuthProfileStore",
+      "ensureAuthProfileStoreAsync",
       "isProviderApiKeyConfigured",
+      "isProviderApiKeyConfiguredAsync",
       "getApiKeyForModel",
       "getRuntimeAuthForModel",
       "resolveApiKeyForProvider",

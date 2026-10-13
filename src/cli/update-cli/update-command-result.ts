@@ -43,6 +43,7 @@ import {
 } from "../../infra/update-run-report.js";
 import { isFailedUpdateStep, updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import { mutateRun } from "../../infra/update-run-write.js";
+import { GitCleanupReportingError } from "../../infra/update-runner-git-cleanup.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { SystemPackageOwnershipError } from "../../infra/update-system-package-ownership.js";
@@ -263,6 +264,22 @@ export type MutableUpdateExecutionResult = {
   activationConfig?: UpdateConfigSnapshot;
 };
 
+function primaryUpdateFailure(error: unknown): unknown {
+  // Cleanup aggregation retains the initiating failure as cause. Secondary
+  // diagnostics must not change its admission/revocation classification.
+  const seen = new Set<unknown>();
+  let current = error;
+  while (
+    current instanceof GitCleanupReportingError &&
+    current.cause !== undefined &&
+    !seen.has(current)
+  ) {
+    seen.add(current);
+    current = current.cause;
+  }
+  return current;
+}
+
 export function createUpdateCommandFailureResult(
   params: Pick<UpdateRunResult, "mode" | "root" | "recovery" | "durationMs"> & {
     failure: { cause: unknown; detail?: string };
@@ -271,7 +288,8 @@ export function createUpdateCommandFailureResult(
   },
 ): UpdateRunResult & { failedStep: UpdateStepResult } {
   const { failure, admission, phase, ...result } = params;
-  const { cause, detail } = failure;
+  const { detail } = failure;
+  const cause = primaryUpdateFailure(failure.cause);
   const preMutationFailure = cause instanceof UpdatePreMutationError;
   const pkgOwnershipFailure = cause instanceof SystemPackageOwnershipError;
   const admissionFailure =
@@ -299,7 +317,7 @@ export function createUpdateCommandFailureResult(
     failureFacts:
       preMutationFailure || cause instanceof GatewayServiceUpdateOwnershipError
         ? cause.failureFacts
-        : [createUpdateErrorFact(phase ?? "update", cause)],
+        : [createUpdateErrorFact(phase ?? "update", failure.cause)],
   };
   return {
     ...result,
@@ -319,11 +337,16 @@ export async function resolveMutableUpdateFailure(params: {
   originalRecovery: () => Promise<UpdateRunResult["recovery"]>;
   run?: UpdateCommandOptions["run"];
 }): Promise<{ result: UpdateRunResult; failure: { cause: unknown; detail: string } }> {
-  if (
-    hasCommandProcessCleanupError(params.cause) ||
-    params.cause instanceof UpdateCommandPendingRecoveryFailure
-  ) {
+  if (hasCommandProcessCleanupError(params.cause)) {
     throw params.cause;
+  }
+  const primary = primaryUpdateFailure(params.cause);
+  if (primary instanceof UpdateCommandPendingRecoveryFailure) {
+    throw primary === params.cause
+      ? primary
+      : new UpdateCommandPendingRecoveryFailure(primary.result, formatErrorMessage(params.cause), {
+          cause: params.cause,
+        });
   }
   const failure = { cause: params.cause, detail: formatErrorMessage(params.cause) };
   defaultRuntime.error(failure.detail);
@@ -346,7 +369,7 @@ export async function resolveMutableUpdateFailure(params: {
       mode: params.mode,
       root: params.root,
       recovery:
-        params.cause instanceof UpdatePreMutationError
+        primary instanceof UpdatePreMutationError
           ? await params.originalRecovery()
           : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       failure,

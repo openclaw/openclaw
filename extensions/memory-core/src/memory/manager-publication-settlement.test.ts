@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { mock } from "node:test";
-import { setImmediate as nextTurn } from "node:timers/promises";
 import { Worker } from "node:worker_threads";
 import { ensureMemoryIndexSchema } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
@@ -12,6 +11,7 @@ import {
   withOpenClawAgentDatabaseWrite,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it } from "vitest";
 import { readMemoryDatabaseRevision } from "./manager-db-kernel.js";
@@ -90,155 +90,171 @@ function observePublicationExit(
   nativeWorker.once("exit", () => events.push("exit"));
 }
 
-it.each([
+it.for([
   { failRollback: false, failClose: false, throwResultFailure: false },
   { failRollback: true, failClose: false, throwResultFailure: false },
   { failRollback: true, failClose: true, throwResultFailure: false },
   { failRollback: true, failClose: true, throwResultFailure: true },
-])("settles native publication before a sibling write (%j)", async (faults) => {
-  const state = await createOpenClawTestState({
-    prefix: "memory-publication-settlement-",
-    layout: "state-only",
-  });
-  const events: string[] = [];
-  const messages = mock.method(Worker.prototype, "postMessage");
-  let worker:
-    | Awaited<ReturnType<typeof openOpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>>>
-    | undefined;
-  let ticks = 0;
-  const heartbeat = setInterval(() => ticks++, 10);
-  try {
-    const { options, db, input } = createPublicationDatabase(state.stateDir);
-    Object.assign(input, faults);
-    db.exec("CREATE TABLE sibling (value TEXT)");
-    worker = await openOpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>(options, db, {
-      moduleUrl: resolveRuntimeWorkerUrl(memoryPublicationFaultEntrypoint),
-      input,
+])(
+  "settles admitted native publication before a sibling write (%j)",
+  async (faults, { signal }) => {
+    const state = await createOpenClawTestState({
+      prefix: "memory-publication-settlement-",
+      layout: "state-only",
     });
-    const native = worker
-      .run(
-        async (scope) => {
-          db.exec(`CREATE TRIGGER fail_publication BEFORE DELETE ON memory_index_sources
-            BEGIN SELECT RAISE(FAIL, 'injected publication failure'); END`);
-          try {
-            return await scope.execute(deleteCurrentSource);
-          } finally {
-            db.exec("DROP TRIGGER fail_publication");
+    const events: string[] = [];
+    const messages = mock.method(Worker.prototype, "postMessage");
+    let worker:
+      | Awaited<ReturnType<typeof openOpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>>>
+      | undefined;
+    const transactionEntered = Promise.withResolvers<void>();
+    let observingTransaction = false;
+    try {
+      const { options, db, input } = createPublicationDatabase(state.stateDir);
+      Object.assign(input, faults);
+      db.exec("CREATE TABLE sibling (value TEXT)");
+      worker = await openOpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>(options, db, {
+        moduleUrl: resolveRuntimeWorkerUrl(memoryPublicationFaultEntrypoint),
+        input,
+        onAdmitted(request) {
+          if (observingTransaction && request.stage === "transaction") {
+            transactionEntered.resolve();
           }
         },
-        () => undefined,
-      )
-      .then(
-        (value) => ({ value }),
+      });
+      observingTransaction = true;
+      const native = worker
+        .run(
+          async (scope) => {
+            db.exec(`CREATE TRIGGER fail_publication BEFORE DELETE ON memory_index_sources
+            BEGIN SELECT RAISE(FAIL, 'injected publication failure'); END`);
+            try {
+              return await scope.execute(deleteCurrentSource);
+            } finally {
+              db.exec("DROP TRIGGER fail_publication");
+            }
+          },
+          () => undefined,
+        )
+        .then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+      await withinTest(
+        awaitGateBeforeSettlement(
+          transactionEntered.promise,
+          native.then((outcome) => {
+            if ("error" in outcome) {
+              throw outcome.error;
+            }
+            if (!outcome.value.ok) {
+              throw Object.assign(new Error(outcome.value.error.message), outcome.value.error);
+            }
+          }),
+          "Publication settled before transaction admission",
+        ),
+        signal,
+      );
+      observePublicationExit(messages.mock.calls, options.path, events);
+      messages.mock.restore();
+      const sibling = withOpenClawAgentDatabaseWrite(
+        options,
+        () => {
+          events.push("sibling");
+          db.prepare("INSERT INTO sibling VALUES (?)").run("after");
+        },
+        db,
+      );
+      // Observe rejection immediately so the red regression does not leak it.
+      const siblingResult = sibling.then(
+        () => ({ ok: true }),
         (error: unknown) => ({ error }),
       );
-    const deadline = performance.now() + 5000;
-    while (!fs.existsSync(input.marker)) {
-      if (performance.now() >= deadline) {
-        throw new Error("Publication did not enter its native transaction");
-      }
-      await nextTurn();
-    }
-    observePublicationExit(messages.mock.calls, options.path, events);
-    messages.mock.restore();
-    const sibling = withOpenClawAgentDatabaseWrite(
-      options,
-      () => {
-        events.push("sibling");
-        db.prepare("INSERT INTO sibling VALUES (?)").run("after");
-      },
-      db,
-    );
-    // Observe rejection immediately so the red regression does not leak it.
-    const siblingResult = sibling.then(
-      () => ({ ok: true }),
-      (error: unknown) => ({ error }),
-    );
-    const outcome = await native;
-    expect(await siblingResult).toEqual({ ok: true });
-    expect(db.prepare("SELECT * FROM sibling").all()).toEqual([{ value: "after" }]);
-    expect(db.prepare("SELECT path, hash FROM memory_index_sources").all()).toEqual([
-      { path: "memory/current.md", hash: "old" },
-    ]);
-    expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-    expect(ticks).toBeGreaterThan(2);
-    if (faults.failRollback) {
-      expect(outcome).toMatchObject({
-        error: {
-          cause: { message: expect.stringContaining("injected publication failure") },
-        },
-      });
-      expect(events).toEqual(["exit", "sibling"]);
-      if (faults.throwResultFailure) {
-        expect(outcome).toMatchObject({
-          error: {
-            cause: { message: expect.stringContaining("injected result delivery failure") },
-          },
-        });
-      }
-      // The client can borrow a fresh executor after native retirement; a stale
-      // hash proves admission without replaying the uncertain delete.
-      await expect(
-        worker.run(
-          (scope) =>
-            scope.execute({
-              ...deleteCurrentSource,
-              input: { ...deleteCurrentSource.input, expectedHash: "not-current" },
-            }),
-          () => undefined,
-        ),
-      ).resolves.toMatchObject({ ok: true, value: false });
-      await worker.close();
-      worker = undefined;
-      await closeOpenClawAgentDatabasesAsync(state.stateDir);
-      const recovered = openOpenClawAgentDatabase(options);
-      expect(recovered.db.prepare("SELECT * FROM sibling").all()).toEqual([{ value: "after" }]);
-      expect(recovered.db.prepare("SELECT path, hash FROM memory_index_sources").all()).toEqual([
+      const outcome = await native;
+      expect(fs.existsSync(input.marker)).toBe(true);
+      expect(await siblingResult).toEqual({ ok: true });
+      expect(db.prepare("SELECT * FROM sibling").all()).toEqual([{ value: "after" }]);
+      expect(db.prepare("SELECT path, hash FROM memory_index_sources").all()).toEqual([
         { path: "memory/current.md", hash: "old" },
       ]);
-      worker = await openOpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>(
-        options,
-        recovered.db,
-        {
-          moduleUrl: resolveRuntimeWorkerUrl(memoryPublicationFaultEntrypoint),
-          input: {
-            ...input,
-            failRollback: false,
-            failClose: false,
-            throwResultFailure: false,
+      expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      if (faults.failRollback) {
+        expect(outcome).toMatchObject({
+          error: {
+            cause: { message: expect.stringContaining("injected publication failure") },
           },
-        },
-      );
-      await expect(
-        worker.run(
-          (scope) => scope.execute(deleteCurrentSource),
-          () => undefined,
-        ),
-      ).resolves.toMatchObject({ ok: true, value: true });
-      expect(recovered.db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([]);
-      expect(recovered.db.prepare("PRAGMA integrity_check").get()).toEqual({
-        integrity_check: "ok",
-      });
-    } else {
-      expect(outcome).toMatchObject({ value: { ok: false, entered: true, committed: false } });
-      expect(events).toEqual(["sibling"]);
-      await expect(
-        worker.run(
-          (scope) => scope.execute(deleteCurrentSource),
-          () => undefined,
-        ),
-      ).resolves.toMatchObject({ ok: true, value: true });
-    }
-  } finally {
-    clearInterval(heartbeat);
-    messages.mock.restore();
-    try {
-      await worker?.close();
+        });
+        expect(events).toEqual(["exit", "sibling"]);
+        if (faults.throwResultFailure) {
+          expect(outcome).toMatchObject({
+            error: {
+              cause: { message: expect.stringContaining("injected result delivery failure") },
+            },
+          });
+        }
+        // The client can borrow a fresh executor after native retirement; a stale
+        // hash proves admission without replaying the uncertain delete.
+        await expect(
+          worker.run(
+            (scope) =>
+              scope.execute({
+                ...deleteCurrentSource,
+                input: { ...deleteCurrentSource.input, expectedHash: "not-current" },
+              }),
+            () => undefined,
+          ),
+        ).resolves.toMatchObject({ ok: true, value: false });
+        await worker.close();
+        worker = undefined;
+        await closeOpenClawAgentDatabasesAsync(state.stateDir);
+        const recovered = openOpenClawAgentDatabase(options);
+        expect(recovered.db.prepare("SELECT * FROM sibling").all()).toEqual([{ value: "after" }]);
+        expect(recovered.db.prepare("SELECT path, hash FROM memory_index_sources").all()).toEqual([
+          { path: "memory/current.md", hash: "old" },
+        ]);
+        worker = await openOpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>(
+          options,
+          recovered.db,
+          {
+            moduleUrl: resolveRuntimeWorkerUrl(memoryPublicationFaultEntrypoint),
+            input: {
+              ...input,
+              failRollback: false,
+              failClose: false,
+              throwResultFailure: false,
+            },
+          },
+        );
+        await expect(
+          worker.run(
+            (scope) => scope.execute(deleteCurrentSource),
+            () => undefined,
+          ),
+        ).resolves.toMatchObject({ ok: true, value: true });
+        expect(recovered.db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([]);
+        expect(recovered.db.prepare("PRAGMA integrity_check").get()).toEqual({
+          integrity_check: "ok",
+        });
+      } else {
+        expect(outcome).toMatchObject({ value: { ok: false, entered: true, committed: false } });
+        expect(events).toEqual(["sibling"]);
+        await expect(
+          worker.run(
+            (scope) => scope.execute(deleteCurrentSource),
+            () => undefined,
+          ),
+        ).resolves.toMatchObject({ ok: true, value: true });
+      }
     } finally {
-      await state.cleanup();
+      messages.mock.restore();
+      try {
+        await worker?.close();
+      } finally {
+        await state.cleanup();
+      }
     }
-  }
-});
+  },
+);
 
 it("preserves a committed publication when binding cleanup fails", async () => {
   const state = await createOpenClawTestState({

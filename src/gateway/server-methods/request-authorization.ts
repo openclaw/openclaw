@@ -12,7 +12,6 @@ import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { listAgentIds, tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { withCanonicalSessionValidationDeferral } from "../../config/sessions/session-canonical-validation-deferral.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { isPerAgentSessionStoreConfig } from "../../config/sessions/session-store-config.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
@@ -44,11 +43,7 @@ import {
   resolveDirectIncognitoTargets,
   resolveDirectSessionTargets,
 } from "../session-sharing-target-input.js";
-import {
-  isGatewayAdmin,
-  resolveSessionMutationAuthorization,
-  SessionMutationAuthorizationChangedError,
-} from "../session-sharing.js";
+import { isGatewayAdmin, SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import type { SessionSubscribePhase } from "../slow-request-diagnostics.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { gatewayRouterUploadPolicyError } from "./core-handlers.js";
@@ -323,21 +318,25 @@ export async function authorizeGatewayRequestPreDispatch(params: {
     let requestParams = params.requestParams;
     if (params.method === "chat.send" && !sessionPolicy) {
       const cfg = params.context.getRuntimeConfig();
-      if (!assertChatRoutingCurrent) {
-        const routing = captureSessionMutationRouting(cfg);
-        assertChatRoutingCurrent = () => routing(params.context.getRuntimeConfig());
-      }
-      assertChatRoutingCurrent();
       const normalized = resolveChatSendAuthorizationParams(cfg, requestParams);
       if (!normalized.ok) {
         return { error: normalized.error };
       }
+      if (!assertChatRoutingCurrent) {
+        const routing = captureSessionMutationRouting(
+          cfg,
+          undefined,
+          resolveDirectSessionTargets(params.method, requestParams),
+        );
+        assertChatRoutingCurrent = () => routing(params.context.getRuntimeConfig());
+      }
+      assertChatRoutingCurrent();
       requestParams = normalized.value;
     }
     const projection =
       !sessionPolicy &&
       resolveDirectSessionTargets(params.method, requestParams).length > 0 &&
-      (params.consumeSessionTurn || !isGatewayAdmin(params.client))
+      (params.consumeSessionTurn || params.method === "chat.send" || !isGatewayAdmin(params.client))
         ? getSessionRowProjection(params.context)
         : undefined;
     const sessionAuthorizationParams = {
@@ -374,151 +373,175 @@ export async function authorizeGatewayRequestPreDispatch(params: {
       }
       return null;
     };
-    const authorizeSession = (sessionRowRead?: SessionRowReadView) => {
-      assertSessionInvocationCurrent();
-      return sessionPolicy
-        ? { error: null }
-        : resolveSessionMutationAuthorization({ ...sessionAuthorizationParams, sessionRowRead });
-    };
-    const authorizeSessionAndConsume = params.consumeSessionTurn
-      ? (sessionRowRead?: SessionRowReadView) => {
-          // Consume transient incognito rows before their prepared view closes.
-          const error = authorizeCurrent(() => params.assertInvocationCurrent?.());
-          if (error) {
-            return { error };
-          }
-          if (!sessionRowRead) {
-            return { error: errorShape(ErrorCodes.UNAVAILABLE, "Session facts are unavailable") };
-          }
-          const result = authorizeSession(sessionRowRead);
-          if (result.error) {
+    const workerSessionMutation: Awaited<
+      ReturnType<typeof resolveSessionMutationAuthorizationAsync>
+    > = sessionPolicy
+      ? { error: null }
+      : await resolveSessionMutationAuthorizationAsync({
+          ...sessionAuthorizationParams,
+          assertInvocationCurrent: assertSessionInvocationCurrent,
+        });
+    let transferred = false;
+    try {
+      const authorizeSession = () => workerSessionMutation;
+      const authorizeSessionAndConsume = params.consumeSessionTurn
+        ? (sessionRowRead?: SessionRowReadView) => {
+            // Consume transient incognito rows before their prepared view closes.
+            if (!sessionRowRead) {
+              return { error: errorShape(ErrorCodes.UNAVAILABLE, "Session facts are unavailable") };
+            }
+            const result = authorizeSession();
+            if (result.error) {
+              return result;
+            }
+            const { target, consume } = params.consumeSessionTurn!;
+            const admitted = result.authorization?.admittedTarget;
+            const row =
+              admitted &&
+              sessionRowRead.describe({
+                key: admitted.sessionKey,
+                agentId: admitted.agentId,
+              });
+            if (
+              !admitted ||
+              admitted.sessionId !== target.sessionId ||
+              admitted.sessionKey !== target.sessionKey ||
+              (target.agentId !== undefined && admitted.agentId !== target.agentId) ||
+              row?.storedEntry?.sessionId !== target.sessionId
+            ) {
+              return {
+                error: errorShape(ErrorCodes.FORBIDDEN, "Session changed before file read"),
+              };
+            }
+            const error = authorizeCurrent(() => {
+              params.assertInvocationCurrent?.();
+              result.authorization?.assertCurrent();
+            });
+            if (error) {
+              return { error };
+            }
+            const value = consume(row.storedEntry);
+            if (isPromiseLike(value)) {
+              void Promise.resolve(value).catch(() => {});
+              throw new Error("Session turn authority consumers must remain synchronous");
+            }
             return result;
           }
-          const { target, consume } = params.consumeSessionTurn!;
-          const admitted = result.authorization?.admittedTarget;
-          const row =
-            admitted &&
-            sessionRowRead.describe({
-              key: admitted.sessionKey,
-              agentId: admitted.agentId,
-            });
-          if (
-            !admitted ||
-            admitted.sessionId !== target.sessionId ||
-            admitted.sessionKey !== target.sessionKey ||
-            (target.agentId !== undefined && admitted.agentId !== target.agentId) ||
-            row?.storedEntry?.sessionId !== target.sessionId
-          ) {
-            return { error: errorShape(ErrorCodes.FORBIDDEN, "Session changed before file read") };
-          }
-          const value = consume(row.storedEntry);
-          if (isPromiseLike(value)) {
-            void Promise.resolve(value).catch(() => {});
-            throw new Error("Session turn authority consumers must remain synchronous");
-          }
-          return result;
+        : authorizeSession;
+      const subscriptionAccessOnly =
+        params.method === "sessions.messages.subscribe" &&
+        resolveDirectIncognitoTargets(params.method, params.requestParams).length === 0;
+      if (projection && subscriptionAccessOnly) {
+        // Observers need committed sharing facts, not display rows held by an active turn's
+        // worker refresh. Incognito reads keep their transient exact-row preparation.
+        params.markSessionSubscribePhase?.("accessFacts");
+        while (projection.needsMembershipPreparation()) {
+          await projection.prepareMembership();
         }
-      : authorizeSession;
-    const subscriptionAccessOnly =
-      params.method === "sessions.messages.subscribe" &&
-      resolveDirectIncognitoTargets(params.method, params.requestParams).length === 0;
-    if (projection && subscriptionAccessOnly) {
-      // Observers need committed sharing facts, not display rows held by an active turn's
-      // worker refresh. Incognito reads keep their transient exact-row preparation.
+      }
+      params.markSessionSubscribePhase?.(
+        subscriptionAccessOnly ? "accessFacts" : "projectionReadiness",
+      );
+      const preparedSessionMutation =
+        projection && params.consumeSessionTurn && !subscriptionAccessOnly
+          ? await projection.withPreparedExactRows((cfg) => {
+              signal?.throwIfAborted();
+              assertChatRoutingCurrent?.();
+              return resolveDirectSessionTargets(params.method, requestParams).flatMap((target) => {
+                const agent = resolveRequestedSessionAgentId(
+                  cfg,
+                  target.sessionKey,
+                  target.agentId,
+                );
+                return agent.ok ? [{ key: target.sessionKey, agentId: agent.agentId }] : [];
+              });
+            }, authorizeSessionAndConsume)
+          : { kind: "complete" as const, value: authorizeSessionAndConsume() };
       params.markSessionSubscribePhase?.("accessFacts");
-      while (projection.needsMembershipPreparation()) {
-        await projection.prepareMembership();
-      }
-    }
-    params.markSessionSubscribePhase?.(
-      subscriptionAccessOnly ? "accessFacts" : "projectionReadiness",
-    );
-    const preparedSessionMutation =
-      projection && !subscriptionAccessOnly
-        ? await projection.withPreparedExactRows((cfg) => {
-            signal?.throwIfAborted();
-            assertChatRoutingCurrent?.();
-            return resolveDirectSessionTargets(params.method, requestParams).flatMap((target) => {
-              const agent = resolveRequestedSessionAgentId(cfg, target.sessionKey, target.agentId);
-              return agent.ok ? [{ key: target.sessionKey, agentId: agent.agentId }] : [];
-            });
-          }, authorizeSessionAndConsume)
-        : params.method === "chat.send" && !sessionPolicy && !params.consumeSessionTurn
-          ? {
-              kind: "complete" as const,
-              value: await resolveSessionMutationAuthorizationAsync({
-                ...sessionAuthorizationParams,
-                assertInvocationCurrent: assertSessionInvocationCurrent,
-              }),
-            }
-          : withCanonicalSessionValidationDeferral(() => authorizeSessionAndConsume());
-    params.markSessionSubscribePhase?.("accessFacts");
-    signal?.throwIfAborted();
-    if (preparedSessionMutation.kind === "pending") {
-      const { certifySessionCanonicalValidationPending } =
-        await import("../../config/sessions/session-canonical-validation-readiness.js");
       signal?.throwIfAborted();
-      await certifySessionCanonicalValidationPending(preparedSessionMutation.database);
-      // No permission result survives readiness. Method scopes, profile binding,
-      // startup state, target selection and current session facts all run again.
-      continue;
-    }
-    const sessionMutation = preparedSessionMutation.value;
-    if (sessionMutation.error) {
-      return { error: sessionMutation.error };
-    }
-    if (params.consumeSessionTurn) {
-      return { error: null, sessionScope: scopeAuthorization.sessionScope };
-    }
-    let sessionAccessAuthority: GatewaySessionAccessAuthority | undefined;
-    if (sessionPolicy) {
-      try {
-        const preparedAccess = await prepareGatewaySessionAccessAuthority({
-          policy: sessionPolicy,
-          requestParams: params.requestParams,
-          client: params.client ?? null,
-          context: params.context,
-          ownSessionOnly: scopeAuthorization.sessionScope === "operator.sessions.write",
-          hasCurrentClientAuthority: params.hasCurrentClientAuthority,
-          assertInvocationCurrent: params.assertInvocationCurrent,
-          assertPreparationCurrent,
-        });
-        sessionAccessAuthority = preparedAccess.authority;
-        params.expectedProfileBinding?.assertCurrent();
-        preparedAccess.assertPreparationCurrent();
-      } catch (error) {
-        sessionAccessAuthority?.release();
-        if (error instanceof SessionMutationAuthorizationChangedError) {
-          return { error: error.error };
+      if (preparedSessionMutation.kind === "pending") {
+        workerSessionMutation.authorization?.release?.();
+        const { certifySessionCanonicalValidationPending } =
+          await import("../../config/sessions/session-canonical-validation-readiness.js");
+        signal?.throwIfAborted();
+        await certifySessionCanonicalValidationPending(preparedSessionMutation.database);
+        // No permission result survives readiness. Method scopes, profile binding,
+        // startup state, target selection and current session facts all run again.
+        continue;
+      }
+      const sessionMutation = preparedSessionMutation.value;
+      if (sessionMutation.error) {
+        workerSessionMutation.authorization?.release?.();
+        return { error: sessionMutation.error };
+      }
+      if (params.consumeSessionTurn) {
+        sessionMutation.authorization?.release?.();
+        return { error: null, sessionScope: scopeAuthorization.sessionScope };
+      }
+      let sessionAccessAuthority: GatewaySessionAccessAuthority | undefined;
+      if (sessionPolicy) {
+        try {
+          const preparedAccess = await prepareGatewaySessionAccessAuthority({
+            policy: sessionPolicy,
+            requestParams: params.requestParams,
+            client: params.client ?? null,
+            context: params.context,
+            ownSessionOnly: scopeAuthorization.sessionScope === "operator.sessions.write",
+            hasCurrentClientAuthority: params.hasCurrentClientAuthority,
+            assertInvocationCurrent: params.assertInvocationCurrent,
+            assertPreparationCurrent,
+          });
+          sessionAccessAuthority = preparedAccess.authority;
+          params.expectedProfileBinding?.assertCurrent();
+          preparedAccess.assertPreparationCurrent();
+        } catch (error) {
+          workerSessionMutation.authorization?.release?.();
+          sessionAccessAuthority?.release();
+          if (error instanceof SessionMutationAuthorizationChangedError) {
+            return { error: error.error };
+          }
+          throw error;
         }
-        throw error;
+      }
+      if (
+        params.client?.connect.role === "node" &&
+        (!params.client.connId ||
+          !(await params.context.nodeRegistry.isConnectionCurrentPairingState(
+            params.client.connId,
+          )))
+      ) {
+        workerSessionMutation.authorization?.release?.();
+        return {
+          error: errorShape(
+            ErrorCodes.UNAVAILABLE,
+            "node pairing changed before request dispatch",
+            {
+              retryable: true,
+              details: { code: "PAIRING_CHANGED" },
+            },
+          ),
+        };
+      }
+      const error = authorizeCurrent(assertSessionInvocationCurrent, () => {
+        sessionAccessAuthority?.release();
+        workerSessionMutation.authorization?.release?.();
+      });
+      if (error) {
+        return { error };
+      }
+      transferred = true;
+      return {
+        error: null,
+        sessionScope: scopeAuthorization.sessionScope,
+        ...(sessionAccessAuthority ? { sessionAccessAuthority } : {}),
+        ...(sessionMutation.authorization
+          ? { sessionMutationAuthorization: sessionMutation.authorization }
+          : {}),
+      };
+    } finally {
+      if (!transferred) {
+        workerSessionMutation.authorization?.release?.();
       }
     }
-    if (
-      params.client?.connect.role === "node" &&
-      (!params.client.connId ||
-        !(await params.context.nodeRegistry.isConnectionCurrentPairingState(params.client.connId)))
-    ) {
-      return {
-        error: errorShape(ErrorCodes.UNAVAILABLE, "node pairing changed before request dispatch", {
-          retryable: true,
-          details: { code: "PAIRING_CHANGED" },
-        }),
-      };
-    }
-    const error = authorizeCurrent(assertSessionInvocationCurrent, () =>
-      sessionAccessAuthority?.release(),
-    );
-    if (error) {
-      return { error };
-    }
-    return {
-      error: null,
-      sessionScope: scopeAuthorization.sessionScope,
-      ...(sessionAccessAuthority ? { sessionAccessAuthority } : {}),
-      ...(sessionMutation.authorization
-        ? { sessionMutationAuthorization: sessionMutation.authorization }
-        : {}),
-    };
   }
 }

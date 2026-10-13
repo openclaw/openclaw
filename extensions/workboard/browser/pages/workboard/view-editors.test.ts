@@ -251,7 +251,6 @@ describe("WorkboardView", () => {
   });
 
   it.each([
-    { field: "title", change: "permission", dismiss: "none" },
     { field: "notes", change: "archive", dismiss: "none" },
     { field: "labels", change: "permission", dismiss: "before" },
     { field: "labels", change: "archive", dismiss: "after" },

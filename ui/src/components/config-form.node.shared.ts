@@ -1,16 +1,13 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { html, nothing, type TemplateResult } from "lit";
-import { ref } from "lit/directives/ref.js";
+import type { Accessor } from "@solidjs/signals";
+import type { JSX } from "@solidjs/web";
+import type { nothing, TemplateResult } from "lit";
 import { isSensitiveConfigPath } from "../../../src/config/sensitive-paths.js";
 import type { ConfigUiHints } from "../api/types.ts";
-import { icons } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
-import "../components/tooltip.ts";
 import { isEnvPlaceholder, REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
 import { formatUnknownText } from "../lib/format.ts";
-import { configValuesEqual, isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import { formatConfigFormNumber } from "./config-form.numeric.ts";
-import { setControlValidity } from "./config-form.scalar-edit.ts";
 import { resolveConfigFieldMeta, type ConfigSearchCriteria } from "./config-form.search.ts";
 import {
   configFieldId,
@@ -19,7 +16,6 @@ import {
   pathKey as configPathKey,
   type JsonSchema,
 } from "./config-form.shared.ts";
-import { renderSettingsDefaultDescription, renderSettingsSegmented } from "./settings-ui.ts";
 
 const META_KEYS = new Set([
   "title",
@@ -30,10 +26,6 @@ const META_KEYS = new Set([
   "tags",
   "x-tags",
 ]);
-const jsonTextareaState = new WeakMap<
-  HTMLTextAreaElement,
-  { sourceValue: unknown; fallback: string; pathKey: string }
->();
 
 export type ConfigNodeRenderParams = {
   schema: JsonSchema;
@@ -64,7 +56,8 @@ export type ConfigNodeRenderParams = {
   onRemove?: (path: Array<string | number>) => boolean | void;
 };
 
-export type ConfigNodeRenderer = (
+export type ConfigNodeRenderer = (params: Accessor<ConfigNodeRenderParams>) => JSX.Element;
+export type LegacyNodeRenderer = (
   params: ConfigNodeRenderParams,
 ) => TemplateResult | typeof nothing;
 
@@ -96,7 +89,7 @@ export function resolveConfigFieldPresentation(params: ConfigNodeRenderParams) {
   };
 }
 
-type SensitiveRenderState = {
+export type SensitiveRenderState = {
   isSensitive: boolean;
   /** The path or hint marks the field sensitive, whether or not it holds a value yet. */
   isSensitiveField: boolean;
@@ -178,223 +171,6 @@ export function getSensitiveRenderState(params: {
   };
 }
 
-export function renderSensitiveToggleButton(params: {
-  path: Array<string | number>;
-  state: SensitiveRenderState;
-  disabled: boolean;
-  onToggleSensitivePath?: (path: Array<string | number>) => void;
-}): TemplateResult | typeof nothing {
-  const { state } = params;
-  if (!state.isSensitive || !params.onToggleSensitivePath) {
-    return nothing;
-  }
-  const label = state.canReveal
-    ? state.isRevealed
-      ? t("configForm.hideValue")
-      : t("configForm.revealValue")
-    : state.sentinelRedacted
-      ? t("configForm.storedSecretNotRevealable")
-      : t("configForm.disableStreamToReveal");
-  return html`
-    <openclaw-tooltip .content=${label}>
-      <button
-        type="button"
-        class="settings-secret__toggle"
-        aria-label=${label}
-        aria-pressed=${state.isRevealed}
-        ?disabled=${params.disabled || !state.canReveal}
-        @click=${() => params.onToggleSensitivePath?.(params.path)}
-      >
-        ${state.isRevealed ? icons.eye : icons.eyeOff}
-      </button>
-    </openclaw-tooltip>
-  `;
-}
-
-/* Sensitive fields inset the reveal eye inside the field (settings-secret
- * pattern); non-sensitive fields render the bare control unchanged. A field that
- * gains its eye once it holds a value keeps the wrapper from the start: a changed
- * template would replace the input and drop focus mid-typing. */
-export function wrapSensitiveControl(
-  control: TemplateResult,
-  toggle: TemplateResult | typeof nothing,
-  keepWrapper = false,
-): TemplateResult {
-  if (toggle === nothing && !keepWrapper) {
-    return control;
-  }
-  return html`<span class="settings-secret">${control}${toggle}</span>`;
-}
-
-export function renderFieldRow(params: {
-  label: unknown;
-  help?: unknown;
-  helpId?: string;
-  defaultDescription?: unknown;
-  showLabel: boolean;
-  control: TemplateResult | typeof nothing;
-  stacked?: boolean;
-  error?: unknown;
-  errorId?: string;
-}): TemplateResult {
-  // Array/map item rows resolve their meta from the parent path (numeric and
-  // wildcard segments collapse), so their help is the parent's. Showing it again
-  // per item is noise; a row with no label of its own gets no help of its own.
-  const help = params.showLabel ? params.help : undefined;
-  const defaultDescription =
-    params.showLabel && params.defaultDescription !== nothing
-      ? params.defaultDescription
-      : undefined;
-  const hasText =
-    params.showLabel || Boolean(help) || Boolean(defaultDescription) || Boolean(params.error);
-  // Control-only rows (array/map item values) stack so the control gets full width.
-  const stacked = params.stacked || !hasText;
-  const className = stacked ? "settings-row settings-row--stacked" : "settings-row";
-  return html`
-    <div class=${className}>
-      ${
-        hasText
-          ? html`
-              <div class="settings-row__text">
-                ${
-                  params.showLabel
-                    ? html`<span class="settings-row__title">${params.label}</span>`
-                    : nothing
-                }
-                ${
-                  help
-                    ? html`<span class="settings-row__desc" id=${params.helpId ?? nothing}
-                        >${help}</span
-                      >`
-                    : nothing
-                }
-                ${
-                  defaultDescription
-                    ? html`<span class="settings-row__desc">${defaultDescription}</span>`
-                    : nothing
-                }
-                ${
-                  params.error
-                    ? html`<span class="cfg-field__error" role="alert">${params.error}</span>`
-                    : nothing
-                }
-              </div>
-            `
-          : nothing
-      }
-      ${
-        params.control !== nothing
-          ? html`<div class="settings-row__control">
-              ${params.control}
-              ${
-                params.errorId
-                  ? html`<span
-                      id=${params.errorId}
-                      class="cfg-field__error settings-control__sr-label"
-                      role="alert"
-                      hidden
-                    ></span>`
-                  : nothing
-              }
-            </div>`
-          : nothing
-      }
-    </div>
-  `;
-}
-
-export function renderCollectionRemoveButton(
-  label: string,
-  disabled: boolean,
-  remove: () => boolean,
-): TemplateResult {
-  return html`<openclaw-tooltip .content=${label}>
-    <button
-      type="button"
-      class="btn btn--icon"
-      style="width:28px;height:28px;padding:0;"
-      aria-label=${label}
-      ?disabled=${disabled}
-      @click=${(event: Event) => removeCollectionRow(event, remove)}
-    >
-      ${icons.trash}
-    </button>
-  </openclaw-tooltip>`;
-}
-
-/**
- * Removes a collection row and keeps keyboard focus in its collection when the
- * focused Remove control is retired: next surviving row, previous row, then Add.
- */
-function removeCollectionRow(event: Event, remove: () => boolean) {
-  const control = event.currentTarget;
-  if (!(control instanceof HTMLButtonElement) || control !== document.activeElement) {
-    remove();
-    return;
-  }
-  const collection = control.closest(".cfg-array, .cfg-map");
-  const own = (selector: string) =>
-    Array.from(collection?.querySelectorAll<HTMLButtonElement>(selector) ?? []).filter(
-      (button) => button.closest(".cfg-array, .cfg-map") === collection,
-    );
-  const label = control.getAttribute("aria-label");
-  const rows = own("button").filter((button) => button.getAttribute("aria-label") === label);
-  const index = rows.indexOf(control);
-  const destinations = [rows[index + 1], rows[index - 1], own("button[aria-controls]")[0]];
-  if (!remove()) {
-    return;
-  }
-  // The owner rerenders before this microtask. Positional rows can keep the
-  // focused control for the next entry, so only a lost focus moves.
-  queueMicrotask(() => {
-    if (document.activeElement === document.body) {
-      destinations.find((button) => button?.isConnected && !button.disabled)?.focus();
-    }
-  });
-}
-
-export function renderSchemaDefaultDescription(
-  schema: JsonSchema,
-  value: unknown,
-): TemplateResult | typeof nothing {
-  if (schema.default === undefined) {
-    return nothing;
-  }
-  return (
-    renderSettingsDefaultDescription(formatConfigValueText(schema.default), value !== undefined) ??
-    nothing
-  );
-}
-
-export function renderSegmentedControl(params: {
-  options: unknown[];
-  resolvedValue: unknown;
-  disabled: boolean;
-  ariaLabel: string;
-  descriptionId?: string;
-  onSelect: (value: unknown) => boolean | void;
-}): TemplateResult {
-  const selectedIndex = params.options.findIndex((option) =>
-    configValuesEqual(option, params.resolvedValue),
-  );
-  return renderSettingsSegmented({
-    value: selectedIndex < 0 ? "" : String(selectedIndex),
-    options: params.options.map((option, index) => ({
-      value: String(index),
-      label: configEnumOptionLabel(option, params.options),
-    })),
-    disabled: params.disabled,
-    ariaLabel: params.ariaLabel,
-    descriptionId: params.descriptionId,
-    onChange: (index) => {
-      const option = params.options[Number(index)];
-      if (option !== undefined) {
-        return params.onSelect(option);
-      }
-    },
-  });
-}
-
 export function configEnumOptionLabel(option: unknown, options: readonly unknown[]): string {
   const presentsBooleanState = options.includes(true) && options.includes(false);
   if (!presentsBooleanState) {
@@ -407,132 +183,4 @@ export function configEnumOptionLabel(option: unknown, options: readonly unknown
     return t("configForm.enumOff");
   }
   return option === "auto" ? t("configForm.enumAuto") : formatConfigValueText(option);
-}
-
-export function renderJsonTextareaControl(params: {
-  schema: JsonSchema;
-  path: Array<string | number>;
-  ariaLabel: string;
-  descriptionId?: string;
-  sourceValue: unknown;
-  fallback: string;
-  rows: number;
-  sensitiveState: SensitiveRenderState;
-  disabled: boolean;
-  isRequired?: boolean;
-  onToggleSensitivePath?: (path: Array<string | number>) => void;
-  onPatch: (path: Array<string | number>, value: unknown) => boolean | void;
-}): TemplateResult {
-  const { path, fallback, sensitiveState, disabled, onPatch } = params;
-  const errorId = configFieldId(path, "json-error");
-  const describedBy = [params.descriptionId, errorId].filter(Boolean).join(" ");
-  const setValidity = (target: HTMLTextAreaElement, message: string) =>
-    setControlValidity(target, message, ".cfg-json-editor");
-  const updateValidity = (target: HTMLTextAreaElement) => {
-    let message = "";
-    const raw = target.value.trim();
-    if (!raw && params.isRequired) {
-      message = t("configForm.invalidJson");
-    } else if (raw) {
-      try {
-        if (!isSupportedConfigValueValid(params.schema, JSON.parse(raw))) {
-          message = t("configForm.invalidJson");
-        }
-      } catch {
-        message = t("configForm.invalidJson");
-      }
-    }
-    setValidity(target, message);
-    return !message;
-  };
-  const renderedFallback = sensitiveState.isRedacted ? "" : fallback;
-  const pathKey = JSON.stringify(path.filter((segment) => typeof segment === "string"));
-  const commitJsonValue = (target: HTMLTextAreaElement, candidate: unknown) => {
-    if (onPatch(path, candidate) !== false) {
-      return true;
-    }
-    target.value = renderedFallback;
-    updateValidity(target);
-    return false;
-  };
-  const textareaControl = html`
-    <textarea
-      ${ref((element) => {
-        if (!(element instanceof HTMLTextAreaElement)) {
-          return;
-        }
-        const previous = jsonTextareaState.get(element);
-        if (
-          previous &&
-          // Content equality for the value: an autosave ack clones the form,
-          // so identity churn with identical bytes must not erase in-progress
-          // (possibly not-yet-valid) JSON the operator is typing.
-          ((!Object.is(previous.sourceValue, params.sourceValue) &&
-            !configValuesEqual(previous.sourceValue, params.sourceValue)) ||
-            previous.fallback !== renderedFallback ||
-            previous.pathKey !== pathKey)
-        ) {
-          element.value = renderedFallback;
-          setValidity(element, "");
-        }
-        jsonTextareaState.set(element, {
-          sourceValue: params.sourceValue,
-          fallback: renderedFallback,
-          pathKey,
-        });
-      })}
-      class="settings-input${sensitiveState.isRedacted ? " cfg-redacted" : ""}"
-      aria-label=${params.ariaLabel}
-      aria-describedby=${describedBy || nothing}
-      aria-invalid="false"
-      placeholder=${sensitiveState.isRedacted ? t("configForm.redactedPlaceholder") : t("configForm.jsonValue")}
-      rows=${params.rows}
-      .value=${renderedFallback}
-      ?disabled=${disabled}
-      ?readonly=${sensitiveState.isRedacted}
-      @click=${() => {
-        if (sensitiveState.isRedacted && params.onToggleSensitivePath) {
-          params.onToggleSensitivePath(path);
-        }
-      }}
-      @input=${(event: Event) => {
-        if (!sensitiveState.isRedacted) {
-          updateValidity(event.target as HTMLTextAreaElement);
-        }
-      }}
-      @change=${(event: Event) => {
-        if (sensitiveState.isRedacted) {
-          return;
-        }
-        const target = event.target as HTMLTextAreaElement;
-        if (!updateValidity(target)) {
-          return;
-        }
-        const raw = target.value.trim();
-        if (!raw) {
-          commitJsonValue(target, undefined);
-          return;
-        }
-        try {
-          commitJsonValue(target, JSON.parse(raw));
-        } catch {
-          // Input validity is already surfaced inline; preserve the draft until it is valid JSON.
-        }
-      }}
-    ></textarea>
-  `;
-  return html`
-    <span class="cfg-json-editor">
-      ${wrapSensitiveControl(
-        textareaControl,
-        renderSensitiveToggleButton({
-          path,
-          state: sensitiveState,
-          disabled,
-          onToggleSensitivePath: params.onToggleSensitivePath,
-        }),
-      )}
-      <span id=${errorId} class="cfg-field__error" role="alert" hidden></span>
-    </span>
-  `;
 }

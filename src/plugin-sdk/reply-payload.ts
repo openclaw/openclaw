@@ -1,6 +1,9 @@
 // Reply payload helpers normalize plugin reply targets, text, media, and approval metadata.
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
-import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  hasReplyPayloadSpeechContent,
+} from "../auto-reply/reply-payload.js";
 import type { ReplyPayload as InternalReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/outbound.types.js";
 import { normalizeOutboundReplyPayloadCore as normalizeCoreOutboundReplyPayload } from "../infra/outbound/reply-payload-normalize.js";
@@ -87,6 +90,7 @@ export {
   isReplyPayloadTerminalContent,
   isReplyPayloadTtsSupplement,
   markReplyPayloadAsTtsSupplement,
+  stripReplyPayloadResponsePrefix,
 } from "../auto-reply/reply-payload.js";
 
 /** Normalized outbound reply payload accepted by channel send helpers. */
@@ -212,7 +216,10 @@ export function hasOutboundReplyContent(
   },
   options?: { trimText?: boolean },
 ): boolean {
-  return hasReplyPayloadContent(payload, { trimText: options?.trimText });
+  return (
+    hasReplyPayloadContent(payload, { trimText: options?.trimText }) ||
+    hasReplyPayloadSpeechContent(payload)
+  );
 }
 
 /** Preserve caller-provided chunking, but fall back to the full text when chunkers return nothing. */

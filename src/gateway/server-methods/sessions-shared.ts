@@ -7,19 +7,12 @@ import {
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
-import type { SessionEntryReadScope } from "../../config/sessions/session-accessor.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import {
-  resolveCanonicalSessionEntryFromStoreKeys,
-  resolveGatewaySessionStoreTargetWithStore,
-} from "../session-utils.js";
-import {
-  resolveWorkerPlacementSessionRuntimeCapabilities,
-  resolveWorkerPlacementSessionRuntimeCapabilitiesAsync,
-} from "../worker-environments/placement-session-runtime.js";
+import { resolveWorkerPlacementCapabilities } from "../worker-environments/placement-capabilities.js";
+import { prepareWorkerPlacementSessionRuntime } from "../worker-environments/placement-session-runtime-preparation.js";
+import { resolveWorkerPlacementSessionRuntimeCapabilitiesAsync } from "../worker-environments/placement-session-runtime.js";
 import {
   readSessionWorkerPlacementAsync,
   resolveWorkerPlacementArchiveRestoreError,
@@ -54,6 +47,51 @@ export async function prepareSessionWorkerPlacementPatchError(
   return resolveSessionWorkerPlacementPatchError(params, { placement, runtime });
 }
 
+/** Prepare placement and inherited model facts; commit validation consumes their current owners. */
+export async function prepareSessionWorkerPlacementPatchValidation(
+  params: Parameters<typeof resolveSessionWorkerPlacementPatchError>[0],
+) {
+  const entry = params.entry;
+  const placement = entry?.sessionId
+    ? await params.context.workerSessionPlacementService?.prepareSessionPlacement?.(entry.sessionId)
+    : undefined;
+  try {
+    const currentPlacement = placement?.current();
+    const runtime =
+      currentPlacement &&
+      currentPlacement.state !== "local" &&
+      entry?.sessionId &&
+      params.validateModelRuntime &&
+      (params.patch.model !== undefined ||
+        params.patch.agentRuntime !== undefined ||
+        params.patch.nativeRuntimeConsent !== undefined)
+        ? await prepareWorkerPlacementSessionRuntime({
+            cfg: params.cfg,
+            entry,
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+          })
+        : undefined;
+    return {
+      validate: () =>
+        resolveSessionWorkerPlacementPatchError(params, {
+          ...(placement ? { placement: placement.current() } : {}),
+          readRuntime:
+            runtime && entry
+              ? () => resolveWorkerPlacementCapabilities(runtime.read(params.cfg, entry))
+              : undefined,
+        }),
+      release: () => {
+        runtime?.[Symbol.dispose]();
+        placement?.release();
+      },
+    };
+  } catch (error) {
+    placement?.release();
+    throw error;
+  }
+}
+
 export function resolveSessionWorkerPlacementPatchError(
   params: {
     agentId: string;
@@ -66,17 +104,19 @@ export function resolveSessionWorkerPlacementPatchError(
     validateModelRuntime: boolean;
   },
   prepared?: {
-    placement: Awaited<ReturnType<typeof readSessionWorkerPlacementAsync>>;
-    runtime?: ReturnType<typeof resolveWorkerPlacementSessionRuntimeCapabilities>;
+    placement?: Awaited<ReturnType<typeof readSessionWorkerPlacementAsync>>;
+    runtime?: Awaited<ReturnType<typeof resolveWorkerPlacementSessionRuntimeCapabilitiesAsync>>;
+    readRuntime?: () => ReturnType<typeof resolveWorkerPlacementCapabilities>;
   },
 ): string | undefined {
-  const placement = prepared
-    ? prepared.placement
-    : params.entry?.sessionId
-      ? params.context.workerSessionPlacementService
-          ?.getMany([params.entry.sessionId])
-          .get(params.entry.sessionId)
-      : undefined;
+  const placement =
+    prepared && "placement" in prepared
+      ? prepared.placement
+      : params.entry?.sessionId
+        ? params.context.workerSessionPlacementService
+            ?.getMany([params.entry.sessionId])
+            .get(params.entry.sessionId)
+        : undefined;
   if (!placement || placement.state === "local") {
     return undefined;
   }
@@ -106,14 +146,11 @@ export function resolveSessionWorkerPlacementPatchError(
   ) {
     return undefined;
   }
-  const { executionMode } =
-    prepared?.runtime ??
-    resolveWorkerPlacementSessionRuntimeCapabilities({
-      cfg: params.cfg,
-      entry: params.entry,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-    });
+  const runtime = prepared?.readRuntime?.() ?? prepared?.runtime;
+  if (!runtime) {
+    throw new Error("Session worker placement runtime validation was not prepared");
+  }
+  const { executionMode } = runtime;
   if (executionMode === placement.executionMode) {
     return undefined;
   }
@@ -133,34 +170,6 @@ export function requireSessionKey(key: unknown, respond: RespondFn): string | nu
     return null;
   }
   return normalized;
-}
-
-export function loadAccessorSessionEntryForGatewayTarget(params: {
-  key: string;
-  cfg: OpenClawConfig;
-  agentId?: string;
-  clone?: boolean;
-  projection?: SessionEntryReadScope["projection"];
-}) {
-  const target = resolveGatewaySessionStoreTargetWithStore({
-    cfg: params.cfg,
-    key: params.key,
-    exactRead: true,
-    projection: params.projection,
-    ...(params.clone === false ? { clone: false } : {}),
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-  });
-  return {
-    target,
-    storePath: target.storePath,
-    store: target.store,
-    // Exact probes include internal-effects rows that operator inventory reads hide.
-    entry: isInternalSessionEffectsKey(target.canonicalKey)
-      ? undefined
-      : resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys),
-    canonicalKey: target.canonicalKey,
-    sessionStoreKey: target.canonicalKey,
-  };
 }
 
 export function emitSessionOperation(

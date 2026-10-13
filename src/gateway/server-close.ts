@@ -8,12 +8,12 @@ import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-run
 import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/session-suspension.js";
 import { closeSwarmScheduler } from "../agents/subagents/swarm/swarm-scheduler.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { closeSessionTranscriptReconcileWorkerPool } from "../config/sessions/session-transcript-reconcile-pool.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { closePluginStateDatabaseAsync } from "../plugin-state/plugin-state-store.js";
 import type { GatewayPluginMetadataOwner } from "../plugins/plugin-metadata-lifecycle.js";
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
 import type { createPluginRegistryOwner } from "../plugins/runtime.js";
@@ -154,6 +154,7 @@ async function closeHttpListener(params: {
 }
 
 export type GatewayCloseParams = {
+  retainSharedState?: boolean;
   resolveGatewayContext: GatewayRunShutdownParams["resolveGatewayContext"];
   closePluginRegistry: ReturnType<typeof createPluginRegistryOwner>["close"];
   pluginMetadata: Pick<GatewayPluginMetadataOwner, "beginClose" | "close">;
@@ -551,17 +552,17 @@ async function closeGatewayResources(
               );
               await measureCloseStep("metadata-retirement", retire);
               await measureCloseStep("retirement-cleanup", () => cleanupWork.runWhenIdle(() => {}));
+              await measureCloseStep("incognito-sessions", () => memorySessionActorOwners.reset());
               // Releasing agent leases still writes shared state; keep its owner alive until then.
               await measureCloseStep("agent-databases", closeOpenClawAgentDatabasesAsync);
               await measureCloseStep("debug-proxy", () =>
                 finalizeActiveDebugProxyCaptures().catch(recordResourceCleanupFailure),
               );
-              if (mediaCleanupStopResult !== undefined) {
-                await measureCloseStep("plugin-state-database", closePluginStateDatabaseAsync);
-              }
               try {
                 await measureCloseStep("global-singletons", () =>
-                  drainGlobalSingletonLifecycleState(restart ? "restart" : "close"),
+                  drainGlobalSingletonLifecycleState(restart ? "restart" : "close", {
+                    retainSharedState: params.retainSharedState,
+                  }),
                 );
               } finally {
                 try {

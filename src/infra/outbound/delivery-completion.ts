@@ -14,7 +14,6 @@ import type {
   ConversationRegistryScope,
   PreparedConversationRegistryScope,
 } from "../../config/sessions/conversation-registry.js";
-import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   resolveSqliteReadScope,
   toDatabaseOptions,
@@ -24,10 +23,7 @@ import {
   runSessionActorCommand,
   withSessionActor,
 } from "../../config/sessions/session-actor-scope.js";
-import {
-  projectPendingFinalDeliverySettlement,
-  type PendingFinalDeliverySettlementInput,
-} from "../../config/sessions/session-pending-final-settlement.js";
+import type { PendingFinalDeliverySettlementInput } from "../../config/sessions/session-pending-final-settlement.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -142,6 +138,8 @@ export async function settlePendingFinalDelivery(
     preserveActivity?: boolean;
     stateContext?: DeliveryQueueStateContext;
     identifiedResult?: OutboundDeliveryResult;
+    /** Delivery has settled; durable queue owners must retain their receipt until ACK. */
+    clearAfterSettled?: { recoveryRunId?: string };
   } = {},
 ): Promise<DurableDeliveryCompletionResult> {
   let settled: DurableDeliveryCompletionResult["state"] = "stale";
@@ -158,6 +156,16 @@ export async function settlePendingFinalDelivery(
     deliveryId: completion.deliveryId,
     state,
     expectedStates: expectedStates?.slice(),
+    ...(options.clearAfterSettled
+      ? {
+          cleanup: {
+            sessionKey: completion.sessionKey,
+            recoveryRunId: options.clearAfterSettled.recoveryRunId,
+            now: Date.now(),
+            preserveActivity: options.preserveActivity,
+          },
+        }
+      : {}),
   };
   const authority = completion.sessionWriterDeliveryAuthority;
   const claim = authority?.harnessCompletion;
@@ -217,9 +225,7 @@ export async function settlePendingFinalDelivery(
       }
     },
   };
-  let actorOwned = false;
   await withSessionActor(scope, { assertCurrent() {}, assertReadable() {} }, async (actor) => {
-    actorOwned = true;
     let outcome;
     try {
       outcome = await runSessionActorCommand(actor, live, (snapshot) =>
@@ -259,28 +265,6 @@ export async function settlePendingFinalDelivery(
       throw new Error(outcome.failure.message);
     }
   });
-  if (!actorOwned) {
-    // Native incognito retains its existing patch owner until its actor cutover.
-    const patchOptions = {
-      skipMaintenance: true,
-      takeCacheOwnership: true,
-      preserveActivity: options.preserveActivity,
-      workerGuard: {},
-    };
-    await patchSessionEntryCore(
-      scope,
-      (entry) => {
-        if (!hasCurrentClaim(entry)) {
-          return null;
-        }
-        const projected = projectPendingFinalDeliverySettlement(entry, settlement, evidence);
-        settled = projected.state;
-        wakeRecovery = projected.wakeRecovery;
-        return projected.patch;
-      },
-      patchOptions,
-    );
-  }
   if (wakeRecovery) {
     const { scheduleMainSessionRecoveryPendingTarget } =
       await import("../../agents/main-session-recovery/main-session-recovery-owner-release.js");

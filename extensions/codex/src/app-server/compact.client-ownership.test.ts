@@ -1,6 +1,10 @@
 import path from "node:path";
 import { setImmediate, setTimeout as delay } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   claimCodexAppServerLiveThread,
@@ -52,6 +56,7 @@ beforeEach(() => {
   directory = tempDirs.make("codex-compact-owner-");
   agentDir = path.join(directory, "agent");
   sessionFile = path.join(directory, "session.jsonl");
+  setRuntimeConfigSnapshot({});
   runtime = resolveCodexAppServerRuntimeOptions({
     pluginConfig,
     codexConfigToml: null,
@@ -64,6 +69,7 @@ afterEach(async () => {
   await Promise.all(transports.splice(0).map(({ client }) => client.closeAndWait()));
   resetCodexTestBindingStore();
   resetThreadLifecycleTestFixtures();
+  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
 });
 

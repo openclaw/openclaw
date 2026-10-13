@@ -50,6 +50,12 @@ suite.define(() => {
         viewport: { height: 900, width: 1280 },
       },
       async ({ page }) => {
+        const absentAvatarRequests: string[] = [];
+        page.on("request", (request) => {
+          if (new URL(request.url()).pathname === "/api/users/profile-mira/avatar") {
+            absentAvatarRequests.push(request.url());
+          }
+        });
         const sessionList = {
           ...chatSessionListResponse([
             {
@@ -190,6 +196,11 @@ suite.define(() => {
           .poll(() => participant.locator(".viewer-avatar").getAttribute("aria-label"))
           .toBe("Mira");
         expect(await participant.getAttribute("href")).toBe("/activity/profile-mira");
+        expect(await participant.locator("img").count()).toBe(0);
+        expect(absentAvatarRequests).toEqual([]);
+        console.log(
+          JSON.stringify({ unadvertisedParticipantAvatarRequests: absentAvatarRequests.length }),
+        );
         await identity.hover();
         expect(
           await identity.evaluate((element) => getComputedStyle(element).textDecorationLine),

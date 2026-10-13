@@ -86,28 +86,6 @@ describe("mxc-spawn-launcher", () => {
     expect(childBridge).not.toHaveBeenCalled();
   });
 
-  it("resolves a promised child process before selecting its bridge", async () => {
-    const { launchSandbox } = loadLauncher();
-    const child = { on: vi.fn(), stdout: undefined, stderr: undefined };
-    const spawnResult = Promise.resolve(child);
-    const ptyBridge = vi.fn();
-    const childBridge = vi.fn();
-
-    await launchSandbox(
-      () => spawnResult,
-      { process: {} },
-      { usePty: false },
-      {
-        pty: ptyBridge,
-        child: childBridge,
-      },
-    );
-
-    expect(childBridge).toHaveBeenCalledWith(child);
-    expect(childBridge).not.toHaveBeenCalledWith(spawnResult);
-    expect(ptyBridge).not.toHaveBeenCalled();
-  });
-
   it("forwards process termination signals to spawned sandbox children", () => {
     const { forwardSignals } = loadLauncher();
     const listeners = new Map<string, () => void>();

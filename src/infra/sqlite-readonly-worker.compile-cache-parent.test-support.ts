@@ -15,6 +15,7 @@ fs.writeFileSync(path.join(installRoot, "package.json"), '{"version":"2026.9.6"}
 assert.equal(getCompileCacheDir(), undefined);
 const beforeEnable = { ...process.env };
 enableOpenClawCompileCache({
+  currentFile: path.join(installRoot, "dist", "entry.js"),
   installRoot,
   env: { ...process.env, NODE_COMPILE_CACHE: path.join(root, "native-cache") },
 });

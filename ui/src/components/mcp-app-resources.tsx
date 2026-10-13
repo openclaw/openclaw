@@ -269,3 +269,17 @@ declare global {
     "openclaw-mcp-app-resources": McpAppResourcesElement;
   }
 }
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-mcp-app-resources": HTMLAttributes<McpAppResourcesElement> &
+        Properties<McpAppResourcesElement> & {
+          "onOpenclaw-mcp-app-resource-mention"?: EventHandlerUnion<
+            McpAppResourcesElement,
+            CustomEvent<McpAppResourceMentionDetail>
+          >;
+        };
+    }
+  }
+}

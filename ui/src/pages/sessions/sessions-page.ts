@@ -45,8 +45,6 @@ import {
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import {
-  areUiSessionKeysEquivalent,
-  buildAgentMainSessionKey,
   parseAgentSessionKey,
   isPinnableUiSessionRow,
   isSubagentSessionKey,
@@ -62,6 +60,7 @@ import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
 import { ensureSessionAgentIdentities, sessionAgentIdentityById } from "./agent-scope.ts";
 import { SessionsPageArchive } from "./archive-actions.ts";
 import { rememberSessionCustomGroup, sessionCategoryNames } from "./custom-groups.ts";
+import { resolveSessionDeleteOutcome } from "./delete-outcome.ts";
 import { buildSessionsListQuery } from "./list-query.ts";
 import { SessionsPageDialog } from "./page-dialog.ts";
 import { loadStoredGroupBy, saveStoredGroupBy } from "./page-state.ts";
@@ -69,6 +68,7 @@ import type { SessionsPageRequestScope } from "./request-scope.ts";
 import type { SessionsRouteData } from "./route.ts";
 import {
   reconcileSelectedSessions,
+  settleSelectedSession,
   updateSelectedSessions,
   type SessionDeleteRow,
 } from "./selection.ts";
@@ -821,37 +821,19 @@ export class SessionsPageController implements ReactiveControllerHost {
         window.alert(formatPreservedWorktreesNotice(result.preservedWorktrees));
       }
       if (result.deleted.length > 0) {
-        const deleted = new Set(result.deleted);
-        const selected = new Map(this.state.selectedSessions);
-        for (const key of result.deleted) {
-          selected.delete(key);
-        }
-        this.state.selectedSessions = selected;
-        if (this.state.expandedSessionKey && deleted.has(this.state.expandedSessionKey)) {
-          this.state.expandedSessionKey = null;
-        }
-        if (this.deepLinkSessionKey && deleted.has(this.deepLinkSessionKey)) {
-          this.deepLinkSessionKey = null;
-        }
-        const deletedCurrent = result.deleted.find((key) =>
-          areUiSessionKeysEquivalent(key, scope.gateway.snapshot.sessionKey),
-        );
-        if (deletedCurrent) {
-          const agentId =
-            parseAgentSessionKey(deletedCurrent)?.agentId ??
-            scope.context.agentSelection.state.selectedId ??
-            "main";
+        const outcome = resolveSessionDeleteOutcome(scope.context, requests, result.deleted, {
+          selectedSessions: this.state.selectedSessions,
+          expandedSessionKey: this.state.expandedSessionKey,
+          deepLinkSessionKey: this.deepLinkSessionKey,
+        });
+        this.state.selectedSessions = outcome.selectedSessions;
+        this.state.expandedSessionKey = outcome.expandedSessionKey;
+        this.deepLinkSessionKey = outcome.deepLinkSessionKey;
+        if (outcome.selection) {
           selectApplicationSession({
             selection: scope.context.agentSelection,
             gateway: scope.gateway,
-            agentId,
-            sessionKey: buildAgentMainSessionKey({
-              agentId,
-              mainKey: resolveUiConfiguredMainKey({
-                agentsList: scope.context.agents.state.agentsList,
-                hello: scope.gateway.snapshot.hello,
-              }),
-            }),
+            ...outcome.selection,
           });
         }
       }
@@ -1188,9 +1170,8 @@ export class SessionsPageController implements ReactiveControllerHost {
       if (!this.isRequestScopeCurrent(scope)) {
         return "stale";
       }
-      const selected = new Map(this.state.selectedSessions);
-      selected.delete(key);
-      this.state.selectedSessions = selected;
+      const selected = this.state.selectedSessions;
+      this.state.selectedSessions = settleSelectedSession(selected, key, patched.entry.sessionId);
       return "completed";
     } catch (error) {
       return this.publishRequestError(scope, error);

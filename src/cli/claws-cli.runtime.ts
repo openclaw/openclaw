@@ -47,7 +47,7 @@ import {
   CLAW_OUTPUT_STABILITY,
   type ClawAddPlan,
 } from "../claws/types.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import { redactSensitiveArgv } from "../config/redact-argv.js";
 import {
@@ -259,7 +259,7 @@ async function runClawsAddCommandLocal(
     return;
   }
 
-  const config = getRuntimeConfig();
+  const config = await captureRuntimeConfigAsyncReader()();
   const listedMcpServers = await listConfiguredMcpServers();
   if (!listedMcpServers.ok) {
     runtime.error(listedMcpServers.error);
@@ -630,7 +630,7 @@ async function runClawsExportCommandLocal(
       throw new ClawExportError("mcp_config_unavailable", listedMcpServers.error);
     }
     const result = await exportClawAgent(agentId, opts.out, {
-      config: getRuntimeConfig(),
+      config: await captureRuntimeConfigAsyncReader()(),
       sourceMcpServers: listedMcpServers.mcpServers,
       ...(opts.bootstrap ? { bootstrapPath: opts.bootstrap } : {}),
     });

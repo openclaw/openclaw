@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { deriveTranscriptPredicateFields } from "../config/sessions/transcript-predicate-fields.js";
 import { closeOpenClawAgentDatabases } from "../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -13,6 +14,9 @@ const SPARSE_EVENT_SESSION_COUNT = 4_096;
 const ACTIVE_SESSIONS = 40;
 const EVENTS_PER_SESSION = 128;
 const PAYLOAD = "x".repeat(48 * 1024);
+const messagePredicates = deriveTranscriptPredicateFields(
+  '{"type":"message","message":{"role":"user"}}',
+);
 const tempDir = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
     closeOpenClawAgentDatabases();
@@ -196,15 +200,24 @@ function createCorpus(stateDir: string): void {
     .prepare(`WITH RECURSIVE s(i) AS (
     VALUES(0) UNION ALL SELECT i+1 FROM s WHERE i+1 < ?
   ), e(seq) AS (VALUES(0) UNION ALL SELECT seq+1 FROM e WHERE seq+1 < ?)
-  INSERT INTO transcript_events(session_id,seq,event_json,created_at)
+  INSERT INTO transcript_events(session_id,seq,event_json,created_at,navigation_type,navigation_last_type,message_role)
     SELECT 'large-corpus-'||i, seq,
       json_object('type','message','id','event-'||i||'-'||seq,'parentId',NULL,'message',
         CASE WHEN i=0 AND seq=0
           THEN json_object('role','user','content',?,'MediaPath','/media/legacy.png')
           WHEN i=0 AND seq=64
           THEN json_object('role','user','content',?,'MediaPath','/media/boundary.png')
-          ELSE json_object('role','user','content',?) END), seq+1 FROM s CROSS JOIN e`)
-    .run(ACTIVE_SESSIONS, EVENTS_PER_SESSION, PAYLOAD, PAYLOAD, PAYLOAD);
+          ELSE json_object('role','user','content',?) END), seq+1, ?, ?, ? FROM s CROSS JOIN e`)
+    .run(
+      ACTIVE_SESSIONS,
+      EVENTS_PER_SESSION,
+      PAYLOAD,
+      PAYLOAD,
+      PAYLOAD,
+      messagePredicates.navigation_type,
+      messagePredicates.navigation_last_type,
+      messagePredicates.message_role,
+    );
   database.db
     .prepare(`WITH RECURSIVE e(seq) AS (
     VALUES(0) UNION ALL SELECT seq+1 FROM e WHERE seq+1 < ?
@@ -230,13 +243,18 @@ function createSparseEventCorpus(stateDir: string): void {
   database.db
     .prepare(`WITH RECURSIVE n(i) AS (
     VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i+1 < ?
-  ) INSERT INTO transcript_events(session_id,seq,event_json,created_at)
+  ) INSERT INTO transcript_events(session_id,seq,event_json,created_at,navigation_type,navigation_last_type,message_role)
     SELECT 'sparse-'||i, 0,
       json_object('type','message','id','transcript-'||i,'parentId',NULL,'message',
         CASE WHEN i=0
           THEN json_object('role','user','content','sparse','MediaPath','/media/transcript.png')
-          ELSE json_object('role','user','content','sparse') END), i+1 FROM n`)
-    .run(SPARSE_EVENT_SESSION_COUNT);
+          ELSE json_object('role','user','content','sparse') END), i+1, ?, ?, ? FROM n`)
+    .run(
+      SPARSE_EVENT_SESSION_COUNT,
+      messagePredicates.navigation_type,
+      messagePredicates.navigation_last_type,
+      messagePredicates.message_role,
+    );
   database.db
     .prepare(`WITH RECURSIVE n(i) AS (
     VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i+1 < ?

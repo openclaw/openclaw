@@ -101,6 +101,7 @@ async function dispatchReplyFromConfigInner(
     (lease) => {
       runtimeLease = runtimeResources.use(scopePreparedModelRuntimeLease(lease));
     },
+    (dispose) => runtimeResources.defer(dispose),
   );
   if (gathered.status === "complete") {
     return gathered.result;

@@ -24,6 +24,7 @@ import {
   getUserPreferences,
   setUserPreferences,
 } from "../../state/user-preferences.test-support.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
@@ -45,16 +46,19 @@ vi.mock("../../plugins/theme-catalog.js", () => ({ listPluginThemes: () => plugi
 let state: OpenClawTestState;
 let requesterProfileId: string;
 let otherProfileId: string;
+let releaseProfiles: () => void;
 
 beforeEach(async () => {
   pluginThemes.length = 0;
   state = await createOpenClawTestState({ layout: "state-only", prefix: "themes-rpc-" });
   requesterProfileId = ensureProfileForEmail("requester@example.test").id;
   otherProfileId = ensureProfileForEmail("other@example.test").id;
+  releaseProfiles = (await prepareUserProfileCatalog()).release;
 });
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  releaseProfiles();
   await state.cleanup();
 });
 
@@ -876,45 +880,6 @@ describe("theme RPC", () => {
     }
     expect(getUserPreferences(requesterProfileId)).toEqual({});
     expect(getUserPreferences(otherProfileId)).toEqual({});
-  });
-
-  it.each(
-    ["select", "mode-only"].flatMap((action) =>
-      ["replaced", "unavailable"].map((change) => ({ action, change })),
-    ),
-  )("refuses a plugin palette $change before commit during $action", async ({ action, change }) => {
-    const installed = pluginTheme();
-    pluginThemes.push(installed);
-    const original = {
-      "ui.theme": action === "select" ? "claw" : installed.id,
-      "ui.themeMode": "system",
-      "ui.accent": "#aabbcc",
-    };
-    expect(setUserPreferences(requesterProfileId, original).ok).toBe(true);
-    let reachedCommit = false;
-    beforeWorkerCommit(() => {
-      reachedCommit = true;
-      if (change === "unavailable") {
-        pluginThemes.length = 0;
-        return;
-      }
-      pluginThemes[0] = {
-        ...installed,
-        modes: ["light"],
-        definition: {
-          name: installed.name,
-          description: "Replacement light-only palette",
-          light: createThemePaletteFixture(),
-        },
-      };
-    });
-    const params = action === "select" ? { id: installed.id, mode: "dark" } : { mode: "dark" };
-    expect(await invoke("themes.set", params)).toMatchObject({
-      ok: false,
-      error: { message: expect.stringContaining("theme plugin changed") },
-    });
-    expect(reachedCommit).toBe(true);
-    expect(getUserPreferences(requesterProfileId)).toEqual(original);
   });
 
   it("rolls back both import and selection when the live run retires at the commit boundary", async () => {

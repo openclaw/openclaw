@@ -1,3 +1,4 @@
+import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -40,6 +41,7 @@ class SessionCommitRejectedError extends Error {}
 export async function persistReplySessionEntry(
   params: PersistReplySessionEntryParams,
 ): Promise<PersistReplySessionEntryResult> {
+  const workspaceReadiness = captureAgentWorkspaceReadiness(params.sessionKey);
   let lifecycleError: string | undefined;
   let lifecycleEntry: SessionEntry | undefined;
   let lockedEntry: SessionEntry | undefined;
@@ -68,6 +70,7 @@ export async function persistReplySessionEntry(
         }
         lifecycleError = resolveSessionWorkStartError(params.sessionKey, existingEntry, {
           expectedSessionId: params.initialEntry.sessionId,
+          allowPendingWorkspace: workspaceReadiness ? true : undefined,
         });
         if (!existingEntry) {
           return null;

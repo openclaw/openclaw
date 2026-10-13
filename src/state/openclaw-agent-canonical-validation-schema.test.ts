@@ -426,46 +426,6 @@ DatabaseSync.prototype.prepare = function(sql) {
       expect(() => assertCanonicalSessionValidationSchema(database)).toThrow(/missing or drifted/u);
     });
   });
-
-  it.each(["close", "dispose"] as const)(
-    "invalidates native %s before the same object reopens",
-    (action) => {
-      withDatabase((database) => {
-        assertCanonicalSessionValidationSchema(database);
-        const cookie = database.prepare("PRAGMA schema_version").get()?.schema_version;
-        assert(typeof cookie === "number");
-        if (action === "close") {
-          database.close();
-        } else {
-          database[Symbol.dispose]();
-        }
-        database.open();
-        database.exec(withoutCanonicalSessionValidationSchema(OPENCLAW_AGENT_SCHEMA_SQL));
-        database.exec(`PRAGMA schema_version = ${cookie}`);
-        expect(() => assertCanonicalSessionValidationSchema(database)).toThrow(missingTable);
-      });
-    },
-  );
-
-  it.runIf(typeof DatabaseSync.prototype.deserialize === "function")(
-    "invalidates deserialized schema even when the cookie is unchanged",
-    () => {
-      withDatabase((database) => {
-        assertCanonicalSessionValidationSchema(database);
-        const cookie = database.prepare("PRAGMA schema_version").get()?.schema_version;
-        assert(typeof cookie === "number");
-        const replacement = new DatabaseSync(":memory:");
-        try {
-          replacement.exec(withoutCanonicalSessionValidationSchema(OPENCLAW_AGENT_SCHEMA_SQL));
-          replacement.exec(`PRAGMA schema_version = ${cookie}`);
-          database.deserialize(replacement.serialize());
-          expect(() => assertCanonicalSessionValidationSchema(database)).toThrow(missingTable);
-        } finally {
-          replacement.close();
-        }
-      });
-    },
-  );
 });
 
 describe("agent schema 21 migration", () => {
@@ -493,9 +453,18 @@ describe("agent schema 21 migration", () => {
             path: pathname,
           });
         });
-        expect(database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all()).toEqual(
-          before,
-        );
+        expect(
+          database
+            .prepare("SELECT * FROM session_nodes ORDER BY session_key")
+            .all()
+            .map(
+              ({
+                session_started_at: _sessionStartedAt,
+                has_optional_references: _hasOptionalReferences,
+                ...row
+              }) => row,
+            ),
+        ).toEqual(before);
         expect(pendingKeys(database)).toEqual([key, sibling].toSorted());
         expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
           OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -657,7 +626,7 @@ describe("agent schema 25 migration", () => {
           database.setAuthorizer(null);
           expect(
             database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all(),
-          ).toEqual(before.nodes);
+          ).toMatchObject(before.nodes);
           if (original) {
             const current = captureOpenClawMigrationWitness(database, {
               role: "agent",

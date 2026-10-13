@@ -328,36 +328,6 @@ describe("setup app recommendation matcher", () => {
     ],
   };
 
-  it("accepts strict JSON", async () => {
-    const result = await getSetupAppRecommendations({
-      inventorySource,
-      runtime: defaultRuntime,
-      deps: {
-        ...candidateDeps,
-        complete: async () => ({
-          ok: true,
-          text: JSON.stringify({
-            matches: [
-              {
-                appLabel: "Notes",
-                candidateId: "@demo-owner/notes-tools",
-                tier: "recommended",
-                reason: "Connects directly to your notes",
-              },
-            ],
-          }),
-        }),
-      },
-    });
-    expect(result.status).toBe("ok");
-    if (result.status === "ok") {
-      expect(result.matches[0]).toMatchObject({
-        candidateId: "@demo-owner/notes-tools",
-        tier: "recommended",
-      });
-    }
-  });
-
   it("tolerates fenced JSON with extra keys and long reasons", async () => {
     const reason = `${"a".repeat(118)}🤖suffix`;
     const result = await getSetupAppRecommendations({

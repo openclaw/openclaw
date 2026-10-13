@@ -616,6 +616,115 @@ describe("TerminalSessionManager agent ownership", () => {
 });
 
 describe("TerminalSessionManager agent session lifecycle", () => {
+  it.each(["previous cancellation", "output flush"] as const)(
+    "stops cancelling terminals when drain authority is revoked by %s",
+    async (revocation) => {
+      vi.useFakeTimers();
+      const owner = agentTerminalOwner("agent:main:archive-target");
+      const firstPty = makeFakePty();
+      const secondPty = makeFakePty();
+      const pendingPty = makeFakePty();
+      const pendingBackend = createDeferred<FakeTerminalPty>();
+      let current = true;
+      let bufferedAmount = Number.MAX_SAFE_INTEGER;
+      const killFirst = firstPty.kill.bind(firstPty);
+      firstPty.kill = () => {
+        killFirst();
+        current = false;
+      };
+      const emit = vi.fn((_connId, event) => {
+        if (revocation === "output flush" && event === TERMINAL_EVENT_DATA) {
+          current = false;
+        }
+      });
+      const manager = new TerminalSessionManager({
+        emit,
+        getBufferedAmount: revocation === "output flush" ? () => bufferedAmount : undefined,
+        spawn: async () => makeFakePty(),
+      });
+      let drain: ReturnType<TerminalSessionManager["beginAgentSessionDrain"]> | undefined;
+      let opening: ReturnType<TerminalSessionManager["open"]> | undefined;
+      try {
+        const first = expectTerminalOpen(
+          await manager.open(
+            baseRequest({ owner, viewerConnId: "viewer", createBackend: async () => firstPty }),
+          ),
+        );
+        const second = expectTerminalOpen(
+          await manager.open(baseRequest({ owner, createBackend: async () => secondPty })),
+        );
+        const beginDrain = () =>
+          manager.beginAgentSessionDrain(owner, () => {
+            if (!current) {
+              throw new Error("deletion superseded");
+            }
+          });
+        if (revocation === "output flush") {
+          expect(beginDrain).toThrow("deletion superseded");
+          expect(firstPty.paused).toBe(true);
+        } else {
+          opening = manager.open(
+            baseRequest({ owner, createBackend: () => pendingBackend.promise }),
+          );
+          drain = beginDrain();
+          let settled = false;
+          const outcome = drain.drained.then(
+            () => {
+              settled = true;
+            },
+            (error: unknown) => {
+              settled = true;
+              return error;
+            },
+          );
+          await Promise.resolve();
+          expect(settled).toBe(false);
+          expect(drain.hasWork()).toBe(true);
+          firstPty.emitExit(0);
+          await Promise.resolve();
+          expect(settled).toBe(false);
+          pendingBackend.resolve(pendingPty);
+          await expect(opening).resolves.toMatchObject({ ok: false, code: "closed" });
+          expect(pendingPty.killed).toBe(true);
+          expect(settled).toBe(false);
+          pendingPty.emitExit(0);
+          expect(await outcome).toEqual(new Error("deletion superseded"));
+          expect(drain.hasWork()).toBe(false);
+          drain.release();
+        }
+        expect(firstPty.killed).toBe(revocation === "previous cancellation");
+        expect(secondPty.killed).toBe(false);
+        const survivor = revocation === "output flush" ? first : second;
+        const survivorPty = revocation === "output flush" ? firstPty : secondPty;
+        expect(manager.writeAgent(owner, survivor.sessionId, "still active")).toEqual({ ok: true });
+        expect(survivorPty.writes).toEqual(["still active"]);
+        if (revocation === "output flush") {
+          bufferedAmount = 0;
+          await vi.advanceTimersByTimeAsync(5_000);
+          expect(survivorPty.paused).toBe(false);
+          emit.mockClear();
+          survivorPty.emitData("still streaming");
+          await vi.advanceTimersByTimeAsync(4);
+          expect(emit).toHaveBeenCalledWith(
+            "viewer",
+            TERMINAL_EVENT_DATA,
+            expect.objectContaining({ sessionId: survivor.sessionId, data: "still streaming" }),
+          );
+        }
+        await expect(manager.open(baseRequest({ owner }))).resolves.toMatchObject({ ok: true });
+      } finally {
+        pendingBackend.resolve(pendingPty);
+        await opening;
+        firstPty.emitExit(0);
+        pendingPty.emitExit(0);
+        await drain?.drained.catch(() => {});
+        drain?.release();
+        manager.disposeAll();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("keeps terminal admission fenced until every overlapping drain releases", async () => {
     const manager = new TerminalSessionManager({
       emit: vi.fn(),

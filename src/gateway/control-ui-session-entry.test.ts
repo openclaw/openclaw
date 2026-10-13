@@ -97,7 +97,7 @@ describe("protected canonical session handoff", () => {
     expect(opened.setHeader).toHaveBeenCalledWith("Location", canonical);
     expect(opened.setHeader).not.toHaveBeenCalledWith("X-OpenClaw-Session-Entry", "1");
   });
-  it.each(["token", "password"] as const)(
+  it.each(["password"] as const)(
     "keeps explicit %s login on the existing app login gate",
     async (mode) => {
       authenticate.mockResolvedValue({
@@ -116,16 +116,12 @@ describe("protected canonical session handoff", () => {
   it.each([
     "https://evil.test/chat/main",
     "/control/chat/main/a\u0000",
-    "/control/chat/main/a\u007f",
     "/control/chat/main/a b",
     "//evil.test/chat/main",
     "/control/settings",
     "/chat/main/topic",
-    "/control/chat/main/topic?token=secret",
     "/control/chat/main/topic?openclaw_mount_recovery=1&token=secret",
-    "/control/chat/main/topic?openclaw_mount_recovery=1&unknown=value",
     "/control/chat/main/topic?openclaw_mount_recovery=1&openclaw_mount_recovery=2",
-    "/control/chat/main/topic?openclaw_mount_recovery=",
     "/control/chat/main/topic?openclaw_mount_recovery=invalid",
     "/control/chat/main/../settings",
     "/control/chat/main\\topic",

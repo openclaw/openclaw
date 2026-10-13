@@ -395,7 +395,7 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("refreshes automatic health snapshots without live channel probes", async () => {
+  it("warms health once and refreshes passively only while clients are connected", async () => {
     const clock = createGatewaySchedulerClock();
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = createMaintenanceTimerDeps();
@@ -408,8 +408,22 @@ describe("startGatewayMaintenanceTimers", () => {
       expect(deps.refreshGatewayHealthSnapshot).toHaveBeenCalledWith({ probe: false });
 
       await clock.advanceBy(60_000);
+      expect(deps.refreshGatewayHealthSnapshot).toHaveBeenCalledTimes(1);
+
+      deps.clients.add({
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: { id: "test", version: "test", platform: "test", mode: "test" },
+        },
+      });
+      await clock.advanceBy(60_000);
       expect(deps.refreshGatewayHealthSnapshot).toHaveBeenCalledTimes(2);
       expect(deps.refreshGatewayHealthSnapshot).toHaveBeenLastCalledWith({ probe: false });
+
+      deps.clients.clear();
+      await clock.advanceBy(60_000);
+      expect(deps.refreshGatewayHealthSnapshot).toHaveBeenCalledTimes(2);
     } finally {
       await stopMaintenanceTimers(timers);
     }
@@ -723,7 +737,7 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("converts expired stalled terminal persistence into a recovery candidate", async () => {
+  it("preserves captured recovery custody when stalled terminal persistence expires", async () => {
     const { startGatewayMaintenanceTimers, deps } = await createTimedMaintenanceScenario();
     const runId = "run-terminal-persistence";
     const terminalRun = createActiveRun("main");
@@ -733,6 +747,15 @@ describe("startGatewayMaintenanceTimers", () => {
     terminalRun.projectSessionTerminalObservedAt = Date.now() - 500;
     terminalRun.projectSessionTerminalPersistence = new Promise<void>(() => {});
     deps.chatAbortControllers.set(runId, terminalRun);
+    const recoveryCandidate = {
+      runId,
+      sourceRunId: "source-terminal-persistence",
+      lifecycleGeneration: "generation-1",
+      sessionKey: "main",
+      sessionId: "sess-1",
+      observedAt: terminalRun.projectSessionTerminalObservedAt,
+    };
+    deps.restartRecoveryCandidates.set(runId, recoveryCandidate);
 
     const timers = startGatewayMaintenanceTimers(deps);
     await vi.advanceTimersByTimeAsync(59_000);
@@ -745,13 +768,7 @@ describe("startGatewayMaintenanceTimers", () => {
 
     expect(terminalRun.controller.signal.aborted).toBe(false);
     expect([await drain, deps.chatAbortControllers.has(runId)]).toEqual([false, false]);
-    expect(deps.restartRecoveryCandidates.get(runId)).toEqual({
-      runId,
-      lifecycleGeneration: "generation-1",
-      sessionKey: "main",
-      sessionId: "sess-1",
-      observedAt: Date.now() - 60_500,
-    });
+    expect(deps.restartRecoveryCandidates.get(runId)).toBe(recoveryCandidate);
     await stopMaintenanceTimers(timers);
   });
 

@@ -352,7 +352,7 @@ export class SessionManagerEntries extends SessionManagerAppend {
       if (!this.byId.has(branchFromId)) {
         await this.ensureCompletePersistedHistoryAsync();
       }
-      this.branchSync(branchFromId);
+      this.selectBranch(branchFromId);
     });
   }
 
@@ -367,6 +367,10 @@ export class SessionManagerEntries extends SessionManagerAppend {
     if (!this.byId.has(branchFromId)) {
       this.ensureCompletePersistedHistory();
     }
+    this.selectBranch(branchFromId);
+  }
+
+  private selectBranch(branchFromId: string): void {
     const branchTargetId = this.resolveBranchTargetId(branchFromId);
     if (branchTargetId === undefined) {
       throw new Error(`Entry ${branchFromId} not found`);

@@ -40,14 +40,14 @@ bundled-channel schemas. That bundled schema subpath is not a pattern for new
 plugins.
 
 <Warning>
-  Do not import provider- or channel-branded convenience seams (for example
+  Do not import provider- or channel-branded convenience interfaces (for example
   `openclaw/plugin-sdk/slack`, `.../discord`, `.../signal`, `.../whatsapp`).
   Bundled plugins compose generic SDK subpaths inside their own `api.ts` /
   `runtime-api.ts` barrels; core consumers should either use those plugin-local
   barrels or add a narrow generic SDK contract when a need is truly
   cross-channel.
 
-A small set of bundled-plugin helper seams still appear in the generated export
+A small set of bundled-plugin helper interfaces still appear in the generated export
 map when they have tracked owner usage. They exist for bundled-plugin
 maintenance only and are not recommended import paths for new third-party
 plugins.
@@ -67,6 +67,10 @@ execution. Use `provider-web-search-config-contract` to read plugin-owned
 web-search config. Keep full auth and search runtime imports in execution paths.
 
 ## Subpath reference
+
+`openclaw/plugin-sdk/gateway-ingress` defines the optional service-owned
+[remote Control UI ingress](/plugins/sdk-gateway-ingress) capability. The host
+admits browser devices through its existing HTTP and WebSocket owners.
 
 The plugin SDK is exposed as a set of narrow subpaths grouped by area (plugin
 entry, channel, provider, auth, runtime, capability, memory, and reserved
@@ -115,7 +119,7 @@ Provider plugins can expose a narrow plugin-local contract barrel when a
 helper is intentionally provider-specific and does not belong in a generic SDK
 subpath yet. Bundled examples:
 
-- **Anthropic**: public `api.ts` / `contract-api.ts` seam for Claude
+- **Anthropic**: public `api.ts` / `contract-api.ts` interface for Claude
   beta-header and `service_tier` stream helpers.
 - **`@openclaw/openai-provider`**: `api.ts` exports provider builders,
   default-model helpers, and realtime provider builders.
@@ -126,5 +130,5 @@ subpath yet. Bundled examples:
   Extension production code should also avoid `openclaw/plugin-sdk/<other-plugin>`
   imports. If a helper is truly shared, promote it to a neutral SDK subpath
   such as `openclaw/plugin-sdk/speech`, `.../provider-model-shared`, or another
-  capability-oriented surface instead of coupling two plugins together.
+  capability-oriented surface instead of making two plugins depend on each other.
 </Warning>

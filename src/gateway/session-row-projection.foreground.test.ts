@@ -2,6 +2,7 @@ import { StatementSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import * as sessions from "../config/sessions/session-accessor.js";
 import {
@@ -12,6 +13,7 @@ import * as history from "../config/sessions/session-transcript-worker-runtime.j
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -111,6 +113,7 @@ function holdBackfillPublication(signal?: AbortSignal) {
 it("publishes read-only transcript previews without acquiring stored row facts again", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:preview-only-backfill",
@@ -199,9 +202,10 @@ it("publishes read-only transcript previews without acquiring stored row facts a
   });
 });
 
-it("retains transcript previews across metadata edits and refreshes them after a transcript append", async () => {
+it("retains transcript previews across metadata edits and consumes committed appends without reads", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:metadata-preview",
@@ -210,6 +214,7 @@ it("retains transcript previews across metadata edits and refreshes them after a
     const query = { agentId: scope.agentId, key: scope.sessionKey };
     sessions.replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     await sessions.persistSessionTranscriptTurn(scope, {
+      config: cfg,
       messages: [{ message: { role: "user", content: "Original preview" } }],
       touchSessionEntry: false,
       updateMode: "none",
@@ -239,6 +244,7 @@ it("retains transcript previews across metadata edits and refreshes them after a
       expect(backfill.mock.calls.length).toBe(0);
       const appended = observeSessionRowBackfill([scope.sessionKey]);
       await sessions.persistSessionTranscriptTurn(scope, {
+        config: cfg,
         messages: [{ message: { role: "assistant", content: "Appended preview" } }],
         touchSessionEntry: false,
       });
@@ -246,9 +252,117 @@ it("retains transcript previews across metadata edits and refreshes them after a
       expect(projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview).toBe(
         "Appended preview",
       );
-      expect(backfill).toHaveBeenCalledTimes(1);
+      await sessions.patchSessionEntryCore(scope, () => ({ displayName: "After append" }));
+      await projection.ensureMaterialized();
+      await nextTurn();
+      expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
+        displayName: "After append",
+        lastMessagePreview: "Appended preview",
+      });
+      expect(backfill).not.toHaveBeenCalled();
     } finally {
       projection.dispose();
+    }
+  });
+});
+
+it("reuses an unknown preview until a committed transcript watermark changes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:preview-notifications",
+      sessionId: "preview-notifications",
+    };
+    const query = { agentId: scope.agentId, key: scope.sessionKey };
+    sessions.replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await sessions.persistSessionTranscriptTurn(scope, {
+      config: cfg,
+      messages: [{ message: { role: "user", content: "Original preview" } }],
+      touchSessionEntry: false,
+      updateMode: "none",
+    });
+    const initial = observeSessionRowBackfill([scope.sessionKey]);
+    const backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    try {
+      await initial;
+      expect(projection.capture(query)?.retainedDatabaseFacts?.transcriptPreview).toBeUndefined();
+      expect(backfill).toHaveBeenCalledTimes(1);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+      emitSessionTranscriptUpdate({ target: scope });
+      emitSessionTranscriptUpdate({
+        target: scope,
+        message: { role: "user", content: "Original preview" },
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await projection.ensureMaterialized();
+      await nextTurn();
+      expect(backfill).toHaveBeenCalledTimes(1);
+      expect(projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview).toBe(
+        "Original preview",
+      );
+
+      const refreshed = observeSessionRowBackfill([scope.sessionKey], projection);
+      await sessions.persistSessionTranscriptTurn(scope, {
+        config: cfg,
+        messages: [
+          { message: { role: "assistant", content: "Updated preview" } },
+          { message: { role: "assistant", content: "Hidden append", display: false } },
+        ],
+        touchSessionEntry: false,
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await refreshed;
+      expect(backfill).toHaveBeenCalledTimes(2);
+      expect(projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview).toBe(
+        "Updated preview",
+      );
+    } finally {
+      projection.dispose();
+      vi.useRealTimers();
+    }
+  });
+});
+
+it("keeps a committed append preview when an older background read finishes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:preview-receipt",
+      sessionId: "preview-receipt",
+    };
+    const query = { agentId: scope.agentId, key: scope.sessionKey };
+    sessions.replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await sessions.persistSessionTranscriptTurn(scope, {
+      config: cfg,
+      messages: [{ message: { role: "user", content: "Older preview" } }],
+      touchSessionEntry: false,
+      updateMode: "none",
+    });
+    const backfill = holdBackfillPublication();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    try {
+      expect((await backfill.prepared).lastMessagePreview).toBe("Older preview");
+      await sessions.persistSessionTranscriptTurn(scope, {
+        config: cfg,
+        messages: [{ message: { role: "assistant", content: "Committed preview" } }],
+        touchSessionEntry: false,
+      });
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview).toBe(
+        "Committed preview",
+      );
+      await backfill.publish();
+      expect(projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview).toBe(
+        "Committed preview",
+      );
+    } finally {
+      projection.dispose();
+      await backfill.close();
     }
   });
 });
@@ -264,6 +378,7 @@ it("keeps pending Worker metadata, membership, and summary facts across optional
         defaults: { utilityModel: "unit-test/small" },
       },
     };
+    setRuntimeConfigSnapshot(cfg);
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:backfill-facts",
@@ -401,6 +516,7 @@ it("gives an in-flight Gateway request priority before starting read-only previe
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     resetGatewayWorkAdmission();
     const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:foreground-backfill",

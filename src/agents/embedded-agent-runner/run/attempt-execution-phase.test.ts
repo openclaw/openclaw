@@ -4,6 +4,7 @@ import { createAssistantMessageEventStream, type Message } from "openclaw/plugin
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   loadTranscriptEventsSync,
   replaceSessionEntrySync,
@@ -66,6 +67,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     "scopes the provider generation guard after writer admission ($kind, $change)",
     async ({ key, change, guarded }) => {
       await withOpenClawTestState({ label: "cron-root-provider-fence" }, async (testState) => {
+        setRuntimeConfigSnapshot({});
         const fixture = await createFixture({ exerciseTerminalMerges: false });
         const target = {
           agentId: "main",
@@ -533,7 +535,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
             onModelRequest: expect.any(Function),
             getObservation: expect.any(Function),
           },
-          history: expect.objectContaining({ contextEngineAssemblySucceeded: true }),
+          history: expect.objectContaining({ contextEnginePromptAuthority: "assembled" }),
           isProbeSession: false,
           stream: fixture.streamResult,
           timeout: fixture.timeoutResult,

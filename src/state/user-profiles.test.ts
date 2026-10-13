@@ -42,9 +42,13 @@ import {
   getUserProfileDisplay,
 } from "./user-profiles.js";
 
+const catalogReleases: Array<() => void> = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
     vi.restoreAllMocks();
+    for (const release of catalogReleases.splice(0)) {
+      release();
+    }
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     cleanup();
@@ -241,7 +245,7 @@ describe("user profiles", () => {
     });
   });
 
-  it("persists GitHub names on the surviving merge head", () => {
+  it("persists GitHub names on the surviving merge head", async () => {
     const target = github(10, "Ada", { alias: "ada" });
     setDisplayName(target.id, "Ada", options);
     const source = ensureProfileForEmail("alias@example.com", options);
@@ -252,6 +256,7 @@ describe("user profiles", () => {
     });
     expect(updated).toMatchObject({ id: target.id, displayName: "Ada Lovelace" });
     closeOpenClawStateDatabaseForTest();
+    catalogReleases.push((await prepareUserProfileCatalog(options)).release);
     expect(getUserProfileDisplay(source.id, options)).toMatchObject({
       id: target.id,
       displayName: "Ada Lovelace",
@@ -406,7 +411,7 @@ describe("user profiles", () => {
     }
   });
 
-  it("migrates legacy provider logins while preserving profiles and real emails", () => {
+  it("migrates legacy provider logins while preserving profiles and real emails", async () => {
     const provider = ensureProfileForEmail("user@github", options);
     const email = ensureProfileForEmail("person@gmail.com", options);
     setDisplayName(provider.id, "User Chosen", options);
@@ -423,6 +428,7 @@ describe("user profiles", () => {
     expect(db.prepare("SELECT email, profile_id FROM user_profile_emails").all()).toEqual([
       { email: "person@gmail.com", profile_id: email.id },
     ]);
+    catalogReleases.push((await prepareUserProfileCatalog(options)).release);
     expect(getUserProfileDisplay(provider.id, options).displayName).toBe("User Chosen");
     expect(getProfileAvatar(provider.id, options)?.bytes).toEqual(new Uint8Array([9, 8, 7]));
   });

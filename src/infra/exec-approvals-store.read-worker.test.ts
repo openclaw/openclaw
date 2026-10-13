@@ -24,11 +24,11 @@ import { createExecApprovalPolicySnapshot } from "./exec-approvals-allow-always.
 import { commitExecAuthorizationLocked } from "./exec-approvals-authorization.js";
 import { prepareCronExecHostPolicyUse } from "./exec-approvals-cron-policy.js";
 import { loadMcpToolGrants } from "./exec-approvals-mcp.js";
+import { execApprovalsPublication } from "./exec-approvals-publication.js";
 import { writeExecApprovalsConfigRow } from "./exec-approvals-sqlite.js";
 import {
   loadExecApprovalsReadOnlyAsync,
   readExecApprovalsPolicyReadOnlyAsync,
-  prepareExecApprovalsCurrentRead,
   readExecApprovalsSnapshot,
   restoreExecApprovalsSnapshotLocked,
   updateExecApprovalsForMaintenance,
@@ -97,8 +97,7 @@ function watchNativeSql() {
 
 it("commits unchanged authorization without main-thread SQLite and keeps its captured policy owner", async () => {
   const { root, env } = fixture();
-  seed(env);
-  prepareExecApprovalsCurrentRead(captureOpenClawStateWorkerContext({ env }));
+  const source = seed(env);
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   const calls = watchNativeSql();
   const authorized = commitExecAuthorizationLocked({
@@ -118,24 +117,18 @@ it("commits unchanged authorization without main-thread SQLite and keeps its cap
   expect(calls.count()).toBe(0);
   vi.restoreAllMocks();
   const sql = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-  const peer = new (requireNodeSqlite().DatabaseSync)(path.join(root, "state", "openclaw.sqlite"));
   try {
     expect(assertCurrent).not.toThrow();
-    expect(sql.queries).toEqual([
-      'select "raw_json" from "exec_approvals_config" where "config_key" = ?',
-    ]);
+    expect(sql.queries).toEqual([]);
     writeExecApprovalsConfigRow({
-      db: peer,
+      db: source.db,
       file: { version: 1, defaults: { security: "deny" } },
     });
     sql.queries.length = 0;
     expect(assertCurrent).toThrow("Exec approval changed before execution");
-    expect(sql.queries).toEqual([
-      'select "raw_json" from "exec_approvals_config" where "config_key" = ?',
-    ]);
+    expect(sql.queries).toEqual([]);
   } finally {
     sql.restore();
-    peer.close();
   }
   expect(fs.existsSync(foreign.databasePath)).toBe(false);
 });
@@ -148,7 +141,6 @@ it("settles batched usage commits in order while isolating refused authorization
     db: source.db,
     file: { version: 1, agents: { main: { allowlist: [entry] } } },
   });
-  prepareExecApprovalsCurrentRead(captureOpenClawStateWorkerContext({ env }));
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   const input = {
     agentId: "main",
@@ -182,6 +174,36 @@ it("settles batched usage commits in order while isolating refused authorization
     if (result.status === "fulfilled") {
       expect(result.value).not.toThrow();
     }
+  }
+  let checkedPendingPolicy = false;
+  const release = execApprovalsPublication.subscribeFacts((change) => {
+    if (change.kind === "pending") {
+      checkedPendingPolicy = true;
+      for (const result of outcomes) {
+        if (result.status === "fulfilled") {
+          expect(result.value).toThrow("changing before execution");
+        }
+      }
+    }
+  });
+  try {
+    await updateExecApprovals({
+      update: { kind: "replace", file: { version: 1, defaults: { security: "deny" } } },
+    });
+  } finally {
+    release();
+  }
+  expect(checkedPendingPolicy).toBe(true);
+  const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+  try {
+    for (const result of outcomes) {
+      if (result.status === "fulfilled") {
+        expect(result.value).toThrow("Exec approval changed before execution");
+      }
+    }
+    expect(reads.queries).toEqual([]);
+  } finally {
+    reads.restore();
   }
 });
 
@@ -466,7 +488,6 @@ it("keeps cron policy uses current through real worker grant and usage writes wi
   seed(env);
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   const initial = readExecApprovalsSnapshot().file;
-  prepareExecApprovalsCurrentRead(captureOpenClawStateWorkerContext({ env }));
   const sql = watchNativeSql();
   sql.calibrate();
   const use = await prepareCronPolicy(env);

@@ -13,7 +13,6 @@ import { expectSubagentFollowupReactivation } from "./subagent-followup.test-hel
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const loadSessionEntryMock = vi.fn();
-const loadGatewaySessionEntryReadOnlyMock = vi.fn();
 const prepareDeletedAgentSessionCheckMock = vi.fn();
 const getLatestSubagentRunByChildSessionKeyMock = vi.fn();
 const getLatestLiveSubagentRunByChildSessionKeyMock = vi.fn();
@@ -23,11 +22,16 @@ const chatSendMock = vi.fn();
 
 // mock-isolation: Follow-up routing uses synthetic entries instead of real session stores.
 vi.mock("../session-utils.js", () => ({
-  loadSessionEntry: (...args: unknown[]) => loadSessionEntryMock(...args),
-  loadGatewaySessionEntryReadOnly: (...args: unknown[]) =>
-    loadGatewaySessionEntryReadOnlyMock(...args),
   prepareDeletedAgentSessionCheck: (...args: unknown[]) =>
     prepareDeletedAgentSessionCheckMock(...args),
+}));
+// mock-isolation: Follow-up routing supplies synthetic entries without a database worker.
+vi.mock("../session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: async (
+    params: Parameters<
+      typeof import("../session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
+    >[0],
+  ) => loadSessionEntryMock(params.key, { agentId: params.agentId }),
 }));
 vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async () => {
   const actual = await vi.importActual<
@@ -131,7 +135,6 @@ describe("sessions.send completed subagent follow-up status", () => {
   afterEach(() => flushPendingSessionsChangedEvents());
   beforeEach(() => {
     loadSessionEntryMock.mockReset();
-    loadGatewaySessionEntryReadOnlyMock.mockReset();
     prepareDeletedAgentSessionCheckMock.mockReset().mockReturnValue(null);
     getLatestSubagentRunByChildSessionKeyMock.mockReset();
     getLatestLiveSubagentRunByChildSessionKeyMock.mockReset();

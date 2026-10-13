@@ -16,7 +16,11 @@ import { readTrackedStateDatabaseIdentity } from "./openclaw-state-db-handle.js"
 
 const bindings = resolveGlobalSingleton(
   Symbol.for("openclaw.stateIntegrityBindings"),
-  () => new WeakMap<DatabaseSync, { revision: SharedArrayBuffer; release(): void }>(),
+  () =>
+    new WeakMap<
+      DatabaseSync,
+      { revision: SharedArrayBuffer; lifetimeRevision: SharedArrayBuffer; release(): void }
+    >(),
 );
 
 export type OpenClawStateIntegrityPolicy = "verify" | "require-proof";
@@ -57,6 +61,7 @@ export function invalidateOpenClawStateRuntimeIntegrity(database: DatabaseSync):
   const bound = bindings.get(database);
   if (bound) {
     invalidate(new BigInt64Array(bound.revision));
+    invalidate(new BigInt64Array(bound.lifetimeRevision));
   }
 }
 
@@ -76,10 +81,15 @@ function bind(database: DatabaseSync, admission: OpenClawStateIntegrityAdmission
   const unregister = registerNodeSqliteDisposeCallback(database, (reason) => {
     if (reason === "replace") {
       invalidate(revision);
+      invalidate(new BigInt64Array(admission.lifetime.revision));
     }
     release();
   });
-  bindings.set(database, { revision: admission.revision, release });
+  bindings.set(database, {
+    revision: admission.revision,
+    lifetimeRevision: admission.lifetime.revision,
+    release,
+  });
 }
 
 /** Reuse only completed integrity proof; shape and mutable metadata retain their admission owners. */

@@ -541,7 +541,9 @@ the ordinary plugin lifecycle separately when you intend to uninstall a
 process-wide plugin.
 
 Directories containing another agent's registered database are retained, even
-when that database is closed. If removal reports that an agent database is
+when that database is closed. Removal previews read current registry rows, including
+registrations made by a completed offline operation since the last preview.
+If removal reports that an agent database is
 still open, stop the command or restart the Gateway holding it before retrying.
 Preview works offline. Persisted monitor rows remain blockers until the serving
 Gateway can verify their ownership. Actual removal requires a running Gateway

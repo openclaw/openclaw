@@ -97,17 +97,6 @@ export function KeyboardShortcut(
   );
 }
 
-export function ShortcutHint(props: { label: string; combo: KeyboardShortcutCombo }) {
-  return (
-    <>
-      {props.label}
-      {" ("}
-      <KeyboardShortcut combo={props.combo} inline />
-      {")"}
-    </>
-  );
-}
-
 /** Each placeholder gets its own nodes, preserving translated sentence order. */
 export function ShortcutText(props: { text: string; shortcut: () => JSX.Element }) {
   return (

@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -11,6 +12,7 @@ import {
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { admitReplyTurn } from "../../auto-reply/reply/reply-turn-admission.js";
 import { initSessionState } from "../../auto-reply/reply/session.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadTranscriptEvents,
   replaceSessionEntry,
@@ -49,11 +51,13 @@ it.each([
       const message = "Continue the existing task with this exact input.";
       const storePath = state.statePath("sessions.sqlite");
       const scope = { agentId, sessionKey, storePath };
-      await state.writeConfig({
+      const cfg = {
         agents: { defaults: { workspace: state.workspaceDir } },
         plugins: { enabled: false },
         session: { store: storePath },
-      });
+      };
+      await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       const profile = ensureProfileForEmail("compaction-handoff@example.test");
       const entry = {
         sessionId: initialSessionId,
@@ -115,8 +119,9 @@ it.each([
       let owned: ChatDispatchParams | undefined;
       let successor: ReplyOperation | undefined;
       let originalRegistration: ChatDispatchParams["admission"]["sessionBinding"] | undefined;
-      const resolver = vi.fn<InternalGetReplyFromConfig>(async (ctx, options, cfg) => {
-        if (!options || !cfg || !owned || !originalRegistration) {
+      let persistenceFailure: unknown;
+      const resolver = vi.fn<InternalGetReplyFromConfig>(async (ctx, options, replyConfig) => {
+        if (!options || !replyConfig || !owned || !originalRegistration) {
           throw new Error("fixture requires the original accepted chat dispatch");
         }
         expect(ctx.BodyForAgent).toBe(message);
@@ -124,7 +129,7 @@ it.each([
         expect(options.expectedExistingSessionId).toBe(finalSessionId);
         const initialized = await initSessionState({
           ctx: finalizeInboundContext(ctx),
-          cfg,
+          cfg: replyConfig,
           commandAuthorized: ctx.CommandAuthorized === true,
           expectedExistingSessionId: options.expectedExistingSessionId,
           requestedSessionId: options.requestedSessionId,
@@ -178,6 +183,16 @@ it.each([
         if (!owned) {
           throw new Error("chat.send did not start detached dispatch");
         }
+        const recorder = owned.userTurn.recorder;
+        const persistApproved = recorder.persistApproved.bind(recorder);
+        vi.spyOn(recorder, "persistApproved").mockImplementation(async (...args) => {
+          try {
+            return await persistApproved(...args);
+          } catch (error) {
+            persistenceFailure = error;
+            throw error;
+          }
+        });
         originalRegistration = owned.admission.sessionBinding;
         expect(originalRegistration.sessionId).toBe(initialSessionId);
 
@@ -235,7 +250,10 @@ it.each([
           scenario === "active-compaction" ||
           scenario === "successive-compactions"
         ) {
-          expect(context.broadcast).not.toHaveBeenCalledWith(
+          expect(
+            context.broadcast,
+            `persistApproved failure: ${inspect(persistenceFailure, { depth: 8 })}`,
+          ).not.toHaveBeenCalledWith(
             "chat",
             expect.objectContaining({ runId, state: "error" }),
             expect.anything(),

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import "../test-helpers/load-styles.ts";
 
 afterEach(() => document.body.replaceChildren());
@@ -46,7 +47,10 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session row DOM iden
       gamma.createdAt = Date.now();
     }
     harness.publishList(next);
-    await sidebar.updateComplete;
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+    await settleLitElement(sidebar);
 
     const rowKeys = Array.from(sidebar.querySelectorAll("[data-session-tree]")).map((row) =>
       row.getAttribute("data-session-tree"),

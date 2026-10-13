@@ -209,7 +209,7 @@ describe("tool result ordering", () => {
     },
   );
 
-  it("captures sanitized trajectory pairs while tool-start delivery remains blocked", async () => {
+  it("captures faithful trajectory pairs while tool-start delivery remains blocked", async () => {
     const entered = createDeferred();
     const pending = createDeferred();
     const onBlockReplyFlush = vi.fn(() => {
@@ -227,9 +227,9 @@ describe("tool result ordering", () => {
       expect(recordEvent).toHaveBeenCalledExactlyOnceWith("tool.call", {
         toolCallId: "first-call",
         name: "exec",
-        args: { command: "printf fixture", apiKey: expect.any(String) },
+        args: { command: "printf fixture", apiKey },
       });
-      expect(JSON.stringify(recordEvent.mock.calls)).not.toContain(apiKey);
+      expect(JSON.stringify(recordEvent.mock.calls)).toContain(apiKey);
       await entered.promise;
       h.end("exec", "first-call", {
         content: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],

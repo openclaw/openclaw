@@ -365,51 +365,81 @@ describe("sessions view", () => {
 
   it("keeps session state visible and moves advanced controls into the filter popover", async () => {
     const container = document.createElement("div");
-    renderView(
-      buildMultiResult([]),
-      { activeMinutes: "120", limit: "200", includeGlobal: true },
-      container,
-    );
-    await Promise.resolve();
+    const onSearchChange = vi.fn();
+    document.body.append(container);
+    try {
+      renderView(
+        buildMultiResult([]),
+        {
+          activeMinutes: "120",
+          limit: "200",
+          includeGlobal: true,
+          searchQuery: "keep me",
+          onSearchChange,
+        },
+        container,
+      );
+      await Promise.resolve();
 
-    const toolbar = container.querySelector(".sessions-filter-bar");
-    const trigger = toolbar?.querySelector<HTMLButtonElement>(".sessions-filter-popover__trigger");
-    const popover = toolbar?.querySelector("wa-popover");
-    const panel = popover?.querySelector(".sessions-filter-popover__panel");
-    expect(toolbar?.getAttribute("role")).toBe("group");
-    expect(toolbar?.getAttribute("aria-label")).toBe("Session filters");
-    expect(toolbar?.querySelector(".sessions-view-segment")).not.toBeNull();
-    expect(trigger?.textContent?.trim()).toBe("");
-    expect(trigger?.getAttribute("aria-label")).toBe("Filters");
-    expect(trigger?.getAttribute("title")).toBe("Filters");
-    expect(trigger?.getAttribute("aria-haspopup")).toBe("dialog");
-    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
-    expect(panel?.querySelector(".session-filter-input--minutes")?.closest("label")).not.toBeNull();
-    expect(panel?.querySelector(".session-filter-input--limit")?.closest("label")).not.toBeNull();
-    expect(panel?.querySelector(".session-groupby__select")).not.toBeNull();
+      const toolbar = container.querySelector(".sessions-filter-bar");
+      const trigger = toolbar?.querySelector<HTMLButtonElement>(
+        ".sessions-filter-popover__trigger",
+      );
+      const popover = toolbar?.querySelector(".sessions-filter-popover");
+      const panel = popover?.querySelector(".sessions-filter-popover__panel");
+      expect(toolbar?.getAttribute("role")).toBe("group");
+      expect(toolbar?.getAttribute("aria-label")).toBe("Session filters");
+      expect(toolbar?.querySelector(".sessions-view-segment")).not.toBeNull();
+      expect(trigger?.textContent?.trim()).toBe("");
+      expect(trigger?.getAttribute("aria-label")).toBe("Filters");
+      expect(trigger?.getAttribute("title")).toBe("Filters");
+      expect(trigger?.getAttribute("aria-haspopup")).toBe("dialog");
+      expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+      expect(
+        panel?.querySelector(".session-filter-input--minutes")?.closest("label"),
+      ).not.toBeNull();
+      expect(panel?.querySelector(".session-filter-input--limit")?.closest("label")).not.toBeNull();
+      expect(panel?.querySelector(".session-groupby__select")).not.toBeNull();
 
-    const toggleGroup = panel?.querySelector(".session-filter-toggle-group");
-    expect(toggleGroup?.getAttribute("role")).toBe("group");
-    expect(toggleGroup?.getAttribute("aria-label")).toBe("Session source filters");
-    expect(toggleGroup?.querySelectorAll(".session-filter-check")).toHaveLength(2);
-    expect(
-      Array.from(toggleGroup?.querySelectorAll(".session-filter-check") ?? []).map((toggle) => [
-        toggle.querySelector("input")?.getAttribute("name"),
-        [...toggle.classList],
-      ]),
-    ).toEqual([
-      [
-        "includeGlobal",
-        ["session-filter-check", "session-filter-toggle", "session-filter-check--active"],
-      ],
-      ["includeUnknown", ["session-filter-check", "session-filter-toggle"]],
-    ]);
-    expect(toggleGroup?.querySelector(".session-filter-check__box")).toBeNull();
+      const toggleGroup = panel?.querySelector(".session-filter-toggle-group");
+      expect(toggleGroup?.getAttribute("role")).toBe("group");
+      expect(toggleGroup?.getAttribute("aria-label")).toBe("Session source filters");
+      expect(toggleGroup?.querySelectorAll(".session-filter-check")).toHaveLength(2);
+      expect(
+        Array.from(toggleGroup?.querySelectorAll(".session-filter-check") ?? []).map((toggle) => [
+          toggle.querySelector("input")?.getAttribute("name"),
+          [...toggle.classList],
+        ]),
+      ).toEqual([
+        [
+          "includeGlobal",
+          ["session-filter-check", "session-filter-toggle", "session-filter-check--active"],
+        ],
+        ["includeUnknown", ["session-filter-check", "session-filter-toggle"]],
+      ]);
+      expect(toggleGroup?.querySelector(".session-filter-check__box")).toBeNull();
 
-    popover?.dispatchEvent(new Event("wa-show"));
-    expect(trigger?.getAttribute("aria-expanded")).toBe("true");
-    popover?.dispatchEvent(new Event("wa-hide"));
-    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+      trigger?.click();
+      expect(popover?.matches(":popover-open")).toBe(true);
+      expect(document.activeElement).toBe(popover);
+      expect(trigger?.getAttribute("aria-expanded")).toBe("true");
+      const escape = new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      });
+      popover?.dispatchEvent(escape);
+      expect(escape.defaultPrevented).toBe(true);
+      expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+      expect(document.activeElement).toBe(trigger);
+      expect(
+        container.querySelector<HTMLInputElement>(".sessions-toolbar__search input")?.value,
+      ).toBe("keep me");
+      expect(onSearchChange).not.toHaveBeenCalled();
+    } finally {
+      disposeSessionView(container);
+      container.remove();
+    }
   });
 
   it("renders and patches provider-owned thinking ids", async () => {

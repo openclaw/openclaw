@@ -13,6 +13,7 @@ import {
 import { isConfiguredSessionStoreAgentId } from "../config/sessions/targets-configured-agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import type { SessionOperatorScope } from "../shared/session-method-scopes-base.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
@@ -22,6 +23,7 @@ import {
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
+import { readSessionSharingMemoryFacts } from "./session-sharing-incognito.js";
 import {
   hiddenSessionNotFound,
   resolveSessionSharingTarget,
@@ -36,6 +38,7 @@ import {
   resolveDirectSessionTargets,
   type SessionMutationTarget,
 } from "./session-sharing-target-input.js";
+import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import type { GatewaySessionStoreCache } from "./session-utils-store-lookup.js";
 
@@ -68,7 +71,7 @@ export function isSameSessionSharingTarget(
   );
 }
 
-/** Reuse admitted sharing facts; aliases, excluded rows, and incognito keep native custody. */
+/** Reuse admitted sharing facts; other targets retain their prepared storage custody. */
 export async function prepareSessionSharingRead(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -77,6 +80,9 @@ export async function prepareSessionSharingRead(params: {
   projection?: SessionSharingReadProjection;
 }) {
   try {
+    if (isIncognitoSessionKey(params.sessionKey)) {
+      return prepareSessionMutationFacts({ ...params, allowMissing: true });
+    }
     const { cfg, projection } = params;
     const query = { key: params.sessionKey, agentId: params.agentId };
     const resident = projection?.sharingTarget(query);
@@ -92,7 +98,6 @@ export async function prepareSessionSharingRead(params: {
       !params.preserveQualifiedAddress &&
       resident &&
       source?.path === resident.storePath &&
-      typeof source.databaseIdentity === "string" &&
       isConfiguredSessionStoreAgentId(cfg, resident.agentId) &&
       source.path === configuredSource.physicalPath
         ? { ...resident, readSource: source }
@@ -100,7 +105,7 @@ export async function prepareSessionSharingRead(params: {
     if (!captured || !projection) {
       return prepareSessionMutationFacts({ ...params, allowMissing: true });
     }
-    const assertRouting = captureSessionMutationRouting(cfg);
+    const assertRouting = captureSessionMutationRouting(cfg, undefined, [params]);
     // Capture before readiness yields so a replacement cannot become the selected session.
     while (projection.needsMembershipPreparation()) {
       await projection.prepareMembership();
@@ -171,11 +176,7 @@ export const readProjectedSessionMutationTarget = (
   }
   const readSource = projection.readSource({ ...query, storePath: state.target.storePath });
   // Legacy selectors and filesystem aliases retain the native candidate-selection contract.
-  if (
-    !readSource ||
-    readSource.path !== state.target.storePath ||
-    typeof readSource.databaseIdentity !== "string"
-  ) {
+  if (!readSource || readSource.path !== state.target.storePath) {
     return { status: "unavailable" };
   }
   assertExistingDatabaseIdentity(
@@ -215,6 +216,20 @@ export function readSessionMutationTarget(params: {
     return { error: input.error };
   }
   try {
+    if (isIncognitoSessionKey(params.targetRef.sessionKey)) {
+      const { agentId, canonicalKey } = resolveSessionStoreIdentity({
+        cfg: params.cfg,
+        ...params.targetRef,
+      });
+      const facts = readSessionSharingMemoryFacts({
+        agentId,
+        sessionKey: canonicalKey,
+        resolved: {
+          storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
+        },
+      });
+      return { target: facts?.target ?? null };
+    }
     const projection = getSessionRowProjection(params.context);
     const projected =
       projection && readProjectedSessionMutationTarget(params.targetRef, params.cfg, projection);

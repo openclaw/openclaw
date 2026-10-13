@@ -190,8 +190,8 @@ async function createLegacyAuditBackupSnapshotsOnce(params: {
       );
       const value: LegacyAuditRawCheckpoint = {
         ...previousCheckpoint,
-        dev: 0,
-        ino: 0,
+        dev: "0",
+        ino: "0",
         mtimeMs: 0,
         size: transformedPrefix.length,
         contentHash: createHash("sha256").update(transformedPrefix).digest("hex"),

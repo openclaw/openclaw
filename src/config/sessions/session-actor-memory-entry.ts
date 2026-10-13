@@ -1,10 +1,19 @@
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { clearSessionActorProgressCardForReset } from "../../session-cards/session-actor-progress-card-memory.js";
+import { shouldPreserveSessionCleanupEntry } from "./cleanup-service-read.policy.js";
+import type { ConversationRouteContext } from "./conversation-route-context.js";
+import { syncSessionActorMemoryConversations } from "./session-actor-memory-conversation.js";
 import type {
   SessionActorMemoryEntryCommand,
   SessionActorMemoryEntryQuery,
+  SessionActorMemoryMaintenance,
+  SessionActorMemoryEntryWrites,
 } from "./session-actor-memory-entry-contract.js";
+import { validateSessionActorMemoryEntryGuards } from "./session-actor-memory-entry-guards.js";
 import { installSessionActorMemoryEntry } from "./session-actor-memory-entry-install.js";
 import { createSessionActorMemoryEvents } from "./session-actor-memory-events.js";
+import { planMemoryLifecycleArtifacts } from "./session-actor-memory-lifecycle-artifacts.js";
 import type { SessionActorMemoryStorageContext } from "./session-actor-memory-storage-context.js";
 import { projectSessionEntryPatch } from "./session-entry-patch-operation.js";
 import {
@@ -13,6 +22,9 @@ import {
 } from "./session-entry-snapshot-values.js";
 import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import { buildSessionResetBoundaryEvent } from "./session-reset-boundary-event.js";
+import { planSessionEntryMaintenance } from "./store-maintenance-plan.js";
+import { resolveSessionMaintenancePreserveKeys } from "./store-maintenance-preserve-snapshot.js";
+import { countUnarchivedSessionEntries } from "./store-maintenance.js";
 import {
   createSessionTranscriptHeader,
   resolveResetBoundaryHeaderCwd,
@@ -29,30 +41,66 @@ export function readSessionActorMemoryEntryQuery(
   query: SessionActorMemoryEntryQuery,
 ) {
   switch (query.type) {
-    case "session.entry.read":
-      return (
-        context.state.hot.entry && projectEntry(context.state.hot.entry, query.input.projection)
-      );
+    case "session.lifecycle.artifacts":
+      return planMemoryLifecycleArtifacts(context, query.input);
+    case "session.entry.creation":
+      return {
+        existingEntry: context.state.hot.entry,
+        targetEntry: context.state.hot.entry,
+        labelInUse: Boolean(
+          query.input.label &&
+          [...context.entries()].some(
+            ([key, state]) =>
+              key !== context.state.hot.target.sessionKey &&
+              state.hot.entry?.label === query.input.label,
+          ),
+        ),
+      };
+    case "session.entry.read": {
+      const entry = query.input.sessionKey
+        ? context.get(query.input.sessionKey)?.hot.entry
+        : context.state.hot.entry;
+      return entry && projectEntry(entry, query.input.projection);
+    }
     case "session.entry.readById":
       for (const [sessionKey, state] of context.entries()) {
         const entry =
           state.hot.entry?.sessionId === query.input.sessionId
             ? state.hot.entry
-            : state.historicalWindows.get(query.input.sessionId)?.hot.entry;
+            : query.input.currentOnly
+              ? undefined
+              : state.historicalWindows.get(query.input.sessionId)?.hot.entry;
         if (entry) {
           context.get(sessionKey);
           return { sessionKey, entry: projectEntry(entry, query.input.projection) };
         }
       }
       return undefined;
-    case "session.entries.read":
+    case "session.entries.read": {
+      const selected = query.input.sessionKeys && new Set(query.input.sessionKeys);
       return [...context.entries()].flatMap(([sessionKey, state]) => {
         if (!state.hot.entry) {
+          return [];
+        }
+        if (
+          selected &&
+          !selected.has(sessionKey) &&
+          !(
+            query.input.includeSessionWindowOwner &&
+            (state.hot.entry.sessionId === query.input.includeSessionWindowOwner ||
+              state.historicalWindows.has(query.input.includeSessionWindowOwner))
+          ) &&
+          !(
+            query.input.includeLabelOwners &&
+            state.hot.entry.label === query.input.includeLabelOwners
+          )
+        ) {
           return [];
         }
         context.get(sessionKey);
         return [{ sessionKey, entry: projectEntry(state.hot.entry, query.input.projection) }];
       });
+    }
   }
   throw new Error("Unknown memory entry query");
 }
@@ -73,14 +121,101 @@ export function executeSessionActorMemoryEntryCommand(
 ) {
   const { state } = context;
   const sessionKey = state.hot.target.sessionKey;
-  const install = (key: string, entry: SessionEntry) => {
+  const install = (
+    key: string,
+    entry: SessionEntry,
+    options?: Parameters<typeof installSessionActorMemoryEntry>[2] & {
+      observeConversation?: boolean;
+      routeContext?: ConversationRouteContext | null;
+    },
+  ) => {
     const target = context.edit(key);
-    return installSessionActorMemoryEntry(target, entry);
+    const previous = target.hot.entry;
+    const installed = installSessionActorMemoryEntry(target, entry, options);
+    if (options?.observeConversation || options?.routeContext !== undefined) {
+      syncSessionActorMemoryConversations(
+        target,
+        context.editConversations(),
+        previous,
+        options.routeContext,
+        options.observeConversation,
+      );
+    }
+    return installed;
+  };
+  const maintain = (
+    maintenance: SessionActorMemoryMaintenance | undefined,
+    activeSessionKey?: string,
+  ) => {
+    if (maintenance && maintenance.config.mode !== "warn") {
+      const store: Record<string, SessionEntry> = {};
+      for (const [key, current] of context.entries()) {
+        if (current.hot.entry) {
+          store[key] = { ...current.hot.entry };
+        }
+      }
+      planSessionEntryMaintenance({
+        maintenance: maintenance.config,
+        initialUnarchivedCount: countUnarchivedSessionEntries(store),
+        readPreserveKeys: () =>
+          resolveSessionMaintenancePreserveKeys({
+            store,
+            snapshot: maintenance.preservation,
+            baseKeys: [activeSessionKey],
+          }),
+        readAgeCandidates: () => store,
+        readCapCandidates: () => ({ store, maxEntries: maintenance.config.maxEntries }),
+        onArchived: ({ key, entry: archived }) => {
+          install(key, archived);
+        },
+        onRemoved: ({ key }) => context.remove(key),
+      });
+    }
+  };
+  const replace = (
+    replacement: SessionActorMemoryEntryWrites["session.entry.replacements"]["input"]["replacements"][number],
+    consumePendingReset?: boolean,
+  ) => {
+    requireExpectedEntry(
+      context.get(replacement.sessionKey)?.hot.entry,
+      replacement.expected,
+      command.type,
+    );
+    if (!replacement.entry) {
+      context.remove(replacement.sessionKey);
+      return undefined;
+    }
+    const entry = install(
+      replacement.sessionKey,
+      {
+        ...replacement.entry,
+        ...(replacement.label === undefined ? {} : { label: replacement.label }),
+        ...(replacement.owner ? { owner: replacement.owner } : {}),
+      },
+      { routeContext: replacement.routeContext, consumePendingReset },
+    );
+    if (replacement.transcriptEvents) {
+      const target = context.edit(replacement.sessionKey);
+      const events = createSessionActorMemoryEvents({ ...context, state: target });
+      for (const event of replacement.transcriptEvents) {
+        events.writeEvent(event);
+      }
+    }
+    if (
+      replacement.label &&
+      [...context.entries()].some(
+        ([key, value]) =>
+          key !== replacement.sessionKey && value.hot.entry?.label === replacement.label,
+      )
+    ) {
+      throw new Error(`Session label already exists: ${replacement.label}`);
+    }
+    return entry;
   };
   switch (command.type) {
     case "session.entry.create": {
       const input = command.input;
-      requireExpectedEntry(state.hot.entry, undefined, command.type);
+      requireExpectedEntry(state.hot.entry, input.expected, command.type);
       const label = input.label ?? input.entry.label;
       if (
         label &&
@@ -88,24 +223,40 @@ export function executeSessionActorMemoryEntryCommand(
           ([key, value]) => key !== sessionKey && value.hot.entry?.label === label,
         )
       ) {
-        const error = new Error(`Session label already exists: ${label}`);
+        const error = new Error(`label already in use: ${label}`);
         error.name = "SessionLabelConflictError";
         throw error;
       }
-      install(sessionKey, {
-        ...input.entry,
-        ...(label !== undefined ? { label } : {}),
-        ...(input.owner ? { owner: input.owner } : {}),
-      });
+      install(
+        sessionKey,
+        {
+          ...input.entry,
+          ...(label !== undefined ? { label } : {}),
+          ...(input.owner ? { owner: input.owner } : {}),
+        },
+        { routeContext: input.routeContext },
+      );
       const events = createSessionActorMemoryEvents(context);
-      for (const event of input.transcriptEvents ?? [
-        createSessionTranscriptHeader({ sessionId: input.entry.sessionId, cwd: input.cwd }),
-      ]) {
+      for (const event of input.transcriptEvents ??
+        (state.events.length
+          ? []
+          : [
+              createSessionTranscriptHeader({ sessionId: input.entry.sessionId, cwd: input.cwd }),
+            ])) {
         events.writeEvent(event);
       }
       return state.hot.entry!;
     }
     case "session.entry.patch": {
+      if (command.input.prepareIf && !state.hot.entry?.liveModelSwitchPending) {
+        return undefined;
+      }
+      if (command.input.expected) {
+        requireExpectedEntry(state.hot.entry, command.input.expected.entry, command.type);
+      }
+      if (!validateSessionActorMemoryEntryGuards(context, command.input.guards)) {
+        return undefined;
+      }
       const writeBase = state.hot.entry ?? command.input.fallbackEntry;
       if (!writeBase) {
         return undefined;
@@ -116,41 +267,37 @@ export function executeSessionActorMemoryEntryCommand(
         sessionKey,
         operation: command.input.operation,
         preserveActivity: command.input.preserveActivity,
+        replaceEntry: command.input.replaceEntry,
       });
-      return next ? install(sessionKey, next) : state.hot.entry;
+      const entry = next ? install(sessionKey, next, command.input) : state.hot.entry;
+      maintain(command.input.maintenance, sessionKey);
+      return entry;
     }
     case "session.entry.replace": {
-      requireExpectedEntry(state.hot.entry, command.input.expected, command.type);
-      if (!command.input.entry) {
-        context.remove(sessionKey);
-        return undefined;
-      }
-      return install(sessionKey, command.input.entry);
+      return replace({ ...command.input, sessionKey });
     }
     case "session.entry.replacements": {
       const removedSessionKeys: string[] = [];
       const updatedSessionKeys: string[] = [];
       for (const replacement of command.input.replacements) {
-        const current = context.get(replacement.sessionKey);
-        requireExpectedEntry(current?.hot.entry, replacement.expected, command.type);
+        replace(replacement, command.input.consumePendingReset);
         if (replacement.entry) {
-          install(replacement.sessionKey, replacement.entry);
           updatedSessionKeys.push(replacement.sessionKey);
         } else {
-          context.remove(replacement.sessionKey);
           removedSessionKeys.push(replacement.sessionKey);
         }
       }
+      maintain(command.input.maintenance, command.input.maintenance?.activeSessionKey);
       return { removedSessionKeys, updatedSessionKeys };
     }
     case "session.lifecycle.reset": {
       const previousEntry = state.hot.entry;
       const input = command.input;
       requireExpectedEntry(previousEntry, input.expected, command.type);
-      const progressCardReset = Boolean(
+      const writeBoundary = Boolean(
         input.resetBoundary && previousEntry && !isDeepStrictEqual(previousEntry, input.nextEntry),
       );
-      if (progressCardReset && input.resetBoundary && previousEntry) {
+      if (writeBoundary && input.resetBoundary && previousEntry) {
         const events = createSessionActorMemoryEvents(context);
         if (!state.events.length) {
           events.writeEvent(
@@ -167,7 +314,18 @@ export function executeSessionActorMemoryEntryCommand(
           }),
         );
       }
-      const nextEntry = install(sessionKey, input.nextEntry);
+      const progressCardReset =
+        writeBoundary &&
+        input.resetBoundary?.context === "clear" &&
+        clearSessionActorProgressCardForReset(state);
+      const nextEntry = install(sessionKey, input.nextEntry, {
+        consumePendingReset: true,
+        observeConversation: true,
+        routeContext: input.routeContext,
+      });
+      for (const replacement of input.relatedReplacements ?? []) {
+        replace(replacement);
+      }
       return {
         archivedTranscripts: [],
         previousEntry,
@@ -198,14 +356,57 @@ export function executeSessionActorMemoryEntryCommand(
       };
     }
     case "session.lifecycle.reclaim": {
+      const countEntries = () =>
+        [...context.entries()].filter(([, value]) => value.hot.entry).length;
+      const beforeCount = countEntries();
       const removedSessionKeys: string[] = [];
+      const archivedSessionKeys: string[] = [];
+      const eligible =
+        command.input.artifacts &&
+        planMemoryLifecycleArtifacts(
+          context,
+          command.input.artifacts.input,
+          new Map(
+            command.input.entries.map((candidate) => [candidate.sessionKey, candidate.expected]),
+          ),
+        );
       for (const candidate of command.input.entries) {
-        if (isDeepStrictEqual(context.get(candidate.sessionKey)?.hot.entry, candidate.expected)) {
+        const current = context.get(candidate.sessionKey);
+        if (
+          candidate.requiresMissingTranscript &&
+          current?.hot.entry &&
+          (shouldPreserveSessionCleanupEntry(candidate.sessionKey, current.hot.entry) ||
+            current.events.some(({ event }) => isRecord(event) && event.type === "message"))
+        ) {
+          continue;
+        }
+        if (
+          eligible
+            ? eligible.entries.some((entry) => entry.sessionKey === candidate.sessionKey)
+            : isDeepStrictEqual(current?.hot.entry, candidate.expected)
+        ) {
           context.remove(candidate.sessionKey);
           removedSessionKeys.push(candidate.sessionKey);
         }
       }
-      return { removedSessionKeys };
+      for (const window of command.input.artifacts?.windows ?? []) {
+        if (
+          eligible?.windows.some(
+            (candidate) =>
+              candidate.sessionKey === window.sessionKey &&
+              candidate.sessionId === window.sessionId,
+          )
+        ) {
+          context.edit(window.sessionKey).historicalWindows.delete(window.sessionId);
+        }
+      }
+      for (const archive of command.input.archives ?? []) {
+        if (isDeepStrictEqual(context.get(archive.sessionKey)?.hot.entry, archive.expected)) {
+          install(archive.sessionKey, archive.entry);
+          archivedSessionKeys.push(archive.sessionKey);
+        }
+      }
+      return { removedSessionKeys, archivedSessionKeys, beforeCount, afterCount: countEntries() };
     }
   }
   throw new Error("Unknown memory entry command");

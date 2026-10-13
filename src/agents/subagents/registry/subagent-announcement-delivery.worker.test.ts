@@ -131,6 +131,8 @@ async function registerCompletion(
   await registerSubagentRun({
     runId,
     childSessionKey,
+    childAgentId: "main",
+    sessionEntry: { sessionId: `${runId}-session`, lifecycleRevision: "original-child" },
     requesterSessionKey: options.requesterSessionKey ?? "agent:main:main",
     requesterAgentId: "main",
     requesterDisplayKey: "main",
@@ -530,6 +532,8 @@ it("refuses an old registered wake after its descendant read outlives a successo
       expect(loadSubagentRegistryFromSqlite().get(run.runId)?.requesterSettleWake).toBeDefined();
       await registerSubagentRun({
         ...run,
+        childAgentId: "main",
+        sessionEntry: original.childSessionIdentity,
         requesterSessionKey: "agent:main:main",
         requesterAgentId: "main",
         requesterDisplayKey: "main",
@@ -643,6 +647,8 @@ it.for(["current", "successor", "revoked", "source switched"] as const)(
       if (change === "successor") {
         authorityChange = registerSubagentRun({
           ...run,
+          childAgentId: "main",
+          sessionEntry: original.childSessionIdentity,
           requesterSessionKey: "agent:main:main",
           requesterAgentId: "main",
           requesterDisplayKey: "main",

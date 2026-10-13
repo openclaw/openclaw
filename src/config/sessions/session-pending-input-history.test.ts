@@ -1,10 +1,11 @@
+import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import {
   observeHostDataSql,
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { MAX_PAYLOAD_BYTES } from "../../gateway/server-constants.js";
+import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import type {
   SqliteWorkerOperations,
@@ -25,9 +26,34 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   registerSessionPendingInputOwner,
   releaseSessionPendingInputOwner,
-  type SessionPendingInputOwner,
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { readPendingInputHistoryInDatabase } from "./session-pending-input-history.kernel.js";
+import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
+
+it("reuses the admitted physical owner for repeated pending history reads", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:prepared-pending-history",
+      sessionId: "prepared-pending-history",
+    };
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
+    writeSessionEntry(database, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
+    await listSessionPendingInputs(scope);
+    const stat = vi.spyOn(fs, "statSync");
+    const realpath = vi.spyOn(fs.realpathSync, "native");
+    try {
+      expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
+      expect(stat.mock.calls.filter(([pathname]) => pathname === database.path)).toHaveLength(0);
+      expect(realpath.mock.calls.filter(([pathname]) => pathname === database.path)).toHaveLength(
+        0,
+      );
+    } finally {
+      stat.mockRestore();
+      realpath.mockRestore();
+    }
+  });
+});
 
 it("serves empty pending history from its counted snapshot in one data read", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

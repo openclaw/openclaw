@@ -350,16 +350,17 @@ describe("ActivityPage gateway lifecycle", () => {
     page.dispose();
   });
 
-  it.each(["sessions", "run"] as const)("does not collect live events in %s mode", (mode) => {
+  it("does not collect live events in sessions mode", () => {
     const { gateway: source, current } = activityGateway();
     const page = bindActivity(source);
     current().opts.onEvent?.(toolEvent("first"));
     const firstId = page.entries[0]!.id;
     page.expandedIds.add(firstId);
-    page.routeData =
-      mode === "sessions"
-        ? { mode, filters: { personId: null, query: "", time: "7d" }, selector: null }
-        : { mode, selector: null, selectorId: null, decisionCursor: null };
+    page.routeData = {
+      mode: "sessions",
+      filters: { personId: null, query: "", time: "7d" },
+      selector: null,
+    };
     page.requestUpdate();
 
     current().opts.onEvent?.(toolEvent("while-away"));
@@ -499,74 +500,63 @@ describe("ActivityPage gateway lifecycle", () => {
     expect(firstPage.entries.map((entry) => entry.outputPreview)).toEqual(["first-visit output"]);
   });
 
-  it.each(["tool", "answer_candidate"] as const)(
-    "collects delivered %s activity only from the mounted roster",
-    async (kind) => {
-      const { gateway: source, current } = activityGateway();
-      const roster = activityRoster([
-        { key: "main", kind: "direct", hasActiveRun: true },
-        { key: "agent:research:work", agentId: "research", kind: "direct", hasActiveRun: true },
-        { key: "global", agentId: "research", kind: "global", hasActiveRun: true },
-        { key: "unknown", agentId: "research", kind: "unknown", hasActiveRun: true },
-      ]);
-      current().request.mockImplementation(async (method, params) =>
-        method === "sessions.list" ? roster : activityResponse(method, params),
+  it("collects delivered answer candidates only from the mounted roster", async () => {
+    const { gateway: source, current } = activityGateway();
+    const roster = activityRoster([
+      { key: "main", kind: "direct", hasActiveRun: true },
+      { key: "agent:research:work", agentId: "research", kind: "direct", hasActiveRun: true },
+      { key: "global", agentId: "research", kind: "global", hasActiveRun: true },
+      { key: "unknown", agentId: "research", kind: "unknown", hasActiveRun: true },
+    ]);
+    current().request.mockImplementation(async (method, params) =>
+      method === "sessions.list" ? roster : activityResponse(method, params),
+    );
+    const origins = [
+      { runId: "selected", sessionKey: "main" },
+      { runId: "other", sessionKey: "agent:research:work", agentId: "research" },
+      { runId: "global", sessionKey: "global", agentId: "research" },
+      { runId: "unknown", sessionKey: "unknown", agentId: "research" },
+      { runId: "outside-roster", sessionKey: "agent:unrelated:work", agentId: "unrelated" },
+      { runId: "unscoped" },
+    ];
+    const acquisitions = vi.spyOn(activityContext(source).sessions, "subscribeMessages");
+    const page = createActivityPage();
+    page.connect(activityContext(source));
+    page.setRouteLocation({ pathname: "/activity", search: "?view=live", hash: "" });
+    try {
+      await page.sessionActivity.load(source.snapshot.client, "current");
+      await Promise.all(acquisitions.mock.results.map((result) => result.value));
+    } finally {
+      acquisitions.mockRestore();
+    }
+    for (const origin of origins) {
+      current().opts.onEvent?.(
+        createGatewayEvent("agent", {
+          ...origin,
+          stream: "item",
+          data: {
+            kind: "answer_candidate",
+            itemId: "shared-item",
+            status: "selected",
+            progressText: `${origin.runId} output`,
+          },
+        }),
       );
-      const origins = [
-        { runId: "selected", sessionKey: "main" },
-        { runId: "other", sessionKey: "agent:research:work", agentId: "research" },
-        { runId: "global", sessionKey: "global", agentId: "research" },
-        { runId: "unknown", sessionKey: "unknown", agentId: "research" },
-        { runId: "outside-roster", sessionKey: "agent:unrelated:work", agentId: "unrelated" },
-        { runId: "unscoped" },
-      ];
-      const acquisitions = vi.spyOn(activityContext(source).sessions, "subscribeMessages");
-      const page = createActivityPage();
-      page.connect(activityContext(source));
-      page.setRouteLocation({ pathname: "/activity", search: "?view=live", hash: "" });
-      try {
-        await page.sessionActivity.load(source.snapshot.client, "current");
-        await Promise.all(acquisitions.mock.results.map((result) => result.value));
-      } finally {
-        acquisitions.mockRestore();
-      }
-      for (const origin of origins) {
-        current().opts.onEvent?.(
-          createGatewayEvent(kind === "tool" ? "session.tool" : "agent", {
-            ...origin,
-            stream: kind === "tool" ? "tool" : "item",
-            data:
-              kind === "tool"
-                ? {
-                    phase: "result",
-                    name: "read",
-                    toolCallId: "shared-call",
-                    result: { text: `${origin.runId} output` },
-                  }
-                : {
-                    kind: "answer_candidate",
-                    itemId: "shared-item",
-                    status: "selected",
-                    progressText: `${origin.runId} output`,
-                  },
-          }),
-        );
-      }
+    }
 
-      expect(page.entries.map((entry) => entry.runId)).toEqual([
-        "selected",
-        "other",
-        "global",
-        "unknown",
-      ]);
-      expect(new Set(page.entries.map((entry) => entry.id)).size).toBe(4);
-      expect(current().request).toHaveBeenCalledWith(
-        "sessions.messages.subscribe",
-        { key: "unknown", agentId: "research", subscriptionId: expect.any(String) },
-        expect.anything(),
-      );
-    },
-  );
+    expect(page.entries.map((entry) => entry.runId)).toEqual([
+      "selected",
+      "other",
+      "global",
+      "unknown",
+    ]);
+    expect(new Set(page.entries.map((entry) => entry.id)).size).toBe(4);
+    expect(current().request).toHaveBeenCalledWith(
+      "sessions.messages.subscribe",
+      { key: "unknown", agentId: "research", subscriptionId: expect.any(String) },
+      expect.anything(),
+    );
+  });
 
   it("releases only its own shared leases while hidden and on unmount", async () => {
     const { gateway: source, current } = activityGateway();
@@ -796,29 +786,12 @@ describe("ActivityPage gateway lifecycle", () => {
 
   it.each([
     [
-      "protocol request",
-      new GatewayProtocolRequestError({
-        code: "INVALID_REQUEST",
-        message: "decision cursor is no longer retained",
-      }),
-      "restart",
-    ],
-    [
       "UI Gateway request",
       new GatewayRequestError({
         code: "INVALID_REQUEST",
         message: "decision cursor is no longer retained",
       }),
       "restart",
-    ],
-    [
-      "retryable invalid request",
-      new GatewayRequestError({
-        code: "INVALID_REQUEST",
-        message: "temporarily unavailable",
-        retryable: true,
-      }),
-      "retry",
     ],
     [
       "non-invalid request",

@@ -409,7 +409,7 @@ export function createConfigWriteCoordinator({
       if (state.connected && state.client) {
         if (reconciliation.interrupted) {
           reconciliation.refreshInterrupted();
-        } else {
+        } else if (state.configSnapshot || state.configFormDirty || !state.bootstrapConfig) {
           void refreshDraft(state, refreshConnectionState, publish, appliedRefresh.reconcile);
         }
       }

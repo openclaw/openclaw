@@ -58,7 +58,7 @@ function resolveOriginTarget(
 
 describe("createDiscordNativeApprovalAdapter", () => {
   it("subscribes the native runtime to system-agent approval events", () => {
-    expect(getDiscordApprovalCapability().nativeRuntime?.eventKinds).toContain("system-agent");
+    expect(getDiscordApprovalCapability().nativeRuntimeAsync?.eventKinds).toContain("system-agent");
   });
 
   it("keeps approval availability enabled when approvers exist but native delivery is off", () => {
@@ -110,9 +110,9 @@ describe("createDiscordNativeApprovalAdapter", () => {
     });
   });
 
-  it("honors ownerAllowFrom fallback when gating approval requests", () => {
+  it("honors ownerAllowFrom fallback when gating approval requests", async () => {
     expect(
-      shouldHandleDiscordApprovalRequest({
+      await shouldHandleDiscordApprovalRequest({
         cfg: {
           commands: {
             ownerAllowFrom: ["discord:123"],

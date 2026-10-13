@@ -85,7 +85,8 @@ function applyThemePresentation(settings: UiPreferences, catalogTheme?: CatalogT
   applyChatFontSmoothing(typefaces.chat);
   syncCustomThemeStyleTag(catalogTheme?.palette ?? settings.customTheme);
   applyControlUiAccent(settings.accent);
-  syncControlUiSystemChrome();
+  // Custom palette CSS can change while the theme ID and inline styles stay the same.
+  syncControlUiSystemChrome(true);
 }
 
 function livePreferencesKey(settings: UiPreferences): string {

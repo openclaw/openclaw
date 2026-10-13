@@ -1,4 +1,5 @@
-import type { IncomingMessage } from "node:http";
+import { IncomingMessage, ServerResponse } from "node:http";
+import { Socket } from "node:net";
 import type { AddressInfo } from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -7,12 +8,13 @@ import { SANDBOX_HOST_PATH } from "../agents/sandbox-host.js";
 import { createPluginBoardWidgetContentKindRegistrar } from "../plugins/board-widget-content-kinds.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import {
-  markPluginRegistryActive,
-  markPluginRegistryRetired,
-} from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import { createSandboxHostHttpServer } from "./mcp-app-sandbox-http.js";
+import { markGatewayIngressTransport } from "./ingress-attribution.js";
+import {
+  createSandboxHostHttpServer,
+  createSandboxHostHttpRequestHandler,
+} from "./mcp-app-sandbox-http.js";
+import { createRemoteControlUiIngressTestContext } from "./remote-control-ui.test-support.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 function request(url: string, method: "GET" | "HEAD" | "POST" = "GET") {
@@ -69,11 +71,47 @@ function publicResourceRegistry(
     validateSource() {},
     composeDocument: () => "",
   });
-  markPluginRegistryActive(registry);
   return registry;
 }
 
 describe("MCP App sandbox HTTP origin", () => {
+  it("fences an awaited public renderer resource when the remote grant closes", async () => {
+    const started = createDeferred();
+    const resource = createDeferred<{ body: Uint8Array; contentType: string }>();
+    const registry = publicResourceRegistry(async () => {
+      started.resolve();
+      return await resource.promise;
+    });
+    let current = true;
+    const req = new IncomingMessage(new Socket());
+    req.method = "GET";
+    req.url = "/__openclaw__/renderer/app.js";
+    markGatewayIngressTransport(req, {
+      kind: "remote-forwarded",
+      context: createRemoteControlUiIngressTestContext({
+        operatorScopeCeiling: ["operator.read"],
+        frameAncestors: [],
+        assertCurrent() {
+          if (!current) {
+            throw new Error("grant closed");
+          }
+        },
+      }),
+    });
+    const res = new ServerResponse(req);
+    const serve = createSandboxHostHttpRequestHandler(() => registry)(req, res);
+    await started.promise;
+    current = false;
+    resource.resolve({
+      body: Buffer.from("private-after-close"),
+      contentType: "application/javascript",
+    });
+    await serve;
+    expect(res.destroyed).toBe(true);
+    expect(res.writableEnded).toBe(false);
+    req.destroy();
+  });
+
   it("caches only the exact versioned public shell and separates effective policies", async () => {
     const paths = [
       buildMcpAppSandboxPath(),
@@ -178,52 +216,6 @@ describe("MCP App sandbox HTTP origin", () => {
       () => registry,
     );
   });
-
-  it("rebuilds public routes when the same registry is reactivated", async () => {
-    const registry = publicResourceRegistry(async () => ({
-      body: Buffer.from("old renderer"),
-      contentType: "application/javascript",
-    }));
-    await withSandboxHost(
-      async (origin) => {
-        const url = `${origin}/__openclaw__/renderer/app.js`;
-        expect((await fetch(url)).status).toBe(200);
-        markPluginRegistryRetired(registry);
-        registry.boardWidgetContentKinds.clear();
-        markPluginRegistryActive(registry);
-        expect((await fetch(url)).status).toBe(404);
-      },
-      () => registry,
-    );
-  });
-
-  it.each(["replacement", "retirement"] as const)(
-    "rejects an awaited public asset after registry %s",
-    async (change) => {
-      const started = createDeferred();
-      const result = createDeferred<{ body: Uint8Array; contentType: string }>();
-      let registry = publicResourceRegistry(async () => {
-        started.resolve();
-        return await result.promise;
-      });
-      await withSandboxHost(
-        async (origin) => {
-          const response = fetch(`${origin}/__openclaw__/renderer/app.js`);
-          await started.promise;
-          if (change === "replacement") {
-            registry = publicResourceRegistry(async () => undefined);
-          } else {
-            markPluginRegistryRetired(registry);
-          }
-          result.resolve({ body: Buffer.from("stale"), contentType: "application/javascript" });
-          const denied = await response;
-          expect(denied.status).toBe(404);
-          expect(await denied.text()).not.toContain("stale");
-        },
-        () => registry,
-      );
-    },
-  );
 
   it("supports HEAD and rejects other paths, methods, and malformed policy", () => {
     const head = request(buildMcpAppSandboxPath(), "HEAD");

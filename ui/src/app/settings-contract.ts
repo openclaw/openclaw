@@ -123,6 +123,7 @@ export type UiSettings = {
   sidebarEntries: string[]; // Ordered personal navigation references
   sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
   chatMessageMaxWidth?: string; // Browser-local centered chat transcript max width
+  chatBubbleDisabledSessionKeys?: string[]; // Explicit per-session opt-outs, retained when the lab is off
   chatBubbleSessionKeys?: string[]; // Browser-local speech bubbles per canonical session, scoped to this Gateway
   showAdvancedSettings?: boolean; // Expand advanced schema settings (default false)
   pinnedAgentIds?: string[]; // Agents surfaced first in the agent-chip quick switcher

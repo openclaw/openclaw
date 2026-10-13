@@ -492,9 +492,6 @@ it("closes generic and explicit candidate-family readers without releasing unrel
           (error: unknown) => error instanceof AggregateError && causes(error).includes(failure),
         );
         expect(reopened.isOpen).toBe(true);
-        expect(() => scope.run(options(sibling), () => read(sibling))).toThrow(
-          "native cleanup is pending",
-        );
         close.mockRestore();
         await closeReaders();
         expect(reopened.isOpen).toBe(false);

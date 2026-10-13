@@ -23,6 +23,7 @@ import {
   OpenClawStateExternalOwnershipError,
   OpenClawStateOwnershipMetadataError,
 } from "../infra/sqlite-lifecycle-errors.js";
+import { deferSqliteSnapshotCleanupAfterRead } from "../infra/sqlite-readonly-location-cleanup.js";
 import {
   prepareSqliteReadOnlyLocationSyncInProcess,
   readSourceJournalMode,
@@ -299,6 +300,7 @@ export async function assertOpenClawStateWriteAllowedAtPath(options: {
     preserveSourceArtifacts: true,
     signal: options.signal,
   });
+  let readSucceeded = false;
   try {
     options.signal?.throwIfAborted();
     assertStateDatabaseAccessAllowed(databasePath);
@@ -311,8 +313,13 @@ export async function assertOpenClawStateWriteAllowedAtPath(options: {
       databasePath,
       env,
     );
+    readSucceeded = true;
   } finally {
-    await prepared.cleanupAsync();
+    await prepared.cleanupAsync().catch((error: unknown) => {
+      if (!readSucceeded || !deferSqliteSnapshotCleanupAfterRead(error, prepared.cleanupRoot)) {
+        throw error;
+      }
+    });
   }
 }
 

@@ -24,8 +24,10 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { resolveAgentDir } from "./agent-scope.js";
+import { refreshAuthProfileFileState } from "./auth-profiles/file-state.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import { loadPersistedAuthProfileStore } from "./auth-profiles/persisted.js";
+import { upsertAuthProfileAsync } from "./auth-profiles/profiles.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
@@ -43,7 +45,12 @@ import {
 } from "./auth-profiles/sqlite.test-support.js";
 import {
   ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
+  ensureAuthProfileStoreForLocalUpdateAsync,
   ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
+  findPersistedAuthProfileCredentialAsync,
+  loadAuthProfileStoreWithoutExternalProfilesAsync,
   loadAuthProfileStoreForRuntime,
   saveAuthProfileStore,
 } from "./auth-profiles/store-runtime.js";
@@ -77,6 +84,69 @@ describe("auth profile sqlite store", () => {
 
   afterEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();
+  });
+
+  it("refreshes async auth reads after concurrent profile writes without losing neighbors", async () => {
+    await withAgentDirEnv("openclaw-auth-async-upsert-", async (agentDir) => {
+      await upsertAuthProfileAsync({
+        agentDir,
+        profileId: "test:original",
+        credential: { type: "api_key", provider: "test", key: "original-key" },
+      });
+      const options = {
+        allowKeychainPrompt: false,
+        externalCli: { mode: "none" as const },
+      };
+      expect((await ensureAuthProfileStoreAsync(agentDir, options)).profiles).toHaveProperty(
+        "test:original",
+      );
+      expect(
+        (await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir, options)).profiles,
+      ).toHaveProperty("test:original");
+      await Promise.all([
+        upsertAuthProfileAsync({
+          agentDir,
+          profileId: "test:original",
+          credential: { type: "api_key", provider: "test", key: "replacement-key" },
+        }),
+        upsertAuthProfileAsync({
+          agentDir,
+          profileId: "test:neighbor",
+          credential: { type: "api_key", provider: "test", key: "neighbor-key" },
+        }),
+      ]);
+      const expected = {
+        "test:original": { type: "api_key", provider: "test", key: "replacement-key" },
+        "test:neighbor": { type: "api_key", provider: "test", key: "neighbor-key" },
+      };
+      expect((await ensureAuthProfileStoreAsync(agentDir, options)).profiles).toEqual(expected);
+      expect(
+        (await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir, options)).profiles,
+      ).toEqual(expected);
+      expect(
+        (await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir, options)).profiles,
+      ).toEqual(expected);
+      expect((await ensureAuthProfileStoreForLocalUpdateAsync(agentDir)).profiles).toEqual(
+        expected,
+      );
+      replaceRuntimeAuthProfileStoreSnapshots([
+        {
+          agentDir,
+          store: {
+            version: 1,
+            profiles: {
+              "test:original": { type: "api_key", provider: "shadow", key: "shadow-key" },
+            },
+          },
+        },
+      ]);
+      expect(
+        (await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir, options)).profiles,
+      ).toEqual(expected);
+      await expect(
+        findPersistedAuthProfileCredentialAsync({ agentDir, profileId: "test:original" }),
+      ).resolves.toEqual(expected["test:original"]);
+    });
   });
 
   it.each([true, false])(
@@ -346,32 +416,17 @@ describe("auth profile sqlite store", () => {
     });
   });
 
-  it("keeps serving SQLite credentials when a credential source appears during the read", async () => {
-    await withAgentDirEnv("openclaw-auth-sqlite-late-legacy-", (agentDir) => {
+  it("keeps serving SQLite credentials after observing a retired credential source", async () => {
+    await withAgentDirEnv("openclaw-auth-sqlite-late-legacy-", async (agentDir) => {
       saveAuthProfileStore(apiKeyStore("not-a-real"), agentDir);
       const legacyPath = path.join(agentDir, "auth.json");
-      const existsSync = fs.existsSync.bind(fs);
-      let legacyChecks = 0;
-      const existsSpy = vi.spyOn(fs, "existsSync").mockImplementation((pathname) => {
-        if (path.resolve(String(pathname)) === path.resolve(legacyPath)) {
-          legacyChecks += 1;
-          if (legacyChecks === 2) {
-            fs.writeFileSync(legacyPath, '{"openai":{"key":"not-a-real"}}\n', "utf8");
-            return true;
-          }
-          return false;
-        }
-        return existsSync(pathname);
-      });
-      try {
-        // The migrated store already owns these credentials, so a retired file
-        // appearing beside it is unarchived bytes rather than pending migration.
-        expect(
-          ensureAuthProfileStore(agentDir, { syncExternalCli: false }).profiles["openai:default"],
-        ).toMatchObject({ type: "api_key", provider: "openai", key: "not-a-real" });
-      } finally {
-        existsSpy.mockRestore();
-      }
+      ensureAuthProfileStore(agentDir, { syncExternalCli: false });
+      fs.writeFileSync(legacyPath, '{"openai":{"key":"not-a-real"}}\n', "utf8");
+      await refreshAuthProfileFileState();
+      // A migrated store still owns its credentials after a retired file reappears.
+      expect(
+        ensureAuthProfileStore(agentDir, { syncExternalCli: false }).profiles["openai:default"],
+      ).toMatchObject({ type: "api_key", provider: "openai", key: "not-a-real" });
       // Runtime never reads or removes it; Doctor still owns the archive step.
       expect(fs.existsSync(legacyPath)).toBe(true);
     });

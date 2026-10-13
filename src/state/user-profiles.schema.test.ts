@@ -27,13 +27,8 @@ import {
 import { getUserProfileListItem } from "./user-profile-list-item.test-support.js";
 import { readUserProfileIdentity, prepareUserProfileCatalog } from "./user-profile-list.js";
 import { setUserProfileRole } from "./user-profile-writes.worker.js";
-import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
-import {
-  ensureProfileForEmail,
-  getUserProfileDisplay,
-  getUserProfileRole,
-  resolveUserProfileId,
-} from "./user-profiles.js";
+import { ensureUserProfileRoleSchema, ensureUserProfilesSchema } from "./user-profiles-schema.js";
+import { ensureProfileForEmail, getUserProfileDisplay } from "./user-profiles.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
@@ -144,7 +139,7 @@ describe("user profile role schema", () => {
       });
       expect(readUserProfileSnapshotSync(options).profiles[0]).not.toHaveProperty("role");
       expect(tableHasColumn(database, "user_profiles", "role")).toBe(false);
-      expect(getUserProfileRole(profile.id, options)).toBeNull();
+      ensureUserProfileRoleSchema(options);
       expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(versionBefore);
       expect(database.prepare("PRAGMA table_info(user_profiles)").all()).toContainEqual(
         expect.objectContaining({
@@ -166,8 +161,7 @@ describe("user profile role schema", () => {
         .run("older-profile", 1, 1);
       closeOpenClawStateDatabaseForTest();
 
-      expect(getUserProfileRole(profile.id, options)).toBe("maintainer");
-      expect(getUserProfileRole("older-profile", options)).toBeNull();
+      expect(getUserProfileListItem("older-profile", options)).not.toHaveProperty("role");
       expect(getUserProfileListItem(profile.id, options)).toMatchObject({
         displayName: "Older Reader",
         role: "maintainer",
@@ -185,8 +179,9 @@ describe("user profile role schema", () => {
       const profile = ensureProfileForEmail("rollback@example.test", options);
       const assertRestored = () => {
         expect(tableHasColumn(database, "user_profiles", "role")).toBe(false);
-        expect(resolveUserProfileId(profile.id, options)).toBe(profile.id);
-        expect(getUserProfileListItem(profile.id, options)).not.toHaveProperty("role");
+        const stored = getUserProfileListItem(profile.id, options);
+        expect(stored.id).toBe(profile.id);
+        expect(stored).not.toHaveProperty("role");
         expect(readUserProfileSnapshotSync(options).profiles[0]).not.toHaveProperty("role");
       };
       const rollBackRole = () =>

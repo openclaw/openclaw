@@ -12,8 +12,10 @@ import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-ru
 import {
   isFastModeAutoProgressPayload,
   isReplyPayloadNonTerminalToolErrorWarning,
+  isReplyPayloadTerminalContent,
   resolveAskUserQuestionOptionIndices,
   resolveSendableOutboundReplyParts,
+  stripReplyPayloadResponsePrefix,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
@@ -357,6 +359,18 @@ async function deliverReplyWithNormalization(
     // Final delivery drains queued draft work so an earlier block cannot overtake it.
     await enqueueDraftEvent(turn, async () => {});
   }
+  if (info.kind === "final" && effectivePayload.isStatusNotice === true) {
+    // ACP identity notices finish dispatch but must not replace the answer preview.
+    await turn.materializeAnswerLaneBeforeRotation();
+    const result = await sendPayload(turn, effectivePayload, {
+      durable: true,
+      onPlatformSendDispatch: info.onPlatformSendDispatch,
+      assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
+      bindPendingFinalDelivery: info.bindPendingFinalDelivery,
+    });
+    await observeFinalDelivery(turn, result, effectivePayload.isError === true);
+    return toTelegramReplyDeliveryResult(turn, result.visibleReplySent, undefined, result);
+  }
   const isToolPayloadAfterFinal = info.kind === "tool" && turn.previewLifecycle.finalStarted;
   const isNonTerminalWarningAfterDeliveredFinal =
     isReplyPayloadNonTerminalToolErrorWarning(payload) && turn.previewLifecycle.finalDelivered;
@@ -441,6 +455,7 @@ async function deliverReplyWithNormalization(
     const skipTextOnlyBlock =
       turn.streamMode === "partial" &&
       info.kind === "block" &&
+      payload.textMode !== "delta" &&
       segment.lane === "answer" &&
       !hasMediaOrControls &&
       turn.answerLane.hasStreamedMessage &&
@@ -456,7 +471,13 @@ async function deliverReplyWithNormalization(
     if (skipTextOnlyBlock || suppressProgressAnswerBlock) {
       turn.activeAnswerBlockDelivery = {
         payload: effectivePayload,
-        text: segment.text,
+        text:
+          payload.textMode === "delta"
+            ? (turn.activeAnswerBlockDelivery?.text ?? "") +
+              (turn.activeAnswerBlockDelivery?.text
+                ? stripReplyPayloadResponsePrefix(effectivePayload, segment.text)
+                : segment.text)
+            : segment.text,
         buttons: telegramButtons,
       };
       turn.activeAnswerDraftIsToolProgressOnly = false;
@@ -481,6 +502,28 @@ async function deliverReplyWithNormalization(
       turn.progressCompositor.resetActivity();
     }
     const isAskUserPayload = effectivePayload.channelData?.askUser !== undefined;
+    // Only declared chunks extend a preview. Finals, media and replacement snapshots
+    // keep their own text even when they do not share the previous answer prefix.
+    const canStreamBlock =
+      info.kind === "block" &&
+      segment.lane === "answer" &&
+      Boolean(turn.answerLane.stream) &&
+      !hasMediaOrControls &&
+      !effectivePayload.isError &&
+      !effectivePayload.presentation &&
+      !effectivePayload.interactive &&
+      !isAskUserPayload &&
+      isReplyPayloadTerminalContent(effectivePayload);
+    const segmentText =
+      canStreamBlock && effectivePayload.textMode === "delta"
+        ? turn.lastAnswerPartialText +
+          (turn.lastAnswerPartialText
+            ? stripReplyPayloadResponsePrefix(effectivePayload, segment.text)
+            : segment.text)
+        : segment.text;
+    if (canStreamBlock) {
+      turn.lastAnswerPartialText = segmentText;
+    }
     const result =
       segment.lane === "answer" && info.kind === "final"
         ? await deliverFinalAnswerText(
@@ -494,7 +537,7 @@ async function deliverReplyWithNormalization(
           )
         : await turn.deliverLaneText({
             laneName: segment.lane,
-            text: segment.text,
+            text: segmentText,
             payload: lanePayload,
             infoKind: info.kind,
             buttons: telegramButtons,
@@ -520,7 +563,7 @@ async function deliverReplyWithNormalization(
     if (segment.lane === "answer" && info.kind === "block" && result.kind === "preview-updated") {
       turn.activeAnswerBlockDelivery = {
         payload: lanePayload,
-        text: segment.text,
+        text: segmentText,
         buttons: telegramButtons,
       };
     }

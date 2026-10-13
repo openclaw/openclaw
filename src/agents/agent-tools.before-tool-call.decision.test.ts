@@ -4,6 +4,7 @@ import { configureExecutionDecisionWorkSink } from "../audit/execution-decision-
 import type { ExecutionDecisionWork } from "../audit/execution-decision-work.types.js";
 import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { configureRuntimeActionDecisionSink } from "../audit/runtime-action-decision.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -117,11 +118,13 @@ async function captureDecisions(run: () => Promise<unknown>) {
 
 describe("generic tool action decision receipts", () => {
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     resetGlobalHookRunner();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
     resetGlobalHookRunner();
     setActivePluginRegistry(createEmptyPluginRegistry());
     vi.restoreAllMocks();

@@ -11,7 +11,6 @@ import type {
 import {
   SqliteWorkerError,
   type SqliteWorkerOperations,
-  type SqliteWorkerEphemeralTarget,
   type SqliteWorkerStore,
 } from "./sqlite-worker-contract.js";
 import {
@@ -19,7 +18,6 @@ import {
   type SqliteWorkerAdmissionFactory,
   type SqliteWorkerAdmissionRequest,
 } from "./sqlite-worker-operation-admission.js";
-import type { SqliteWorkerRuntimePreparation } from "./sqlite-worker-runtime-preparation.types.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
 function withCallerErrors<T>(result: Promise<T>): Promise<T> {
@@ -76,17 +74,8 @@ function resolveSqliteWorkerBroker() {
     Symbol.for("openclaw.sqliteWorkerBroker"),
     () => new SqliteWorkerBroker(),
     (broker) => withCallerErrors(broker.close()),
+    "shared-state",
   );
-}
-
-/** Preload code for one post-drain shared-state opening without admitting native storage. */
-export function prepareSharedStateSqliteWorkerRuntime(
-  source: Pick<SqliteWorkerStoreOptions, "moduleUrl" | "runtimeGeneration">,
-): SqliteWorkerRuntimePreparation | undefined {
-  if (!isMainThread) {
-    return undefined;
-  }
-  return resolveSqliteWorkerBroker().prepareRuntime(source);
 }
 
 export type { SqliteWorkerInputPreparation } from "./sqlite-worker-broker.types.js";
@@ -101,7 +90,7 @@ export function reserveSqliteWorkerInputPreparation(
 
 /**
  * Retain an admitted writer through native settlement. Backends request authority
- * after BEGIN and again immediately before COMMIT; the host never joins a native
+ * before BEGIN and again immediately before COMMIT; the host never joins a native
  * writer lock. A successful commit grant linearizes against subsequent revocation.
  */
 export function runSqliteWorkerStoreWrite<Operations extends SqliteWorkerOperations, T>(
@@ -174,25 +163,17 @@ export function closeUnclaimedSharedStateSqliteWorkers(databasePath: string): Pr
 }
 
 export function openSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
-  options: SqliteWorkerStoreOptions & { existingOnly: true; target?: never },
+  options: SqliteWorkerStoreOptions & { existingOnly: true },
 ): Promise<SqliteWorkerStore<Operations> | undefined>;
 export function openSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
-  options: SqliteWorkerStoreOptions & { existingOnly?: false; target?: never },
+  options: SqliteWorkerStoreOptions & { existingOnly?: false },
 ): Promise<SqliteWorkerStore<Operations>>;
 export function openSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
-  options: SqliteWorkerStoreOptions & { target?: never },
+  options: SqliteWorkerStoreOptions,
 ): Promise<SqliteWorkerStore<Operations> | undefined>;
 export function openSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
-  options: SqliteWorkerStoreOptions & { target?: never },
+  options: SqliteWorkerStoreOptions,
 ): Promise<SqliteWorkerStore<Operations> | undefined> {
-  if (options.target) {
-    return Promise.reject(
-      new SqliteWorkerError(
-        "Ephemeral SQLite stores require their agent execution owner",
-        "closed",
-      ),
-    );
-  }
   if (!isMainThread) {
     return Promise.reject(
       new SqliteWorkerError(
@@ -235,35 +216,6 @@ export function openAgentDatabaseSqliteWorkerStore<Operations extends SqliteWork
         onNativeStopped: custody.onNativeStopped,
         signal: custody.signal,
       },
-    ),
-  );
-}
-
-/** Inactive incognito foundation: its execution owner pins the client until explicit disposal. */
-export function openEphemeralAgentDatabaseSqliteWorkerStore<
-  Operations extends SqliteWorkerOperations,
->(
-  options: SqliteWorkerStoreOptions & { target: SqliteWorkerEphemeralTarget },
-  custody: {
-    assertCurrent(): void;
-    createAdmission: SqliteWorkerAdmissionFactory;
-    onNativeLost?: SqliteWorkerOpenCustody["onNativeLost"];
-    onNativeStopped?: SqliteWorkerOpenCustody["onNativeStopped"];
-    signal?: AbortSignal;
-  },
-): Promise<SqliteWorkerStore<Operations> | undefined> {
-  if (!isMainThread) {
-    return Promise.reject(
-      new SqliteWorkerError("Ephemeral agent admission requires its host owner", "unavailable"),
-    );
-  }
-  custody.assertCurrent();
-  return withCallerErrors(
-    resolveSqliteWorkerBroker().open<Operations>(
-      options,
-      undefined,
-      () => custody.assertCurrent(),
-      custody,
     ),
   );
 }

@@ -5,6 +5,13 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  bindAuthProfileFileObservationReaders,
+  readAuthProfileDatabaseIdentity,
+  refreshAuthProfileFileState,
+  registerAuthProfileFileChangeListener,
+} from "../agents/auth-profiles/file-state.js";
+import { watchAuthProfileNativeCommits } from "../agents/auth-profiles/store-update-commit.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { createScheduledGatewayRunner } from "../gateway/scheduled-run-gateway-context.js";
 import { GatewayConnectionWork } from "../gateway/server-connection-work.js";
@@ -14,13 +21,17 @@ import { createSpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { SpawnBrokerError } from "../process/spawn-broker/protocol.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import { revokeAgentDatabaseResources } from "../state/openclaw-agent-db-resources.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import {
   createSqliteReadOnlyWorkerScope,
   runSqliteReadOnlyWorker,
   withSqliteReadOnlyWorkerScope,
 } from "./sqlite-readonly-worker.js";
+import { admitSqliteSchema } from "./sqlite-schema-facts.js";
 import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -34,6 +45,83 @@ afterEach(() => {
   vi.mocked(spawn).mockReset();
 });
 const skipBroker = process.platform === "win32";
+
+it.skipIf(skipBroker)(
+  "reuses the Gateway reader through detached observations and retained-state restart",
+  async () => {
+    vi.spyOn(fs, "watch").mockImplementation(() => {
+      throw new Error("synthetic unavailable watcher");
+    });
+    const { source, store } = createAuthDatabase();
+    const writer = openNodeSqliteDatabase(source);
+    admitSqliteSchema(writer);
+    const broker = createSpawnBrokerHost();
+    const scope = createSqliteReadOnlyWorkerScope();
+    const restartedScope = createSqliteReadOnlyWorkerScope();
+    let publication: ReturnType<typeof watchAuthProfileNativeCommits> | undefined;
+    let pendingRefresh: Promise<void> | undefined;
+    const observed: unknown[] = [];
+    let refresh = () => read(source, "canonical");
+    const unsubscribe = registerAuthProfileFileChangeListener(async ({ directory }) => {
+      if (directory !== path.dirname(source)) {
+        return;
+      }
+      const rows = await refresh();
+      observed.push(rows.store);
+      // Credential publication can replace the observation's refresh callback.
+      refresh = () => read(source, "canonical");
+    });
+    try {
+      await broker.ready();
+      const brokerSpawn = vi.spyOn(broker, "spawn");
+      vi.mocked(spawn).mockClear();
+      runWithSpawnBroker(broker, () => scope.run(() => readAuthProfileDatabaseIdentity(source)));
+      writer
+        .prepare("UPDATE auth_profile_state SET state_json = ?")
+        .run('{"lastGood":{"fixture":"fixture-next"}}');
+      await runInDetachedAsyncContext(refreshAuthProfileFileState);
+      const rotated = { ...store, profiles: {} };
+      writer.prepare("UPDATE auth_profile_store SET store_json = ?").run(JSON.stringify(rotated));
+      await runInDetachedAsyncContext(refreshAuthProfileFileState);
+      clearAuthState(source);
+      await runInDetachedAsyncContext(refreshAuthProfileFileState);
+      expect(observed).toEqual([
+        { status: "readable", raw: store },
+        { status: "readable", raw: rotated },
+        { status: "readable", raw: rotated },
+      ]);
+      expect(brokerSpawn).toHaveBeenCalledTimes(1);
+      expect(spawn).not.toHaveBeenCalled();
+      publication = watchAuthProfileNativeCommits(source);
+      pendingRefresh = runInDetachedAsyncContext(refreshAuthProfileFileState);
+      await scope.close();
+      expect(brokerSpawn.mock.results[0]?.value.exitCode).toBe(0);
+      expect(observed).toHaveLength(3);
+      runWithSpawnBroker(broker, () => restartedScope.run(bindAuthProfileFileObservationReaders));
+      writer.prepare("UPDATE auth_profile_store SET store_json = ?").run(JSON.stringify(store));
+      publication.dispose();
+      await pendingRefresh;
+      expect(observed).toHaveLength(4);
+      expect(observed[3]).toEqual({ status: "readable", raw: store });
+      expect(brokerSpawn).toHaveBeenCalledTimes(2);
+      expect(spawn).not.toHaveBeenCalled();
+      await restartedScope.close();
+      expect(brokerSpawn.mock.results[1]?.value.exitCode).toBe(0);
+      clearAuthState(source);
+      await runInDetachedAsyncContext(refreshAuthProfileFileState);
+      expect(observed).toHaveLength(4);
+    } finally {
+      publication?.dispose();
+      await Promise.allSettled(pendingRefresh ? [pendingRefresh] : []);
+      unsubscribe();
+      await closeOpenClawStateDatabaseAsync();
+      await scope.close();
+      await restartedScope.close();
+      await broker.close();
+      writer.close();
+    }
+  },
+);
 
 function createAuthDatabase(key = "synthetic", metadata?: Record<string, string>) {
   const source = path.join(tempDirs.make("openclaw-auth-transport-"), "source.sqlite");
@@ -108,6 +196,8 @@ describe.each([
     "serializes fresh auth reads in one scoped child and joins it on close",
     async () => {
       const { source, store, rows: expectedRows } = createAuthDatabase();
+      const writer = openNodeSqliteDatabase(source);
+      admitSqliteSchema(writer);
       const broker = transport.broker ? createSpawnBrokerHost() : undefined;
       try {
         await broker?.ready();
@@ -119,7 +209,7 @@ describe.each([
               Array.from({ length: 4 }, () => read(source, transport.sourceKind)),
             );
             expect(rows).toEqual(Array.from({ length: 4 }, () => expectedRows));
-            clearAuthState(source);
+            writer.prepare("UPDATE auth_profile_state SET state_json = ?").run('{"lastGood":{}}');
             expect((await read(source, transport.sourceKind)).state).toEqual({
               status: "readable",
               raw: { lastGood: {} },
@@ -143,6 +233,17 @@ describe.each([
             } finally {
               await connection.drain();
             }
+            writer.exec("DROP TABLE auth_profile_state");
+            expect((await read(source, transport.sourceKind)).state).toEqual({
+              status: "missing",
+              reason: "table",
+            });
+            writer.exec(`PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`);
+            expect(await read(source, transport.sourceKind)).toEqual({
+              store: { status: "unreadable" },
+              state: { status: "unreadable" },
+              cacheable: false,
+            });
             const child =
               transport.label === "broker"
                 ? brokerSpawn?.mock.results[0]?.value
@@ -155,6 +256,7 @@ describe.each([
         expect(spawning.mock.results[0]?.value.exitCode).toBe(0);
         expect(spawning.mock.results[0]?.value.connected).toBe(false);
       } finally {
+        writer.close();
         await broker?.close();
       }
     },
@@ -284,6 +386,20 @@ it("closes a scoped auth child before rejecting queued reads on shutdown", async
   } finally {
     await scope.close();
   }
+});
+
+it("joins the retained auth reader before agent database removal", async () => {
+  const { source } = createAuthDatabase();
+  await withSqliteReadOnlyWorkerScope(async () => {
+    await read(source, "canonical");
+    const child = vi.mocked(spawn).mock.results.at(-1)?.value;
+    expect(child).toBeDefined();
+    expect(child?.exitCode).toBeNull();
+    await Promise.all(revokeAgentDatabaseResources({ path: source }));
+    expect(child?.exitCode ?? child?.signalCode).not.toBeNull();
+    fs.unlinkSync(source);
+    expect(fs.existsSync(source)).toBe(false);
+  });
 });
 
 it("captures queued auth launch facts before FIFO admission", async () => {

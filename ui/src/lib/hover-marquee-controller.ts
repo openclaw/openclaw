@@ -1,11 +1,10 @@
+import { cancelLayout, scheduleLayout } from "./layout-frame.ts";
+
 const MARQUEE_SPEED_PX_PER_SEC = 40;
 const MARQUEE_HOVER_DELAY_MS = 500;
 const MARQUEE_LOOP_TRAVEL_FRACTION = 0.4;
 
 export type MarqueeOptions = { delay?: number; speed?: number; loop?: boolean };
-
-const pendingMarquees = new Set<() => (() => void) | undefined>();
-let marqueeFrame: number | undefined;
 
 export class HoverMarqueeController {
   private connected = true;
@@ -45,11 +44,7 @@ export class HoverMarqueeController {
 
   disconnect() {
     this.connected = false;
-    pendingMarquees.delete(this.measure);
-    if (pendingMarquees.size === 0 && marqueeFrame !== undefined) {
-      cancelAnimationFrame(marqueeFrame);
-      marqueeFrame = undefined;
-    }
+    cancelLayout(this);
     this.stop();
     for (const key of ["observer", "contentObserver", "visibilityObserver"] as const) {
       this[key]?.disconnect();
@@ -67,20 +62,7 @@ export class HoverMarqueeController {
     if (!this.connected) {
       return;
     }
-    pendingMarquees.add(this.measure);
-    if (marqueeFrame !== undefined) {
-      return;
-    }
-    // Rendering commits the label children and hover controls before measurement.
-    marqueeFrame = requestAnimationFrame(() => {
-      marqueeFrame = undefined;
-      const batch = [...pendingMarquees];
-      pendingMarquees.clear();
-      // A sidebar can invalidate hundreds of titles together. Finish every
-      // geometry read before applying any title's overflow or animation styles.
-      const updates = batch.map((measure) => measure());
-      updates.forEach((update) => update?.());
-    });
+    scheduleLayout(this, this.measure);
   };
 
   private readonly measure = () => {

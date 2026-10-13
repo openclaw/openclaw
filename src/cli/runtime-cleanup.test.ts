@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { registerSessionResourceCleanup } from "../../packages/ai/src/session-resources.js";
 import type { AgentHarness } from "../agents/harness/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -130,4 +131,18 @@ it("stops scheduling and joins admitted callbacks before dependent CLI resources
 it("leaves watcher retirement to an embedded caller without process ownership", async () => {
   await closeCliResources();
   expect(skillsClosed).not.toHaveBeenCalled();
+});
+
+it("retires provider session resources after a one-shot command", async () => {
+  const expired = vi.fn();
+  const retainedSocketTimer = setTimeout(expired, 60_000);
+  const unregister = registerSessionResourceCleanup(() => clearTimeout(retainedSocketTimer));
+  try {
+    await closeCliResources();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(expired).not.toHaveBeenCalled();
+  } finally {
+    unregister();
+    clearTimeout(retainedSocketTimer);
+  }
 });

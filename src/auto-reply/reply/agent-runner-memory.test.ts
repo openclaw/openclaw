@@ -30,6 +30,10 @@ import { withSessionCompactionPersistenceAsync } from "../../agents/sessions/ses
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
 import { ZERO_USAGE_FIXTURE } from "../../agents/test-helpers/usage-fixtures.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
   appendTranscriptEvent,
@@ -134,10 +138,9 @@ type MemoryFlushTestParams = Parameters<typeof runMemoryFlushIfNeededRaw>[0] & {
 
 async function runMemoryFlushIfNeeded(params: MemoryFlushTestParams) {
   const { modelContextTokens, ...runParams } = params;
-  return await runMemoryFlushIfNeededRaw({
-    ...runParams,
-    cfg: withTestModelContextTokens({ ...runParams, contextTokens: modelContextTokens }),
-  });
+  const cfg = withTestModelContextTokens({ ...runParams, contextTokens: modelContextTokens });
+  setRuntimeConfigSnapshot(cfg);
+  return await runMemoryFlushIfNeededRaw({ ...runParams, cfg });
 }
 
 type PreflightCompactionTestParams = Parameters<typeof runSessionCompactionIfNeededRaw>[0] & {
@@ -146,10 +149,9 @@ type PreflightCompactionTestParams = Parameters<typeof runSessionCompactionIfNee
 
 async function runSessionCompactionIfNeeded(params: PreflightCompactionTestParams) {
   const { modelContextTokens, ...runParams } = params;
-  return await runSessionCompactionIfNeededRaw({
-    ...runParams,
-    cfg: withTestModelContextTokens({ ...runParams, contextTokens: modelContextTokens }),
-  });
+  const cfg = withTestModelContextTokens({ ...runParams, contextTokens: modelContextTokens });
+  setRuntimeConfigSnapshot(cfg);
+  return await runSessionCompactionIfNeededRaw({ ...runParams, cfg });
 }
 
 function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
@@ -436,6 +438,7 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   afterEach(async () => {
+    clearRuntimeConfigSnapshot();
     cliBackendsTesting.resetDepsForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
     clearMemoryPluginState();

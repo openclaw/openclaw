@@ -60,7 +60,6 @@ async function withCatalog(
   const fixture = await createCatalog(restricted);
   try {
     await state.writeConfig(fixture.config);
-    setRuntimeConfigSnapshot(fixture.config);
     await run(fixture);
   } finally {
     vi.restoreAllMocks();
@@ -89,6 +88,7 @@ async function createCatalog(restricted: boolean) {
         }
       : {}),
   };
+  setRuntimeConfigSnapshot(config);
   const id = ++nextCatalog;
   const client = createSessionMutationTestClient(
     ensureProfileForEmail("catalog-import@example.test").id,

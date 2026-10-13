@@ -4,6 +4,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../agents/sessions/session-manager.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { encodeSessionArchiveContent } from "../config/sessions/archive-compression.js";
 import {
   formatSqliteSessionFileMarker,
@@ -146,11 +150,16 @@ describe("usage archive identity", () => {
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "usage-archive-identity" });
     await state.writeConfig(config);
+    setRuntimeConfigSnapshot(config);
   });
 
   afterEach(async () => {
     vi.restoreAllMocks();
-    await state.cleanup();
+    try {
+      await state.cleanup();
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
   });
 
   it("uses explicit usage artifacts and validates canonical targets in the worker", async () => {
@@ -258,6 +267,7 @@ describe("usage archive identity", () => {
       session: { store: storePath },
     };
     await state.writeConfig(scopedConfig);
+    setRuntimeConfigSnapshot(scopedConfig);
     const fixtures = [
       { agentId: "main", sessionId: "main-usage", tokens: 17 },
       { agentId: "ops", sessionId: `usage-${"x".repeat(300)}`, tokens: 29 },

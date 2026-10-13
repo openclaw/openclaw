@@ -7,8 +7,8 @@ import {
 } from "../agents/tools/gateway-caller-context.js";
 import { getInProcessGatewayToolContext } from "../agents/tools/in-process-gateway.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { refreshCronScheduler } from "../cron/service/scheduler-actor.js";
 import type { CronServiceState } from "../cron/service/state.js";
-import { armTimer } from "../cron/service/timer.js";
 import type { CronJobCreate } from "../cron/types.js";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import {
@@ -142,7 +142,7 @@ export function registerGatewayCronContextTests({
                   isWebchatConnect: () => false,
                 } as never,
                 () => {
-                  armTimer(cronState);
+                  refreshCronScheduler(cronState);
                   return {
                     run: AsyncLocalStorage.snapshot(),
                     assertCurrent: captureGatewayToolCallerAssertion(),

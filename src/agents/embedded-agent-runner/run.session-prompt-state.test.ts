@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -146,6 +147,7 @@ describe("embedded run session prompt state", () => {
         env: { OPENCLAW_EXEC_SHELL_SNAPSHOT: "0" },
       },
       async (fixture) => {
+        setRuntimeConfigSnapshot({});
         const target = {
           agentId: "main",
           sessionId: randomUUID(),

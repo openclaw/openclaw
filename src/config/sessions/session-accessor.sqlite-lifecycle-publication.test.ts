@@ -17,11 +17,11 @@ import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-
 import {
   isPreparedSessionSharingChange,
   projectSessionSharingEntry,
-  readCommittedSessionEntryCache,
   readSessionEntryCache,
   retainPreparedSessionGenerationFacts,
   retainPreparedSessionSharingFacts,
 } from "./session-accessor.sqlite-entry-cache.js";
+import { readCommittedSessionEntryCache } from "./session-accessor.sqlite-entry-cache.test-support.js";
 import {
   loadSessionEntry,
   loadSessionEntryReadOnly,
@@ -35,7 +35,7 @@ import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamati
 import { resolveSessionReclamationDatabaseOptions } from "./session-accessor.sqlite-reclamation.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
-import { loadTranscriptEvents } from "./session-transcript-events.js";
+import { loadSessionTranscriptEvents as loadTranscriptEvents } from "./session-transcript-events.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "./session-transcript-reconcile.js";
 
 const failures = vi.hoisted(() => ({
@@ -129,7 +129,6 @@ it("publishes history changes only after deletion while fresh reads observe sibl
   const completed: boolean[] = [];
   const reclaim = () =>
     runSqliteSessionReclamation({
-      forceInProcess: false,
       plan,
       onWorkerResult(result) {
         if (result.kind === "history-eviction") {

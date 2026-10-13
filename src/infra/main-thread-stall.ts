@@ -1,5 +1,6 @@
 import { AsyncLocalStorage, createHook } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 const STALL_MS = 1_000;
@@ -7,22 +8,38 @@ const MAX_PENDING_STALLS = 8;
 
 type Stall = { elapsedMs: number; task: string; taskMs: number };
 type TaskObserver = { enter(name: string): () => void; stop(): void };
-type MainThreadTaskState = { context: AsyncLocalStorage<string>; observer?: TaskObserver };
+type TaskScope = { name: string; active: boolean };
+type MainThreadTaskState = { context: AsyncLocalStorage<TaskScope>; observer?: TaskObserver };
 
 const taskState = resolveGlobalSingleton<MainThreadTaskState>(
   Symbol.for("openclaw.mainThreadTask"),
-  () => ({ context: new AsyncLocalStorage<string>() }),
+  () => ({ context: new AsyncLocalStorage<TaskScope>() }),
 );
 
 /** Name code-owned work only; request text, paths, and identifiers do not belong in labels. */
-export function runWithMainThreadTask<T>(name: string, run: () => T): T {
+export function runWithMainThreadTask<T>(name: string, run: () => Promise<T>): Promise<T>;
+export function runWithMainThreadTask<T>(name: string, run: () => T): T;
+export function runWithMainThreadTask(name: string, run: () => unknown): unknown {
   const observer = taskState.observer;
   if (!observer) {
     return run();
   }
   const exit = observer.enter(name);
+  const scope: TaskScope = { name, active: true };
+  const finish = () => {
+    scope.active = false;
+  };
   try {
-    return taskState.context.run(name, run);
+    const result = taskState.context.run(scope, run);
+    // Detached descendants keep the context, but no longer own a completed task's label.
+    if (isPromiseLike(result)) {
+      return Promise.resolve(result).finally(finish);
+    }
+    finish();
+    return result;
+  } catch (error) {
+    finish();
+    throw error;
   } finally {
     exit();
   }
@@ -34,6 +51,7 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
   const pending: Stall[] = [];
   let stopped = false;
   let dropped = 0;
+  let delayMaxMs = 0;
   let depth = 0;
   let startedAt = 0;
   let segmentAt = 0;
@@ -53,7 +71,8 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
       return;
     }
     startedAt = segmentAt = now();
-    task = longestTask = taskState.context.getStore() ?? "unattributed";
+    const scope = taskState.context.getStore();
+    task = longestTask = scope?.active ? scope.name : "unattributed";
     longestMs = 0;
   };
   const after = () => {
@@ -63,6 +82,7 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
     const at = now();
     segment(at);
     const elapsedMs = at - startedAt;
+    delayMaxMs = Math.max(delayMaxMs, elapsedMs);
     if (elapsedMs > STALL_MS) {
       if (pending.length < MAX_PENDING_STALLS) {
         pending.push({ elapsedMs, task: longestTask, taskMs: longestMs });
@@ -83,6 +103,7 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
       }
       pending.length = 0;
       dropped = 0;
+      delayMaxMs = 0;
     },
     enter(name) {
       // Activation can occur within an already-running callback, before its hook was enabled.
@@ -111,7 +132,17 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
       const stalls = pending.splice(0);
       const omitted = dropped;
       dropped = 0;
-      return { stalls, dropped: omitted };
+      const maximum = delayMaxMs;
+      delayMaxMs = 0;
+      return { stalls, dropped: omitted, delayMaxMs: maximum };
+    },
+    reset() {
+      pending.length = 0;
+      dropped = 0;
+      delayMaxMs = 0;
+      startedAt = segmentAt = now();
+      longestMs = 0;
+      longestTask = task;
     },
     stop: () => observer.stop(),
   };

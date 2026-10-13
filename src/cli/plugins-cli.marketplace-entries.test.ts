@@ -37,9 +37,12 @@ const mocks = vi.hoisted(() => ({
   pluginLifecycleGateway: vi.fn(),
   resolvePluginLifecycleGateway: vi.fn(),
 }));
+// mock-isolation: Marketplace fixtures isolate config reads and writes from operator state.
 vi.mock("../config/config.js", () => ({
   assertConfigWriteAllowedInCurrentMode: vi.fn(),
   getRuntimeConfig: mocks.getRuntimeConfig,
+  loadConfig: mocks.getRuntimeConfig,
+  captureRuntimeConfigAsyncReader: () => async () => mocks.getRuntimeConfig(),
   readConfigFileSnapshot: vi.fn(),
   replaceConfigFile: vi.fn(),
 }));

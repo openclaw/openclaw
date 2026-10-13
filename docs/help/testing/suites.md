@@ -8,25 +8,30 @@ read_when:
 
 ## Quick start
 
-Most days:
+Select proof using the canonical
+[proof policy](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-testing/SKILL.md#proof-policy).
+Use the commands below for the suite you need:
 
-- Full gate (expected before push): `pnpm build && pnpm check && pnpm check:test-types && pnpm test`
-- Faster local full-suite run on a roomy machine: `pnpm test:max`
-- Direct Vitest watch loop: `pnpm test:watch`
-- Direct file targeting routes plugin/channel paths too: `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts`
-- Prefer targeted runs first when iterating on a single failure.
-- Docker-backed QA site: `pnpm qa:lab:up`
-- Linux VM-backed QA lane: `pnpm openclaw qa suite --runner multipass --scenario channel-chat-baseline`
+- Focused test: `pnpm test <file> --maxWorkers=1`
+- Failed PR CI tests: `pnpm test:ci-failed <pr>`; execute the selection with `--run`
+- Watch loop: `pnpm test:watch`
+- Full suite: `pnpm test`; higher worker cap: `pnpm test:max`
+- Informational coverage: `pnpm test:coverage`
+- E2E: `pnpm test:e2e`
+- Docker QA site: `pnpm qa:lab:up`
+- Linux VM QA: `pnpm openclaw qa suite --runner multipass --scenario channel-chat-baseline`
 
-The last two lanes need tooling the other commands do not: `qa:lab:up` needs a
-running Docker daemon and a source checkout, because the npm tarball omits QA
-Lab, and the `multipass` runner needs Multipass installed. See
-[QA-specific runners](/help/testing/qa-runners).
+The QA site requires Docker and source (the npm tarball omits QA Lab); the VM
+runner requires Multipass. See [QA runners](/help/testing/qa-runners).
 
-When you touch tests or want extra confidence:
-
-- Informational V8 coverage report: `pnpm test:coverage`
-- E2E suite: `pnpm test:e2e`
+PR CI owns broad proof. After CI fails, run `pnpm test:ci-failed <pr>` and read
+the pre-existing/new/unknown classification. Fix new failures and investigate
+unknown ones, then use `pnpm test:ci-failed <pr> --run` until the selected tests
+pass locally and push once. Do not run the full local suite or use
+`gh run rerun` to chase green. Pre-existing failures follow the
+[failure-table landing rule](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-pr-maintainer/references/landing.md#red-main-and-inherited-failures).
+See [failed CI test selection](/reference/scripts/pr-tooling#rerun-failed-ci-tests)
+for targets, classification, and command options.
 
 Oxlint's `max-lines` rule warns when files exceed the per-scope limits in
 `.oxlintrc.json`; these warnings remain visible in lint logs and do not fail CI.
@@ -36,9 +41,80 @@ PR CI reports numeric ratchet violations as warnings too. The suppression
 baseline ratchet remains strict locally. See [surface ratchets](/ci/local-proof#surface-ratchets) for
 comparison bases and shrink-only maintenance.
 
+## Runner exit status
+
+`pnpm test`, `scripts/test-projects.mts`, and `scripts/run-vitest.mjs` distinguish
+Vitest failures from runner infrastructure failures:
+
+- `0`: the command completed successfully.
+- `1`: Vitest failed, or rejected the requested tests or arguments.
+- `2`: loader startup, runner preparation, child completion, worker disposal, or report publication failed.
+  Existing native failure codes other than `1` remain unchanged.
+
+The runner completes worker disposal and requested report publication before it
+returns. A later infrastructure failure takes precedence over an earlier test
+failure. Across parallel completions, the first observed native status other than
+`0`, `1`, or reserved infrastructure `2` wins, regardless of when `2` arrives.
+Infrastructure outcomes stop new shard admission; already admitted shards still
+join. Ordinary assertion failures keep the selection's continuation policy.
+Forwarded signals retain their signal outcome after cleanup.
+
+For an expected-failure proof, require exit `1` and the intended assertion in its
+report. Wait for the outer command to terminate. A report alone does not prove
+that cleanup succeeded. An interrupted command or missing terminal result is
+not a completed expected failure.
+
 ## Test suites (what runs where)
 
 Think of the suites as "increasing realism" (and increasing flakiness/cost).
+
+The maintainer-tooling family uses `RELEASE_ONLY_TOOLING_SHARDS` and matching
+maintainer leaves in mixed fast configs: product-only PRs and main omit it,
+tooling-owner PRs select their affected files (with full-family fallback for unresolved owners), and manual CI and Full Release Validation
+retain it. Keep tests in their assigned configs, with their process and timer
+policies, so new files inherit the same owner routing. Dedicated product E2E
+and live tests remain outside this tier. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
+
+### PostgreSQL conformance
+
+`node scripts/test-database-conformance.mjs --engine postgres --connection <dsn>`
+runs the workboard suite and `src/infra/postgres-sync` tests against a disposable
+PostgreSQL database. The runner passes the connection through a Node preload
+and worker environment data to test processes and threads, without a DSN
+environment variable. It redacts the connection from child output.
+
+Arguments after `--` go to the normal test runner. Start with a file or directory
+to replace the default targets; options alone retain both suites. For example,
+append `-- src/infra/postgres-sync/locks.test.ts --maxWorkers=1` for a smoke test.
+
+For a local Homebrew `postgresql@17` cluster, use a temporary directory on a disk
+with enough free space. This subshell stops and removes its cluster on exit:
+
+```bash
+(
+  D=$(mktemp -d /Volumes/External/openclaw-pg.XXXXXX)
+  PG=$(brew --prefix postgresql@17)/bin
+  trap '"$PG/pg_ctl" -D "$D/data" -m immediate stop; rm -rf "$D"' EXIT
+  "$PG/initdb" -A trust -U postgres -D "$D/data"
+  "$PG/pg_ctl" -D "$D/data" -l "$D/server.log" \
+    -o "-p 55436 -k $D -h ''" -w start
+  node scripts/test-database-conformance.mjs --engine postgres \
+    --connection "postgresql://postgres@localhost:55436/postgres?host=$D"
+)
+```
+
+Alternatively, on a Docker-enabled Testbox, start `postgres:17` with trust auth
+and a loopback-only port, run the same command with
+`postgresql://postgres@127.0.0.1:5432/postgres`, then remove the container.
+
+CI's **PostgreSQL conformance** job uses a fresh `postgres:17` service. It runs
+on scheduled main CI and PRs touching `src/infra/database-engine/**`,
+`src/infra/postgres-sync/**`, `src/infra/sql-connection.ts`,
+`src/infra/sql-query-compiler.ts`, `src/infra/kysely-sync*.ts`,
+`src/infra/sqlite-transaction.ts`, `extensions/workboard/**`,
+`src/config/zod-schema.database.ts`, or `scripts/test-database-conformance*.mjs`.
+Unknown PR paths conservatively select it; older targets without the runner
+omit it. The selected job is required by `openclaw/ci-gate`.
 
 ### Unit / integration (default)
 
@@ -87,8 +163,9 @@ Native dependency policy:
     - Non-watch package and agent directory targets, such as `pnpm test packages/gateway-client` or `pnpm test src/agents/tools`, and quoted agent globs such as `pnpm test 'src/agents/failover/**/*.test.ts'`, discover regular `*.test.ts` files and route each to its owning lane. This preserves fast, isolated, harness, and database-worker ownership, shared exclusions, and inherited include limits; ordinary selections do not opt into live or E2E tests.
     - Non-watch root-project runs, such as `node scripts/run-vitest.mjs run src/config`, prepare any built runtime required by their selected tests before starting them.
     - `pnpm test:changed` expands changed git paths into cheap scoped lanes by default: direct test edits, sibling `*.test.ts` files, explicit source mappings, and local import-graph dependents. Config/setup/package edits do not broad-run tests unless you explicitly use `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed`.
-    - `pnpm check:changed` is the normal smart local check gate for narrow work. It classifies the diff into core, core tests, extensions, extension tests, apps, docs, release metadata, live Docker tooling, and tooling, then runs the matching typecheck, lint, and guard commands. Selected paths also schedule targeted Vitest owner tests via `pnpm test:serial`; use `pnpm test:changed` or explicit `pnpm test <target>` for additional test proof matching the touched contract. Release metadata-only version bumps run targeted version/config/root-dependency checks, with a guard that rejects package changes outside the top-level version field.
+    - `pnpm check:changed` is an optional smart local check for narrow work; PR CI owns the broad gate. It classifies the diff into core, core tests, extensions, extension tests, apps, docs, release metadata, live Docker tooling, and tooling, then runs the matching typecheck, lint, and guard commands. Selected paths also schedule targeted Vitest owner tests via `pnpm test:serial`; use `pnpm test:changed` or explicit `pnpm test <target>` for additional test proof matching the touched contract. Release metadata-only version bumps run targeted version/config/root-dependency checks, with a guard that rejects package changes outside the top-level version field.
     - In the default Git diff mode against `HEAD`, comment/whitespace-only TypeScript edits skip their typecheck lanes and core graph boundary check when tokens and line-break boundaries match the merge base. Files with TypeScript/JSX directives, triple-slash comments, parse errors, or path lifecycle changes retain typechecking, as do JavaScript files. Lint, formatting, ratchets, guards, and tests keep the full changed-path scope. Staged, explicit-path, and non-`HEAD` comparisons retain normal typecheck selection; `--dry-run` reports any skipped paths.
+    - Changed core test checks run the shards that own changed test roots before their other selected consumers. Both groups keep their canonical order, and CI stripe membership stays unchanged. Source-only changes keep the normal order. The boundary inventory is reused for selection and ordering.
     - Live Docker ACP harness edits run focused checks: shell syntax for the live Docker auth scripts and a live Docker scheduler dry-run. `package.json` changes are included only when the diff is limited to `scripts["test:docker:live-*"]`; dependency, export, version, and other package-surface edits still use the broader guards.
     - Import-light unit tests from agents, commands, plugins, auto-reply helpers, `plugin-sdk`, and similar pure utility areas route through the `unit-fast` lane, which skips `test/setup-openclaw-runtime.ts`; stateful/runtime-heavy files stay on the existing lanes.
     - Selected `plugin-sdk` and `commands` helper source files also map changed-mode runs to explicit sibling tests in those light lanes, so helper edits avoid rerunning the full heavy suite for that directory.
@@ -170,8 +247,8 @@ Native dependency policy:
       configured, it also scans staged content before and after formatting.
       See [Local commit hook setup](https://github.com/openclaw/openclaw/blob/main/CONTRIBUTING.md#local-commit-hook).
       It does not run lint, typecheck, or tests.
-    - Run `pnpm check:changed` explicitly before handoff or push when you
-      need the smart local check gate.
+    - Use `pnpm check:changed` when an optional smart local check helps select
+      focused proof. PR CI runs broad checks after publication.
     - `pnpm test:changed` routes through cheap scoped lanes by default. Use
       `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` only when the agent
       decides a harness, config, package, or contract edit really needs
@@ -306,7 +383,8 @@ Native dependency policy:
 - Expectations:
   - Runs in CI as part of `pnpm test:e2e`; the resource groups add no CI jobs
   - No provider keys required; `OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY=1` excludes real-Gateway suites
-  - Browser dependency must be present (`pnpm --dir ui exec playwright install chromium`)
+  - Chromium and Playwright FFmpeg must be present; `node --import tsx scripts/ensure-playwright-chromium.mts` installs them, and `pnpm test:ui:e2e` already runs it
+  - The workboard native-bundle suite also needs WebKit with system dependencies (`pnpm --dir ui exec playwright install --with-deps webkit`); Crabbox Linux hydration installs both browser prerequisites
 
 The dedicated real-Gateway CI lane uses `test/vitest/vitest.ui-e2e-prebuilt.config.ts` after `OPENCLAW_BUILD_PRIVATE_QA=1 OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=1 pnpm build` completes in each clean checkout. The separate artifact job retains SDK declaration validation. The planner balances existing serial files and selected standalone companions in one row, with the remaining audited parallel files in another. The companions share the existing two-worker phase after serial execution without an extra bundled preview. The real node/SSH desktop resize tour is release-only: when its file is selected by full manual/release validation or a direct spec edit, the first row runs `node --import tsx scripts/test-desktop-resize-real.mts` once for both carriers. The bootstrap remains required; invoking the desktop spec without its real fixture is not equivalent proof. Frequent resize, revocation, view-only filtering, takeover, and UI sizing tests remain in ordinary CI. Placement consumes the parallel-eligibility allowlist from `vitest.ui-paths.mjs` without changing Vitest scheduling. Each selected file has one CI owner; the desktop bootstrap executes each carrier once. Full manual and release selection retain the complete inventory. Prebuilt previews borrow the validated standard Control UI assets without rebuilding or deleting them; default mocked Gateway hellos use the same artifact identity, and explicit mock identity overrides still apply. Ordinary local runs retain their private builds. Keep source and built outputs unchanged until all workers and children finish. Fixtures retain their private HOME, state, ports, cleanup, and existing worker limits. Readiness failures stop without rebuilding or falling back. The ordinary local config keeps real-Gateway files serial; frozen targets and older planners retain one complete CI row and their own config/command. See [CI](/ci) for the resource policy and timing evidence.
 
@@ -509,11 +587,10 @@ frozen release targets may not support this advisory selector.
 
 ## Which suite should I run?
 
-Use this decision table:
-
-- Editing logic/tests: run `pnpm test` (and `pnpm test:coverage` if you changed a lot)
-- Touching gateway networking / WS protocol / pairing: add `pnpm test:e2e`
-- Debugging "my bot is down" / provider-specific failures / tool calling: run a narrowed `pnpm test:live`
+Follow the [proof policy](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-testing/SKILL.md#proof-policy).
+Target the touched owner first. Gateway networking, WebSocket, and pairing
+contracts have E2E lanes; provider/tool-calling diagnosis may require a narrowed
+live lane. Suite descriptions above identify their scope and prerequisites.
 
 ## Live (network-touching) tests
 
@@ -538,6 +615,7 @@ These are "real pipeline" regressions without real providers:
 - Gateway agent admission (real Gateway with a mock OpenAI provider): `src/gateway/gateway.test.ts` (case: "accepts a gateway agent request over ws and returns a run id"; checks acceptance, a run ID, and an abort response).
 - Gateway wizard (WS `wizard.start`/`wizard.next`, writes config + auth enforced): `src/gateway/gateway.test.ts` (case: "runs wizard over ws and writes auth token config")
 - Prompt/KV-cache request prefixes: `src/agents/embedded-agent-runner.prompt-cache.test.ts` drives admitted agent turns against capturing mock providers for Anthropic Messages, Claude in-history system messages, OpenAI Chat Completions, and OpenAI Responses.
+- User replay and failed-attempt persistence: `src/agents/embedded-agent-runner/run/attempt-prompt-submit.projections.test.ts`, `src/agents/session-tool-result-guard.transcript-events.test.ts`, and `src/agents/sessions/agent-session-responses-eof.test.ts` exercise recorded user content, append-only errors, and retry/reopen prefixes at their owning boundaries.
 - Gateway chat, completion, and restart prefixes: `src/gateway/gateway.prompt-cache.test.ts` uses authenticated `chat.send`, a real `sessions_spawn` child and its completion, an in-process Gateway server stop/start, and another `chat.send` in the same session. It compares the parent conversation's requests and nonempty cache keys separately from the child's requests.
 
 The prompt-cache fixture drives ten turns through the real embedded agent
@@ -559,10 +637,10 @@ captures a turn while its reconnect is blocked, steers the sixth turn, and
 reopens durable runner state before the seventh. Turn eight assembles and replays
 a synthetic typed subagent completion event; it does not spawn a subagent or
 prove announcement delivery or authorization. The channel-derived history limit
-crosses on turn nine. Captures include system, tools, history, and cache identity.
-Prefix comparisons permit only the declared first-image cleanup on turn five
-and the exact history-prefix removal on turn nine. Cleanup replaces only image
-blocks with the documented marker; adjacent text remains exact. At the pruning
+crosses on turn nine. The Responses route also exercises a partial assistant
+error followed by a new turn. Captures include system, tools, history, and cache
+identity. Prefix comparisons permit only the exact history-prefix removal on
+turn nine; previously sent image blocks remain unchanged. At the pruning
 boundary, legacy Chat Completions relocates the same runtime facts from the
 retired first user to the retained first user. Legacy Messages can refresh its
 identified transient runtime context, including date facts and announcements.

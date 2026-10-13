@@ -94,7 +94,6 @@ test("sessions.patch retries failed cleanup during unrelated dispatch and reject
     resolveProvider: () => undefined,
     prepareInstallation: unexpectedWorkerWork,
     bootstrapWorker: unexpectedWorkerWork,
-    executeInference: unexpectedWorkerWork,
   });
   const reclaimStarted = createDeferredCore();
   const releaseReclaim = createDeferredCore();
@@ -187,7 +186,7 @@ test.each([false, true])(
     const { dir, storePath } = await createSessionStoreDir();
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: dir } });
     const placements = createWorkerSessionPlacementStore({ database });
-    const harness = createHarness(database, placements, { workspacePath: dir, destroyFails });
+    const harness = await createHarness(database, placements, { workspacePath: dir, destroyFails });
     await seedProvisioningPlacement(placements, harness.ready.environmentId);
     await writeSessionStore({
       entries: { [REQUEST.sessionKey]: sessionStoreEntry(REQUEST.sessionId) },
@@ -199,6 +198,34 @@ test.each([false, true])(
       destroying.resolve();
       await release.promise;
       return await destroy(environmentId);
+    });
+    // Keep the runtime read in flight through our own cleanup publication.
+    const reclaimed = createDeferredCore();
+    const reclaim = harness.service.reclaim.bind(harness.service);
+    vi.spyOn(harness.service, "reclaim").mockImplementation(async (...args) => {
+      try {
+        return await reclaim(...args);
+      } finally {
+        reclaimed.resolve();
+      }
+    });
+    const readProjection = placements.readProjection.bind(placements);
+    const prepareRuntimeRefresh = placements.prepareRuntimeRefresh.bind(placements);
+    let refreshingRuntime = false;
+    vi.spyOn(placements, "prepareRuntimeRefresh").mockImplementation(async (...args) => {
+      refreshingRuntime = true;
+      try {
+        return await prepareRuntimeRefresh(...args);
+      } finally {
+        refreshingRuntime = false;
+      }
+    });
+    vi.spyOn(placements, "readProjection").mockImplementation(async (...args) => {
+      const projection = await readProjection(...args);
+      if (refreshingRuntime) {
+        await reclaimed.promise;
+      }
+      return projection;
     });
     const archive = directSessionReq(
       "sessions.patch",
@@ -243,7 +270,8 @@ test.each([false, true])(
         ).toBeUndefined();
         return;
       }
-      await expect(archive).resolves.toMatchObject({ ok: true });
+      const archived = await archive;
+      expect(archived, JSON.stringify(archived)).toMatchObject({ ok: true });
       expect(placements.get(REQUEST.sessionId)?.state).toBe("local");
       expect(harness.environments.get(harness.ready.environmentId)?.state).toBe("destroyed");
       expect(loadSessionEntry({ storePath, sessionKey: REQUEST.sessionKey })?.archivedAt).toEqual(

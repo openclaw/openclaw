@@ -48,7 +48,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal)
   recordDeliveredCommandExchange: runtimeModuleMocks.recordDeliveredCommandExchange,
 }));
 let observedNativeTurnDispatcher: unknown;
-const getSessionEntry = sessionStore.getSessionEntry;
+const getSessionEntry = sessionStore.getSessionEntryAsync;
 
 const dispatchChannelInboundTurnForTest: typeof channelInbound.dispatchChannelInboundTurn = async (
   plan,
@@ -370,7 +370,7 @@ describe("Discord native plugin command dispatch", () => {
           accountId: params.accountId,
         }),
     );
-    vi.spyOn(sessionStore, "getSessionEntry").mockImplementation((params) =>
+    vi.spyOn(sessionStore, "getSessionEntryAsync").mockImplementation(async (params) =>
       params.agentId !== undefined
         ? runtimeModuleMocks.getSessionEntry(params)
         : getSessionEntry(params),

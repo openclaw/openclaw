@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { sql, type ExpressionBuilder, type RawBuilder } from "kysely";
 import {
@@ -13,11 +12,7 @@ import {
   projectSubagentRunForMaintenance,
   projectSubagentRunForSessionList,
 } from "./subagent-delivery-state.js";
-import type {
-  SubagentRunReadRecord,
-  SubagentMaintenanceDurableBasis,
-  SubagentRunsDurableBasis,
-} from "./subagent-registry-read.types.js";
+import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import { hasParentStoreColumns } from "./subagent-registry.store.kernel.js";
 import { subagentRunRowVersion, type SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
@@ -58,7 +53,6 @@ export function readSubagentRun(
 type SubagentRegistryReadScope =
   | { kind: "session"; sessionKey: string }
   | { kind: "child"; sessionKey: string }
-  | { kind: "children"; sessionKeys: readonly string[] }
   | { kind: "runs"; runIds: readonly string[] };
 
 function subagentControllerFilter(controllerSessionKeys: readonly string[]) {
@@ -93,8 +87,6 @@ function readSubagentRegistryRows(
     .select(projection === "full" ? "payload_json" : subagentMaintenancePayload.as("payload_json"));
   if (scope?.kind === "child") {
     query = query.where("child_session_key", "=", scope.sessionKey);
-  } else if (scope?.kind === "children") {
-    query = query.where("child_session_key", "in", sqliteStringSet(scope.sessionKeys));
   } else if (scope?.kind === "runs") {
     query = query.where("run_id", "in", sqliteStringSet(scope.runIds));
   } else if (scope?.kind === "session") {
@@ -337,48 +329,14 @@ function decodeSubagentRegistryRows<T>(
   return runs;
 }
 
-/** Hash physical projection rows before decoding, including malformed and colliding identities. */
+/** Read the bounded projection needed by maintenance protection. */
 export function loadSubagentMaintenanceRunsInDatabase(
   database: Pick<OpenClawStateDatabase, "db">,
-): { runs: Map<string, SubagentRunMaintenanceRecord>; digest: string } {
-  const hash = createHash("sha256");
-  const runs = decodeSubagentRegistryRows(
+): Map<string, SubagentRunMaintenanceRecord> {
+  return decodeSubagentRegistryRows(
     readSubagentRegistryRows(undefined, database, "maintenance"),
     projectSubagentRunForMaintenance,
-    (row) => {
-      hash.update(JSON.stringify(row));
-    },
   );
-  return { runs, digest: hash.digest("hex") };
-}
-
-export function subagentMaintenanceDurableBasisMatches(
-  database: Pick<OpenClawStateDatabase, "db">,
-  basis: SubagentMaintenanceDurableBasis,
-): boolean {
-  return loadSubagentMaintenanceRunsInDatabase(database).digest === basis.digest;
-}
-
-/** Native maintenance rechecks only its victims after observing a foreign commit. */
-export function loadSubagentMaintenanceCandidatesInDatabase(
-  database: Pick<OpenClawStateDatabase, "db">,
-  sessionKeys: readonly string[],
-): Map<string, SubagentRunMaintenanceRecord> {
-  const runs = new Map<string, SubagentRunMaintenanceRecord>();
-  for (let offset = 0; offset < sessionKeys.length; offset += 64) {
-    const selected = decodeSubagentRegistryRows(
-      readSubagentRegistryRows(
-        { kind: "children", sessionKeys: sessionKeys.slice(offset, offset + 64) },
-        database,
-        "maintenance",
-      ),
-      projectSubagentRunForMaintenance,
-    );
-    for (const [runId, run] of selected) {
-      runs.set(runId, run);
-    }
-  }
-  return runs;
 }
 
 /** Loads only the canonical fields needed to build session-list topology metadata. */
@@ -411,7 +369,6 @@ export function loadSubagentRunsForSessionsInDatabase(
   sessionKeys: readonly string[],
   inMemoryRuns: Iterable<Pick<SubagentRunReadRecord, "childSessionKey" | "requesterSessionKey">>,
 ) {
-  const hash = createHash("sha256");
   const { db } = database;
   const result = runSqliteDeferredTransactionSync(db, () => {
     const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
@@ -441,12 +398,6 @@ export function loadSubagentRunsForSessionsInDatabase(
       .map((row) => row.run_id);
     const runs = new Map<string, SubagentRunRecord>();
     const complete = runIds.length === identities.length;
-    // Topology includes malformed payloads and newly attached descendant branches.
-    for (const row of identities) {
-      if (selected.has(row.child_session_key.trim()) || selectedRunIds.has(row.run_id.trim())) {
-        hash.update(JSON.stringify(["topology", row]));
-      }
-    }
     if (runIds.length) {
       const query = stateDb.selectFrom("subagent_runs").selectAll();
       const rows = executeSqliteQuerySync(
@@ -456,7 +407,6 @@ export function loadSubagentRunsForSessionsInDatabase(
           .orderBy("run_id", "asc"),
       ).rows;
       for (const row of rows) {
-        hash.update(JSON.stringify(["row", row]));
         const entry = rowToSubagentRunRecord(row);
         if (entry) {
           runs.set(entry.runId, entry);
@@ -465,15 +415,5 @@ export function loadSubagentRunsForSessionsInDatabase(
     }
     return { sessionKeys: selected, runIds, runs, complete };
   });
-  return { ...result, digest: hash.digest("hex") };
-}
-
-export function subagentRunsDurableBasisMatches(
-  database: Pick<OpenClawStateDatabase, "db">,
-  basis: SubagentRunsDurableBasis,
-): boolean {
-  return (
-    loadSubagentRunsForSessionsInDatabase(database, basis.sessionKeys, basis.liveTopology)
-      .digest === basis.digest
-  );
+  return result;
 }

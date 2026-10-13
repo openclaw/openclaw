@@ -83,20 +83,7 @@
   color: var(--muted);
 }
 
-.chat-working-indicator__child {
-  overflow: hidden;
-  max-width: 100%;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--text);
-  font: inherit;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* The subagents' count, running or waited on. A step above the status text:
-   a control, while the session's own work and a subagent's name lead. */
+/* Running subagent counts lead to their panel while the parent works. */
 button.chat-working-indicator__subagents {
   padding: 0;
   border: 0;
@@ -105,10 +92,7 @@ button.chat-working-indicator__subagents {
   font: inherit;
 }
 
-button:is(.chat-working-indicator__child, .chat-working-indicator__subagents):is(
-    :hover,
-    :focus-visible
-  ) {
+button.chat-working-indicator__subagents:is(:hover, :focus-visible) {
   text-decoration: underline;
 }
 

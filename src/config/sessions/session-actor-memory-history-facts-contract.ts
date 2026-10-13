@@ -30,6 +30,18 @@ import type {
 } from "./session-transcript-hydration.types.js";
 
 type Reads = {
+  "visibility-inputs": {
+    input: { runIds: string[] };
+    output: Array<{
+      seq: number;
+      message: {
+        role: "user";
+        idempotencyKey: unknown;
+        provenance: unknown;
+        __openclaw: { runId: unknown; steerTargetRunId: unknown; idempotencyKey: unknown };
+      };
+    }>;
+  };
   title: {
     input: { includeInterSession?: boolean };
     output: { kind: "session-title-fields"; fields: SessionTitleFields };
@@ -74,6 +86,10 @@ type Reads = {
     input: { options: SessionTranscriptBoundedMessageTailOptions };
     output: SessionTranscriptBoundedMessageTailPage;
   };
+  "visitor-source": {
+    input: { offset?: number };
+    output: { messages: Array<{ message: unknown; seq: number }>; nextOffset?: number };
+  };
 };
 
 export type SessionActorMemoryHistoryFactsReads = {
@@ -88,6 +104,7 @@ export type SessionActorMemoryHistoryFactsReads = {
         | "recent-active-events"
         | "accounting"
         | "bounded-tail"
+        | "visitor-source"
         ? { admission?: UserTurnTranscriptAdmissionReceipt }
         : Record<never, never>);
     output: Reads[Key]["output"];

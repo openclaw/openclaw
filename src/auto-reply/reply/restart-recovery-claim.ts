@@ -10,7 +10,6 @@ import {
   isMainRestartRecoveryCandidate,
   recordLifecycleFence,
 } from "../../config/sessions/restart-recovery-state.js";
-import type { RestartRecoveryBeforeAgentReplyState } from "../../config/sessions/restart-recovery-types.js";
 import { patchSessionEntryTarget } from "../../config/sessions/session-accessor.js";
 import { applySessionEntryTargetOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionEntryTargetPatchScope } from "../../config/sessions/session-accessor.types.js";
@@ -48,25 +47,9 @@ import type {
 } from "../../sessions/user-turn-transcript.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
+import type { AgentTurnRestartClaimCleanup } from "./agent-runner-completion.types.js";
+import type { ReplyRestartRecoveryClaimController } from "./restart-recovery-claim.types.js";
 import { retireTerminalRestartRecoverySourceClaim } from "./restart-recovery-source.js";
-
-type ReplyRestartRecoveryClaimController = {
-  admitUserTurn: (
-    recorder?: UserTurnTranscriptRecorder,
-  ) => Promise<"admitted" | "duplicate-source">;
-  beginBeforeAgentReply: () => Promise<boolean>;
-  checkpointBeforeAgentReply: (params: {
-    state?: RestartRecoveryBeforeAgentReplyState;
-    pendingFinalDelivery?: {
-      context?: DeliveryContext;
-      deliveries: NonNullable<SessionEntry["pendingFinalDelivery"]>["deliveries"];
-      intentId: string;
-      text: string;
-    };
-  }) => Promise<void>;
-  clear: () => Promise<void>;
-  isArmed: () => Promise<boolean>;
-};
 
 export function createReplyRestartRecoveryClaimController(params: {
   agentId: string;
@@ -185,7 +168,6 @@ export function createReplyRestartRecoveryClaimController(params: {
     if (actor) {
       return (actor.snapshot(readAuthority) ?? (await actor.read(readAuthority))).entry;
     }
-    // Native incognito retains the existing reader and its captured source.
     return readSessionEntryInWorker(
       { agentId: params.agentId, sessionKey, storePath: params.storePath },
       assertReadCurrent,
@@ -613,7 +595,7 @@ export function createReplyRestartRecoveryClaimController(params: {
     });
   };
 
-  const clear = async (): Promise<void> => {
+  const prepareClearOperation = (): AgentTurnRestartClaimCleanup["operation"] | undefined => {
     const lifecycleGeneration = params.lifecycleGeneration;
     if (
       !tracked ||
@@ -622,43 +604,47 @@ export function createReplyRestartRecoveryClaimController(params: {
       !lifecycleGeneration ||
       params.isRestartAbort()
     ) {
-      return;
+      return undefined;
     }
     const sessionId = params.getSessionId();
     if (sessionId !== trackedSessionId) {
-      return;
+      return undefined;
     }
     const expected = { sessionId, lifecycleRevision: trackedLifecycleRevision };
-    const persisted = await applySessionEntryTargetOperation(
-      preparedTarget(),
-      {
-        kind: "restart-claim-clear",
-        expected,
-        sessionId,
-        recoveryRunId,
-        recoverySourceRunId,
-        executionRunId,
-        executionGeneration,
-      },
-      {
-        // The worker owns row predicates; live host authority survives every admission wait.
-        workerGuard: {
-          assertCurrent: () => {
-            assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-            if (params.isRestartAbort()) {
-              throw createAgentRunStaleLifecycleError();
-            }
-            if (params.getSessionId() !== sessionId) {
-              throw createRestartRecoveryClaimChangedError();
-            }
-          },
+    return {
+      kind: "restart-claim-clear",
+      expected,
+      sessionId,
+      recoveryRunId,
+      recoverySourceRunId,
+      executionRunId,
+      executionGeneration,
+    };
+  };
+
+  const clear = async (): Promise<void> => {
+    const operation = prepareClearOperation();
+    if (!operation) {
+      return;
+    }
+    const persisted = await applySessionEntryTargetOperation(preparedTarget(), operation, {
+      // The worker owns row predicates; live host authority survives every admission wait.
+      workerGuard: {
+        assertCurrent: () => {
+          assertAgentRunLifecycleGenerationCurrent(executionGeneration);
+          if (params.isRestartAbort()) {
+            throw createAgentRunStaleLifecycleError();
+          }
+          if (params.getSessionId() !== operation.sessionId) {
+            throw createRestartRecoveryClaimChangedError();
+          }
         },
       },
-    );
+    });
     // A refused reduction returns the current row; it cannot retarget this run's cache.
     if (
-      persisted?.sessionId === expected.sessionId &&
-      persisted.lifecycleRevision === expected.lifecycleRevision
+      persisted?.sessionId === operation.sessionId &&
+      persisted.lifecycleRevision === trackedLifecycleRevision
     ) {
       params.setEntry(persisted);
     }
@@ -713,6 +699,21 @@ export function createReplyRestartRecoveryClaimController(params: {
     },
     checkpointBeforeAgentReply: (checkpoint) => updateBeforeAgentReply("pending", checkpoint),
     clear,
+    prepareCompletionCleanup(entry) {
+      // Unknown provider outcomes retain their separate reconciliation boundary.
+      if (entry.restartRecoveryDeliveryReceiptState === "terminal-pending") {
+        return undefined;
+      }
+      const operation = prepareClearOperation();
+      return operation
+        ? {
+            operation,
+            committed() {
+              tracked = false;
+            },
+          }
+        : undefined;
+    },
     isArmed,
   };
 }

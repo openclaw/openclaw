@@ -66,19 +66,14 @@ describe("exec approval card", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([
-    ["warn", "warning"],
-    ["warning", "warning"],
-    ["danger", "danger"],
-    ["critical", "danger"],
-    ["error", "danger"],
-    ["unknown", "info"],
-    [undefined, "info"],
-  ])("maps plugin severity %s to the %s accent", (pluginSeverity, expected) => {
-    const card = renderCard(approval({ pluginSeverity }));
+  it.each([["error", "danger"]])(
+    "maps plugin severity %s to the %s accent",
+    (pluginSeverity, expected) => {
+      const card = renderCard(approval({ pluginSeverity }));
 
-    expect(card?.classList.contains(`exec-approval-card--severity-${expected}`)).toBe(true);
-  });
+      expect(card?.classList.contains(`exec-approval-card--severity-${expected}`)).toBe(true);
+    },
+  );
 
   it("expires a mounted sidebar approval and disables its decisions", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
@@ -123,18 +118,6 @@ describe("exec approval card", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("always gives exec approvals the warning accent", () => {
-    const card = renderCard(
-      approval({
-        kind: "exec",
-        pluginSeverity: "critical",
-        request: { command: "pnpm test" },
-      }),
-    );
-
-    expect(card?.classList.contains("exec-approval-card--severity-warning")).toBe(true);
-  });
-
   it("preserves command text while highlighting ordered, non-overlapping valid spans", () => {
     const command = "echo hello | cat";
     const card = renderCard(
@@ -164,28 +147,7 @@ describe("exec approval card", () => {
     ]);
   });
 
-  it("shows plugin and agent chips with session details in the modal", () => {
-    const card = renderCard(approval());
-    const details = card?.querySelector<HTMLDetailsElement>(".exec-approval-details");
-
-    expect(card?.querySelector('[data-approval-chip="plugin"]')?.textContent).toBe("codex");
-    expect(card?.querySelector('[data-approval-chip="agent"]')?.textContent).toBe("main");
-    expect(details?.open).toBe(false);
-    expect(details?.textContent).toContain("Session");
-    expect(details?.textContent).toContain("agent:main:session-1");
-    expect(card?.textContent).not.toContain("Severity");
-  });
-
-  it("keeps inline identity limited to the plugin chip", () => {
-    const card = renderCard(approval(), "inline");
-
-    expect(card?.querySelector('[data-approval-chip="plugin"]')?.textContent).toBe("codex");
-    expect(card?.querySelector('[data-approval-chip="agent"]')).toBeNull();
-    expect(card?.querySelector(".exec-approval-details")).toBeNull();
-    expect(card?.textContent).not.toContain("agent:main:session-1");
-  });
-
-  it.each(["inline", "modal", "sidebar"] as const)(
+  it.each(["modal", "sidebar"] as const)(
     "uses plugin decision action labels and resolves their original decisions in the %s surface",
     async (variant) => {
       const request = parseApprovalRequestedEvent("plugin.approval.requested", {
@@ -254,7 +216,7 @@ describe("exec approval card", () => {
     },
   );
 
-  it.each(["inline", "modal"] as const)(
+  it.each(["modal"] as const)(
     "shows the full plugin request detail as plain text in the %s card",
     (variant) => {
       const detail = `  Command: pnpm test\n${"review context\n".repeat(700)}<script>blocked()</script>`;

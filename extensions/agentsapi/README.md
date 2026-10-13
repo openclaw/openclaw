@@ -280,16 +280,17 @@ and `AgentExecutorContext` types from `openclaw/plugin-sdk/agent-harness-runtime
 
 - `workspaceDirectory` is an existing absolute path on the executor host,
   configured by the executor plugin. Gateway tool paths stay unchanged.
-- `ensure(binding, context)` idempotently starts or reconnects the executor using
-  the exact environment ID, remote URL and workspace in the canonical binding.
+- `ensure(binding, context)` starts or reconnects without creating duplicates the executor using
+  the exact environment ID, remote URL and workspace in the stored binding.
   The harness persists that binding and its controller owner before invocation,
   then waits for the API to report the environment connected. Startup is triggered
   only by an outstanding `environment_connection` action. The original input
   request can remain pending while its executor starts; the harness reads
   connection actions during that wait without resubmitting the input. Healthy
   turns do not call the executor controller.
-- `retire(binding, context)` idempotently releases only that binding's executor
+- `retire(binding, context)` releases only that binding's executor
   after native work settles, before reset or session deletion discards the binding.
+  Repeated calls are safe.
   Native settlement is required: a failed status read or cancellation preserves
   the binding and blocks reset or deletion until the operator can retry.
   Retirement of an already-settled executor is best effort.
@@ -411,7 +412,7 @@ and control tools stay unavailable. Policies that restrict native shell, file,
 or native web-search access are rejected before the native session starts or
 resumes; the MVP cannot narrow those native capabilities.
 
-Token accounting reads canonical native turn records after settlement, since
+Token accounting reads stored native turn records after settlement, since
 completion stream events can omit usage. Each OpenClaw attempt counts its new
 coordinator turns once, including work superseded by steering. Earlier turns in
 the same native session are excluded. Cached input is counted separately from

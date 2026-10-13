@@ -22,7 +22,6 @@ import {
 import { deleteSessionPendingInputs } from "./session-accessor.sqlite-pending-inputs.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
-import { mergeParticipantAggregate } from "./session-participant-identity.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 
 type AgentCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
@@ -396,33 +395,65 @@ export function copySessionNodeArtifactsForRepair(
           if (source.db === destination.db && participant.session_key === canonicalKey) {
             continue;
           }
-          const existing = executeSqliteQueryTakeFirstSync(
-            destination.db,
-            destinationDb
-              .selectFrom("session_participants")
-              .select(["contribution_count", "first_prompted_at", "last_prompted_at"])
-              .where("session_key", "=", canonicalKey)
-              .where("identity_namespace", "=", participant.identity_namespace)
-              .where("actor_id", "=", participant.actor_id),
-          );
-          const aggregate = mergeParticipantAggregate(
-            existing,
-            participant,
-            source.db === destination.db ? "sum" : "copy",
-          );
+          // Each alias merges against the row written by the previous alias in this transaction.
           executeSqliteQuerySync(
             destination.db,
             destinationDb
               .insertInto("session_participants")
               .values({
                 ...participant,
-                ...aggregate,
                 session_key: canonicalKey,
               })
               .onConflict((conflict) =>
                 conflict
                   .columns(["session_key", "identity_namespace", "actor_id"])
-                  .doUpdateSet(aggregate),
+                  .doUpdateSet((eb) => ({
+                    contribution_count:
+                      source.db === destination.db
+                        ? eb(
+                            "session_participants.contribution_count",
+                            "+",
+                            participant.contribution_count,
+                          )
+                        : eb
+                            .case()
+                            .when(
+                              "session_participants.contribution_count",
+                              ">",
+                              participant.contribution_count,
+                            )
+                            .then(eb.ref("session_participants.contribution_count"))
+                            .else(participant.contribution_count)
+                            .end(),
+                    first_prompted_at:
+                      participant.first_prompted_at === null
+                        ? null
+                        : eb
+                            .case()
+                            .when("session_participants.first_prompted_at", "is", null)
+                            .then(null)
+                            .when(
+                              "session_participants.first_prompted_at",
+                              "<",
+                              participant.first_prompted_at,
+                            )
+                            .then(eb.ref("session_participants.first_prompted_at"))
+                            .else(participant.first_prompted_at)
+                            .end(),
+                    last_prompted_at:
+                      participant.last_prompted_at === null
+                        ? eb.ref("session_participants.last_prompted_at")
+                        : eb
+                            .case()
+                            .when(
+                              "session_participants.last_prompted_at",
+                              ">",
+                              participant.last_prompted_at,
+                            )
+                            .then(eb.ref("session_participants.last_prompted_at"))
+                            .else(participant.last_prompted_at)
+                            .end(),
+                  })),
               ),
           );
           copiedParticipant = true;

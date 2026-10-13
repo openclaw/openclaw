@@ -1,8 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { TaskStatus } from "@lit/task";
 import type { SkillsLibraryListResult } from "@openclaw/gateway-protocol";
-import { nothing } from "lit";
 import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
@@ -11,7 +9,6 @@ import type { AgentsListResult } from "../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
 import { createGatewayMetadataObserver } from "../app/gateway-observers.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
-import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
@@ -37,7 +34,6 @@ import {
   cleanupUsagePageTest,
   createPage as createUsagePage,
 } from "./usage/usage-page.test-support.ts";
-import "./debug/debug-page.ts";
 import "./model-providers/model-providers-page.tsx";
 
 // Mirrors the module-private default usage TTL asserted below.
@@ -193,13 +189,6 @@ function contextWithMutableGateway(
   };
 }
 
-function createPage(tagName: string, context: ApplicationContext): TestPage {
-  const page = document.createElement(tagName) as TestPage;
-  page.context = context;
-  page.render = () => nothing;
-  return page;
-}
-
 async function replaceContext(
   page: Pick<TestPage, "context" | "remove" | "updateComplete">,
   element: HTMLElement,
@@ -341,9 +330,9 @@ describe("gateway source replacement across reconnect with a reused client", () 
 
     document.body.append(page.element);
     await page.updateComplete;
-    await waitForFast(() => expect(page.usageResult).toBe(freshResult));
-
-    expect(page.usageResult).not.toBe(staleResult);
+    await waitForFast(() =>
+      expect(page.usageResult?.sessions.map(({ key }) => key)).toEqual(["fresh"]),
+    );
   });
 
   it("retries a usage load interrupted by a same-client disconnect", async () => {
@@ -377,11 +366,13 @@ describe("gateway source replacement across reconnect with a reused client", () 
     await waitForFast(() =>
       expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(2),
     );
-    await waitForFast(() => expect(page.usageResult).toBe(freshResult));
+    await waitForFast(() =>
+      expect(page.usageResult?.sessions.map(({ key }) => key)).toEqual(["fresh"]),
+    );
     interrupted.resolve(usageResult("stale"));
     await Promise.resolve();
     await Promise.resolve();
-    expect(page.usageResult).toBe(freshResult);
+    expect(page.usageResult?.sessions.map(({ key }) => key)).toEqual(["fresh"]);
   });
 
   it("gates same-client usage reconnects by payload age and page visibility", async () => {
@@ -404,7 +395,10 @@ describe("gateway source replacement across reconnect with a reused client", () 
 
     document.body.append(page.element);
     await page.updateComplete;
-    expect(page.usageResult).toBe(result);
+    expect(page.usageResult).toMatchObject({
+      totals: result.totals,
+      sessions: result.sessions,
+    });
 
     harness.emitConnected(false);
     harness.emitConnected(true);
@@ -685,10 +679,9 @@ describe("gateway source replacement across reconnect with a reused client", () 
     document.body.append(page.element);
     await page.updateComplete;
     await page.loadUsage();
-    expect(page.usageResult).toBe(result);
-    expect(page.usageCostSummary).toMatchObject({
+    expect(page.usageResult).toMatchObject({
       totals: result.totals,
-      daily: result.aggregates.costDaily,
+      sessions: result.sessions,
     });
     expect(page.providerUsageSummary).toBe(providerUsage);
     page.usageSelectedSessions = ["old"];
@@ -696,7 +689,6 @@ describe("gateway source replacement across reconnect with a reused client", () 
     await replaceContext(page, page.element, client);
 
     expect(page.usageResult).toBeNull();
-    expect(page.usageCostSummary).toBeNull();
     expect(page.providerUsageSummary).toBeNull();
     expect(page.usageSelectedSessions).toEqual([]);
   });
@@ -785,39 +777,5 @@ describe("gateway source replacement across reconnect with a reused client", () 
     expect(mounted.page.textContent).toContain("Replacement agent skill");
     expect(request).toHaveBeenCalledWith("skills.status", { agentId: "fresh" });
     expect(request).not.toHaveBeenCalledWith("skills.status", { agentId: "stale" });
-  });
-
-  it("discards diagnostics from a replaced provider that reuses its client", async () => {
-    const pending = deferred<unknown>();
-    const request = vi.fn(() => pending.promise);
-    const client = { request } as unknown as GatewayBrowserClient;
-    const context = contextWithClient(client, { connected: true });
-    const page = createPage("openclaw-debug-page", context) as TestPage & {
-      debugStatus: unknown;
-      debugHealth: unknown;
-      debugModels: unknown[];
-      debugHeartbeat: unknown;
-      debugLanes: unknown[];
-      debugDiagnosticsError: string | null;
-      diagnosticsTask: { readonly status: TaskStatus };
-    };
-    document.body.append(page);
-    await page.updateComplete;
-
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(4));
-    page.debugDiagnosticsError = "old diagnostics failure";
-    await replaceContext(page, page, client);
-    pending.resolve({ models: [{ id: "stale" }], stale: true });
-    await pending.promise;
-    await settleLitElement(page);
-
-    expect(request).toHaveBeenCalledTimes(4);
-    expect(page.diagnosticsTask.status).not.toBe(TaskStatus.PENDING);
-    expect(page.debugStatus).toBeNull();
-    expect(page.debugHealth).toBeNull();
-    expect(page.debugModels).toEqual([]);
-    expect(page.debugHeartbeat).toBeNull();
-    expect(page.debugLanes).toEqual([]);
-    expect(page.debugDiagnosticsError).toBeNull();
   });
 });

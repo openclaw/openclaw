@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
 import { createNativeTypeScriptParser } from "./native-typescript.mts";
+import { controlUiBuildSiblingPid } from "./output-root-guard.mjs";
 import { isRecord as object } from "./record-shared.mjs";
 import { parseReleaseVersion } from "./release-version.mjs";
 import {
@@ -11,7 +12,6 @@ import {
 import { ModuleGraph, type UpdateCompatibilityOrigin } from "./update-compat-module-graph.mts";
 
 export { isUpdateCompatibilityChunk } from "./update-compat-contract.mjs";
-export const UPDATE_COMPATIBILITY_INVENTORY_FILE = "update-compat-inventory.json";
 const HASHED_CHUNK = /-[A-Za-z0-9_-]{8}\.m?js$/;
 const POST_SWAP_OWNER = /^src\/(?:cli\/update-cli\/|daemon\/|cli\/runtime-cleanup(?:-scope)?\.ts$)/;
 
@@ -80,6 +80,13 @@ function moduleFiles(root: string): string[] {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       const file = path.join(directory, entry.name);
       if (entry.isDirectory()) {
+        // The UI publishes its independent browser graph by renaming these trees.
+        if (
+          directory === root &&
+          (entry.name === "control-ui" || controlUiBuildSiblingPid(entry.name) !== null)
+        ) {
+          continue;
+        }
         // Plugin outputs and installed dependencies are independent runtime graphs.
         if (!["node_modules", "extensions", "plugin-sdk"].includes(entry.name)) {
           visit(file);
@@ -669,9 +676,5 @@ export function writeUpdateCompatibilityChunks(params: {
       fs.writeFileSync(destination, contents);
     }
   }
-  fs.writeFileSync(
-    path.join(distDir, UPDATE_COMPATIBILITY_INVENTORY_FILE),
-    `${JSON.stringify(params.inventory, null, 2)}\n`,
-  );
   return [...outputs.keys()].toSorted();
 }

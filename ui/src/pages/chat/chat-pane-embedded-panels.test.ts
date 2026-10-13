@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult } from "../../api/types.ts";
 import { loadSettings } from "../../app/settings.ts";
+import * as videoPosters from "../../lib/media/video-poster.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { PRESENTATION_CHANGED_EVENT } from "../../lit/presentation-binding.ts";
 import {
@@ -47,7 +48,7 @@ import {
   resetTranscriptTestDom,
   threadProps,
 } from "./components/chat-transcript.test-support.ts";
-import "./components/chat-sidebar-region.runtime.ts";
+import "./components/chat-sidebar-region.runtime.tsx";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
 import {
   closeSlot,
@@ -344,6 +345,7 @@ describe("chat pane embedded panels", () => {
     "reuses attachment metadata when Open shows %s content in Files",
     async (surface) => {
       installTranscriptDomMocks();
+      vi.spyOn(videoPosters, "requestVideoPoster").mockResolvedValue(null);
       const { context, mount, state } = createReviewFixture();
       const transcript = document.body.appendChild(document.createElement("div"));
       const fetchMetadata = vi.fn(() =>

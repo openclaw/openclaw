@@ -1,4 +1,6 @@
+import { deriveSessionPredicateColumns } from "../config/sessions/session-predicate-columns.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { createTranscriptEventInserter } from "../config/sessions/transcript-payload.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { repairCanonicalSessionKeys as repairSessionKeys } from "./doctor-session-canonical-keys.js";
@@ -32,15 +34,19 @@ export function insertLegacySession(params: {
       env: params.env,
     }).path,
   });
+  const entryJson = JSON.stringify(params.entry);
+  const predicates = deriveSessionPredicateColumns(entryJson);
   database.db
     .prepare(
-      "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+      "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, session_started_at, has_optional_references) VALUES (?, ?, ?, ?, ?, ?)",
     )
     .run(
       params.sessionKey,
       params.entry.sessionId,
-      JSON.stringify(params.entry),
+      entryJson,
       params.entry.updatedAt,
+      predicates.session_started_at,
+      predicates.has_optional_references,
     );
   database.db
     .prepare(
@@ -50,18 +56,17 @@ export function insertLegacySession(params: {
   if (!params.eventText) {
     return;
   }
-  database.db
-    .prepare(
-      "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, 0, ?, ?)",
-    )
-    .run(
-      params.entry.sessionId,
-      JSON.stringify({
-        id: `${params.entry.sessionId}-message`,
-        message: { content: params.eventText, role: "user" },
-        parentId: null,
-        type: "message",
-      }),
-      params.entry.updatedAt,
-    );
+  createTranscriptEventInserter(
+    database.db,
+    params.entry.sessionId,
+  )({
+    seq: 0,
+    eventJson: JSON.stringify({
+      id: `${params.entry.sessionId}-message`,
+      message: { content: params.eventText, role: "user" },
+      parentId: null,
+      type: "message",
+    }),
+    createdAt: params.entry.updatedAt,
+  });
 }

@@ -6,10 +6,14 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../agents/harness/hook-helpers.js";
 import { formatChatWorkContext } from "../chat/work-context.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveSessionTranscriptDatabasePath } from "../config/sessions/session-accessor.transcript-target.js";
 import { resolveSessionColdArchivePath } from "../config/sessions/session-cold-storage-codec.js";
@@ -37,7 +41,18 @@ import {
 import type { UserTurnOriginalInputCommit } from "./user-turn-transcript.types.js";
 
 describe("persistUserTurnTranscript", () => {
-  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-user-turn-append-");
+  const sessionDirs = useSessionStoreTempDirs(
+    (cleanup) =>
+      afterAll(async () => {
+        await cleanup();
+        clearRuntimeConfigSnapshot();
+      }),
+    "openclaw-user-turn-append-",
+  );
+
+  beforeEach(() => {
+    setRuntimeConfigSnapshot({});
+  });
 
   afterEach(() => {
     resetGlobalHookRunner();
@@ -146,12 +161,14 @@ describe("persistUserTurnTranscript", () => {
     expect(persisted).not.toHaveProperty("__openclaw.workContext");
   });
 
-  it("round-trips a multi-attachment SQLite row byte-identically", async () => {
+  it("round-trips source text and attachments byte-identically despite logging patterns", async () => {
     const dir = sessionDirs.make();
     const target = createSqliteTranscriptTarget({ dir });
+    const text =
+      "Inspect both\nAPI_TOKEN = computeToken()\nOPENAI_API_KEY=sk-proj-fixture1234567890";
     const expected = {
       role: "user",
-      content: "Inspect both",
+      content: text,
       timestamp: 456,
       __openclaw: {
         media: [
@@ -163,8 +180,9 @@ describe("persistUserTurnTranscript", () => {
 
     const appended = await persistUserTurnTranscript({
       ...target,
+      config: { logging: { redactPatterns: ["computeToken"] } },
       input: {
-        text: "Inspect both",
+        text,
         timestamp: 456,
         media: [
           { path: "/tmp/image.png", contentType: "image/png" },

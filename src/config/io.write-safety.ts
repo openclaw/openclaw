@@ -570,6 +570,7 @@ export function resolveConfigSizeBaselineBytes(params: {
   raw: string | null;
   json5: { parse: (value: string) => unknown };
   lastTouchedVersionOverride?: string;
+  env?: NodeJS.ProcessEnv;
 }): number | null {
   if (params.raw === null) {
     return null;
@@ -580,7 +581,12 @@ export function resolveConfigSizeBaselineBytes(params: {
     return rawBytes;
   }
   const canonical = JSON.stringify(
-    stampConfigWriteMetadata(parsed.parsed as OpenClawConfig, params.lastTouchedVersionOverride),
+    stampConfigWriteMetadata(
+      parsed.parsed as OpenClawConfig,
+      params.lastTouchedVersionOverride,
+      undefined,
+      params.env,
+    ),
     null,
     2,
   )

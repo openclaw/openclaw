@@ -28,6 +28,7 @@ import { runAgentHarnessBeforeMessageWriteHook } from "../src/agents/harness/hoo
 import { createAgentHarnessHostCapabilities } from "../src/agents/harness/host-capability.js";
 import { listRegisteredAgentHarnesses } from "../src/agents/harness/registry.js";
 import { withGatewayToolCallerIdentity } from "../src/agents/tools/gateway-caller-context.js";
+import { setRuntimeConfigSnapshot } from "../src/config/runtime-snapshot.js";
 import {
   listSessionEntriesCore,
   loadSessionEntry,
@@ -393,6 +394,7 @@ async function withFixture(
           openai: { enabled: true },
         },
       };
+      setRuntimeConfigSnapshot(config);
       const { registry, createApi } = createPluginRegistry({
         runtime,
         logger: { info() {}, warn() {}, error() {} },
@@ -1809,17 +1811,20 @@ describe("canonical descendant lifecycle through real owners", () => {
     ["ignored cut", /did not apply the exact beforeTurnId cut/],
     ["missing model", /model/i],
     ["null model", /model/i],
-    ["model changed during preparation", /canonical Codex source changed/],
-    ["provider changed during preparation", /canonical Codex source changed/],
+    ["model changed during preparation", /The Codex source thread changed during initialization/],
+    [
+      "provider changed during preparation",
+      /The Codex source thread changed during initialization/,
+    ],
     ["request authorization changed after native fork", /request authorization changed/],
     ["sandbox policy changed during initialization", /requires a sandbox/],
     ["catalog mismatch", /native tool catalog is missing, corrupt, or changed/],
     ["child catalog", /did not preserve the actual native tool catalog/],
-    ["child model", /did not preserve the exact canonical source and selected native model/],
-    ["child thread model", /did not preserve the exact canonical source and selected native model/],
+    ["child model", /did not preserve the exact source session and selected native model/],
+    ["child thread model", /did not preserve the exact source session and selected native model/],
     [
       "null child thread model",
-      /did not preserve the exact canonical source and selected native model/,
+      /did not preserve the exact source session and selected native model/,
     ],
     ["child lineage", /unsafe native thread identity/],
     ["unsubscribe failure", /unsubscribe|subscription|guarded rollback/i],

@@ -1,6 +1,7 @@
 import type { DeclaredProviderOwnerIndex } from "../provider-owner-index.js";
 
 export type PluginRuntimeLoadContextState = {
+  workspaceDir: string | undefined;
   activationInputFingerprint: string;
   controlPlaneFingerprint: string;
   registrationConfigKey: string;

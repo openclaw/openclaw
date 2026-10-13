@@ -223,17 +223,20 @@ The pill carries inline controls:
 - **Chevron** expands the pill to show the full objective, the latest status
   note, token usage, and elapsed time.
 
-On narrow mobile screens, expand the pill to reveal compact labeled controls
-above the full objective. Collapsing it hides these controls again; token usage
-and elapsed time remain below the objective and status note.
+Resume stays visible in the collapsed pill, including on narrow mobile screens.
+Expand the pill to reveal the other compact labeled controls above the full
+objective. Token usage and elapsed time remain below the objective and status note.
 
 Edit, Pause, and Clear do not send slash commands or add chat turns. Controls
 target the displayed Goal ID, so a stale button cannot change a replacement
 Goal. If a request is interrupted or its acknowledgment does not arrive within
-30 seconds, the UI reports an unconfirmed outcome. Use **Check outcome** in the
-recovery notice, even if the goal changed or was cleared. This retries the saved action
+30 seconds, the UI reports an unconfirmed outcome. Resume keeps **Resuming goal…**
+in the pill while waiting and retries once after a timeout or unavailable response,
+using the same saved request. If it remains unconfirmed, use **Retry resume** in
+the pill. Other actions, or requests whose goal changed or was cleared, use
+**Check outcome** in the recovery notice. These controls retry the saved action
 unchanged to reconcile it with the Gateway receipt. The original request stays
-in this browser tab across reconnects and reloads; it is never retried
+in this browser tab across reconnects and reloads; restoring it never sends it
 automatically. The UI does not send goal controls if the connection has no
 account-scoped recovery identity or the recovery request cannot be saved; it
 immediately shows an error explaining why the action was not sent.

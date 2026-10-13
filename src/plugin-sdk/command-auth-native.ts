@@ -15,6 +15,7 @@ export {
   serializeCommandArgs,
   resolveCommandArgChoices,
   resolveCommandArgMenu,
+  resolveCommandArgMenuAsync,
 } from "../auto-reply/commands-registry.js";
 export type {
   ChatCommandDefinition,
@@ -38,7 +39,10 @@ export {
   resolveCommandAuthorizationAsync,
   type CommandAuthorization,
 } from "../auto-reply/command-auth.js";
-export { resolveStoredModelOverride } from "../sessions/stored-model-overrides.js";
+export {
+  resolveStoredModelOverride,
+  resolveStoredModelOverrideAsync,
+} from "../sessions/stored-model-overrides.js";
 export { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 export {
   formatFastModeCommandOptions,
