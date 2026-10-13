@@ -13,6 +13,7 @@ import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type {
   CodeModeExecutorContinuation,
+  CodeModeExecutorInlineHost,
   CodeModeExecutorStartInput,
 } from "./code-mode-executor-types.js";
 import { nodeCodeModeExecutor } from "./code-mode-node.js";
@@ -55,6 +56,51 @@ function execute(source: string, overrides: Partial<CodeModeExecutorStartInput> 
 }
 
 describe("Node Code Mode executor", () => {
+  it("reports heap exhaustion after dispatch with the native cause and recovers", async () => {
+    const observed = vi.fn();
+    const onBoundary = vi.fn<CodeModeExecutorInlineHost["onBoundary"]>(
+      async (boundary, context) => ({
+        kind: "continue" as const,
+        timeoutMs: Math.min(1000, context.maxTimeoutMs),
+        pendingRequests: [],
+        settledRequests: boundary.pendingRequests.map(({ id }) => ({ id, ok: true, json: "null" })),
+      }),
+    );
+    const result = await host.run(() =>
+      nodeCodeModeExecutor.execute(
+        {
+          kind: "exec",
+          config,
+          catalog: [],
+          namespaces: [],
+          source:
+            "await yield_control(); const data = []; for (let i = 0; i < 2_000_000; i++) data.push({ i, value: String(i) }); return data.length;",
+        },
+        { timeoutMs: 7000, inlineHost: { onBoundary, onFailure: observed } },
+      ),
+    );
+    expect(onBoundary).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ status: "failed", code: "runtime_unavailable" });
+    if (result.status !== "failed") {
+      throw new Error("expected heap exhaustion");
+    }
+    expect(result.error).toContain("exhausted its 64 MiB JavaScript heap");
+    expect(result.error).toContain("Inspect any completed actions before retrying");
+    expect(observed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cause: expect.objectContaining({
+          code: "ERR_WORKER_OUT_OF_MEMORY",
+          stack: expect.any(String),
+        }),
+      }),
+      "host",
+      expect.stringMatching(/^code-mode-node:/),
+    );
+    expect(await execute("return 42")).toMatchObject({
+      status: "completed",
+      value: { json: "42" },
+    });
+  });
   it.each(["alternating limits", "concurrent continuations"] as const)(
     "keeps workers warm across %s",
     async (scenario) => {
