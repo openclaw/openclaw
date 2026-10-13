@@ -13,7 +13,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { getTrackedWorkerCpuSources, getTrackedWorkerPoolSnapshot } from "./worker-cpu.js";
 import { workerTaskPoolEntrypoints } from "./worker-task-pool-runtime.test-support.js";
-import { WorkerTaskError, WorkerTaskPool } from "./worker-task-pool.js";
+import { WorkerTaskPool } from "./worker-task-pool.js";
 import type { PoolFixtureInput, PoolFixtureResult } from "./worker-task-pool.test-support.js";
 
 const workerUrl = resolveRuntimeWorkerUrl(workerTaskPoolEntrypoints.worker);
@@ -376,59 +376,14 @@ it("rejects a clean exit before a response and recovers capacity", async () => {
   expect(workers).toHaveLength(2);
 });
 
-it.each(["exit", "oom"] as const)(
-  "rejects active and queued callers after worker %s without an unhandled rejection",
-  async (failure) => {
-    const script = `
-      import { parentPort } from "node:worker_threads";
-      parentPort.once("message", () => {
-        ${
-          failure === "exit"
-            ? "process.exit(77);"
-            : `
-          const allocations = [];
-          for (;;) allocations.push(new Array(131072).fill(allocations.length));
-        `
-        }
-      });
-    `;
-    const pool = createPool({
-      workerUrl: new URL(`data:text/javascript,${encodeURIComponent(script)}`),
-      workerOptions: {
-        execArgv: [],
-        resourceLimits: { maxOldGenerationSizeMb: 16, maxYoungGenerationSizeMb: 4 },
-      },
-      maxWorkers: 2,
-      restartOnError: false,
-    });
-    const unhandled = vi.fn();
-    process.on("unhandledRejection", unhandled);
-    try {
-      const results = await Promise.allSettled(
-        Array.from({ length: 40 }, (_, index) =>
-          pool.run({ label: `caller-${index}` }, { timeoutMs: 10_000 }),
-        ),
-      );
-      await pool.close();
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      for (const result of results) {
-        expect(result.status).toBe("rejected");
-        if (result.status === "rejected") {
-          expect(result.reason).toBeInstanceOf(WorkerTaskError);
-          expect(result.reason.code).toBe("unavailable");
-          expect(result.reason.message).toContain(
-            failure === "exit" ? "worker exited with code 77" : "ERR_WORKER_OUT_OF_MEMORY",
-          );
-        }
-      }
-      expect(unhandled).not.toHaveBeenCalled();
-    } finally {
-      process.off("unhandledRejection", unhandled);
-    }
-  },
-);
+it("rejects active and queued callers after worker exit and OOM without unhandled rejections", async () => {
+  // CI's process-wide V8 heap setting overrides Worker resourceLimits.
+  await exec(
+    process.execPath,
+    resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(workerTaskPoolEntrypoints.failure)),
+    { env: { ...process.env, NODE_OPTIONS: "" }, timeout: 20_000 },
+  );
+});
 
 it("closes a generation before a rejected result can dispatch its successor", async () => {
   const reason = new Error("generation superseded");

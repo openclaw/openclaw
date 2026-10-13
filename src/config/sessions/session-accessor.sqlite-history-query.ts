@@ -23,7 +23,7 @@ import { positionTranscriptDisplayEvents } from "./session-accessor.sqlite-displ
 import {
   parseStoredTranscriptEvent,
   readDisplayableActiveEventById,
-  readDisplayableActiveResetMetadataById,
+  readDisplayableActiveEventMetadataById,
   readHistoricalHistoryAnchorPage,
   readHistoricalHistoryPrecedingEvent,
   resolveHistoricalHistoryEvent,
@@ -141,7 +141,6 @@ function resolveRecentHistoryStart(
   maxMessages: number,
   allowOversizedFirst = true,
 ): { start: number; bytes: number } {
-  const byteLimit = Math.min(maxBytes, SOURCE_PAGE_MAX_BYTES);
   const { boundedEnd, boundedStart, boundaries, messageEnd, messageStart } =
     resolveVisibleHistoryRange(history, start, endExclusive);
   // No result can include more than maxMessages events, so older metadata would
@@ -175,12 +174,12 @@ function resolveRecentHistoryStart(
       if (serializedBytes === undefined) {
         continue;
       }
-      if (selectedCount === 0 && serializedBytes > SOURCE_PAGE_MAX_BYTES) {
+      if (allowOversizedFirst && selectedCount === 0 && serializedBytes > SOURCE_PAGE_MAX_BYTES) {
         throw new Error(
           `Transcript history message exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte page limit`,
         );
       }
-      if ((!allowOversizedFirst || selectedCount > 0) && bytes + serializedBytes > byteLimit) {
+      if ((!allowOversizedFirst || selectedCount > 0) && bytes + serializedBytes > maxBytes) {
         break;
       }
       selectedStart = displayPosition;
@@ -201,6 +200,22 @@ type HistoryEventById =
   | { historical: NonNullable<ReturnType<typeof readDisplayableActiveEventById>> };
 export type { SessionTranscriptMessageByIdOptions } from "../../gateway/session-transcript-read.types.js";
 
+function resolveHistoryEventSequence(
+  projection: CurrentTranscriptProjection,
+  history: VisibleHistoryProjection,
+  row: { event_seq: number; message_position: number | null },
+): number | undefined {
+  if (row.message_position === null) {
+    const boundary = history.boundaries.find((candidate) => candidate.eventSeq === row.event_seq);
+    return boundary === undefined ? undefined : boundary.displayPosition + 1;
+  }
+  return resolveHistoryMessageSequence(
+    resolveVisibleMessagePositions(projection),
+    history,
+    row.message_position,
+  );
+}
+
 function resolveHistoryEventById(
   projection: CurrentTranscriptProjection,
   eventId: string,
@@ -209,11 +224,6 @@ function resolveHistoryEventById(
 ): HistoryEventById | undefined {
   const boundary = history.boundaries.find((candidate) => candidate.eventId === eventId);
   if (boundary) {
-    if (boundary.serializedBytes > SOURCE_PAGE_MAX_BYTES) {
-      throw new Error(
-        `Transcript history message exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte page limit`,
-      );
-    }
     if (maxBytes !== undefined && boundary.serializedBytes > maxBytes) {
       return undefined;
     }
@@ -231,14 +241,7 @@ function resolveHistoryEventById(
   if (!row) {
     return undefined;
   }
-  const seq =
-    row.message_position === null
-      ? undefined
-      : resolveHistoryMessageSequence(
-          resolveVisibleMessagePositions(projection),
-          history,
-          row.message_position,
-        );
+  const seq = resolveHistoryEventSequence(projection, history, row);
   return seq === undefined
     ? { historical: row }
     : {
@@ -337,7 +340,10 @@ function readRecentHistoryInSnapshot(
         Math.max(0, history.total - maxLines),
         history.total,
         history,
-        resolveIntegerOption(options.maxBytes, 8 * 1024 * 1024, { min: 1024 }),
+        Math.min(
+          resolveIntegerOption(options.maxBytes, SOURCE_PAGE_MAX_BYTES, { min: 1024 }),
+          SOURCE_PAGE_MAX_BYTES,
+        ),
         maxMessages,
       );
   const events = empty ? [] : readVisibleHistoryRange(projection, start, history.total, history);
@@ -466,7 +472,7 @@ export function readSessionTranscriptHistoryEventPageFromProjection(
     history,
     resolveIntegerOption(options.maxBytes, SOURCE_PAGE_MAX_BYTES, { min: 1024 }),
     maxMessages,
-    options.allowOversizedFirst ?? false,
+    options.allowOversizedFirst ?? options.maxBytes === undefined,
   ).start;
   if (options.maxBytes === undefined && boundedStart !== requestedStart) {
     throw new Error(
@@ -577,19 +583,21 @@ export function readSessionTranscriptHistoryAnchorPageFromProjection(
   options: TranscriptAnchorPageOptions,
 ): SessionTranscriptMessageAnchorPage {
   const history = resolveVisibleHistoryProjection(projection);
-  if (options.closedResetInterval === true && options.direction === "older") {
-    const closingReset = readDisplayableActiveResetMetadataById(projection, options.messageId);
-    if (closingReset) {
-      const closedPage = readHistoricalHistoryAnchorPage(
-        projection,
-        history.displaySource,
-        closingReset,
-        options,
-        true,
-      );
-      if (closedPage) {
-        return closedPage;
-      }
+  const anchor = readDisplayableActiveEventMetadataById(projection, options.messageId);
+  if (
+    options.closedResetInterval === true &&
+    options.direction === "older" &&
+    anchor?.event_type === "reset"
+  ) {
+    const closedPage = readHistoricalHistoryAnchorPage(
+      projection,
+      history.displaySource,
+      anchor,
+      options,
+      true,
+    );
+    if (closedPage) {
+      return closedPage;
     }
   }
   const windowChange = resolveHistoryReadWindowChange(
@@ -597,8 +605,8 @@ export function readSessionTranscriptHistoryAnchorPageFromProjection(
     history,
     options.expectedReadWindow,
   );
-  const anchor = resolveHistoryEventById(projection, options.messageId, history);
-  if (windowChange && (!anchor || "historical" in anchor)) {
+  const anchorSeq = anchor && resolveHistoryEventSequence(projection, history, anchor);
+  if (windowChange && anchorSeq === undefined) {
     return {
       ...readSessionTranscriptHistoryEventPageFromProjection(projection, {
         offset: 0,
@@ -612,18 +620,13 @@ export function readSessionTranscriptHistoryAnchorPageFromProjection(
       offset: 0,
     };
   }
-  if (!anchor || "historical" in anchor) {
+  if (!anchor || anchorSeq === undefined) {
     // Explicit anchors reopen the closed reset interval that still contains the
     // active-path row. Unanchored history and current-display lookup stay
     // latest-reset-relative; missing or off-path IDs stay not-found.
     return (
       (anchor &&
-        readHistoricalHistoryAnchorPage(
-          projection,
-          history.displaySource,
-          anchor.historical,
-          options,
-        )) ?? {
+        readHistoricalHistoryAnchorPage(projection, history.displaySource, anchor, options)) ?? {
         events: [],
         found: false,
         hasOverreadContext: false,
@@ -633,7 +636,7 @@ export function readSessionTranscriptHistoryAnchorPageFromProjection(
       }
     );
   }
-  const range = resolveHistoryAnchorPageRange(history.total, anchor.seq - 1, options);
+  const range = resolveHistoryAnchorPageRange(history.total, anchorSeq - 1, options);
   const limit = Math.min(options.maxBytes ?? SOURCE_PAGE_MAX_BYTES, SOURCE_PAGE_MAX_BYTES);
   const { start } = resolveRecentHistoryStart(
     projection,
@@ -642,7 +645,7 @@ export function readSessionTranscriptHistoryAnchorPageFromProjection(
     history,
     Math.max(1024, limit),
     range.endExclusive - range.readStart,
-    false,
+    options.maxBytes === undefined,
   );
   if (options.maxBytes === undefined && start !== range.readStart) {
     throw new Error(

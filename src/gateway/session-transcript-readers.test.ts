@@ -276,6 +276,18 @@ describe("session transcript reader facade", () => {
     await expect(
       readSessionMessagesAroundIdWithStatsAsync(scope, { messageId: "oversized", maxMessages: 1 }),
     ).rejects.toThrow("Transcript history message exceeds the 8388608-byte page limit");
+    openOpenClawAgentDatabase({
+      agentId: "main",
+      path: path.join(tempDir, "openclaw-agent.sqlite"),
+    })
+      .db.prepare("DELETE FROM transcript_event_identities WHERE session_id = ?")
+      .run(sessionId);
+    await expect(readSessionMessageByIdAsync(scope, "oversized")).resolves.toMatchObject({
+      found: true,
+    });
+    await expect(
+      readSessionMessagesAroundIdWithStatsAsync(scope, { messageId: "oversized", maxMessages: 1 }),
+    ).rejects.toThrow("Transcript history message exceeds the 8388608-byte page limit");
   });
 
   test("refuses unbounded anchor windows and caps payloads before decoding", async () => {

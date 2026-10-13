@@ -838,7 +838,11 @@ export async function runGatewayLoop(params: {
               );
             }
             completeBoot(
-              loopCompletion.formatShutdownCompletion(acceptedRequest, Boolean(shutdownFailure)),
+              loopCompletion.formatShutdownCompletion(
+                acceptedRequest,
+                Boolean(shutdownFailure),
+                hostExitReason,
+              ),
             );
             await releaseLockIfHeld();
             await finishLoopAfterCleanup(shutdownFailure ? 1 : 0);

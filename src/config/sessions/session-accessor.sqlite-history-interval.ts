@@ -163,34 +163,32 @@ export function readDisplayableActiveEventById(
   maxBytes?: number,
 ) {
   const db = getActiveTranscriptKysely(projection.database);
-  const limit = Math.min(maxBytes ?? SOURCE_PAGE_MAX_BYTES, SOURCE_PAGE_MAX_BYTES);
   const indexed = executeSqliteQueryTakeFirstSync(
     projection.database.db,
     selectDisplayableActiveEventById(projection, eventId).select((eb) =>
-      eb
-        .case()
-        .when(eb(transcriptEventReadBytesSql("event"), "<=", limit))
-        .then(transcriptEventJsonSql(projection.database.db, "event"))
-        .else(null)
-        .end()
-        .as("event_json"),
+      maxBytes === undefined
+        ? transcriptEventJsonSql(projection.database.db, "event").as("event_json")
+        : eb
+            .case()
+            .when(eb(transcriptEventReadBytesSql("event"), "<=", maxBytes))
+            .then(transcriptEventJsonSql(projection.database.db, "event"))
+            .else(null)
+            .end()
+            .as("event_json"),
     ),
   );
   assertTranscriptNavigationValid(indexed?.navigation_valid);
   if (indexed) {
-    if (indexed.event_json === null && maxBytes === undefined) {
-      throw new Error(
-        `Transcript history message exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte page limit`,
-      );
-    }
     return indexed.event_json === null ? undefined : { ...indexed, event_json: indexed.event_json };
   }
   const unindexed = findUnindexedActiveTranscriptEntry(projection, eventId);
   if (
     !unindexed ||
-    (unindexed.message_position === null && !isVisibleHistoryNonMessageEvent(unindexed.event)) ||
-    unindexed.serialized_bytes - 1 > limit
+    (unindexed.message_position === null && !isVisibleHistoryNonMessageEvent(unindexed.event))
   ) {
+    return undefined;
+  }
+  if (maxBytes !== undefined && unindexed.serialized_bytes - 1 > maxBytes) {
     return undefined;
   }
   const event = executeSqliteQueryTakeFirstSync(
@@ -212,24 +210,31 @@ export function readDisplayableActiveEventById(
     : undefined;
 }
 
-export function readDisplayableActiveResetMetadataById(
+export function readDisplayableActiveEventMetadataById(
   projection: CurrentTranscriptProjection,
   eventId: string,
-): { active_position: number; event_type: "reset" } | undefined {
+) {
   const indexed = executeSqliteQueryTakeFirstSync(
     projection.database.db,
     selectDisplayableActiveEventById(projection, eventId),
   );
   assertTranscriptNavigationValid(indexed?.navigation_valid);
   if (indexed) {
-    return indexed.event_type === "reset"
-      ? { active_position: indexed.active_position, event_type: "reset" }
-      : undefined;
+    return indexed;
   }
   const unindexed = findUnindexedActiveTranscriptEntry(projection, eventId);
-  return unindexed?.event.type === "reset"
-    ? { active_position: unindexed.active_position, event_type: "reset" }
-    : undefined;
+  if (
+    !unindexed ||
+    (unindexed.message_position === null && !isVisibleHistoryNonMessageEvent(unindexed.event))
+  ) {
+    return undefined;
+  }
+  return {
+    event_seq: unindexed.event_seq,
+    active_position: unindexed.active_position,
+    message_position: unindexed.message_position,
+    event_type: typeof unindexed.event.type === "string" ? unindexed.event.type : null,
+  };
 }
 
 function countHistoricalDisplayEvents(

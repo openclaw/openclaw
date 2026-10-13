@@ -160,9 +160,9 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
     }
   });
 
-  it.each([false, true])(
-    "records an unhandled rejection stop reason (already restarting: %s)",
-    async (restart) => {
+  it.each(["running", "restarting", "stopping"] as const)(
+    "records an unhandled rejection stop reason while %s",
+    async (phase) => {
       const { exitAfterSignalExitBarriers } = await import("../signal-exit-barrier.js");
       const closing = createDeferredCore();
       const closed = createDeferredCore();
@@ -183,8 +183,8 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
             completeBoot,
           });
           await waitForStart(started);
-          if (restart) {
-            captureSignal("SIGUSR2")();
+          if (phase !== "running") {
+            captureSignal(phase === "restarting" ? "SIGUSR2" : "SIGTERM")();
             await closing.promise;
           }
           exitAfterSignalExitBarriers(1, "unhandled rejection");
@@ -196,7 +196,7 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
             reason: "stop (process exit: unhandled rejection)",
           });
           expect(gatewayLog.info).toHaveBeenCalledWith(
-            restart
+            phase !== "running"
               ? "received unhandled rejection during shutdown; finishing shutdown without restart"
               : "received unhandled rejection; shutting down",
           );
