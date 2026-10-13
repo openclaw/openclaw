@@ -4,9 +4,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
@@ -75,6 +80,9 @@ describe("attempt execution bootstrap context forwarding", () => {
     homeEnvSnapshot = captureEnv(["HOME", "OPENCLAW_STATE_DIR"]);
     setTestEnvValue("OPENCLAW_STATE_DIR", suiteRoot);
     tmpDir = await fixtureRoot.make();
+    // The CLI branch asserts local turn placement, which reads the prepared
+    // runtime config; prepare it here so the file is order-independent.
+    setRuntimeConfigSnapshot({ session: { store: storePath } } as OpenClawConfig);
     runCliAgentMock.mockReset();
     runEmbeddedAgentMock.mockReset();
     cliBackendsTesting.setDepsForTest({
@@ -93,6 +101,7 @@ describe("attempt execution bootstrap context forwarding", () => {
 
   afterEach(async () => {
     cliBackendsTesting.resetDepsForTest();
+    clearRuntimeConfigSnapshot();
     clearSessionStoreCacheForTest();
     resetCliAttemptFixtureDatabases(suiteRoot);
     await fs.rm(tmpDir, { recursive: true, force: true });
