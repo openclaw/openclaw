@@ -42,13 +42,11 @@ import { runAcpAgentCommand } from "./command/acp-execution.js";
 import { repairPendingAssistantTranscriptTurns } from "./command/assistant-transcript-repair.js";
 import { persistAgentSession } from "./command/attempt-execution.shared.js";
 import { finishAgentCommandCleanup } from "./command/cleanup.js";
+import { createCompactionSessionIdReporter } from "./command/compaction-accounting.js";
 import { emitIngressModelUsageDiagnostic } from "./command/ingress-diagnostics.js";
 import { prepareCommandForegroundRun } from "./command/maintenance.js";
 import { resolveEmbeddedModelSelection } from "./command/model-selection.js";
-import {
-  createCompactionSessionIdReporter,
-  finalizeEmbeddedAgentCommand,
-} from "./command/post-run.js";
+import { finalizeEmbeddedAgentCommand } from "./command/post-run.js";
 import {
   prepareAgentCommandExecution,
   type PreparedAgentCommandRuntimeContext,

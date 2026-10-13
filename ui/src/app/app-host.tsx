@@ -173,9 +173,7 @@ export class ShellOwner
   // A rejected chunk must stay visible: the overlay is already open, so the
   // shell renders a recoverable failure instead of an empty dialog frame.
   readonly devicePairSetup = new LazyRenderer(this, () =>
-    import("../pages/devices/view-pairing.runtime.ts").then(
-      (module) => module.renderDevicePairSetup,
-    ),
+    import("../pages/devices/view-pairing.tsx").then((module) => module.DevicePairSetup),
   );
   private readonly shellNavigation = new ShellNavigationOwner(this);
   private readonly shellChrome = new ShellChromeOwner(this);

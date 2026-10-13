@@ -1,5 +1,4 @@
 // Creates verified SQLite snapshots, compacting by default.
-import { randomUUID } from "node:crypto";
 import fsSync, { type BigIntStats, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
@@ -348,10 +347,7 @@ async function publishSqliteFile(
     stagingDir =
       consumeOwnedSource === "prepared"
         ? path.dirname(options.sourcePath)
-        : await createPrivateSqliteTempDirectory(
-            targetDirectory,
-            `.sqlite-publish-${randomUUID()}-`,
-          );
+        : await createPrivateSqliteTempDirectory(targetDirectory, ".sqlite-publish-");
   } catch (error) {
     await targetDirectoryPin.close().catch(() => undefined);
     throw error;

@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { BroadcastChannel } from "node:worker_threads";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { runWithSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -13,6 +14,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import type { CronJob } from "../types.js";
 import { loadCronStoreFromDatabase } from "./load.kernel.js";
+import { cancelCronRequestsInWorker } from "./run-queue.worker.js";
 import { ensureCronRunReceiptSchema } from "./run-receipt-store.js";
 import { saveCronStoreInDatabase } from "./save.kernel.js";
 import type { CronSchedulerOperations, CronSchedulerSnapshot } from "./scheduler-actor.types.js";
@@ -156,6 +158,120 @@ it("requests one overdue occurrence per job in oldest-first order", () => {
   expect(scheduler.receipts()).toHaveLength(3);
   expect(scheduler.tick(now + 1, 1).accepted).toEqual([]);
   expect(scheduler.receipts()).toHaveLength(3);
+});
+
+it("activates scheduled requests in FIFO capacity order and observes a queued edit on the next tick", () => {
+  const count = DEFAULT_CRON_MAX_CONCURRENT_RUNS + 2;
+  const scheduler = storedScheduler(
+    "scheduled-activation",
+    Array.from({ length: count }, (_, index) =>
+      job(`job-${index}`, now - (count - index) * minute),
+    ),
+  );
+  const started = scheduler.start(now, {
+    snapshot: { ...snapshot, config: { ...snapshot.config, maxMissedJobsPerRestart: count } },
+  });
+  expect(started.accepted).toHaveLength(count);
+  expect(started.launches.map(({ job: entry }) => entry.id)).toEqual(
+    Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, (_, index) => `job-${index}`),
+  );
+  const queuedId = `job-${DEFAULT_CRON_MAX_CONCURRENT_RUNS}`;
+  const persisted = scheduler.read();
+  expect(persisted.filter((entry) => entry.state.runningAtMs === now)).toHaveLength(
+    DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+  );
+  expect(persisted.filter((entry) => entry.state.queuedAtMs === now)).toHaveLength(2);
+  const queued = persisted.find((entry) => entry.id === queuedId)!;
+  queued.payload = { kind: "command", argv: ["echo", "edited while queued"] };
+  queued.state.lastError = "preserve earlier failure";
+  withinWorker(() =>
+    runOpenClawStateWriteTransaction(
+      () => saveCronStoreInDatabase(database, scheduler.storeKey, { version: 1, jobs: persisted }),
+      { database, path: database.path, env: fixture.env },
+    ),
+  );
+  expect(scheduler.tick(now + 1, 1).launches).toEqual([]);
+  withinWorker(() =>
+    cancelCronRequestsInWorker(database, {
+      storeKey: scheduler.storeKey,
+      receiptIds: [started.launches[0]!.runReceipt.receiptId],
+      nowMs: now + 2,
+      reason: "test releases one slot",
+    }),
+  );
+  const resumed = scheduler.tick(now + 3, 3);
+  expect(resumed.accepted).toEqual([]);
+  expect(resumed.launches.map(({ job: entry }) => entry.id)).toEqual([queuedId]);
+  expect(resumed.launches[0]?.job.payload).toEqual({
+    kind: "command",
+    argv: ["echo", "edited while queued"],
+  });
+  expect(resumed.launches[0]?.job.state).toMatchObject({
+    runningAtMs: now + 3,
+    lastError: "preserve earlier failure",
+  });
+  expect(scheduler.read().find((entry) => entry.id === queuedId)?.state).toEqual(
+    resumed.launches[0]?.job.state,
+  );
+});
+
+it("keeps startup work pending while its subscriber is paused", () => {
+  const scheduler = storedScheduler("paused-start", [job("pending", now - minute)]);
+  const started = scheduler.start(now, { paused: true });
+  expect(started.accepted).toEqual([]);
+  expect(started.launches).toEqual([]);
+  const resumed = scheduler.tick(now + 1, 1, { channelName: scheduler.channelName, paused: false });
+  expect(resumed.launches.map(({ job: entry }) => entry.id)).toEqual(["pending"]);
+});
+
+it("settles a removed queued request even when no queued job remains", () => {
+  const count = DEFAULT_CRON_MAX_CONCURRENT_RUNS + 1;
+  const scheduler = storedScheduler(
+    "removed-queued-request",
+    Array.from({ length: count }, (_, index) => job(`job-${index}`, now - minute)),
+  );
+  const started = scheduler.start(now, {
+    snapshot: { ...snapshot, config: { ...snapshot.config, maxMissedJobsPerRestart: count } },
+  });
+  const removed = started.accepted.at(-1)!;
+  withinWorker(() => {
+    cancelCronRequestsInWorker(database, {
+      storeKey: scheduler.storeKey,
+      receiptIds: [removed.runReceipt.receiptId],
+      nowMs: now + 1,
+      reason: "removed before launch",
+    });
+    const retained = scheduler.read().filter((entry) => entry.id !== removed.job.id);
+    runOpenClawStateWriteTransaction(
+      () => saveCronStoreInDatabase(database, scheduler.storeKey, { version: 1, jobs: retained }),
+      { database, path: database.path, env: fixture.env },
+    );
+  });
+  const result = scheduler.tick(now + 2, 2, {
+    requests: [{ receiptId: removed.runReceipt.receiptId, mode: "scheduled" }],
+  });
+  expect(result.launches).toEqual([]);
+  expect(result.skipped.map(({ runReceipt }) => runReceipt.receiptId)).toEqual([
+    removed.runReceipt.receiptId,
+  ]);
+});
+
+it("does not activate work for a paused caller when another subscriber is active", () => {
+  const scheduler = storedScheduler("paused-subscriber", [job("pending", now + minute)]);
+  scheduler.start();
+  const secondChannel = "cron-scheduler-test:unpaused-sibling";
+  scheduler.start(now, { channelName: secondChannel });
+  const paused = scheduler.tick(now + minute, minute, {
+    channelName: scheduler.channelName,
+    paused: true,
+  });
+  expect(paused.accepted).toHaveLength(1);
+  expect(paused.launches).toEqual([]);
+  const unpaused = scheduler.tick(now + minute + 1, minute + 1, {
+    channelName: secondChannel,
+    paused: false,
+  });
+  expect(unpaused.launches.map(({ job: entry }) => entry.id)).toEqual(["pending"]);
 });
 
 it("persists the five-immediate limit, overflow staggering, and pending requests across restart", async () => {

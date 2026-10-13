@@ -31,6 +31,7 @@ vi.mock("../../plugins/provider-runtime.runtime.js", async () => {
   };
 });
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { refreshAuthProfileFileState } from "../auth-profiles/file-state.js";
 import {
   assertAuthProfileMigrationReady,
   clearAuthProfileMigrationDiagnostics,
@@ -172,6 +173,7 @@ describe("SQLite auth storage", () => {
     const agentDir = makeAgentDir();
     const storage = AuthStorage.forAgent(agentDir);
     writePersistedAuthProfileStoreRaw({ version: 1, profiles: "invalid-profile-map" }, agentDir);
+    await refreshAuthProfileFileState();
     vi.stubEnv("OPENAI_API_KEY", "fake-environment-key");
     storage.reload();
 
@@ -562,6 +564,7 @@ describe("SQLite auth storage", () => {
     const storage = AuthStorage.forAgent(agentDir);
     vi.stubEnv("OPENAI_API_KEY", "fake-environment-key");
     fs.writeFileSync(path.join(agentDir, "auth.json"), '{"openai":{"key":"fake-late"}}\n');
+    await refreshAuthProfileFileState();
 
     await expect(storage.getApiKey("openai")).rejects.toThrow(
       "requires legacy credential migration",

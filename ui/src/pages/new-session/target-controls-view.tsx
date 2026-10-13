@@ -180,7 +180,9 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
     cloudDisabledReason: environmentCloudDisabledReason(props.params.place.modelControl),
     cloudProfileDisabledReason: (profile) =>
       environmentCloudDisabledReason(props.params.place.modelControl, profile),
-    submitting: props.params.submitting,
+    submitting: props.params.submitting || props.params.place.suggestedCloudProfile.pending,
+    suggestedProfile: props.params.gateway.suggestedProfile,
+    onAdoptSuggestedProfile: () => void props.params.place.suggestedCloudProfile.adopt(),
     pendingPlacement: props.params.pendingPlacement,
     catalogLoading: props.params.place.canWrite() && props.params.gateway.cloudProfilesPending,
     isAdmin: props.params.place.isAdmin(),

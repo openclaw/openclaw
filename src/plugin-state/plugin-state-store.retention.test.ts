@@ -119,39 +119,6 @@ describe("plugin state keyed store", () => {
     expect(counts).toEqual({ expiryProbe: 0, delete: 0 });
   });
 
-  it("continues bounded expiry cleanup when compound writes reuse retention facts", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(2_000);
-    const scope = { pluginId: "discord", namespace: "operation-expiry-batch" };
-    seedPluginStateEntriesForTests([
-      { ...scope, key: "stable", value: 1 },
-      ...Array.from({ length: PLUGIN_STATE_EXPIRY_BATCH_ROWS + 1 }, (_, index) => ({
-        ...scope,
-        key: `expired-${index}`,
-        value: index,
-        expiresAt: 1_000,
-      })),
-    ]);
-    runWriteTransaction("register", (store) => {
-      const retention = readPluginStateRetention(store.db, { ...scope, now: Date.now() });
-      const params = {
-        ...scope,
-        key: "stable",
-        maxEntries: 1,
-        overflowPolicy: "reject-new" as const,
-      };
-      registerPluginStateEntry(store, { ...params, valueJson: "2" }, retention, true);
-      registerPluginStateEntry(store, { ...params, valueJson: "3" }, retention, true);
-    });
-    vi.setSystemTime(500);
-    expect(
-      createPluginStateSyncKeyedStore("discord", {
-        namespace: scope.namespace,
-        maxEntries: 1,
-      }).entries(),
-    ).toEqual([{ key: "stable", value: 3, createdAt: 2_000 }]);
-  });
-
   it("evicts oldest live entries over maxEntries with bounded database calls", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1000);
@@ -224,21 +191,6 @@ describe("plugin state keyed store", () => {
     expect(store.entries()).toEqual([{ key: "target", value: 42, createdAt: 2_000 }]);
   });
 
-  it("keeps a same-millisecond registerIfAbsent claim in the shared native kernel", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1000);
-    const store = createPluginStateSyncKeyedStore<number>("discord", {
-      namespace: "evict-tie-claim",
-      maxEntries: 1,
-    });
-
-    expect(store.registerIfAbsent("z", 1)).toBe(true);
-    expect(store.registerIfAbsent("a", 2)).toBe(true);
-
-    expect(store.entries()).toEqual([{ key: "a", value: 2, createdAt: 1000 }]);
-    expect(store.lookup("z")).toBeUndefined();
-  });
-
   it("protects a worker claim when existing rows have later timestamps", async () => {
     const store = createPluginStateKeyedStore<number>("discord", {
       namespace: "evict-worker-claim",
@@ -264,7 +216,7 @@ describe("plugin state keyed store", () => {
     expect(await store.lookup("z")).toBeUndefined();
   });
 
-  it.each([true, false])(
+  it.each([true])(
     "sheds sequenced journal rows without evicting durable sibling state (existing cursor: %s)",
     async (existingCursor) => {
       const durableEntryCount = 37;

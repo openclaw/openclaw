@@ -219,7 +219,7 @@ export function emitPersistentReasoning(ctx: EmbeddedAgentSubscribeContext, text
     !ctx.params.onBlockReply ||
     ctx.params.silentExpected ||
     shouldSuppressDeterministicApprovalOutput(ctx.state) ||
-    hasMessageToolOnlySourceDelivery(ctx) ||
+    shouldSuppressSourceReplyOutput(ctx) ||
     text === ctx.state.lastReasoningSent
   ) {
     return;
@@ -259,14 +259,15 @@ export function shouldSuppressDeterministicApprovalOutput(
   return state.deterministicApprovalPromptPending || state.deterministicApprovalPromptSent;
 }
 
-export function hasMessageToolOnlySourceDelivery(
+export function shouldSuppressSourceReplyOutput(
   ctx: Pick<EmbeddedAgentSubscribeContext, "params" | "state">,
 ): boolean {
   return (
-    ctx.params.sourceReplyDeliveryMode === "message_tool_only" &&
-    (ctx.state.messageToolOnlySourceReplyDelivered ||
-      ctx.params.hasDeliveredMessageToolOnlySourceReply?.() === true ||
-      (ctx.state.messagingToolSourceReplyPayloads?.length ?? 0) > 0)
+    ctx.state.sourceReplyDeliveryState === "delivered" ||
+    (ctx.params.sourceReplyDeliveryMode === "message_tool_only" &&
+      (ctx.state.messageToolOnlySourceReplyDelivered ||
+        ctx.params.hasDeliveredMessageToolOnlySourceReply?.() === true ||
+        (ctx.state.messagingToolSourceReplyPayloads?.length ?? 0) > 0))
   );
 }
 

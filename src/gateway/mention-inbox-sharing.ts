@@ -87,33 +87,28 @@ export function createMentionSharingTargets(params: {
         if (targets.has(key)) {
           continue;
         }
+        // Acquire display first: replacement during that await can revoke a sharing receipt.
+        const display = await resolveSessionSharingTargetAsync({ cfg, agentId, sessionKey });
         const prepared = await prepareSessionSharingRead({ cfg, agentId, sessionKey });
-        try {
-          // Sharing receipts omit title fields; acquire small list metadata once per cold target.
-          const display = await resolveSessionSharingTargetAsync({ cfg, agentId, sessionKey });
-          targets.set(key, {
-            sessionKey,
-            storeKeys: display?.storeKeys ?? [sessionKey],
-            readTarget: () => {
-              const current = prepared.readCurrent(getRuntimeConfig()).target;
-              return current && display?.entry.sessionId === current.entry.sessionId
-                ? {
-                    ...current,
-                    entry: {
-                      ...current.entry,
-                      label: display.entry.label,
-                      displayName: display.entry.displayName,
-                      subject: display.entry.subject,
-                    },
-                  }
-                : current;
-            },
-            release: prepared.release,
-          });
-        } catch (error) {
-          prepared.release();
-          throw error;
-        }
+        targets.set(key, {
+          sessionKey,
+          storeKeys: display?.storeKeys ?? [sessionKey],
+          readTarget: () => {
+            const current = prepared.readCurrent(getRuntimeConfig()).target;
+            return current && display?.entry.sessionId === current.entry.sessionId
+              ? {
+                  ...current,
+                  entry: {
+                    ...current.entry,
+                    label: display.entry.label,
+                    displayName: display.entry.displayName,
+                    subject: display.entry.subject,
+                  },
+                }
+              : current;
+          },
+          release: prepared.release,
+        });
       }
       for (const [key, cached] of targets) {
         if (!requested.has(key)) {

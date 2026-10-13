@@ -18,7 +18,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
-import * as spawnDiagnostics from "../../process/spawn-diagnostics.js";
+import * as gitWorker from "../../infra/git-worker.js";
 import { registerProjectRegistry } from "../../projects/project-registry.js";
 import { registerClonedProjectRegistry } from "../../projects/project-registry.test-support.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
@@ -374,7 +374,7 @@ test("projects.list refuses a default repository from a replaced config during r
   }
 });
 
-test("projects.list coalesces concurrent observed Git discovery and refreshes later reads", async () => {
+test("projects.list replies before cold or stale observed Git discovery settles", async () => {
   await withProjectState(async (state) => {
     const repo = await initializeRepository(state.root);
     replaceSessionEntrySync(
@@ -394,59 +394,53 @@ test("projects.list coalesces concurrent observed Git discovery and refreshes la
         registeredProjectsHandlers,
         projection,
       );
-    using spawns = vi.spyOn(spawnDiagnostics, "recordChildProcessSpawn");
-    const single = await list();
-    expect(single).toMatchObject({
-      ok: true,
-      payload: {
-        observedProjects: [
-          { name: "registered", originUrl: "https://github.com/openclaw/openclaw.git" },
-        ],
-      },
-    });
-    const gitSpawns = () =>
-      spawns.mock.calls.filter(([command]) =>
-        /^git(?:\.exe|\.cmd)?$/i.test(path.win32.basename(command)),
-      ).length;
-    const onePass = gitSpawns();
-    expect(onePass).toBeGreaterThan(0);
-    spawns.mockClear();
-    const requestCount = 10;
-    const admitted = Promise.withResolvers<void>();
-    let remaining = requestCount;
-    const resolveIdentities = managedWorktrees.resolveRepositoryIdentities.bind(managedWorktrees);
-    // SQLite preparation can stagger RPCs past a pending-only Git pass's lifetime.
+    const held =
+      Promise.withResolvers<
+        Awaited<ReturnType<typeof managedWorktrees.resolveRepositoryIdentities>>
+      >();
+    const run = gitWorker.runGitWorkerOperation;
     using discovery = vi
-      .spyOn(managedWorktrees, "resolveRepositoryIdentities")
-      .mockImplementation(async (roots) => {
-        if (--remaining === 0) {
-          admitted.resolve();
-        }
-        await admitted.promise;
-        return resolveIdentities(roots);
+      .spyOn(gitWorker, "runGitWorkerOperation")
+      .mockImplementation((operation, options) =>
+        operation.type === "repository.identities" ? held.promise : run(operation, options),
+      );
+    try {
+      expect(await list()).toMatchObject({ ok: true, payload: { observedProjects: [] } });
+      expect(await list()).toMatchObject({ ok: true, payload: { observedProjects: [] } });
+      held.resolve([
+        {
+          checkoutRoot: repo,
+          repoRoot: repo,
+          originUrl: "https://example.test/repo.git",
+          fingerprint: "repo",
+        },
+      ]);
+      await held.promise;
+      expect(await list()).toMatchObject({
+        ok: true,
+        payload: {
+          observedProjects: [{ name: "registered", originUrl: "https://example.test/repo.git" }],
+        },
       });
-    const concurrent = await Promise.all(
-      Array.from({ length: requestCount }, () => list().finally(() => admitted.resolve())),
-    );
-    discovery.mockRestore();
-    for (const result of concurrent) {
-      expect(result).toEqual(single);
+      using clock = vi.spyOn(Date, "now");
+      clock.mockReturnValue(Date.now() + 60_001);
+      const refresh = Promise.withResolvers<Awaited<typeof held.promise>>();
+      discovery.mockImplementation((operation, options) =>
+        operation.type === "repository.identities" ? refresh.promise : run(operation, options),
+      );
+      try {
+        expect(await list()).toMatchObject({
+          ok: true,
+          payload: { observedProjects: [{ originUrl: "https://example.test/repo.git" }] },
+        });
+      } finally {
+        refresh.resolve([]);
+        await refresh.promise;
+      }
+      expect(await list()).toMatchObject({ ok: true, payload: { observedProjects: [] } });
+    } finally {
+      held.resolve([]);
     }
-    expect(gitSpawns()).toBeLessThanOrEqual(onePass);
-    await execFileAsync("git", [
-      "-C",
-      repo,
-      "remote",
-      "set-url",
-      "origin",
-      "https://example.test/changed.git",
-    ]);
-    expect(await list()).toMatchObject({
-      ok: true,
-      payload: { observedProjects: [{ originUrl: "https://example.test/changed.git" }] },
-    });
-    await fs.rm(repo, { recursive: true });
-    expect(await list()).toMatchObject({ ok: true, payload: { observedProjects: [] } });
   });
 });
 
@@ -575,7 +569,7 @@ test("project responses redact credentials and URL suffixes from registered orig
   });
 });
 
-test("registered projects.list serves fresh observed metadata without broad reads or display refresh", async () => {
+test("registered projects.list serves current session metadata without broad reads or display refresh", async () => {
   const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-worker-" });
   let projection: SessionRowProjection | undefined;
   try {
@@ -605,6 +599,9 @@ test("registered projects.list serves fresh observed metadata without broad read
       do {
         await projection.ensureMaterialized();
       } while (projection.needsMaterialization);
+      const discovered = await managedWorktrees.resolveRepositoryIdentity(repo);
+      using identities = vi.spyOn(managedWorktrees, "resolveRepositoryIdentities");
+      identities.mockResolvedValue([discovered]);
       observer.queries.length = 0;
       using broadRead = vi
         .spyOn(combinedStoreRead, "loadCombinedSessionStoreForGatewayCoreAsync")

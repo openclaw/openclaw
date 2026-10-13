@@ -16,7 +16,6 @@ import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-sta
 import {
   acquireAuthProfileReadDatabase,
   closeAuthProfileReadDatabase,
-  closeAuthProfileReadPool,
 } from "./sqlite-read-pool.js";
 import type { AuthProfileRowRead, PersistedAuthProfileStoreInspection } from "./types.js";
 
@@ -156,27 +155,30 @@ export function inspectAgentAuthProfileJsonCellReadOnly(
   }
 }
 
-/** The isolated reader closes its native pool before transferring credential rows. */
+/** Reuse the worker-owned reader; each statement observes the latest committed rows. */
 export function readAuthProfileRowsReadOnly(
   databasePath: string,
   schema?: SqliteAuthSchema,
+  expectedIdentity?: string,
+  retainReader = true,
 ): AuthProfileRowRead {
+  const acquired = acquireAuthProfileReadDatabase(databasePath, schema, expectedIdentity);
+  if (acquired.status !== "readable") {
+    const inspection: PersistedAuthProfileStoreInspection =
+      acquired.status === "missing"
+        ? { status: "missing", reason: "database" }
+        : { status: "unreadable" };
+    return { store: inspection, state: inspection, cacheable: false };
+  }
   try {
-    const acquired = acquireAuthProfileReadDatabase(databasePath, schema);
-    if (acquired.status !== "readable") {
-      const inspection: PersistedAuthProfileStoreInspection =
-        acquired.status === "missing"
-          ? { status: "missing", reason: "database" }
-          : { status: "unreadable" };
-      return { store: inspection, state: inspection, cacheable: false };
-    }
-    try {
-      return readAuthProfileRows(acquired.db, databasePath, "agent", schema);
-    } catch {
-      return { store: { status: "unreadable" }, state: { status: "unreadable" }, cacheable: false };
-    }
+    return readAuthProfileRows(acquired.db, databasePath, "agent", schema);
+  } catch {
+    closeAuthProfileReadDatabase(databasePath);
+    return { store: { status: "unreadable" }, state: { status: "unreadable" }, cacheable: false };
   } finally {
-    closeAuthProfileReadPool({ kind: "database", databasePath });
+    if (!retainReader) {
+      closeAuthProfileReadDatabase(databasePath);
+    }
   }
 }
 

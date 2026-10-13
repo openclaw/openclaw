@@ -171,6 +171,7 @@ export type SubagentRunReadIndex<T extends SubagentRunReadRecord = SubagentRunRe
   getDisplaySubagentRun(childSessionKey: string): T | null;
   latestRunsByChildSessionKey: ReadonlyMap<string, T>;
   runsByChildSessionKey: ReadonlyMap<string, readonly T[]>;
+  requesterSessionKeys(): Iterable<string>;
   countActiveDescendantRuns(rootSessionKey: string): number;
   countPendingDescendantRuns(
     rootSessionKey: string,
@@ -381,6 +382,7 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
       getDisplaySubagentRun,
       latestRunsByChildSessionKey,
       runsByChildSessionKey,
+      requesterSessionKeys: topology.requesterSessionKeys,
       countActiveDescendantRuns,
       countPendingDescendantRuns,
       hasDescendantRunAwaitingSettle,

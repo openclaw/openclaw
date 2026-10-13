@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
@@ -50,6 +51,48 @@ async function openSession(lifecycleRevision?: string) {
 async function appendUser(manager: SessionManager, text: string): Promise<string> {
   return (await manager.appendMessageWithTranscriptAnchorAsync(makeUserMessage(text, 1))).entryId;
 }
+
+it.each([false, true])("isolates rewrite payloads with opaque SDK data: %s", async (opaque) => {
+  const shared = { text: "original" };
+  const buffer = new ArrayBuffer(3);
+  const manager = SessionManager.fromEntries([
+    { type: "session", version: 4, id: "snapshot", cwd: "/synthetic" },
+    { type: "custom", id: "data", parentId: null, customType: "fixture", data: shared },
+    {
+      type: "opaque",
+      id: "opaque",
+      shared,
+      ...(opaque ? { buffer, bytes: new Uint8Array(buffer) } : {}),
+    },
+  ]);
+  const rewrite = await manager.prepareTranscriptRewriteAsync();
+  const entry = rewrite.sessionManager.getEntry("data");
+  if (entry?.type !== "custom" || !isRecord(entry.data)) {
+    throw new Error("Missing custom entry");
+  }
+  const record = rewrite.sessionManager
+    .getPersistedEntries()
+    .find((value) => isRecord(value) && value.type === "opaque");
+  if (!isRecord(record)) {
+    throw new Error("Missing opaque record");
+  }
+  expect(record.shared).toBe(entry.data);
+  if (opaque) {
+    if (!(record.bytes instanceof Uint8Array)) {
+      throw new Error("Missing opaque bytes");
+    }
+    expect(record.bytes.buffer).toBe(record.buffer);
+    expect(record.buffer).not.toBe(buffer);
+  }
+  entry.data.text = "prepared";
+  expect(manager.getEntry("data")).toMatchObject({ data: { text: "original" } });
+  await rewrite.commit(new Map());
+  const committed = manager.getEntry("data");
+  expect(committed).toMatchObject({ data: { text: "prepared" } });
+  expect(committed).not.toBe(entry);
+  entry.data.text = "later";
+  expect(committed).toMatchObject({ data: { text: "prepared" } });
+});
 
 it("settles queued suffix removals in order and rebuilds the pending branch projection", async () => {
   const { scope, manager } = await openSession();

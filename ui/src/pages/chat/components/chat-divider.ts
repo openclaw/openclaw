@@ -11,6 +11,8 @@ import { formatSessionArchiveReason } from "../../../lib/sessions/session-archiv
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import "./chat-skill-learned-notice.tsx";
 import "./chat-permission-card.tsx";
+import "./chat-run-failure-notice.tsx";
+import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 
 export function renderChatPermissionCard(
   request: NodePermissionRequest,
@@ -113,7 +115,38 @@ export function renderChatDivider(item: Extract<ChatItem, { kind: "divider" }>) 
 export function renderChatNotice(
   item: Extract<ChatItem, { kind: "notice" }>,
   onPermissionRetry?: (message: string) => void,
+  recovery?: Pick<
+    ChatThreadProps,
+    "failureActionsRunId" | "runActive" | "runWorking" | "onRetryRun" | "onChangeFailureModel"
+  >,
 ) {
+  if (item.runError) {
+    const runId = item.runError.runId;
+    const canRecover =
+      recovery &&
+      runId === recovery.failureActionsRunId &&
+      !recovery.runActive &&
+      !recovery.runWorking;
+    const failureActions = canRecover
+      ? {
+          onRetry: recovery.onRetryRun ? () => recovery.onRetryRun?.(runId) : undefined,
+          onChangeModel: recovery.onChangeFailureModel
+            ? () => recovery.onChangeFailureModel?.(runId)
+            : undefined,
+        }
+      : undefined;
+    return html`<div
+      data-chat-row-key=${item.key}
+      data-ts=${String(item.timestamp)}
+      data-run-failure=${item.runError.runId}
+    >
+      <openclaw-chat-run-failure-notice
+        .summary=${item.runError.summary}
+        .onRetry=${failureActions?.onRetry}
+        .onChangeModel=${failureActions?.onChangeModel}
+      ></openclaw-chat-run-failure-notice>
+    </div>`;
+  }
   if (item.permissionMissing) {
     return html`<div data-chat-row-key=${item.key} data-ts=${String(item.timestamp)}>
       ${renderChatPermissionCard(item.permissionMissing, onPermissionRetry)}

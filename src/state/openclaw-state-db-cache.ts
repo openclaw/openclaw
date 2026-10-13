@@ -4,10 +4,7 @@ import {
   assertStateDatabaseAccessAllowed,
   assertStateDatabaseReadAllowed,
 } from "../infra/gateway-state-owner.js";
-import {
-  clearNodeSqliteKyselyCacheForDatabase,
-  registerNodeSqliteKyselyQueryErrorHandler,
-} from "../infra/kysely-sync-cache-state.js";
+import { registerNodeSqliteKyselyQueryErrorHandler } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
 import {
   isSqliteCorruptionError,
@@ -59,7 +56,7 @@ import type {
   StateDatabaseHandle,
 } from "./openclaw-state-db-contract.js";
 import {
-  closeTrackedStateDatabase,
+  closeStateDatabaseHandle,
   readTrackedStateDatabaseIdentity,
 } from "./openclaw-state-db-handle.js";
 import { invalidateOpenClawStateRuntimeIntegrity } from "./openclaw-state-db-integrity-admission.js";
@@ -259,32 +256,8 @@ function closeOpenClawStateDatabaseHandle(
     return [error];
   }
   idleReferences.delete(database.db);
-  const errors: unknown[] = [];
   openClawStateSnapshotOwners.release(database.db);
-  try {
-    database.walMaintenance?.close(options);
-  } catch (error) {
-    errors.push(error);
-  }
-  try {
-    clearNodeSqliteKyselyCacheForDatabase(database.db);
-  } catch (error) {
-    errors.push(error);
-  }
-  try {
-    closeTrackedStateDatabase(database.db);
-  } catch (error) {
-    errors.push(error);
-  }
-  let cleanupPending = false;
-  if (!database.db.isOpen) {
-    try {
-      database.afterClose?.();
-    } catch (error) {
-      errors.push(error);
-      cleanupPending = true;
-    }
-  }
+  const { errors, cleanupPending } = closeStateDatabaseHandle(database, options);
   if (database.db.isOpen || cleanupPending) {
     retainStateDatabaseClose(database);
   } else {

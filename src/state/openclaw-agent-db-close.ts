@@ -1,6 +1,10 @@
 import { statSync } from "node:fs";
 import { disposeNodeSqliteDependents } from "../infra/kysely-sync-cache-state.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
+import {
+  prepareSqliteDatabaseCleanClose,
+  revokeSqliteDatabaseAdmissionsForPath,
+} from "../infra/sqlite-database-admission.js";
 import { releaseAgentCreationClaimHandle } from "./agent-creation-claim.js";
 import { releaseAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
 import type { OpenClawAgentDatabase } from "./openclaw-agent-db-contract.js";
@@ -9,7 +13,7 @@ import {
   readOpenClawAgentDatabaseIdentity,
 } from "./openclaw-agent-db-identity.js";
 import { releaseOpenClawAgentDatabaseLease } from "./openclaw-agent-db-lease.js";
-import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
+import { invalidateOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
 
 /** Native handle close uses the lifecycle owner's existing leases and validation. */
 export function createAgentDatabaseHandleCloser(cache: {
@@ -22,7 +26,8 @@ export function createAgentDatabaseHandleCloser(cache: {
     const lease = cache.leases.get(database.path);
     const alreadyClosed = !database.db.isOpen;
     const priorCheckpointError = database.walMaintenance.health?.state === "error";
-    let clean: { path: string; identity: string } | undefined;
+    using seal = !alreadyClosed ? prepareSqliteDatabaseCleanClose(database.db) : undefined;
+    let clean: { path: string; publishSeal: () => boolean } | undefined;
     let retainRuntimeProof: boolean;
     try {
       if (!alreadyClosed) {
@@ -41,17 +46,18 @@ export function createAgentDatabaseHandleCloser(cache: {
         database.db.close();
       }
       if (pathCurrent) {
-        const { identity, canonicalPath } = readOpenClawAgentDatabaseIdentity(database);
+        const { canonicalPath } = readOpenClawAgentDatabaseIdentity(database);
         // Native last-close may finish a checkpoint; a pinned WAL must remain unsealed.
         const closedWithEmptyWal =
           (statSync(`${canonicalPath}-wal`, { throwIfNoEntry: false })?.size ?? 0) === 0;
-        if (typeof identity === "string" && closedWithEmptyWal) {
-          clean = { path: database.path, identity };
+        if (seal && closedWithEmptyWal) {
+          clean = { path: database.path, publishSeal: seal.publish };
         }
       }
     } catch (error) {
       if (lease) {
-        clearOpenClawAgentIntegrityVerification(database.path, lease.env);
+        invalidateOpenClawAgentDatabaseValidation(database.path);
+        revokeSqliteDatabaseAdmissionsForPath(database.path);
       }
       throw error;
     }

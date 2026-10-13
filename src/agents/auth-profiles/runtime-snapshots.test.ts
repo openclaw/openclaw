@@ -1,6 +1,8 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as authProfileClone from "./clone.js";
 import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import {
@@ -26,8 +28,11 @@ import {
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
 import { createSnapshotStore as createStore, testing } from "./runtime-snapshots.test-support.js";
+import { acquireAuthProfileReadDatabase } from "./sqlite-read-pool.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import type { AuthProfileStore } from "./types.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function expectOpenAICodexSnapshotCredential(
   store: AuthProfileStore | undefined,
@@ -46,6 +51,49 @@ function expectOpenAICodexSnapshotCredential(
 }
 
 describe("runtime auth profile snapshots", () => {
+  it("retires only the changed owner's reader until the runtime closes", () => {
+    const agentDir = tempDirs.make("auth-snapshot-readers-");
+    const databasePath = resolveAuthProfileDatabasePath(agentDir);
+    {
+      using database = openNodeSqliteDatabase(databasePath);
+      database.exec(
+        "CREATE TABLE reader_fixture (value TEXT); INSERT INTO reader_fixture VALUES ('available')",
+      );
+    }
+    setRuntimeAuthProfileStoreSnapshot(createStore("reader-owner"), agentDir);
+    const reader = acquireAuthProfileReadDatabase(databasePath);
+    expect(reader.status).toBe("readable");
+    if (reader.status !== "readable") {
+      throw new Error("Expected a pooled auth reader");
+    }
+    try {
+      const revision = getRuntimeAuthProfileStoreSnapshotRevision(agentDir);
+      setRuntimeAuthProfileStoreSnapshot(
+        { ...createStore("reader-owner"), usageStats: { "openai:default": { lastUsed: 2 } } },
+        agentDir,
+      );
+      expect(getRuntimeAuthProfileStoreSnapshotRevision(agentDir)).not.toBe(revision);
+      expect(reader.db.isOpen).toBe(true);
+      clearRuntimeAuthProfileStoreSnapshotCore(path.join(agentDir, "unrelated"));
+      expect(reader.db.isOpen).toBe(true);
+      expect(reader.db.prepare("SELECT value FROM reader_fixture").get()).toEqual({
+        value: "available",
+      });
+
+      clearRuntimeAuthProfileStoreSnapshotCore(agentDir);
+      expect(reader.db.isOpen).toBe(false);
+      const replacement = acquireAuthProfileReadDatabase(databasePath);
+      expect(replacement.status).toBe("readable");
+      if (replacement.status !== "readable") {
+        throw new Error("Expected the pooled auth reader to reopen");
+      }
+      clearRuntimeAuthProfileStoreSnapshots();
+      expect(replacement.db.isOpen).toBe(false);
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+    }
+  });
+
   it("marks default-owner materializations as inherited mutations", () => {
     const listener = vi.fn();
     const unregister = registerRuntimeAuthMaterializationMutationListener(listener);

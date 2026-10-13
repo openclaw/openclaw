@@ -120,7 +120,10 @@ if (previous.length && failReplacement !== "false") {
   }
   process.exit(17);
 }
-http.createServer((_request, response) => response.end("ok")).listen(Number(args[args.indexOf("--port") + 1]), "127.0.0.1");
+http.createServer((request, response) => {
+  response.setHeader("content-type", "application/json");
+  response.end(JSON.stringify(request.url === "/readyz" ? { ready: true, agentDatabases: [] } : { ok: true }));
+}).listen(Number(args[args.indexOf("--port") + 1]), "127.0.0.1");
 }
 `,
   );

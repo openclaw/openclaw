@@ -56,12 +56,15 @@ is set. Only a running ring and unread dot decorate these shortcuts.
 Each view has one header row. In Sessions, the title is the owner-filter chip:
 **My sessions**, **Involving me**, **All owners**, or the selected person's name.
 Open the chip to choose whose sessions appear. **Involving me** also includes
-participation and mentions. The separate filter button controls the remaining
-session filters. New conversation stays in the rail rather than moving into this
-header. On mobile, an equivalent **+** stays in the chat header or page topbar
-while the drawer is closed. Opening the drawer moves the action back to the rail,
-without a second header button. In team mode, the header action opens the same
-agent picker as the rail. Native apps keep their native creation controls.
+participation and mentions. External catalog entries appear in **Involving me**
+only when their adopted OpenClaw conversation is in the Gateway-filtered list.
+Shared or imported catalog access alone does not establish involvement; use
+**All owners** to browse those sources. The separate filter button controls the
+remaining session filters. New conversation stays in the rail rather than moving
+into this header. On mobile, an equivalent **+** stays in the chat header or page
+topbar while the drawer is closed. Opening the drawer moves the action back to the
+rail, without a second header button. In team mode, the header action opens the
+same agent picker as the rail. Native apps keep their native creation controls.
 
 The owner filter is the only control for this selection. Its saved value belongs
 to the current Gateway and your profile in this browser. A signed-in profile
@@ -694,12 +697,18 @@ checkout directory's name.
 Registering the same resolved repository root again returns its existing project ID and
 display name. Passing a different `name` does not rename an existing project.
 
-`projects.list` returns recorded projects without checking Git. Recent projects
+`projects.list` reads committed registry rows through a read-only worker without
+checking Git or joining unrelated state writes. Registration initializes the
+registry when needed; listing an empty registry does not create it. Recent projects
 and folders do not wait for session display details to refresh. Operators with
 `operator.write` can request `{"includeObserved":true}` to discover additional
-checkouts from visible sessions and managed worktrees. Concurrent discovery of
-the same checkout set shares one bounded Git pass; subsequent requests read
-fresh repository metadata, including external remote changes and moved checkouts.
+checkouts from visible sessions and managed worktrees. Listings return the last
+Git discovery snapshot immediately while one bounded background pass refreshes
+the same checkout set. A cold set initially includes only recorded worktree facts;
+session-only checkouts appear after discovery completes. External remote changes
+and moved or removed checkouts refresh in the background on the first listing
+after the snapshot is one minute old. A changed checkout set starts new discovery,
+and Gateway shutdown cancels pending refreshes and clears snapshots.
 Listings retain a session snapshot during discovery and recheck the contributing
 sessions before replying. Unrelated session creation and activity do not invalidate
 an in-flight listing; changed access to a contributing session still requires a retry.

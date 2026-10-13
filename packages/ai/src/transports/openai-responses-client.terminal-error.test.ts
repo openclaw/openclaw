@@ -57,14 +57,16 @@ const model = {
 const initialHost = getAiTransportHost();
 const logWarn = vi.fn();
 const logDebug = vi.fn<typeof initialHost.logDebug>();
+const logInfo = vi.fn<typeof initialHost.logInfo>();
 beforeEach(() => {
   logWarn.mockClear();
   logDebug.mockClear();
+  logInfo.mockClear();
   vi.stubEnv("OPENCLAW_DEBUG_MODEL_TRANSPORT", undefined);
   vi.stubEnv("OPENCLAW_DEBUG_MODEL_PAYLOAD", undefined);
   vi.stubEnv("OPENCLAW_DEBUG_SSE", undefined);
   vi.stubEnv("OPENCLAW_DEBUG_CODE_MODE", undefined);
-  configureAiTransportHost({ logWarn, logDebug });
+  configureAiTransportHost({ logWarn, logDebug, logInfo });
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -72,6 +74,64 @@ afterEach(() => {
 });
 
 describe("managed Responses transport terminal errors", () => {
+  it("logs the actual output budget, served tier, and usage after a long incomplete stream", async () => {
+    vi.stubEnv("OPENCLAW_DEBUG_SSE", "peek");
+    let now = 1_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    sseState.outcomes.push({
+      data: (async function* () {
+        yield { type: "response.created", response: { id: "resp_long", service_tier: "default" } };
+        yield {
+          type: "response.output_text.delta",
+          delta: "private-response-content",
+          output_index: 0,
+          content_index: 0,
+          item_id: "msg_private",
+        };
+        now += 1_095_000;
+        yield {
+          type: "response.incomplete",
+          response: {
+            id: "resp_long",
+            status: "incomplete",
+            service_tier: "default",
+            incomplete_details: { reason: "max_output_tokens" },
+            output: [],
+            usage: {
+              input_tokens: 20,
+              output_tokens: 4096,
+              total_tokens: 4116,
+              output_tokens_details: { reasoning_tokens: 4000 },
+            },
+          },
+        };
+      })(),
+      response: new Response(null, { status: 200 }),
+    });
+    try {
+      const stream = await createOpenAIResponsesTransportStreamFn()(
+        model,
+        { messages: [], tools: [] },
+        { apiKey: "test-key", transport: "sse", maxTokens: 4096, serviceTier: "priority" },
+      );
+      expect((await stream.result()).stopReason).toBe("length");
+      const messages = [
+        ...logDebug.mock.calls.map(([, build]) => build()?.message),
+        ...logInfo.mock.calls.map(([, message]) => message),
+      ];
+      const done = messages.find((message) => message?.startsWith("[responses] stream_done "));
+      expect(done).toContain("requestedTier=priority max_output_tokens=4096");
+      expect(done).toContain("responseId=resp_long servedTier=default");
+      expect(done).toContain("outputTokens=4096 reasoningTokens=4000");
+      expect(done).toContain("streamDurationMs=1095000 elapsedMs=1095000");
+      expect(done).toContain("terminal=response.incomplete incompleteReason=max_output_tokens");
+      expect(done).not.toContain("test-key");
+      expect(messages.join(" ")).not.toContain("private-response-content");
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it.each(["filtered", "failed", "eof", "aborted"])(
     "fences later tool completions after truncated output until %s",
     async (ending) => {

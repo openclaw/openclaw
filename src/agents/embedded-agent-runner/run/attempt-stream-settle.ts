@@ -37,6 +37,7 @@ import {
   type ProviderPromptState,
   wrapStreamFnWithProviderPromptState,
 } from "../provider-prompt-state.js";
+import { wrapStreamFnWithSessionFork } from "../session-fork.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   resolveEmbeddedAgentApiKey,
@@ -450,9 +451,14 @@ export async function prepareEmbeddedAttemptTransport(input: {
     workspaceDir: input.workspaceDir,
     auth,
   });
+  const sessionFork = {
+    runId: attempt.runId,
+    sessionId: attempt.sessionId,
+    agentId: input.sessionAgentId,
+  };
   const directProviderStreamFn = providerStreamFn
     ? wrapStreamFnWithMessageTransform(
-        providerStreamFn,
+        wrapStreamFnWithSessionFork(providerStreamFn, sessionFork),
         (messages) => messages,
         async ({ context, ...provider }) => {
           assertRunCurrent?.();
@@ -497,6 +503,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
     authStorage: attempt.authStorage,
     assertCurrent: assertRunCurrent,
+    sessionFork,
   });
   session.agent.streamFn = streamFn;
   // Install inside provider/config wrappers so their full onPayload chain runs
@@ -649,6 +656,11 @@ export async function prepareEmbeddedAttemptTransport(input: {
           baseUrl: model.baseUrl,
           ...observation,
         }),
+      {
+        runId: attempt.runId,
+        sessionId: attempt.sessionId,
+        accountRoute: selectedCredential.identityKey,
+      },
     );
   }
   return {

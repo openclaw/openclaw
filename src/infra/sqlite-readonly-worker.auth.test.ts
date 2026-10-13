@@ -15,6 +15,7 @@ import { SpawnBrokerError } from "../process/spawn-broker/protocol.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import { revokeAgentDatabaseResources } from "../state/openclaw-agent-db-resources.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import {
@@ -300,6 +301,20 @@ it("closes a scoped auth child before rejecting queued reads on shutdown", async
   } finally {
     await scope.close();
   }
+});
+
+it("joins the retained auth reader before agent database removal", async () => {
+  const { source } = createAuthDatabase();
+  await withSqliteReadOnlyWorkerScope(async () => {
+    await read(source, "canonical");
+    const child = vi.mocked(spawn).mock.results.at(-1)?.value;
+    expect(child).toBeDefined();
+    expect(child?.exitCode).toBeNull();
+    await Promise.all(revokeAgentDatabaseResources({ path: source }));
+    expect(child?.exitCode ?? child?.signalCode).not.toBeNull();
+    fs.unlinkSync(source);
+    expect(fs.existsSync(source)).toBe(false);
+  });
 });
 
 it("captures queued auth launch facts before FIFO admission", async () => {

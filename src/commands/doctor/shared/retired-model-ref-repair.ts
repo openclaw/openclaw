@@ -17,6 +17,7 @@ import {
   projectModelProviderConfig,
   resolveMergedModelProviderConfig,
 } from "../../../config/model-provider-config.js";
+import { copyConfigResolutionFactsThroughRewrite } from "../../../config/resolution-facts.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
@@ -547,6 +548,9 @@ export function repairRetiredConfigModelRefs(
   rewriteVoice(discord?.voice, "channels.discord.voice");
   for (const [account, settings] of Object.entries(asOptionalRecord(discord?.accounts) ?? {})) {
     rewriteVoice(asOptionalRecord(settings)?.voice, `channels.discord.accounts.${account}.voice`);
+  }
+  if (changes.length > 0) {
+    copyConfigResolutionFactsThroughRewrite(cfg, config);
   }
   return { config: changes.length ? config : cfg, changes };
 }

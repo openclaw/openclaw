@@ -51,7 +51,7 @@ function createCrabboxNodeSetup(params: {
   target?: CrabboxOperatingSystem;
 }): { command: string; forwardedEnv: Record<string, string> } {
   const { enrollment, leaseId } = params;
-  const { token, ...nodeBootstrap } = params.nodeBootstrap;
+  const { token, linuxToolchainSetup, ...nodeBootstrap } = params.nodeBootstrap;
   const workerBundle = params.workerBundle
     ? (({ token: _token, ...artifact }) => artifact)(params.workerBundle)
     : undefined;
@@ -112,7 +112,7 @@ setPhase("preparation");
   const nodeEnv = { ...process.env, ...(mode ? { OPENCLAW_STATE_DIR: stateDir } : {}) };
   // Tools travel inside the verified full-node artifact and share its preparation identity.
   if (process.platform !== "win32") {
-    nodeEnv.PATH = path.join(runtimeDir, "node_modules", "openclaw", "dist", "worker-tools", "bin") + path.delimiter + (nodeEnv.PATH || "");
+    nodeEnv.PATH = (process.platform === "linux" ? path.dirname(process.execPath) + path.delimiter : "") + path.join(runtimeDir, "node_modules", "openclaw", "dist", "worker-tools", "bin") + path.delimiter + (nodeEnv.PATH || "");
   }
   const subprocessError = (message, result) => {
     let detail = [result.error?.message, result.stderr].filter(Boolean).join("\\n");
@@ -486,11 +486,14 @@ setPhase("preparation");
 })().catch((error) => { console.error(error.downloadArtifact ? error.message : failureMessage("node bootstrap", error.downloadPhase || phase, error.code) + ": " + error.message); process.exitCode = 1; });
 `;
   return {
-    command: wrapCrabboxNodeScript(
-      script.trimEnd(),
-      params.target,
-      "CRABBOX_NODE_ENROLLMENT_SCRIPT",
-    ),
+    command:
+      ((params.target ?? "linux") === "linux" ? (linuxToolchainSetup ?? "") : "") +
+      wrapCrabboxNodeScript(
+        script.trimEnd(),
+        params.target,
+        "CRABBOX_NODE_ENROLLMENT_SCRIPT",
+        "bootstrap",
+      ),
     forwardedEnv: {
       [CLOUD_BOOTSTRAP_TOKEN_ENV]: JSON.stringify({
         nodeBootstrap: token,

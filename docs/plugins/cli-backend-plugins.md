@@ -302,6 +302,14 @@ The host rejects restart when the caller is revoked or an exact live generation
 must be preserved. `register()` remains a synchronous admission check and refuses
 replacement while cleanup is unresolved.
 
+For a bundled or official plugin's bidirectional process, use the shared
+[`createOwnedStdioProcess` owner](/plugins/sdk-overview/infrastructure#owned-stdio-processes)
+with the prepared command, arguments, `argv0`, and `exactEnv: true`. On POSIX,
+`terminateOnHostLoss: true` stops the process tree before host loss becomes
+protocol EOF; explicit stdin closure remains graceful. This prevents an
+unanswered permission hook from continuing after a killed Gateway. Join
+`closeOwnedStdioProcess` before releasing the live-session registration.
+
 `runtimeArtifact` is plugin-owned. It is consulted
 only when a live inference turn mints or revalidates verified setup authority;
 normal CLI runs do not require it. A backend without this declaration cannot

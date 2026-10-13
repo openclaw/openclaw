@@ -16,6 +16,7 @@ import {
 import { isProcessAlive } from "../helpers/process-wait.js";
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 import { createControlledWorkerCompiler } from "./vitest-worker-artifacts.test-support.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
@@ -129,7 +130,7 @@ export default {
 };
 `,
       );
-      const env = { ...process.env };
+      const env = testRunnerFixtureEnv();
       for (const key of Object.keys(env)) {
         if (key.startsWith("VITEST") || key.startsWith("OPENCLAW_")) {
           delete env[key];
@@ -278,11 +279,10 @@ posixSerialDescribe("compiled subprocess preparation progress", { concurrent: fa
   const testPreparation = (verification: "valid" | "tampered") =>
     joinedProgressTest(async ({ expect, signal }) => {
       const directory = tempDirs.make("oc-vt-preparation-progress-");
-      const env = {
-        ...process.env,
+      const env = testRunnerFixtureEnv({
         OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000",
         OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
-      };
+      });
       const controlled = createControlledWorkerCompiler(directory, env);
       const owner = createVitestWorkerRun(env);
       const generation = owner.descriptor.directory;

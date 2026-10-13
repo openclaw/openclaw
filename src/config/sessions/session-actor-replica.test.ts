@@ -423,6 +423,8 @@ it("installs complete outcomes, fences unknowns, and rejects delayed epochs", as
     });
     const shared = replica.read()!;
     expect(replica.read()).toBe(shared);
+    expect(replica.beginRead().install(shared)).toBe(true);
+    expect(replica.read()).toBe(shared);
     expect(() => {
       shared.entry!.label = "caller edit";
     }).toThrow(TypeError);
@@ -518,6 +520,14 @@ it("installs complete outcomes, fences unknowns, and rejects delayed epochs", as
     expect(delayed.settle(committed(delayedContext, load("second", 1)))).toBe(false);
     expect(replica.read()?.version.epoch).toBe("reconciled");
 
+    const opaque = load("opaque");
+    opaque.entry!.swarmOutputSchema = { value: new Date(0) };
+    expect(replica.beginRead().install(opaque)).toBe(true);
+    const borrowed = replica.read()!;
+    expect(replica.beginRead().install(borrowed)).toBe(true);
+    expect(replica.read()).not.toBe(borrowed);
+    expect(replica.read()?.entry?.swarmOutputSchema).toEqual({ value: new Date(0) });
+
     const current = hydrate(fixture, "final");
     const closingContext = command(current, "accepted-before-close");
     const closing = replica.beginCommand();
@@ -580,6 +590,8 @@ it("invalidates for native owner, replacement, transcript and deletion writers",
 });
 
 it("reuses list facts and invalidates summary watermarks after transcript writes", async () => {
+  // Worker retirement revokes resident facts, so settle earlier fixtures before asserting reuse.
+  await drainGlobalSingletonLifecycleState("restart");
   await withReplica(async (fixture) => {
     const { scope, replica } = fixture;
     replaceSessionEntrySync(scope, {

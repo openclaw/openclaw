@@ -392,11 +392,13 @@ describeLaunchdIntegration("launchd integration", () => {
         commandSettled = result.error === undefined && result.status !== null;
         expect(result.error).toBeUndefined();
         expect(result.status, result.stderr).toBe(1);
+        expect(result.stderr).toContain(`Cannot replace ${checkout}: another managed Gateway`);
         expect(result.stderr).toContain(
-          `Refusing to rebuild dist while a managed Gateway (profile ${siblingProfile})`,
+          `/${siblingEnv.OPENCLAW_LAUNCHD_LABEL}" loaded from "${resolveLaunchAgentPlistPath(siblingEnv)}"`,
         );
-        expect(result.stderr).toContain(entry);
-        expect(result.stderr).toContain(`openclaw gateway stop --profile ${siblingProfile}`);
+        expect(result.stderr).toContain(
+          "Stop that Gateway through its own service manager or Startup process",
+        );
         expect(result.stderr).not.toContain("Building TypeScript");
         expect((await fs.readdir(dist)).toSorted()).toEqual([...files.keys()].toSorted());
         for (const [name, bytes] of files) {

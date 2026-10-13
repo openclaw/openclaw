@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
 import { parseCliOutput } from "./cli-output.js";
+import { claudeStreamEvent, claudeTextDelta, joinJsonlFrames } from "./cli-output.test-helpers.js";
 
 type ParseCliOutputParams = Parameters<typeof parseCliOutput>[0];
 
@@ -17,38 +18,8 @@ function parseCliJsonl(
   return parseCliOutput({ raw, backend, providerId, outputMode: "jsonl" });
 }
 
-function joinJsonlFrames(...frames: unknown[]) {
-  return frames
-    .map((frame) => (typeof frame === "string" ? frame : JSON.stringify(frame)))
-    .join("\n");
-}
-
-function claudeStreamEvent(event: Record<string, unknown>) {
-  return { type: "stream_event", event };
-}
-
 function claudeMessageStart(id?: string) {
   return claudeStreamEvent({ type: "message_start", ...(id ? { message: { id } } : {}) });
-}
-
-function claudeTextDelta(text: string, index?: number | string) {
-  return claudeStreamEvent({
-    type: "content_block_delta",
-    ...(index === undefined ? {} : { index }),
-    delta: { type: "text_delta", text },
-  });
-}
-
-function claudeThinkingDelta(thinking: string, index?: number | string) {
-  return claudeStreamEvent({
-    type: "content_block_delta",
-    ...(index === undefined ? {} : { index }),
-    delta: { type: "thinking_delta", thinking },
-  });
-}
-
-function claudeAssistantSnapshot(id: string, content: unknown[]) {
-  return { type: "assistant", message: { id, content } };
 }
 
 function normalizedUsage(values: {
@@ -645,50 +616,5 @@ describe("parseCliJsonl", () => {
 
     expect(toolStarts).toEqual(["Agent"]);
     expect(progress).toEqual([parentId, "toolu_other", parentId]);
-  });
-
-  it.each([
-    {
-      name: "resets per-index thinking state on a new message within the same turn (tool round-trip)",
-      frames: [
-        claudeMessageStart("msg-A"),
-        claudeThinkingDelta("Hello ", 0),
-        claudeThinkingDelta("world", 0),
-        claudeAssistantSnapshot("msg-A", [{ type: "thinking", thinking: "Hello world" }]),
-        claudeMessageStart("msg-B"),
-        claudeThinkingDelta("New ", 0),
-        claudeThinkingDelta("thought", 0),
-        claudeAssistantSnapshot("msg-B", [{ type: "thinking", thinking: "New thought" }]),
-      ],
-      expected: [
-        { text: "Hello ", delta: "Hello ", isReasoningSnapshot: true },
-        { text: "Hello world", delta: "world", isReasoningSnapshot: true },
-        { text: "New ", delta: "New ", isReasoningSnapshot: true },
-        { text: "New thought", delta: "thought", isReasoningSnapshot: true },
-      ],
-    },
-    {
-      name: "ignores indexless thinking deltas without content block framing",
-      frames: [claudeThinkingDelta("orphaned"), claudeThinkingDelta("also orphaned", "0")],
-      expected: [],
-    },
-  ])("$name", ({ frames, expected }) => {
-    const thinking: Array<{ text: string; delta: string; isReasoningSnapshot?: boolean }> = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "local-cli",
-      onAssistantDelta: () => {},
-      onThinkingDelta: (delta) => thinking.push(delta),
-    });
-
-    parser.push(joinJsonlFrames(...frames));
-    parser.finish();
-
-    expect(thinking).toEqual(expected);
   });
 });

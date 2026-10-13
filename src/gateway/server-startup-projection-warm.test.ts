@@ -37,7 +37,7 @@ function createStartupState(label: string) {
   });
 }
 
-it("overlaps early services with retained projection startup and waits for both before finishing", async ({
+it("warms projection before transport binding and joins early services before finishing", async ({
   signal,
 }) => {
   const basePath = "/health";
@@ -46,6 +46,7 @@ it("overlaps early services with retained projection startup and waits for both 
   const state = await createStartupState("startup-projection-http");
   const projectionEntered = createDeferred();
   const releaseProjection = createDeferred();
+  const releaseTransport = createDeferred();
   const listenerBound = createDeferred();
   const releaseListening = createDeferred();
   const earlyRuntimeEntered = createDeferred();
@@ -83,6 +84,7 @@ it("overlaps early services with retained projection startup and waits for both 
     const transportModule = await import("./server-runtime-state.js");
     const createTransport = transportModule.createGatewayHttpTransport;
     vi.spyOn(transportModule, "createGatewayHttpTransport").mockImplementation(async (params) => {
+      await releaseTransport.promise;
       const transport = await createTransport(params);
       const entryResponses = [entryReceived, secondEntryReceived];
       transport.httpServer.on("request", (req, res) => {
@@ -117,6 +119,15 @@ it("overlaps early services with retained projection startup and waits for both 
       startupFinished = true;
       return server;
     });
+    await withinTest(
+      awaitGateBeforeSettlement(
+        projectionEntered.promise,
+        startup,
+        "Gateway did not warm its projection while transport creation was pending",
+      ),
+      signal,
+    );
+    releaseTransport.resolve();
     await withinTest(
       awaitGateBeforeSettlement(
         listenerBound.promise,
@@ -196,6 +207,7 @@ it("overlaps early services with retained projection startup and waits for both 
     expect(unauthorized.status).toBe(401);
     await unauthorized.arrayBuffer();
   } finally {
+    releaseTransport.resolve();
     releaseProjection.resolve();
     releaseListening.resolve();
     releaseEarlyRuntime.resolve();
@@ -205,6 +217,76 @@ it("overlaps early services with retained projection startup and waits for both 
       await server?.close();
       await earlyEntryRequest?.catch(() => undefined);
       await entryRequest?.catch(() => undefined);
+    } finally {
+      vi.restoreAllMocks();
+      await state.cleanup();
+    }
+  }
+});
+
+it("joins and disposes a warming projection when transport creation fails", async ({ signal }) => {
+  const state = await createStartupState("startup-projection-transport-failure");
+  const port = await getFreePort();
+  const projectionEntered = createDeferred();
+  const releaseProjection = createDeferred();
+  const transportFailed = createDeferred();
+  const failure = new Error("Synthetic transport failure");
+  const disposed = vi.fn();
+  let startup: Promise<GatewayServer> | undefined;
+  let settled = false;
+  try {
+    await state.writeConfig({
+      gateway: { auth: { mode: "none" }, controlUi: { enabled: false }, port },
+      plugins: { enabled: false },
+      discovery: { mdns: { mode: "off" } },
+      cron: { enabled: false },
+    });
+    state.applyEnv();
+    const createProjection = projections.createSessionRowProjection;
+    vi.spyOn(projections, "createSessionRowProjection").mockImplementation(async (params) => {
+      const projection = await createProjection(params);
+      const dispose = projection.dispose;
+      vi.spyOn(projection, "dispose").mockImplementation(() => {
+        dispose();
+        disposed();
+      });
+      projectionEntered.resolve();
+      await releaseProjection.promise;
+      return projection;
+    });
+    const transportModule = await import("./server-runtime-state.js");
+    vi.spyOn(transportModule, "createGatewayHttpTransport").mockImplementation(async () => {
+      await projectionEntered.promise;
+      transportFailed.resolve();
+      throw failure;
+    });
+    const { startGatewayServerCore } = await import("./server-start.js");
+    startup = startGatewayServerCore(port, { bind: "loopback", controlUiEnabled: false });
+    void startup.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await withinTest(
+      awaitGateBeforeSettlement(transportFailed.promise, startup, "Transport did not fail"),
+      signal,
+    );
+    expect(settled).toBe(false);
+    expect(disposed).not.toHaveBeenCalled();
+    releaseProjection.resolve();
+    await expect(startup).rejects.toBe(failure);
+    expect(disposed).toHaveBeenCalledOnce();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+    expect(getActiveSecretsRuntimeConfigSnapshot()).toBeNull();
+  } finally {
+    releaseProjection.resolve();
+    projectionEntered.resolve();
+    try {
+      const server = await startup?.catch(() => undefined);
+      await server?.close();
     } finally {
       vi.restoreAllMocks();
       await state.cleanup();

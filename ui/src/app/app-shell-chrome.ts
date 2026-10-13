@@ -10,6 +10,7 @@ import {
   type CommandPaletteElement,
   type CommandPaletteTargetDetail,
 } from "../components/command-palette-contract.ts";
+import { registryFor } from "../components/overlay-registry.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   LINK_READER_PANEL_TOGGLE_EVENT,
@@ -610,7 +611,8 @@ export class ShellChromeOwner {
         ?.isOpen ||
       overlaySnapshot?.devicePairSetupOpen ||
       host.approvalOverlay?.dialogOpen === true ||
-      document.openClawModalLayers?.size
+      document.openClawModalLayers?.size ||
+      registryFor(document).stack.at(-1)?.open
     ) {
       return true;
     }

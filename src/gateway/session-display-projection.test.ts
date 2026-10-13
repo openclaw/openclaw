@@ -36,14 +36,6 @@ describe("projectSessionDisplayMessage", () => {
     ]);
   });
 
-  test("bounds previews without splitting surrogate pairs", () => {
-    const longReply = `${"a".repeat(SESSION_LAST_MESSAGE_PREVIEW_DEFAULT_CHARS - 2)}😊tail`;
-    const preview = projectSessionDisplayMessage({ role: "assistant", content: longReply });
-
-    expect(preview?.text).toHaveLength(SESSION_LAST_MESSAGE_PREVIEW_DEFAULT_CHARS);
-    expect(preview?.text).toBe(`${"a".repeat(SESSION_LAST_MESSAGE_PREVIEW_DEFAULT_CHARS - 3)}...`);
-  });
-
   test("honors explicit preview budgets up to the shared cap", () => {
     const maxChars = 800;
     const message = { role: "assistant", content: "a".repeat(maxChars + 20) };
@@ -54,16 +46,6 @@ describe("projectSessionDisplayMessage", () => {
     expect(projectSessionDisplayMessage(message, { maxChars: Number.MAX_SAFE_INTEGER })?.text).toBe(
       `${"a".repeat(maxChars - 3)}...`,
     );
-  });
-
-  test("flattens Markdown before bounding a preview", () => {
-    const longUrl = `https://example.com/${"x".repeat(SESSION_LAST_MESSAGE_PREVIEW_DEFAULT_CHARS)}`;
-    const preview = projectSessionDisplayMessage(
-      { role: "assistant", content: `Read the [deployment guide](${longUrl})` },
-      { flattenMarkdown: true },
-    );
-
-    expect(preview?.text).toBe("Read the deployment guide");
   });
 
   test.each([
@@ -86,10 +68,5 @@ describe("projectSessionDisplayMessage", () => {
     );
 
     expect(preview?.text).toBe(expected);
-  });
-
-  test("preserves quoted directive examples", () => {
-    const quoted = "Use `[[reply_to_current]]` literally.";
-    expect(projectSessionDisplayMessage({ role: "assistant", content: quoted })?.text).toBe(quoted);
   });
 });

@@ -4,6 +4,7 @@ import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { z } from "zod";
 import { NODE_WORKER_WORKSPACE_PREPARE_COMMAND } from "../../infra/node-commands.js";
 import type { WorkerProfile } from "../../plugins/types.js";
+import { EnvironmentRecipeSchema, type EnvironmentRecipe } from "./environment-recipe.js";
 import type { WorkerProjectSnapshot } from "./workspace-git-base.js";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -36,6 +37,7 @@ const Preparation = z
       .regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u)
       .optional(),
     runSetupScript: z.boolean().optional(),
+    recipe: EnvironmentRecipeSchema.optional(),
     target: Target,
     artifacts: Artifacts,
   })
@@ -73,6 +75,7 @@ export function createWorkerProjectPreparationIdentity(params: {
   artifacts: WorkerPreparationArtifacts;
   setupRecipe?: string;
   runSetupScript?: boolean;
+  recipe?: EnvironmentRecipe;
 }): WorkerProjectPreparationIdentity {
   const artifacts = Artifacts.parse(params.artifacts);
   artifacts.enabledPluginIds = [...new Set(artifacts.enabledPluginIds)].toSorted();
@@ -81,6 +84,7 @@ export function createWorkerProjectPreparationIdentity(params: {
   const facts = {
     contractVersion: 2 as const,
     ...(params.setupRecipe ? { setupRecipe: params.setupRecipe } : {}),
+    ...(params.recipe ? { recipe: EnvironmentRecipeSchema.parse(params.recipe) } : {}),
     ...(params.setupRecipe && params.runSetupScript === false
       ? { runSetupScript: false as const }
       : {}),

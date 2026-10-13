@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -78,6 +79,7 @@ describe.each(["HTTP", "WebSocket"] as const)(
       sandbox?: "required";
       stored?: boolean;
       system?: boolean;
+      revokeMember?: boolean;
       expectedError?: string;
     }> = [
       {
@@ -116,6 +118,13 @@ describe.each(["HTTP", "WebSocket"] as const)(
         sandbox: "required",
         system: true,
       },
+      {
+        label: "denies tool execution when the member is revoked during the before-tool hook",
+        sessionKey: "agent:main:member-session",
+        stored: true,
+        revokeMember: true,
+        expectedError: "session is read-only",
+      },
     ];
 
     it.each(cases)("$label", async (testCase) => {
@@ -151,11 +160,23 @@ describe.each(["HTTP", "WebSocket"] as const)(
           const entry = {
             sessionId: "standalone-guest-session",
             updatedAt: 1,
-            visibility: "shared" as const,
-            createdActor: { type: "human" as const, source: "profile" as const, id: profile.id },
+            visibility: testCase.revokeMember ? ("read-only" as const) : ("shared" as const),
+            createdActor: {
+              type: "human" as const,
+              source: "profile" as const,
+              id: testCase.revokeMember ? "another-creator" : profile.id,
+            },
             sandbox: "required" as const,
           };
           await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
+          if (testCase.revokeMember) {
+            const scope = { agentId: "main", sessionKey };
+            await addSessionMember(scope, { identityId: profile.id, addedBy: "another-creator" });
+            runtime.beforeHook.mockImplementationOnce(async ({ params }) => {
+              await removeSessionMember(scope, profile.id);
+              return { blocked: false, params };
+            });
+          }
         }
         const input = {
           name: testCase.toolName ?? "session_status",
@@ -203,8 +224,12 @@ describe.each(["HTTP", "WebSocket"] as const)(
           });
         }
         if (testCase.expectedError) {
-          expect(runtime.beforeHook).not.toHaveBeenCalled();
-          expect(runtime.createTools).not.toHaveBeenCalled();
+          if (testCase.revokeMember) {
+            expect(runtime.beforeHook).toHaveBeenCalledOnce();
+          } else {
+            expect(runtime.beforeHook).not.toHaveBeenCalled();
+            expect(runtime.createTools).not.toHaveBeenCalled();
+          }
           expect(runtime.execute).not.toHaveBeenCalled();
         } else {
           expect(runtime.beforeHook).toHaveBeenCalledOnce();

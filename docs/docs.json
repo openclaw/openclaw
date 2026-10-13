@@ -2530,6 +2530,7 @@
                         "group": "Cloud Workers",
                         "pages": [
                           "gateway/cloud-workers/warm-images",
+                          "gateway/cloud-workers/environment-file",
                           "gateway/cloud-workers/per-project-default-profiles",
                           "gateway/cloud-workers/setup-and-bundle-installation",
                           "gateway/cloud-workers/verify-the-profile",

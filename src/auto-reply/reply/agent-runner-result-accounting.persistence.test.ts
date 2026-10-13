@@ -395,6 +395,42 @@ it.each([
   },
 );
 
+it.each([
+  { stored: "off", selected: "raw", authorized: true, trace: true },
+  { stored: "raw", selected: "off", authorized: true, trace: false },
+  { stored: "raw", selected: undefined, authorized: true, trace: true },
+  { stored: "raw", selected: "raw", authorized: false, trace: false },
+] as const)(
+  "retains trace $selected over stored $stored after native delivery with authority=$authorized",
+  async ({ stored, selected, authorized, trace }) => {
+    const fixture = await createFixture();
+    await fixture.replace({
+      ...fixture.context.activeSessionEntry!,
+      traceLevel: stored,
+      verboseLevel: "off",
+    });
+    fixture.context.followupRun.run.traceAuthorized = authorized;
+    fixture.context.followupRun.run.traceLevelOverride = selected;
+    fixture.context.execution.result.payloads = [];
+    fixture.context.execution.result.sourceReplyDeliveryState = "delivered";
+    fixture.context.execution.result.meta!.finalAssistantRawText = "STREAMED_REPLY";
+    fixture.context.sessionCtx.agentText = "STREAMED_INPUT";
+
+    const result = await finalizeReplyAgentRun(fixture.context);
+    const delivered = Array.isArray(result) ? result : result ? [result] : [];
+    expect(delivered.some((payload) => isReplyPayloadTerminalContent(payload))).toBe(false);
+    const diagnostics = delivered.find((payload) =>
+      payload.text?.includes("Model Input (User Role)"),
+    );
+    expect(Boolean(diagnostics)).toBe(trace);
+    if (diagnostics) {
+      expect(diagnostics.text).toContain("STREAMED_INPUT");
+      expect(diagnostics.text).toContain("STREAMED_REPLY");
+    }
+    expect(fixture.read()?.traceLevel).toBe(stored);
+  },
+);
+
 describe.each(["ordinary", "followup"] as const)("%s completion verbosity", (lane) => {
   it.each([
     { initial: "on", live: "off", override: "on", visible: true },

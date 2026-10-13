@@ -1,5 +1,6 @@
 import {
   createEffect,
+  createMemo,
   createRenderEffect,
   createSignal,
   For,
@@ -9,6 +10,7 @@ import {
 import { t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge, LitContent, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { solidContent } from "../lit/solid-content.tsx";
+import { DockResizer } from "./dock-layout-solid.tsx";
 import { LinkReaderContent } from "./link-reader-content.tsx";
 import {
   LINK_READER_TAB_LIMIT,
@@ -23,7 +25,7 @@ import {
 } from "./link-reader-panel-view.ts";
 import { EMPTY_LINK_READERS } from "./link-reader-target.ts";
 import type { PanelHostedTabsElement } from "./panel-hosted-tabs.ts";
-import { renderPanelTabStrip } from "./panel-tab-strip.ts";
+import { PanelTabStrip } from "./panel-tab-strip-solid.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { PanelIconButton } from "./solid/panel-icon-button.tsx";
 
@@ -157,6 +159,18 @@ function PanelView(
   };
   const tab = () => view().activeTab;
   const target = () => view().target;
+  const tabStripTabs = createMemo(() =>
+    view().hostedTabs.map((item) => ({
+      id: item.id,
+      label: item.label,
+      url: item.url,
+      title: item.title,
+      icon: <LitContent render={() => item.icon} />,
+      className: item.className,
+      domId: item.id + "-label",
+      closeLabel: t("linkReader.closeTab", { title: item.label }),
+    })),
+  );
   const action = (
     name: "chevronLeft" | "chevronRight" | "refresh" | "x",
     label: string,
@@ -188,35 +202,26 @@ function PanelView(
           }}
         >
           {!props.embedded && (
-            <LitContent
-              render={() => view().dockLayout.renderResizer("bp", t("linkReader.resize"))}
+            <DockResizer
+              controller={view().dockLayout}
+              classPrefix="bp"
+              label={t("linkReader.resize")}
             />
           )}
           {!(props.embedded && props.tabsInHeader) && (
             <header class="rail-header bp-header lr-tab-header">
-              <LitContent
-                render={() =>
-                  renderPanelTabStrip({
-                    tabs: view().hostedTabs.map((item) => ({
-                      id: item.id,
-                      label: item.label,
-                      url: item.url,
-                      title: item.title,
-                      icon: item.icon,
-                      className: item.className,
-                      domId: item.id + "-label",
-                      closeLabel: t("linkReader.closeTab", { title: item.label }),
-                    })),
-                    activeId: view().activeId,
-                    ariaControls: "link-reader-tab-panel",
-                    onSelect: (id) => owner.selectHostedTab(id),
-                    onClose: (id) => owner.closeTab(id),
-                    onNew: () => owner.createTab(),
-                    newLabel: t("linkReader.newTab"),
-                    newDisabled: view().tabs.length >= 10,
-                  })
-                }
-              />
+              <openclaw-panel-tab-strip style={{ display: "contents" }}>
+                <PanelTabStrip
+                  tabs={tabStripTabs()}
+                  activeId={view().activeId}
+                  ariaControls="link-reader-tab-panel"
+                  onSelect={(id) => owner.selectHostedTab(id)}
+                  onClose={(id) => owner.closeTab(id)}
+                  onNew={() => owner.createTab()}
+                  newLabel={t("linkReader.newTab")}
+                  newDisabled={view().tabs.length >= 10}
+                />
+              </openclaw-panel-tab-strip>
               {!props.embedded && action("x", t("linkReader.close"), () => owner.closePanel())}
             </header>
           )}

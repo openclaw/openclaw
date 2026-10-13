@@ -5054,5 +5054,9 @@
   {
     "source": "Remote Control UI ingress",
     "target": "远程 Control UI 入口"
+  },
+  {
+    "source": "Cloud environment file",
+    "target": "云环境文件"
   }
 ]

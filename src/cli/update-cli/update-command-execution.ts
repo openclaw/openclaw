@@ -4,7 +4,6 @@ import { tryReadJson } from "../../infra/json-files.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import type { UpdateStateSchemaVersion } from "../../infra/update-candidate-state.js";
 import type { UpdateDoctorConfigChange } from "../../infra/update-doctor-config.js";
-import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
@@ -480,16 +479,7 @@ export async function executeMutableUpdate(
       );
     }
     assertExecutionCurrent();
-    const activationTimeoutMs =
-      params.timeoutMs === undefined
-        ? undefined
-        : await resolveUpdateFinalizationTimeoutMs(updateStepTimeoutMs, {
-            env,
-            databases: schemaVersions,
-            observedStartupMs: observedGatewayStartupMs,
-            pluginCount: Object.keys(config.plugins?.entries ?? {}).length,
-            nodeRunner: params.packageUpdateNodeRunner,
-          });
+    const activationTimeoutMs = params.opts.run?.deadline?.remainingMs() ?? params.timeoutMs;
     await parkForegroundUpdateForActivation(params, assertExecutionCurrent);
     await prepareMutableUpdate(env, activationTimeoutMs);
     assertExecutionCurrent();

@@ -136,6 +136,10 @@ Channel plugins may preserve ordering, debounce input, and apply transport backp
 
 Once a turn is durably accepted, an unexpected failure before its answer produces a compact error reply in direct chats and explicitly addressed conversations where automatic replies are enabled. Progress acknowledgments do not replace that final outcome. The turn remains failed and is not replayed as a new inbound message; delivery policies and replies already sent through the message tool still apply.
 
+A final source reply completes only the input it answers. When another input steers the same running agent, its answer or failure remains visible even if an earlier input already received a final reply through the message tool.
+
+When delivery of the current input's reply is pending, OpenClaw waits for its outcome before sending a replacement answer or failure message.
+
 With the OpenClaw runtime, an assistant turn that errors or is aborted after producing partial text, without tool calls, appears as a short failure marker in the next model request. Its unfinished text is not replayed, and the stored failed turn stays unchanged. Empty and placeholder-only failures remain excluded; failed tool calls keep their existing pairing rules. The marker does not establish whether an earlier action completed.
 
 ## Streaming, chunking, and batching
@@ -188,10 +192,11 @@ begins. Steering updates the current prompt only after the new input is committe
 and consumed by the running agent; pending or rejected input does not retarget a
 reaction. Collected inputs use their committed combined prompt.
 
-Acknowledgment reactions do not replace the final answer. Omit `final` or set
-`final: false` when more work follows. Only an explicit `final: true` addition,
-requested as the complete response, can count as source-reply completion. Removals,
-no-ops, dry runs, and failed reactions never count. Normal message-tool permissions
+Omit `final` or set `final: false` when more work follows. An added reaction with
+explicit `final: true` can be the complete reply when the agent chooses it. Once
+delivery is confirmed on the current source message, OpenClaw ends the turn without
+requesting another text response. Removals, reactions to other messages, no-ops,
+dry runs, and failed reactions never count. Normal message-tool permissions
 still apply, and the current-prompt capability expires with its admitted turn.
 
 ## Silent replies

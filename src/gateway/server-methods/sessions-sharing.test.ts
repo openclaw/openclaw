@@ -33,10 +33,11 @@ import {
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { SessionMutationFactsUnavailableError } from "../session-sharing-preparation.js";
 import {
-  authorizeResolvedSessionMutation,
+  authorizeResolvedSessionMutationAsync,
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
   canReceiveSessionEvent,
+  prepareProjectedSessionSharing,
   createSessionListEntryFilter,
   invalidateSessionSharingSnapshot,
 } from "../session-sharing.js";
@@ -478,7 +479,7 @@ describe("session sharing handlers", () => {
       // The agent-run handler authorizes this resolved (default/effective) key
       // even when the request omitted sessionKey; a non-participant is blocked.
       expect(
-        authorizeResolvedSessionMutation({
+        await authorizeResolvedSessionMutationAsync({
           cfg: {},
           client: outsider,
           sessionKey,
@@ -487,7 +488,7 @@ describe("session sharing handlers", () => {
       ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
       // The owner, and a not-yet-created session, both pass.
       expect(
-        authorizeResolvedSessionMutation({
+        await authorizeResolvedSessionMutationAsync({
           cfg: {},
           client: identifiedClient(owner.id, owner.label),
           sessionKey,
@@ -495,7 +496,7 @@ describe("session sharing handlers", () => {
         }),
       ).toBeNull();
       expect(
-        authorizeResolvedSessionMutation({
+        await authorizeResolvedSessionMutationAsync({
           cfg: {},
           client: outsider,
           sessionKey: "agent:main:fresh",
@@ -674,6 +675,15 @@ describe("session sharing handlers", () => {
           getLocalSnapshot: () => ({ request: { sessionKey, agentId: "main" } }),
         },
       } as unknown as GatewayRequestContext;
+      await initializeSessionReadContext(requestContext);
+      const projection = getSessionRowProjection(requestContext)!;
+      await projection.prepareMembership();
+      const sharing = prepareProjectedSessionSharing({
+        cfg: {},
+        client: memberClient,
+        isMember: (target, identity) =>
+          projection.hasMembership(target.storePath, target.storeKey, identity),
+      });
       const mutations: Array<[string, Record<string, unknown>]> = [
         ["chat.send", { sessionKey }],
         ["sessions.steer", { key: sessionKey }],
@@ -718,6 +728,10 @@ describe("session sharing handlers", () => {
             client: memberClient as never,
             sessionKeys: [sessionKey],
             agentId: "main",
+            prepared: {
+              sharing,
+              target: (key) => projection.sharingTarget({ key, agentId: "main" }),
+            },
           }),
         ).toBe(allowed);
       };

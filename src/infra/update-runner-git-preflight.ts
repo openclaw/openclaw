@@ -4,6 +4,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 import { hasErrnoCode } from "./errno.js";
+import { formatErrorMessage } from "./errors.js";
 import { readPackageManagerSpec } from "./package-json.js";
 import { DEV_BRANCH, resolveDevUpstreamRefs } from "./update-channels.js";
 import { resolveDevUpdateTargetRevision, type DevUpdateTarget } from "./update-dev-target.js";
@@ -11,6 +12,7 @@ import {
   parsePnpmPackageManagerVersion,
   resolveUpdateBuildManager,
 } from "./update-package-manager.js";
+import { UpdatePreMutationError } from "./update-pre-mutation-error.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { runStep } from "./update-runner-command.js";
 import { cleanupGitPreflight } from "./update-runner-git-cleanup.js";
@@ -628,7 +630,15 @@ export async function runGitCandidatePreflight(params: {
     }
   } catch (error) {
     cleanupUncertain = hasCommandProcessCleanupError(error);
-    throw error;
+    const failedStep = params.steps.findLast(isFailedUpdateStep);
+    throw cleanupUncertain ||
+      failedStep?.name !== "preflight-runtime-stage" ||
+      error instanceof UpdatePreMutationError
+      ? error
+      : new UpdatePreMutationError("git-preflight-failed", formatErrorMessage(error), {
+          cause: error,
+          stepResult: { steps: params.steps, failedStep },
+        });
   } finally {
     if (!cleanupUncertain) {
       const cleanup = () => cleanupGitPreflight(params, worktreeDir, preflightRoot);

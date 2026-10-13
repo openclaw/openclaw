@@ -383,7 +383,10 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 [REPLY_ADMISSION_TICKET]: replyAdmissionTicket,
                 prepareAssistantTranscriptMessage: replyDispatch.prepareAssistantTranscriptMessage,
                 ...(isInternalSourceReplyChannel(ctx)
-                  ? { resolveReplyDelivery: replyDispatch.resolveReplyDelivery }
+                  ? {
+                      resolveReplyDelivery: replyDispatch.resolveReplyDelivery,
+                      resolveReplyDeliveryFacts: replyDispatch.resolveReplyDeliveryFacts,
+                    }
                   : {}),
                 ...(admission.admittedSessionSettings
                   ? { admittedSessionSettings: admission.admittedSessionSettings }

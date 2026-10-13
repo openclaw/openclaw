@@ -9,7 +9,11 @@ import {
   createInfoErrorLogger,
   createInfoWarnErrorLogger,
 } from "../../test/helpers/mock-logger.js";
-import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { currentUpdateCheckLifecycle } from "../infra/update-check-lifecycle.js";
 import type { PluginHookGatewayContext } from "../plugins/hook-gateway.types.js";
@@ -722,13 +726,23 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(outcomeMessage).not.toContain("private hook path");
   });
 
-  it("does not publish an imported hook candidate after Gateway close starts", async () => {
+  it("prepares requests alongside hooks and refuses hook publication after close", async ({
+    signal,
+  }) => {
     const loading = createDeferred<{
       loadedCount: number;
       commit: typeof hoisted.commitInternalHooks;
     }>();
     let closing = false;
-    hoisted.prepareInternalHooks.mockReturnValueOnce(loading.promise);
+    const hooksStarted = createDeferred();
+    const requestsPrepared = createDeferred();
+    hoisted.prewarmConfigDrivenReplyRuntime.mockImplementationOnce(async () => {
+      requestsPrepared.resolve();
+    });
+    hoisted.prepareInternalHooks.mockImplementationOnce(() => {
+      hooksStarted.resolve();
+      return loading.promise;
+    });
     const params = createPostAttachParams();
     const starting = startGatewaySidecars({
       cfg: { hooks: { internal: { enabled: true } } },
@@ -743,12 +757,20 @@ describe("startGatewayPostAttachRuntime", () => {
       logHooks: params.logHooks,
       logChannels: params.logChannels,
     });
-    await waitForGatewayTestState(() => {
-      expect(hoisted.prepareInternalHooks).toHaveBeenCalledOnce();
-    });
-    closing = true;
-    loading.resolve({ loadedCount: 1, commit: hoisted.commitInternalHooks });
-    await starting;
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          Promise.all([hooksStarted.promise, requestsPrepared.promise]),
+          starting,
+          "independent preparation did not start",
+        ),
+        signal,
+      );
+    } finally {
+      closing = true;
+      loading.resolve({ loadedCount: 1, commit: hoisted.commitInternalHooks });
+      await starting;
+    }
     expect(hoisted.commitInternalHooks).not.toHaveBeenCalled();
     expect(params.startChannels).not.toHaveBeenCalled();
   });

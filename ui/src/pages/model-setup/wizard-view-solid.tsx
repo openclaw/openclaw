@@ -3,10 +3,22 @@ import { createMemo, For, Match, Show, Switch } from "solid-js";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import "../../components/modal-dialog.ts";
+import type { ModelSetupWizardState } from "./state.ts";
 import { WIZARD_COPY } from "./wizard-copy.ts";
 import { WizardStepControls } from "./wizard-step-controls.tsx";
-import type { WizardViewProps } from "./wizard-view.ts";
-export type { WizardViewProps } from "./wizard-view.ts";
+
+export type WizardViewProps = {
+  mode: "auth" | "prepare" | "activate";
+  state: ModelSetupWizardState;
+  refreshWarning: string | null;
+  doneMessage?: string;
+  cancellationNotice?: string | null;
+  value: unknown;
+  onValueChange: (value: unknown) => void;
+  onAnswer: (value: unknown, includeValue?: boolean) => void;
+  onCancel: () => void;
+  onClose: () => void;
+};
 
 export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
   const copy = createMemo(() => WIZARD_COPY[props.mode]);

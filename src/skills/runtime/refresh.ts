@@ -403,7 +403,7 @@ export async function refreshSkillsDiscovery(
   } = {},
 ): Promise<void> {
   if (params.reason === "config-change") {
-    await closeSkillsWatchers();
+    await resetSkillsDiscoverySources(false);
   }
   for (const source of state.sources.values()) {
     source.dirty = true;
@@ -430,14 +430,25 @@ export async function refreshSkillsDiscovery(
   });
 }
 
-export async function closeSkillsWatchers(resetState = false): Promise<void> {
+async function resetSkillsDiscoverySources(
+  retireWorker: boolean,
+  resetState = false,
+): Promise<void> {
   if (state.closing) {
-    return state.closing;
+    await state.closing;
+    // A concurrent shutdown must still retire the worker a source reset retained.
+    if (!retireWorker || !state.pool) {
+      return;
+    }
   }
   clearInterval(state.timer);
   state.timer = undefined;
-  const activePool = state.pool;
-  state.pool = undefined;
+  // Config changes replace plans and subscriptions, not the healthy discovery worker.
+  // Its requests already carry their own environment and freshly selected source plan.
+  const activePool = retireWorker ? state.pool : undefined;
+  if (retireWorker) {
+    state.pool = undefined;
+  }
   state.sources.clear();
   state.plans.clear();
   state.closing = Promise.allSettled([
@@ -460,6 +471,10 @@ export async function closeSkillsWatchers(resetState = false): Promise<void> {
       state.closing = undefined;
     });
   return state.closing;
+}
+
+export function closeSkillsWatchers(resetState = false): Promise<void> {
+  return resetSkillsDiscoverySources(true, resetState);
 }
 
 export const detachSkillsWatchers = closeSkillsWatchers;

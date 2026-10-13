@@ -2,6 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  captureSqliteDatabaseAdmissions,
+  installSqliteDatabaseAdmissions,
+  readSqliteDatabaseScopedWriteTokenForPath,
+  sqliteSessionIdWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import { deleteSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -27,6 +33,7 @@ import {
   patchSessionEntryCore,
   replaceSessionEntry,
 } from "./session-accessor.sqlite-entry.js";
+import { deleteSessionEntryLifecycle } from "./session-accessor.sqlite-lifecycle.js";
 import { emptySessionEntryMaintenancePlan } from "./session-accessor.sqlite-maintenance-store.js";
 import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort } from "./session-accessor.sqlite-maintenance.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
@@ -67,6 +74,100 @@ describe("SQLite session deletion receipts", () => {
     loadSessionEntry({ sessionKey: key, storePath, readConsistency: "latest" });
 
   const seedReceipt = (key = sessionKey) => seedPersonalGitHubDeletionReceipt(key, sessionId);
+
+  it("releases deleted session scopes without reviving old receipts or invalidating another session", async () => {
+    await seed();
+    const unrelatedSessionId = "unrelated-session";
+    await replaceSessionEntry(
+      { sessionKey: baseKey, storePath },
+      { sessionId: unrelatedSessionId, lifecycleRevision: "unrelated-1", updatedAt: Date.now() },
+    );
+    const database = openOpenClawAgentDatabase(
+      toDatabaseOptions(resolveSqliteScope({ sessionKey, storePath })),
+    );
+    const scopes = [sessionKey, sqliteSessionIdWriteScope(sessionId)];
+    const unrelatedScopes = [baseKey, sqliteSessionIdWriteScope(unrelatedSessionId)];
+    readSqliteDatabaseScopedWriteTokenForPath(database.path, scopes);
+    readSqliteDatabaseScopedWriteTokenForPath(database.path, unrelatedScopes);
+    const scopeCount = () =>
+      captureSqliteDatabaseAdmissions().find((record) => record.location === database.path)
+        ?.writeScopes.size;
+    const retainedBefore = scopeCount();
+    expect(retainedBefore).toBeGreaterThanOrEqual(4);
+    const failure = new Error("rollback receipt retirement");
+    expect(() =>
+      runSqliteSessionDeletionTransaction(
+        (current) => {
+          deleteSessionEntryRows(current, sessionKey, { deleteOwnedWindows: true });
+          throw failure;
+        },
+        toDatabaseOptions(resolveSqliteScope({ sessionKey, storePath })),
+      ),
+    ).toThrow(failure);
+    expect(scopeCount()).toBe(retainedBefore);
+    expect(read()?.sessionId).toBe(sessionId);
+
+    const before = readSqliteDatabaseScopedWriteTokenForPath(database.path, scopes);
+    const unrelated = readSqliteDatabaseScopedWriteTokenForPath(database.path, unrelatedScopes);
+    const stale = structuredClone(
+      captureSqliteDatabaseAdmissions().filter((record) => record.location === database.path),
+    );
+    expect(before).toBeTypeOf("string");
+    expect(unrelated).toBeTypeOf("string");
+
+    await deleteSessionEntryLifecycle({
+      agentId: "main",
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+      archiveTranscript: false,
+      deleteTranscriptWithoutArchive: true,
+    });
+
+    expect(scopeCount()).toBe(retainedBefore! - 2);
+    installSqliteDatabaseAdmissions(stale);
+    expect(scopeCount()).toBe(retainedBefore! - 2);
+    expect(read()).toBeUndefined();
+    expect(readSqliteDatabaseScopedWriteTokenForPath(database.path, unrelatedScopes)).toBe(
+      unrelated,
+    );
+    await seed();
+    expect(readSqliteDatabaseScopedWriteTokenForPath(database.path, scopes)).not.toBe(before);
+    expect(readSqliteDatabaseScopedWriteTokenForPath(database.path, unrelatedScopes)).toBe(
+      unrelated,
+    );
+    expect(read(baseKey)?.sessionId).toBe(unrelatedSessionId);
+  });
+
+  it("retires a replaced legacy key while retaining the transferred window scope", async () => {
+    await seed();
+    const database = openOpenClawAgentDatabase(
+      toDatabaseOptions(resolveSqliteScope({ sessionKey, storePath })),
+    );
+    readSqliteDatabaseScopedWriteTokenForPath(database.path, [
+      sessionKey,
+      baseKey,
+      sqliteSessionIdWriteScope(sessionId),
+    ]);
+    const scopes = () =>
+      captureSqliteDatabaseAdmissions().find((record) => record.location === database.path)!
+        .writeScopes;
+    const retained = new Map(scopes());
+    expect(retained.delete(JSON.stringify(["key", sessionKey]))).toBe(true);
+    const stale = structuredClone(captureSqliteDatabaseAdmissions());
+
+    await applySessionEntryLifecycleMutation({
+      storePath,
+      removals: [{ sessionKey }],
+      upserts: [{ sessionKey: baseKey, entry: read()! }],
+      skipMaintenance: true,
+    });
+
+    expect(scopes()).toEqual(retained);
+    installSqliteDatabaseAdmissions(stale);
+    expect(scopes()).toEqual(retained);
+    expect(read()).toBeUndefined();
+    expect(read(baseKey)?.sessionId).toBe(sessionId);
+  });
 
   it("removes a deleted incognito session's personal receipt during maintenance", async () => {
     const incognitoKey = "agent:main:dashboard:incognito-maintenance-receipt";

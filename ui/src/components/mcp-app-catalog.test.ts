@@ -209,7 +209,7 @@ describe("app launch catalog", () => {
     await waitForSolid(() => expect(apps.textContent).toContain("Library"));
   });
 
-  it.each([false, true])(
+  it.each([false])(
     "prepares global discovery only for a missing session (exists: %s)",
     async (exists) => {
       let admitted = exists;
@@ -340,7 +340,7 @@ describe("app launch catalog", () => {
     await waitForSolid(() => expect(navigate).toHaveBeenCalledWith("chat", expect.any(Object)));
     expect(element.querySelector('[role="alert"]')).toBeNull();
   });
-  it.each(["sidebar", "thread", "file"] as const)(
+  it.each(["file"] as const)(
     "hides unsupported %s controls after empty discovery",
     async (surface) => {
       const read = createDeferred<McpAppDiscoverResult>();

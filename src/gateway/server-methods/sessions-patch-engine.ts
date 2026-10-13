@@ -457,6 +457,7 @@ export async function executeSessionPatchMutations(params: {
                             lifecycleIdentities: target.lifecycleIdentities,
                           })
                         : undefined;
+                      groupTiming?.mark("runtimeSelection");
                       const runtimeSelection =
                         await modelSelection.prepareSessionPatchRuntimeSelection({
                           cfg,
@@ -469,6 +470,7 @@ export async function executeSessionPatchMutations(params: {
                           validateModelSelection: projected.validateModelSelection,
                           placement: { context: params.context, sessionKey: primaryKey },
                         });
+                      groupTiming?.mark("projection");
                       if (!runtimeSelection.ok) {
                         projectedOutcomes.push(runtimeSelection);
                         continue;
@@ -494,7 +496,9 @@ export async function executeSessionPatchMutations(params: {
                           existingEntry.archivedAt !== undefined ||
                           target.fullPatch.archived)
                       ) {
-                        const worktreeTiming = params.diagnostics?.scope("worktree");
+                        const worktreeTiming = params.diagnostics?.scope(
+                          target.fullPatch.archived ? "archivePlacement" : "worktree",
+                        );
                         let transition: ArchiveTransition;
                         try {
                           transition = await prepareSessionPatchArchiveTransition({
@@ -671,6 +675,7 @@ export async function executeSessionPatchMutations(params: {
     context: params.context,
     callerScopes,
     callerCanManageCron: callerIsAdmin,
+    diagnostics: params.diagnostics,
     targets: activePrepared.flatMap((target) => {
       const outcome = outcomes[target.index];
       return outcome?.ok && outcome.applied

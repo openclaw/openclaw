@@ -595,6 +595,7 @@ describe("agent event handler", () => {
             attempt,
             maxAttempts: 10,
             reason,
+            retryAt: 1_800_000_000_000 + attempt * 30_000,
           },
           { seq: attempt * 2 + 1 },
         );
@@ -606,7 +607,12 @@ describe("agent event handler", () => {
             runId: "client-retry",
             state: "status",
             phase: "starting_model",
-            ...(reason === "rate_limit" ? { retry: { attempt, maxAttempts: 10, reason } } : {}),
+            retry: {
+              attempt,
+              maxAttempts: 10,
+              reason,
+              retryAt: 1_800_000_000_000 + attempt * 30_000,
+            },
           }),
         ),
       );

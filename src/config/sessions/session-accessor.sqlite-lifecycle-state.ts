@@ -8,6 +8,7 @@ import {
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import {
+  retireSqliteDatabaseWriteScopes,
   sqliteSessionIdWriteScope,
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
@@ -626,6 +627,7 @@ function deleteSqliteSessionStateRows(database: OpenClawAgentDatabase, sessionId
       db.deleteFrom("session_windows").where("session_id", "=", sessionId),
     ),
   );
+  retireSqliteDatabaseWriteScopes(database.db, [sqliteSessionIdWriteScope(sessionId)]);
 }
 
 export function deletePlannedLifecycleArtifactEntries(

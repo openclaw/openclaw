@@ -28,6 +28,10 @@ vi.mock("../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/auth-profiles/store-runtime.js")>()),
   loadAuthProfileStoreWithoutExternalProfilesAsync: async () => fixture.loadAuthProfileStore(),
 }));
+// mock-isolation: Discovery deadlines exclude the process-owned directory observer lifecycle.
+vi.mock("../infra/owned-directory-observation.js", () => ({
+  observeOwnedDirectory: () => ({ close() {} }),
+}));
 vi.mock("./setup-provider-method.js", () => ({
   withSetupProviderAuthMethod: fixture.withSetupProviderAuthMethod,
 }));

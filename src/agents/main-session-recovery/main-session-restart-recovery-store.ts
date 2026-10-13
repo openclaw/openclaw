@@ -508,6 +508,37 @@ export async function recoverStore(params: {
       if (stopped()) {
         return result;
       }
+      if (
+        !harnessCompletion &&
+        entry.restartRecoverySourceIngress === "internal" &&
+        expectedRecoverySourceRunId?.startsWith("announce:requester-settle:")
+      ) {
+        try {
+          const { prepareRequesterSettleWakeRecoverySource } =
+            await import("../subagents/registry/subagent-registry.js");
+          completionSource = await prepareRequesterSettleWakeRecoverySource({
+            runId: expectedRecoverySourceRunId,
+            requesterSessionKey: dispatchSessionKey,
+            requesterAgentId: agentId,
+            sessionId: entry.sessionId,
+            lifecycleRevision: entry.lifecycleRevision,
+            storePath: params.storePath,
+            gatewayRuntime: params.gatewayRuntime,
+          });
+          if (!completionSource || !entry.restartRecoveryOperatorSource) {
+            throw new Error(
+              "Requester settle recovery lacks its original cohort or operator authority",
+            );
+          }
+          completionSource();
+        } catch (error) {
+          mainSessionRecoveryLog.warn(
+            `requester settle recovery source unavailable for ${sessionKey}: ${String(error)}`,
+          );
+          result.failed++;
+          continue;
+        }
+      }
       // Steering changes the transcript tail, not the executing turn's source claim.
       const hasRetainedHumanSource =
         expectedRecoverySourceRunId !== undefined &&
@@ -515,6 +546,7 @@ export async function recoverStore(params: {
           entry.restartRecoverySourceIngress === "channel");
       if (
         !recoverableHarnessCompletion &&
+        !completionSource &&
         ((source === "inter_session" && !hasRetainedHumanSource) ||
           ((source === undefined ||
             source === "internal_system" ||

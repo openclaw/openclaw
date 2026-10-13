@@ -21,6 +21,10 @@ export type {
 } from "../plugins/capability-catalog-context.types.js";
 export type { PluginCapabilityCatalog } from "../plugins/capability-catalog.types.js";
 export type { OpenClawConfig } from "../config/types.openclaw.js";
+export type {
+  SuggestedWorkerProfile,
+  WorkerProfileSuggestionDiscovery,
+} from "../plugins/worker-profile-suggestion.types.js";
 
 export type {
   AgentHarness,
