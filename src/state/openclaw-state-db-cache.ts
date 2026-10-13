@@ -11,6 +11,7 @@ import {
   isSqliteLockError,
   sqlitePrimaryResultCode,
 } from "../infra/sqlite-error-diagnostics.js";
+import { readSqliteFileGeneration } from "../infra/sqlite-file-generation-worker.js";
 import {
   sameSqliteFileGeneration,
   type SqliteFileGeneration,
@@ -405,8 +406,6 @@ export async function getOpenClawStateDatabaseTerminalFailureAsync(
   const failure = await terminalOpenLatch.getAsync(
     context.admission.databasePath,
     async (pathname, generation) => {
-      const { readSqliteFileGeneration } =
-        await import("../infra/sqlite-file-generation-worker.js");
       signal?.throwIfAborted();
       context.admission.assertCurrent();
       const current = await readSqliteFileGeneration(pathname, signal);

@@ -1,4 +1,4 @@
-import type { ResolvedSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
+import type { ResolvedSessionEntryRow } from "./session-entry-storage.types.js";
 import type { SessionEntryWindowFacts } from "./session-entry-window.types.js";
 import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import type { SessionEntry } from "./types.js";

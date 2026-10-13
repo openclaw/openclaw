@@ -1,10 +1,11 @@
+import "../../../../src/test-utils/prepare-compiled-subprocesses.js";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
-import { buildQaGatewayConfig } from "../../../../extensions/qa-lab/api.js";
+import { buildQaGatewayConfig } from "../../../../extensions/qa-lab/test-api.js";
 import type {
   SkillsLibraryActivateResult,
   SkillsLibraryListResult,
@@ -78,6 +79,7 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
       const settlement = createWireWorkspaceSettlementWaiter();
       let provider: Awaited<ReturnType<typeof startSkillLibraryWireProvider>> | undefined;
       let node: Awaited<ReturnType<typeof prepareSkillLibraryNodeProcess>> | undefined;
+      let nodeStartup: ReturnType<typeof prepareSkillLibraryNodeProcess> | undefined;
       let published: PublishedWireWorkspace | undefined;
       const clients: SkillLibraryWireClient[] = [];
       await runQaGatewayTestFixture(
@@ -135,6 +137,14 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
             email: SKILL_LIBRARY_BOB,
             buildId: hello.server.buildId,
           });
+          // Pairing and bundle prewarming are independent of local skill-library turns.
+          nodeStartup = (async () => {
+            console.info("[skill-library-wire] pairing real node");
+            node = await prepareSkillLibraryNodeProcess(instance);
+            await node.start(admin);
+            return node;
+          })();
+          void nodeStartup.catch(() => undefined);
           const original = executableSkillLibraryBundle();
           console.info("[skill-library-wire] publishing Alice/Bob private bundles");
           const saved = await alice.request<SkillsLibraryReceipt>("skills.library.save", original);
@@ -247,9 +257,7 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
             helper: "bundled-helper-v1",
           });
           expect(outside(localFirst.directory, localCwd)).toBe(true);
-          console.info("[skill-library-wire] pairing real node");
-          node = await prepareSkillLibraryNodeProcess(instance);
-          await node.start(admin);
+          node = await nodeStartup;
           console.info("[skill-library-wire] dispatching managed session to node");
           const dispatched = await admin.request<{
             placement: { state: string; remoteWorkspaceDir: string; workerBundleHash: string };
@@ -586,6 +594,7 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
           expect(await workspaceStatus(localCwd)).toBe(localBefore);
           expect(await workspaceStatus(gatewayWorkerCwd)).toBe(workerBefore);
         },
+        () => nodeStartup,
         () => provider?.stop(),
         () => node?.stop(),
         async () => {

@@ -574,7 +574,7 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   container-type: inline-size;
 }
 
-.session-group-defaults__mode-dropdown::part(menu) {
+.session-group-defaults__mode-dropdown > .session-group-defaults__mode-menu {
   width: min(100cqw, calc(100vw - 48px));
   padding: var(--menu-padding);
   border: 1px solid var(--border-strong);
@@ -585,7 +585,7 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 }
 
 .session-group-defaults__mode-trigger {
-  grid-template-columns: 18px minmax(0, 1fr) 14px;
+  display: block;
   width: 100%;
   min-height: 56px;
   color: var(--text);
@@ -595,18 +595,25 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   box-shadow: inset 0 1px 0 var(--card-highlight);
 }
 
+.session-group-defaults__mode-trigger > .oc-menu-item__label {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 10px;
+}
+
 .session-group-defaults__mode-trigger:disabled {
   cursor: default;
   opacity: 0.6;
 }
 
-.session-group-defaults__mode-option {
+.session-group-defaults__mode-menu .session-group-defaults__mode-option {
   color: var(--text);
   font: inherit;
   font-size: 13px;
 }
 
-.session-group-defaults__mode-option::part(label) {
+.session-group-defaults__mode-option > .oc-menu-item__label {
   width: 100%;
   min-width: 0;
 }
@@ -786,6 +793,20 @@ wa-popover.new-session-page__where-popover::part(body) {
   max-width: none;
   padding: 0;
   overflow: hidden;
+}
+
+.oc-popover.session-group-defaults__folder-popover {
+  --oc-overlay-max-width: min(420px, calc(100vw - 24px));
+  --oc-popover-padding: 0;
+
+  width: var(--oc-overlay-max-width);
+  min-width: min(224px, var(--oc-overlay-max-width), var(--oc-overlay-available-width, 100%));
+  overflow-y: auto;
+  background: var(--bg-elevated);
+}
+
+.session-group-defaults__folder-popover > .new-session-page__browser {
+  flex-shrink: 0;
 }
 
 /* Popovers need their own scroll region because project and destination

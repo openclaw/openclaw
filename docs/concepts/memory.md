@@ -10,6 +10,11 @@ OpenClaw remembers things by writing plain Markdown files in your agent's
 workspace (default `~/.openclaw/workspace`). The model only remembers what gets
 saved to disk; there is no hidden state.
 
+Workspace `USER.md` and `MEMORY.md` context does not require a memory search
+plugin to implement provenance classification. When that optional capability is
+missing, OpenClaw uses its workspace provenance records. Files recorded as
+untrusted and remote files without a valid read-source identity remain excluded.
+
 ## How it works
 
 Your agent has four memory-related files:

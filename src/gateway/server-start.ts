@@ -1,3 +1,4 @@
+import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs";
 import { formatErrorMessage } from "../infra/errors.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
@@ -119,6 +120,7 @@ async function startGatewayServerWithSdkHost(
       if (gatewayKernel.lifecycle.closePreludeStarted) {
         return;
       }
+      scheduleOpenClawCompileCacheFlush();
       // Deferred sidecars must finish before the I/O window for background work begins.
       gatewayKernel.scheduler.schedule({
         id: "startup:post-ready-work",

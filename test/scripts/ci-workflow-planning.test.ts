@@ -8399,6 +8399,7 @@ describe("ci workflow guards", () => {
     "selects changed-path-facts owner tests and preserves legacy task execution for $label",
     ({ changedPath, taskOverride, fullStatic }) => {
       const root = tempDirs.make("openclaw-fast-ci-routing-");
+      installCollectChecks(root);
       const changedPaths = [changedPath];
       const scopeEnv = Object.fromEntries(
         Object.entries(runCiChangedScopeFixture(changedPaths)).map(([key, value]) => [
@@ -8466,6 +8467,7 @@ describe("ci workflow guards", () => {
       ]);
       // Historical release checkouts retain these tasks; current PRs select the owner row above.
       const run = spawnSync("bash", ["-c", runStep.run], {
+        cwd: root,
         encoding: "utf8",
         env: {
           ...process.env,

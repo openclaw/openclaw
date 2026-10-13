@@ -259,7 +259,7 @@ function DevicePageContent() {
             stacked
             control={
               <div class="device-extension-setup">
-                <openclaw-native-chrome-setup auto-inspect />
+                <openclaw-native-chrome-setup />
                 <div class="device-extension-setup__actions">
                   <a
                     href="https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig"

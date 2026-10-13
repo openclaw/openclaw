@@ -100,7 +100,7 @@ describe("acpx plugin", () => {
 
     const api = createTestPluginApi({
       pluginConfig: { stateDir: "/tmp/acpx" },
-      runtime: { state: { openKeyedStore } } as never,
+      runtime: { state: { openKeyedStoreV2: openKeyedStore } } as never,
       registerService: vi.fn(),
       on: vi.fn(),
     });
@@ -373,7 +373,7 @@ export { sendReceipt };`,
               resolveStateDir: () => {
                 throw new Error("Catalog inspection must not resolve runtime state");
               },
-              openKeyedStore: () => {
+              openKeyedStoreV2: () => {
                 throw new Error("Catalog inspection must not open runtime state");
               },
             },

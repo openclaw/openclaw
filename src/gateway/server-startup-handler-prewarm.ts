@@ -1,3 +1,4 @@
+import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
@@ -102,7 +103,11 @@ export function scheduleGatewayHandlerPrewarm(params: {
   let idleTask: GatewayIdleTaskHandle | undefined;
 
   const scheduleNext = () => {
-    if (stopped || nextIndex >= items.length) {
+    if (stopped) {
+      return;
+    }
+    if (nextIndex >= items.length) {
+      scheduleOpenClawCompileCacheFlush();
       return;
     }
     void (async () => {

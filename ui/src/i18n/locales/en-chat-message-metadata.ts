@@ -78,6 +78,8 @@ const enChatMessageMetadata = {
       forwardedMessage: "Forwarded message",
       fullContentLoadExhausted: "Could not load the full message.",
       voiceNote: "Voice note",
+      readAloud: "Read aloud",
+      stopReading: "Stop reading",
       duplicatesCollapsed: "{count} consecutive identical messages collapsed",
       contextFor: "Message context for {timestamp}",
     },

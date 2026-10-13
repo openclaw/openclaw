@@ -286,6 +286,9 @@ export async function prepareSessionLifecycleDrain(
       throw new Error("Session cancellation lost ownership");
     }
 
+    // Early reclaim owns dispatch cancellation and settlement. Join its writes before
+    // capturing runtime authority, or our own cleanup can invalidate that snapshot.
+    await reclaimed;
     params.authorize?.();
     const placementService: LifecyclePlacementService | undefined =
       params.context.workerSessionPlacementService;

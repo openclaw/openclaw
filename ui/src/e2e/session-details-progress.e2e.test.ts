@@ -233,14 +233,14 @@ suite.define(() => {
           .poll(() => progress.textContent())
           .toContain("The card changed while Details stayed closed.");
         const menu = progress.locator(".chat-details-progress__menu");
-        expect(await menu.locator("wa-dropdown-item").count()).toBe(0);
+        expect(await menu.locator('[role^="menuitem"]:visible').count()).toBe(0);
         await progress.getByRole("button", { name: "Task progress options", exact: true }).click();
-        await menu.locator('wa-dropdown-item[value="hide"]').waitFor({ state: "visible" });
-        expect(await menu.locator("wa-dropdown-item").count()).toBe(4);
+        await menu.locator('[data-value="hide"]').waitFor({ state: "visible" });
+        expect(await menu.locator('[role^="menuitem"]').count()).toBe(4);
         await page.keyboard.press("Escape");
-        expect(await menu.locator("wa-dropdown-item").count()).toBe(4);
+        expect(await menu.locator('[role^="menuitem"]').count()).toBe(4);
         await progress.getByRole("button", { name: "Task progress options", exact: true }).click();
-        await menu.locator('wa-dropdown-item[value="hide"]').click();
+        await menu.locator('[data-value="hide"]').click();
         await expect.poll(() => progress.count()).toBe(0);
         expect(await session.isVisible()).toBe(true);
         const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
@@ -258,10 +258,10 @@ suite.define(() => {
         await trigger.click();
         await expect.poll(() => progress.isVisible()).toBe(true);
         await progress.getByRole("button", { name: "Task progress options", exact: true }).click();
-        await menu.locator('wa-dropdown-item[value="collapse"]').click();
+        await menu.locator('[data-value="collapse"]').click();
         expect(await progress.getAttribute("open")).not.toBeNull();
         await progress.getByRole("button", { name: "Task progress options", exact: true }).click();
-        await menu.locator('wa-dropdown-item[value="hide"]').click();
+        await menu.locator('[data-value="hide"]').click();
         await expect.poll(showSetting).toBe(false);
         await page.reload();
         await trigger.waitFor();

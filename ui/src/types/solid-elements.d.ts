@@ -14,7 +14,6 @@ import type { ControlUiSurfaceProps } from "../../../src/plugin-sdk/control-ui.j
 import type { ClawHubRecommendation } from "../../../src/shared/clawhub-recommendations.js";
 import type { LobsterPetProps } from "../components/lobster-pet-contract.ts";
 import type { MascotMood } from "../components/mascot-pose.ts";
-import type { SelectPicker } from "../components/select-picker.ts";
 import type { MessageActionDetails } from "../pages/chat/components/chat-message-markdown.types.ts";
 export type { JSX } from "@solidjs/web";
 
@@ -43,6 +42,7 @@ declare module "@solidjs/web" {
     interface IntrinsicElements {
       "openclaw-github-identity": HTMLAttributes<HTMLElement>;
       "openclaw-plugins-page": HTMLAttributes<HTMLElement>;
+      "openclaw-dashboards-page": HTMLAttributes<HTMLElement>;
       "openclaw-lobster-pet": HTMLAttributes<HTMLElement> & ElementProperties<LobsterPetProps>;
       "wa-select": HTMLAttributes<WaSelect> & { "prop:value": WaSelect["value"] };
       "wa-option": HTMLAttributes<WaOption> & {
@@ -51,7 +51,9 @@ declare module "@solidjs/web" {
         "prop:selected": WaOption["selected"];
       };
       // Each caller validates the picker option/callback pairing before the DOM boundary.
-      "openclaw-select-picker": HTMLAttributes<SelectPicker> & { "prop:params": unknown };
+      "openclaw-select-picker": HTMLAttributes<HTMLElementTagNameMap["openclaw-select-picker"]> & {
+        "prop:params": unknown;
+      };
       "openclaw-update-run-view": HTMLAttributes<HTMLElement> & {
         "prop:run": UpdateRunRecord | null;
         "prop:connected": boolean;

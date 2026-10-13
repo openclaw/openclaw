@@ -138,7 +138,9 @@ That split lets OpenClaw validate config, explain missing/disabled plugins, and 
 
 Failed registrations remain visible in plugin diagnostics after their contributions are rolled back. Those records do not enter execution scopes or block healthy plugins and core context-engine admission; the loader still owns their cleanup.
 
-Gateway startup and reload yield to the event loop between plugin registrations so health probes and existing requests can run. Registration order is unchanged, and the Gateway publishes the registry only after the complete generation is ready. Each plugin's module evaluation and `register()` remain synchronous; plugins should defer expensive work to their asynchronous service lifecycle.
+Gateway startup and reload yield to the event loop between plugin registrations so health probes and existing requests can run. Registration order is unchanged, and the Gateway publishes the registry only after the complete generation is ready. Each plugin's module evaluation and `register()` remain synchronous; plugins should defer expensive work to their asynchronous service lifecycle or load execution-only modules on first asynchronous use. Register callable hooks before readiness, even when their implementations load lazily.
+
+The llama.cpp plugin follows this split for setup, server management, embeddings, image descriptions, and streaming. Registration exposes its capabilities and embedding index identities immediately; the corresponding asynchronous operation loads its implementation on first use.
 
 Web-provider discovery honors exact prepared generations, including empty selections. It reuses an ordinary request-owned registry when it covers the selected providers; otherwise an empty result requires a complete inspected manifest inventory. Partial capability callbacks retain discovery of undeclared providers. Prepared cron runs and Doctor tool construction do not register the same plugins again merely to check whether web search is configured. Doctor keeps provider-specific schema normalization outside its selected tool generation.
 
@@ -147,6 +149,8 @@ Web-provider discovery honors exact prepared generations, including empty select
 One `PluginCache` starts on the first plugin metadata access, including CLI preflight before Gateway startup, and fills progressively as metadata and artifacts are needed. Gateway startup retains that owner and builds its immutable `PluginMetadataSnapshot`. The snapshot includes plugin metadata from all configured agent workspaces, including disabled plugins, with source precedence and workspace provenance preserved. It stores the installed plugin index, manifest registry, manifest diagnostics, owner maps, and a plugin id normalizer. Package contents and lazily loaded module exports belong to other typed views of the same cache, not the snapshot itself.
 
 Plugin-aware config validation, startup auto-enable, and Gateway plugin bootstrap consume that snapshot instead of rebuilding manifest/index metadata independently. `PluginLookUpTable` is derived from the same snapshot and adds the startup plugin plan for the current runtime config.
+
+On POSIX, successful checked entry opens also publish their canonical paths to the metadata cache. Discovery reuses those facts until the owner invalidates metadata; actual file opens retain their descriptor-bound security checks. Windows keeps separate path resolution because admission can return a trusted root alias rather than the native spelling.
 
 Async config validation requests metadata when a rule or default needs it. Core-only settings do not load the plugin inventory; successful `config get` uses core redaction hints outside plugin, channel, and agent configuration, building the JSON schema only for missing-path diagnostics. Agent configuration keeps provider model-parameter schemas from plugins. Native-catalog privacy preferences still receive their plugin schema checks.
 

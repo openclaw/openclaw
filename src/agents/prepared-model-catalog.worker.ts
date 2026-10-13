@@ -50,7 +50,7 @@ import { resolveAuthStorePathForDisplay } from "./auth-profiles/paths.js";
 import { mergeRuntimeExternalProfileReferences } from "./auth-profiles/runtime-external-profile-references.js";
 import { withWorkerAuthProfileWrites } from "./auth-profiles/runtime-scope.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "./auth-profiles/store-runtime.js";
 import { preserveResolvedSecretBackedCredentials } from "./auth-profiles/store.js";
 import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import { modelCatalogRouteVariantKey, modelCatalogRowToEntry } from "./model-catalog-entry.js";
@@ -88,7 +88,7 @@ type WorkerGeneration = {
   release: () => void | Promise<void>;
 };
 
-function refreshAuthStore(params: {
+async function refreshAuthStore(params: {
   agentDir: string;
   inheritedAuthDir?: string;
   authStore: PreparedModelCatalogWorkerInput["authStore"];
@@ -99,7 +99,7 @@ function refreshAuthStore(params: {
   pluginGeneration: PreparedModelRuntimePluginGeneration;
 }) {
   const durable = preserveResolvedSecretBackedCredentials({
-    next: loadAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
+    next: await loadAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir, {
       allowKeychainPrompt: false,
       ...(params.inheritedAuthDir ? { inheritedAuthDir: params.inheritedAuthDir } : {}),
     }),
@@ -305,7 +305,7 @@ async function runCatalogRequest(
     }
     // Full discovery is one point-in-time operation: refresh first, then let every provider hook
     // and the returned availability projection consume the same exact store.
-    const authStore = refreshAuthStore({
+    const authStore = await refreshAuthStore({
       agentDir: value.input.agentDir,
       inheritedAuthDir: value.input.inheritedAuthDir,
       authStore: value.authStore,

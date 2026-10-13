@@ -61,6 +61,8 @@ const repositoryScriptEntries = [
   "scripts/bench-channel-turn.mts!",
   // Maintainers invoke this isolated transcript-rewrite benchmark by path.
   "scripts/bench-session-manager-rewrite.ts",
+  // The team-shaped fixture README invokes this measurement CLI by path.
+  "scripts/perf/team-shape-measure.ts",
   "scripts/bundle-a2ui.mts!",
   "scripts/build-discord-activity-sdk.mts!",
   // Plugin package asset hooks invoke the browser builder by path.
@@ -764,6 +766,11 @@ const config = {
   // Script exports are checked with every script as an entry and entry-export
   // reporting enabled. Suppress them only in this application-production scan.
   ignoreIssues: {
+    // P3-6c.1 stages manifest write/archive and typed replacement outcomes for P3-6c.2.
+    // Remove these production-only exceptions when the offline port caller lands;
+    // the full-tree audit still checks all exports against their boundary tests.
+    "src/infra/database-port-recovery.ts": ["exports"],
+    "src/infra/sqlite-snapshot.ts": ["exports"],
     "scripts/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
     // PR2a admits physical facts now; PR2b routes state maintenance to these capabilities.
     // The full-tree test-aware scan still audits their boundary-test consumers.

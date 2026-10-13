@@ -17,11 +17,11 @@ import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-
 import {
   isPreparedSessionSharingChange,
   projectSessionSharingEntry,
-  readCommittedSessionEntryCache,
   readSessionEntryCache,
   retainPreparedSessionGenerationFacts,
   retainPreparedSessionSharingFacts,
 } from "./session-accessor.sqlite-entry-cache.js";
+import { readCommittedSessionEntryCache } from "./session-accessor.sqlite-entry-cache.test-support.js";
 import {
   loadSessionEntry,
   loadSessionEntryReadOnly,

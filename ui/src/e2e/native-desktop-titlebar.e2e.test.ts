@@ -398,19 +398,24 @@ suite.define(() => {
             expect(panelGeometry.x).toBe(macos ? 92 : 68);
           }
           await toggle.click();
-          await page.locator(".shell-chrome-controls__nav-toggle").click();
+          await page
+            .locator(
+              native ? ".shell-chrome-controls__nav-toggle" : `[data-navigation-view="${panel}"]`,
+            )
+            .click();
         }
         await page.locator('[data-navigation-view="sessions"]').click();
         await collapse.click();
         const cluster = page.locator(".shell-chrome-controls");
-        await cluster.waitFor();
+        await expect.poll(() => cluster.isVisible()).toBe(native);
+        expect(await page.locator('[data-navigation-view][aria-pressed="true"]').count()).toBe(0);
         expect(
           await cluster
             .locator("button, a")
             .evaluateAll((elements) =>
               elements.map((element) => element.getAttribute("aria-label")),
             ),
-        ).toEqual(["Expand sidebar"]);
+        ).toEqual(native ? ["Expand sidebar"] : []);
         expect(await page.locator(".sidebar-brand__search").isVisible()).toBe(true);
         if (native) {
           expect(
@@ -441,7 +446,11 @@ suite.define(() => {
             })
             .toBe(true);
         }
-        await cluster.getByRole("button", { name: "Expand sidebar" }).click();
+        if (native) {
+          await cluster.getByRole("button", { name: "Expand sidebar" }).click();
+        } else {
+          await page.locator('[data-navigation-view="sessions"]').click();
+        }
         await collapse.waitFor();
       });
     },

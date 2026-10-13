@@ -27,10 +27,13 @@ import {
 import { resolveChannelResetConfig, resolveSessionResetType } from "../../config/sessions/reset.js";
 import type { SessionEntrySummary } from "../../config/sessions/session-accessor.types.js";
 import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../config/sessions/session-actor-storage-binding.js";
+import {
   readSessionEntryReadOnlyInWorker,
   withSessionStoreReaderInWorker,
 } from "../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
 import {
@@ -505,11 +508,14 @@ async function resolveSessionKeyForRequestInternal(
     !isInternalSessionEffectsKey(storeSessionKey) &&
     !(
       opts.prepareBoundEntry &&
-      captureIncognitoSessionSource({
-        agentId: storeAgentId,
-        storePath,
-        sessionKey: storeSessionKey,
-      })
+      captureSessionActorStorageOwner(
+        {
+          agentId: storeAgentId,
+          storePath,
+          sessionKey: storeSessionKey,
+        },
+        { assertCurrent() {}, authorize() {} },
+      )
     )
       ? await readSessionEntryReadOnlyInWorker({
           agentId: storeAgentId,
@@ -607,15 +613,19 @@ export async function resolveSession(
     prepareBoundEntry: true,
   });
   const scope = { agentId: resolvedAgentId, sessionKey: sessionKey ?? "", storePath };
-  const sessionEntry =
-    sessionKey && !isInternalSessionEffectsKey(sessionKey) && captureIncognitoSessionSource(scope)
-      ? await readSessionEntryReadOnlyInWorker(
-          { ...scope, sessionKey: normalizeStoreSessionKey(sessionKey) },
-          () => {
+  const memory =
+    sessionKey && !isInternalSessionEffectsKey(sessionKey)
+      ? captureSessionActorStorageOwner(scope, {
+          assertCurrent() {
             opts.signal?.throwIfAborted();
             opts.assertCurrent?.();
           },
-        )
+          authorize() {},
+        })
+      : undefined;
+  const sessionEntry =
+    memory && sessionKey
+      ? readCapturedSessionActorEntry(memory, normalizeStoreSessionKey(sessionKey))
       : routedEntry;
   const now = Date.now();
 

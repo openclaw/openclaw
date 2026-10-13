@@ -38,7 +38,7 @@ export const TELEGRAM_THREAD_BINDINGS_TEST_CFG: OpenClawConfig = {
 export function useTelegramThreadBindingsFixture() {
   let stateRuntime = initialStateRuntime;
   let state: OpenClawTestState;
-  let store: PluginStateKeyedStore<TelegramThreadBindingRecord>;
+  let store: PluginStateKeyedStore<TelegramThreadBindingRecord, 2>;
   const managers = new Set<Awaited<ReturnType<typeof createTelegramThreadBindingManager>>>();
   const stopManagers = async () => {
     for (const manager of managers) {
@@ -47,7 +47,7 @@ export function useTelegramThreadBindingsFixture() {
     managers.clear();
   };
   const installStore = (
-    next: PluginStateKeyedStore<TelegramThreadBindingRecord>,
+    next: PluginStateKeyedStore<TelegramThreadBindingRecord, 2>,
     allowLegacySync = false,
   ) => {
     store = next;
@@ -63,7 +63,7 @@ export function useTelegramThreadBindingsFixture() {
             return stateRuntime.createPluginStateSyncKeyedStoreForTests<T>("telegram", options);
           },
           // SAFETY: This fixture serves only the thread-binding namespace and its canonical record type.
-          openKeyedStore: (() => store) as TelegramRuntime["state"]["openKeyedStore"],
+          openKeyedStoreV2: (() => store) as TelegramRuntime["state"]["openKeyedStoreV2"],
         },
       }),
     );
@@ -83,10 +83,14 @@ export function useTelegramThreadBindingsFixture() {
     });
     stateRuntime.resetPluginStateStoreForTests({ closeDatabase: false });
     installStore(
-      stateRuntime.createPluginStateKeyedStoreForTests("telegram", {
-        namespace: TELEGRAM_THREAD_BINDINGS_NAMESPACE,
-        maxEntries: TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
-      }),
+      stateRuntime.createPluginStateKeyedStoreV2ForTests(
+        "telegram",
+        {
+          namespace: TELEGRAM_THREAD_BINDINGS_NAMESPACE,
+          maxEntries: TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
+        },
+        { assertCurrent() {} },
+      ),
     );
     await store.clear();
   });

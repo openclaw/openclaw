@@ -206,6 +206,10 @@ export function checkPluginCacheEntry(params: {
       fs.closeSync(opened.fd);
       root = bindPluginCacheRoot(params.rootDir, opened.rootRealPath);
       Object.assign(pathFacts(opened.path), { exists: true, stat: opened.stat });
+      // Safe-open already resolved this path natively. Windows admission can rebase root aliases.
+      if (process.platform !== "win32") {
+        pathFacts(opened.path).nativeRealpath = opened.path;
+      }
       checked = { ok: true, path: opened.path, rootRealPath: opened.rootRealPath, exists: true };
     }
   }
