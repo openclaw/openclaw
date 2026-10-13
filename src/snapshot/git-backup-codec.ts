@@ -59,10 +59,10 @@ const GIT_BACKUP_PROJECTION_TABLES = [
   "session_transcript_index_state",
 ] as const;
 
-export type GitBackupIdentity = { role: "global" } | { role: "agent"; agentId: string };
+export type GitBackupIdentity = import("./snapshot-provider.js").SnapshotDatabaseIdentity;
 
 export type GitBackupManifest = {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   identity: GitBackupIdentity;
   userVersion: number;
   excludedTables: string[];
@@ -103,6 +103,10 @@ function normalizeIdentity(identity: GitBackupIdentity): GitBackupIdentity {
   if (identity.role === "global") {
     return identity;
   }
+  if (identity.role === "generic") {
+    requireSafeTableName(identity.id);
+    return identity;
+  }
   const agentId = normalizeAgentId(identity.agentId);
   if (agentId !== identity.agentId) {
     throw new Error(`Git backup agent id must be canonical: ${identity.agentId}`);
@@ -112,7 +116,11 @@ function normalizeIdentity(identity: GitBackupIdentity): GitBackupIdentity {
 
 export function gitBackupScopePath(identity: GitBackupIdentity): string {
   const normalized = normalizeIdentity(identity);
-  return normalized.role === "global" ? "global" : path.join("agents", normalized.agentId);
+  return normalized.role === "generic"
+    ? path.join("stores", normalized.id)
+    : normalized.role === "global"
+      ? "global"
+      : path.join("agents", normalized.agentId);
 }
 
 function readSchemaEntries(database: DatabaseSync): SchemaEntry[] {
@@ -247,8 +255,14 @@ export async function dumpGitBackupDatabase(params: {
   outputPath: string;
   identity: GitBackupIdentity;
   excludeSecrets?: boolean;
+  physicalEngine?: "sqlite" | "postgres";
 }): Promise<GitBackupManifest> {
   const identity = normalizeIdentity(params.identity);
+  const { captureGitPostgresBackup } = await import("./database-backup.js");
+  const postgres = await captureGitPostgresBackup({ ...params, identity });
+  if (postgres) {
+    return postgres;
+  }
   const database = openNodeSqliteDatabase(params.snapshotPath, { readOnly: true });
   try {
     const entries = readSchemaEntries(database);
@@ -352,9 +366,11 @@ export function parseGitBackupManifest(value: string, source: string): GitBackup
   }
   const manifest = parsed as Partial<GitBackupManifest>;
   if (
-    manifest.schemaVersion !== 1 ||
+    (manifest.schemaVersion !== 1 && manifest.schemaVersion !== 2) ||
     !manifest.identity ||
-    (manifest.identity.role !== "global" && manifest.identity.role !== "agent") ||
+    (manifest.identity.role !== "global" &&
+      manifest.identity.role !== "agent" &&
+      manifest.identity.role !== "generic") ||
     !Number.isSafeInteger(manifest.userVersion) ||
     !Array.isArray(manifest.excludedTables) ||
     (manifest.excludedConfigStateKeyPrefixes !== undefined &&
@@ -463,6 +479,9 @@ function validateRestoredOwner(
   userVersion: number,
 ): void {
   assertSqliteIntegrity(database, databasePath);
+  if (identity.role === "generic") {
+    return;
+  }
   if (identity.role === "agent") {
     assertOpenClawAgentDatabaseOwner(database, {
       agentId: identity.agentId,
@@ -566,6 +585,20 @@ export async function restoreGitBackupDirectory(params: {
     JSON.stringify(normalizeIdentity(manifest.identity)) !== JSON.stringify(restoreIdentity)
   ) {
     throw new Error("Git backup manifest database identity does not match the requested scope.");
+  }
+  if (manifest.schemaVersion === 2) {
+    const { createLocalSnapshotProvider } = await import("./local-repository.js");
+    await createLocalSnapshotProvider({ repositoryPath: params.sourcePath }).restoreFresh(
+      { path: path.join(params.sourcePath, "postgres") },
+      targetPath,
+    );
+    return {
+      manifest,
+      targetPath,
+      tables: [],
+      excludedTables: [],
+      excludedConfigStateKeyPrefixes: [],
+    };
   }
   const schema = await fs.readFile(path.join(params.sourcePath, GIT_BACKUP_SCHEMA), "utf8");
   const statements = splitSchemaStatements(schema);

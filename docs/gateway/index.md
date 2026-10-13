@@ -92,7 +92,14 @@ One-shot commands do not enable a cache by default: cold cache persistence on No
 and Bun can delay process exit after output. Setting `NODE_COMPILE_CACHE` explicitly
 opts those commands in. Explicit Gateway prewarming still populates the cache.
 
-The first boot populates the cache; later boots reuse it. Deployment systems can
+The first boot populates the cache; later boots reuse it. The Gateway flushes
+accumulated bytecode after startup and handler prewarming; workers flush their
+startup and newly loaded database operation modules too. This avoids leaving the
+whole module graph to persist during shutdown. Node performs these writes
+synchronously, so a cold cache can still delay early work on slow storage. Modules
+loaded later can still leave some bytecode to write at exit.
+
+Deployment systems can
 warm a candidate before cutover by booting and cleanly stopping it with isolated
 state, a loopback port, the runtime user, and the same cache root. Warm it at its
 final release path: moving the release after warming can prevent Node from

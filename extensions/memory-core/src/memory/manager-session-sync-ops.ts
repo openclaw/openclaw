@@ -487,6 +487,13 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
             const delay = SESSION_RETRY_DELAYS_MS[this.sessionRetryAttempt++];
             // After three automatic retries, fresh activity can start another bounded series.
             this.sessionRetryAt = delay === undefined ? Infinity : Date.now() + delay;
+            if (this.sessionRetryAttempt === SESSION_RETRY_DELAYS_MS.length) {
+              // Keep the last retry until a full rebuild is allowed to run.
+              this.sessionRetryAt = Math.max(
+                this.sessionRetryAt,
+                this.fullReindexRetryBackoff.retryAt,
+              );
+            }
           }
         }
         this.sessionBackgroundIndexing = false;

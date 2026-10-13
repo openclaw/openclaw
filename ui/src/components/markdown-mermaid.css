@@ -19,7 +19,7 @@ openclaw-mermaid > .actions {
   align-items: center;
   gap: 2px;
 }
-openclaw-mermaid > .actions button {
+openclaw-mermaid > .actions :is(.copy-button, .oc-menu-trigger) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -33,16 +33,16 @@ openclaw-mermaid > .actions button {
   font: inherit;
   cursor: default;
 }
-openclaw-mermaid > .actions button:hover,
-openclaw-mermaid > .actions button[aria-expanded="true"] {
+openclaw-mermaid > .actions :is(.copy-button, .oc-menu-trigger):hover,
+openclaw-mermaid > .actions .oc-menu-trigger[aria-expanded="true"] {
   background: var(--bg-hover);
   color: var(--text);
 }
-openclaw-mermaid > .actions button:focus-visible {
+openclaw-mermaid > .actions :is(.copy-button, .oc-menu-trigger):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
-openclaw-mermaid > .actions button svg {
+openclaw-mermaid > .actions :is(.copy-button, .oc-menu-trigger) svg {
   width: 15px;
   height: 15px;
 }
@@ -63,25 +63,17 @@ openclaw-mermaid > .copy-feedback {
   clip-path: inset(50%);
   white-space: nowrap;
 }
-openclaw-mermaid > .actions wa-dropdown::part(menu) {
+openclaw-mermaid > .actions .oc-menu {
+  --oc-overlay-distance: 4px;
+
   min-width: 160px;
-  padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
 }
-openclaw-mermaid > .actions wa-dropdown-item {
+openclaw-mermaid > .actions .oc-menu-item {
   min-height: var(--menu-item-height);
   padding: 0 8px;
-  border-radius: var(--menu-item-radius);
-  color: var(--text);
   font: 12px var(--font-body);
   cursor: default;
-}
-openclaw-mermaid > .actions wa-dropdown-item:hover,
-openclaw-mermaid > .actions wa-dropdown-item:focus-visible {
-  background: var(--bg-hover);
 }
 openclaw-mermaid > .preview {
   padding: 36px 16px 16px;
@@ -115,7 +107,7 @@ openclaw-mermaid > .status {
   color: var(--muted);
 }
 @media (hover: none), (pointer: coarse) {
-  openclaw-mermaid > .actions button {
+  openclaw-mermaid > .actions :is(.copy-button, .oc-menu-trigger) {
     width: 36px;
     height: 36px;
   }

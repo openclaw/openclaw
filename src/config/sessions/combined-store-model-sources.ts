@@ -59,13 +59,13 @@ export function createSessionModelSources(
         if (!logicalEntries.has(identity)) {
           logicalEntries.set(identity, entry);
         }
-        const nativeIncognito = isIncognitoSessionKey(storedKey);
+        const incognito = isIncognitoSessionKey(storedKey);
         const readerKey =
-          preparedLineage && nativeIncognito ? `${logicalAgentId}\0incognito` : logicalAgentId;
+          preparedLineage && incognito ? `${logicalAgentId}\0incognito` : logicalAgentId;
         let read = readers.get(readerKey);
         if (!read) {
           const readQualifiedParent =
-            (!nativeIncognito && preparedLineage) || createGatewaySessionLineageReader(cfg);
+            (!incognito && preparedLineage) || createGatewaySessionLineageReader(cfg);
           // Capture the chosen fallback separately: it is not proof that the literal row exists.
           const selectedParents = new Map<
             string,

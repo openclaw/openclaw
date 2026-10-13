@@ -364,14 +364,15 @@ Session store reads do not prune or cap entries during Gateway startup, so
 startup and isolated cron sessions do not pay for a full store cleanup.
 `openclaw sessions cleanup --enforce` applies the cap immediately.
 
-Ordinary entry writes also arm background maintenance at the next age boundary,
+Ordinary entry writes and reply initialization arm background maintenance at the next age boundary,
 with a periodic recheck every 30 minutes while the store remains open. This lets
-eligible sessions age out without further traffic. Writes that cannot change
+eligible sessions age out without further traffic. Reply preparation does not wait
+for unrelated retention cleanup. Writes that cannot change
 age or count maintenance outcomes skip candidate scans. Automatic planning reads
 only retention and protection metadata before entering the foreground write queue;
-cap selection retains only the required oldest eligible entries. The writer checks
-the prepared store revision before applying changes, so concurrent updates are
-reconsidered instead of overwritten.
+cap selection retains only the required oldest eligible entries. The writer rechecks the selected rows and their protection before applying
+changes, so concurrent updates are reconsidered instead of overwritten. Activity
+on unrelated sessions and protection that has ended do not invalidate the plan.
 If writes invalidate an automatic maintenance plan, its replacement waits for
 a quiet window after the last write (one second, then two seconds). Three
 consecutive invalidations pause automatic retries and log the cause; a new

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -32,11 +33,8 @@ import {
   countPendingDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
 } from "./subagent-registry-read.js";
-import {
-  bindSubagentRunRecord,
-  rowToSubagentRunRecord,
-  subagentRunRecordVersion,
-} from "./subagent-registry.store.codec.js";
+import { bindSubagentRunRecord, rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
+import { subagentRunRowVersion } from "./subagent-registry.store.row.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
@@ -63,11 +61,12 @@ function policyReceipt(
       if (!entry) {
         return [];
       }
-      const subagent = rowToSubagentRunRecord(bindSubagentRunRecord(entry))!;
+      const row = bindSubagentRunRecord(entry);
+      const subagent = rowToSubagentRunRecord(row)!;
       return [
         {
           subagent,
-          version: subagentRunRecordVersion(subagent)!,
+          version: expectDefined(subagentRunRowVersion(row), "subagent completion row version"),
           cleanupHandled: entry.cleanupHandled,
         },
       ];

@@ -815,3 +815,38 @@ it.each([
     ]),
   );
 });
+
+it("keeps session membership writes with the worker and canonical entry owners", () => {
+  const members = "src/config/sessions/session-sharing-store.native.ts";
+  const sources = {
+    [members]: `export function addSessionMember() { db.insertInto('session_members'); }`,
+    "src/config/sessions/session-sharing-store.worker.ts": `
+      import { addSessionMember } from './session-sharing-store.native.js';
+      function bindSqliteWorkerBackend() { return { execute() { addSessionMember(); } }; }
+    `,
+    "src/config/sessions/session-accessor.sqlite-node-artifacts.ts": `
+      export function clearSessionCollaborationForKey() {
+        const tables = clear ? ['session_members'] as const : ['session_members', 'session_suggestions'] as const;
+        for (const table of tables) { db.deleteFrom(table); }
+      }
+    `,
+    "src/config/sessions/session-accessor.sqlite-entry-store.ts": `
+      import { clearSessionCollaborationForKey } from './session-accessor.sqlite-node-artifacts.js';
+      function writeSessionEntry() { clearSessionCollaborationForKey(); }
+    `,
+  };
+  expect(inspect(sources)).toEqual([]);
+  expect(
+    inspect({
+      ...sources,
+      "src/new-writer.ts": `
+        import { addSessionMember } from './config/sessions/session-sharing-store.native.js';
+        addSessionMember();
+        db.exec('DELETE FROM session_members');
+      `,
+    }),
+  ).toEqual([
+    expect.stringContaining("unreviewed session membership writer reference"),
+    expect.stringContaining("raw authority-table write"),
+  ]);
+});

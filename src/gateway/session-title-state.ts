@@ -5,12 +5,11 @@ type SessionTitleTarget = {
   storePath: string;
   sessionKey: string;
   sessionId: string;
-  incarnation?: string;
 };
 const requestKey = (target: SessionTitleTarget) =>
-  `${target.storePath}\0${target.sessionKey}\0${target.sessionId}${target.incarnation ? `\0${target.incarnation}` : ""}`;
+  `${target.storePath}\0${target.sessionKey}\0${target.sessionId}`;
 
-// One request per session generation; callers share settlement and pending requests
+// One request per session; callers share settlement and pending requests
 // always leave the registry, including model failures and timeouts.
 const pending = new Map<string, Promise<boolean>>();
 export const sessionTitleRequests = {

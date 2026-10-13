@@ -79,8 +79,7 @@ function createSurfaceAnchor(surface: HTMLElement): SurfaceAnchor {
   const original = surface.style.getPropertyValue("position-anchor");
   const priority = surface.style.getPropertyPriority("position-anchor");
   const oldPlacement = surface.dataset.placement;
-  const doc = surface.ownerDocument;
-  const win = doc.defaultView;
+  let win: Window | null = null;
   let source: HTMLSpanElement | undefined;
   let presented = false;
   let frame: number | undefined;
@@ -178,6 +177,9 @@ function createSurfaceAnchor(surface: HTMLElement): SurfaceAnchor {
       if (!current()?.anchor) {
         return;
       }
+      // Solid template nodes can be adopted into the live document after binding.
+      const doc = surface.ownerDocument;
+      win = doc.defaultView;
       if (!source) {
         source = doc.createElement("span");
         source.setAttribute("aria-hidden", "true");

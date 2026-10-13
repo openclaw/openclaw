@@ -34,12 +34,6 @@ export type SqliteWorkerAdmissionRequest = {
 };
 
 export type SqliteWorkerOperations = Record<string, { input: unknown; output: unknown }>;
-/** Process-private locator; live owner admission remains separate from this identity. */
-export type SqliteWorkerEphemeralTarget = {
-  kind: "ephemeral";
-  handle: string;
-  incarnation: string;
-};
 export type SqliteWorkerCommand<Operations extends SqliteWorkerOperations> = {
   [Key in keyof Operations]: { type: Key; input: Operations[Key]["input"] };
 }[keyof Operations];
@@ -105,7 +99,6 @@ export type SqliteWorkerRequest = {
       moduleUrl: string;
       sourceLoaderUrl?: string;
       databasePath: string;
-      target?: SqliteWorkerEphemeralTarget;
       existingIdentity?: string;
       openAdmission?: "input" | "identity";
       input: Uint8Array;

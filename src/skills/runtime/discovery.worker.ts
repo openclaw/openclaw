@@ -12,7 +12,7 @@ import {
   mergeSkillRecords,
 } from "../loading/skill-precedence.js";
 import { buildSkillSnapshotProjection } from "../loading/skill-snapshot-projection.js";
-import { readWorkspaceSkillSources } from "../loading/workspace-skill-loader.js";
+import { readWorkspaceSkillSources } from "../loading/workspace-skill-source-reader.js";
 import {
   resolveWorkspaceSkillSourcePlan,
   splitSkillSourcePlan,

@@ -5,6 +5,7 @@ import { parseCronPacingBounds } from "../../cron/pacing.js";
 import type { CronPacing } from "../../cron/types.js";
 import { CRON_MANAGEMENT_METHODS } from "../../gateway/cron-creator-authority-grant.js";
 import { isRecord } from "../../utils.js";
+import { createCachedToolSchema } from "../schema/cached-schema.js";
 import {
   optionalNonNegativeIntegerSchema,
   optionalPositiveIntegerSchema,
@@ -328,6 +329,21 @@ function createCronFailureAlertSchema(): TSchema {
 
 // Flattened schema: runtime validates per-action requirements.
 export function createCronToolSchema(options?: CronToolSchemaOptions): TSchema {
+  return cronToolSchemas(options);
+}
+
+const cronToolSchemas = createCachedToolSchema({
+  key: (options?: CronToolSchemaOptions) =>
+    JSON.stringify([
+      options?.triggersEnabled !== false,
+      options?.management ?? null,
+      options?.selfRemoveOnly === true,
+      Boolean(options?.agentSessionKey?.trim()),
+    ]),
+  build: buildCronToolSchema,
+});
+
+function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
   const triggersEnabled = options?.triggersEnabled !== false;
   const management = Boolean(options?.management);
   const managementOnly = options?.management === "only";

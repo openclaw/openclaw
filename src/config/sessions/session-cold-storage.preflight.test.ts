@@ -5,7 +5,13 @@ import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/pro
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import {
+  resolveIncognitoOpenClawAgentSqlitePath,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.paths.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import type { SessionColdArchive } from "./session-cold-storage-state.js";
 import { restoreSessionColdTranscript } from "./session-cold-storage.js";
 import type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
@@ -148,17 +154,56 @@ it.each([
   expect(observed.release).toHaveBeenCalledTimes(phase === "preparation" ? 0 : 1);
 });
 
-it("keeps incognito metadata with its process-held owner", async () => {
-  const target = scope();
-  observed.nativeRead.mockReturnValue({ found: true, value: undefined });
-  await expect(
-    restoreSessionColdTranscript({
-      ...target,
-      sessionKey: "agent:main:dashboard:incognito-test",
-    }),
-  ).resolves.toBeUndefined();
-  expect(observed.nativeRead).toHaveBeenCalledOnce();
-  expect(observed.readMetadata).not.toHaveBeenCalled();
+it("skips cold storage for an unbound memory session without recreating a closed owner", async () => {
+  const target = {
+    agentId: "main",
+    sessionKey: "agent:main:dashboard:incognito-cold-preflight",
+    sessionId: "memory-transcript",
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("cold-memory-") },
+  };
+  const namespace = {
+    agentId: target.agentId,
+    path: resolveIncognitoOpenClawAgentSqlitePath(target),
+  };
+  const authority = { assertCurrent() {}, authorize() {} };
+  try {
+    const initial = await acquireSessionActorStorage(target, {
+      lifetime: { assertCurrent() {}, assertReadable() {} },
+      authority,
+      create: true,
+    });
+    if (!initial) {
+      throw new Error("Expected memory owner");
+    }
+    try {
+      readSessionActorStorageResult(
+        await initial.actor.storage.mutate(
+          {
+            type: "session.entry.create",
+            input: { entry: { sessionId: target.sessionId, updatedAt: 1, incognito: true } },
+          },
+          authority,
+        ),
+      );
+    } finally {
+      await initial.actor.release();
+    }
+    await expect(restoreSessionColdTranscript(target)).resolves.toBeUndefined();
+    memorySessionActorOwners.closeDatabase(namespace);
+    await expect(restoreSessionColdTranscript(target)).resolves.toBeUndefined();
+    await expect(
+      restoreSessionColdTranscript({
+        agentId: target.agentId,
+        sessionId: target.sessionId,
+        storePath: namespace.path,
+      }),
+    ).resolves.toBeUndefined();
+    expect(memorySessionActorOwners.read(namespace)).toBeUndefined();
+    expect(observed.nativeRead).not.toHaveBeenCalled();
+    expect(observed.readMetadata).not.toHaveBeenCalled();
+  } finally {
+    memorySessionActorOwners.closeDatabase(namespace);
+  }
 });
 
 it("removes an aborted cold restoration from its store queue", async ({ signal }) => {

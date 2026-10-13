@@ -9,6 +9,7 @@ import { invalidateOpenClawAgentWritableProjections } from "../../state/openclaw
 import { invalidateOpenClawAgentReadOnlyProjections } from "../../state/openclaw-agent-db-readonly-scope.js";
 import {
   publishRetainedSessionEntryChange,
+  markSessionSharingAuthorityUnknown,
   recordCommittedSessionEntryPublication,
   recordCommittedSessionMetadataPublication,
   retainedSharingReads,
@@ -32,11 +33,6 @@ import {
   type SessionEntryPublicationRecord,
   type SessionEntryCreationOperation,
 } from "./session-accessor.sqlite-entry-cache.types.js";
-import {
-  commitIncognitoSessionSharingFacts,
-  commitIncognitoSessionSharingField,
-  publishIncognitoSessionEntryChange,
-} from "./session-accessor.sqlite-incognito-sharing.js";
 import {
   publishRetainedSessionEntryPredicate,
   publishRetainedSessionGeneration,
@@ -125,11 +121,12 @@ export function invalidateSessionEntryCaches(databaseIdentity: string): void {
 export function invalidateSessionEntryPublication(
   database: SessionEntryCacheDatabase,
   sessionKey: string,
+  authorityChanged = true,
 ): void {
-  publishRetainedSessionEntryChange(database, sessionKey, undefined, undefined, false);
-  if (!database.db.location()) {
-    commitIncognitoSessionSharingFacts(database.db, sessionKey, null);
+  if (authorityChanged) {
+    markSessionSharingAuthorityUnknown(database, sessionKey);
   }
+  publishRetainedSessionEntryChange(database, sessionKey, undefined, undefined, false);
 }
 
 /** A committed metadata-only worker write invalidates caches without changing retained identity. */
@@ -246,7 +243,6 @@ export function publishSessionEntryPlaceholderInsertion(
     placeholder,
     committed: false,
   };
-  const incognito = !database.db.location();
   let staged = false;
   staged = publishTrackedCacheUpdate(
     database,
@@ -262,9 +258,6 @@ export function publishSessionEntryPlaceholderInsertion(
         }
         publishRetainedSessionGeneration(read, undefined, staged);
         read.facts = facts;
-      }
-      if (incognito) {
-        commitIncognitoSessionSharingFacts(database.db, sessionKey, facts ?? null);
       }
       sessionEntryCaches.delete(database.db);
       receipt.committed = staged;
@@ -301,7 +294,6 @@ export function publishSessionSharingFieldChange(
           read.facts = updateSessionSharingField(read.facts, change);
         }
       }
-      commitIncognitoSessionSharingField(database.db, sessionKey, change);
     },
     () =>
       stageSessionSharingPublication(
@@ -309,7 +301,7 @@ export function publishSessionSharingFieldChange(
         sessionKey,
         change.kind === "category" ? undefined : change,
       ),
-    () => invalidateSessionEntryPublication(database, sessionKey),
+    () => invalidateSessionEntryPublication(database, sessionKey, change.kind !== "category"),
   );
 }
 
@@ -338,7 +330,6 @@ export function publishSessionSharingEntryChange(
     return;
   }
   const sharingUnchanged = facts?.kind === "unchanged" || facts?.kind === "participants";
-  const incognito = !database.db.location();
   const sharingEntry = update.entry ? projectSessionSharingEntry(update.entry) : undefined;
   if (sharingUnchanged) {
     publishTrackedCacheUpdate(
@@ -346,7 +337,7 @@ export function publishSessionSharingEntryChange(
       () =>
         recordCommittedSessionMetadataPublication(database, update.sessionKey, facts, update.entry),
       undefined,
-      () => invalidateSessionEntryPublication(database, update.sessionKey),
+      () => invalidateSessionEntryPublication(database, update.sessionKey, false),
     );
   }
   const previousIdentity = update.previousEntry && {
@@ -366,11 +357,8 @@ export function publishSessionSharingEntryChange(
           update.entry,
         );
       },
-      !incognito ? () => stageSessionSharingPublication(database, update.sessionKey) : undefined,
+      () => stageSessionSharingPublication(database, update.sessionKey),
       () => invalidateSessionEntryPublication(database, update.sessionKey),
     );
-  }
-  if (incognito && !sharingUnchanged) {
-    publishIncognitoSessionEntryChange(database, update);
   }
 }

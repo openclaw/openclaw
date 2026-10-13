@@ -11,10 +11,6 @@ import { formatErrorMessage } from "./errors.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
 import { isSessionCostUsageRefreshRunning } from "./session-cost-usage-cache.sqlite.js";
-import {
-  withUsageCostIncognitoScope,
-  type UsageCostIncognitoBinding,
-} from "./session-cost-usage-incognito.js";
 import { isSessionActorUsageRefreshRunning } from "./session-cost-usage-memory.js";
 import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
 import {
@@ -43,7 +39,6 @@ type UsageCostRefreshState = {
   databasePath: string;
   queueKey: string;
   env?: NodeJS.ProcessEnv;
-  incognito?: UsageCostIncognitoBinding;
   sessionActor?: SessionActorStorageBinding;
   fullRefreshRequested: boolean;
   pendingSessionFiles: Set<string>;
@@ -57,7 +52,6 @@ type UsageCostRefreshState = {
 type UsageCostRefreshRequest = Pick<UsageCostRefreshState, "agentId" | "config" | "storePath"> & {
   databasePath?: string;
   env?: NodeJS.ProcessEnv;
-  incognito?: UsageCostIncognitoBinding;
   sessionActor?: SessionActorStorageBinding;
   sessionFiles?: string[];
   rebuildRows?: SessionCostUsageRollupRow[];
@@ -73,9 +67,7 @@ function isUsageCostRefreshQueued(databasePath: string): boolean {
 }
 
 async function flushPendingUsageCostRefresh(prepared: PreparedUsageCostWorker): Promise<void> {
-  const key = prepared.incognito
-    ? `${prepared.location.databasePath}#${prepared.incognito.actor.identity.incarnation}`
-    : prepared.location.databasePath;
+  const key = prepared.location.databasePath;
   const pending: Promise<void>[] = [];
   for (const refreshes of usageCostRefreshes.values()) {
     const state = refreshes.get(key);
@@ -168,8 +160,8 @@ async function loadAggregateCostUsageSummary(
   if (
     refresh === "busy" ||
     isUsageCostRefreshQueued(databasePath) ||
-    (prepared.sessionActor
-      ? isSessionActorUsageRefreshRunning(prepared.sessionActor)
+    (prepared.memory
+      ? isSessionActorUsageRefreshRunning(prepared.memory)
       : await isSessionCostUsageRefreshRunning(params.agentId, databasePath))
   ) {
     cacheStatus.status = "refreshing";
@@ -236,9 +228,7 @@ function loadSessionCostResultFromCache(
     ...params,
     sessionFiles: params.sessions.map((session) => session.sessionFile),
   });
-  return withUsageCostIncognitoScope(prepared.incognito, (incognito) =>
-    loadCapturedSessionCostSummariesFromCache(params, { ...prepared, incognito }),
-  );
+  return loadCapturedSessionCostSummariesFromCache(params, prepared);
 }
 
 async function loadCapturedSessionCostSummariesFromCache(
@@ -282,15 +272,14 @@ async function loadCapturedSessionCostSummariesFromCache(
       rebuildRows: result.invalidRows,
       databasePath,
       env: prepared.location.env,
-      incognito: prepared.incognito,
       sessionActor: prepared.sessionActor,
     });
   }
   if (
     staleSessionFiles.length > 0 &&
     (refreshRequested ||
-      (prepared.sessionActor
-        ? isSessionActorUsageRefreshRunning(prepared.sessionActor)
+      (prepared.memory
+        ? isSessionActorUsageRefreshRunning(prepared.memory)
         : await isSessionCostUsageRefreshRunning(params.agentId, databasePath)))
   ) {
     cacheStatus.status = "refreshing";
@@ -327,9 +316,7 @@ export function requestCostUsageCacheRefresh(params: UsageCostRefreshRequest): v
   ) {
     return;
   }
-  const queueKey = params.incognito
-    ? `${databasePath}#${params.incognito.actor.identity.incarnation}`
-    : databasePath;
+  const queueKey = databasePath;
   const refreshes = usageCostRefreshes.get(scopeSignal) ?? new Map<string, UsageCostRefreshState>();
   const existing = refreshes.get(queueKey);
   if (existing) {
@@ -343,7 +330,6 @@ export function requestCostUsageCacheRefresh(params: UsageCostRefreshRequest): v
     databasePath,
     queueKey,
     env: params.env,
-    incognito: params.incognito,
     sessionActor: params.sessionActor,
     fullRefreshRequested: false,
     pendingSessionFiles: new Set(),
@@ -355,10 +341,7 @@ export function requestCostUsageCacheRefresh(params: UsageCostRefreshRequest): v
   usageCostRefreshes.set(scopeSignal, refreshes);
   // Register the initial timer and every retry now, not after a timer fires.
   refreshes.set(queueKey, state);
-  state.completion = trackAsyncWork(() => {
-    const run = () => runQueuedUsageCostRefresh(state, refreshes, scopeSignal);
-    return state.incognito ? state.incognito.actor.sessions.withSharedState(run) : run();
-  });
+  state.completion = trackAsyncWork(() => runQueuedUsageCostRefresh(state, refreshes, scopeSignal));
 }
 
 function mergeUsageCostRefreshRequest(
@@ -473,7 +456,6 @@ async function runQueuedUsageCostRefresh(
             },
             rebuildRows,
             env: state.env,
-            incognito: state.incognito,
             sessionActor: state.sessionActor,
           });
           if (signal?.aborted) {
