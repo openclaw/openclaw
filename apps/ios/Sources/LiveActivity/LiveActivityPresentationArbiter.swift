@@ -41,7 +41,7 @@ struct LiveActivityVoiceSampleBuffer {
 /// state. ActivityKit receives one reconciled presentation instead of competing
 /// connection, tool, and voice writes.
 struct LiveActivityPresentationArbiter {
-    private struct ToolIdentity: Hashable {
+    private struct ToolIdentity: Equatable {
         let sessionKey: String
         let id: String
     }
@@ -51,23 +51,20 @@ struct LiveActivityPresentationArbiter {
     private(set) var voice: LiveActivityPresentationRequest?
     private(set) var hasLiveVoice = false
     private(set) var hydratedToolFallback: LiveActivityPresentationRequest?
-    private var toolsByIdentity: [ToolIdentity: LiveActivityPresentationRequest] = [:]
-    private var toolOrder: [ToolIdentity] = []
+    private var tools: [(identity: ToolIdentity, request: LiveActivityPresentationRequest)] = []
 
     var current: LiveActivityPresentationRequest? {
         if let attention {
             return attention
         }
-        if let toolIdentity = toolOrder.last,
-           let tool = toolsByIdentity[toolIdentity]
-        {
-            return tool
+        if let tool = self.tools.last {
+            return tool.request
         }
         return self.voice ?? self.connection ?? self.hydratedToolFallback
     }
 
     var activeToolCount: Int {
-        self.toolsByIdentity.count
+        self.tools.count
     }
 
     static func voiceStatus(
@@ -119,25 +116,24 @@ struct LiveActivityPresentationArbiter {
     }
 
     mutating func startTool(id: String, request: LiveActivityPresentationRequest) {
-        guard !id.isEmpty else { return }
         self.hydratedToolFallback = nil
         let identity = ToolIdentity(sessionKey: request.sessionKey, id: id)
-        if self.toolsByIdentity[identity] == nil {
-            self.toolOrder.append(identity)
+        if let index = self.tools.firstIndex(where: { $0.identity == identity }) {
+            self.tools[index].request = request
+        } else {
+            self.tools.append((identity, request))
         }
-        self.toolsByIdentity[identity] = request
     }
 
     mutating func endTool(id: String, sessionKey: String) {
         self.hydratedToolFallback = nil
         let identity = ToolIdentity(sessionKey: sessionKey, id: id)
-        self.toolsByIdentity[identity] = nil
-        self.toolOrder.removeAll { $0 == identity }
+        self.tools.removeAll { $0.identity == identity }
     }
 
     mutating func refreshTools(staleDate: Date) {
-        for identity in self.toolsByIdentity.keys {
-            self.toolsByIdentity[identity]?.staleDate = staleDate
+        for index in self.tools.indices {
+            self.tools[index].request.staleDate = staleDate
         }
     }
 
@@ -152,7 +148,6 @@ struct LiveActivityPresentationArbiter {
         self.attention = nil
         self.setVoice(nil)
         self.hydratedToolFallback = nil
-        self.toolsByIdentity.removeAll(keepingCapacity: true)
-        self.toolOrder.removeAll(keepingCapacity: true)
+        self.tools.removeAll(keepingCapacity: true)
     }
 }

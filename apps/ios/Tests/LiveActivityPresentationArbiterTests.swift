@@ -74,6 +74,26 @@ struct LiveActivityPresentationArbiterTests {
     }
 
     @Test
+    func `tool updates preserve start order without duplicating the tool`() {
+        let now = Date(timeIntervalSince1970: 100)
+        var arbiter = LiveActivityPresentationArbiter()
+        arbiter.startTool(
+            id: "first",
+            request: Self.request(status: .toolRunning, detail: "first", startedAt: now))
+        arbiter.startTool(
+            id: "second",
+            request: Self.request(status: .toolRunning, detail: "second", startedAt: now))
+        arbiter.startTool(
+            id: "first",
+            request: Self.request(status: .toolRunning, detail: "updated", startedAt: now))
+
+        #expect(arbiter.activeToolCount == 2)
+        #expect(arbiter.current?.state.verbatimDetail == "second")
+        arbiter.endTool(id: "second", sessionKey: "main")
+        #expect(arbiter.current?.state.verbatimDetail == "updated")
+    }
+
+    @Test
     func `tool heartbeats do not renew a voice card restored after restart`() {
         let now = Date(timeIntervalSince1970: 100)
         let voice = Self.request(status: .voiceActive, detail: nil, startedAt: now)
