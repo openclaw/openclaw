@@ -144,7 +144,9 @@ export async function appendSessionTurnInWorker(
     relocation: custody?.relocation,
   };
   const actor = inputActor?.actor;
+  let inputExpectedState = options.expectedSessionState;
   const fixedVoiceTranscript =
+    !actor &&
     !incognito &&
     !memory &&
     Boolean(options.voiceTranscript) &&
@@ -288,6 +290,9 @@ export async function appendSessionTurnInWorker(
           if (ownerSource) {
             acceptSessionSourceValidation(ownerSource, prepared.ownerSourceValidation);
           }
+          if (actor) {
+            inputExpectedState ??= prepared.expectedSessionState;
+          }
           return prepared;
         };
         // Selection must precede observable callbacks; ordinary turns validate in COMMIT.
@@ -319,6 +324,7 @@ export async function appendSessionTurnInWorker(
         );
         // Keyed user messages may already own accepted bytes and skip host preparation.
         const needsPreparation =
+          actor ||
           sessionTurnMutation ||
           accepted.some(
             (append) =>
@@ -495,7 +501,7 @@ export async function appendSessionTurnInWorker(
             );
           },
           async () => {
-            let expectedState = options.expectedSessionState;
+            let expectedState = inputExpectedState;
             let candidate: SessionTurnCommitted | undefined;
             const actorOutcome = await runSessionActorCommand<
               SessionActorPhaseResults["acceptInput" | "adoptRun"]
@@ -509,6 +515,9 @@ export async function appendSessionTurnInWorker(
                   expectedState ??= buildRestartRecoveryExpectedState(
                     before.entry ?? { sessionId: options.expectedSessionId, updatedAt: 0 },
                   );
+                }
+                if (!expectedState) {
+                  throw new Error("Input preparation omitted its lifecycle expectation");
                 }
                 const record = (turn: SessionTurnCommitted | undefined) => {
                   if (!turn) {
@@ -544,7 +553,7 @@ export async function appendSessionTurnInWorker(
                   phaseId: `${inputActor.phase}:${options.expectedSessionId}`,
                   // Memory commands use their FIFO owner's current state, not a cached version.
                   expected: memory ? undefined : before?.version,
-                  expectedState: expectedState ?? "current",
+                  expectedState,
                   lifecycle: {},
                   turn: plan,
                 };

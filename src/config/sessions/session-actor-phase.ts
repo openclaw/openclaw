@@ -34,10 +34,7 @@ import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "./session-transcript-turn-lifecycle.types.js";
-import {
-  buildRestartRecoveryExpectedState,
-  sessionMatchesExpectedTranscriptTurn,
-} from "./session-transcript-turn-state.js";
+import { sessionMatchesExpectedTranscriptTurn } from "./session-transcript-turn-state.js";
 import type { SessionTurnCommitted, SessionTurnPlan } from "./session-turn.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -138,20 +135,9 @@ export function applySessionActorPhaseWithBackend(
   };
   let result: SessionActorPhaseResults[SessionActorPhase];
   let pendingInputMutationReceipt: PendingInputMutationReceipt | undefined;
-  const selectExpectedState = (
-    expected: SessionTranscriptTurnExpectedState | "current",
-    sessionId: string,
-  ) =>
-    expected === "current"
-      ? buildRestartRecoveryExpectedState(hot.entry ?? { sessionId, updatedAt: 0 })
-      : expected;
   switch (command.type) {
     case "session.actor.acceptInput": {
-      const { pending, lifecycle: patch } = command.input;
-      const expectedState = selectExpectedState(
-        command.input.expectedState,
-        command.input.turn?.options.expectedSessionId ?? requireEntry().sessionId,
-      );
+      const { pending, expectedState, lifecycle: patch } = command.input;
       if (
         pending &&
         (pending.sessionKey !== sessionKey || pending.sessionId !== requireEntry().sessionId)
@@ -237,10 +223,7 @@ export function applySessionActorPhaseWithBackend(
           ...input,
           options: {
             ...input.options,
-            expectedSessionState: selectExpectedState(
-              command.input.expectedState,
-              command.input.sessionId,
-            ),
+            expectedSessionState: command.input.expectedState,
             sessionLifecyclePatch: { ...input.options.sessionLifecyclePatch, ...patch },
           },
         });

@@ -136,9 +136,9 @@ remain with the history owner. See
 and [`session-actor-replica.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor-replica.ts).
 
 Cold input preparation uses the turn planner instead of fetching a full actor
-replica first. The input command selects an uncaptured recovery expectation from
-its transaction preimage; explicit expectations and warm replica expectations
-remain fixed across version retries. Transcript input and restart recovery still
+replica first. The planner carries its recovery expectation into the input
+command; prepared, explicit, and warm replica expectations remain fixed across
+version retries. Transcript input and restart recovery still
 commit atomically under the existing writer FIFO, source checks, final host
 COMMIT authorization, and receipt settlement. Schemas, durability, and update
 behavior are unchanged.

@@ -112,11 +112,11 @@ export type SessionActorDeliveryEvidence = {
 
 export type SessionActorPhaseInputs = {
   acceptInput: {
+    expectedState: SessionTranscriptTurnExpectedState;
     lifecycle: SessionTranscriptTurnLifecyclePatch;
     recovery?: SessionActorInputRecovery;
   } & (
     | {
-        expectedState: SessionTranscriptTurnExpectedState;
         pending: Extract<PendingInputMutation, { kind: "stage" }>;
         /** Admission and adoption may share a durable point only before an intervening effect. */
         turn?: SessionTurnPlan;
@@ -124,8 +124,6 @@ export type SessionActorPhaseInputs = {
         append?: SessionActorAppend;
       }
     | {
-        /** Cold input selects its lifecycle in the command's native preimage. */
-        expectedState: SessionTranscriptTurnExpectedState | "current";
         /** Transcript custody before ACK does not require a queued-input row. */
         pending?: never;
         turn: SessionTurnPlan;
@@ -134,17 +132,13 @@ export type SessionActorPhaseInputs = {
   );
   adoptRun: {
     sessionId: string;
+    expectedState: SessionTranscriptTurnExpectedState;
     lifecycle: SessionTranscriptTurnLifecyclePatch;
     /** Explicit writer adoption; omission preserves the existing lifecycle-only command. */
     runId?: string;
-  } & (
-    | { expectedState: SessionTranscriptTurnExpectedState; turn?: never }
-    | {
-        expectedState: SessionTranscriptTurnExpectedState | "current";
-        /** Consume accepted input and adopt its lifecycle at the same durable point. */
-        turn: SessionTurnPlan;
-      }
-  );
+    /** Consume accepted input and adopt its lifecycle at the same durable point. */
+    turn?: SessionTurnPlan;
+  };
   appendToolResult:
     | { turn: SessionTurnPlan; append?: never }
     | { append: SessionActorAppend; turn?: never };

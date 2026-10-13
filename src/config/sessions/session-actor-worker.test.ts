@@ -343,9 +343,9 @@ it.each([
       }
       const before = mode.cold ? undefined : f.read(target);
       const sessionId = mode.initial ? "first-input" : f.scope.sessionId;
-      const expectedState = mode.cold
-        ? "current"
-        : buildRestartRecoveryExpectedState(before?.entry ?? { sessionId, updatedAt: 1 });
+      const expectedState = buildRestartRecoveryExpectedState(
+        (mode.cold ? f.nativeEntry() : before?.entry) ?? { sessionId, updatedAt: 1 },
+      );
       const lifecycle = { restartRecoveryDeliveryRunId: "input-run", startedAt: 2 };
       const turn = {
         agentId: "main",
