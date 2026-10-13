@@ -1,4 +1,5 @@
 import type { SessionLogEntry } from "../../../../src/infra/session-cost-usage.types.js";
+import type { SessionUsageTimeSeries } from "../../../../src/shared/session-usage-timeseries-types.js";
 import type { CostUsageSummary } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
@@ -101,7 +102,7 @@ type UsageDetailState = {
   context: UsageContextDetail;
   timeSeriesMode: "cumulative" | "per-turn";
   timeSeriesBreakdownMode: "total" | "by-type";
-  timeSeries: { points: TimeSeriesPoint[] } | null;
+  timeSeries: SessionUsageTimeSeries | null;
   timeSeriesLoading: boolean;
   timeSeriesStatus: PanelRefreshStatus;
   timeSeriesCursorStart: number | null; // Start of selected range (null = no selection)

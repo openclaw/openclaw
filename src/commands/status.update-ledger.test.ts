@@ -156,11 +156,11 @@ describe("status update ledger evidence", () => {
       historical: true,
     },
     {
-      name: "verified target observation",
+      name: "matching recovery observation without a selected target",
       target: {},
       verification: observed(candidate, true),
       server: candidate,
-      historical: true,
+      detail: "Gateway is serving 2026.9.7; the update target is unknown — run `openclaw update`.",
     },
     {
       name: "rejected build despite an explicit matching target version",
@@ -314,6 +314,161 @@ describe("status update ledger evidence", () => {
         expect(rows[0]?.Value).toContain(
           "⚠️ OpenClaw update failed: post-update-failed. Gateway did not settle; startup phase: waiting for managed service",
         );
+        if (detail) {
+          expect(rows[0]?.Value).toContain(detail);
+        }
+      }
+      expect(getUpdateRun(run.runId)).toEqual(saved);
+    },
+  );
+
+  const preflightStart = {
+    version: "2026.9.4",
+    sha: "37ea9f110bad",
+    buildId: "2026.9.4-37ea9f110bad",
+  };
+  it.each<{
+    name: string;
+    healthy?: boolean;
+    runTarget?: UpdateRunRecord["target"];
+    before?: UpdateRunRecord["before"];
+    after?: UpdateRunRecord["after"];
+    verification?: UpdateRunRecord["verification"];
+    server: { version: string; buildId: string };
+    history?: string;
+    detail?: string;
+  }>([
+    {
+      name: "a newer Gateway after recovery matched the old serving version",
+      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
+      history:
+        "Last update run failed (preflight-no-good-commit) — Gateway is now serving 2026.10.1; recorded serving identity was 2026.9.4.",
+    },
+    {
+      name: "a rebuilt Gateway after recovery matched the old serving build",
+      server: { version: "2026.9.4", buildId: "2026.9.4-rebuilt" },
+      history:
+        "Last update run failed (preflight-no-good-commit) — Gateway is now serving 2026.9.4 (build 2026.9.4-rebuilt); recorded serving identity was build 2026.9.4-37ea9f110bad.",
+    },
+    {
+      name: "a changed Gateway after recovery observed an older serving version",
+      before: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
+      verification: { versionMatch: false },
+      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
+      history:
+        "Last update run failed (preflight-no-good-commit) — Gateway is now serving 2026.10.1; recorded serving identity was 2026.9.4.",
+    },
+    {
+      name: "a Gateway already behind the installed package when the update failed",
+      before: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
+      verification: { versionMatch: false },
+      server: { version: "2026.9.4", buildId: "2026.9.4-37ea9f110bad" },
+      detail:
+        "Gateway is serving 2026.9.4 (build 2026.9.4-37ea9f110bad); the update target is unknown — run `openclaw update`.",
+    },
+    {
+      name: "a Gateway already behind the installed build of the same version",
+      before: { version: "2026.9.4", buildId: "2026.9.4-rebuilt" },
+      verification: { versionMatch: false },
+      server: { version: "2026.9.4", buildId: "2026.9.4-37ea9f110bad" },
+      detail:
+        "Gateway is serving 2026.9.4 (build 2026.9.4-37ea9f110bad); the update target is unknown — run `openclaw update`.",
+    },
+    {
+      name: "the Gateway still serving the starting build",
+      server: { version: "2026.9.4", buildId: "2026.9.4-37ea9f110bad" },
+      detail: "Gateway is serving 2026.9.4; the update target is unknown — run `openclaw update`.",
+    },
+    {
+      name: "an unhealthy Gateway on a newer version",
+      healthy: false,
+      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
+    },
+    {
+      name: "no recorded serving identity",
+      verification: {
+        runningVersion: undefined,
+        runningBuildId: undefined,
+        versionMatch: undefined,
+      },
+      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
+      detail: "Gateway is serving 2026.10.1; the update target is unknown — run `openclaw update`.",
+    },
+    {
+      name: "a recorded stopped Gateway",
+      verification: { serviceRunning: false },
+      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
+      detail: "Gateway is serving 2026.10.1; the update target is unknown — run `openclaw update`.",
+    },
+    {
+      // Git admission records the selected SHA before refusing its unreadable metadata.
+      name: "an explicit SHA whose version was never read",
+      runTarget: { kind: "git", channel: "dev", sha: "fcdb9321abcd" },
+      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
+      detail: "Gateway is serving 2026.10.1; the update target is unknown — run `openclaw update`.",
+    },
+    {
+      name: "an explicit tag",
+      runTarget: { kind: "git", tag: "v2026.9.7" },
+      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
+      detail: "Gateway is serving 2026.10.1; the update target is unknown — run `openclaw update`.",
+    },
+    {
+      name: "a recorded post-update SHA without a target version",
+      after: { sha: "fcdb9321abcd" },
+      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
+      detail: "Gateway is serving 2026.10.1; the update target is unknown — run `openclaw update`.",
+    },
+    {
+      name: "a recorded post-update build without a target version",
+      after: { buildId: "candidate" },
+      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
+      detail:
+        "Gateway is serving 2026.10.1 (build 2026.10.1-3745fd3c29a4); the update target is unknown — run `openclaw update`.",
+    },
+    {
+      name: "a targetless rollback with no post-update identity",
+      verification: { rollbackOutcome: failedRollback },
+      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
+      detail:
+        "Gateway is serving 2026.10.1 (build 2026.10.1-3745fd3c29a4); the update target is unknown — run `openclaw update`.",
+    },
+  ])(
+    "reports a preflight failure with $name",
+    async ({
+      healthy = true,
+      runTarget = { kind: "git", channel: "dev" },
+      before = preflightStart,
+      after,
+      verification,
+      server,
+      history,
+      detail,
+    }) => {
+      const run = recordRun({
+        status: "failed",
+        reason: "preflight-no-good-commit",
+        target: runTarget,
+        before,
+        after,
+        verification: {
+          runningVersion: "2026.9.4",
+          runningBuildId: "2026.9.4-37ea9f110bad",
+          serviceRunning: true,
+          versionMatch: true,
+          ...verification,
+        },
+      });
+      const saved = getUpdateRun(run.runId);
+      const rows = await buildStatusUpdateRows(null, {
+        localGatewayHealthy: healthy,
+        gatewayServer: server,
+      });
+      expect(rows).toHaveLength(1);
+      if (history) {
+        expect(rows[0]?.Value).toBe(history);
+      } else {
+        expect(rows[0]?.Value).toContain("⚠️ OpenClaw update failed: preflight-no-good-commit.");
         if (detail) {
           expect(rows[0]?.Value).toContain(detail);
         }

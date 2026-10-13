@@ -217,6 +217,22 @@ describe("prepared binary availability", () => {
     expect((await prepareBinaryAvailability([bin])).hasBinary(bin)).toBe(true);
     expect(hasBinary(bin)).toBe(true);
   });
+
+  it("bounds environment reads when missing binaries expand across PATH and PATHEXT", async () => {
+    mockProcessPlatform("win32");
+    const root = tempDirs.make("openclaw-prepared-freshness-");
+    const pathEntries = Array.from({ length: 30 }, (_, index) =>
+      path.join(root, `missing-${index}`),
+    );
+    vi.stubEnv("PATH", pathEntries.join(path.delimiter));
+    vi.stubEnv("PATHEXT", ".EXE;.CMD;.BAT;.COM");
+    const cwdSpy = vi.spyOn(process, "cwd");
+    const facts = await prepareBinaryAvailability(["missing-tool-a", "missing-tool-b"]);
+    expect(facts.hasBinary("missing-tool-a")).toBe(false);
+    expect(facts.hasBinary("missing-tool-b")).toBe(false);
+    expect(facts.isCurrent()).toBe(true);
+    expect(cwdSpy.mock.calls.length).toBeLessThan(20);
+  });
 });
 
 describe("runtime requirements through eligibility", () => {

@@ -92,7 +92,8 @@ describe("project runner native empty-file policy", () => {
     { name: "delegated separated true", code: 0, flags: ["--passWithNoTests", "true"] },
     {
       name: "direct invalid scalar is not repaired",
-      code: 1,
+      // Direct CLI parse errors fail before tests run, so they are infrastructure failures.
+      code: 2,
       flags: ["--config", config, "--no-passWithNoTests", "--passWithNoTests=true"],
       invalid: true,
     },

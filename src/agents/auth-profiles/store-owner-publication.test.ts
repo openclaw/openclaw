@@ -12,6 +12,7 @@ import {
   withCanonicalAuthProfileCredentialObserver,
   type CanonicalAuthProfileCredentialObservation,
 } from "./credential-observation.js";
+import { refreshAuthProfileFileState } from "./file-state.js";
 import {
   assertAuthProfileMigrationReady,
   AuthProfileMigrationRequiredError,
@@ -128,6 +129,7 @@ describe("auth publication owner receipts", () => {
       const legacyPath = path.join(agentDir, "auth.json");
       if (discoveredAt === "prepare") {
         fs.writeFileSync(legacyPath, "{}");
+        await refreshAuthProfileFileState();
       }
       const snapshot = await prepareSecretsRuntimeSnapshot({
         config: {},
@@ -307,6 +309,7 @@ describe("auth publication owner receipts", () => {
       }
       const legacyPath = path.join(oauthDir, "oauth.json");
       fs.writeFileSync(legacyPath, "{}");
+      await refreshAuthProfileFileState();
       withEnv(env, () =>
         saveAuthProfileStore(
           { version: 1, profiles: populated ? { shared: apiKey("updated") } : {} },

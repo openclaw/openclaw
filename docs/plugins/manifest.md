@@ -410,6 +410,26 @@ surfaces. Repository builds include declared entries and rewrite emitted manifes
 paths to the corresponding JavaScript artifacts. Plugin reload owns invalidation;
 catalog requests do not poll files for changes.
 
+### Cloud worker profile suggestions
+
+`contracts.workerProfileSuggestions` lists worker provider IDs whose plugin exposes
+`worker-profile-api.ts` (or its built JavaScript artifact). The artifact exports
+`discoverWorkerProfile`, typed as `WorkerProfileSuggestionDiscovery` from
+`openclaw/plugin-sdk/plugin-entry`. It returns a proposed config entry or `undefined`.
+
+When no cloud profiles exist, the Gateway loads only this declared setup surface,
+even when the plugin declares `activation.onStartup: false`. Plugin disablement,
+allowlists, and deny lists still apply. The artifact must stay lightweight, reuse
+plugin lifecycle caches, and avoid importing the full plugin entry. Discovery may
+inspect local CLI configuration and machine catalogs; it must not allocate machines
+or modify configuration. The explicit `refresh` option rechecks discovery when an
+administrator adopts the suggestion.
+
+Suggestions are not runtime profiles. The Gateway saves an adopted suggestion
+through its config owner before normal placement can use it. Existing profiles
+suppress suggestions. Discovery describes configured inputs, not live provider health;
+normal allocation retains its authentication and provisioning checks.
+
 ### Configuration validation
 
 - Settings validation matches manifest IDs case-insensitively. Errors and schema defaults use the authored settings entry rather than creating a second entry with different casing.

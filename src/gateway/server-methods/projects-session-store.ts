@@ -1,10 +1,12 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { loadOpenIncognitoSessionStores } from "../../config/sessions/combined-store-gateway.js";
+import { readCommittedIncognitoSessionSharing } from "../../config/sessions/session-accessor.sqlite-incognito-sharing.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import type { SessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import type { withIncognitoSessionStoreEntries } from "../../config/sessions/session-incognito-binding.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import type { SessionRowProjection } from "../session-row-projection.js";
 import { prepareSessionRowSelection } from "../session-utils-list.js";
 
@@ -61,26 +63,76 @@ export function loadProjectSessionStore(
     { metadataPrepared: true, ordered: true },
   );
   const paths = projection.state.scope({}).paths;
+  const targets = new Map(selection.entries.map(([key]) => [key, selection.getTarget(key)!]));
   // Stable locale-equal recency ties retain physical-store and SQLite binary key order.
   const entries = selection.entries
     .map(([key, entry]) => ({
       key,
       entry,
       keyBytes: Buffer.from(key),
-      order: paths.get(selection.getTarget(key)!.storeTarget.storePath)!,
+      order: paths.get(targets.get(key)!.storeTarget.storePath)!,
     }))
     .toSorted(
       (left, right) => left.order - right.order || Buffer.compare(left.keyBytes, right.keyBytes),
     );
   const store = Object.fromEntries(entries.map(({ key, entry }) => [key, entry]));
-  const agents = new Map(entries.map(({ key }) => [key, selection.getTarget(key)!.agentId]));
+  const privateSources = new Map<
+    string,
+    { agentId: string; read: () => (typeof store)[string] | undefined }
+  >();
   for (const source of incognitoStores ?? loadOpenIncognitoSessionStores()) {
+    const database = incognitoStores
+      ? undefined
+      : getOpenIncognitoAgentDatabase(source.agentId, source.storePath);
     for (const { sessionKey, entry } of source.entries) {
       if (isIncognitoSessionKey(sessionKey) && entry.incognito === true) {
         store[sessionKey] = entry;
-        agents.set(sessionKey, source.agentId);
+        privateSources.set(sessionKey, {
+          agentId: source.agentId,
+          read: () => {
+            // Bound actor snapshots retain their own final disclosure guard.
+            if (incognitoStores) {
+              return entry;
+            }
+            return database &&
+              getOpenIncognitoAgentDatabase(source.agentId, source.storePath) === database
+              ? readCommittedIncognitoSessionSharing(database.db, sessionKey)?.entry
+              : undefined;
+          },
+        });
       }
     }
   }
-  return { store, agents };
+  return {
+    store,
+    agentId: (key: string) => privateSources.get(key)?.agentId ?? targets.get(key)?.agentId,
+    assertCurrent(keys: Iterable<string>) {
+      for (const key of keys) {
+        const target = targets.get(key);
+        const query = target && {
+          agentId: target.agentId,
+          storePath: target.storeTarget.storePath,
+          key: target.key,
+        };
+        const current = privateSources.has(key)
+          ? privateSources.get(key)!.read()
+          : query && projection.capture(query)?.generation === target?.generation
+            ? projection.readCapabilityEntry(query)?.entry
+            : undefined;
+        const fields = [
+          "sessionId",
+          "lifecycleRevision",
+          "createdActor",
+          "visibility",
+          "incognito",
+        ] as const;
+        if (
+          !current ||
+          fields.some((field) => !isDeepStrictEqual(store[key]?.[field], current[field]))
+        ) {
+          throw new Error("Project access changed while preparing the listing. Retry the request.");
+        }
+      }
+    },
+  };
 }

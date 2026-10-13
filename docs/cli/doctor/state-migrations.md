@@ -316,6 +316,13 @@ Media and historical transcript migrations still complete, retain the stored
 SQLite blobs, and leave deleted copies absent. These warnings do not block the
 remaining migration steps or database readiness.
 
+Media and historical-directive archive inspection and repair decode one JSONL
+record at a time, so a large zstd archive does not need to fit in one JavaScript
+string. Unchanged archives retain their exact encoded bytes. Changed archives
+keep their original codec; memory still includes the stored blob, the largest
+record, and the encoded replacement. Cancellation during decoding or compression
+leaves uncommitted blobs and cursor progress available for retry.
+
 SQLite archive repairs commit changed blobs in bounded batches before repairing
 their file copies. Publication metadata and the historical migration cursor commit
 together after that batch is verified. Enumeration advances through the complete

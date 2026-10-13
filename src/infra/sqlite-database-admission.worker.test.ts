@@ -600,3 +600,49 @@ it("shares facts with retained task workers across awaited host exchanges", asyn
     retained?.close();
   }
 });
+
+it("keeps 5,000 task messages bounded while unrelated session receipts change", async () => {
+  const location = path.join(tempDirs.make("sqlite-task-payload-"), "unrelated.sqlite");
+  const database = openNodeSqliteDatabase(location);
+  const pool = createOwnedWorkerTaskPool<AdmissionTaskInput, AdmissionTaskResult>({
+    workerUrl: new URL("./sqlite-database-admission.task.test-support.ts", import.meta.url),
+    maxWorkers: 1,
+    idleTimeoutMs: 0,
+  });
+  let taskMessages = 0;
+  // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the actual worker receiver.
+  const postMessage = Worker.prototype.postMessage;
+  const messages = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+    this: Worker,
+    ...args: Parameters<Worker["postMessage"]>
+  ) {
+    const message: unknown = args[0];
+    if (typeof message === "object" && message !== null && "taskId" in message) {
+      const payload = JSON.stringify(message, (_key, value: unknown) =>
+        value instanceof Map || value instanceof Set
+          ? [...value]
+          : value instanceof SharedArrayBuffer
+            ? [...new Uint8Array(value)]
+            : value,
+      );
+      expect(Buffer.byteLength(payload)).toBeLessThan(16 * 1024);
+      taskMessages += 1;
+    }
+    Reflect.apply(postMessage, this, args);
+  });
+  try {
+    readSqliteDatabaseScopedWriteToken(
+      database,
+      Array.from({ length: 5_000 }, (_, index) => `session-${index}`),
+    );
+    for (let index = 0; index < 5_000; index += 1) {
+      publishSqliteDatabaseAdmission(database, hostFactKey, index);
+      await pool.run({}, {});
+    }
+    expect(taskMessages).toBe(5_000);
+  } finally {
+    messages.mockRestore();
+    await pool.close();
+    database.close();
+  }
+});

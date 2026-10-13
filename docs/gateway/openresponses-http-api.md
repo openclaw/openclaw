@@ -268,6 +268,8 @@ Disconnecting the HTTP client cancels active source-URL downloads and the agent 
 
 `usage` is populated when the underlying provider reports token counts. OpenClaw normalizes common OpenAI-style aliases before those counters reach downstream status/session surfaces, including `input_tokens` / `output_tokens` and `prompt_tokens` / `completion_tokens`.
 
+If a response ends before complete usage arrives, JSON responses and terminal streaming resources omit `usage` instead of presenting zero or provisional counts as complete. Stream completion does not depend on a usage report arriving.
+
 ## Errors
 
 Errors use a JSON object like:

@@ -284,9 +284,11 @@ export async function finalizeCodexAttempt(
         !effectiveTimedOut &&
         (finalPromptError === null || finalPromptError === undefined) &&
         (completedTurnStatus === "completed" || locallyCompletedTurn);
-      const completedSourceReply = toolBridge.telemetry.messagingToolSentTargets.some(
-        (target) => target.sourceReplyFinal === true,
-      );
+      const completedSourceReply =
+        toolBridge.telemetry.finalSourceReplyDelivered ||
+        toolBridge.telemetry.messagingToolSentTargets.some(
+          (target) => target.sourceReplyFinal === true,
+        );
       if (completedSourceReply) {
         // Harness classification only sees assistant/reasoning/plan projections.
         // A reply delivered entirely through the source message tool is visible

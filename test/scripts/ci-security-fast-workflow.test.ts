@@ -1,10 +1,11 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { evaluateWorkflowExpression } from "./ci-workflow.test-support.js";
+import { evaluateWorkflowCondition } from "./ci-workflow.test-support.js";
 
 type WorkflowStep = {
   env?: Record<string, string>;
@@ -239,7 +240,19 @@ describe("security-fast workflow", () => {
         "Install security scanners",
         "Audit changed GitHub workflows with zizmor",
       ]) {
-        expect(securityStep(name).if).toBe("steps.workflow_scope.outputs.changed == 'true'");
+        expect(
+          evaluateWorkflowCondition(expectDefined(securityStep(name).if, "scanner condition"), {
+            eventName: "pull_request",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            failed: true,
+            steps: {
+              workflow_scope: { outputs: { changed: String(changed) } },
+              security_scanners: { outputs: {}, outcome: "success" },
+              scanner_config: { outputs: {}, outcome: "success" },
+            },
+          }),
+        ).toBe(changed);
         expect(securityStepIndex("Detect changed GitHub workflows")).toBeLessThan(
           securityStepIndex(name),
         );
@@ -261,9 +274,10 @@ describe("security-fast workflow", () => {
         ["release-native-android-1-1-a", true],
       ] as const) {
         expect(
-          evaluateWorkflowExpression(`\${{ ${audit.if} }}`, {
+          evaluateWorkflowCondition(expectDefined(audit.if, "audit condition"), {
             eventName,
             dispatchId,
+            steps: { node_setup: { outputs: {}, outcome: "success" } },
             repository: "openclaw/openclaw",
             runAttempt: 1,
           }),

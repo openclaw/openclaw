@@ -4,15 +4,13 @@ import fs from "node:fs";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  saveAuthProfileStore,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createRemoteEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { updateAuthProfileStoreWithLock } from "openclaw/plugin-sdk/provider-auth";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOpenAiEmbeddingProvider } from "./embedding-provider.js";
 
@@ -134,50 +132,52 @@ describe("OpenAI embedding provider HTTP contract", () => {
       vi.stubEnv("OPENAI_API_KEY", "");
       try {
         const server = custom ? await startEmbeddingServer() : undefined;
-        saveAuthProfileStore(
-          {
-            version: 1,
-            profiles: {
-              "openai:siwc": {
-                type: "oauth",
-                provider: "openai",
-                authFlow: "chatgpt-token-sharing",
-                access: "fixture-siwc-access",
-                refresh: "fixture-siwc-refresh",
-                expires: Date.now() + 3_600_000,
-              },
-              ...(additional === "api-key"
-                ? {
-                    "openai:api": {
-                      type: "api_key" as const,
-                      provider: "openai",
-                      key: "fixture-embedding-api-key",
-                    },
-                  }
-                : additional === "codex"
+        await expect(
+          updateAuthProfileStoreWithLock({
+            agentDir,
+            saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
+            updater(store) {
+              store.profiles = {
+                "openai:siwc": {
+                  type: "oauth",
+                  provider: "openai",
+                  authFlow: "chatgpt-token-sharing",
+                  access: "fixture-siwc-access",
+                  refresh: "fixture-siwc-refresh",
+                  expires: Date.now() + 3_600_000,
+                },
+                ...(additional === "api-key"
                   ? {
                       "openai:api": {
-                        type: "oauth" as const,
+                        type: "api_key" as const,
                         provider: "openai",
-                        access: "fixture-codex-access",
-                        refresh: "fixture-codex-refresh",
-                        expires: Date.now() + 3_600_000,
+                        key: "fixture-embedding-api-key",
                       },
                     }
-                  : additional === "token"
+                  : additional === "codex"
                     ? {
                         "openai:api": {
-                          type: "token" as const,
+                          type: "oauth" as const,
                           provider: "openai",
-                          token: "fixture-embedding-token",
+                          access: "fixture-codex-access",
+                          refresh: "fixture-codex-refresh",
+                          expires: Date.now() + 3_600_000,
                         },
                       }
-                    : {}),
+                    : additional === "token"
+                      ? {
+                          "openai:api": {
+                            type: "token" as const,
+                            provider: "openai",
+                            token: "fixture-embedding-token",
+                          },
+                        }
+                      : {}),
+              };
+              return true;
             },
-          },
-          agentDir,
-          { filterExternalAuthProfiles: false, syncExternalCli: false },
-        );
+          }),
+        ).resolves.not.toBeNull();
         const result = createOpenAiEmbeddingProvider(
           createOptions({
             agentDir,
@@ -219,7 +219,7 @@ describe("OpenAI embedding provider HTTP contract", () => {
         }
       } finally {
         clearRuntimeAuthProfileStoreSnapshots();
-        closeOpenClawAgentDatabasesForTest();
+        await closeOpenClawAgentDatabasesAsync();
         fs.rmSync(agentDir, { recursive: true, force: true });
         vi.unstubAllEnvs();
       }

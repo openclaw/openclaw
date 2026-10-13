@@ -215,7 +215,7 @@ describe("operator approval store", () => {
     ).toEqual(["plugin-new"]);
   });
 
-  it("filters an audience before applying the replay limit across scan pages", async () => {
+  it("filters an audience before applying the replay limit", async () => {
     const databaseOptions = getSuiteDatabaseOptions();
     for (let index = 0; index < 256; index += 1) {
       const id = `unrelated-${String(index).padStart(3, "0")}`;
@@ -249,7 +249,7 @@ describe("operator approval store", () => {
     ).toMatchObject([{ id: "target-after-first-page" }]);
   });
 
-  it("filters reviewers before the replay limit across scan pages", async () => {
+  it("filters reviewers before the replay limit", async () => {
     const databaseOptions = getSuiteDatabaseOptions();
     for (let index = 0; index < 256; index += 1) {
       const id = `unrelated-reviewer-${String(index).padStart(3, "0")}`;
@@ -282,6 +282,54 @@ describe("operator approval store", () => {
       }),
     ).toMatchObject([{ id: "authorized-after-first-page" }]);
   });
+
+  it.each([undefined, "agent:main:child"])(
+    "repairs corrupt pending rows and releases a limited replay scan (audience=%s)",
+    async (audienceSessionKey) => {
+      const databaseOptions = getSuiteDatabaseOptions();
+      for (const id of ["a-corrupt", "b-match", "c-match"]) {
+        await insertOperatorApproval({ approval: approval(id), databaseOptions });
+      }
+      const database = openOpenClawStateDatabase(databaseOptions);
+      const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        stateDb
+          .updateTable("operator_approvals")
+          .set({ presentation_json: "{not-json" })
+          .where("approval_id", "=", "a-corrupt"),
+      );
+
+      const records = await listPendingOperatorApprovals({
+        audienceSessionKey,
+        limit: 1,
+        nowMs: 2_000,
+        databaseOptions,
+      });
+      expect(records.map((record) => record.id)).toEqual(audienceSessionKey ? ["b-match"] : []);
+      expect(rawApprovalRow(databaseOptions, "a-corrupt")).toMatchObject({
+        status: "denied",
+        terminal_reason: "storage-corrupt",
+      });
+      await forceDenyOperatorApproval({
+        id: "b-match",
+        reason: "no-route",
+        resolver: { kind: "system", id: null },
+        nowMs: 2_000,
+        databaseOptions,
+      });
+      expect(
+        (
+          await listPendingOperatorApprovals({
+            audienceSessionKey,
+            limit: 1,
+            nowMs: 2_000,
+            databaseOptions,
+          })
+        ).map((record) => record.id),
+      ).toEqual(["c-match"]);
+    },
+  );
 
   it("reads the default clock after waiting for the SQLite write lock", async () => {
     const databaseOptions = createDatabaseOptions();

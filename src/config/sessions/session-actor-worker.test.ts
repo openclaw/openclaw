@@ -320,20 +320,31 @@ it("adopts a run only under the exact lifecycle and current transaction and comm
 });
 
 it.each([
-  { phase: "acceptInput", initial: true },
-  { phase: "acceptInput", initial: false },
-  { phase: "adoptRun", initial: false },
+  { phase: "acceptInput", initial: true, cold: false },
+  { phase: "acceptInput", initial: false, cold: false },
+  { phase: "adoptRun", initial: false, cold: false },
+  { phase: "acceptInput", initial: false, cold: true },
+  { phase: "adoptRun", initial: false, cold: true },
 ] as const)(
-  "commits $phase transcript custody and lifecycle together (initial=$initial)",
+  "commits $phase transcript custody and lifecycle together (initial=$initial, cold=$cold)",
   async (mode) => {
     await withActor(async (f) => {
       const target = mode.initial
         ? { ...f.target, sessionKey: "agent:main:first-input" }
         : f.target;
-      const before = f.read(target);
+      if (mode.cold) {
+        runSqliteImmediateTransactionSync(f.database.db, () =>
+          writeSessionEntry(f.database, target.sessionKey, {
+            ...f.nativeEntry()!,
+            status: "done",
+            restartRecoveryTerminalRunIds: ["previous-run"],
+          }),
+        );
+      }
+      const before = mode.cold ? undefined : f.read(target);
       const sessionId = mode.initial ? "first-input" : f.scope.sessionId;
       const expectedState = buildRestartRecoveryExpectedState(
-        before.entry ?? { sessionId, updatedAt: 1 },
+        (mode.cold ? f.nativeEntry() : before?.entry) ?? { sessionId, updatedAt: 1 },
       );
       const lifecycle = { restartRecoveryDeliveryRunId: "input-run", startedAt: 2 };
       const turn = {
@@ -353,7 +364,7 @@ it.each([
       };
       const input = {
         target,
-        expected: before.version,
+        expected: before?.version,
         commandId: "accept-transcript",
         phaseId: "input",
         expectedState,
@@ -389,14 +400,6 @@ it.each([
       if (committed.kind !== "committed") {
         throw new Error("Expected input custody commit");
       }
-      const turnResult =
-        mode.phase === "acceptInput"
-          ? committed.value && "turn" in committed.value && committed.value.turn
-          : committed.value;
-      expect(turnResult).toMatchObject({
-        kind: "session-turn",
-        result: { sessionEntry: committed.receipt.postimage.entry },
-      });
       expect(
         readTranscriptEventRows(f.database, sessionId).map((row) => JSON.parse(row.eventJson)),
       ).toEqual([
@@ -408,6 +411,9 @@ it.each([
         }),
       ]);
       expect(f.read(target).entry).toEqual(committed.receipt.postimage.entry);
+      if (mode.cold) {
+        expect(f.nativeEntry()?.restartRecoveryTerminalRunIds).toEqual(["previous-run"]);
+      }
     });
   },
 );

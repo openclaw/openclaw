@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import type { EnvironmentSummary, SystemInfoResult } from "@openclaw/gateway-protocol";
+import { expectDefined } from "@openclaw/normalization-core";
 import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -22,6 +23,7 @@ import {
   waitForRenderedModalDialog,
 } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { DevicesPage, type DevicesRouteData } from "./devices-page.tsx";
 
 const ROTATED_TOKEN = "rotated-operator-token";
@@ -215,15 +217,21 @@ function dialogButton(label: string) {
   return button(modal, label);
 }
 
-function selectEntryAction(container: ParentNode, action: string, name = "MacBook Pro") {
+async function selectEntryAction(container: ParentNode, action: string, name = "MacBook Pro") {
   const row = [...container.querySelectorAll(".device-entry")].find(
     (entry) => entry.querySelector(".settings-row__title")?.textContent === name,
   );
-  const menu = row?.querySelector("wa-dropdown");
-  if (!menu) {
-    throw new Error("Expected device actions menu");
-  }
-  menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: action } } }));
+  const trigger = expectDefined(
+    row?.querySelector<HTMLButtonElement>(".device-entry__menu-trigger"),
+    "device actions trigger",
+  );
+  trigger.click();
+  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+  expectDefined(
+    row?.querySelector<HTMLButtonElement>(`[role="menuitem"][data-value="${action}"]`),
+    `device action ${action}`,
+  ).click();
+  await Promise.resolve();
   flush();
 }
 
@@ -691,7 +699,7 @@ describe("DevicesPage gateway lifecycle", () => {
     async (kind) => {
       const request = vi.fn(async (method: string) => responseFor(method));
       const page = mountPaired(request);
-      selectEntryAction(page.container, kind === "alias" ? "editAlias" : "remove");
+      await selectEntryAction(page.container, kind === "alias" ? "editAlias" : "remove");
       await waitForRenderedModalDialog(document.body);
       request.mockClear();
       page.fixture.emitSnapshot(gatewaySnapshot(page.client, false));
@@ -733,7 +741,7 @@ describe("DevicesPage gateway lifecycle", () => {
       ],
       devicesList: { paired: [], pending: [] },
     });
-    selectEntryAction(page.container, "reject", "Pending node");
+    await selectEntryAction(page.container, "reject", "Pending node");
     await waitForRenderedModalDialog(document.body);
     request.mockClear();
     dialogButton(t("common.cancel")).click();

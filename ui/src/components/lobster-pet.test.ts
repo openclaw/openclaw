@@ -31,6 +31,7 @@ async function advancePetFrame(element: LobsterPetElement): Promise<void> {
 }
 
 async function settleDismissMenu(element: LobsterPetElement) {
+  await vi.dynamicImportSettled();
   await waitForSolid(() => {
     const firstItem = element.querySelector('.lobster-pet-dismiss-menu [role="menuitem"]');
     expect(firstItem).not.toBeNull();

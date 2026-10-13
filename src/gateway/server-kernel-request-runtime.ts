@@ -56,9 +56,25 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       logHealth,
     });
   });
-  let projectionReady:
-    | ReturnType<(typeof import("./session-row-projection.js"))["createSessionRowProjection"]>
-    | undefined;
+  const projectionReady = runtime.opts.updateCanary
+    ? undefined
+    : startupTrace.measure("sessions.projection", async () => {
+        const { createSessionRowProjection } = await import("./session-row-projection.js");
+        return createSessionRowProjection({
+          cfg: getRuntimeConfig(),
+          getConfig: getRuntimeConfig,
+          getPolicyConfig: gatewayRequestContext.getCommittedRuntimeConfig ?? getRuntimeConfig,
+          getModelCatalog: () =>
+            readPreparedServerMethodModelCatalogs(
+              gatewayRequestContext,
+              listAgentIds(getRuntimeConfig()),
+            ),
+          context: gatewayRequestContext,
+          placementFactsReader: runtime.workerEnvironmentStartup?.placementStore,
+        });
+      });
+  // Startup and teardown retain this work even if transport setup fails first.
+  void projectionReady?.catch(() => {});
   let requestRuntimeReady: Promise<void> | undefined;
   const projectionLifetime: { closing: boolean; detach?: () => void } = { closing: false };
   runtime.registerGatewayLifetimeSidecars({
@@ -80,23 +96,6 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   });
   // An early request may initialize this while other listeners bind; keep startup ownership.
   const initializeRequestRuntime = AsyncLocalStorage.bind(async () => {
-    projectionReady = runtime.opts.updateCanary
-      ? undefined
-      : startupTrace.measure("sessions.projection", async () => {
-          const { createSessionRowProjection } = await import("./session-row-projection.js");
-          return createSessionRowProjection({
-            cfg: getRuntimeConfig(),
-            getConfig: getRuntimeConfig,
-            getPolicyConfig: gatewayRequestContext.getCommittedRuntimeConfig ?? getRuntimeConfig,
-            getModelCatalog: () =>
-              readPreparedServerMethodModelCatalogs(
-                gatewayRequestContext,
-                listAgentIds(getRuntimeConfig()),
-              ),
-            context: gatewayRequestContext,
-            placementFactsReader: runtime.workerEnvironmentStartup?.placementStore,
-          });
-        });
     const projection = await projectionReady;
     if (projectionLifetime.closing) {
       throw new Error("Gateway closed during session projection startup");

@@ -1,5 +1,5 @@
 import { ContextProvider, createContext } from "@lit/context";
-import { render } from "lit";
+import { createComponent } from "solid-js";
 /* @vitest-environment jsdom */
 import { afterEach, expect, it, vi } from "vitest";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
@@ -14,10 +14,12 @@ import {
   type PresenceViewer,
 } from "../lib/presence-users.ts";
 import { profileDirectory } from "../lib/profile-directory.ts";
+import { LitContent } from "../lit/solid-content.tsx";
 import { renderChatAuthorAvatar } from "../pages/chat/components/chat-author-avatar.ts";
 import { createApplicationGateway } from "../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import "./viewer-facepile.ts";
 
 afterEach(() => {
@@ -53,7 +55,13 @@ it("uses the same user initials and identity hue in the roster and attributed ch
 
   const chat = document.createElement("div");
   document.body.append(chat);
-  render(renderChatAuthorAvatar({ id: user.id, name: user.name, username: user.email }), chat);
+  mountSolid(
+    () =>
+      createComponent(LitContent, {
+        value: renderChatAuthorAvatar({ id: user.id, name: user.name, username: user.email }),
+      }),
+    { container: chat },
+  );
 
   const expected = resolveAvatarInitials({
     id: user.id,

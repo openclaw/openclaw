@@ -6,6 +6,7 @@ import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import { isUpdateDoctorInspectionReportMode } from "../commands/doctor/shared/update-phase.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
+import { copyConfigResolutionFactsThroughRewrite } from "../config/resolution-facts.js";
 import {
   DoctorStateMigrationRefusalError,
   throwIfDoctorStateMigrationRefused,
@@ -232,7 +233,7 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
   }
   const { randomToken } = await import("../commands/onboard-helpers.js");
   const nextToken = randomToken();
-  ctx.cfg = {
+  const config: typeof ctx.cfg = {
     ...ctx.cfg,
     gateway: {
       ...ctx.cfg.gateway,
@@ -243,6 +244,8 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
       },
     },
   };
+  copyConfigResolutionFactsThroughRewrite(ctx.cfg, config);
+  ctx.cfg = config;
   note("Gateway token configured.", "Gateway auth");
 }
 

@@ -9,21 +9,23 @@ import {
   resolveConfiguredRealtimeTranscriptionProvider,
 } from "../session-config.js";
 
-export async function resolveCatalogProviderSelection(
+export async function resolveCatalogProviderSelection<T extends { provider: { id: string } }>(
   configuredProvider: string | undefined,
-  resolveAutomaticProvider: () => string | Promise<string>,
-): Promise<{ activeProvider?: string; ready: boolean }> {
+  resolveAutomaticProvider: () => Promise<T>,
+) {
   // Provider priority belongs to the runtime resolver; catalog consumers must not infer it from row order.
   try {
     const resolvedProvider = await resolveAutomaticProvider();
     return {
-      activeProvider: resolvedProvider,
+      activeProvider: resolvedProvider.provider.id,
       ready: true,
+      resolved: resolvedProvider,
     };
   } catch {
     return {
       ...(configuredProvider ? { activeProvider: configuredProvider } : {}),
       ready: false,
+      resolved: undefined,
     };
   }
 }
@@ -39,15 +41,13 @@ export async function buildTalkTranscriptionCatalog(config: OpenClawConfig, agen
     ? { ready: transcriptionConfig.file.ready, activeProvider: transcriptionConfig.file.provider }
     : await resolveCatalogProviderSelection(
         canonicalizeRealtimeTranscriptionProviderId(transcriptionConfig.provider, config),
-        async () =>
-          (
-            await resolveConfiguredRealtimeTranscriptionProvider({
-              config,
-              configuredProviderId: transcriptionConfig.provider,
-              providerConfigs: transcriptionConfig.providers,
-              defaultModel: transcriptionConfig.model,
-            })
-          ).provider.id,
+        () =>
+          resolveConfiguredRealtimeTranscriptionProvider({
+            config,
+            configuredProviderId: transcriptionConfig.provider,
+            providerConfigs: transcriptionConfig.providers,
+            defaultModel: transcriptionConfig.model,
+          }),
       );
   const activeTranscriptionProvider = transcriptionSelection.activeProvider;
   return {

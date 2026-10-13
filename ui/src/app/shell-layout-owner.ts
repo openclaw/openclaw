@@ -43,11 +43,8 @@ export class ShellLayoutOwner {
   };
 
   record(token: object, host: Element, traits: ShellLayoutTraits) {
-    if (
-      !host.isConnected ||
-      !this.content?.contains(host) ||
-      !TRAITS.some(([key]) => traits[key])
-    ) {
+    // Native shells assemble their page descendants before connecting to the document.
+    if (!this.content?.contains(host) || !TRAITS.some(([key]) => traits[key])) {
       this.clear(token);
       return;
     }
@@ -73,7 +70,7 @@ export class ShellLayoutOwner {
   get current(): ShellLayoutTraits {
     const traits: ShellLayoutTraits = {};
     for (const [token, reporter] of this.reporters) {
-      if (!reporter.host.isConnected || !this.content?.contains(reporter.host)) {
+      if (!this.content?.contains(reporter.host)) {
         this.reporters.delete(token);
         continue;
       }

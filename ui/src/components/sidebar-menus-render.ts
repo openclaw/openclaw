@@ -34,6 +34,7 @@ import { canRetryGatewayStatus } from "./gateway-status.ts";
 import "../styles/sidebar-menus.css";
 import { sessionMenuReasons } from "./session-menu-access.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
+import "./session-menu.ts";
 import {
   isSidebarAttentionDismissed,
   isUpdateAttentionForced,

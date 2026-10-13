@@ -48,7 +48,7 @@ import {
 } from "./subagent-registry-read.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import {
-  getSubagentSessionListRunsSnapshotForRead,
+  getSubagentControlRunsSnapshotForRead,
   withSubagentRunReadSnapshot,
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -478,7 +478,7 @@ export function listControlledSubagentRunFacts(
     return [];
   }
   const index = buildSubagentRunReadIndexFromRuns({
-    runs: getSubagentSessionListRunsSnapshotForRead(subagentRuns),
+    runs: getSubagentControlRunsSnapshotForRead(controllerSessionKey),
   });
   return selectControlledSubagentRunFacts(index, controllerSessionKey, controllerAgentId, cfg);
 }

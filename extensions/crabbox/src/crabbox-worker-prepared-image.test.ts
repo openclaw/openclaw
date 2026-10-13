@@ -208,6 +208,56 @@ describe("Crabbox prepared image demand and custody", () => {
     expect((await listCrabboxWarmImages(crabboxState))[0]?.lastDemandAtMs).toBe(now + 60_000);
   });
 
+  it.each(["session", "aged session", "reserve"] as const)(
+    "tops up an older runtime on a compatible %s fork and refreshes only at its capture boundary",
+    async (scenario) => {
+      const now = 1_800_000_000_000;
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+      const preparation = createPreparation("reserve", now);
+      const events: string[] = [];
+      let current = projectOptions(events, new AbortController(), preparation);
+      let captures = 0;
+      const { provider, calls } = createWarmProvider((call) => {
+        current.observe(call);
+        return call.argv[2] === "create"
+          ? checkpointResult(
+              `chk_runtime_${++captures}`,
+              call.argv[call.argv.indexOf("--id") + 1]!,
+              "available",
+            )
+          : undefined;
+      });
+      const source = await provider.provision(PROFILE, "runtime-source", current.options);
+      await destroyAndWait(provider, { ...source, profile: PROFILE });
+      const image = structuredClone(openWarmImageStore().entries()[0]!.value.image);
+      if (scenario === "aged session") {
+        clock.mockReturnValue(now + 86_400_000);
+      }
+      current = projectOptions(events, new AbortController(), {
+        ...preparation,
+        key: "e".repeat(64),
+        purpose: scenario === "reserve" ? "reserve" : "session",
+      });
+      current.options.nodeRuntimeIdentity.nodeBootstrapSha256 = "f".repeat(64);
+      events.length = 0;
+      calls.length = 0;
+      await provider.provision(PROFILE, "runtime-next", current.options);
+      expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe("chk_runtime_1");
+      expect(current.options.prepareNodeRuntime).toHaveBeenCalledOnce();
+      expect(events.indexOf("runtime-install")).toBeLessThan(events.indexOf("enrollment-begun"));
+      expect(current.options.beginNodeEnrollment).toHaveBeenCalledOnce();
+      expect(events).toContain("enrollment-install");
+      expect(captures).toBe(scenario === "session" ? 1 : 2);
+      if (scenario === "session") {
+        expect(openWarmImageStore().entries()[0]!.value.image).toEqual(image);
+      } else {
+        expect(openWarmImageStore().entries()[0]!.value.image?.runtimeIdentity).toEqual(
+          current.options.nodeRuntimeIdentity,
+        );
+      }
+    },
+  );
+
   it.each([
     { reason: "interrupted preparation", aged: false, pinned: false, replay: true, captures: 2 },
   ])("preserves capture policy for a changed commit after $reason", async (scenario) => {
@@ -297,6 +347,11 @@ describe("Crabbox prepared image demand and custody", () => {
           ...preparation,
           key: "e".repeat(64),
           purpose: "session",
+        });
+        current.options.project.prepare.mockResolvedValueOnce({
+          seedKey: PROJECT_KEY,
+          cacheHit: false,
+          captureRequired: true,
         });
         current.options.beginNodeEnrollment.mockRejectedValueOnce(
           new Error("enrollment admission failed"),
@@ -442,10 +497,19 @@ describe("Crabbox prepared image demand and custody", () => {
   it("offers ready capacity only for immutable Linux warm-image profiles", async () => {
     const { provider, calls } = createWarmProvider();
     expect(provider.resolvePreparedIdleTimeoutMs?.(PROFILE)).toBe(3_600_000);
-    expect(provider.resolvePreparationTarget?.(PROFILE, "fast")).toEqual({
+    const target = provider.resolvePreparationTarget?.(PROFILE, "fast");
+    expect(target).toMatchObject({
       machineClass: "fast",
       platform: "linux",
+      profileKey: expect.stringMatching(/^[a-f0-9]{64}$/u),
     });
+    expect(
+      provider.resolvePreparationTarget?.({ ...PROFILE, ttl: "48h", idleTimeout: "2h" }, "fast"),
+    ).toEqual(target);
+    expect(
+      provider.resolvePreparationTarget?.({ ...PROFILE, setup: "install-other-tools" }, "fast")
+        ?.profileKey,
+    ).not.toBe(target?.profileKey);
     for (const profile of [
       { ...PROFILE, warmImage: false },
       { ...PROFILE, setup: "setup", setupEnv: ["MUTABLE_INPUT"] },

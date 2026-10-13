@@ -328,6 +328,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     branding: props.branding,
     assistant: assistantIdentity,
     startupLabel: props.startupLabel,
+    retryAt: props.retryAt,
     waitingApproval: props.waitingApproval,
     waitingSubagents: subagents.wait ?? undefined,
     runningSubagents: subagents.running,
@@ -498,7 +499,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
         return () => renderChatDivider(item);
       }
       if (item.kind === "notice") {
-        return () => renderChatNotice(item, props.onPermissionRetry);
+        return () => renderChatNotice(item, props.onPermissionRetry, props);
       }
       if (item.kind === "agent-run-frame") {
         return () =>
@@ -601,6 +602,10 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     activityGroupKey,
     Boolean(props.runWorking),
     props.startupLabel,
+    props.retryAt,
+    props.onRetryRun,
+    props.onChangeFailureModel,
+    props.failureActionsRunId,
     Boolean(props.waitingApproval),
     props.questionPrompts,
     state.asyncQuestionRevision,

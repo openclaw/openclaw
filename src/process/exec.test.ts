@@ -501,7 +501,7 @@ describe("runCommandBuffered", () => {
 
           await vi.advanceTimersByTimeAsync(execSpawn.COMMAND_PROCESS_TREE_KILL_GRACE_MS);
           // Force delivery now has a separate bounded exit-observation phase.
-          await vi.advanceTimersByTimeAsync(execSpawn.COMMAND_PROCESS_TREE_KILL_GRACE_MS);
+          await vi.advanceTimersByTimeAsync(execSpawn.COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS);
           expect(await withinTest(command, signal)).toMatchObject(
             exitCode === 0
               ? { code: null, termination: "timeout" }

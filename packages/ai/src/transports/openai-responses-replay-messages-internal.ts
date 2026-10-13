@@ -40,7 +40,10 @@ import {
 } from "./openai-responses-contracts.js";
 import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoint.js";
 import { createResponsesInputReplay } from "./openai-responses-input-replay.js";
-import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
+import {
+  normalizeOpenAIResponsesReasoningReplayItem,
+  resolveReplayableResponsesMessageId,
+} from "./openai-responses-replay.js";
 import {
   buildProviderReplayContext,
   isProviderReplayContext,
@@ -101,23 +104,6 @@ function readOpenAIResponsesReasoningReplayBlockMetadata(
   }
   const value = block[OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY];
   return isOpenAIResponsesReasoningReplayMetadata(value) ? value : null;
-}
-
-function normalizeOpenAIResponsesReasoningReplayItem(
-  item: ReplayableResponseReasoningItem,
-  api: Api,
-): ReplayableResponseReasoningItem {
-  if (api === "openai-chatgpt-responses") {
-    return Array.isArray(item.summary) ? item : { ...item, summary: [] };
-  }
-  // Match storage's reasoning privacy shape and order before warm replay too.
-  return {
-    id: item.id,
-    type: "reasoning",
-    summary: [],
-    status: item.status,
-    encrypted_content: item.encrypted_content,
-  };
 }
 
 function prepareOpenAIResponsesReasoningItemForReplay(

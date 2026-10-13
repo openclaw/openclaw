@@ -215,7 +215,18 @@ export function evaluateWorkflowExpression(
       ...context.steps,
     },
     needs: {
-      ...context.additionalNeeds,
+      ...Object.fromEntries(
+        Object.entries(context.additionalNeeds ?? {}).map(([name, need]) => [
+          name,
+          {
+            ...need,
+            // Actions resolves missing output properties to an empty string.
+            outputs: new Proxy(need.outputs, {
+              get: (outputs, key: string) => outputs[key] ?? "",
+            }),
+          },
+        ]),
+      ),
       resolve_target: { outputs: context.resolveTargetOutputs ?? {} },
       "checks-baseline-ratchets": {
         result: context.jobResults?.["checks-baseline-ratchets"] ?? "success",
@@ -264,6 +275,16 @@ export function evaluateWorkflowRunner(
         ...context,
       })
     : selector;
+}
+
+export function evaluateWorkflowCondition(
+  condition: string,
+  context: Parameters<typeof evaluateWorkflowExpression>[1],
+) {
+  return evaluateWorkflowExpression(
+    condition.trim().startsWith("${{") ? condition : `\${{ ${condition} }}`,
+    context,
+  );
 }
 
 export function quoteShell(value: string): string {

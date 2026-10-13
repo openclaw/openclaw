@@ -63,8 +63,10 @@ An explicit server-close failure retains exit status `1`, including when final
 provider cleanup crosses the native shutdown deadline.
 
 Admission-close logs name the shutdown trigger, for example `stop (SIGTERM)` or
-`restart (SIGUSR2: config reload: gateway.bind)`. A signal alone does not identify
-its sender: Node does not expose the sender PID or command. Three occurrences of
+`restart (SIGUSR2: config reload: gateway.bind)`. Process failures retain their
+cause, for example `stop (process exit: unhandled rejection)`, while host lifeline
+closure is reported only when the hosting process closes its lifeline. A signal
+alone does not identify its sender: Node does not expose the sender PID or command. Three occurrences of
 the same signal within five minutes in one process, or three recorded plain
 SIGTERM/SIGINT stops across process lifetimes, produce a hint to check
 `openclaw gateway status --deep` for another supervisor. Deep local status shows
@@ -238,6 +240,7 @@ External supervisor implementations should also apply these acceptance rules:
 - `OPENCLAW_DIAGNOSTICS=timeline` with `OPENCLAW_DIAGNOSTICS_TIMELINE_PATH=<path>` writes a best-effort JSONL startup diagnostics timeline for external QA harnesses (equivalent to config `diagnostics.flags: ["timeline"]`; the path is still env-only). Add `OPENCLAW_DIAGNOSTICS_EVENT_LOOP=1` to include event-loop samples.
 - `pnpm build` then `pnpm test:startup:gateway -- --runs 5 --warmup 1` benchmarks Gateway startup against the built CLI entry: first process output, `/healthz`, `/readyz`, startup trace timings, event-loop delay, and plugin lookup-table timing.
 - `pnpm build` then `pnpm test:restart:gateway -- --case skipChannels --runs 1 --restarts 5` benchmarks in-process restart on macOS or Linux (not supported on Windows; restart requires `SIGUSR2`). Uses `SIGUSR2`, enables both traces in the child process, and records next `/healthz`, next `/readyz`, downtime, ready timing, CPU, RSS, and restart trace metrics.
+- Session projection warming overlaps transport setup after session admission and request-context preparation. Readiness still waits for initial session materialization and interrupted-turn recovery; a listener can be live while those gates remain pending. Update canaries continue to defer session catalogs until activation.
 - `/healthz` is liveness; `/readyz` is usable readiness. Treat trace lines and benchmark output as owner-attribution signal, not a complete performance conclusion from one span or sample.
 
 Without tracing, stops and restarts report nonzero active-work category counts at

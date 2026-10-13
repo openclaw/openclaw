@@ -1092,10 +1092,6 @@ export async function runVitest(
     : config === null && !sourceMode && process.cwd() === repoRoot
       ? "vitest.config.ts"
       : "";
-  const invocationEnv =
-    invocations.length > 1 && relativeConfig === E2E_VITEST_CONFIG
-      ? { ...env, ...(await prepareE2eVitestRuntime(env)) }
-      : env;
   // Canonical configs have known project scopes. Custom roots/projects keep
   // their own setup; never infer their runtime selection from a config name.
   const canonicalSelection =
@@ -1104,6 +1100,12 @@ export async function runVitest(
     !hasExplicitVitestProjectArg(vitestArgs) &&
     !hasNonRunVitestSubcommand(vitestArgs) &&
     !hasExplicitDisabledRunFlag(vitestArgs);
+  // E2E global setup must precede shared asset preparation, including a single
+  // invocation; otherwise it can replace dist after UI readiness was checked.
+  const invocationEnv =
+    canonicalSelection && relativeConfig === E2E_VITEST_CONFIG
+      ? { ...env, ...(await prepareE2eVitestRuntime(env)) }
+      : env;
   if (canonicalSelection && relativeConfig) {
     const code = await prepareVitestRuntime(
       invocations.flatMap((cliArgs) =>

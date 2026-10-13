@@ -179,7 +179,7 @@ describe("auth profile sqlite reader lifecycle", () => {
     }
   });
 
-  it("revalidates format after final pool close and rejects a replacement file", async () => {
+  it("reuses sealed format after final pool close and rejects a replacement file", async () => {
     await withReaders((agentDir) => {
       const pathname = resolveAuthProfileDatabasePath(agentDir);
       const observed = observeSqliteReadSql(nodeSqlite.requireNodeSqlite().StatementSync.prototype);
@@ -194,15 +194,7 @@ describe("auth profile sqlite reader lifecycle", () => {
         closeAuthProfileReadPool({ kind: "database", databasePath: pathname });
         observed.queries.length = 0;
         expect(acquireAuthProfileReadDatabase(pathname).status).toBe("readable");
-        expect(
-          formatQueries().filter((sql) => /^PRAGMA schema_version\b/iu.test(sql)),
-        ).toHaveLength(1);
-        expect(formatQueries().filter((sql) => /^PRAGMA user_version\b/iu.test(sql))).toHaveLength(
-          1,
-        );
-        expect(
-          formatQueries().filter((sql) => /FROM main\.sqlite_schema\b/iu.test(sql)),
-        ).toHaveLength(1);
+        expect(formatQueries()).toEqual([]);
         observed.queries.length = 0;
         expect(acquireAuthProfileReadDatabase(pathname).status).toBe("readable");
         expect(formatQueries()).toEqual([]);
@@ -223,7 +215,7 @@ describe("auth profile sqlite reader lifecycle", () => {
     });
   });
 
-  it("observes foreign commits through cached readers and closes them on snapshot replacement", async () => {
+  it("observes foreign commits through cached readers and retains them on snapshot replacement", async () => {
     await withReaders((agentDir, open) => {
       expect(loadPersistedAuthProfileStore(agentDir)).toMatchObject(apiKeyStore("qa-main"));
       const reader = expectDefined(open.mock.results[0]?.value, "pooled auth reader");
@@ -246,11 +238,13 @@ describe("auth profile sqlite reader lifecycle", () => {
         writer.close();
       }
       replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: apiKeyStore("qa-main") }]);
-      expect(reader.isOpen).toBe(false);
+      expect(reader.isOpen).toBe(true);
       expect(loadPersistedAuthProfileStore(agentDir)).toMatchObject(
         apiKeyStore("synthetic-external"),
       );
-      expect(open).toHaveBeenCalledTimes(2);
+      expect(open).toHaveBeenCalledOnce();
+      clearRuntimeAuthProfileStoreSnapshots();
+      expect(reader.isOpen).toBe(false);
     });
   });
 
