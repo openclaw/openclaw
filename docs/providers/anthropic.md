@@ -1067,6 +1067,23 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 ## Troubleshooting
 
 <AccordionGroup>
+  <Accordion title="Claude CLI login could not be verified">
+    OpenClaw allows 10 seconds for the Claude CLI login check. A timeout or
+    unreadable response means OpenClaw could not verify the login; it does not
+    establish that Claude Code is logged out.
+
+    Run this check on the same host, as the same user, and with the same
+    environment as OpenClaw:
+
+    ```bash
+    claude auth status --json
+    ```
+
+    If `loggedIn` is `true`, retry OpenClaw setup. If it is `false`, run
+    `claude auth login` there first.
+
+  </Accordion>
+
   <Accordion title="Claude CLI OAuth session expired or could not be refreshed">
     Run these commands as the Gateway user on the Gateway host:
 

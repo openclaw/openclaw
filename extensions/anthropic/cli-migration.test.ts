@@ -348,16 +348,42 @@ describe("anthropic cli migration", () => {
     expect(defaults.models?.["anthropic/*"]).toEqual({ agentRuntime: { id: "openclaw" } });
   });
 
-  it("registered cli auth tells users to run claude auth login when local auth is missing", async () => {
-    probeClaudeCliAuthStatus.mockReturnValue({ status: "missing" });
-    const method = await resolveAnthropicCliAuthMethod();
-
-    await expect(method.run(createProviderAuthContext())).rejects.toThrow(
-      [
+  it.each([
+    {
+      name: "missing local auth",
+      result: { code: 1, termination: "exit", stdout: "" },
+      guidance: [
         "Claude CLI is not authenticated on this host.",
         "Run claude auth login first, then re-run this setup.",
-      ].join("\n"),
-    );
+      ],
+    },
+    {
+      name: "a timed-out probe with authenticated output",
+      result: {
+        code: 124,
+        termination: "timeout",
+        stdout: JSON.stringify({ loggedIn: true }),
+      },
+      guidance: [
+        "Could not verify the installed Claude CLI login.",
+        "Run claude auth status, then re-run this setup.",
+      ],
+    },
+    {
+      name: "an unreadable probe response",
+      result: { code: 0, termination: "exit", stdout: "invalid JSON" },
+      guidance: [
+        "Could not verify the installed Claude CLI login.",
+        "Run claude auth status, then re-run this setup.",
+      ],
+    },
+  ])("registered cli auth gives recovery guidance for $name", async ({ result, guidance }) => {
+    const actual = await vi.importActual<typeof import("./cli-auth-seam.js")>("./cli-auth-seam.js");
+    probeClaudeCliAuthStatus.mockImplementation(actual.probeClaudeCliAuthStatus);
+    runUtf8CommandWithTimeout.mockResolvedValue(result);
+    const method = await resolveAnthropicCliAuthMethod();
+
+    await expect(method.run(createProviderAuthContext())).rejects.toThrow(guidance.join("\n"));
   });
 
   it.each(["string", "legacy-collision"] as const)(

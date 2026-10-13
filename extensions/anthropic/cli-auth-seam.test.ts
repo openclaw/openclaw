@@ -41,7 +41,7 @@ it("asks Claude CLI for its active account and returns only safe display fields"
 
   expect(runUtf8CommandWithTimeout).toHaveBeenCalledWith(
     ["/test/claude", "auth", "status", "--json"],
-    expect.objectContaining({ timeoutMs: 3_000, killProcessTree: true }),
+    expect.objectContaining({ timeoutMs: 10_000, killProcessTree: true }),
   );
 });
 

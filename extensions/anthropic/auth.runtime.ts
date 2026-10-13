@@ -215,12 +215,17 @@ export async function runAnthropicCliMigration(
 ): Promise<ProviderAuthResult> {
   const authStatus = await claudeCliAuth.probeClaudeCliAuthStatus({ env: ctx.env ?? process.env });
   if (authStatus.status !== "available") {
-    throw new Error(
-      [
-        "Claude CLI is not authenticated on this host.",
-        `Run ${formatCliCommand("claude auth login")} first, then re-run this setup.`,
-      ].join("\n"),
-    );
+    const error =
+      authStatus.status === "unreadable"
+        ? [
+            "Could not verify the installed Claude CLI login.",
+            `Run ${formatCliCommand("claude auth status")}, then re-run this setup.`,
+          ]
+        : [
+            "Claude CLI is not authenticated on this host.",
+            `Run ${formatCliCommand("claude auth login")} first, then re-run this setup.`,
+          ];
+    throw new Error(error.join("\n"));
   }
   return buildAnthropicCliMigrationResult(ctx.config);
 }

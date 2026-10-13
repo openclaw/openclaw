@@ -45,7 +45,7 @@ export async function probeClaudeCliAuthStatus(params?: {
       maxOutputBytes: 64 * 1024,
       maxCombinedOutputBytes: 64 * 1024,
       terminateOnOutputLimit: true,
-      timeoutMs: 3_000,
+      timeoutMs: 10_000,
       signal: params?.signal,
       killProcessTree: true,
     });
