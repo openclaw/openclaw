@@ -38,6 +38,7 @@ import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { projectSessionActor } from "./session-identity-projection.js";
 import { buildSessionRowFixture, listSessionFixture } from "./session-list.test-support.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
+import { readSessionTitleFieldsFromTranscriptAsync } from "./session-transcript-title-reader.js";
 import { deriveSessionTitle } from "./session-utils-core.js";
 import {
   getSessionDefaults,
@@ -68,6 +69,7 @@ import {
   useSessionStoreFixture,
   withStateDirEnv,
 } from "./session-utils.test-support.js";
+import type { SessionTitleFields } from "./session-utils.types.js";
 import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
 
 const { getSessionProviderArtifactMocks, resetSessionProviderArtifacts } =
@@ -1950,6 +1952,7 @@ describe("session list selected model display", () => {
   test("caps transcript title and last-message hydration for bulk list responses", async () => {
     const storePath = fixtureStorePath();
     const store: Record<string, SessionEntry> = {};
+    const titleFieldsBySessionKey = new Map<string, SessionTitleFields>();
     const now = Date.now();
     for (let i = 0; i < 101; i += 1) {
       const sessionId = `sess-${i}`;
@@ -1974,6 +1977,15 @@ describe("session list selected model display", () => {
             { role: "assistant", content: `last ${i}` },
           ],
         });
+        titleFieldsBySessionKey.set(
+          sessionKey,
+          await readSessionTitleFieldsFromTranscriptAsync({
+            agentId: "main",
+            sessionId,
+            sessionKey,
+            storePath,
+          }),
+        );
       }
     }
 
@@ -1981,6 +1993,7 @@ describe("session list selected model display", () => {
       cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
       storePath,
       store,
+      titleFieldsBySessionKey,
       opts: { includeDerivedTitles: true, includeLastMessage: true, limit: 101 },
     });
 

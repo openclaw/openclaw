@@ -52,7 +52,6 @@ const reviewed = new Map<string, readonly string[]>([
   [
     "src/plugin-sdk/session-store-runtime.ts",
     [
-      "getSessionEntry",
       "getConversationSession",
       "readSessionStoreTranscriptStatsSync",
       "readAmbientTranscriptWatermark",

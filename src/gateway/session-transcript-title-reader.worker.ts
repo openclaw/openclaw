@@ -1,5 +1,6 @@
 // Session-list title reads: bounded transcript probes plus a watermark-validated
 // cache so list rendering never rescans transcripts that have not changed.
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isSessionTranscriptProjectionUnavailableError,
   readSessionTranscriptBoundedMessageTailPage,
@@ -76,8 +77,7 @@ function findFirstTitleUserText(
     const projected = projectSessionDisplayMessage(message);
     if (
       projected?.role === "user" &&
-      (includeInterSession ||
-        !hasInterSessionUserProvenance(message as { role?: unknown; provenance?: unknown }))
+      (includeInterSession || !hasInterSessionUserProvenance(asOptionalRecord(message)))
     ) {
       return projected.text;
     }

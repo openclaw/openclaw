@@ -416,12 +416,13 @@ async function readRawQaSessionStore(
 ): Promise<Record<string, SessionEntry>> {
   const runtimeEnv = qaSessionRuntimeEnv(env.gateway.tempRoot);
   const agentId = readNonEmptyString(options.agentId) ?? "qa";
-  return Object.fromEntries(
-    (await listSessionEntriesAsync({ agentId, env: runtimeEnv })).map(({ sessionKey, entry }) => [
-      sessionKey,
-      entry,
-    ]),
-  );
+  // The harness reads a separate Gateway process and does not receive its write receipts.
+  const entries = await listSessionEntriesAsync({
+    agentId,
+    env: runtimeEnv,
+    readConsistency: "latest",
+  });
+  return Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry]));
 }
 
 async function readQaSessionTranscriptEvents(
