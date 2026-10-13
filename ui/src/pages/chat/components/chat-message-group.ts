@@ -1,4 +1,4 @@
-import { createComponent } from "solid-js";
+import { createComponent, merge } from "solid-js";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
 import type { RenderMessageGroupOptions } from "./chat-message-group-options.ts";
@@ -6,43 +6,33 @@ import {
   ActivityGroup,
   MessageGroupContent as NativeMessageGroupContent,
   MessageGroup,
-  type NativeMessageGroupOptions,
 } from "./chat-message-group-view.tsx";
 export * from "./chat-message-group-view.tsx";
 
-function nativeOptions(read: () => RenderMessageGroupOptions): () => NativeMessageGroupOptions {
+function nativeProps<P extends { options: RenderMessageGroupOptions }>(props: P) {
   const frameContent = [
     createComponent(LitContent, {
       get value() {
-        return read().frameContent;
+        return props.options.frameContent;
       },
     }),
   ];
-  return () => {
-    const options = read();
-    return {
-      ...options,
-      frameContent: options.frameContent === undefined ? undefined : frameContent,
-    };
-  };
+  return merge(() => props, {
+    get options() {
+      const options = props.options;
+      return {
+        ...options,
+        frameContent: options.frameContent === undefined ? undefined : frameContent,
+      };
+    },
+  });
 }
 function ActivityGroupContent(props: {
   groups: readonly MessageGroupData[];
   options: RenderMessageGroupOptions;
   presentation: "standalone" | "continuation";
 }) {
-  const options = nativeOptions(() => props.options);
-  return createComponent(ActivityGroup, {
-    get groups() {
-      return props.groups;
-    },
-    get options() {
-      return options();
-    },
-    get presentation() {
-      return props.presentation;
-    },
-  });
+  return createComponent(ActivityGroup, nativeProps(props));
 }
 export function renderActivityGroup(
   groups: readonly MessageGroupData[],
@@ -55,15 +45,7 @@ function MessageGroupContent(props: {
   group: MessageGroupData;
   options: RenderMessageGroupOptions;
 }) {
-  const options = nativeOptions(() => props.options);
-  return createComponent(NativeMessageGroupContent, {
-    get group() {
-      return props.group;
-    },
-    get options() {
-      return options();
-    },
-  });
+  return createComponent(NativeMessageGroupContent, nativeProps(props));
 }
 export function renderMessageGroupContent(
   group: MessageGroupData,
@@ -72,15 +54,7 @@ export function renderMessageGroupContent(
   return solidContent(MessageGroupContent, { group, options });
 }
 function GroupContent(props: { group: MessageGroupData; options: RenderMessageGroupOptions }) {
-  const options = nativeOptions(() => props.options);
-  return createComponent(MessageGroup, {
-    get group() {
-      return props.group;
-    },
-    get options() {
-      return options();
-    },
-  });
+  return createComponent(MessageGroup, nativeProps(props));
 }
 export function renderMessageGroup(group: MessageGroupData, options: RenderMessageGroupOptions) {
   return solidContent(GroupContent, { group, options });

@@ -3,6 +3,10 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
   persistSessionTranscriptTurn,
@@ -59,6 +63,7 @@ beforeEach(() => {
   tempDir = tempDirs.make("openclaw-transcript-titles-");
   storePath = path.join(tempDir, "sessions.json");
   setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+  setRuntimeConfigSnapshot({});
 });
 
 afterEach(async () => {
@@ -66,6 +71,7 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
   tempDirs.cleanup();
   envSnapshot.restore();
 });

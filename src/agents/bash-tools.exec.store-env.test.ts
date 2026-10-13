@@ -406,8 +406,8 @@ describe("exec store environment", () => {
         expect(env).toMatchObject(EGRESS_ENV);
         const childEnv = mocks.spawnInputs.at(-1)?.env;
         expect(childEnv?.SERVICE_API_KEY).toBe(env.SERVICE_API_KEY);
-        expect(JSON.stringify(childEnv)).not.toContain("enabled-secret");
-        expect(JSON.stringify(env)).not.toContain("enabled-secret");
+        expect(JSON.stringify(childEnv).includes("enabled-secret")).toBe(false);
+        expect(JSON.stringify(env).includes("enabled-secret")).toBe(false);
         expect(mocks.proxyBindings).toEqual([
           [
             expect.objectContaining({
@@ -422,7 +422,7 @@ describe("exec store environment", () => {
 
       expect(env).not.toHaveProperty("AWS_REGION");
       expect(env).not.toHaveProperty("SERVICE_API_KEY");
-      expect(JSON.stringify(env)).not.toContain("oc-sent-v2.");
+      expect(JSON.stringify(env).includes("oc-sent-v2.")).toBe(false);
       for (const [key, value] of Object.entries(EGRESS_ENV)) {
         expect(env[key]).not.toBe(value);
       }

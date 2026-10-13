@@ -2,7 +2,7 @@ import { createRenderEffect, createSignal, onCleanup, Show, untrack } from "soli
 import { renderSessionProgressCard } from "../../../components/session-progress-card.ts";
 import { PRESENTATION_CHANGED_EVENT } from "../../../lit/presentation-binding.ts";
 import type { GoalComposerController } from "./chat-composer-goal-mode.tsx";
-import { ChatGoal } from "./chat-composer-goal.tsx";
+import { ChatGoal, renderChatGoalRecoverySolid } from "./chat-composer-goal.tsx";
 import { LitContent } from "./chat-composer-interop.tsx";
 import { renderChatQueueSolid as ChatQueue } from "./chat-composer-queue.tsx";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
@@ -104,31 +104,49 @@ export function ComposerGoal(view: {
   controller: GoalComposerController;
   requestUpdate: () => void;
 }) {
+  const resumeRecovery = () => {
+    const recovery = view.composer.goalRecovery;
+    return recovery?.action === "resume" &&
+      !recovery.retired &&
+      recovery.goalId === view.composer.selectedSession?.goal?.id
+      ? recovery
+      : undefined;
+  };
   return (
-    <Show when={view.composer.selectedSession?.goal} keyed>
-      {(goal) => (
-        <div class="agent-chat__goal-float">
-          <ChatGoal
-            goal={goal}
-            expanded={view.state.goalExpandedId === goal.id}
-            canAct={
-              view.composer.connected &&
-              view.composer.canSend &&
-              !view.composer.submitDisabledReason &&
-              Boolean(view.composer.currentSessionId) &&
-              !view.composer.goalRecovery
-            }
-            onGoalAction={view.composer.onGoalAction}
-            onGoalEdit={
-              view.composer.onGoalSubmit ? (selected) => view.controller.begin(selected) : undefined
-            }
-            onExpandedChange={(expanded) => {
-              view.state.goalExpandedId = expanded ? goal.id : null;
-              view.requestUpdate();
-            }}
-          />
-        </div>
+    <>
+      {renderChatGoalRecoverySolid(
+        resumeRecovery() ? undefined : view.composer.goalRecovery,
+        view.composer.connected,
       )}
-    </Show>
+      <Show when={view.composer.selectedSession?.goal} keyed>
+        {(goal) => (
+          <div class="agent-chat__goal-float">
+            <ChatGoal
+              goal={goal}
+              resumeRecovery={resumeRecovery()}
+              connected={view.composer.connected}
+              expanded={view.state.goalExpandedId === goal.id}
+              canAct={
+                view.composer.connected &&
+                view.composer.canSend &&
+                !view.composer.submitDisabledReason &&
+                Boolean(view.composer.currentSessionId) &&
+                !view.composer.goalRecovery
+              }
+              onGoalAction={view.composer.onGoalAction}
+              onGoalEdit={
+                view.composer.onGoalSubmit
+                  ? (selected) => view.controller.begin(selected)
+                  : undefined
+              }
+              onExpandedChange={(expanded) => {
+                view.state.goalExpandedId = expanded ? goal.id : null;
+                view.requestUpdate();
+              }}
+            />
+          </div>
+        )}
+      </Show>
+    </>
   );
 }

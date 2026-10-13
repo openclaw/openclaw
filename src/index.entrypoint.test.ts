@@ -39,14 +39,6 @@ const lifecycleImports = vi.hoisted(() => ({ failureOutput: vi.fn() }));
 vi.mock("./cli/one-shot-exit.js", () => ({
   runCliWithExitFinalization: vi.fn(),
 }));
-vi.mock("./cli/failure-output.js", () => {
-  lifecycleImports.failureOutput();
-  return {
-    formatCliFailureLines: vi.fn(() => []),
-    formatCliJsonFailure: vi.fn(),
-    isExpectedCliError: vi.fn(() => false),
-  };
-});
 vi.mock("./entry.version-fast-path.js", () => ({
   tryHandleRootVersionFastPath: vi.fn(() => false),
 }));
@@ -84,6 +76,15 @@ describe("legacy package executable entrypoint", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     vi.resetModules();
+    // Module resets retain mock factories; each entry case needs a fresh import witness.
+    vi.doMock("./cli/failure-output.js", () => {
+      lifecycleImports.failureOutput();
+      return {
+        formatCliFailureLines: vi.fn(() => []),
+        formatCliJsonFailure: vi.fn(),
+        isExpectedCliError: vi.fn(() => false),
+      };
+    });
     vi.mocked(isMainModule).mockReturnValue(true);
     vi.mocked(tryHandleRootVersionFastPath).mockReturnValue(false);
     vi.mocked(existsSync).mockReturnValue(false);
@@ -103,22 +104,52 @@ describe("legacy package executable entrypoint", () => {
     process.exitCode = originalExitCode;
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+    vi.doUnmock("./cli/failure-output.js");
   });
 
   it.each([
-    { mode: "version", args: ["--version"], main: true, handled: true, loadsFailure: false },
-    { mode: "CLI", args: ["status"], main: true, handled: false, loadsFailure: true },
-    { mode: "library", args: ["status"], main: false, handled: false, loadsFailure: false },
+    {
+      mode: "version",
+      args: ["--version"],
+      main: true,
+      handled: true,
+      loadsFailure: false,
+      caches: false,
+    },
+    {
+      mode: "CLI",
+      args: ["status"],
+      main: true,
+      handled: false,
+      loadsFailure: true,
+      caches: false,
+    },
+    {
+      mode: "Gateway",
+      args: ["gateway", "run"],
+      main: true,
+      handled: false,
+      loadsFailure: true,
+      caches: true,
+    },
+    {
+      mode: "library",
+      args: ["status"],
+      main: false,
+      handled: false,
+      loadsFailure: false,
+      caches: false,
+    },
   ])(
     "loads only the modules needed for $mode",
-    async ({ mode, args, main, handled, loadsFailure }) => {
+    async ({ mode, args, main, handled, loadsFailure, caches }) => {
       process.argv = ["node", "dist/index.js", ...args];
       vi.mocked(isMainModule).mockReturnValue(main);
       vi.mocked(tryHandleRootVersionFastPath).mockReturnValue(handled);
       const entry = await import("./index.js?legacy-entry-mode" as "./index.js");
       expect(lifecycleImports.failureOutput).toHaveBeenCalledTimes(loadsFailure ? 1 : 0);
-      expect(compileCache.enable).toHaveBeenCalledTimes(loadsFailure ? 1 : 0);
-      if (loadsFailure) {
+      expect(compileCache.enable).toHaveBeenCalledTimes(caches ? 1 : 0);
+      if (caches) {
         expect(compileCache.enable).toHaveBeenCalledBefore(lifecycleImports.failureOutput);
       }
       if (mode === "library") {
@@ -135,6 +166,7 @@ describe("legacy package executable entrypoint", () => {
   );
 
   it("continues startup with one diagnostic when the compile cache is unavailable", async () => {
+    process.argv = ["node", "dist/index.js", "gateway", "run"];
     const { constants } = await import("node:module");
     compileCache.enable.mockReturnValue({ status: constants.compileCacheStatus.FAILED });
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);

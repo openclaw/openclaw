@@ -1,5 +1,6 @@
 import { quickJsWorkerTestEntrypoint } from "../../extensions/code-mode-quickjs/src/worker-entrypoint.test-support.ts";
 import { codexCatalogPageWorkerEntrypoint } from "../../extensions/codex/catalog-page-worker-entrypoint.ts";
+import { codexHistoryWorkerEntrypoint } from "../../extensions/codex/session-history-worker-entrypoint.ts";
 import { discordAudioTestEntrypoints } from "../../extensions/discord/src/voice/audio-worker-entrypoints.test-support.ts";
 import { logbookSqliteBackendEntrypoint } from "../../extensions/logbook/src/sqlite-backend-entrypoint.test-support.ts";
 import { memoryForgetFaultEntrypoint } from "../../extensions/memory-core/src/memory-forget-fault-entrypoint.test-support.ts";
@@ -52,6 +53,7 @@ import { nativeBoundaryTestEntrypoints } from "../../src/infra/native-boundary-r
 import { nativeProcessTestEntrypoints } from "../../src/infra/native-process-runtime.test-support.ts";
 import { externalProxyTestEntrypoints } from "../../src/infra/net/proxy/external-proxy-runtime.test-support.ts";
 import { deliveryQueueProcessEntrypoints } from "../../src/infra/outbound/delivery-queue-process-runtime.test-support.ts";
+import { postgresLockTestEntrypoint } from "../../src/infra/postgres-sync/locks-runtime.test-support.ts";
 import { sqliteMaintenanceEntrypoints } from "../../src/infra/sqlite-maintenance-runtime.test-support.ts";
 import { sqliteReadOnlyCompileCacheParentEntrypoint } from "../../src/infra/sqlite-readonly-worker.compile-cache-runtime.test-support.ts";
 import { sqliteSnapshotStagingEntrypoints } from "../../src/infra/sqlite-snapshot-staging-runtime.test-support.ts";
@@ -306,6 +308,7 @@ export const vitestWorkerBuildEntries = {
     ...Object.values(realtimeAudioTestEntrypoints),
     quickJsWorkerTestEntrypoint,
     codexCatalogPageWorkerEntrypoint,
+    codexHistoryWorkerEntrypoint,
     nativeWorkerTestEntrypoint,
     agentWorkerStoreFixtureEntrypoint,
     memoryPublicationFaultEntrypoint,
@@ -316,6 +319,7 @@ export const vitestWorkerBuildEntries = {
     sqliteWorkerStoreCompileCacheParentEntrypoint,
     ...Object.values(nativeProcessTestEntrypoints),
     ...Object.values(storageProcessTestEntrypoints),
+    postgresLockTestEntrypoint,
     ...Object.values(workerTaskPoolEntrypoints),
     nativeWorkerLifecycleEntrypoint,
     nativeWorkerResourceEntrypoint,

@@ -67,7 +67,7 @@ export function resolveSessionCreateModelInputError(
   if (params.agentRuntime !== undefined && (!params.model || params.catalogTarget)) {
     return errorShape(
       ErrorCodes.INVALID_REQUEST,
-      "agentRuntime requires an explicit canonical provider/model selection",
+      "agentRuntime requires an explicit provider/model selection using full IDs",
     );
   }
   const requestedProfile = splitTrailingAuthProfile(
@@ -315,6 +315,7 @@ export async function resolveSessionForkMaxTokens(params: {
             sessionKey: params.sessionKey,
             sessionEntry: params.entry,
           }),
+          allowApiFallback: false,
         }).entry
       : undefined;
   const childContextWindow = resolveModelContextWindowProfile({
@@ -327,8 +328,7 @@ export async function resolveSessionForkMaxTokens(params: {
     model: childModel.model,
     modelContextTokens: childCatalogEntry?.contextTokens,
     modelContextWindow: childContextWindow.contextTokens,
-    allowAsyncLoad: false,
-    allowUnscopedModelLookup: false,
+    allowCacheLookup: false,
   });
   return childContextWindow.contextTokens
     ? Math.min(

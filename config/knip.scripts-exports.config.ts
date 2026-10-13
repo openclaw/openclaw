@@ -74,6 +74,8 @@ const config = {
     "tools/solid-lint/index.mjs": ["exports"],
     // Vitest consumes this required default export through the reporter CLI path.
     "scripts/lib/vitest-resource-reporter.mts": ["exports"],
+    // Vitest loads this default class through the report owner's CLI and generated merge config.
+    "scripts/lib/vitest-report-capture.mts": ["exports"],
     // Wrangler consumes the Worker default export and instantiates the Durable
     // Object class by name from wrangler.jsonc; Knip cannot resolve either.
     "scripts/cloudflare/src/index.ts": ["exports"],

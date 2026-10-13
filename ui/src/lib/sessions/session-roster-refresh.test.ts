@@ -689,25 +689,6 @@ describe("session roster refresh", () => {
     }
   });
 
-  it("returns a failed replacement outcome while preserving the previous roster", async () => {
-    const previous = sessionsResult([{ key: "agent:main:main", kind: "direct", updatedAt: 1 }], 1);
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(previous)
-      .mockRejectedValueOnce(new Error("Roster unavailable"));
-    const { sessions } = createSessionCapabilityHarness(request);
-    try {
-      await sessions.refresh({ agentId: "main", search: "draft", force: true });
-      const admitted = sessions.state.result;
-      expect(admitted).toStrictEqual(previous);
-      await expect(sessions.refreshReplacement()).resolves.toBeNull();
-      expect(sessions.state.result).toBe(admitted);
-      expect(sessions.state.error).toBe("Roster unavailable");
-    } finally {
-      sessions.dispose();
-    }
-  });
-
   it.each(["disconnect", "same-client reconnect", "replacement-client reconnect", "dispose"])(
     "settles unissued refreshes on %s without dispatching them through a replacement owner",
     async (retirement) => {

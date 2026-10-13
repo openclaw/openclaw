@@ -247,6 +247,7 @@ export async function ensureClientVoiceAgentSessionEntry(params: {
     target: Omit<SessionSourceTransactionGrant, "assertCurrent">,
   ) => Promise<SessionSourceWriteGrant>;
   assertCurrent?: () => void;
+  followRegistration?: AgentDatabaseRequestExecutionSource["onRegistryChange"];
   onCommitted?: (entry: InternalSessionEntry) => void;
   onCommittedSource?: (source: CapturedSessionEntryReadSource, entry: InternalSessionEntry) => void;
   creation?: Pick<Parameters<typeof buildSessionCreationStamp>[0], "actor" | "sandbox">;
@@ -325,6 +326,31 @@ export async function ensureClientVoiceAgentSessionEntry(params: {
           selected.assertCurrent();
           assertPreparedSessionSourceCurrent(requester);
         };
+        if (selected.creating) {
+          // The captured creator publishes its own registry receipts before source checks resume.
+          await execution.prepare({
+            assertCurrent: () => {
+              assertPreparationCurrent();
+              if (requester.opaqueCommitGuard) {
+                source();
+              }
+            },
+            onRegistryChange: params.followRegistration,
+            createAdmission: (binding) => () => ({
+              nativeLocations: binding.nativeLocations,
+              admission: createSqliteWorkerOperationAdmission((request, grant) => {
+                binding.authorize(request);
+                assertPreparationCurrent();
+                if (requester.opaqueCommitGuard) {
+                  source();
+                }
+                if (!grant()) {
+                  throw new Error("Talk entry preparation authority expired");
+                }
+              }, binding.attachment),
+            }),
+          });
+        }
         const { withOpenClawAgentDatabaseAsync, withOpenClawAgentDatabaseRuntimeFromExecution } =
           await import("../state/openclaw-agent-db.js");
         const apply = async (database: OpenClawAgentDatabase) => {
@@ -381,10 +407,12 @@ export async function ensureClientVoiceAgentSessionEntry(params: {
             ),
           );
         };
-        return requester.opaqueCommitGuard
+        return requester.opaqueCommitGuard || selected.creating
           ? withOpenClawAgentDatabaseAsync(selected.options, apply, () => {
               assertPreparationCurrent();
-              source();
+              if (requester.opaqueCommitGuard) {
+                source();
+              }
             })
           : withOpenClawAgentDatabaseRuntimeFromExecution(
               selected.options,

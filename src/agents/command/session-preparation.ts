@@ -174,11 +174,11 @@ export async function prepareEmbeddedSessionState(params: {
   const currentSkillsSnapshot = sessionEntry?.skillsSnapshot;
   const [
     { getRemoteSkillEligibility, resolveReusableWorkspaceSkillSnapshot },
-    { resolveNodeExecEligibility },
+    { resolveNodeExecEligibilityAsync },
   ] = await Promise.all([loadSkillsRuntime(), loadExecDefaultsRuntime()]);
-  const nodeSkillsEligibility = resolveNodeExecEligibility({
+  const nodeSkillsEligibility = await resolveNodeExecEligibilityAsync({
     cfg: params.cfg,
-    sessionEntry,
+    sessionEntry: sessionEntry ?? null,
     sessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
   });

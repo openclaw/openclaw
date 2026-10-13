@@ -23,6 +23,12 @@ Gateway and account changes still refresh hidden Dashboard windows. Saved web
 drafts recover within the same Gateway address and authenticated account; they
 are not copied to a different Gateway, account, or recreated SSH tunnel address.
 
+If the Dashboard cannot load, it shows a recovery page with **Reload** and
+**Connection Settings…**. Choose **Navigate → Reload** or press **Cmd-R** while a
+Dashboard window is active to reload its current page. Gateway HTTP errors with
+plain-text or JSON bodies use the recovery page; HTML sign-in pages from an
+authenticated proxy remain available in the window.
+
 The native chat features below connect to the Gateway and default to the primary
 session for the selected agent (`main`, or `global` when `session.scope` is
 `global`). Quick Chat remains a native floating composer in either experience.

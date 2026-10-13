@@ -53,6 +53,7 @@ import {
   resolveSharedSecretHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
+import { getRemoteControlUiIngressContext } from "./ingress-attribution.js";
 import {
   resolveManagedImageOriginalPath,
   deleteManagedImageRecordArtifacts,
@@ -90,6 +91,7 @@ import {
   parseManagedOutgoingArtifactId,
 } from "./managed-outgoing-artifact-id.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { prepareRemoteIngressSessionRead } from "./remote-ingress-session-read.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import {
   readSessionMessagesMatchingIdAsync,
@@ -1197,7 +1199,12 @@ export async function createManagedOutgoingMediaBlocks(params: {
           try {
             const metadata = await resolvePlaybackMetadataForSource({
               sourcePath: opened.realPath,
-              sourceStat: opened.stat,
+              sourceStat: {
+                size: opened.stat.size,
+                mtimeMs: opened.stat.mtimeMs,
+                ctimeMs: opened.stat.ctimeMs,
+                exactIdentity: opened.exactIdentity,
+              },
               mimeType: savedOriginalContentType,
               kind: mediaKind,
               signal: params.abortSignal,
@@ -1373,6 +1380,15 @@ export async function handleManagedOutgoingMediaHttpRequest(
   };
   const stateDir = opts.stateDir ?? resolveStateDir();
   try {
+    using ingressRead = await prepareRemoteIngressSessionRead(
+      getRemoteControlUiIngressContext(req)?.resolvePrincipal(),
+      sessionKey,
+    );
+    const assertRequest = assertRequestCurrent;
+    assertRequestCurrent = () => {
+      assertRequest?.();
+      ingressRead.assertCurrent();
+    };
     const record = await readManagedImageRecord(attachmentId, stateDir);
     assertCallerCurrent();
     if (!record || record.sessionKey !== sessionKey) {
@@ -1443,7 +1459,12 @@ export async function handleManagedOutgoingMediaHttpRequest(
           if (isPlayback) {
             const playback = await resolvePlaybackTranscode({
               sourcePath: opened.realPath,
-              sourceStat: opened.stat,
+              sourceStat: {
+                size: opened.stat.size,
+                mtimeMs: opened.stat.mtimeMs,
+                ctimeMs: opened.stat.ctimeMs,
+                exactIdentity: opened.exactIdentity,
+              },
               mimeType: responseContentType,
               kind: mediaKind,
               signal: byteStream.signal,

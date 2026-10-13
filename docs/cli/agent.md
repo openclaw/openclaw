@@ -337,6 +337,13 @@ These are observations, not statistical speed guarantees.
 - `--timeout <seconds>`: override the execution budget for each model attempt (default 600, or `agents.defaults.timeoutSeconds`); each configured fallback gets a fresh budget, and `0` disables the attempt deadline. The Gateway client waits for the run's terminal result across fallback attempts, with cancellation and connection failures still applying. The 600-second default belongs to this CLI command, not ordinary Gateway turns, whose default is 48 hours per attempt.
 - `--json`: output JSON
 
+Model switches preserve the session's requested thinking level. If the selected
+model cannot support an inherited level, the run uses a supported level and prints
+a clamp notice. JSON output includes the effective level in
+`result.meta.requestShaping.thinking` and the notice in `thinkingClamp` (`meta`
+at the top level for `--local`). The saved preference remains available when you
+switch back to a supporting model.
+
 Gateway commands using OpenClaw's managed agent loop return their completed reply before optional memory
 flushing and compaction. That work has its own session owner and uses the command's
 remaining time. A new turn in the same session cancels and settles it before
@@ -365,7 +372,7 @@ openclaw agent --agent ops --message "Run locally" --local
 
 - Pass exactly one of `--message` or `--message-file`. `--message-file` strips a leading UTF-8 BOM and preserves multiline content; it rejects files that are not valid UTF-8. Files larger than 4 MiB are rejected before dispatch.
 - `--message` does not run the channel slash-command dispatcher. Recognized `$skill-name` references and leading `/skill-name [input]` are the scoped exception: OpenClaw expands them into model instructions to read the skill before acting. Other slash-prefixed messages keep normal agent-turn behavior; `/compact` is rejected with a pointer to `openclaw sessions compact <key>`.
-- `--local` runs are one-shot: bundled MCP loopback resources and warm Claude stdio sessions opened for the run are retired after the reply, so scripted invocations do not leave local child processes running. Gateway-backed runs keep Gateway-owned MCP loopback resources under the running Gateway process instead.
+- `--local` runs are one-shot: cached provider connections, bundled MCP loopback resources, and warm Claude stdio sessions opened for the run are retired after the reply, so scripted invocations do not leave sockets or local child processes running. Gateway-backed runs keep Gateway-owned resources under the running Gateway process instead.
 - `--local` requires exclusive ownership of the configured state directory. It refuses to start while a Gateway or another `agent --local` run owns that directory, then holds the same state lock for the full embedded turn. Run without `--local` to use the active Gateway, or stop it first with `openclaw gateway stop`.
 - Standalone embedded execution with `--local` refuses to reuse an existing main session while restart recovery is pending. Run the turn through a healthy Gateway, or reset it there with `/new` or `/reset`; an independent embedded process cannot safely coordinate that recovery owner with the Gateway scanner.
 - With `--agent`, `--channel` and `--to` together, session routing follows the channel's resolved recipient and `session.dmScope`. Channels with a stable outbound-only recipient identity use a provider-owned session isolated from the agent's main session. `--reply-channel` and `--reply-account` affect delivery only.

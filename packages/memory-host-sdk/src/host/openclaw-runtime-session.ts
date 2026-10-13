@@ -1,5 +1,6 @@
 // Session/runtime facade for memory transcript helpers.
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { cloneEnvWithPlatformSemantics } from "../../../../src/config/config-env-vars.js";
 import {
@@ -14,11 +15,15 @@ import {
   withIncognitoSessionBinding,
 } from "../../../../src/config/sessions/session-incognito-binding.js";
 import { captureSessionTranscriptStorageEnvironment } from "../../../../src/config/sessions/transcript-target-binding.js";
+import { warnPluginSdkDeprecation } from "../../../../src/plugins/sdk-deprecation.js";
 import { IncognitoSessionSyncAccessError } from "../../../../src/state/incognito-session-error.js";
 
 export { readAccessorTranscriptStatsSync as readTranscriptStatsSync };
+export { readTranscriptStatsAsync } from "../../../../src/config/sessions/session-transcript-stats.js";
+export { warnPluginSdkDeprecation };
 export { readTranscriptExportSnapshotReadOnlySync };
 export { readRestoredSessionTranscript } from "../../../../src/config/sessions/session-cold-storage-read.js";
+export { readTranscriptStatsBatchReadOnlyAsync } from "../../../../src/config/sessions/session-transcript-stats-batch.js";
 export { SessionTranscriptColdError } from "../../../../src/config/sessions/session-cold-storage-state.js";
 export {
   listSessionEntriesCore,
@@ -42,14 +47,22 @@ export function assertBoundIncognitoMemorySyncAccess(
   }
 }
 
+/** @deprecated Use readTranscriptStatsBatchReadOnlyAsync; removed in the next Plugin SDK major. */
 export function readTranscriptStatsBatchReadOnlySync(
   scopes: Parameters<typeof readAccessorTranscriptStatsBatchReadOnlySync>[0],
 ) {
+  if (isMainThread) {
+    warnPluginSdkDeprecation({
+      family: "session-store",
+      method: "readTranscriptStatsBatchReadOnlySync",
+      replacement: "readTranscriptStatsBatchReadOnlyAsync",
+    });
+  }
   for (const scope of scopes) {
     assertBoundIncognitoMemorySyncAccess(
       scope,
       "readTranscriptStatsBatchReadOnlySync",
-      "buildSessionEntry",
+      "readTranscriptStatsBatchReadOnlyAsync",
     );
   }
   return readAccessorTranscriptStatsBatchReadOnlySync(scopes);
@@ -374,6 +387,16 @@ export function readBoundIncognitoMemoryCorpus(
 }
 
 /** Keep worker launch machinery behind the memory host's existing lazy runtime bridge. */
+export async function prepareSessionEntriesInWorker(
+  ...args: Parameters<
+    typeof import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js").prepareSessionEntriesInWorker
+  >
+) {
+  const { prepareSessionEntriesInWorker: prepare } =
+    await import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js");
+  return prepare(...args);
+}
+
 export async function prepareSessionEntryInWorker(
   ...args: Parameters<
     typeof import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js").prepareSessionEntryInWorker
@@ -382,6 +405,16 @@ export async function prepareSessionEntryInWorker(
   const { prepareSessionEntryInWorker: prepare } =
     await import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js");
   return prepare(...args);
+}
+
+export async function readSessionEntrySnapshotInWorker(
+  ...args: Parameters<
+    typeof import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js").readSessionEntrySnapshotInWorker
+  >
+) {
+  const { readSessionEntrySnapshotInWorker: read } =
+    await import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js");
+  return read(...args);
 }
 
 export async function readSessionTranscriptCorpusInWorker(
@@ -428,15 +461,27 @@ export {
 export { hasInterSessionUserProvenance } from "../../../../src/sessions/input-provenance.js";
 export { onSessionTranscriptUpdate } from "../../../../src/sessions/transcript-events.js";
 
-/** Returns an opaque revision that changes for every canonical transcript mutation. */
+/**
+ * Returns an opaque revision that changes for every canonical transcript mutation.
+ * Read-only callers stay on the read-only reader; a missing transcript has no revision.
+ */
 export function readTranscriptContentRevisionSync(params: {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   sessionId: string;
   sessionKey?: string;
   storePath?: string;
-}): string {
-  const stats = readAccessorTranscriptStatsSync(params);
+  readOnly?: boolean;
+}): string | undefined {
+  const { readOnly, ...scope } = params;
+  // Inventory runs in pooled history Workers; a writable open there would claim an
+  // agent-database lease that only that Worker's process exit could release.
+  const stats = readOnly
+    ? readTranscriptStatsBatchReadOnlySync([scope])[0]
+    : readAccessorTranscriptStatsSync(scope);
+  if (!stats) {
+    return undefined;
+  }
   return [
     "sqlite",
     stats.maxSeq,

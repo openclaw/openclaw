@@ -41,7 +41,11 @@ describe("worker automatic resume", () => {
       );
       runtimeFactoryMocks.createDiskSpace.mockReturnValue({ read: vi.fn(), version: () => 0 });
 
-      const { root, stateDb, config } = support.testState;
+      const { root, stateDb } = support.testState;
+      const config = {
+        ...support.testState.config,
+        session: { store: path.join(root, "sessions.sqlite") },
+      };
       const runId = `resumed-${executionMode}-turn`;
       const entry = {
         sessionId: REQUEST.sessionId,
@@ -70,12 +74,18 @@ describe("worker automatic resume", () => {
       const targetOwner = await vi.importActual<
         typeof import("./server-worker-placement-session-target.js")
       >("./server-worker-placement-session-target.js");
+      const targetReader = await vi.importActual<typeof import("./session-utils-store-worker.js")>(
+        "./session-utils-store-worker.js",
+      );
+      moveDestinationMocks.prepareGatewaySessionTarget
+        .mockReset()
+        .mockImplementation(targetReader.resolveGatewaySessionStoreTargetInWorker);
       moveDestinationMocks.resolveSessionTarget.mockImplementation(
         targetOwner.resolveWorkerPlacementSessionTarget,
       );
 
       const placements = createWorkerSessionPlacementStore({ database: stateDb });
-      const previous = createHarness(stateDb, placements, { workspacePath: root });
+      const previous = await createHarness(stateDb, placements, { workspacePath: root });
       const active = await previous.service.dispatch({ ...REQUEST, executionMode });
       if (state === "failed") {
         previous.markEnvironmentFailed();
@@ -89,7 +99,7 @@ describe("worker automatic resume", () => {
       }
       previous.markEnvironmentFailed();
       const previousEnvironment = previous.environments.get(active.environmentId);
-      const replacement = createHarness(stateDb, placements, {
+      const replacement = await createHarness(stateDb, placements, {
         environmentGeneration: placement.generation + 1,
         workspacePath: root,
       });
@@ -102,7 +112,7 @@ describe("worker automatic resume", () => {
             : replacement.environments.get(environmentId),
       };
       const runtime = createGatewayWorkerPlacementRuntime({
-        initialPlacements: placements.list(),
+        initialPlacements: await placements.listAsync(),
         scheduler: createTestGatewayScheduler(),
         getCommittedRuntimeConfig: getRuntimeConfig,
         placements,

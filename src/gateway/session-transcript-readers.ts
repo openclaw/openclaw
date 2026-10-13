@@ -1,6 +1,8 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readSessionTranscriptBoundedMessageTailPageFromProjection } from "../config/sessions/session-accessor.sqlite-active-events-read.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
+  readRecentSessionTranscriptMessageEvents,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import { withCurrentProjectionSnapshot } from "../config/sessions/session-accessor.sqlite-active-projection.js";
@@ -20,6 +22,7 @@ import {
 } from "../config/sessions/session-incognito-history-read.js";
 import { readSessionTranscriptAccountingFromProjection } from "../config/sessions/session-transcript-accounting.js";
 import type { SessionTranscriptAccountingOptions } from "../config/sessions/session-transcript-accounting.types.js";
+import type { ReadRecentSessionConversationTextOptions } from "../config/sessions/transcript-recent-text.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
@@ -33,8 +36,12 @@ import {
   createIncognitoSessionHistoryReader,
   type IncognitoSessionHistoryReader,
 } from "./session-history-snapshot.js";
+import { aggregateSessionTranscriptUsage } from "./session-transcript-derived-readers.js";
 import { createSessionActorTranscriptReader } from "./session-transcript-memory-reader.js";
-import { createSessionTranscriptReader } from "./session-transcript-read-kernel.js";
+import {
+  createSessionTranscriptReader,
+  selectSessionTranscriptProjection,
+} from "./session-transcript-read-kernel.js";
 import {
   resolveTranscriptReadTarget,
   toTranscriptReadScope,
@@ -292,11 +299,85 @@ export async function readSessionTranscriptBoundedMessageTailPageAsync(
   return readSessionTranscriptBoundedMessageTailPage(scope, options, signal);
 }
 
+const readRecentConversationText = createHistoryPageReader(
+  async (target, options: ReadRecentSessionConversationTextOptions) =>
+    withCurrentProjectionSnapshot(target, (projection) =>
+      selectSessionTranscriptProjection(projection, { kind: "recent-text", options }),
+    ),
+  (read, target, options, signal) =>
+    read({ kind: "recent-text", params: { target, options } }, signal),
+  () => {
+    throw new Error("Recent text requires its captured actor binding");
+  },
+);
+
+export async function readRecentSessionConversationTextAsync(
+  scope: SessionTranscriptReadScope,
+  options: ReadRecentSessionConversationTextOptions,
+  signal?: AbortSignal,
+) {
+  const memory = captureSessionActorTranscriptRead(scope, signal);
+  if (memory) {
+    const result = memory.missing
+      ? []
+      : await memory.read("session.history.recent-text", {
+          options: structuredClone(options),
+        });
+    memory.assertCurrent();
+    return result;
+  }
+  const incognito = captureIncognitoSessionHistoryBinding(scope);
+  return incognito
+    ? readIncognitoSessionHistory(
+        incognito,
+        scope,
+        (target) => ({ type: "session.history.recent-text", input: { ...target, options } }),
+        signal,
+      )
+    : readRecentConversationText(scope, options, signal);
+}
+
 export const readRecentSessionMessagesWithStatsAsync = createHistoryPageReader(
   sessionTranscriptReader.readRecentSessionMessagesWithStatsAsync,
   (read, target, options) => read({ kind: "recent-page", params: { target, options } }),
   (reader, scope, options) => reader.readRecentSessionMessagesWithStatsAsync(scope, options),
 );
+
+const readRecentSessionUsage = createHistoryPageReader(
+  async (target, maxBytes: number) =>
+    aggregateSessionTranscriptUsage(
+      readRecentSessionTranscriptMessageEvents(target, {
+        maxBytes,
+        maxLines: 1000,
+        maxMessages: 1000,
+      }).events.map(({ event }) => {
+        const record = asOptionalRecord(event);
+        return record?.type === "message" ? record.message : undefined;
+      }),
+    ),
+  async (read, target, maxBytes) => read({ kind: "recent-usage", params: { target, maxBytes } }),
+  async (reader, target, maxBytes) =>
+    aggregateSessionTranscriptUsage(
+      (
+        await reader.readRecentSessionMessagesWithStatsAsync(target, {
+          maxBytes,
+          maxLines: 1000,
+          maxMessages: 1000,
+        })
+      ).messages,
+    ),
+);
+
+/** Prepare bounded usage in the history owner before rendering a status response. */
+export async function readRecentSessionUsageFromTranscriptAsync(
+  scope: SessionTranscriptReadScope,
+  maxBytes: number,
+) {
+  return readRecentSessionUsage(
+    scope,
+    Math.max(1024, Math.floor(Number.isFinite(maxBytes) ? maxBytes : 8 * 1024 * 1024)),
+  );
+}
 
 export const readSessionMessagesPageWithStatsAsync = createHistoryPageReader(
   sessionTranscriptReader.readSessionMessagesPageWithStatsAsync,

@@ -39,7 +39,7 @@ vi.mock("../../src/gateway/session-utils.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/gateway/session-utils.js")>();
   return {
     ...original,
-    loadSessionEntry: () => {
+    loadGatewaySessionEntryReadOnlyInWorker: async () => {
       if (!session.target) {
         throw new Error("Missing abort transcript fixture");
       }

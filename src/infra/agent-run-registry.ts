@@ -288,7 +288,7 @@ export function retainQueuedAgentRunContext(
     return undefined;
   }
 
-  const wasLive = hasLiveAgentRunContext(runId);
+  const wasLive = hasAgentRunContextExecutionOwner(runId);
   const leases = (state.queuedRunContextLeases ??= new WeakMap<AgentRunContext, number>());
   leases.set(context, (leases.get(context) ?? 0) + 1);
   if (!wasLive) {
@@ -317,7 +317,7 @@ export function retainQueuedAgentRunContext(
       if (outcome === "admitted") {
         context.lastActiveAt = Date.now();
       }
-      if (!hasLiveAgentRunContext(runId)) {
+      if (!hasAgentRunContextExecutionOwner(runId)) {
         bumpAgentRunIndexVersion(context);
       }
     }

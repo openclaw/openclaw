@@ -65,6 +65,8 @@ export async function processResponsesStream<TApi extends Api>(
   type StreamingToolCallBlock = ToolCall & { partialJson: string };
   type StreamingToolCallState = ResponsesToolCallState & {
     block: StreamingToolCallBlock;
+    // Consumers normalize the shared block; wire validation keeps the provider's name.
+    readonly providerName: string;
     contentIndex: number;
     // Preview refresh schedule for streamed arguments; done/terminal parses stay authoritative.
     previewSchedule: ToolArgumentPreviewSchedule;
@@ -266,7 +268,7 @@ export async function processResponsesStream<TApi extends Api>(
       if (tracked && !state) {
         throw new Error("Responses stream completed with unresolved tool calls");
       }
-      const validated = resolveCompletedResponsesToolCall(item, { name: state?.block.name });
+      const validated = resolveCompletedResponsesToolCall(item, { name: state?.providerName });
       if (state) {
         recovered.push(state);
       }
@@ -355,6 +357,7 @@ export async function processResponsesStream<TApi extends Api>(
           const contentIndex = output.content.length;
           const toolCallState: StreamingToolCallState = {
             block: toolCallBlock,
+            providerName: toolCallBlock.name,
             contentIndex,
             argumentStreamReliable: true,
             argumentsStreamed: false,
@@ -641,7 +644,7 @@ export async function processResponsesStream<TApi extends Api>(
           let validated: Pick<ToolCall, "name" | "arguments">;
           try {
             validated = resolveCompletedResponsesToolCall(item, {
-              name: streamingToolCall?.block.name,
+              name: streamingToolCall?.providerName,
               arguments: parsedStreamedArguments ?? (completedArguments || streamedArguments),
             });
           } catch (error) {

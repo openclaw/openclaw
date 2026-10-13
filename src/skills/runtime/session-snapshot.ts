@@ -1,4 +1,4 @@
-import { stableStringify } from "@openclaw/normalization-core";
+import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -87,7 +87,7 @@ export async function resolveReusableWorkspaceSkillSnapshot(
       : undefined;
   const eligibility = params.resolveEligibility?.() ?? params.eligibility;
   if (params.watch !== false) {
-    ensureSkillsWatcher({
+    await ensureSkillsWatcher({
       workspaceDir: watcherWorkspaceDir,
       ...(skillRoots
         ? {
@@ -109,18 +109,20 @@ export async function resolveReusableWorkspaceSkillSnapshot(
     params.existingSnapshot?.version,
     snapshotVersion,
   );
-  const nodeSkillsEligibilityChanged =
-    stableStringify(params.existingSnapshot?.nodeSkillsEligibility) !==
-    stableStringify(eligibility?.nodeSkills);
-  const skillOverridesChanged =
-    stableStringify(params.existingSnapshot?.skillOverrides) !==
-    stableStringify(params.skillOverrides);
-  const skillRootsChanged =
-    stableStringify(params.existingSnapshot?.skillRoots) !== stableStringify(skillRoots);
+  const nodeSkillsEligibilityChanged = !isDeepStrictEqual(
+    params.existingSnapshot?.nodeSkillsEligibility,
+    eligibility?.nodeSkills,
+  );
+  const skillOverridesChanged = !isDeepStrictEqual(
+    params.existingSnapshot?.skillOverrides,
+    params.skillOverrides,
+  );
+  const skillRootsChanged = !isDeepStrictEqual(params.existingSnapshot?.skillRoots, skillRoots);
   const librarySelections = params.librarySelections ?? params.existingSnapshot?.librarySelections;
-  const libraryChanged =
-    stableStringify(librarySelections) !==
-    stableStringify(params.existingSnapshot?.librarySelections);
+  const libraryChanged = !isDeepStrictEqual(
+    librarySelections,
+    params.existingSnapshot?.librarySelections,
+  );
   const shouldRefresh =
     libraryChanged ||
     promptFormatChanged ||
@@ -169,17 +171,34 @@ export async function resolveReusableWorkspaceSkillSnapshot(
     });
   const sourceVersion = getSkillsSourceVersion(watcherWorkspaceDir, sourceScope);
   const effectiveVersion = getSkillsSnapshotVersion(watcherWorkspaceDir);
-  const eligibilityKey = stableStringify(eligibility);
-  const projectionIsCurrent = () =>
-    getSkillsSourceVersion(watcherWorkspaceDir, sourceScope) === sourceVersion &&
-    getSkillsSnapshotVersion(watcherWorkspaceDir) === effectiveVersion &&
-    stableStringify(params.resolveEligibility?.() ?? params.eligibility) === eligibilityKey;
+  // Capture values: callers may mutate eligibility while a projection is being built.
+  // Remote bin availability is invalidated through the source/snapshot revisions.
+  const canExec = eligibility?.nodeSkills?.canExec;
+  const node = eligibility?.nodeSkills?.node;
+  const platforms = eligibility?.remote?.platforms.slice();
+  const note = eligibility?.remote?.note;
+  const projectionIsCurrent = () => {
+    if (
+      getSkillsSourceVersion(watcherWorkspaceDir, sourceScope) !== sourceVersion ||
+      getSkillsSnapshotVersion(watcherWorkspaceDir) !== effectiveVersion
+    ) {
+      return false;
+    }
+    const current = params.resolveEligibility?.() ?? params.eligibility;
+    return (
+      current?.nodeSkills?.canExec === canExec &&
+      current?.nodeSkills?.node === node &&
+      current?.remote?.note === note &&
+      isDeepStrictEqual(current?.remote?.platforms, platforms)
+    );
+  };
   const buildSnapshot = async (assertCurrent: () => void) => {
     const snapshot = await buildSkillSnapshot(normalizedRoots.agentWorkspaceDir, {
       executionWorkspaceDir: normalizedRoots.executionWorkspaceDir,
       executionWorkspaceFileHost: normalizedRoots.executionWorkspaceFileHost,
       librarySelections,
       config: params.config,
+      watch: params.watch,
       preserveEntryOrder: Boolean(skillRoots),
       agentId: params.agentId,
       skillFilter: params.skillFilter,

@@ -23,9 +23,9 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { setUserPreferences } from "../state/user-preferences.test-support.js";
 import { syncGitHubIdentity } from "../state/user-profile-writes.worker.js";
 import * as publicationExecutor from "./github-publication-executor.js";
-import { readGitHubPublicationRequest } from "./github-publication-store.js";
+import { readRepositoryGitHubPublicationFixture as readRepositoryGitHubPublication } from "./github-publication-store.test-support.js";
+import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
 import * as repositoryPublicationExecutor from "./github-repository-publication-executor.js";
-import { readRepositoryGitHubPublication } from "./github-repository-publication-store.js";
 import { createRepositoryPublicationFixture } from "./github-repository-publication.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
@@ -62,7 +62,7 @@ describe("Gateway GitHub publication attribution", () => {
     const coordinator = createGitHubPublicationCoordinator({
       placements: createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
     });
-    const result = await coordinator.requestForSession({
+    const result = await coordinator.requestForSessionV2({
       agentId: "main",
       sessionKey: SESSION_KEY,
       idempotencyKey: "credit-in-title",
@@ -171,7 +171,7 @@ describe("Gateway GitHub publication attribution", () => {
         createGitHubPublicationCoordinator({
           placements: createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
         });
-      const result = await coordinator.requestForSession({
+      const result = await coordinator.requestForSessionV2({
         agentId: "main",
         sessionKey: SESSION_KEY,
         idempotencyKey: `opt-out-${surface}-${boundary}`,
@@ -246,7 +246,7 @@ describe("Gateway GitHub publication attribution", () => {
         sessionKey: SESSION_KEY,
         idempotencyKey: "unpushed-credit-recovery",
       };
-      const interrupted = await repository.coordinator.requestForSession(request);
+      const interrupted = await repository.coordinator.requestForSessionV2(request);
       expect(interrupted.status).toBe("requested");
       expect(readRepositoryGitHubPublication(interrupted.requestId)?.head_commit).toBeTruthy();
       expect(repository.runtime.head).toBeNull();
@@ -258,7 +258,7 @@ describe("Gateway GitHub publication attribution", () => {
         );
       }
       mocks.runCommand.mockClear().mockImplementation(transport);
-      const resumed = await repository.coordinator.requestForSession(request);
+      const resumed = await repository.coordinator.requestForSessionV2(request);
 
       expect(resumed).toMatchObject({
         status: "failed",
@@ -364,7 +364,7 @@ describe("Gateway GitHub publication attribution", () => {
       }),
     });
 
-    const result = await coordinator.requestForSession({
+    const result = await coordinator.requestForSessionV2({
       sessionKey: childKey,
       agentId: "main",
       idempotencyKey: "ordered-attribution",
@@ -395,7 +395,7 @@ describe("Gateway GitHub publication attribution", () => {
       }),
     });
 
-    const result = await coordinator.requestForSession({
+    const result = await coordinator.requestForSessionV2({
       sessionKey: SESSION_KEY,
       agentId: "main",
       idempotencyKey: "local-session-url",

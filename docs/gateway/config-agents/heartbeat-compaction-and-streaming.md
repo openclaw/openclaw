@@ -143,7 +143,7 @@ Custom compaction instructions are code-owned. Implement a compaction provider
 plugin with `summarize()` for custom summary construction, and use
 `before_prompt_build` when post-compaction context must be injected into later
 model prompts. Doctor strips the retired instruction fields and points to these
-seams.
+hooks.
 
 ## `agents.defaults.contextPruning`
 

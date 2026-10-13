@@ -4,8 +4,6 @@ import type {
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { base64url } from "../protocol/encoding.js";
-import { generateIdentity } from "../protocol/identity.js";
 import type { ReviewApproval, ReviewRequest } from "../protocol/pipeline.js";
 import {
   parseReefIdentityBinding,
@@ -31,6 +29,12 @@ import {
   type ReefIdentityMigrationRecord,
   type ReefDurableMigrationRecord,
 } from "./state-format.js";
+import {
+  assertReefIdentityMigrationComplete,
+  completedReefReviewToEvict,
+  generateReefKeys,
+  reefReviewDecision,
+} from "./state-policy.js";
 import type { ReefKeys } from "./types.js";
 
 // Released hosts without worker operations retain their original native owner until
@@ -49,21 +53,15 @@ export function assertLegacyReefIdentityMigrationComplete(runtime: PluginRuntime
     maxEntries: REEF_DURABLE_MIGRATION_MAX_ENTRIES,
     overflowPolicy: "reject-new",
   });
-  if (durableMigration.lookup(REEF_DURABLE_MIGRATION_KEY)) {
-    throw new Error(
-      "Reef durable state migration is incomplete; repair the legacy state files and rerun openclaw doctor --fix",
-    );
-  }
   const migration = runtime.state.openSyncKeyedStore<ReefIdentityMigrationRecord>({
     namespace: REEF_KEYS_MIGRATION_NAMESPACE,
     maxEntries: REEF_KEYS_MIGRATION_MAX_ENTRIES,
     overflowPolicy: "reject-new",
   });
-  if (migration.lookup(REEF_KEYS_MIGRATION_KEY)) {
-    throw new Error(
-      "Reef identity migration is incomplete; repair the legacy identity files and rerun openclaw doctor --fix",
-    );
-  }
+  assertReefIdentityMigrationComplete(
+    durableMigration.lookup(REEF_DURABLE_MIGRATION_KEY),
+    migration.lookup(REEF_KEYS_MIGRATION_KEY),
+  );
 }
 
 export async function generateAndStoreLegacyKeys(runtime: PluginRuntime): Promise<ReefKeys> {
@@ -79,17 +77,10 @@ export async function generateAndStoreLegacyKeys(runtime: PluginRuntime): Promis
   );
   if (binding) {
     throw new Error(
-      `Reef identity @${binding.handle} on ${binding.relayUrl} has no canonical keys; restore the original keys before registration`,
+      `Reef identity @${binding.handle} on ${binding.relayUrl} has no stored keys; restore the original keys before registration`,
     );
   }
-  const identity = generateIdentity();
-  const random = (length: number) => crypto.getRandomValues(new Uint8Array(length));
-  const keys: ReefKeys = {
-    ...identity,
-    auditKey: base64url(random(32)),
-    replayKey: base64url(random(32)),
-    keyEpoch: 1,
-  };
+  const keys = generateReefKeys();
   if (!openKeysStore(runtime).registerIfAbsent(REEF_KEYS_KEY, keys)) {
     throw new Error("Reef keys already exist in plugin state");
   }
@@ -131,21 +122,12 @@ export class LegacyReviewApprovalStore {
     if (!deleteIf) {
       throw new Error("Reef review retention requires atomic plugin-state deleteIf");
     }
-    while (true) {
-      if (this.#store.count && this.#store.count() < this.#maxEntries) {
-        return;
-      }
-      const entries = this.#store.entries();
-      if (entries.length < this.#maxEntries) {
-        return;
-      }
-      const completed = entries
-        .filter((entry) => entry.value.approved !== undefined)
-        .toSorted((left, right) => left.createdAt - right.createdAt)[0];
-      if (!completed) {
-        throw new Error("Reef pending review capacity is exhausted");
-      }
-      deleteIf(completed.key, (current) => current.approved !== undefined);
+    if (this.#store.count && this.#store.count() < this.#maxEntries) {
+      return;
+    }
+    const completed = completedReefReviewToEvict(this.#store.entries(), this.#maxEntries);
+    if (completed !== undefined) {
+      deleteIf(completed, (current) => current.approved !== undefined);
     }
   }
 
@@ -155,17 +137,14 @@ export class LegacyReviewApprovalStore {
     if (current?.approved !== undefined) {
       return { approved: current.approved, approvalDigest: review.approvalDigest };
     }
-    if (!current) {
-      this.#makeRoomForPendingReview();
+    if (current) {
+      return undefined;
     }
-    this.#store.registerIfAbsent(review.approvalDigest, { review: structuredClone(review) });
-    const persisted = this.#store.lookup(review.approvalDigest);
-    if (!persisted) {
+    this.#makeRoomForPendingReview();
+    if (!this.#store.registerIfAbsent(review.approvalDigest, { review: structuredClone(review) })) {
       throw new Error("Failed persisting Reef pending review");
     }
-    return persisted?.approved === undefined
-      ? undefined
-      : { approved: persisted.approved, approvalDigest: review.approvalDigest };
+    return undefined;
   }
 
   async lookupDecision(
@@ -174,10 +153,7 @@ export class LegacyReviewApprovalStore {
     this.authoritySignal?.throwIfAborted();
     const current = await this.#reader.lookup(approvalDigest);
     this.authoritySignal?.throwIfAborted();
-    if (!current) {
-      return "none";
-    }
-    return current.approved === undefined ? "pending" : { approved: current.approved };
+    return reefReviewDecision(current);
   }
 
   async decide(

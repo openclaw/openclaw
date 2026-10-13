@@ -10,7 +10,7 @@ import {
   assignPositiveNumberAttr,
 } from "./service-genai-attributes.js";
 import type { DiagnosticsRecorderRuntime } from "./service-recorder-runtime.js";
-import type { MessageDeliveryDiagnosticEvent, TrustedSpanAliasOwner } from "./service-types.js";
+import type { MessageDeliveryDiagnosticEvent } from "./service-types.js";
 
 export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
   const messageDeliveryAttrs = (evt: MessageDeliveryDiagnosticEvent): Record<string, string> => ({
@@ -298,7 +298,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       );
       const parentSpanId = runtime.trustedTraceContext(evt, metadata)?.parentSpanId;
       if (parentSpanId && !runtime.activeTrustedSpans.has(parentSpanId)) {
-        const owner: TrustedSpanAliasOwner = { kind: "run", id: evt.runId };
+        const owner = evt.runId;
         runtime.activeTrustedSpanAliases.set(runtime.trustedSpanAliasKey(parentSpanId, owner), {
           span,
           spanId: parentSpanId,

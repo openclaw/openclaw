@@ -127,6 +127,7 @@ function readPlacement(gateway: WireGateway, key: string) {
 it.skipIf(process.platform === "win32")(
   "settles native A, deletes it, then runs B on the same one-slot node",
   async ({ signal }) => {
+    process.stderr.write("[native-slot] starting one-slot proof\n");
     const root = tempDirs.make("native-slot-lifecycle-");
     const provider = await providerFixture();
     const published = await createPublishedWireWorkspace(root);
@@ -159,6 +160,7 @@ it.skipIf(process.platform === "win32")(
     } as OpenClawConfig;
     let node: PairedNodeWorkerHost | undefined;
     let operator: Awaited<ReturnType<typeof connectWireClient>> | undefined;
+    let onSessionChanged: ((key: string) => void) | undefined;
     await runQaGatewayFixture(
       async () => {
         const gateway = await startPairedNodeWorkerGateway({
@@ -174,7 +176,21 @@ it.skipIf(process.platform === "win32")(
             tempParentDir: root,
           },
         });
-        operator = await connectWireClient({ gateway, role: "operator", identity: null });
+        operator = await connectWireClient({
+          gateway,
+          role: "operator",
+          identity: null,
+          onEvent: (event) => {
+            if (event.event === "sessions.changed") {
+              const payload = event.payload as { sessionKey?: string; session?: { key?: string } };
+              const key = payload.sessionKey ?? payload.session?.key;
+              if (key) {
+                onSessionChanged?.(key);
+              }
+            }
+          },
+        });
+        await operator.request("sessions.subscribe", {});
         node = await createPairedNodeWorkerHost({
           gateway,
           operator,
@@ -222,6 +238,31 @@ it.skipIf(process.platform === "win32")(
             { runId, timeoutMs: PROOF_TIMEOUT_MS },
             { timeoutMs: PROOF_TIMEOUT_MS + 5000 },
           );
+        const waitForSettlement = async (key: string) => {
+          const settled = createDeferred();
+          onSessionChanged = (changedKey) => {
+            if (changedKey !== key) {
+              return;
+            }
+            try {
+              const state = readPlacement(gateway, key);
+              process.stderr.write(
+                `[native-slot] settlement ${JSON.stringify({ key, ...state })}\n`,
+              );
+              if (state.placement?.turn_claim_id === null && !state.pending) {
+                settled.resolve();
+              }
+            } catch (error) {
+              settled.reject(error);
+            }
+          };
+          try {
+            onSessionChanged(key);
+            await withinTest(settled.promise, signal);
+          } finally {
+            onSessionChanged = undefined;
+          }
+        };
         await start(keys.A, "NATIVE-SLOT-A", "native-slot-a");
         await withinTest(provider.entered.A.promise, signal);
         expect(readPlacement(gateway, keys.A).placement?.turn_claim_id).toBeTruthy();
@@ -239,6 +280,7 @@ it.skipIf(process.platform === "win32")(
         expect(readPlacement(gateway, keys.A).placement?.turn_claim_id).toBeTruthy();
         provider.releases.A.resolve();
         expect(await wait("native-slot-a")).toMatchObject({ status: "ok" });
+        await waitForSettlement(keys.A);
         const settled = readPlacement(gateway, keys.A);
         expect(settled.placement).toMatchObject({
           state: "active",
@@ -282,6 +324,7 @@ it.skipIf(process.platform === "win32")(
         expect(await node.supervisor.status(activeB.launchId)).toMatchObject({ state: "running" });
         provider.releases.B.resolve();
         expect(await wait("native-slot-b")).toMatchObject({ status: "ok" });
+        await waitForSettlement(keys.B);
         expect(readPlacement(gateway, keys.B)).toMatchObject({
           placement: { state: "active", turn_claim_id: null },
           pending: undefined,

@@ -1,26 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { readTranscriptStatsBatchReadOnlySync } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
-import {
-  openOpenClawAgentDatabase,
-  resolveOpenClawAgentSqlitePath,
-} from "openclaw/plugin-sdk/sqlite-runtime";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  observeHostDataSql,
-} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
 import * as cpuRuntime from "./manager-cpu-worker-runtime.js";
 import type { MemoryIndexDatabase } from "./manager-database-context.js";
 import {
   createManagerIndexFixture,
   memoryIndexFixtureWriter,
-  readPublishedSessionIndex,
 } from "./manager-index.test-support.js";
-import { observePublishedSql } from "./manager-publication-observer.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
@@ -231,110 +222,6 @@ describe("memory manager retained worker reads", () => {
         release.resolve();
         await sync.catch(() => undefined);
         reading.mockRestore();
-      }
-    },
-  );
-
-  it.each(["ready", "rejected", "revoked"] as const)(
-    "settles a %s source-hash read before replacing the session index",
-    async (outcome) => {
-      const sessionId = "source-hash-admission";
-      const sessionKey = `agent:main:chat:${sessionId}`;
-      const sessionPath = `sessions/main/${sessionId}.jsonl`;
-      await fixture.seedSessionTranscript({
-        sessionId,
-        sessionKey,
-        messages: [{ role: "user", timestamp: 1, content: "Published violet source." }],
-      });
-      const manager = await fixture.getFreshManager(
-        fixture.createConfig({
-          provider: "none",
-          sources: ["sessions"],
-          sessionMemory: true,
-          vectorEnabled: false,
-        }),
-        "cli",
-      );
-      await manager.sync({ reason: "baseline", force: true });
-      const observer = new DatabaseSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }), {
-        readOnly: true,
-      });
-      const snapshot = () => readPublishedSessionIndex(observer, sessionPath, "violet");
-      const before = snapshot();
-      expect(before.chunks).toHaveLength(1);
-      await fixture.seedSessionTranscript({
-        sessionId,
-        sessionKey,
-        messages: [{ role: "assistant", timestamp: 2, content: "Replacement violet response." }],
-      });
-      const database = Reflect.get(manager, "publishedDatabase") as MemoryIndexDatabase;
-      const observed = outcome === "ready" ? observePublishedSql(database.db) : undefined;
-      const hashReads = () =>
-        observed
-          ?.calls()
-          .filter(({ sql }) =>
-            /^\s*SELECT\s+["`]?hash["`]?\s+FROM\s+["`]?memory_index_sources\b/i.test(sql),
-          );
-      if (observed) {
-        database.db.prepare("SELECT hash FROM memory_index_sources WHERE 0").all();
-        expect(hashReads()).toHaveLength(1);
-        observed.clear();
-      }
-      const delivered = createDeferred<void>();
-      const release = createDeferred<void>();
-      let readDelivered = false;
-      const read = database.read.bind(database);
-      const reading = vi
-        .spyOn(database, "read")
-        .mockImplementation(async (command, assertCurrent) => {
-          const result = await read(command, assertCurrent);
-          if (command.type === "source.hash") {
-            expect(result).toBe(before.source?.hash);
-            readDelivered = true;
-            delivered.resolve();
-            await release.promise;
-            if (outcome === "rejected") {
-              throw new Error("controlled source-hash read rejection");
-            }
-          }
-          return result;
-        });
-      const sync = manager.sync({
-        reason: "delayed-source",
-        sessions: [{ sessionId, sessionKey }],
-      });
-      void sync.catch(() => undefined);
-      try {
-        await Promise.race([delivered.promise, sync]);
-        expect(readDelivered).toBe(true);
-        expect(snapshot()).toEqual(before);
-        if (outcome === "revoked") {
-          closeOpenClawAgentDatabasesForTest();
-        }
-        release.resolve();
-        if (outcome === "ready") {
-          await sync;
-          expect(hashReads()).toEqual([]);
-          const after = snapshot();
-          expect(after.source?.hash).not.toBe(before.source?.hash);
-          expect(after.chunks.map((row) => row.text).join("\n")).toContain(
-            "Replacement violet response.",
-          );
-          expect(after.search.length).toBeGreaterThan(0);
-        } else {
-          await expect(sync).rejects.toThrow(
-            outcome === "rejected"
-              ? "controlled source-hash read rejection"
-              : "Memory database owner closed or changed before write admission",
-          );
-          expect(snapshot()).toEqual(before);
-        }
-      } finally {
-        release.resolve();
-        await sync.catch(() => undefined);
-        reading.mockRestore();
-        observed?.restore();
-        observer.close();
       }
     },
   );

@@ -21,12 +21,86 @@ import { withSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
 import * as logging from "../logging/logger.js";
 import {
   runOpenClawAgentWorkerWrite,
+  runOpenClawAgentPathWriteAdmission,
   runOpenClawAgentWriteAdmission,
   runOpenClawAgentWriteAdmissions,
 } from "./openclaw-agent-write-admission.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+
+it.each([false, true])(
+  "defers background writes behind later foreground work (abort=%s)",
+  async (abort) => {
+    const root = tempDirs.make("openclaw-background-admission-");
+    const options = { agentId: "usage", path: path.join(root, "agent.sqlite") };
+    const release = createDeferred();
+    const controller = new AbortController();
+    const reason = new Error("closed");
+    const order: string[] = [];
+    const held = runOpenClawAgentWorkerWrite(options, async () => {
+      order.push("held");
+      await release.promise;
+    });
+    const background = runOpenClawAgentWorkerWrite(
+      options,
+      async () => {
+        order.push("background");
+      },
+      undefined,
+      controller.signal,
+      "background",
+    );
+    const foreground = runOpenClawAgentWorkerWrite(options, async () => {
+      order.push("foreground");
+    });
+    const outcome = abort ? expect(background).rejects.toBe(reason) : background;
+    try {
+      if (abort) {
+        controller.abort(reason);
+      }
+      release.resolve();
+      await Promise.all([held, foreground, outcome]);
+      expect(order).toEqual(abort ? ["held", "foreground"] : ["held", "foreground", "background"]);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([held, foreground, background]);
+    }
+  },
+);
+
+it.each(["write", "replace", "remove"] as const)(
+  "revalidates the captured file after an awaited %s",
+  async (change) => {
+    const root = tempDirs.make("openclaw-write-identity-");
+    const pathname = path.join(root, "agent.sqlite");
+    fs.writeFileSync(pathname, "original");
+    await runOpenClawAgentPathWriteAdmission(pathname, async (_identity, assertCurrent) => {
+      await Promise.resolve();
+      if (change === "write") {
+        fs.writeFileSync(pathname, "updated");
+        expect(assertCurrent).not.toThrow();
+      } else if (change === "replace") {
+        const replacement = path.join(root, "replacement.sqlite");
+        fs.writeFileSync(replacement, "replacement");
+        fs.renameSync(replacement, pathname);
+        expect(assertCurrent).toThrow("database target changed");
+      } else {
+        fs.unlinkSync(pathname);
+        expect(assertCurrent).toThrow();
+      }
+    });
+  },
+);
+
+it("keeps a missing reservation current when its database is created", async () => {
+  const pathname = path.join(tempDirs.make("openclaw-write-create-"), "agent.sqlite");
+  await runOpenClawAgentPathWriteAdmission(pathname, async (_identity, assertCurrent) => {
+    await Promise.resolve();
+    fs.writeFileSync(pathname, "created");
+    expect(assertCurrent).not.toThrow();
+  });
+});
 
 it.each([
   { count: 773, outcome: "ok" },
@@ -115,6 +189,7 @@ it.each(["ok", "error"] as const)(
   async (outcome) => {
     const { options, clock, warnings } = fixture();
     const release = createDeferred();
+    const releaseFollower = createDeferred();
     const failure = new Error("synthetic-private-error");
     const value = { result: "synthetic-private-result" };
     const order: string[] = [];
@@ -135,8 +210,10 @@ it.each(["ok", "error"] as const)(
       (error: unknown) => ({ error }),
     );
     clock.now = 100;
-    const next = runOpenClawAgentWriteAdmission(options, () => {
+    const next = runOpenClawAgentWriteAdmission(options, async () => {
       order.push("follower");
+      // The holder's diagnostic continuation may run after the follower starts.
+      await releaseFollower.promise;
       clock.now += 25;
       return value;
     });
@@ -148,6 +225,7 @@ it.each(["ok", "error"] as const)(
       expect("error" in observed ? observed.error : observed.result).toBe(
         outcome === "error" ? failure : value,
       );
+      releaseFollower.resolve();
       expect(await next).toBe(value);
       expect(order).toEqual(["holder", "follower"]);
       expect(warnings).toEqual([
@@ -171,6 +249,7 @@ it.each(["ok", "error"] as const)(
       expect(JSON.stringify(warnings)).not.toContain(options.path);
     } finally {
       release.resolve();
+      releaseFollower.resolve();
       await Promise.allSettled([first, next]);
     }
   },

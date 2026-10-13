@@ -107,6 +107,9 @@ describe("unconfigured web search tool surface", () => {
             logicalAgentId: "main",
             storePaths: [agentDir],
             assertCurrent: () => {},
+            readEntry: async () => {
+              throw new Error("The auth owner is isolated by the source probe");
+            },
             withRead: async () => {
               throw new Error("The auth owner is isolated by the source probe");
             },

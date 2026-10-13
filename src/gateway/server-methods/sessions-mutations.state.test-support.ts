@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import {
   createOpenClawTestState,
@@ -15,8 +16,9 @@ export function setupSessionMutationState() {
   beforeAll(async () => {
     state = await createOpenClawTestState({ scenario: "minimal" });
   });
-  beforeEach(() => {
+  beforeEach(async () => {
     state.applyEnv();
+    await captureRuntimeConfigAsyncReader()();
   });
   afterAll(async () => {
     await state?.cleanup();

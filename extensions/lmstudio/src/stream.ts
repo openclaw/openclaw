@@ -30,7 +30,7 @@ import {
   prepareLmstudioModelForInference,
   type LmstudioPreparedModel,
 } from "./models.fetch.js";
-import { resolveLmstudioInferenceBase } from "./models.js";
+import { normalizeLmstudioModelKey, resolveLmstudioInferenceBase } from "./models.js";
 import { resolveLmstudioProviderHeaders, resolveLmstudioRuntimeApiKey } from "./runtime.js";
 
 const log = createSubsystemLogger("extensions/lmstudio/stream");
@@ -79,14 +79,6 @@ function recordPreloadFailure(
   };
   preloadCooldown.set(preloadKey, entry);
   return entry;
-}
-
-function normalizeLmstudioModelKey(modelId: string): string {
-  const trimmed = modelId.trim();
-  if (trimmed.toLowerCase().startsWith("lmstudio/")) {
-    return trimmed.slice("lmstudio/".length).trim();
-  }
-  return trimmed;
 }
 
 function withLmstudioUsageCompat(model: StreamModel): StreamModel {

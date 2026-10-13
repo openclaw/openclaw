@@ -35,6 +35,7 @@ const abortSessionRunTargetWithOutcomeMock = vi.hoisted(() =>
   >(() => ({
     active: false,
     aborted: false,
+    retirement: undefined,
   })),
 );
 const formatAbortReplyTextMock = vi.hoisted(() => vi.fn(() => "⚙️ Agent was aborted."));
@@ -59,8 +60,10 @@ vi.mock("./abort-cutoff.js", () => ({
 
 vi.mock(import("./abort-operation.js"), async (importOriginal) => ({
   ...(await importOriginal()),
-  prepareSessionRunTargetAbort: (params: unknown) => () =>
-    abortSessionRunTargetWithOutcomeMock(params),
+  prepareSessionRunTargetAbort: (params: unknown) =>
+    Object.assign(() => abortSessionRunTargetWithOutcomeMock(params), {
+      requestRunIds: new Set<string>(),
+    }),
   stopSubagentsForRequester: stopSubagentsForRequesterMock,
 }));
 
@@ -159,7 +162,11 @@ describe("handleStopCommand target fallback", () => {
   beforeEach(() => {
     previousPluginRegistry = getActivePluginRegistry();
     vi.clearAllMocks();
-    abortSessionRunTargetWithOutcomeMock.mockReturnValue({ active: false, aborted: false });
+    abortSessionRunTargetWithOutcomeMock.mockReturnValue({
+      active: false,
+      aborted: false,
+      retirement: undefined,
+    });
     persistAbortTargetEntryMock.mockResolvedValue(true);
   });
 
@@ -215,7 +222,11 @@ describe("handleStopCommand target fallback", () => {
 
   it("reports a finalizing target without persisting abort state", async () => {
     const params = buildStopParams();
-    abortSessionRunTargetWithOutcomeMock.mockReturnValue({ active: true, aborted: false });
+    abortSessionRunTargetWithOutcomeMock.mockReturnValue({
+      active: true,
+      aborted: false,
+      retirement: undefined,
+    });
     formatAbortReplyTextMock.mockReturnValue(
       "Agent reply is already finalizing and can no longer be aborted.",
     );

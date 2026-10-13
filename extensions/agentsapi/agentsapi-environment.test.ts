@@ -59,6 +59,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-attempt-runtime", () => ({
   },
   racePromiseWithAbortSignal: (promise: Promise<unknown>) => promise,
 }));
+// mock-isolation: Environment propagation uses synthetic prompt and side-effect owners, without a live Gateway.
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   agentHarnessAttemptTerminal: { normalize: () => ({ kind: "ok" }) },
   loadAgentHarnessMcpConfig: async () => ({
@@ -96,9 +97,8 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   embeddedAgentLog: { warn: vi.fn() },
   formatErrorMessage: (error: unknown) => String(error),
   resolveAgentDir: () => "/fixture/agent",
-  runAgentEndSideEffects: vi.fn(),
+  runAgentEndSideEffectsAsync: vi.fn(async () => {}),
   runAgentHarnessLlmOutputHook: vi.fn(),
-  sanitizeToolArgs: (args: unknown) => args,
   setActiveEmbeddedRun: vi.fn(),
 }));
 vi.mock("openclaw/plugin-sdk/agent-sessions", () => ({
@@ -207,7 +207,7 @@ describe("Agents API attempt environment selection", () => {
       expect(rejected.result.terminal).toMatchObject({
         kind: "failed",
         error: expect.objectContaining({
-          message: expect.stringContaining("web-search policy changed"),
+          message: expect.stringContaining("web-search, or forwarding policy changed"),
         }),
       });
       expect(mocks.fetch).not.toHaveBeenCalled();
@@ -451,6 +451,7 @@ describe("Agents API attempt environment selection", () => {
     const network = { access: "restricted", allowed_domains: ["api.github.com"] };
     const { result } = await attempt("openai_hosted", undefined, undefined, media, {
       openai_host: { network },
+      forwarding: { gatewayTools: false, mcpServers: false },
     });
 
     expect(result).toMatchObject({

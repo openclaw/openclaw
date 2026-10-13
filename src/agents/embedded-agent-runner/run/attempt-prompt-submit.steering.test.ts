@@ -79,6 +79,8 @@ async function prepareSteering() {
   await registerSubagentRun({
     runId: childRunId,
     childSessionKey,
+    childAgentId: "main",
+    sessionEntry: { sessionId: "kept-child-session" },
     requesterSessionKey,
     requesterDisplayKey: "main",
     task: "Inspect the findings",
@@ -413,6 +415,8 @@ async function publishChild(runId: string, resultText: string) {
   await registerSubagentRun({
     runId,
     childSessionKey: publishedSessionKey,
+    childAgentId: "main",
+    sessionEntry: { sessionId: childSessionId },
     requesterSessionKey,
     requesterDisplayKey: "main",
     task: "Inspect the findings",
@@ -465,7 +469,7 @@ it("submits deferred child results after canonical archive pruning without poiso
   if (!archivePath) {
     throw new Error("Expected published child transcript archive");
   }
-  await expect(access(archivePath)).resolves.toBeUndefined();
+  await access(archivePath);
   expect(
     await findSessionTranscriptArchiveEventReadOnly(archived.target, archived.child.runId),
   ).toMatchObject({

@@ -2,6 +2,7 @@ import path from "node:path";
 import type { AgentsDeleteResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import {
   assertAgentSessionStoreDeletionSafe,
+  drainAgentDeleteDatabaseWork,
   finishAgentDeleteDatabases,
   isPathOwnedBySurvivingAgent,
   prepareAgentDeleteDatabases,
@@ -169,6 +170,7 @@ export async function deleteGatewayAgent(
       await closeActiveMemorySearchManagerCore({ cfg: prepared.config, agentId });
       await deletion.assertCurrentAsync();
       if (journal.phase === "draining") {
+        await drainAgentDeleteDatabaseWork(deletion);
         await deletion.retire();
       }
       return await withConfigMutationExclusive(async (lockedConfig) => {
@@ -410,7 +412,11 @@ export async function deleteGatewayAgent(
                 ) {
                   return entry;
                 }
-                const updated = Object.assign({}, entry, { done: true });
+                const updated = Object.assign({}, entry, {
+                  done: true,
+                  dev: cleanupPath.preparedIdentity?.dev ?? null,
+                  ino: cleanupPath.preparedIdentity?.ino ?? null,
+                });
                 if (note) {
                   updated.note = note;
                 }

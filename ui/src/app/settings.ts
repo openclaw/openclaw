@@ -19,6 +19,7 @@ import {
 import { normalizeChatSplitLayout } from "../pages/chat/split-layout-persistence.ts";
 import { resolveControlUiPaths } from "./browser.ts";
 import { parseImportedCustomTheme } from "./custom-theme.ts";
+import { isRemoteControlUiIngress } from "./remote-ingress.ts";
 import { resolveProfileAppearanceProfileId } from "./server-prefs-profile.ts";
 import {
   loadBackgroundPreference,
@@ -152,7 +153,7 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   if (devGateway) {
     return { pageUrl, effectiveUrl: devGateway.gatewayUrl };
   }
-  if (!isViteDevPage()) {
+  if (isRemoteControlUiIngress() || !isViteDevPage()) {
     return { pageUrl, effectiveUrl: pageUrl };
   }
   // location.hostname already carries brackets for IPv6 literals; wrapping
@@ -236,8 +237,8 @@ export function profileNavigation(
   profileId: string,
 ): ProfileNavigation | null {
   const entry = asOptionalRecord(parsed?.navigationByProfile?.[profileId]);
-  const sidebarEntries = normalizeSidebarEntries(entry?.sidebarEntries);
-  return sidebarEntries ? { sidebarEntries } : null;
+  const railShortcuts = normalizeSidebarEntries(entry?.railShortcuts);
+  return railShortcuts ? { railShortcuts } : null;
 }
 
 function tokenSessionKeyForGateway(gatewayUrl: string): string {
@@ -417,17 +418,6 @@ export function loadUiPreferences(
     const parsedRecord = asOptionalRecord(parsed) ?? {};
     const profileId = resolveProfileAppearanceProfileId(gatewayUrl);
     const personalNavigation = profileId ? profileNavigation(parsed, profileId) : null;
-    const hasSidebarEntries = Boolean(profileId) || Object.hasOwn(parsedRecord, "sidebarEntries");
-    // One-time read of the retired route-only shape; all writes use sidebarEntries.
-    const migratedSidebarEntries = hasSidebarEntries
-      ? null
-      : Array.isArray(parsedRecord.sidebarPinnedRoutes)
-        ? normalizeSidebarEntries(
-            parsedRecord.sidebarPinnedRoutes.map((value) =>
-              typeof value === "string" ? `route:${value}` : value,
-            ),
-          )
-        : null;
     const booleanSetting = <K extends BooleanSettingKey>(key: K) => {
       const value = parsed[key];
       return typeof value === "boolean" ? value : defaults[key];
@@ -480,10 +470,8 @@ export function loadUiPreferences(
       sidebarPreTeamScope: normalizeSidebarPreTeamScope(parsed.sidebarPreTeamScope),
       sidebarCollapsedAgentIds: normalizeUniqueTrimmedStringList(parsed.sidebarCollapsedAgentIds),
       sidebarEntries: profileId
-        ? (personalNavigation?.sidebarEntries ?? defaults.sidebarEntries)
-        : (normalizeSidebarEntries(parsedRecord.sidebarEntries) ??
-          migratedSidebarEntries ??
-          defaults.sidebarEntries),
+        ? (personalNavigation?.railShortcuts ?? defaults.sidebarEntries)
+        : (normalizeSidebarEntries(parsedRecord.railShortcuts) ?? defaults.sidebarEntries),
       sidebarLiveActivity: booleanSetting("sidebarLiveActivity"),
       chatMessageMaxWidth: normalizeChatMessageMaxWidth(parsed.chatMessageMaxWidth),
       showAdvancedSettings: booleanSetting("showAdvancedSettings"),
@@ -497,12 +485,6 @@ export function loadUiPreferences(
       ...(parsed.openLinksInControlUiBrowser === true ? { openLinksInControlUiBrowser: true } : {}),
       ...(parsed.openLinksExternally === true ? { openLinksExternally: true } : {}),
     };
-    if (migratedSidebarEntries !== null) {
-      saveSettings(
-        { ...settings, token: loadSessionToken(gatewayUrl) },
-        { selectGateway: !targetGatewayUrl },
-      );
-    }
     return settings;
   } catch {
     return defaults;
@@ -570,13 +552,13 @@ export function saveSettings(
   }
   const profileId = resolveProfileAppearanceProfileId(next.gatewayUrl);
   const authoredNavigation = options.writeNavigation !== false;
-  const navigation = { sidebarEntries: next.sidebarEntries };
+  const navigation = { railShortcuts: next.sidebarEntries };
   const pendingNavigation = {
     ...(settingsFallback?.key === scopedKey ? settingsFallback.pendingNavigation : null),
     ...(profileId &&
     authoredNavigation &&
     JSON.stringify(navigation) !== JSON.stringify(profileNavigation(source?.parsed, profileId))
-      ? { [profileId]: navigation }
+      ? { [profileId]: { ...source?.parsed.navigationByProfile?.[profileId], ...navigation } }
       : {}),
   };
   const sessionsByGateway = Object.fromEntries(
@@ -641,9 +623,19 @@ export function saveSettings(
     sidebarCollapsedAgentIds: next.sidebarCollapsedAgentIds?.length
       ? normalizeUniqueTrimmedStringList(next.sidebarCollapsedAgentIds)
       : undefined,
-    sidebarEntries:
-      !profileId && authoredNavigation ? next.sidebarEntries : source?.parsed.sidebarEntries,
-    navigationByProfile: { ...source?.parsed.navigationByProfile, ...pendingNavigation },
+    railShortcuts:
+      !profileId && authoredNavigation ? next.sidebarEntries : source?.parsed.railShortcuts,
+    sidebarEntries: source?.parsed.sidebarEntries,
+    sidebarPinnedRoutes: source?.parsed.sidebarPinnedRoutes,
+    navigationByProfile: {
+      ...source?.parsed.navigationByProfile,
+      ...Object.fromEntries(
+        Object.entries(pendingNavigation).map(([id, value]) => [
+          id,
+          { ...source?.parsed.navigationByProfile?.[id], ...value },
+        ]),
+      ),
+    },
     sidebarLiveActivity: next.sidebarLiveActivity === false ? false : undefined,
     chatMessageMaxWidth: normalizeChatMessageMaxWidth(next.chatMessageMaxWidth),
     showAdvancedSettings: next.showAdvancedSettings === true ? true : undefined,

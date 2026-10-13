@@ -75,8 +75,7 @@ function resolveGatewaySessionThinkingLevel(
       })
     : undefined;
   // Lightweight projections can omit the catalog or carry identity-only entries.
-  // Runtime/model patches normalize persisted state with authoritative metadata;
-  // projections must not reinterpret an already-validated level without it.
+  // Projections must not infer an execution clamp without authoritative metadata.
   if (
     !catalogEntry ||
     (params.providerPolicySource !== undefined &&
@@ -127,7 +126,8 @@ function resolveGatewayModelThinkingFacts(
   const thinkingPolicyProvider = params.thinkingPolicyProvider ?? params.provider;
   const policySource =
     typeof params.providerPolicySource === "object" ? "prepared" : params.providerPolicySource;
-  const key = `${normalizeAgentId(params.agentId)}\0${agentRuntime}\0${normalizeLowercaseStringOrEmpty(thinkingPolicyProvider)}\0${String(params.configuredReasoning)}\0${policySource ?? "active-or-bundled"}\0${createSessionRowModelCacheKey(
+  // Config and catalog publications replace the context; partial rows reuse its model facts.
+  const key = `${normalizeAgentId(params.agentId)}\0${agentRuntime}\0${normalizeLowercaseStringOrEmpty(thinkingPolicyProvider)}\0${policySource ?? "active-or-bundled"}\0${createSessionRowModelCacheKey(
     params.provider,
     params.model,
   )}`;
@@ -227,12 +227,16 @@ export function resolveGatewaySessionThinkingProjectionInternal(
     provider: params.provider,
     model: params.model,
     agentRuntime: thinkingRuntime,
+    configuredReasoning:
+      catalogEntry !== logicalEntry
+        ? (logicalEntry?.configuredReasoning ?? logicalEntry?.reasoning)
+        : undefined,
     modelCatalog: runtimeCatalog,
     rowContext: params.rowContext,
     providerPolicySource: params.providerPolicySource,
   });
   const storedThinkingLevel = normalizeThinkLevel(params.entry?.thinkingLevel);
-  const thinkingLevel = storedThinkingLevel
+  const effectiveThinkingLevel = storedThinkingLevel
     ? resolveGatewaySessionThinkingLevel(
         { ...params, modelCatalog: runtimeCatalog },
         thinkingProfile,
@@ -253,8 +257,8 @@ export function resolveGatewaySessionThinkingProjectionInternal(
     capacityRuntime: thinkingRuntime,
     agentRuntime,
     runtimeSelectionLocked,
-    thinkingLevel,
-    effectiveThinkingLevel: thinkingLevel ?? metadata.thinkingDefault,
+    thinkingLevel: storedThinkingLevel,
+    effectiveThinkingLevel: effectiveThinkingLevel ?? metadata.thinkingDefault,
     // Preserve the established serialized projection order for byte-stable responses.
     thinkingLevels: metadata.thinkingLevels,
     thinkingOptions: metadata.thinkingLevels.map((level) => level.label),

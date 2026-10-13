@@ -7,7 +7,6 @@ import { start, stop } from "../service/ops-lifecycle.js";
 import { makeCronRecoveryState } from "../service/run-recovery.test-support.js";
 import { runCronRuntimeMutation } from "../service/runtime-mutation.js";
 import { loadCronStore } from "../store.js";
-import { releaseLocalCronRunReceiptOwnership } from "./run-receipt-store.js";
 import {
   claimCronRunReceiptForTest,
   makeCronReceiptJob,
@@ -43,7 +42,7 @@ it.each(["commit", "retired", "reply-lost"] as const)(
             throw new Error("delivery owner retired before dispatch");
           }
         },
-        snapshot: { allowMissingJob: false },
+        snapshot: {},
         publish: published,
         onSettled: settled,
       });
@@ -100,7 +99,6 @@ it.each(["legacy-running", "legacy-terminal", "started-terminal", "receiptless"]
           finishedAtMs: startedAtMs + 1,
         });
       }
-      releaseLocalCronRunReceiptOwnership(receipt);
     }
     for (let restart = 0; restart < 2; restart += 1) {
       const state = makeCronRecoveryState(logger, storePath, startedAtMs + 2);

@@ -30,6 +30,7 @@ import {
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
 import { classifySessionStateActor } from "../../sessions/session-state-events.js";
+import { observeAgentRunStart } from "../agent-run-start.js";
 import { isNativeCommandTurn } from "../command-turn-context.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import {
@@ -417,13 +418,10 @@ export function createDispatchReplyOperationCoordinator(params: {
       });
     const lifecycleOnlyAbortController =
       allowActiveResolution || allowSlackRoutedThreadBypass ? new AbortController() : undefined;
-    const onLifecycleInterrupt = () => {
-      preDispatchLifecycleInterrupted = true;
-      lifecycleOnlyAbortController?.abort();
-    };
     const admitCurrentReplyTurn = async () => {
       try {
         return await admitReplyTurn({
+          onDatabaseRegistration: params.replyOptions?.onDatabaseRegistration,
           assertRequestCurrent: () => {
             params.replyOptions?.operatorAuthority?.assertCurrent();
             params.replyOptions?.internalEventExecution?.assertCurrent?.();
@@ -453,7 +451,10 @@ export function createDispatchReplyOperationCoordinator(params: {
           upstreamAbortSignal: params.replyOptions?.abortSignal,
           waitForActive: !allowActiveResolution && !allowSlackRoutedThreadBypass,
           retainLifecycleAdmissionOnActive: allowActiveResolution || allowSlackRoutedThreadBypass,
-          onLifecycleInterrupt,
+          onLifecycleInterrupt: () => {
+            preDispatchLifecycleInterrupted = true;
+            lifecycleOnlyAbortController?.abort();
+          },
         });
       } catch (error) {
         if (
@@ -622,13 +623,12 @@ export function createDispatchReplyOperationCoordinator(params: {
             queuedFollowupAbortSignal: getQueuedFollowupAbortSignal(),
           }
         : {}),
-      onAgentRunStart: (...args) => {
+      ...observeAgentRunStart(params.replyOptions, (start) => {
         agentRunTerminalOutcome = "completed";
         // Execution may generate its ID in copied options; finalization needs the observed run.
-        agentRunId = args[0];
-        params.messageAuditTerminal?.observeRunId(args[0]);
-        return params.replyOptions?.onAgentRunStart?.(...args);
-      },
+        agentRunId = start.runId;
+        params.messageAuditTerminal?.observeRunId(start.runId);
+      }),
       onAgentRunTerminalOutcome: (outcome) => {
         if (outcome === "failed" || agentRunTerminalOutcome === undefined) {
           agentRunTerminalOutcome = outcome;

@@ -261,7 +261,7 @@ describe("retired Phone Control doctor migration", () => {
     expect(result.changes).toHaveLength(2);
     await expect(store.entries()).resolves.toEqual([]);
     await expect(fs.access(legacyPath)).rejects.toThrow();
-    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${legacyPath}.migrated`);
   });
 
   it("keeps the canonical journal when the stale legacy source cannot be archived", async () => {
@@ -276,6 +276,6 @@ describe("retired Phone Control doctor migration", () => {
 
     expect(result.warnings).toHaveLength(1);
     await expect(store.entries()).resolves.toHaveLength(1);
-    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
+    await fs.access(legacyPath);
   });
 });

@@ -9,9 +9,7 @@ type ChatPerformanceHost = {
 const EVENT_LOG_LIMIT = 250;
 
 export function controlUiNowMs(): number {
-  return typeof performance !== "undefined" && typeof performance.now === "function"
-    ? performance.now()
-    : Date.now();
+  return performance.now();
 }
 
 export function roundedControlUiDurationMs(durationMs: number): number {
@@ -32,27 +30,24 @@ function runAfterPaint(callback: () => void, complete: () => void): () => void {
       complete();
     }
   };
-  if (typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") {
-    queueMicrotask(run);
-  } else {
-    frame = window.requestAnimationFrame(() => {
+  // Paint timing requires the supported browser primitives, not a microtask approximation.
+  frame = requestAnimationFrame(() => {
+    frame = null;
+    if (!active) {
+      return;
+    }
+    frame = requestAnimationFrame(() => {
       frame = null;
-      if (!active) {
-        return;
-      }
-      frame = window.requestAnimationFrame(() => {
-        frame = null;
-        run();
-      });
+      run();
     });
-  }
+  });
   return () => {
     if (!active) {
       return;
     }
     active = false;
     if (frame !== null) {
-      window.cancelAnimationFrame(frame);
+      cancelAnimationFrame(frame);
       frame = null;
     }
   };

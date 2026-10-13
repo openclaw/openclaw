@@ -20,7 +20,7 @@ import {
 } from "./http-utils.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "./method-scopes.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
 export async function handleSessionKillHttpRequest(
   req: IncomingMessage,
@@ -160,6 +160,12 @@ export async function handleSessionKillHttpRequest(
       return kill(entry, capturedKey, assertCurrent);
     });
   }
-  const { entry, canonicalKey } = loadSessionEntry(sessionKey, { agentId: requestedAgent.agentId });
+  const { entry, canonicalKey } = await loadGatewaySessionEntryReadOnlyInWorker({
+    cfg,
+    key: sessionKey,
+    agentId: requestedAgent.agentId,
+    assertActive: requestAuth.assertCurrent,
+    excludeInternalEffects: true,
+  });
   return kill(entry, canonicalKey, requestAuth.assertCurrent);
 }

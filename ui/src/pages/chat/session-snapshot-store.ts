@@ -74,6 +74,10 @@ const transcriptMetadataSchema = Type.Pick(SessionRowSchema, [
 
 const snapshotSchema = z
   .object({
+    widgetHeights: z
+      .record(z.string(), z.number().finite().min(48).max(8000))
+      .refine((heights) => Object.keys(heights).length <= 100)
+      .optional(),
     transcriptMetadata: z
       .custom<ChatTranscriptMetadata>((value) => Value.Check(transcriptMetadataSchema, value))
       .optional(),
@@ -423,16 +427,9 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     }
   }
 
-  async read(
-    sessionKey: string,
-    onPrewarm?: (readyAt: number | undefined) => void,
-  ): Promise<ChatSessionSnapshot | null> {
+  async read(sessionKey: string): Promise<ChatSessionSnapshot | null> {
     const isCurrent = this.captureReadScope(sessionKey);
     const prewarm = consumePrewarmedChatSnapshot(sessionKey);
-    if (prewarm) {
-      // The pane must know the read's origin before deciding whether startup can wait.
-      onPrewarm?.(prewarm.readyAt);
-    }
     const value = await (prewarm?.promise ?? readStoredChatSnapshotRecord(sessionKey));
     if (value === undefined || !isCurrent() || !isPersistableChatSnapshotKey(sessionKey)) {
       return null;

@@ -16,7 +16,9 @@ vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => {
 });
 
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatBillingErrorMessage } from "../../embedded-agent-helpers.js";
+import { resolvePreparedSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import {
@@ -173,18 +175,25 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it.each(["worker", "main"])("keeps global tool-error replies owned by %s", (agentId) => {
+    const config: OpenClawConfig = {
+      agents: {
+        entries: {
+          main: { sandbox: { mode: "off" } },
+          worker: { sandbox: { mode: "all" } },
+        },
+      },
+      tools: { sandbox: { tools: { deny: ["browser"] } } },
+    };
     const payloads = buildPayloads({
       agentId,
       sessionKey: "global",
-      config: {
-        agents: {
-          entries: {
-            main: { sandbox: { mode: "off" } },
-            worker: { sandbox: { mode: "all" } },
-          },
-        },
-        tools: { sandbox: { tools: { deny: ["browser"] } } },
-      },
+      config,
+      sandboxRuntime: resolvePreparedSandboxRuntimeStatus({
+        cfg: config,
+        agentId,
+        sessionKey: "global",
+        preparedSessionEntry: null,
+      }),
       lastAssistant: makeAssistant({ errorMessage: "unknown tool: browser", content: [] }),
     });
     expect(payloads).toEqual([

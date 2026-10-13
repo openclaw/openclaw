@@ -87,6 +87,19 @@ The Gateway exposes three unauthenticated `GET`/`HEAD` check pairs:
 | `/startup`, `/startupz` | Startup sidecars and agent database inspection/preparation have settled, and the Gateway is not draining. Channel health is not consulted.                                   | Startup-phase monitoring and update verification. |
 | `/ready`, `/readyz`     | Startup sidecars have settled, the Gateway is not draining, required agent databases have no confirmed failures, and configured channel accounts pass deep readiness checks. | Traffic admission and operator monitoring.        |
 
+The HTTP listener opens before the initial session projection is complete. During
+that build, `/healthz` can return `200`, while `/startupz` and `/readyz` remain
+pending. Other HTTP requests and WebSocket upgrades wait for the complete
+projection before authentication and routing; they never see a partial roster.
+Discovery and remote-skill setup run alongside projection preparation. Readiness
+also waits for the reply and WebSocket connection modules to load, so immediate
+connections and first turns reuse the prepared runtime.
+Update verification still waits for startup completion before checking readiness.
+
+These probe paths stay at the server root even when `gateway.controlUi.basePath`
+is set. A UI base path such as `/health` does not turn its child routes into
+probes: they still wait for initialization and retain their normal authentication.
+
 `/startupz` returns `503` with `status: "starting"` while startup sidecars or agent database inspection/preparation are pending, `503` with `status: "draining"` during drain, and `200` with `status: "started"` otherwise. After sidecars settle, pending inspection for any agent, including an optional agent, reports `pendingReason: "agent-database-inspection"`. This lets `openclaw update` candidate verification wait within its startup budget before checking readiness. A settled inspection failure does not keep startup pending; readiness and per-agent admission report the failure.
 
 A default or system agent database with a confirmed admission failure keeps readiness false, with `failing: ["agent-database:<id>"]` and the exact admission reason and repair hint in `agentDatabases`. Pending startup inspection is reported there with code `agent-database-inspection-pending` while the Gateway can report ready and serve the Control UI and healthy agents. Agent-scoped `sessions.list`, plus `sessions.resolve`, `sessions.describe`, and `models.list`, wait up to 20 seconds for their selected agents to finish startup preparation, then recheck request authorization before reading. Requests targeting healthy agents proceed independently. Unscoped session lists continue returning admitted agents while other stores prepare. Writes still require completed admission. RPC requests refused for pending inspection return `UNAVAILABLE` with `retryable: true` and `retryAfterMs: 250`; callers can retry the same request after that delay. Inspection failures and ownership mismatches remain non-retryable. A refused optional agent can remain isolated while healthy agents serve requests. Gateway ready announcements use the same readiness decision.
@@ -130,7 +143,15 @@ resources requires the reported repair or retry before it can restart. See
 
 Detailed readiness can include the latest completed `eventLoop` diagnostic
 snapshot. The sampler owns observation windows; health reads do not reset a
-pending measurement. No snapshot is available until the first window completes. Its
+pending measurement. During active work, degradation, or diagnostic sample
+export, native event-loop delay sampling runs at 20 ms resolution and the Gateway
+publishes completed observations once per second. A healthy idle Gateway publishes
+every ten seconds and pauses the native histogram. Idle windows still track
+blocking callbacks and overdue sampling deadlines; `delayP99Ms` is zero while the
+histogram is paused. Work or an exporter becoming active restores full sampling
+at the next idle deadline, within ten seconds. Long blocking callbacks remain part
+of the observation even when they delay the publisher. No snapshot is available
+until the first window completes. Its
 `cpuCoreRatio` measures user and system CPU time across the whole Gateway process,
 including worker and native threads, divided by elapsed wall time. The unit is
 core equivalents: `1` means one CPU core fully occupied over the interval, and
@@ -170,11 +191,13 @@ Tracked worker CPU and the residual are omitted on Bun: its worker API can
 report zero when native counter collection fails. Unsupported or failed native
 APIs on any platform leave the corresponding field absent.
 
-The Control UI's **CPU** box reads the same sampler through `system.info.eventLoop`.
-Its detail overlay shows host usage separately from the process and thread
-breakdown. Process and thread percentages use `100%` for one fully occupied
-core; host usage uses `100%` for all reported logical CPUs. Values show a dash
-until their first complete measurement, or while unavailable.
+The Control UI's **Gateway CPU** box reads the same sampler through
+`system.info.eventLoop`. Its headline shows process core-equivalents: `2.58 cores`
+means about two and a half fully occupied logical CPUs. Build and tool subprocesses
+are excluded. The separate **Host** reading includes all host processes and uses
+`100%` for all reported logical CPUs. In the detail overlay, process and thread
+percentages use `100%` for one fully occupied core. Values show a dash until their
+first complete measurement, or while unavailable.
 
 Event-loop delay and utilization describe the main thread separately. A `cpu`
 degradation reason reports process CPU pressure with delay co-evidence; it does
@@ -219,7 +242,7 @@ When no `x-openclaw-session-key` header or `user` field is provided, `/v1/chat/c
 
 - `logged out` or status 409-515 -> relink with `openclaw channels logout` then `openclaw channels login`.
 - Gateway unreachable -> start it: `openclaw gateway --port 18789` (use `--force` if the port is busy).
-- No inbound messages -> confirm linked phone is online and the sender is allowed (`channels.whatsapp.allowFrom`); for group chats, ensure allowlist + mention rules match (`channels.whatsapp.groups`, `agents.entries.*.groupChat.mentionPatterns`).
+- No inbound messages -> confirm linked phone is online and the sender is allowed (`channels.whatsapp.allowFrom`); for group chats, check that allowlist + mention rules match (`channels.whatsapp.groups`, `agents.entries.*.groupChat.mentionPatterns`).
 
 ## Dedicated "health" command
 

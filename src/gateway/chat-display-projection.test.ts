@@ -605,6 +605,23 @@ it.each([
   expect(message).toEqual(original);
 });
 
+it("preserves a model-fallback event marker through history projection", () => {
+  const notice = {
+    role: "assistant",
+    provider: "openclaw",
+    model: "delivery-mirror",
+    content: [{ type: "text", text: "Model switched from primary/model-a to secondary/model-b." }],
+    openclawDeliveryMirror: {
+      kind: "model-fallback",
+      runId: "run-a",
+      fromModel: "primary/model-a",
+      toModel: "secondary/model-b",
+      reason: "empty_response",
+    },
+  };
+  expect(projectChatDisplayMessages([notice])).toEqual([notice]);
+});
+
 it("retires repeated non-visible failed attempts after their run answers", () => {
   const failures = Array.from({ length: 4 }, (_, attempt) => ({
     ...failed,
@@ -618,12 +635,80 @@ it("retires repeated non-visible failed attempts after their run answers", () =>
   expect(raw).toEqual(original);
 });
 
+it.each([false, true])(
+  "retires a recovered overflow copy without hiding partial output (projected=%s)",
+  (projected) => {
+    const copy =
+      "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.";
+    const overflow = {
+      ...failed,
+      content: [text(copy)],
+      errorCode: "context_length_exceeded",
+      errorMessage: "Your input exceeds the context window of this model.",
+    };
+    const message = projected ? projectChatDisplayMessage(overflow) : overflow;
+    if (!message) {
+      throw new Error("Expected an overflow display projection");
+    }
+    const original = structuredClone(message);
+    expect(projectChatDisplayMessages([user, message, answer])).toEqual([user, answer]);
+    expect(projectedIds([user, message])).toContainEqual(failed["__openclaw"]);
+    expect(
+      projectedIds([
+        user,
+        message,
+        { ...answer, __openclaw: { ...answer["__openclaw"], runId: "other" } },
+      ]),
+    ).toContainEqual(failed["__openclaw"]);
+    expect(
+      projectedIds([user, message, { ...user, content: "Next question" }, answer]),
+    ).toContainEqual(failed["__openclaw"]);
+    const partial = { ...message, content: [text(copy + "\n\nThe first step completed.")] };
+    expect(projectedIds([user, partial, answer])).toContainEqual(failed["__openclaw"]);
+    expect(message).toEqual(original);
+  },
+);
+
 it.each([
   { ...answer, provider: "openclaw", model: "gateway-injected" },
   { ...answer, stopReason: "toolUse" },
 ])("keeps the failure without a successful runtime answer: %j", (later) => {
   expect(projectedIds([user, failed, later])).toContainEqual(failed["__openclaw"]);
 });
+
+it.each([false, true])(
+  "keeps same-run recovery across hidden internal continuations (overflow=%s)",
+  (overflow) => {
+    const failure = overflow
+      ? {
+          ...failed,
+          content: [
+            text(
+              "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
+            ),
+          ],
+        }
+      : failed;
+    const continuation = {
+      role: "user",
+      content: "Continue from the current transcript.",
+      provenance: { kind: "internal_system" },
+      display: false,
+    };
+    const raw = [user, failure, continuation, answer];
+    const original = structuredClone(raw);
+    expect(projectChatDisplayMessages(raw)).toEqual([user, answer]);
+    expect(
+      projectedIds([
+        user,
+        failure,
+        continuation,
+        { ...answer, __openclaw: { ...answer["__openclaw"], runId: "other" } },
+      ]),
+    ).toContainEqual(failed["__openclaw"]);
+    expect(raw).toEqual(original);
+  },
+);
 
 it("keeps unattributed failures and failures separated by a new user turn", () => {
   const unattributed = { ...failed, __openclaw: { id: "failed", seq: 2 } };

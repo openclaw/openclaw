@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { assert, expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
   loadSessionEntry,
@@ -284,6 +285,7 @@ export function registerReplyAdmissionCases({
           ? await (async () => {
               const state = await createOpenClawTestState({ label: "reply-admission-incognito" });
               onTestFinished(() => state.cleanup());
+              await captureRuntimeConfigAsyncReader()();
               const storePath = resolveIncognitoOpenClawAgentSqlitePath({
                 agentId: "main",
                 env: state.env,

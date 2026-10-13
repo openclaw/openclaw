@@ -1913,7 +1913,10 @@ async function runGatewaySample(
         ? createLiveGatewayEvidence(agentIds, options.turnsPerSession)
         : undefined;
     const timelinePath = path.join(fixtureRoot, "diagnostics-timeline.jsonl");
-    const requestLogPath = path.join(fixtureRoot, "mock-provider-requests.jsonl");
+    const requestLogPath = path.join(
+      mkdtempSync(path.join(fixtureRoot, "telemetry-")),
+      "mock-provider-requests.jsonl",
+    );
     const responseControlPath = path.join(fixtureRoot, "mock-provider-responses.json");
     const heapProfilePath = options.heapProfDir
       ? path.resolve(options.heapProfDir, `gateway-load-${randomUUID()}.heapprofile`)

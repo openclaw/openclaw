@@ -1,6 +1,6 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   beginAgentDeletionJournal,
@@ -23,6 +23,47 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it.each([
+  ["unrelated", undefined],
+  ["same identity", "while agent deleted is deleted"],
+  ["overlapping path", "deletion owns"],
+] as const)("checks current deletion ownership for %s registration", (relationship, error) => {
+  const stateDir = tempDirs.make("agent-deletion-current-fence-");
+  const env = { OPENCLAW_STATE_DIR: stateDir };
+  const claim = {
+    agentId: relationship === "same identity" ? "deleted" : "survivor",
+    path: path.join(stateDir, "survivor.sqlite"),
+    env,
+  };
+  const register = () =>
+    registerOpenClawAgentDatabase(claim, {
+      starting: () => {
+        // Start deletion after claim preparation but before its registration transaction.
+        beginAgentDeletionJournal(
+          {
+            agentId: "deleted",
+            operationId: "deletion",
+            agentDir: path.join(stateDir, "agents/deleted/agent"),
+            workspaceDir: path.join(stateDir, "workspace-deleted"),
+            sessionsDir: path.join(stateDir, "sessions-deleted"),
+            databasePaths: relationship === "overlapping path" ? [claim.path] : [],
+            deleteFiles: true,
+          },
+          { env },
+        );
+      },
+    });
+  if (error) {
+    expect(register).toThrow(error);
+  } else {
+    expect(register).not.toThrow();
+  }
+  using reader = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
+  expect(reader.prepare("SELECT agent_id, path FROM agent_databases").all()).toEqual(
+    error ? [] : [{ agent_id: claim.agentId, path: "survivor.sqlite" }],
+  );
+});
 
 it("admits settlement leases while draining and fences them once retirement begins", () => {
   const stateDir = tempDirs.make("agent-deletion-draining-fence-");
@@ -72,13 +113,9 @@ it.each([
   ["lease claim", "cleanup_paths_json", "[1]"],
   ["lease drain", "database_paths_json", "[1]"],
   ["lease drain", "cleanup_paths_json", "[1]"],
-  ["registration", "operation_id", "replacement"],
-  ["lease drain", "operation_id", "replacement"],
 ] as const)("%s classifies changed %s=%s", (caller, column, value) => {
-  const afterPrepare = column === "operation_id";
-  const error = afterPrepare
-    ? "deletion journal changed"
-    : column === "database_paths_json"
+  const error =
+    column === "database_paths_json"
       ? "Invalid agent deletion database path journal."
       : "Invalid agent deletion cleanup path journal.";
   const stateDir = tempDirs.make("agent-deletion-journal-fence-");
@@ -101,26 +138,11 @@ it.each([
   const leases = writer.prepare("SELECT * FROM agent_database_leases ORDER BY lease_id");
   const beforeRegistrations = registrations.all();
   const beforeLeases = leases.all();
-  const mutate = () =>
+  try {
     writer
       .prepare(`UPDATE agent_deletion_journal SET ${column} = ? WHERE agent_id = ?`)
       .run(value, deletion.agentId);
-  const prepare = agentDeletionJournal.prepareAgentDeletionPathFence;
-  const preparation = afterPrepare
-    ? vi
-        .spyOn(agentDeletionJournal, "prepareAgentDeletionPathFence")
-        .mockImplementationOnce((...args) => {
-          const fence = prepare(...args);
-          // Commit through another connection after preparation releases its transaction.
-          mutate();
-          return fence;
-        })
-    : undefined;
-  try {
-    if (!afterPrepare) {
-      mutate();
-      expect(readAgentDeletionJournal(claim.agentId, { env })).toBeUndefined();
-    }
+    expect(readAgentDeletionJournal(claim.agentId, { env })).toBeUndefined();
     const operate = () => {
       if (caller === "registration") {
         registerOpenClawAgentDatabase(claim);
@@ -130,12 +152,11 @@ it.each([
         assertNoOpenClawAgentDatabaseLeases(deletion.agentId, { env });
       }
     };
-    const refuses = afterPrepare || caller === "lease drain";
+    const refuses = caller === "lease drain";
     if (refuses) {
       expect(operate).toThrow(error);
     } else {
       expect(operate).not.toThrow();
-      expect(prepare(claim, { env }).journal).toBe("unknown");
     }
     expect(registrations.all()).toEqual(
       !refuses && caller === "registration"
@@ -159,16 +180,11 @@ it.each([
         .get(deletion.agentId),
     ).toEqual({ [column]: value });
   } finally {
-    preparation?.mockRestore();
     writer.close();
     if (leaseId) {
       releaseOpenClawAgentDatabaseLease(leaseId, { env });
     }
-    removeAgentDeletionJournal(
-      deletion.agentId,
-      column === "operation_id" ? "replacement" : deletion.operationId,
-      { env },
-    );
+    removeAgentDeletionJournal(deletion.agentId, deletion.operationId, { env });
   }
 });
 
@@ -191,9 +207,6 @@ it.each(["registration", "lease claim"])(
     );
     using writer = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
     writer.exec("UPDATE agent_deletion_journal SET database_paths_json = '[1]'");
-    expect(agentDeletionJournal.prepareAgentDeletionPathFence(claim, { env }).journal).toBe(
-      "unknown",
-    );
     expect(() =>
       caller === "registration"
         ? registerOpenClawAgentDatabase(claim)

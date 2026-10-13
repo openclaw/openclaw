@@ -1,7 +1,7 @@
 import { zstdDecompressSync } from "node:zlib";
 import { createApiRegistry } from "@openclaw/ai";
 import { createOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports";
-import type { Model, StreamFn } from "@openclaw/llm-core";
+import type { Context, Model, StreamFn } from "@openclaw/llm-core";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../../../../packages/ai/src/host.js";
@@ -139,7 +139,12 @@ afterEach(() => {
 async function fixture(
   sessionManager = SessionManager.inMemory(),
   withHistory = true,
-  { asyncProvider = false, nativeProvider = false } = {},
+  {
+    asyncProvider = false,
+    nativeProvider = false,
+    contextTokenBudget = 8_000,
+    contextWindow = model.contextWindow,
+  } = {},
 ) {
   if (withHistory) {
     sessionManager.appendMessage({ role: "user", content: "remember copper", timestamp: 1 });
@@ -152,7 +157,7 @@ async function fixture(
     details: {},
   }));
   const { session } = await createTestSession({
-    model,
+    model: { ...model, contextWindow },
     sessionManager,
     systemPrompt: "stable system",
     settingsManager: SettingsManager.inMemory({
@@ -227,7 +232,7 @@ async function fixture(
     withSessionManagerWrite(sessionManager, write);
   const boundaryParams = {
     session,
-    contextTokenBudget: 8_000,
+    contextTokenBudget,
     reserveTokens: 2_000,
     timeoutMs: 30_000,
     authProfileId: "fixture-profile",
@@ -242,7 +247,7 @@ async function fixture(
     submitEmbeddedAttemptPrompt({
       attempt: { sessionId: session.sessionId },
       activeSession: session,
-      contextTokenBudget: 8_000,
+      contextTokenBudget,
       compactBeforeRequest: boundary,
       onModelRequest,
       images: [],
@@ -357,6 +362,170 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
       expect.stringContaining("per-turn developer context"),
     ]);
     expect(reopened.execute).not.toHaveBeenCalled();
+  });
+
+  it("compacts a settled 90% window before a large tool result reaches the next boundary", async () => {
+    const manager = SessionManager.inMemory();
+    manager.appendMessage({ role: "user", content: "remember copper", timestamp: 1 });
+    manager.appendMessage(
+      createAssistant(model, [{ type: "text", text: "settled history" }], "stop", 465_674),
+    );
+    const f = await fixture(manager, false, {
+      contextTokenBudget: 500_000,
+      contextWindow: 500_000,
+    });
+    f.execute.mockResolvedValue({
+      content: [{ type: "text", text: "large tool output. ".repeat(16_000) }],
+      details: {},
+    });
+    let normal = 0;
+    let compacted = false;
+    respond = (body) => {
+      if (body.input.at(-1)?.type === "compaction_trigger") {
+        compacted = true;
+        return compactEvents(1);
+      }
+      if (++normal !== 1) {
+        return textEvents();
+      }
+      const events = toolEvents();
+      if (!compacted) {
+        events[events.length - 1] = {
+          ...terminal,
+          response: {
+            ...terminal.response,
+            usage: { ...terminal.response.usage, input_tokens: 465_668, total_tokens: 465_674 },
+          },
+        };
+      }
+      return events;
+    };
+    await f.submit();
+    expect(f.onFallback).not.toHaveBeenCalled();
+    expect(f.execute).toHaveBeenCalledOnce();
+    expect(requests.map((body) => body.input.at(-1)?.type)).toEqual([
+      "compaction_trigger",
+      "compaction",
+      "function_call_output",
+    ]);
+    const [compaction, firstNormal, afterTool] = requests;
+    if (!compaction || !firstNormal || !afterTool) {
+      throw new Error("Expected early compaction followed by one settled tool round");
+    }
+    expect(JSON.stringify(compaction)).toContain("current request");
+    expect(realUserText(firstNormal)).toEqual(["remember copper", "current request"]);
+    expect(afterTool.input.filter((item) => item.type === "function_call_output")).toHaveLength(1);
+    expect(afterTool.input.filter((item) => item.type === "compaction")).toHaveLength(1);
+    const reopened = await fixture(
+      SessionManager.fromEntries([manager.getHeader(), ...manager.getEntries()]),
+      false,
+      { contextTokenBudget: 500_000, contextWindow: 500_000 },
+    );
+    requests = [];
+    await reopened.submit("after restart");
+    expect(requests).toHaveLength(1);
+    const resumed = requests[0];
+    if (!resumed) {
+      throw new Error("Missing resumed request");
+    }
+    expect(resumed.input.filter((item) => item.type === "function_call_output")).toHaveLength(1);
+    expect(resumed.input.filter((item) => item.type === "compaction")).toHaveLength(1);
+    expect(reopened.execute).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { window: 500_000, reserve: 20_000, tokens: 449_000, compact: false },
+    { window: 500_000, reserve: 20_000, tokens: 450_000, compact: true },
+    { window: 32_000, reserve: 8_000, tokens: 23_900, compact: false },
+    { window: 32_000, reserve: 8_000, tokens: 24_000, compact: true },
+  ])("uses the earlier V2 threshold at $tokens / $window tokens", async (test) => {
+    const f = await fixture(SessionManager.inMemory(), false);
+    const boundary = createChatGPTV2CompactionBoundary({
+      ...f.boundaryParams,
+      contextTokenBudget: test.window,
+      reserveTokens: test.reserve,
+    });
+    const result = await boundary(
+      f.session.agent.streamFn,
+      { ...model, contextWindow: test.window },
+      { messages: [] },
+      { sessionId: f.session.sessionId },
+      { requestIndex: 1, messageCount: 0, contextTokens: test.tokens },
+    );
+    expect(Boolean(result)).toBe(test.compact);
+    expect(requests).toHaveLength(test.compact ? 1 : 0);
+    expect(f.onFallback).not.toHaveBeenCalled();
+  });
+
+  it("skips soft compaction while tools are pending without lowering the client threshold", async () => {
+    const f = await fixture(SessionManager.inMemory(), false);
+    const boundary = createChatGPTV2CompactionBoundary({
+      ...f.boundaryParams,
+      contextTokenBudget: 500_000,
+      reserveTokens: 20_000,
+    });
+    let normal = 0;
+    respond = () => (++normal === 1 ? toolEvents() : textEvents());
+    f.execute.mockImplementation(async () => {
+      expect(f.session.agent.state.pendingToolCalls.size).toBe(1);
+      await expect(
+        boundary(
+          f.session.agent.streamFn,
+          { ...model, contextWindow: 500_000 },
+          { messages: [] },
+          { sessionId: f.session.sessionId },
+          { requestIndex: 1, messageCount: 0, contextTokens: 465_674 },
+        ),
+      ).resolves.toBeUndefined();
+      return { content: [{ type: "text", text: "settled" }], details: {} };
+    });
+    await f.submit();
+    expect(f.execute).toHaveBeenCalledOnce();
+    expect(requests.map((body) => body.input.at(-1)?.type)).toEqual([
+      "message",
+      "function_call_output",
+    ]);
+    expect(f.onFallback).not.toHaveBeenCalled();
+  });
+
+  it("continues normal requests after a soft V2 failure without retrying or client compaction", async () => {
+    const manager = SessionManager.inMemory();
+    manager.appendMessage({ role: "user", content: "remember copper", timestamp: 1 });
+    manager.appendMessage(
+      createAssistant(model, [{ type: "text", text: "settled history" }], "stop", 465_674),
+    );
+    const f = await fixture(manager, false, {
+      contextTokenBudget: 500_000,
+      contextWindow: 500_000,
+    });
+    const warn = vi.spyOn(log, "warn");
+    const highUsageCompletion = {
+      ...terminal,
+      response: {
+        ...terminal.response,
+        usage: { ...terminal.response.usage, input_tokens: 465_668, total_tokens: 465_674 },
+      },
+    };
+    respond = (body) =>
+      body.input.at(-1)?.type === "compaction_trigger"
+        ? [terminal]
+        : textEvents().map((event) =>
+            event.type === "response.completed" ? highUsageCompletion : event,
+          );
+    await f.submit();
+    await f.submit("next request");
+    expect(requests.map((body) => body.input.at(-1)?.type)).toEqual([
+      "compaction_trigger",
+      "message",
+      "message",
+    ]);
+    expect(f.onFallback).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    expect(
+      manager
+        .buildSessionContext()
+        .messages.some((message) => message.role === "assistant" && message.providerReplay),
+    ).toBe(false);
   });
 
   it("prices a matching measured prefix once before deciding to compact", async () => {
@@ -513,25 +682,27 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     ).toBe(false);
   });
 
-  it("rejects retained input requiring redaction before making a provider request", async () => {
+  it("preserves retained input despite configured log redaction patterns", async () => {
     const f = await fixture();
     const boundary = createChatGPTV2CompactionBoundary({
       ...f.boundaryParams,
       config: { logging: { redactPatterns: ["PRIVATE_VALUE"] } },
     });
+    const content = "PRIVATE_VALUE API_TOKEN = computeToken()";
+    const messages: Context["messages"] = [
+      { role: "user", content, timestamp: 1 },
+      ...f.sessionManager
+        .buildSessionContext()
+        .messages.filter(
+          (message) => message.role === "assistant" || message.role === "toolResult",
+        ),
+    ];
     await expect(
-      boundary(
-        f.session.agent.streamFn,
-        model,
-        {
-          messages: [
-            { role: "user", content: "PRIVATE_VALUE " + "large ".repeat(5_000), timestamp: 1 },
-          ],
-        },
-        {},
-      ),
-    ).rejects.toBeInstanceOf(MidTurnPrecheckSignal);
-    expect(requests).toHaveLength(0);
+      boundary(f.session.agent.streamFn, model, { messages }, {}),
+    ).resolves.toMatchObject({ providerReplay: { compactedWindow: { outputTokens: 5 } } });
+    expect(requests).toHaveLength(1);
+    expect(requests.map(realUserText)).toEqual([[content]]);
+    expect(f.onFallback).not.toHaveBeenCalled();
   });
 
   it("never falls back after a committed checkpoint or caller abort", async () => {

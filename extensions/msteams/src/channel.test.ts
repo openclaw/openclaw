@@ -379,7 +379,7 @@ describe("msteamsPlugin.approvalCapability", () => {
     senderId: string,
     approvalKind: "exec" | "plugin" | "system-agent" = "exec",
   ) {
-    return msteamsPlugin.approvalCapability?.authorizeActorAction?.({
+    return msteamsPlugin.approvalCapability?.authorizeActorActionAsync?.({
       cfg: { channels: { msteams: { allowFrom } } },
       senderId,
       action: "approve",
@@ -389,24 +389,26 @@ describe("msteamsPlugin.approvalCapability", () => {
 
   it.each(["exec", "plugin", "system-agent"] as const)(
     "authorizes only the configured owner for %s after normalizing an AAD principal",
-    (approvalKind) => {
+    async (approvalKind) => {
       const allowFrom = [`MSTEAMS:USER:${ownerId.toUpperCase()}`];
-      expect(authorizeApproval(allowFrom, ownerId, approvalKind)).toEqual({ authorized: true });
-      expect(authorizeApproval(allowFrom, otherUserId, approvalKind)).toMatchObject({
+      expect(await authorizeApproval(allowFrom, ownerId, approvalKind)).toEqual({
+        authorized: true,
+      });
+      expect(await authorizeApproval(allowFrom, otherUserId, approvalKind)).toMatchObject({
         authorized: false,
       });
     },
   );
 
-  it("preserves implicit same-chat authorization when no approvers are configured", () => {
-    const result = authorizeApproval([], ownerId);
+  it("preserves implicit same-chat authorization when no approvers are configured", async () => {
+    const result = await authorizeApproval([], ownerId);
     expect(result).toEqual({ authorized: true });
     expect(isImplicitSameChatApprovalAuthorization(result)).toBe(true);
   });
 
-  it("does not authorize a conversation id as an approval principal", () => {
+  it("does not authorize a conversation id as an approval principal", async () => {
     expect(
-      authorizeApproval([ownerId, `msteams:conversation:${otherUserId}`], otherUserId),
+      await authorizeApproval([ownerId, `msteams:conversation:${otherUserId}`], otherUserId),
     ).toMatchObject({ authorized: false });
   });
 });

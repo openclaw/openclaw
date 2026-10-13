@@ -159,7 +159,7 @@ export async function runProvisionWarmup(
   // Crabbox internal/cli/run.go rejects this capability before Warmup/Acquire.
   if (isFixedLeaseIdUnsupported(result, params.provider)) {
     throw new WorkerProviderError(
-      `Crabbox backend ${params.provider} does not support fixed idempotent lease IDs. OpenClaw cloud workers need a Crabbox backend with fixed lease ID support.`,
+      `Crabbox backend ${params.provider} does not support fixed lease IDs that are safe to reuse. OpenClaw cloud workers need a Crabbox backend with fixed lease ID support.`,
     );
   }
   const error = crabboxCommandError("warmup", result);

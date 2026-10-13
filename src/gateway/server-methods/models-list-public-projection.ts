@@ -70,9 +70,12 @@ export function buildPublicModelProjection(
 export function projectProviderCatalogOutcomes(
   outcomes: readonly ProviderCatalogOutcome[] | undefined,
 ): ModelCatalogProviderOutcome[] | undefined {
-  return outcomes?.map(({ provider, profileId, status }) => ({
+  return outcomes?.map(({ provider, profileId, status, unlistedConfiguredModelIds }) => ({
     provider,
     ...(profileId ? { profileId } : {}),
     status,
+    ...(status === "ready" && unlistedConfiguredModelIds?.length
+      ? { unlistedConfiguredModelIds: [...unlistedConfiguredModelIds] }
+      : {}),
   }));
 }

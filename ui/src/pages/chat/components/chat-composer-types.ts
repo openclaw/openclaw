@@ -42,7 +42,7 @@ import type {
 } from "./chat-composer-plus-menu.tsx";
 import type { SkillMenuState } from "./chat-composer-skill-menu.tsx";
 import type { SlashMenuState } from "./chat-composer-slash-menu.tsx";
-import type { ChatPermissionPickerProps } from "./chat-permission-picker.ts";
+import type { ChatPermissionPickerProps } from "./chat-permission-picker.tsx";
 
 type ChatQueuedEditProps = {
   editingId: string | null;
@@ -76,7 +76,6 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   sessionAdmitted?: boolean;
   connected: boolean;
   offline?: boolean;
-  queuedOutboxCount?: number;
   canSend: boolean;
   canCompose?: boolean;
   modelRequiredReason?: string | null;

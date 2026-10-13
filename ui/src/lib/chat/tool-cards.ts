@@ -24,7 +24,6 @@ import {
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
 import { readBrowserTabTarget } from "../../components/browser/browser-target.ts";
-import { redactToolPayloadText } from "../browser-redact.ts";
 import type { ToolCard, ToolCardOutcome, ToolOutputMetadata } from "./chat-types.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
 import { readLiveDiffStat } from "./tool-call-diff.ts";
@@ -309,9 +308,7 @@ export function resolveCollapsedToolArgumentPreview(args: unknown): string | und
       lineEnd.lastIndex = firstContent;
       firstLine = value.slice(start, lineEnd.exec(value)?.index ?? value.length);
     }
-    const preview = formatCollapsedToolPreviewText(
-      firstLine ? redactToolPayloadText(firstLine) : undefined,
-    );
+    const preview = formatCollapsedToolPreviewText(firstLine);
     if (preview) {
       return preview;
     }

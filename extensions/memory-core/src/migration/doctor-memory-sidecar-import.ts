@@ -67,7 +67,7 @@ type LegacyMemorySidecarImportResult = {
 
 export class LegacyMemoryDerivedRowsConflictError extends Error {
   constructor(readonly tableName: string) {
-    super(`legacy memory ${tableName} rows conflict with canonical memory index rows`);
+    super(`legacy memory ${tableName} rows conflict with existing memory index rows`);
   }
 }
 
@@ -221,12 +221,12 @@ function ensureCanonicalVectorTableForLegacyRows(db: DatabaseSync): void {
       : undefined) ?? readMemoryIndexMetaVectorDimensions(db, "main", MEMORY_INDEX_META_TABLE);
   if (canonicalTableExists && !canonicalDimensions) {
     throw new Error(
-      "canonical memory chunks_vec table requires vector dimensions before legacy import",
+      "current memory chunks_vec table requires vector dimensions before legacy import",
     );
   }
   if (canonicalDimensions && canonicalDimensions !== dimensions) {
     throw new Error(
-      `legacy memory chunks_vec dimensions ${dimensions} do not match canonical memory chunks_vec dimensions ${canonicalDimensions}`,
+      `legacy memory chunks_vec dimensions ${dimensions} do not match current memory chunks_vec dimensions ${canonicalDimensions}`,
     );
   }
   if (canonicalTableExists) {

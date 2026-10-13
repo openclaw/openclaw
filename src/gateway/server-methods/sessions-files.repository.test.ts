@@ -4,6 +4,10 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import * as worktreeGit from "../../agents/worktrees/git.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { withSessionTranscriptDeltaReader } from "../../config/sessions/session-transcript-delta-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -11,6 +15,7 @@ import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspac
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
@@ -119,7 +124,7 @@ let source: Awaited<ReturnType<typeof store.create>>;
 let runtime: NodeWorkerWorkspaceRuntime;
 let generation: number;
 let active: boolean;
-let onTunnel: (() => void) | undefined;
+let onTunnel: (() => void | Promise<void>) | undefined;
 let onResult: (() => void) | undefined;
 let sessionId: string;
 let lifecycleRevision: string;
@@ -164,7 +169,7 @@ function requestContext() {
     workerEnvironmentService: {
       get: () => ({ state: "attached", ownerEpoch: 1, attachedSessionIds: [identity.sessionId] }),
       startTunnel: async () => {
-        onTunnel?.();
+        await onTunnel?.();
         return { environmentId: identity.environmentId, ownerEpoch: 1, runWorkspaceCommand: run };
       },
     },
@@ -235,10 +240,13 @@ beforeEach(async () => {
     agentId: "main",
     canonicalKey: sessionKey,
     cfg: {},
-    storePath: path.join(gatewayRoot, "sessions.sqlite"),
+    storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
     storeKeys: [sessionKey],
     entry: { sessionId, repositoryWorkspaceId: source.workspaceId, lifecycleRevision, archivedAt },
   }));
+  context = requestContext();
+  setRuntimeConfigSnapshot(context.getRuntimeConfig());
+  await persistSessionEntry();
   run = vi.fn(async (command: WorkerWorkspaceCommand) => {
     command.assertCurrent?.();
     const input = parseNodeWorkerWorkspaceExecInput(
@@ -248,18 +256,18 @@ beforeEach(async () => {
     onResult?.();
     return result;
   });
-  context = requestContext();
 });
 
 afterEach(async () => {
   await closeOpenClawStateDatabaseByPathAsync(path.join(gatewayRoot, "state.sqlite"));
   await closeOpenClawAgentDatabasesAsync(gatewayRoot);
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
   removeWorkspaceFixture(nodeRoot);
   removeWorkspaceFixture(gatewayRoot);
 });
 
-async function withCheckpointAcceptance(failCapture = false) {
+async function persistSessionEntry() {
   await upsertSessionEntryCore(
     { agentId: "main", sessionKey },
     {
@@ -270,6 +278,9 @@ async function withCheckpointAcceptance(failCapture = false) {
       archivedAt,
     },
   );
+}
+
+async function withCheckpointAcceptance(failCapture = false) {
   const database = openOpenClawStateDatabase({ path: path.join(gatewayRoot, "state.sqlite") });
   const placements = createWorkerSessionPlacementStore({ database });
   seedAttachedPlacementEnvironment(database, {
@@ -527,7 +538,7 @@ it.each(["tunnel", "result"])("rejects a replaced placement after %s work", asyn
 it.each(["reset", "archive", "lifecycle revision"])(
   "rejects a session %s before dispatching an editor write",
   async (change) => {
-    onTunnel = () => {
+    onTunnel = async () => {
       if (change === "reset") {
         sessionId = "replacement";
       } else if (change === "archive") {
@@ -535,6 +546,7 @@ it.each(["reset", "archive", "lifecycle revision"])(
       } else {
         lifecycleRevision = `${lifecycleRevision}-next`;
       }
+      await persistSessionEntry();
     };
     await expect(
       invoke(
@@ -650,6 +662,7 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
     const result = await originalGitRead(...args);
     if (args[1][1] === "--batch") {
       lifecycleRevision = `${lifecycleRevision}-next`;
+      await persistSessionEntry();
     }
     return result;
   });
@@ -776,7 +789,7 @@ it("keeps a timed-out remote save owned until its physical write drains before S
   let stopEntered = false;
   let contentAtStop: string | undefined;
   const stopping = runExclusiveSessionLifecycleMutation("drain", {
-    scope: path.join(gatewayRoot, "sessions.sqlite"),
+    scope: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
     identities: [sessionKey, identity.sessionId],
     run: async () => {
       stopEntered = true;

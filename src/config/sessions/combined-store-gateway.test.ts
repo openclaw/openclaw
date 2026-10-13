@@ -24,6 +24,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-preflight.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.js";
 import * as sessionAccessor from "./session-accessor.js";
@@ -204,6 +205,7 @@ it("projects shared rows under their logical owner while retaining the physical 
       },
       session: { scope: "global", store: storePath },
     };
+    setRuntimeConfigSnapshot(cfg);
     openOpenClawAgentDatabase({ agentId: "main", path: storePath });
     for (const sessionKey of ["global", "unknown", "agent:worker:task"]) {
       replaceSessionEntrySync(
@@ -216,7 +218,7 @@ it("projects shared rows under their logical owner while retaining the physical 
       );
     }
     await persistSessionTranscriptTurn(
-      { agentId: "main", storePath, sessionKey: "global", sessionId: "session-global" },
+      { agentId: "ops", storePath, sessionKey: "global", sessionId: "session-global" },
       {
         messages: [{ message: { role: "user", content: "Shared physical global preview" } }],
         touchSessionEntry: false,

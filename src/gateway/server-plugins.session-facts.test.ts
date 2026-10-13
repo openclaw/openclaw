@@ -27,9 +27,9 @@ import { createFixture, sessionKey } from "./control-ui-session-pr-access.test-s
 import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
 import { createRequestGatewayMethodRegistry } from "./server-methods.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
-import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { publishTranscriptFields } from "./session-row-projection-record.js";
+import * as transcriptBackfill from "./session-row-transcript-backfill.js";
 
 type Fixture = Awaited<ReturnType<typeof createFixture>>;
 let state: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
@@ -111,7 +111,7 @@ function withSelectedFacts<T>(
 
 describe("trusted plugin selected session facts", () => {
   it.each(["config-presentation", "secret registry"] as const)(
-    "refreshes exact and selected redaction while preserving PR state after %s changes",
+    "preserves exact and selected text and PR state after %s changes",
     (change) =>
       withFixture(async (fixture) => {
         const releaseForeground = retainSessionListForegroundWork();
@@ -163,14 +163,15 @@ describe("trusted plugin selected session facts", () => {
           }
           const exact = await read(fixture, [plainKey]);
           const current = await selected();
-          expect(exact.sessions[0]?.label).toBe("***");
-          expect(current.sessions.find((row) => row.key === plainKey)?.label).toBe("***");
+          expect(exact.sessions[0]?.label).toBe(marker);
+          expect(current.sessions.find((row) => row.key === plainKey)?.label).toBe(marker);
           expect(current.retryAt).toBe(stale.retryAt);
           const currentPrs = current.sessions.find((row) => row.key === sessionKey)!;
           expect(currentPrs.pullRequestsUnavailable).toBe(true);
           expect(currentPrs.pullRequestsStale).toBe(true);
-          expect(currentPrs.pullRequests).toEqual([{ number: 12, state: "open" }]);
-          expect(current.redactionRevision).not.toBe(stale.redactionRevision);
+          expect(currentPrs.pullRequests).toEqual([
+            { number: 12, state: "open", title: prTitle.slice(0, 120) },
+          ]);
         } finally {
           resetLogger();
           resetSecretRedactionRegistryForTest();
@@ -354,29 +355,29 @@ describe("trusted plugin selected session facts", () => {
       }
     }));
 
-  it("refreshes a cached selection when background transcript enrichment publishes", () =>
+  it("refreshes a cached selection from committed previews while background reads are held", () =>
     withFixture(async (fixture) => {
       const release = retainSessionListForegroundWork();
       try {
-        await persistSessionTranscriptTurn(
-          { agentId: "main", sessionKey, sessionId: fixture.sessionId },
-          {
-            messages: [{ message: { role: "assistant", content: "Prepared background preview" } }],
-            touchSessionEntry: false,
-            updateMode: "none",
-          },
-        );
         const projection = getSessionRowProjection(fixture.context)!;
         await projection.ensureMaterialized();
         const before = await withSelectedFacts(fixture, async (value) => value);
         expect(before.sessions[0]?.lastMessagePreview).toBeUndefined();
-        const published = observeSessionRowBackfill([sessionKey], projection);
-        release();
-        await published;
+        using backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
+        await persistSessionTranscriptTurn(
+          { agentId: "main", sessionKey, sessionId: fixture.sessionId },
+          {
+            config: fixture.cfg,
+            messages: [{ message: { role: "assistant", content: "Prepared committed preview" } }],
+            touchSessionEntry: false,
+            updateMode: "none",
+          },
+        );
         const after = await withSelectedFacts(fixture, async (value) => value);
-        expect(after.sessions[0]?.lastMessagePreview).toBe("Prepared background preview");
+        expect(after.sessions[0]?.lastMessagePreview).toBe("Prepared committed preview");
         expect(after.revision).not.toBe(before.revision);
         expect(before.sessions[0]?.lastMessagePreview).toBeUndefined();
+        expect(backfill).not.toHaveBeenCalled();
       } finally {
         release();
       }
@@ -411,13 +412,15 @@ describe("trusted plugin selected session facts", () => {
       const describeRow = vi.spyOn(projection, "describe");
       try {
         sessionChanges.emit({ agentId: "main", sessionKey, scope: "runtime" });
-        acquisition.mockRejectedValueOnce(new Error("Synthetic facts read failed"));
+        acquisition.mockRejectedValueOnce(
+          new Error("Synthetic facts read failed: API_TOKEN = computeToken()"),
+        );
         const failed = await selected();
         expect(failed.sessions).toMatchObject([
           {
             key: sessionKey,
             sessionId: fixture.sessionId,
-            unavailable: "Error: Synthetic facts read failed",
+            unavailable: "Error: Synthetic facts read failed: API_TOKEN = computeToken()",
           },
         ]);
         expect(failed.missingSessionKeys).toBeUndefined();
@@ -786,7 +789,7 @@ describe("trusted plugin session facts", () => {
       }),
   );
 
-  it("retries rate-limited snapshots and bounds and redacts PR titles", () =>
+  it("retries rate-limited snapshots and bounds PR titles", () =>
     withFixture(async (fixture) => {
       const pullRequest = {
         number: 42,
@@ -814,7 +817,7 @@ describe("trusted plugin session facts", () => {
         url: pullRequest.url,
       });
       expect(limited.pullRequests[0]?.title?.length).toBeLessThanOrEqual(120);
-      expect(limited.pullRequests[0]?.title).not.toContain("synthetic-secret-value");
+      expect(limited.pullRequests[0]?.title).toContain("synthetic-secret-value");
       expect(limited.pullRequests[1]).toEqual({ number: 43, state: "open" });
       await fixture.subscriptions.pollNow();
       const recovered = (await read(fixture, [sessionKey])).sessions[0]!;
@@ -863,9 +866,11 @@ describe("trusted plugin session facts", () => {
         // filter, so the reader itself must keep it away from preview enrichment.
         const foreignDraft = "agent:main:foreign-draft";
         await fixture.seed(foreignDraft, fixture.other.id, { visibility: "draft" });
+        using backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
         await persistSessionTranscriptTurn(
           { agentId: "main", sessionKey, sessionId: fixture.sessionId },
           {
+            config: fixture.cfg,
             messages: [{ message: { role: "assistant", content: "May I merge this change?" } }],
             touchSessionEntry: false,
             updateMode: "none",
@@ -894,8 +899,9 @@ describe("trusted plugin session facts", () => {
           },
         ]);
         expect(result.sessions.map((session) => session.key)).not.toContain(foreignDraft);
-        // Optional transcript enrichment must not bypass foreground ownership.
-        expect(result.sessions[0]?.lastMessagePreview).toBeUndefined();
+        // Committed preview facts remain available while optional transcript reads wait.
+        expect(result.sessions[0]?.lastMessagePreview).toBe("May I merge this change?");
+        expect(backfill).not.toHaveBeenCalled();
       } finally {
         releaseForeground();
       }

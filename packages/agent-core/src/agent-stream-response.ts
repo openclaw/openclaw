@@ -72,7 +72,11 @@ function removeNonExecutableToolCalls(message: AssistantMessage): AssistantMessa
   if (message.stopReason === "toolUse") {
     return message;
   }
-  const content = message.content.filter((item) => item.type !== "toolCall" || item.async);
+  const failed = message.stopReason === "aborted" || message.stopReason === "error";
+  // Executed async calls already own earlier fragments; a failed tail cannot admit another call.
+  const content = message.content.filter(
+    (item) => item.type !== "toolCall" || (!failed && item.async),
+  );
   return content.length === message.content.length
     ? message
     : replaceCompactionReplayOwnerContent(message, content);

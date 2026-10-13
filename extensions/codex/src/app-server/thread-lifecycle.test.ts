@@ -16,6 +16,7 @@ import { threadStartResult as nativeThreadStartResult } from "./codex-app-server
 import { shouldEnableCodexAppServerNativeToolSurface } from "./dynamic-tool-build.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { createCodexManagedThreadStore } from "./managed-thread-store.js";
+import { prepareTestNativeExecutionPolicy } from "./native-execution-policy.test-support.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
 import { buildCodexProjectDocThreadConfig } from "./project-doc-thread-config.js";
@@ -77,7 +78,9 @@ it("uses direct OpenClaw functions and hosted web search for subscription sharin
       selectedAuthFlow: "chatgpt-token-sharing",
     },
   } as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
-  const nativeCodeModeEnabled = shouldEnableCodexAppServerNativeToolSurface(params);
+  const nativeCodeModeEnabled = shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
+    nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params),
+  });
   expect(nativeCodeModeEnabled).toBe(false);
   const start = await buildThreadStartParams(params, {
     appServer: createAppServerOptions() as never,
@@ -2853,8 +2856,8 @@ describe("Codex app-server supervised branch lifecycle", () => {
         }),
       ).rejects.toThrow(
         returnedId
-          ? "canonical branch reused an existing thread"
-          : "canonical branch may have materialized without a safe thread id",
+          ? "supervised branch reused an existing thread"
+          : "supervised branch may have materialized without a safe thread id",
       );
       expect(request.mock.calls.map(([method]) => method)).toEqual([
         "config/read",

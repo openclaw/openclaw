@@ -34,6 +34,7 @@ import { suspendReplacedStoreNotifications } from "./subagent-registry-lifecycle
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { createSubagentRegistryListener } from "./subagent-registry-listener.js";
 import {
+  getSubagentChildSessionCandidates,
   getSubagentRunsForChildSession,
   getSubagentRunsForCollectorGroup,
   subagentRuns,
@@ -526,6 +527,7 @@ const subagentSweeper = createSubagentRegistrySweeper({
   startSubagentAnnounceCleanupFlow,
   completeCleanupBookkeeping,
   isCleanupOwnerCurrent: subagentLifecycleController.isCleanupOwnerCurrent,
+  isTerminalTailActive: subagentLifecycleController.isTerminalTailActive,
   sessionEffectsHostCurrent: (entry) =>
     subagentLifecycleController.sessionEffectsHostCurrent(entry),
   shouldSuppressSessionEffects: (entry, effects) =>
@@ -557,6 +559,7 @@ const subagentRunManager = createSubagentRunManager({
   acquireTerminalCompletionLock: (runId) =>
     subagentLifecycleController.acquireTerminalCompletionLock(runId),
   runs: subagentRuns,
+  getChildSessionCandidates: getSubagentChildSessionCandidates,
   getRunsForChildSession: getSubagentRunsForChildSession,
   resumedRuns,
   callGateway: async <T>(request: Parameters<typeof callGateway>[0]) => {
