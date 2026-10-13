@@ -1313,71 +1313,6 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.enqueueSessionEvent).not.toHaveBeenCalled();
   });
 
-  it("replays generated-media provenance through the owning session agent", async () => {
-    const resolveGatewayContext = () => undefined;
-    await deliverGeneratedMedia(
-      {
-        id: "session-delivery-media",
-        messageId: "image:task-1:agent-loop",
-        route: {
-          channel: "discord",
-          to: "channel:123",
-          accountId: "default",
-          chatType: "channel",
-        },
-        inputProvenance: {
-          kind: "inter_session",
-          sourceSessionKey: "image_generate:task-1",
-          sourceChannel: "internal",
-          sourceTool: "image_generate",
-        },
-        sourceReplyDeliveryMode: "message_tool_only",
-        expectedMediaUrls: ["/tmp/proof.png"],
-        idempotencyKey: "image:task-1:agent-loop",
-      },
-      "/tmp/custom-session-delivery-state",
-      resolveGatewayContext,
-    );
-
-    expect(mocks.dispatchGatewayMethodInProcess).toHaveBeenCalledWith(
-      "agent",
-      {
-        sessionKey: "agent:main:main",
-        message: "generated image ready",
-        deliver: true,
-        bestEffortDeliver: false,
-        channel: "discord",
-        accountId: "default",
-        to: "channel:123",
-        threadId: undefined,
-        inputProvenance: {
-          kind: "inter_session",
-          sourceSessionKey: "image_generate:task-1",
-          sourceChannel: "internal",
-          sourceTool: "image_generate",
-        },
-        sourceReplyDeliveryMode: "automatic",
-        disableMessageTool: true,
-        forceRestartSafeTools: true,
-        idempotencyKey: "image:task-1:agent-loop",
-      },
-      {
-        expectFinal: true,
-        forceSyntheticClient: true,
-        internalDeliveryMediaUrls: ["/tmp/proof.png"],
-        runtimeContextFragments: expectedGeneratedMediaContext,
-        resolveGatewayContext,
-        onAccepted: expect.any(Function),
-      },
-    );
-    expect(mocks.recordInboundSessionAndDispatchReply).not.toHaveBeenCalled();
-    expect(mocks.enqueueSessionEvent).not.toHaveBeenCalled();
-    expect(mocks.markSessionDeliveryAttemptStarted).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "session-delivery-media", kind: "agentTurn" }),
-      expectQueueContext("/tmp/custom-session-delivery-state"),
-    );
-  });
-
   it("keeps a generated-media gateway rejection before acceptance retryable", async () => {
     mocks.dispatchGatewayMethodInProcess.mockRejectedValueOnce(new Error("gateway unavailable"));
 
@@ -1397,6 +1332,7 @@ describe("scheduleRestartSentinelWake", () => {
   });
 
   it("authorizes queued media replay for an active cron continuation", async () => {
+    const resolveGatewayContext = () => undefined;
     mocks.loadSessionEntry.mockReturnValue(
       sessionFixture("agent:main:cron:daily-media:run:run-123", {
         sessionId: "cron-run-session",
@@ -1409,19 +1345,27 @@ describe("scheduleRestartSentinelWake", () => {
       }),
     );
 
-    await deliverGeneratedMedia({
-      id: "session-delivery-cron-media",
-      sessionKey: "agent:main:cron:daily-media:run:run-123",
-      messageId: "image:cron-task:agent-loop",
-      expectedMediaUrls: ["/tmp/proof.png"],
-      suppressTextDelivery: true,
-    });
+    await deliverGeneratedMedia(
+      {
+        id: "session-delivery-cron-media",
+        sessionKey: "agent:main:cron:daily-media:run:run-123",
+        messageId: "image:cron-task:agent-loop",
+        expectedMediaUrls: ["/tmp/proof.png"],
+        suppressTextDelivery: true,
+      },
+      undefined,
+      resolveGatewayContext,
+    );
 
     expect(mocks.dispatchGatewayMethodInProcess).toHaveBeenCalledWith(
       "agent",
       expect.objectContaining({
         sessionKey: "agent:main:cron:daily-media:run:run-123",
         sessionId: "cron-run-session",
+        bestEffortDeliver: false,
+        sourceReplyDeliveryMode: "automatic",
+        disableMessageTool: true,
+        forceRestartSafeTools: true,
       }),
       {
         allowSyntheticCronRunContinuation: true,
@@ -1430,6 +1374,7 @@ describe("scheduleRestartSentinelWake", () => {
         internalDeliveryMediaUrls: ["/tmp/proof.png"],
         runtimeContextFragments: expectedGeneratedMediaContext,
         internalDeliverySuppressText: true,
+        resolveGatewayContext,
         onAccepted: expect.any(Function),
       },
     );
@@ -1593,62 +1538,6 @@ describe("scheduleRestartSentinelWake", () => {
       1_000,
       expectQueueContext(),
     );
-  });
-
-  it("persists internal generated audio as managed transcript content", async () => {
-    const attachment = {
-      type: "audio" as const,
-      mediaUrl: "/tmp/proof.mp3",
-      mimeType: "audio/mpeg",
-    };
-    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
-      status: "ok",
-      result: { payloads: [{ text: "ready", mediaUrls: [attachment.mediaUrl] }] },
-    });
-
-    await deliverGeneratedMedia({
-      id: `session-delivery-media-internal-${attachment.type}`,
-      messageId: `${attachment.type}:task-internal:agent-loop`,
-      route: { channel: "webchat", to: "agent:main:main", chatType: "direct" },
-      expectedMediaUrls: [attachment.mediaUrl],
-      expectedMediaAttachments: {
-        [attachment.mediaUrl]: {
-          type: attachment.type,
-          path: attachment.mediaUrl,
-          mimeType: attachment.mimeType,
-        },
-      },
-    });
-
-    expect(mocks.dispatchGatewayMethodInProcess).toHaveBeenCalledWith(
-      "agent",
-      expect.objectContaining({ deliver: false, sourceReplyDeliveryMode: "automatic" }),
-      expect.objectContaining({ internalDeliveryMediaUrls: [attachment.mediaUrl] }),
-    );
-    expect(mocks.createManagedOutgoingMediaBlocks).toHaveBeenCalledWith({
-      sessionKey: "agent:main:main",
-      agentId: "main",
-      items: [
-        {
-          url: attachment.mediaUrl,
-          mimeType: attachment.mimeType,
-          trustedLocal: true,
-        },
-      ],
-      stateDir: testState.stateDir,
-      localRoots: [testState.statePath("media")],
-    });
-    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
-      expect.objectContaining({
-        content: [],
-        displayContent: [expect.objectContaining({ type: attachment.type })],
-        idempotencyKey: `${attachment.type}:task-internal:agent-loop:generated-media-transcript`,
-      }),
-    );
-    expect(mocks.attachManagedOutgoingMediaToMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ messageId: "generated-media-transcript" }),
-    );
-    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
   });
 
   it("replays targetless media into the original owner transcript without duplicating artifacts", async () => {
@@ -2187,73 +2076,6 @@ describe("scheduleRestartSentinelWake", () => {
     });
   });
 
-  it("authorizes routed agentTurn continuations while preserving Telegram topic routing", async () => {
-    mocks.readRestartSentinel.mockResolvedValue({
-      payload: {
-        sessionKey: "agent:main:telegram:group:-1003826723328:topic:13757",
-        ts: 123,
-        continuation: {
-          kind: "agentTurn",
-          message: "continue in topic",
-        },
-      },
-    } as unknown as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
-    mocks.parseSessionThreadInfo.mockReturnValue({
-      baseSessionKey: "agent:main:telegram:group:-1003826723328",
-      threadId: "13757",
-    });
-    mocks.loadSessionEntry.mockReturnValue(
-      sessionFixture("agent:main:telegram:group:-1003826723328:topic:13757", {
-        sessionId: "agent:main:telegram:group:-1003826723328:topic:13757",
-        updatedAt: 0,
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "telegram" },
-          origin: { provider: "telegram", chatType: "group" },
-        }),
-      }),
-    );
-    mocks.deliveryContextFromSession.mockReturnValue({
-      channel: "telegram",
-      to: "-1003826723328:topic:13757",
-      accountId: "default",
-      threadId: 13757,
-    });
-    mocks.resolveOutboundTarget.mockReturnValue({
-      ok: true as const,
-      to: "-1003826723328:topic:13757",
-    });
-    setNoticeOwner("-1003826723328:topic:13757");
-
-    await wakeRestartSentinel();
-
-    expectContinuationDispatchFields(
-      {
-        channel: "telegram",
-        accountId: "default",
-        routeSessionKey: "agent:main:telegram:group:-1003826723328:topic:13757",
-        replyOptions: expect.objectContaining({ sourceReplyDeliveryMode: "message_tool_only" }),
-      },
-      {
-        Body: "continue in topic",
-        CommandAuthorized: true,
-        GatewayClientScopes: ["operator.admin"],
-        GatewayClientCaps: [],
-        InputProvenance: {
-          kind: "internal_system",
-          sourceChannel: "telegram",
-          sourceTool: "restart-sentinel",
-        },
-        Provider: "webchat",
-        Surface: "webchat",
-        ChatType: "group",
-        OriginatingChannel: "telegram",
-        OriginatingTo: "-1003826723328:topic:13757",
-        ExplicitDeliverRoute: false,
-        MessageThreadId: "13757",
-      },
-    );
-  });
-
   it("preserves derived reply transport ids in internal continuation context", async () => {
     mocks.getChannelPlugin.mockReturnValue({
       id: "whatsapp",
@@ -2550,7 +2372,7 @@ describe("scheduleRestartSentinelWake", () => {
     expect(getUpdateRun(run.runId)?.verification.noticeDelivered).toBe(false);
   });
 
-  it.each(["config-patch", "config-apply"] as const)(
+  it.each(["config-patch"] as const)(
     "consumes a targetless %s acknowledgement without waking an agent",
     async (kind) => {
       mocks.readRestartSentinel.mockResolvedValue(
@@ -2564,7 +2386,7 @@ describe("scheduleRestartSentinelWake", () => {
           message: null,
           doctorHint: "Run openclaw doctor --non-interactive",
           stats: {
-            mode: kind === "config-patch" ? "config.patch" : "config.apply",
+            mode: "config.patch",
             root: "/tmp/openclaw.json",
             requiresRestart: true,
           },

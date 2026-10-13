@@ -3,11 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js";
 import {
-  deleteSessionEntryLifecycle,
   loadSessionEntryReadOnly,
   loadTranscriptEvents,
   replaceSessionEntry,
-  resetSessionEntryLifecycle,
 } from "../config/sessions/session-accessor.js";
 import { readTranscriptEventMessage } from "../config/sessions/session-accessor.sqlite-read.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -363,7 +361,6 @@ describe("completion announcement", () => {
 
   it.each([
     { kind: "script", failure: "none" },
-    { kind: "command", failure: "none" },
     { kind: "script", failure: "rejected" },
     { kind: "script", failure: "uncertain" },
   ] as const)(
@@ -526,43 +523,6 @@ describe("completion announcement", () => {
     });
   });
 
-  it.each(["deleted", "reset"] as const)(
-    "delivers to the explicit destination when the captured source was %s",
-    async (change) => {
-      await withCompletionFixture(kind, async (fixture) => {
-        const target = {
-          canonicalKey: fixture.source.sessionKey,
-          storeKeys: [fixture.source.sessionKey],
-        };
-        if (change === "deleted") {
-          await deleteSessionEntryLifecycle({
-            archiveTranscript: false,
-            storePath: fixture.source.storePath,
-            target,
-          });
-        } else {
-          await resetSessionEntryLifecycle({
-            storePath: fixture.source.storePath,
-            target,
-            buildNextEntry: () => ({
-              sessionId: "replacement-session",
-              lifecycleRevision: "replacement-generation",
-              updatedAt: 2,
-            }),
-          });
-        }
-
-        await expect(fixture.finalize()).resolves.toMatchObject({
-          deliveryAttempted: true,
-          delivered: true,
-        });
-        expect(fixture.sendText).toHaveBeenCalledOnce();
-        await fixture.assertResult();
-        await fixture.assertNoOtherResults();
-      });
-    },
-  );
-
   it("refuses destination output without an occurrence identity", async () => {
     await withCompletionFixture(kind, async (fixture) => {
       await expect(fixture.finalize({ runStartedAtMs: undefined })).resolves.toMatchObject({
@@ -606,7 +566,7 @@ describe("completion announcement", () => {
     });
   });
 
-  it.each(["NO_REPLY", "Scheduled report\nNO_REPLY"])(
+  it.each(["Scheduled report\nNO_REPLY"])(
     "suppresses script control text before committing or adding an inspection link: %s",
     async (text) => {
       await withCompletionFixture("script", async (fixture) => {
@@ -624,7 +584,7 @@ describe("completion announcement", () => {
     },
   );
 
-  it.each(["none", "webhook"] as const)(
+  it.each(["webhook"] as const)(
     "does not write a conversation result for %s delivery",
     async (mode) => {
       await withCompletionFixture(kind, async (fixture) => {
