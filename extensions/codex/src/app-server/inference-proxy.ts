@@ -57,7 +57,8 @@ type ResidentTicket = {
 };
 
 function inferenceFakeIpPolicy(target: URL): SsrFPolicy | undefined {
-  if (target.origin !== "https://chatgpt.com" || target.username || target.password) {
+  const isChatGptHttps = target.protocol === "https:" && target.origin === "https://chatgpt.com";
+  if (!isChatGptHttps || target.username || target.password) {
     return undefined;
   }
   // The exact HTTPS origin permits 198.18.0.0/15 and fc00::/7, including real ULA
