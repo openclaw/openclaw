@@ -288,13 +288,17 @@ export class ComposerDictationController {
       client,
       {
         onError: (message, preservesText) => {
-          if (this.session !== session) {
+          if (this.session !== session && this.pendingCommitSession !== session) {
             return;
           }
           try {
             this.options.onError(message, { kind: "interrupted", preservesText });
           } finally {
-            void this.stop({ commit: true });
+            if (this.session === session) {
+              void this.stop({ commit: true });
+            } else if (this.pendingCommitSession === session) {
+              this.retirePendingCommit();
+            }
           }
         },
         onLevel: (level) => this.inputLevel.set(level),

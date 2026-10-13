@@ -184,6 +184,8 @@ function mountComposer(overrides: Parameters<typeof props>[0]) {
 
 beforeEach(() => {
   onTestFinished(installChatComposerPickerDismissal(document));
+  vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+  vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
   // ESM imports remain live when the composer was cached by another test file.
   // Patch the shared dependencies instead of clearing isolate:false's registry.
   vi.spyOn(realtimeTalkInput, "discoverRealtimeTalkInputs").mockImplementation(

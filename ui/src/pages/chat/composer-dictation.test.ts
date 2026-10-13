@@ -273,6 +273,39 @@ afterEach(() => {
 });
 
 describe("ComposerDictationController", () => {
+  it("surfaces final transcription failure and discards its pending result", async () => {
+    const start = vi.spyOn(ComposerDictationSession.prototype, "start");
+    const { controller, onCommit, onError } = createHarness();
+    try {
+      expect(controller.startDirect()).toBe(true);
+      const started = start.mock.results[0];
+      assert.isDefined(started);
+      await started.value;
+      const finished = controller.finishActive();
+      emit({
+        transcriptionSessionId: "dictation-1",
+        type: "transcript",
+        text: "failed result",
+        final: true,
+      });
+      emit({
+        transcriptionSessionId: "dictation-1",
+        type: "error",
+        message: "Local transcription failed",
+      });
+      expect(onError).toHaveBeenCalledExactlyOnceWith("Local transcription failed", {
+        kind: "interrupted",
+        preservesText: false,
+      });
+      await expect(finished).resolves.toBe(false);
+      expect(onCommit).not.toHaveBeenCalled();
+      expect(controller.locksComposer).toBe(false);
+      expect(listeners.size).toBe(0);
+    } finally {
+      controller.dispose();
+    }
+  });
+
   it("lets Read aloud discard pending dictation without stopping newer playback", async () => {
     const start = vi.spyOn(ComposerDictationSession.prototype, "start");
     const { controller, onCommit, options } = createHarness();
@@ -527,7 +560,7 @@ describe("ComposerDictationController", () => {
       }
       return { ok: true };
     });
-    const { controller, onCommit, target } = createHarness();
+    const { controller, onCommit, onError, target } = createHarness();
     await startHold(target);
 
     const committed = controller.finishActive();
@@ -549,6 +582,8 @@ describe("ComposerDictationController", () => {
       expect(controller.transcript).toBe("new preview");
       emit({ transcriptionSessionId: "dictation-1", type: "partial", text: "stale preview" });
       expect(controller.transcript).toBe("new preview");
+      emit({ transcriptionSessionId: "dictation-1", type: "error", message: "stale failure" });
+      expect(onError).not.toHaveBeenCalled();
       emit({
         transcriptionSessionId: "dictation-1",
         type: "transcript",
@@ -868,7 +903,7 @@ describe("ComposerDictationController", () => {
     resolveCreate({
       sessionId: "late-session",
       transcriptionSessionId: "late-session",
-      audio: { inputEncoding: "unsupported", inputSampleRateHz: 48_000 },
+      audio: { inputEncoding: "g711_ulaw", inputSampleRateHz: 8000 },
     });
 
     await waitForFast(() =>
