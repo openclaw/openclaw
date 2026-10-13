@@ -337,6 +337,7 @@ type GatewaySessionLifecycleEventParams = {
   sessionKey: string;
   agentId?: string;
   event: LifecycleEventLike;
+  timeoutPartialText?: string;
   assertCommitAllowed?: () => void;
   expectedWriter?: {
     requireYielded?: true;
@@ -405,7 +406,14 @@ async function persistPreparedGatewaySessionLifecycleEvent(
 
   const exactCronRun = parseCronRunScopeSuffix(sessionEntry.canonicalKey).runId !== undefined;
   let terminalRecovery: { runId: string; outcome: AgentRunTerminalOutcome } | undefined;
-  let failedRun: { runId: string; error: unknown; errorKind?: "state_contention" } | undefined;
+  let failedRun:
+    | {
+        runId: string;
+        error: unknown;
+        status: "failed" | "timeout";
+        errorKind?: "state_contention";
+      }
+    | undefined;
   const persisted = await patchSessionEntryTarget(
     {
       agentId: sessionEntry.agentId,
@@ -455,7 +463,8 @@ async function persistPreparedGatewaySessionLifecycleEvent(
           owningSessionId,
           currentSessionId: entry.sessionId,
           eventRunId: params.event.runId,
-          currentRunId: entry.lifecycleRunId,
+          // Admission can own the writer before its lifecycle start is published.
+          currentRunId: entry.lifecycleRunId ?? entry.activeWriterRunId,
           eventStartedAt: params.event.data?.startedAt,
           currentStartedAt: entry.startedAt,
         })
@@ -527,6 +536,7 @@ async function persistPreparedGatewaySessionLifecycleEvent(
           error:
             resolveTerminalOutcome(params.event).error ??
             (patch.status === "timeout" ? "Run timed out" : undefined),
+          status: patch.status,
         };
       }
       const recoveryTerminalIsCurrent =
@@ -572,7 +582,7 @@ async function persistPreparedGatewaySessionLifecycleEvent(
     restartRecoveryLog[terminalRecovery.outcome.status === "ok" ? "info" : "warn"](message);
   }
   if (persisted && failedRun) {
-    const { runId, error, errorKind } = failedRun;
+    const { runId, error, status, errorKind } = failedRun;
     // Only accepted errors pay for branch navigation; assistant detection and
     // report deduplication share the appender's authoritative write snapshot.
     const receipt = {
@@ -586,6 +596,8 @@ async function persistPreparedGatewaySessionLifecycleEvent(
       },
       runId,
       error,
+      status,
+      timeoutPartialText: params.timeoutPartialText,
       errorKind,
       assertCommitAllowed: params.assertCommitAllowed,
     };

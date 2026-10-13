@@ -1,5 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  sliceUtf16Safe,
+  truncateUtf16Safe,
+  truncateWithMarker,
+} from "@openclaw/normalization-core/utf16-slice";
 import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { renderUserFacingText } from "../agents/embedded-agent-helpers/user-facing-text.js";
 import {
@@ -15,10 +19,11 @@ import type { CustomMessageReportAppend } from "../config/sessions/session-acces
 import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
-import { redactSensitiveText } from "../logging/redact.js";
+import { redactSensitiveText, redactToolPayloadText } from "../logging/redact.js";
 import { STATE_CONTENTION_SUMMARY } from "./session-run-error-presentation.js";
 
 const SESSION_RUN_ERROR_MAX_CHARS = 160;
+const SESSION_TIMEOUT_PARTIAL_MAX_CHARS = 8_000;
 const RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE = "run-failed-before-reply";
 
 function sanitizeSessionRunError(error: unknown): string {
@@ -31,6 +36,8 @@ type GatewaySessionRunFailure = {
   runId: string;
   error: unknown;
   errorKind?: "state_contention";
+  status?: "failed" | "timeout";
+  timeoutPartialText?: string;
   assertCommitAllowed?: () => void;
   sessionEntryCurrent?: SessionEntryCurrentCheck;
 };
@@ -41,14 +48,34 @@ export async function recordGatewaySessionRunFailure(
   const { runId } = params;
   const storageFailure = classifyGatewayStorageFailure(params.error);
   const error = truncateUtf16Safe(sanitizeSessionRunError(params.error), 512) || "unknown error";
+  // Redact the complete buffer before truncating so a boundary cannot split a secret
+  // before diagnostic redaction sees it. The report keeps its explicit masking boundary.
+  const timeoutPartialText =
+    params.status === "timeout" && params.timeoutPartialText?.trim()
+      ? truncateWithMarker(
+          redactToolPayloadText(params.timeoutPartialText),
+          SESSION_TIMEOUT_PARTIAL_MAX_CHARS,
+          { marker: "\n[truncated]", reserve: "\n[truncated]".length, trimEnd: false },
+        )
+      : undefined;
+  // One existing custom report keeps the partial and its outcome inseparable.
+  // Older readers already replay this format; partial text remains quoted data,
+  // rather than an injected assistant message that they would filter out.
+  const timeoutContent =
+    "This turn timed out and may have performed work before it stopped." +
+    (timeoutPartialText
+      ? `\n\nUnfinished assistant output (recorded text, not a completion claim):\n${JSON.stringify(timeoutPartialText)}`
+      : "");
   const report: CustomMessageReportAppend = {
     customType: RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
     content:
-      params.errorKind === "state_contention"
-        ? STATE_CONTENTION_SUMMARY
-        : (renderAssistantRequestFailureCopy({ storageFailure }) ??
-          renderCodexAppServerFailureCopy(error) ??
-          `Your request couldn't be completed: ${error}`),
+      params.status === "timeout"
+        ? timeoutContent
+        : params.errorKind === "state_contention"
+          ? STATE_CONTENTION_SUMMARY
+          : (renderAssistantRequestFailureCopy({ storageFailure }) ??
+            renderCodexAppServerFailureCopy(error) ??
+            `Your request couldn't be completed: ${error}`),
     display: true,
     details: { runId, error, ...(params.errorKind ? { errorKind: params.errorKind } : {}) },
   };

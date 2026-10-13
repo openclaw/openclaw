@@ -57,6 +57,7 @@ import {
 import { bindChatSendPreparedSession } from "./chat-send-session-binding.js";
 import { captureAdmittedChatSendSessionSettings } from "./chat-send-session-settings.js";
 import { withCurrentChatSendSession, prepareChatSendSessionEntry } from "./chat-send-session.js";
+import { waitForChatSessionTimeoutPersistence } from "./chat-send-timeout-persistence.js";
 import {
   admitChatSendUploads,
   assertChatSendExclusiveAdmission,
@@ -76,11 +77,8 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   const { p, turnKind } = request;
   const requestIdentity = request.goalOperation?.requestFingerprint ?? request.requestIdentity;
   const progressRefresh = isProgressCardRefreshInputProvenance(request.systemInputProvenance);
+  const { clientRunId, storePath, entry, sessionKey } = session;
   const {
-    clientRunId,
-    storePath,
-    entry,
-    sessionKey,
     selectedAgent,
     requestedSessionId,
     backingSessionId,
@@ -410,6 +408,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
 
   let retainedRequestConflict: ReturnType<typeof resolveChatSendRequestConflict>;
   try {
+    await waitForChatSessionTimeoutPersistence({ context, session });
     using workPhase = diagnostics?.scope("detail.admission.work");
     gatewayWorkAdmission = await beginSessionWorkAdmission({
       agentId,
@@ -450,6 +449,9 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
       },
     });
     workPhase?.finish();
+    // A preceding run can time out while admission waits for the session writer.
+    // Wait outside that writer so its terminal transcript write can complete.
+    await waitForChatSessionTimeoutPersistence({ context, session });
     retainedRequestConflict = await consumeChatSendCurrent(params, () =>
       resolveChatSendRequestConflict(params, retryComparison),
     );
