@@ -352,6 +352,7 @@ src/agents/sandbox/registry-lifecycle.ts
 src/agents/sandbox/registry-publication.ts
 src/config/zod-schema.database.ts
 src/infra/database-engine/admission-scope.ts
+src/infra/database-engine/json-values.ts
 src/infra/database-engine/observation.ts
 src/infra/database-engine/policy.ts
 src/infra/postgres-sync/connection.ts

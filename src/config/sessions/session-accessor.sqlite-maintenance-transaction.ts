@@ -1,3 +1,4 @@
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
@@ -189,7 +190,7 @@ export function readSessionMaintenanceInWorker(
           ageFact: readSessionEntryMaintenanceAgeFact(database.db, input.maintenance),
         };
       }
-      return withSqlitePostCommitPublications(database.db, () =>
+      return withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
         runSqliteDeferredTransactionSync(
           database.db,
           (): SessionMaintenanceReadResult => {
