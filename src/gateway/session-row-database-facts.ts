@@ -227,14 +227,16 @@ export async function withSessionRowDatabaseFacts(
                 ownershipReads.set(identity(row), ownership);
                 prepared.runtimeOwnership = ownership.value ?? null;
                 prepared.runtimeOwnershipDependencies = ownership.dependencies;
+                delete prepared.runtimeOwnershipRetryPending;
                 break;
               } catch (error) {
                 if (!(error instanceof SessionRuntimeOwnershipChanged)) {
                   throw error;
                 }
-                // Continued native churn degrades only this row; no dependency caches the fallback.
+                // Serve this row degraded, then retry it at the next foreground selection.
                 prepared.runtimeOwnership = null;
                 prepared.runtimeOwnershipDependencies = [];
+                prepared.runtimeOwnershipRetryPending = true;
               }
             }
           }

@@ -14,7 +14,8 @@ from: DMs, group chats, cron jobs, etc. All session state is owned by the
 Session lists reconcile invalidated metadata before returning rows. If a native
 session changes ownership during a list read, the Gateway retries its runtime
 metadata once. Continued changes temporarily use the configured model metadata
-for that row while other sessions remain available.
+for that row while other sessions remain available. The next list read retries
+its native metadata.
 
 To continue the same Gateway-owned session in the Control UI, terminal, or a
 coding harness, see [Session synchronization and attachment](/concepts/session-attachment).

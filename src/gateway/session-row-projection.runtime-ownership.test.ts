@@ -120,6 +120,28 @@ it.for(["once", "continued", "failure"] as const)(
             }),
           );
           expect(reads).toBe(2);
+          if (change === "continued") {
+            changing = false;
+            respond.mockClear();
+            await sessionReadHandlers["sessions.list"]!({
+              req: { type: "req", id: "ownership-stable-list", method: "sessions.list" },
+              params: {},
+              client: null,
+              context: bindSessionRowProjection(requestContext(cfg), () => projection!),
+              isWebchatConnect: () => false,
+              respond,
+            });
+            expect(respond).toHaveBeenCalledWith(
+              true,
+              expect.objectContaining({
+                sessions: [
+                  expect.objectContaining({ sessionId: "changing", model: "gpt-5.6-sol" }),
+                  expect.objectContaining({ sessionId: "unaffected" }),
+                ],
+              }),
+            );
+            expect(reads).toBe(3);
+          }
         }
       } finally {
         projection?.dispose();
