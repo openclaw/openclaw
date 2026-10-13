@@ -44,7 +44,8 @@ export async function publishDoctorUpdateResult(params: {
       ...(updateResult.capture.fileWrites
         ? { configFileWrites: updateResult.capture.fileWrites }
         : {}),
-      ...(warnings.length ? { warnings } : {}),
+      // Replace Doctor's own list even when every entry settled; the writer drops [].
+      warnings,
       ...(updateResult.capture.configChanges.length
         ? { configChanges: updateResult.capture.configChanges }
         : {}),

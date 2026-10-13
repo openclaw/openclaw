@@ -310,43 +310,51 @@ describe("runDoctorHealthFlow update outcomes", () => {
     },
   );
 
-  it("drops plugin migration warnings settled later in the same Doctor pass", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const resultPath = createUpdatePostInstallDoctorResultPath();
-      vi.stubEnv(UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV, resultPath);
-      const pending = (pluginId: string) => ({
-        pluginId,
-        reason: "The installed plugin has not confirmed its saved data and settings.",
-        command: "openclaw doctor --fix",
-      });
-      const [settled, stillPending] = [pending("acpx"), pending("codex")];
-      // Config preflight reported both before post-session repair settled acpx.
-      for (const plugin of [settled, stillPending]) {
-        mocks.stateMigrationReceipts.push({
-          id: `plugin:${plugin.pluginId}`,
-          phase: "final",
-          source: [{ kind: "owner", id: plugin.pluginId }],
-          target: [{ kind: "owner", id: plugin.pluginId }],
-          requiredness: "conditional",
-          reversibility: "checkpoint-required",
-          outcome: "deferred",
-          changes: [],
-          warnings: [formatDeferredPluginMigration(plugin)],
+  it.each([
+    ["one plugin still pending", ["codex"]],
+    ["every plugin settled", []],
+  ])(
+    "drops plugin migration warnings settled later in the same Doctor pass (%s)",
+    async (_, stillPendingIds) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const resultPath = createUpdatePostInstallDoctorResultPath();
+        vi.stubEnv(UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV, resultPath);
+        const pending = (pluginId: string) => ({
+          pluginId,
+          reason: "The installed plugin has not confirmed its saved data and settings.",
+          command: "openclaw doctor --fix",
         });
-      }
-      // The ledger as the pass leaves it: acpx settled, codex still pending.
-      mocks.pendingPluginMigrations.mockResolvedValue([stillPending]);
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        // Config preflight reported both before post-session repair settled them.
+        const reported = [pending("acpx"), pending("codex")];
+        for (const plugin of reported) {
+          mocks.stateMigrationReceipts.push({
+            id: `plugin:${plugin.pluginId}`,
+            phase: "final",
+            source: [{ kind: "owner", id: plugin.pluginId }],
+            target: [{ kind: "owner", id: plugin.pluginId }],
+            requiredness: "conditional",
+            reversibility: "checkpoint-required",
+            outcome: "deferred",
+            changes: [],
+            warnings: [formatDeferredPluginMigration(plugin)],
+          });
+        }
+        // The ledger as the pass leaves it.
+        const stillPending = reported.filter((plugin) => stillPendingIds.includes(plugin.pluginId));
+        mocks.pendingPluginMigrations.mockResolvedValue(stillPending);
+        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
-      try {
-        await runDoctorHealthFlow(runtime, { nonInteractive: true });
-        const result = await consumeUpdatePostInstallDoctorResult(resultPath);
-        expect(result?.warnings).toEqual([formatDeferredPluginMigration(stillPending)]);
-      } finally {
-        await consumeUpdatePostInstallDoctorResult(resultPath);
-      }
-    });
-  });
+        try {
+          await runDoctorHealthFlow(runtime, { nonInteractive: true });
+          const result = await consumeUpdatePostInstallDoctorResult(resultPath);
+          expect(result).not.toBeNull();
+          expect(result?.warnings ?? []).toEqual(stillPending.map(formatDeferredPluginMigration));
+        } finally {
+          await consumeUpdatePostInstallDoctorResult(resultPath);
+        }
+      });
+    },
+  );
 
   it.each(["ok", "pending"] as const)(
     "preserves the canonical %s update outcome before further Doctor checks",
