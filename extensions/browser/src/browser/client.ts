@@ -242,8 +242,6 @@ export async function browserOpenTab(
     managedOnly?: boolean;
   },
 ): Promise<BrowserOpenResult> {
-  // An explicit budget bounds the opening navigation like navigate; without one the
-  // browser keeps its default open navigation budget.
   const timeoutMs =
     opts?.timeoutMs === undefined ? undefined : resolveBrowserNavigationTimeoutMs(opts.timeoutMs);
   return await postBrowserJson(
@@ -255,9 +253,7 @@ export async function browserOpenTab(
       ...(opts?.managedOnly ? { managedOnly: true } : {}),
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
     },
-    timeoutMs === undefined
-      ? browserClientTimeout(baseUrl, undefined, 15000)
-      : resolveBrowserOperationRequestTimeoutMs(timeoutMs),
+    resolveBrowserOperationRequestTimeoutMs(timeoutMs ?? 30_000),
     opts,
   );
 }

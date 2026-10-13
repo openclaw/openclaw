@@ -264,6 +264,33 @@ it.each<{
   doctor?: true;
 }>([
   {
+    name: "requested open navigation",
+    input: { action: "open", url: "https://example.com/slow", timeoutMs: 60_000 },
+    replies: [{ targetId: "tab-1", url: "https://example.com/slow" }],
+    gatewayTimeout: 75_000,
+    nodeTimeout: 70_000,
+    params: { path: "/tabs/open", timeoutMs: 65_000 },
+    exactBody: { url: "https://example.com/slow", timeoutMs: 60_000 },
+  },
+  {
+    name: "capped open navigation",
+    input: { action: "open", url: "https://example.com/slow", timeoutMs: Number.MAX_SAFE_INTEGER },
+    replies: [{ targetId: "tab-1", url: "https://example.com/slow" }],
+    gatewayTimeout: 135_000,
+    nodeTimeout: 130_000,
+    params: { path: "/tabs/open", timeoutMs: 125_000 },
+    exactBody: { url: "https://example.com/slow", timeoutMs: 120_000 },
+  },
+  {
+    name: "default open navigation",
+    input: { action: "open", url: "https://example.com/slow" },
+    replies: [{ targetId: "tab-1", url: "https://example.com/slow" }],
+    gatewayTimeout: 45_000,
+    nodeTimeout: 40_000,
+    params: { path: "/tabs/open", timeoutMs: 35_000 },
+    exactBody: { url: "https://example.com/slow" },
+  },
+  {
     name: "requested download wait",
     input: { action: "waitfordownload", path: "export.csv", targetId: "tab-1", timeoutMs: 30_000 },
     replies: [
@@ -591,7 +618,7 @@ it.each(["host fallback", "failed rollback"] as const)(
         expect(runtime.fetchBrowserJson).toHaveBeenLastCalledWith("/tabs/open?profile=work", {
           method: "POST",
           body: JSON.stringify({ url: opened.url }),
-          timeoutMs: 60_000,
+          timeoutMs: 35_000,
           signal: controller.signal,
         });
       } else {

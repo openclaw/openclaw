@@ -238,7 +238,6 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
     if (!url) {
       return jsonError(res, 400, "url is required");
     }
-    // The opening navigation honors the same bounded budget as /navigate.
     let timeoutMs: number | undefined;
     try {
       const requestedTimeoutMs = readRouteTimerTimeoutMs(
