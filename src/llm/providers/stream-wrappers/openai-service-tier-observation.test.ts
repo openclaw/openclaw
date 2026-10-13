@@ -6,6 +6,7 @@ import { createOpenAIServiceTierObservationWrapper } from "./openai-service-tier
 import { createOpenAIFastModeWrapper } from "./openai.js";
 
 const log = vi.hoisted(() => ({ info: vi.fn() }));
+// mock-isolation: Capture records without opening process-global file/console sinks.
 vi.mock("../../../logging/subsystem.js", () => ({ createSubsystemLogger: () => log }));
 beforeEach(() => log.info.mockClear());
 const attribution = {
@@ -95,7 +96,7 @@ it("attributes a successful slower retry to the original rejected tier without a
     model: "fixture-served",
     usage: {
       input_tokens: 12_000,
-      input_tokens_details: { cached_tokens: 8_000 },
+      input_tokens_details: { cached_tokens: 8_000, cache_write_tokens: 0 },
       output_tokens: 100,
       output_tokens_details: { reasoning_tokens: 0 },
       total_tokens: 12_100,
