@@ -278,9 +278,11 @@ suite.define(() => {
               "Reconnecting",
             );
             expect(await pane.locator(".agent-chat__welcome").count()).toBe(0);
-            await pollLocatorText(pane.locator(".agent-chat__composer-status-band")).toContain(
-              "1 in this conversation’s outbox.",
-            );
+            const outbox = pane.locator(".chat-queue__item");
+            await outbox.getByText("later ordinary turn", { exact: true }).waitFor();
+            await outbox.getByText("Waiting for reconnect", { exact: true }).waitFor();
+            expect(await outbox.count()).toBe(1);
+            expect(await pane.locator(".agent-chat__composer-status-band").count()).toBe(0);
             await pollLocatorText(failedGroup.locator(".chat-send-status")).toContain(
               "Waiting for reconnect",
             );
