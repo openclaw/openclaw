@@ -98,9 +98,13 @@ export class SessionOrganizerController {
     return operations.patchSession(this.host, session, patch, scope, options);
   };
 
-  snoozeSessionWithUndo(session: SidebarRecentSession, snoozedUntil: number): Promise<void> {
+  snoozeSessionWithUndo(
+    session: SidebarRecentSession,
+    snoozedUntil: number,
+    rememberCustom = false,
+  ): Promise<void> {
     return this.runOperation((operations, scope) =>
-      operations.snoozeSessionWithUndo(this.host, session, snoozedUntil, scope),
+      operations.snoozeSessionWithUndo(this.host, session, { snoozedUntil, rememberCustom }, scope),
     );
   }
 

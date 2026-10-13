@@ -236,7 +236,7 @@ export function registerExternalHandoffShutdownTests(
       });
       captureSignal("SIGTERM")();
       await expect(exited).resolves.toBe(0);
-      expect(waitForGatewayActiveWork).toHaveBeenCalledWith(315_000, expect.any(Object));
+      expect(waitForGatewayActiveWork).toHaveBeenCalledWith(20_000, expect.any(Object));
       expect(close).toHaveBeenCalledWith({
         retainSharedState: true,
         reason: "gateway stopping",

@@ -1,5 +1,3 @@
-import { initialState, Task, TaskStatus } from "@lit/task";
-import type { ReactiveControllerHost } from "lit";
 import type {
   FsListDirResult,
   ProjectRecord,
@@ -13,6 +11,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
 import { projectsForGateway, type ProjectCatalog } from "../../lib/projects.ts";
+import type { ControllerHost } from "../../lit/subscriptions-controller.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { isAbsolutePath, isKnownWorkspacePath } from "./path.ts";
 import { PICKER_INPUT_DEBOUNCE_MS, PlaceBrowserState } from "./place-browser-state.ts";
@@ -64,10 +63,14 @@ export class DraftPlaceBrowser {
 
   readonly browser: PlaceBrowserState;
 
-  private readonly projectSearchTask: Task<readonly unknown[], ProjectsSearchRemoteResult>;
+  private projectSearchArgs: readonly unknown[] = [];
+  private projectSearchRequest: AbortController | undefined;
+  private projectSearchStatus: "initial" | "pending" | "complete" | "error" = "initial";
+  private projectSearchValue: ProjectsSearchRemoteResult | null = null;
+  private projectSearchFailure: unknown;
 
   constructor(
-    private readonly host: ReactiveControllerHost,
+    private readonly host: Pick<ControllerHost, "addController" | "updateComplete">,
     private readonly gateway: DraftGatewayState,
     private readonly read: () => DraftPlaceBrowserSnapshot,
     private readonly callbacks: DraftPlaceBrowserCallbacks,
@@ -105,33 +108,69 @@ export class DraftPlaceBrowser {
       },
     );
     // Draft lifetime can outlive the DOM during an instant-thread handoff.
-    // The page's disposeDraft owns disconnect; queued Lit updates must not revive it.
-    host.addController({ hostUpdate: () => this.bindProjectCatalog() });
-    this.projectSearchTask = new Task(host, {
-      args: () =>
-        [
-          this.read().context && this.gateway.connected ? this.gateway.client : null,
-          this.read().context
-            ? canCallGatewayMethod(
-                this.read().context?.gateway.snapshot,
-                "projects.searchRemote",
-                "operator.read",
-              )
-            : false,
-          this.debouncedProjectQuery,
-          this.gateway.connectionEpoch,
-        ] as const,
-      task: ([client, advertised, query], { signal }) => {
-        if (!client || !advertised || query.length < 2 || projectCloneInput(query)) {
-          return initialState;
+    // The page's disposeDraft owns disconnect; queued updates must not revive it.
+    host.addController({
+      hostUpdate: () => {
+        this.bindProjectCatalog();
+        const args = this.projectSearchInput();
+        if (!args.every((arg, index) => Object.is(arg, this.projectSearchArgs[index]))) {
+          this.searchProjects(args);
         }
-        return client.request<ProjectsSearchRemoteResult>(
-          "projects.searchRemote",
-          { query },
-          { signal },
-        );
       },
     });
+  }
+
+  private projectSearchInput() {
+    return [
+      this.read().context && this.gateway.connected ? this.gateway.client : null,
+      canCallGatewayMethod(
+        this.read().context?.gateway.snapshot,
+        "projects.searchRemote",
+        "operator.read",
+      ),
+      this.debouncedProjectQuery,
+      this.gateway.connectionEpoch,
+    ] as const;
+  }
+
+  private searchProjects(args = this.projectSearchInput()) {
+    this.projectSearchArgs = args;
+    this.projectSearchRequest?.abort();
+    this.projectSearchRequest = undefined;
+    this.projectSearchStatus = "initial";
+    this.projectSearchValue = null;
+    this.projectSearchFailure = undefined;
+    const [client, advertised, query] = args;
+    if (!client || !advertised || query.length < 2 || projectCloneInput(query)) {
+      return;
+    }
+    const request = new AbortController();
+    this.projectSearchRequest = request;
+    this.projectSearchStatus = "pending";
+    void client
+      .request<ProjectsSearchRemoteResult>(
+        "projects.searchRemote",
+        { query },
+        { signal: request.signal },
+      )
+      .then((result) => {
+        if (!request.signal.aborted) {
+          this.projectSearchStatus = "complete";
+          this.projectSearchValue = result;
+        }
+      })
+      .catch((error: unknown) => {
+        if (!request.signal.aborted) {
+          this.projectSearchStatus = "error";
+          this.projectSearchFailure = error;
+        }
+      })
+      .finally(() => {
+        if (this.projectSearchRequest === request) {
+          this.projectSearchRequest = undefined;
+          this.callbacks.requestUpdate();
+        }
+      });
   }
 
   get projects(): readonly ProjectRecord[] {
@@ -191,9 +230,9 @@ export class DraftPlaceBrowser {
   }
 
   get projectSearchResult(): ProjectsSearchRemoteResult | null {
-    return this.projectSearchTask.status === TaskStatus.COMPLETE &&
+    return this.projectSearchStatus === "complete" &&
       this.debouncedProjectQuery === this.projectQueryValue.trim()
-      ? (this.projectSearchTask.value ?? null)
+      ? this.projectSearchValue
       : null;
   }
 
@@ -201,18 +240,18 @@ export class DraftPlaceBrowser {
     return (
       this.debouncedProjectQuery.length >= 2 &&
       this.debouncedProjectQuery === this.projectQueryValue.trim() &&
-      this.projectSearchTask.status === TaskStatus.PENDING
+      this.projectSearchStatus === "pending"
     );
   }
 
   get projectSearchError(): string | null {
     if (
-      this.projectSearchTask.status !== TaskStatus.ERROR ||
+      this.projectSearchStatus !== "error" ||
       this.debouncedProjectQuery !== this.projectQueryValue.trim()
     ) {
       return null;
     }
-    return formatUiError(this.projectSearchTask.error);
+    return formatUiError(this.projectSearchFailure);
   }
 
   get browserOpen(): boolean {
@@ -333,7 +372,7 @@ export class DraftPlaceBrowser {
     this.projectQueryValue = query;
     this.clearProjectSearchTimer();
     this.debouncedProjectQuery = "";
-    void this.projectSearchTask.run([null, false, "", this.gateway.connectionEpoch]);
+    this.searchProjects([null, false, "", this.gateway.connectionEpoch]);
     const normalized = query.trim();
     const context = this.read().context;
     if (
@@ -355,7 +394,7 @@ export class DraftPlaceBrowser {
         return;
       }
       this.debouncedProjectQuery = normalized;
-      void this.projectSearchTask.run([client, true, normalized, connectionEpoch]);
+      this.searchProjects([client, true, normalized, connectionEpoch]);
       this.callbacks.requestUpdate();
     }, PICKER_INPUT_DEBOUNCE_MS);
     this.callbacks.requestUpdate();
@@ -509,7 +548,7 @@ export class DraftPlaceBrowser {
     this.projectCatalogCleanup = undefined;
     this.projectCatalogGateway = undefined;
     this.projectCatalog = undefined;
-    void this.projectSearchTask.run([null, false, "", -1]);
+    this.searchProjects([null, false, "", -1]);
   }
 
   private resetBrowser(closePopover: boolean) {
