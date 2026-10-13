@@ -8,6 +8,10 @@ import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
+  getProviderRequestRateLimitQueuedCountForTests,
+  waitForProviderRequestRateLimit,
+} from "./provider-rate-limit.js";
+import {
   buildGuardedModelFetch,
   buildProviderRequestDispatcherPolicyMock,
   ensureModelProviderLocalServiceMock,
@@ -497,9 +501,16 @@ describe("buildGuardedModelFetch", () => {
       const queueFull = await fetcher("https://api.openai.com/v1/responses", { method: "POST" });
       expect(queueFull.status).toBe(429);
       expect(queueFull.headers.get("x-should-retry")).toBe("false");
-      await expect(queueFull.json()).resolves.toMatchObject({
-        error: { code: "provider_rate_limit_queue_full", type: "rate_limit" },
+      const queueFullBody = (await queueFull.json()) as {
+        error: { code: string; type: string; message: string };
+      };
+      expect(queueFullBody.error).toMatchObject({
+        code: "provider_rate_limit_queue_full",
+        type: "rate_limit",
       });
+      expect(queueFullBody.error.message).toContain("rejected locally");
+      expect(queueFullBody.error.message).toContain("not sent to the provider");
+      expect(queueFullBody.error.message).toContain("then retry");
       await vi.advanceTimersByTimeAsync(50);
       await vi.waitFor(() => expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2));
       await queued;
@@ -649,6 +660,22 @@ describe("buildGuardedModelFetch", () => {
 
       controller.abort("canceled-before-turn");
       await expect(queued).rejects.toMatchObject({ name: "AbortError" });
+      expect(getProviderRequestRateLimitQueuedCountForTests(pacedModel)).toBe(0);
+
+      // Repeated cancellation must remove each waiter, not just decrement capacity
+      // while retaining canceled callbacks in a promise-chain queue.
+      for (let attempt = 0; attempt < 128; attempt += 1) {
+        const churnController = new AbortController();
+        const canceled = waitForProviderRequestRateLimit(
+          pacedModel,
+          { minIntervalMs: 50, maxQueueSize: 1 },
+          churnController.signal,
+        );
+        expect(getProviderRequestRateLimitQueuedCountForTests(pacedModel)).toBe(1);
+        churnController.abort(`canceled-${attempt}`);
+        await expect(canceled).rejects.toMatchObject({ name: "AbortError" });
+        expect(getProviderRequestRateLimitQueuedCountForTests(pacedModel)).toBe(0);
+      }
 
       // The freed slot must be reusable immediately, before any pacing window elapses.
       const retry = fetcher("https://api.openai.com/v1/responses", { method: "POST" });

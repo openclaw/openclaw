@@ -8,10 +8,20 @@ export type ProviderRequestRateLimitConfig = NonNullable<
   ModelProviderRequestTransportOverrides["rateLimit"]
 >;
 
+type ProviderRequestRateLimitWaiter = {
+  config: ProviderRequestRateLimitConfig;
+  signal?: AbortSignal;
+  canceled: boolean;
+  settled: boolean;
+  resolve: () => void;
+  reject: (error: Error) => void;
+  onAbort?: () => void;
+};
+
 type ProviderRequestRateLimitBucket = {
   expiresAt: number;
-  queue: Promise<void>;
-  queued: number;
+  waiters: ProviderRequestRateLimitWaiter[];
+  draining: boolean;
   requestTimes: number[];
   lastDispatchAt: number;
 };
@@ -27,7 +37,7 @@ function resetProviderRequestRateLimitBucketsForTests(): void {
 
 function pruneProviderRequestRateLimitBuckets(now: number): void {
   for (const [key, bucket] of providerRequestRateLimitBuckets) {
-    if (bucket.queued === 0 && bucket.expiresAt > 0 && bucket.expiresAt <= now) {
+    if (bucket.waiters.length === 0 && bucket.expiresAt > 0 && bucket.expiresAt <= now) {
       providerRequestRateLimitBuckets.delete(key);
     }
   }
@@ -83,7 +93,7 @@ function resolveProviderRateLimitKey(model: Model): string {
   return [model.provider, model.id, model.baseUrl].join("\0");
 }
 
-function resolveProviderRateLimitDelayMs(
+function resolveProviderRequestRateLimitDelayMs(
   bucket: ProviderRequestRateLimitBucket,
   config: ProviderRequestRateLimitConfig,
 ): number {
@@ -106,7 +116,7 @@ function buildProviderRateLimitQueueFullResponse(model: Model): Response {
   return new Response(
     JSON.stringify({
       error: {
-        message: `${model.provider}/${model.id}: provider request rate-limit queue is full`,
+        message: `${model.provider}/${model.id}: provider rate-limit queue is full; this request was rejected locally and was not sent to the provider. Wait for queued requests to finish, then retry.`,
         type: "rate_limit",
         code: PROVIDER_RATE_LIMIT_QUEUE_FULL_ERROR_CODE,
       },
@@ -120,6 +130,91 @@ function buildProviderRateLimitQueueFullResponse(model: Model): Response {
       },
     },
   );
+}
+
+function removeProviderRequestRateLimitWaiter(
+  bucket: ProviderRequestRateLimitBucket,
+  waiter: ProviderRequestRateLimitWaiter,
+): void {
+  const index = bucket.waiters.indexOf(waiter);
+  if (index !== -1) {
+    bucket.waiters.splice(index, 1);
+  }
+}
+
+function detachProviderRequestRateLimitWaiterAbortListener(
+  waiter: ProviderRequestRateLimitWaiter,
+): void {
+  if (waiter.signal && waiter.onAbort) {
+    waiter.signal.removeEventListener("abort", waiter.onAbort);
+    waiter.onAbort = undefined;
+  }
+}
+
+function rejectProviderRequestRateLimitWaiter(
+  bucket: ProviderRequestRateLimitBucket,
+  waiter: ProviderRequestRateLimitWaiter,
+  error: Error,
+): void {
+  if (waiter.settled) {
+    return;
+  }
+  waiter.canceled = true;
+  waiter.settled = true;
+  removeProviderRequestRateLimitWaiter(bucket, waiter);
+  detachProviderRequestRateLimitWaiterAbortListener(waiter);
+  waiter.reject(error);
+  pruneProviderRequestRateLimitBuckets(Date.now());
+}
+
+async function drainProviderRequestRateLimitQueue(
+  bucket: ProviderRequestRateLimitBucket,
+): Promise<void> {
+  if (bucket.draining) {
+    return;
+  }
+  bucket.draining = true;
+  try {
+    while (bucket.waiters.length > 0) {
+      const waiter = bucket.waiters[0];
+      if (!waiter) {
+        break;
+      }
+      if (waiter.canceled) {
+        removeProviderRequestRateLimitWaiter(bucket, waiter);
+        continue;
+      }
+      try {
+        const delayMs = resolveProviderRequestRateLimitDelayMs(bucket, waiter.config);
+        if (delayMs > 0) {
+          await sleepForRateLimit(delayMs, waiter.signal);
+        }
+        if (waiter.canceled || waiter.signal?.aborted) {
+          rejectProviderRequestRateLimitWaiter(
+            bucket,
+            waiter,
+            createProviderRequestRateLimitAbortError(waiter.signal),
+          );
+          continue;
+        }
+        recordProviderRequestRateLimitDispatch(bucket, waiter.config);
+        removeProviderRequestRateLimitWaiter(bucket, waiter);
+        detachProviderRequestRateLimitWaiterAbortListener(waiter);
+        waiter.settled = true;
+        waiter.resolve();
+      } catch (error) {
+        if (!waiter.settled) {
+          waiter.settled = true;
+          removeProviderRequestRateLimitWaiter(bucket, waiter);
+          detachProviderRequestRateLimitWaiterAbortListener(waiter);
+          waiter.reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      }
+    }
+  } finally {
+    bucket.draining = false;
+    pruneProviderRequestRateLimitBuckets(Date.now());
+  }
 }
 
 export async function waitForProviderRequestRateLimit(
@@ -138,75 +233,60 @@ export async function waitForProviderRequestRateLimit(
   const key = resolveProviderRateLimitKey(model);
   const bucket = providerRequestRateLimitBuckets.get(key) ?? {
     expiresAt: 0,
-    queue: Promise.resolve(),
-    queued: 0,
+    waiters: [],
+    draining: false,
     requestTimes: [],
     lastDispatchAt: 0,
   };
   providerRequestRateLimitBuckets.set(key, bucket);
   const maxQueueSize = config.maxQueueSize ?? DEFAULT_PROVIDER_RATE_LIMIT_MAX_QUEUE_SIZE;
-  if (bucket.queued === 0 && resolveProviderRateLimitDelayMs(bucket, config) <= 0) {
+  if (bucket.waiters.length === 0 && resolveProviderRequestRateLimitDelayMs(bucket, config) <= 0) {
     if (signal?.aborted) {
       throw createProviderRequestRateLimitAbortError(signal);
     }
     recordProviderRequestRateLimitDispatch(bucket, config);
     return undefined;
   }
-  if (bucket.queued >= maxQueueSize) {
+  if (bucket.waiters.length >= maxQueueSize) {
     return buildProviderRateLimitQueueFullResponse(model);
   }
-  bucket.queued += 1;
-  // A waiter canceled before its turn rejects immediately and releases its queue
-  // slot; its turn becomes a no-op so it never sleeps, dispatches, or records quota.
-  let canceled = false;
-  let waitAborted: Promise<never> | undefined;
-  // Retained outside the executor so settlement can detach the listener; a
-  // once:true listener only self-removes when the signal eventually aborts.
-  let onWaitAbort: (() => void) | undefined;
-  if (signal) {
-    waitAborted = new Promise<never>((_, reject) => {
-      onWaitAbort = () => {
-        canceled = true;
-        reject(createProviderRequestRateLimitAbortError(signal));
-      };
+
+  await new Promise<void>((resolve, reject) => {
+    const waiter: ProviderRequestRateLimitWaiter = {
+      config,
+      signal,
+      canceled: false,
+      settled: false,
+      resolve,
+      reject,
+    };
+    bucket.waiters.push(waiter);
+    if (signal) {
+      waiter.onAbort = () =>
+        rejectProviderRequestRateLimitWaiter(
+          bucket,
+          waiter,
+          createProviderRequestRateLimitAbortError(signal),
+        );
+      signal.addEventListener("abort", waiter.onAbort, { once: true });
       if (signal.aborted) {
-        onWaitAbort();
-        return;
+        waiter.onAbort();
       }
-      signal.addEventListener("abort", onWaitAbort, { once: true });
-    });
-    waitAborted.catch(() => undefined);
-  }
-  const turn = bucket.queue.then(async () => {
-    if (canceled || signal?.aborted) {
-      return;
     }
-    const delayMs = resolveProviderRateLimitDelayMs(bucket, config);
-    if (delayMs > 0) {
-      await sleepForRateLimit(delayMs, signal);
+    if (!waiter.canceled) {
+      void drainProviderRequestRateLimitQueue(bucket);
     }
-    if (canceled || signal?.aborted) {
-      return;
-    }
-    recordProviderRequestRateLimitDispatch(bucket, config);
   });
-  bucket.queue = turn.catch(() => undefined);
-  try {
-    if (waitAborted) {
-      await Promise.race([turn, waitAborted]);
-    } else {
-      await turn;
-    }
-  } finally {
-    // Long-lived run signals outlive many paced requests; a listener left on a
-    // settled waiter retains its closure and promise until the signal aborts.
-    if (signal && onWaitAbort) {
-      signal.removeEventListener("abort", onWaitAbort);
-    }
-    bucket.queued = Math.max(0, bucket.queued - 1);
-    pruneProviderRequestRateLimitBuckets(Date.now());
-  }
   return undefined;
 }
 
-export { resetProviderRequestRateLimitBucketsForTests };
+function getProviderRequestRateLimitQueuedCountForTests(model: Model): number {
+  return (
+    providerRequestRateLimitBuckets.get(resolveProviderRateLimitKey(model))?.waiters.length ?? 0
+  );
+}
+
+export {
+  getProviderRequestRateLimitQueuedCountForTests,
+  resetProviderRequestRateLimitBucketsForTests,
+};
