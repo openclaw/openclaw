@@ -81,6 +81,7 @@ test("publishes standalone exact-commit releases with an inode-independent reusa
     fs.mkdirSync('dist/control-ui/assets', {recursive:true});
     for (const name of ['.buildstamp', '.runtime-postbuildstamp']) fs.writeFileSync('dist/'+name, JSON.stringify({head}));
     fs.writeFileSync('dist/build-info.json', JSON.stringify({commit:head, buildId:head}));
+    fs.writeFileSync('dist/build-cache-inputs.json', JSON.stringify({version:1, steps:{'fixture-runtime':'a'.repeat(64)}}));
     fs.writeFileSync('dist/index.js', 'fixture();');
     fs.writeFileSync('dist/control-ui/index.html', '<script src="./assets/app.js"></script>');
     fs.writeFileSync('dist/control-ui/assets/app.js', 'fixture();');
@@ -128,6 +129,8 @@ publish_release "$1" "$mirror"
 `;
   run("bash", ["-c", program, "publish", target]);
   const release = join(serving, "releases", target);
+  assert.deepEqual(JSON.parse(readFileSync(join(release, "deployment.json"), "utf8")).buildCacheInputs,
+    { version: 1, steps: { "fixture-runtime": "a".repeat(64) } });
   const bin = join(root, "bin");
   mkdirSync(bin);
   writeFileSync(join(bin, "sync"), "#!/bin/sh\nexit 74\n", { mode: 0o755 });

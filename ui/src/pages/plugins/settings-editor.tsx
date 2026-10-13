@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createRenderEffect, createSignal } from "solid-js";
+import { For, Show, createMemo, createSignal } from "solid-js";
 import { resolveStructuredDraftInitialValue } from "../../components/config-form-structured-draft.ts";
 import { renderMapField } from "../../components/config-form.node.collection-map.ts";
 import { resolveConfigObjectFields } from "../../components/config-form.node.collection.ts";
@@ -107,29 +107,6 @@ function PluginSettingsRow(props: FieldProps) {
     value: props.field.value === undefined ? props.field.effectiveValue : props.field.value,
     descriptionId: props.field.help ? descriptionId() : undefined,
   }));
-  let selectHandler: (event: CustomEvent<{ item: { value: string } }>) => void = () => {};
-  // Retired dropdowns may still deliver their queued selection; retain that field's callback.
-  createRenderEffect(
-    () => {
-      const field = props.field;
-      const onAskSetting = props.onAskSetting;
-      const staticValue = effective();
-      return (event: CustomEvent<{ item: { value: string } }>) => {
-        if (event.detail.item.value === "reset" && !field.disabled) {
-          field.onPatch(
-            field.path,
-            field.isRequired ? structuredClone(field.schema.default) : undefined,
-          );
-        }
-        if (event.detail.item.value === "ask") {
-          onAskSetting?.({ ...field, value: staticValue });
-        }
-      };
-    },
-    (handler) => {
-      selectHandler = handler;
-    },
-  );
   const credential = createMemo(() => props.resolveCredential?.(controlParams()));
   return (
     <div
@@ -154,7 +131,17 @@ function PluginSettingsRow(props: FieldProps) {
       <div class="plugin-editor__menu">
         <wa-dropdown
           placement="bottom-start"
-          onWa-select={(event: CustomEvent<{ item: { value: string } }>) => selectHandler(event)}
+          onWa-select={(event: CustomEvent<{ item: { value: string } }>) => {
+            const field = props.field;
+            if (event.detail.item.value === "reset" && !field.disabled) {
+              field.onPatch(
+                field.path,
+                field.isRequired ? structuredClone(field.schema.default) : undefined,
+              );
+            } else if (event.detail.item.value === "ask") {
+              props.onAskSetting?.({ ...field, value: effective() });
+            }
+          }}
         >
           <button
             slot="trigger"

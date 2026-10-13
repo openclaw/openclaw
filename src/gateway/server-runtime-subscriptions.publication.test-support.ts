@@ -10,14 +10,16 @@ import {
   getActiveGatewayRootWorkCount,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
 import type { createSubscriptionTestFixture } from "./server-runtime-subscriptions.test-support.js";
 import { registerSubscriptionChatRun } from "./server-runtime-subscriptions.test-support.js";
+import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 import type { readSessionMessageByIdAsync } from "./session-transcript-readers.js";
 
-export function registerTranscriptPublicationTests(fixture: {
+export function registerSessionPublicationTests(fixture: {
   createParams: ReturnType<typeof createSubscriptionTestFixture>["createParams"];
   start: (
     params: Parameters<typeof startGatewayEventSubscriptions>[0],
@@ -32,6 +34,78 @@ export function registerTranscriptPublicationTests(fixture: {
   warn: ReturnType<typeof createSubscriptionTestFixture>["warn"];
 }): void {
   const { createParams, start, transcriptBroadcastMocks, warn } = fixture;
+  it("joins committed lifecycle publication before subscription shutdown", async ({ signal }) => {
+    vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
+    const key = "agent:main:finished-child";
+    const entry = { sessionId: "finished-child", updatedAt: 1, lifecycleRevision: "original" };
+    const projection = createSessionRowProjectionFixture({
+      cfg: { agents: { entries: { main: {} } } },
+      store: { [key]: entry },
+    });
+    const entered = createDeferred();
+    const release = createDeferred();
+    const published = createDeferred();
+    const prepare = projection.withPreparedExactRows.bind(projection);
+    const preparation = vi
+      .spyOn(projection, "withPreparedExactRows")
+      .mockImplementation(async (...args) => {
+        entered.resolve();
+        await release.promise;
+        return prepare(...args);
+      });
+    const producer = new AsyncWorkScope();
+    const params = createParams();
+    params.sessionEventSubscribers.subscribe("conn-lifecycle");
+    params.broadcastToConnIds = vi.fn(() => published.resolve());
+    warn.mockImplementation((_message: string, context: { error: unknown }) =>
+      published.reject(context.error),
+    );
+    // Observe failure even if it occurs before the held preparation is reached.
+    void published.promise.catch(() => {});
+    const unsubs = start({ ...params, getSessionRowProjection: () => projection });
+    let shutdown: Promise<void> | undefined;
+    try {
+      producer.run(() => emitSessionLifecycleEvent({ sessionKey: key, reason: "subagent-status" }));
+      await withinTest(
+        awaitGateBeforeSettlement(
+          entered.promise,
+          published.promise,
+          "Lifecycle publication settled before row preparation",
+        ),
+        signal,
+      );
+      await producer.drain();
+      let closed = false;
+      shutdown = unsubs.agentUnsub().then(() => {
+        closed = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(closed).toBe(false);
+      release.resolve();
+      await withinTest(published.promise, signal);
+      await (shutdown ?? unsubs.agentUnsub());
+      expect(params.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+        "sessions.changed",
+        expect.objectContaining({
+          sessionKey: key,
+          reason: "subagent-status",
+          session: expect.objectContaining({ key, sessionId: entry.sessionId }),
+        }),
+        new Set(["conn-lifecycle"]),
+        expect.objectContaining({ dropIfSlow: true }),
+      );
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await producer.drain();
+      await withinTest(published.promise, signal).catch(() => {});
+      await (shutdown ?? unsubs.agentUnsub());
+      preparation.mockRestore();
+      warn.mockReset();
+      projection.dispose();
+      vi.useRealTimers();
+    }
+  });
   it.for(["streaming", "paced", "terminal", "replacement", "disposed", "queued"] as const)(
     "keeps the assistant visible through delayed transcript publication (%s)",
     async (mode, { signal }) => {

@@ -33,7 +33,6 @@ let versionClock = INITIAL_SKILLS_SNAPSHOT_VERSION;
 let globalVersion = INITIAL_SKILLS_SNAPSHOT_VERSION;
 let sourceClock = INITIAL_SKILLS_SNAPSHOT_VERSION;
 let globalSourceVersion = sourceClock;
-let listenerErrorHandler: ((err: unknown) => void) | undefined;
 
 function bumpVersion(current: number): number {
   const now = Date.now();
@@ -41,7 +40,7 @@ function bumpVersion(current: number): number {
 }
 
 function emit(event: SkillsChangeEvent) {
-  notifyListeners(listeners, event, (err) => listenerErrorHandler?.(err));
+  notifyListeners(listeners, event);
 }
 
 function publishChange(event: SkillsChangeEvent): number {
@@ -53,10 +52,6 @@ function publishChange(event: SkillsChangeEvent): number {
   }
   emit(event);
   return versionClock;
-}
-
-export function setSkillsChangeListenerErrorHandler(handler?: (err: unknown) => void): void {
-  listenerErrorHandler = handler;
 }
 
 export function registerSkillsChangeListener(listener: (event: SkillsChangeEvent) => void) {
@@ -182,5 +177,4 @@ export function resetSkillsRefreshStateForTest(): void {
   versionClock = globalVersion;
   sourceClock = bumpVersion(sourceClock);
   globalSourceVersion = sourceClock;
-  listenerErrorHandler = undefined;
 }
