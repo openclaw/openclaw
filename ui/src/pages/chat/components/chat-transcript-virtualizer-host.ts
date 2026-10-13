@@ -68,7 +68,6 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   private readonly controllers = new Set<ReactiveController>();
   private readonly positionRail: PositionRailGutterController;
   private readonly virtualizer: Virtualizer<HTMLDivElement, HTMLElement>;
-  private readonly updateVirtualizer: () => void;
   private readonly viewportRect: TranscriptViewportRect;
   private readonly presentation: TranscriptPresentation;
   private threadInnerElement: HTMLDivElement | null = null;
@@ -123,10 +122,9 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     queueMicrotask(() => {
       this.scrollElementAttachQueued = false;
       this.renderer.connect();
-      const instance = this.virtualizer;
-      if (this.connected && instance.scrollElement !== this.scrollElement) {
+      if (this.connected && this.virtualizer.scrollElement !== this.scrollElement) {
         this.layout.connect(this.scrollElement);
-        this.updateVirtualizer();
+        this.virtualizer._willUpdate();
         this.host.requestUpdate();
       }
     });
@@ -224,14 +222,12 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       overscan: CHAT_TRANSCRIPT_OVERSCAN,
     });
     // Virtual-core exposes these lifecycle hooks as bound arrow functions.
-    const { _didMount: mountVirtualizer, _willUpdate: updateVirtualizer } = this.virtualizer;
-    this.updateVirtualizer = updateVirtualizer;
     let cleanupVirtualizer: (() => void) | undefined;
     this.addController({
       hostConnected: () => {
-        cleanupVirtualizer = mountVirtualizer();
+        cleanupVirtualizer = this.virtualizer._didMount();
       },
-      hostUpdated: this.updateVirtualizer,
+      hostUpdated: this.virtualizer._willUpdate,
       hostDisconnected: () => cleanupVirtualizer?.(),
     });
     this.presentation = new TranscriptPresentation(this, this.virtualizer, () => {
@@ -538,9 +534,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
             : new Set(nextRowKeys),
         ),
       {
-        afterCommit: (effect) => {
-          this.renderer.afterCommit(effect);
-        },
+        afterCommit: (effect) => void this.renderer.afterCommit(effect),
       },
       // SAFETY: Both gate branches return this session's Solid root while MCP views retire.
     ) as HTMLDivElement;
@@ -750,8 +744,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     if (!this.initialPositionPending || !this.rowKeys.length || !this.scrollElement?.clientHeight) {
       return;
     }
-    this.layout.sync();
-    this.viewportRect.sync();
+    this.syncViewportGeometry();
     if (this.presentation.measureRows()) {
       this.host.requestUpdate();
       return;

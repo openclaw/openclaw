@@ -14,7 +14,7 @@ import {
 } from "./chat-realtime.ts";
 import { useRealtimeTalkMicrophoneFixture } from "./talk/input.test-support.ts";
 import { RealtimeTalkSession } from "./talk/session.ts";
-import type { RealtimeTalkTransportContext } from "./talk/shared.ts";
+import type { RealtimeTalkTransport, RealtimeTalkTransportContext } from "./talk/shared.ts";
 
 const transports = vi.hoisted(() => ({
   contexts: [] as RealtimeTalkTransportContext[],
@@ -24,14 +24,16 @@ const transports = vi.hoisted(() => ({
 
 vi.mock(import("./talk/transport.runtime.ts"), async (importOriginal) => ({
   ...(await importOriginal()),
-  createRealtimeTalkTransport: vi.fn((_session: unknown, context: RealtimeTalkTransportContext) => {
-    transports.contexts.push(context);
-    return {
-      start: async () => "ready",
-      activate: () => transports.onActivated?.(),
-      stop: transports.stop,
-    };
-  }),
+  createRealtimeTalkTransport: vi.fn(
+    (_session: unknown, context: RealtimeTalkTransportContext): RealtimeTalkTransport => {
+      transports.contexts.push(context);
+      return {
+        start: async () => "ready",
+        activate: () => transports.onActivated?.(),
+        stop: transports.stop,
+      };
+    },
+  ),
 }));
 
 useRealtimeTalkMicrophoneFixture();

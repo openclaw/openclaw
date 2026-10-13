@@ -66,51 +66,59 @@ describe("session-scoped Talk catalog", () => {
             assertOwnerCurrent: lease.assertCurrent,
             assertDatabaseAccess: lease.assertDatabaseAccess,
           });
-          const { client, profileCatalog } = await maintenance
-            .run(async () => {
-              for (const agentId of ["speaker", "researcher"]) {
-                const configured =
-                  agentId === "researcher" ? selectedHasCredentials : !selectedHasCredentials;
-                await state.writeAuthProfiles(
-                  {
-                    version: 1,
-                    profiles: configured
-                      ? {
-                          "openai:audio": {
-                            type: "api_key",
-                            provider: "openai",
-                            key: `synthetic-${agentId}-key`,
-                          },
-                        }
-                      : {},
-                  },
-                  agentId,
-                );
-              }
-              const profileCatalog = await prepareUserProfileCatalog();
-              const reader = roleClient("view", "catalog-reader");
-              const owner = roleClient("write", "catalog-owner");
-              for (const [key, visibility] of [
-                [sessionKey, "shared"],
-                ["agent:researcher:hidden", "draft"],
-              ] as const) {
-                replaceSessionEntrySync(
-                  { agentId: "researcher", sessionKey: key },
-                  {
-                    sessionId: key,
-                    updatedAt: 1,
-                    visibility,
-                    createdActor: {
-                      type: "human",
-                      source: "profile",
-                      id: owner.authenticatedUserProfile!.profileId,
+          const { client, profileCatalog } = await (async () => {
+            try {
+              return await maintenance.run(async () => {
+                for (const agentId of ["speaker", "researcher"]) {
+                  const configured =
+                    agentId === "researcher" ? selectedHasCredentials : !selectedHasCredentials;
+                  await state.writeAuthProfiles(
+                    {
+                      version: 1,
+                      profiles: configured
+                        ? {
+                            "openai:audio": {
+                              type: "api_key",
+                              provider: "openai",
+                              key: `synthetic-${agentId}-key`,
+                            },
+                          }
+                        : {},
                     },
-                  },
-                );
+                    agentId,
+                  );
+                }
+                const preparedProfileCatalog = await prepareUserProfileCatalog();
+                const reader = roleClient("view", "catalog-reader");
+                const owner = roleClient("write", "catalog-owner");
+                for (const [key, visibility] of [
+                  [sessionKey, "shared"],
+                  ["agent:researcher:hidden", "draft"],
+                ] as const) {
+                  replaceSessionEntrySync(
+                    { agentId: "researcher", sessionKey: key },
+                    {
+                      sessionId: key,
+                      updatedAt: 1,
+                      visibility,
+                      createdActor: {
+                        type: "human",
+                        source: "profile",
+                        id: owner.authenticatedUserProfile!.profileId,
+                      },
+                    },
+                  );
+                }
+                return { client: reader, profileCatalog: preparedProfileCatalog };
+              });
+            } finally {
+              try {
+                await maintenance.close();
+              } finally {
+                lease.release();
               }
-              return { client: reader, profileCatalog };
-            })
-            .finally(() => maintenance.close().finally(() => lease.release()));
+            }
+          })();
           const projection = await createSessionRowProjection({ cfg: config });
           const context = bindSessionRowProjection(
             { getRuntimeConfig: () => config },
@@ -132,6 +140,7 @@ describe("session-scoped Talk catalog", () => {
                 resolvedKey: asOptionalRecord(asOptionalRecord(rawConfig.providers)?.sample)
                   ?.apiKey,
               }),
+              isConfigured: () => false,
               isConfiguredAsync: async ({ providerConfig }) =>
                 providerConfig.resolvedKey === "synthetic-speech-key",
               synthesize: async () => {
