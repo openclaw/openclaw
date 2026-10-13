@@ -232,24 +232,6 @@ describe("update-cli", () => {
     ).toBe(true);
   });
 
-  it("names the reason for each skipped plugin under the post-core summary", async () => {
-    mockNpmPluginOutcomes([
-      { pluginId: "lossless-claw", status: "updated", message: "Updated lossless-claw." },
-      {
-        pluginId: "local-fixture",
-        status: "skipped",
-        message: 'Skipping "local-fixture" (source: path).',
-      },
-    ]);
-
-    await runPostCoreCommand({ restart: false });
-
-    const logs = vi.mocked(runtimeCapture.log).mock.calls.map((call) => stripAnsi(String(call[0])));
-    const summary = logs.indexOf("Plugin updates: 1 updated, 0 unchanged, 1 skipped.");
-    expect(summary).toBeGreaterThanOrEqual(0);
-    expect(logs[summary + 1]).toBe('Skipping "local-fixture" (source: path).');
-  });
-
   it.each([{ source: "bridge", mode: "finalize" }] as const)(
     "completes $mode with a plugin retry notice when $source awaits capability consent",
     async ({ source, mode }) => {

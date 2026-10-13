@@ -574,16 +574,6 @@ async function updatePluginsAfterCoreUpdateWithLease(
       parts.push(`${skipped} skipped`);
     }
     runtime.log(theme.muted(`Plugin updates: ${parts.join(", ")}.`));
-    // Skips that need action are reported below as plugin warnings.
-    for (const outcome of finalPluginOutcomes) {
-      if (
-        outcome.status === "skipped" &&
-        outcome.code !== "plugin-operator-managed" &&
-        !isActionableSkippedPostUpdateOutcome(outcome)
-      ) {
-        runtime.log(theme.muted(outcome.message));
-      }
-    }
   }
   for (const outcome of finalPluginOutcomes) {
     if (outcome.status === "skipped") {
