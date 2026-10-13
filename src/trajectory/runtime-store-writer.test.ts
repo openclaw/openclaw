@@ -10,7 +10,10 @@ import {
 import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
 import { createDiagnosticEmbeddedRunOwner } from "../logging/diagnostic-run-activity.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import {
+  getOpenClawAgentDatabaseIfOpen,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createSqliteTrajectoryRuntimeSink } from "./runtime-store-writer.js";
 import {
@@ -141,7 +144,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("persists identical serialized events separately with accurate queued bytes", async () => {
+it("persists repeated events and retains the worker owner without a main-thread database", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const target = {
       agentId: "main",
@@ -150,6 +153,8 @@ it("persists identical serialized events separately with accurate queued bytes",
       storePath: state.statePath("agents", "main", "agent.sqlite"),
     };
     await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const databaseOptions = { agentId: target.agentId, path: target.storePath, env: state.env };
+    expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)).toBeUndefined();
     const sink = await createSqliteTrajectoryRuntimeSink({
       env: state.env,
       sessionId: target.sessionId,
@@ -165,8 +170,17 @@ it("persists identical serialized events separately with accurate queued bytes",
       `pendingRows=2 queuedBytes=${2 * (Buffer.byteLength(line, "utf8") + 1)} activeOperation=sqlite-append`,
     );
     await sink.flush();
+    await retention.accepted;
     expect(sink.describeFlushState()).toBeUndefined();
     expect(await loadSqliteTrajectoryRuntimeEvents(target)).toEqual([event, event]);
+    expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)).toBeUndefined();
+    expect(retention.reads).toBe(1);
+    sink.write({ ...event }, line);
+    await sink.flush();
+    await retention.accepted;
+    expect(await loadSqliteTrajectoryRuntimeEvents(target)).toEqual([event, event, event]);
+    expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)).toBeUndefined();
+    expect(retention.reads).toBe(1);
   });
 });
 
@@ -406,9 +420,10 @@ it("bounds 2,000 queued events while a background append awaits settlement", asy
       expect(bytes).toBeLessThanOrEqual(maxRuntimeFileBytes * (start === 0 ? 1 : 2));
     };
     try {
-      recordCalls(0, 1_000);
+      recordCalls(0, 32);
       // Native persistence starts during the run, before any explicit final flush.
       await committed.promise;
+      recordCalls(32, 1_000);
       recordCalls(1_000, 2_000);
     } finally {
       settlement.resolve({ kind: "completed" });
