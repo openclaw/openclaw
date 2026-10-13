@@ -407,7 +407,9 @@ Flags:
 
 When a Gateway is reachable, non-dry-run cleanup for configured agent stores is
 sent through the Gateway so it shares the same session-store writer as runtime
-traffic. Use `--store <path>` for explicit offline repair of a SQLite database or
+traffic. Once connected, the CLI waits for cleanup to finish without a fixed
+request deadline; connection startup still has a timeout. Use `--store <path>`
+for explicit offline repair of a SQLite database or
 legacy store selector.
 
 Automatic offline fallback applies only when the configured local Gateway cannot

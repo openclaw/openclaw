@@ -1,7 +1,6 @@
 import { dynamic } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import "../../components/agent-row-chip.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -34,6 +33,7 @@ import {
   resolveUiConfiguredMainKey,
   scopedSessionArtifactKey,
 } from "../../lib/sessions/session-key.ts";
+import type { ProjectedSessionListResult } from "../../lib/sessions/session-row-fields.ts";
 import { activityRunInspectorHref } from "./run-inspector-model.ts";
 import { ActivitySessionGit } from "./session-activity-git.tsx";
 import { ActivitySessionMedia } from "./session-activity-media.tsx";
@@ -48,6 +48,7 @@ import {
   sessionActivityOwner,
   type SessionActivityFilters,
 } from "./session-activity.ts";
+import type { ACTIVITY_HISTORY_ROW_FIELDS, ActivityHistoryRow } from "./session-row-fields.ts";
 
 export type SessionActivityViewProps = {
   context: ApplicationContext;
@@ -55,14 +56,14 @@ export type SessionActivityViewProps = {
   filters: SessionActivityFilters;
   presenceViewers: readonly PresenceViewer[];
   presentationRevision?: number;
-  result?: SessionsListResult;
+  result?: ProjectedSessionListResult<typeof ACTIVITY_HISTORY_ROW_FIELDS>;
   loading: boolean;
   retrying: boolean;
   error?: string;
   onRetry: () => void;
   onAutomationDayToggle: (dayKey: string) => void;
   onFiltersChange: (filters: SessionActivityFilters) => void;
-  onSummaryRetry?: (row: GatewaySessionRow) => void;
+  onSummaryRetry?: (row: ActivityHistoryRow) => void;
 };
 
 function dayLabel(timestamp: number | null, now = Date.now()): string {
@@ -89,8 +90,8 @@ function dayLabel(timestamp: number | null, now = Date.now()): string {
 
 function SessionLinkView(props: {
   context: ApplicationContext;
-  row: GatewaySessionRow;
-  onSummaryRetry?: (row: GatewaySessionRow) => void;
+  row: ActivityHistoryRow;
+  onSummaryRetry?: (row: ActivityHistoryRow) => void;
   presentationRevision?: number;
 }) {
   const agentId = createMemo(
@@ -300,7 +301,7 @@ function DaySessions(props: {
 function IdentityHeader(props: {
   context: ApplicationContext;
   identity: PresenceViewer;
-  rows: readonly GatewaySessionRow[];
+  rows: readonly ActivityHistoryRow[];
   presentationRevision?: number;
 }) {
   const entries = createMemo(() => props.identity.entries ?? []);

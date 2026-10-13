@@ -1,6 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { SIDEBAR_ROW_FIELDS } from "../../components/app-sidebar-session-row-fields.ts";
 import type { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
 import { sessionMatchesArchivedFilter } from "./navigation.ts";
 import type {
@@ -22,6 +23,7 @@ import {
   DEFAULT_SESSION_LIST_QUERY,
   normalizeManagedSessionListQuery,
 } from "./session-requests.ts";
+import { canSelectSessionRowFields, sessionRowFieldsSelection } from "./session-row-fields.ts";
 import {
   hasSessionChangedAncestorCoverage,
   matchesExistingSession,
@@ -488,7 +490,16 @@ export function prepareSessionRefreshOptions(
   // must inherit the UI default in both the request and its query identity.
   const prepared = {
     ...options,
-    rowMode: options.rowMode ?? "sidebar",
+    rowMode: options.fields ? options.rowMode : undefined,
+    ...(options.fields
+      ? {}
+      : !options.rowMode || options.rowMode === "sidebar"
+        ? sessionRowFieldsSelection(
+            SIDEBAR_ROW_FIELDS,
+            "sidebar",
+            canSelectSessionRowFields(snapshot.hello),
+          )
+        : { rowMode: options.rowMode }),
     source: options.source ?? "sidebar",
     excludeDock: options.excludeDock ?? true,
     includeDerivedTitles: options.includeDerivedTitles ?? true,

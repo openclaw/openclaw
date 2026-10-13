@@ -545,7 +545,7 @@ describe("AppSidebar agent chip", () => {
         ),
       },
     });
-    await rosterActivityStore(context).refresh();
+    await rosterActivityStore(context, "sidebar").refresh();
     await settleRoster(sidebar);
     expect(
       sidebar.querySelectorAll("[data-agent-group=main] .sidebar-agent-roster__header"),

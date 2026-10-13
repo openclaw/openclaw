@@ -282,8 +282,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       this.state !== undefined && isSidebarSlotVisible(this.state.sidebarLayout, "subagents");
     const processesVisible =
       this.state !== undefined && isSidebarSlotVisible(this.state.sidebarLayout, "processes");
-    const modifiedFiles =
-      sessionWorkspace.list?.files.filter((file) => file.kind === "modified").length ?? 0;
     const panelMenuActions = this.headerPanelsMemo.read(
       [
         Boolean(sessionWorkspace.onToggleTerminal),
@@ -293,7 +291,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         discussion?.active,
         Boolean(sessionWorkspace.onOpenDiff),
         sessionWorkspace.collapsed,
-        modifiedFiles,
         sessionRailVisible,
         subagentsVisible,
         processesVisible,
@@ -357,7 +354,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
           ),
           icon: icons.fileText,
           active: !sessionWorkspace.collapsed,
-          badge: modifiedFiles,
           onActivate: callbacks.files,
         });
         actions.push({

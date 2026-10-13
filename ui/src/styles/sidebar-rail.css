@@ -11,6 +11,7 @@
 .sidebar-rail {
   display: flex;
   flex-direction: column;
+  align-items: center;
   flex: 0 0 var(--shell-nav-rail-width, 52px);
   min-width: 0;
   min-height: 0;
@@ -213,6 +214,11 @@
   padding: 6px 8px;
   color: var(--muted);
   font-size: var(--font-size-sm);
+}
+
+/* Match the 44px session toolbar centerline without changing drawer or native clearance. */
+.shell:not(.shell--mobile-nav) .sidebar-rail {
+  padding-top: 4px;
 }
 
 html:is(.openclaw-native-desktop, .openclaw-native-macos)

@@ -7,6 +7,21 @@ read_when:
 title: "Storage changes and release preflight"
 ---
 
+Runtime changes use the [existing worker owner](/reference/database-schemas/worker-access),
+with Kysely for ordinary queries. Raw SQL is reserved for schema, migrations,
+bootstrap, or a justified primitive owned by the engine. Prepare asynchronous
+inputs before entering a write transaction; its callback must stay synchronous.
+Use SQLite autocommit for a complete single-statement operation through
+`runSqliteSingleStatementSync`; PostgreSQL writes retain the adapter's
+`runTransaction` custody. Related reads that require a consistent snapshot stay
+in one read transaction. Do not replace SQL-side projections that bound large
+payloads with full-value loading and TypeScript assembly.
+
+Cache changes require complete writer receipt coverage, scoped to the affected
+data. Load once and consume committed postimages or invalidations rather than
+adding freshness queries. [Authority publication](/reference/database-schemas/worker-access#final-authority-without-sql)
+is a separate owner contract: a data receipt alone never grants permission.
+
 ## Agent JSON predicate columns
 
 [Agent schema 26](/reference/database-schemas/agent-schema-history#json-predicate-columns)

@@ -4,7 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createEffect, createSignal, onCleanup, For, Show, untrack } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { requestQuestionGateway } from "../../app/question-prompt-client.ts";
+import { canUseQuestionPrompts, requestQuestionGateway } from "../../app/question-prompt-client.ts";
 import {
   cancelQuestionPrompt,
   createQuestionPromptState,
@@ -141,7 +141,10 @@ class QuestionPageController {
       }
       this.operationGeneration += 1;
       this.client = nextClient;
-      setQuestionPromptClient(this.questionState, nextClient);
+      setQuestionPromptClient(
+        this.questionState,
+        canUseQuestionPrompts(snapshot) ? nextClient : null,
+      );
       if (!nextClient) {
         if (
           listQuestionPrompts(this.questionState).some((prompt) => prompt.id === this.questionId)
@@ -163,6 +166,11 @@ class QuestionPageController {
   }
 
   async loadQuestion(client: GatewayBrowserClient): Promise<void> {
+    if (!canUseQuestionPrompts(this.context.gateway.snapshot)) {
+      this.loading = false;
+      this.requestError = "unavailable";
+      return;
+    }
     const id = this.questionId;
     const generation = ++this.operationGeneration;
     this.loading = true;

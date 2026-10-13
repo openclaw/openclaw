@@ -26,6 +26,35 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it("expands shared Activity row facts before publishing the selected-field result", async () => {
+  const request = vi.spyOn(client, "request").mockResolvedValue({
+    ...result,
+    count: 1,
+    sessions: [
+      {
+        key: "agent:main:activity",
+        kind: "direct",
+        sessionId: "activity-session",
+        updatedAt: 100,
+        sharedFacts: [0],
+      },
+    ],
+    sharedFacts: [
+      { label: "Shared title", owner: { actor: { type: "human", id: "fixture-person" } } },
+    ],
+  });
+  await controller.load(client, { personId: null, time: "all", query: "" }, "query", false, true);
+  expect(controller.result?.sessions[0]).toMatchObject({
+    label: "Shared title",
+    owner: { actor: { type: "human", id: "fixture-person" } },
+  });
+  expect(controller.result?.sessions[0]).not.toHaveProperty("sharedFacts");
+  expect(request.mock.calls[0]?.[1]).toMatchObject({
+    fields: expect.arrayContaining(["owner", "activitySummary"]),
+  });
+  expect(request.mock.calls[0]?.[1]).not.toHaveProperty("rowMode");
+});
+
 it("requests calendar-aligned pulse windows, including clock-change dates", async () => {
   const request = vi.spyOn(client, "request").mockResolvedValue(result);
   const windows = [

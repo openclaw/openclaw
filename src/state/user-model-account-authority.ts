@@ -2,13 +2,12 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { inlineAuthProfileCredentialSchema } from "../agents/auth-profiles/credential-schema.js";
+import { withAuthProfileCredentialWriteCustody } from "../agents/auth-profiles/credential-write-custody.js";
 import { coercePersistedAuthProfileStore } from "../agents/auth-profiles/persisted-store.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import {
-  hasSqlitePostCommitScope,
-  stageSqliteTransactionState,
-} from "../infra/sqlite-post-commit.js";
-import {
+  createSqliteWorkerOperationAdmission,
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionFactory,
 } from "../infra/sqlite-worker-operation-admission.js";
@@ -314,43 +313,79 @@ export function withAuthProfileCredentialWrite<T>(
   db: DatabaseSync,
   payload: unknown,
   write: () => T,
+  didWrite: (result: T) => boolean = () => true,
 ): T {
-  if (db.isTransaction && !hasSqlitePostCommitScope(db)) {
-    throw new Error("Credential writes require their owning transaction publication scope");
-  }
-  const identity = authProfileCredentialPublication.receipt(db, new Map()).source.identity;
-  const publication = authProfileCredentialPublication.begin({ identity, assertCurrent() {} });
-  let failed = false;
-  const managed = stageSqliteTransactionState(db, {
-    stage() {},
-    commit() {
-      if (failed) {
+  return withAuthProfileCredentialWriteCustody(db, () => {
+    const identity = authProfileCredentialPublication.receipt(db, new Map()).source.identity;
+    const publication = authProfileCredentialPublication.begin({ identity, assertCurrent() {} });
+    let failed = false;
+    const managed = stageSqliteTransactionState(db, {
+      stage() {},
+      commit() {
+        if (failed) {
+          publication.finish(false);
+        }
+      },
+      prepareObservers: () => publication.finish(true, true),
+      invalidate: () => publication.finish(false),
+      rollback: () => publication.finish(true, true),
+    });
+    try {
+      const result = write();
+      if (didWrite(result)) {
+        if (payload === undefined) {
+          authProfileCredentialPublication.stageDeletions(db, ["store"]);
+        } else {
+          authProfileCredentialPublication.stagePostimages(db, [payload]);
+        }
+      }
+      if (!managed) {
+        publication.finish(true, true);
+      }
+      return result;
+    } catch (error) {
+      // A caught native error may still leave an outer transaction able to commit.
+      failed = true;
+      if (!managed) {
         publication.finish(false);
       }
-    },
-    prepareObservers: () => publication.finish(true, true),
-    invalidate: () => publication.finish(false),
-    rollback: () => publication.finish(true, true),
+      throw error;
+    }
   });
-  try {
-    const result = write();
-    if (payload === undefined) {
-      authProfileCredentialPublication.stageDeletions(db, ["store"]);
-    } else {
-      authProfileCredentialPublication.stagePostimages(db, [payload]);
-    }
-    if (!managed) {
-      publication.finish(true, true);
-    }
-    return result;
-  } catch (error) {
-    // A caught native error may still leave an outer transaction able to commit.
-    failed = true;
-    if (!managed) {
-      publication.finish(false);
-    }
-    throw error;
-  }
+}
+
+/** Generic shared-state writes publish through their existing request and native receipt. */
+export function createAuthProfileCredentialWriteAdmission(
+  context: OpenClawStateWorkerContext,
+): SqliteWorkerAdmissionFactory {
+  return (operation) => {
+    const publication = authProfileCredentialPublication.begin({
+      identity: `${context.admission.identity.key}:${context.admission.identity.birthtime ?? ""}`,
+      assertCurrent: context.admission.assertCurrent,
+    });
+    const admission = createSqliteWorkerOperationAdmission(() => {
+      throw new Error("Machine-state writes do not request separate domain admission");
+    });
+    observeSqliteWorkerCommittedFacts(admission, ({ facts }) => {
+      publication.committed(isRecord(facts) ? facts.authCredentials : undefined);
+    });
+    const finish = admission.finish.bind(admission);
+    admission.finish = () => {
+      try {
+        finish();
+      } finally {
+        if (admission.settlement) {
+          const confirmed = admission.settlement.kind === "completed";
+          publication.finish(confirmed, confirmed && !admission.committed);
+        }
+      }
+    };
+    void operation.settled.then((outcome) => {
+      const known = outcome.kind !== "unknown";
+      publication.finish(known, known && !admission.committed);
+    });
+    return { admission, nativeLocations: [context.admission.databasePath] };
+  };
 }
 
 export function captureAuthProfileCredentialAuthority(

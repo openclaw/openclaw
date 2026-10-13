@@ -68,6 +68,10 @@ web-search config. Keep full auth and search runtime imports in execution paths.
 
 ## Subpath reference
 
+`openclaw/plugin-sdk/gateway-ingress` defines the optional service-owned
+[remote Control UI ingress](/plugins/sdk-gateway-ingress) capability. The host
+admits browser devices through its existing HTTP and WebSocket owners.
+
 The plugin SDK is exposed as a set of narrow subpaths grouped by area (plugin
 entry, channel, provider, auth, runtime, capability, memory, and reserved
 bundled-plugin helpers). For the full catalog — grouped and linked — see

@@ -1,17 +1,15 @@
-import type {
-  AgentIdentityResult,
-  GatewaySessionRow,
-  SessionsListResult,
-} from "../../api/types.ts";
+import type { AgentIdentityResult, GatewaySessionRow } from "../../api/types.ts";
 import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
 import type { SessionPatch } from "../../lib/sessions/patch.ts";
+import type { ProjectedSessionListResult } from "../../lib/sessions/session-row-fields.ts";
+import type { SESSIONS_PAGE_ROW_FIELDS } from "./session-row-fields.ts";
 import type { SessionsAdvancedFiltersProps } from "./sessions-filters.tsx";
 import type { TranscriptSearchProps } from "./transcript-search-view.tsx";
 
 export type SessionsProps = {
   loading: boolean;
   refreshing: boolean;
-  result: SessionsListResult | null;
+  result: ProjectedSessionListResult<typeof SESSIONS_PAGE_ROW_FIELDS> | null;
   error: string | null;
   basePath: string;
   agentId: string;

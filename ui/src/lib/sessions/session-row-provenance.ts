@@ -1,8 +1,4 @@
-import {
-  SESSION_DASHBOARD_ROW_FIELDS,
-  SESSION_ROW_DETAIL_FIELDS,
-  SESSION_SIDEBAR_ROW_FIELDS,
-} from "../../../../packages/gateway-protocol/src/session-row-fields.js";
+import type { SessionRowProjection } from "../../../../packages/gateway-protocol/src/session-row-fields.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
   isUiGlobalSessionKey,
@@ -11,12 +7,18 @@ import {
   parseAgentSessionKey,
 } from "./session-key.ts";
 import { isShallowEqualSessionRow } from "./session-row-equality.ts";
+import { preserveUncoveredSessionRowFields, sessionRowCoverage } from "./session-row-fields.ts";
 
 const enrichmentFields = ["derivedTitle", "lastMessagePreview", "activitySummary"] as const;
 
 /** Row identity and one read revision; individual fields do not carry custody records. */
 export function createSessionRowProvenance() {
-  type Observation = { revision: number; agentId: string | null; cleared?: ReadonlySet<string> };
+  type Observation = {
+    revision: number;
+    agentId: string | null;
+    cleared?: ReadonlySet<string>;
+    covered?: ReadonlySet<string>;
+  };
   let observations = new WeakMap<GatewaySessionRow, Observation>();
   const owner = (row: GatewaySessionRow, agentId?: string | null) => {
     const resolved =
@@ -33,8 +35,17 @@ export function createSessionRowProvenance() {
       : JSON.stringify([normalizeDefaultMainSessionAliasForUi(row.key), resolved, row.sessionId]);
   };
   const rowRevision = (row: GatewaySessionRow) => observations.get(row)?.revision ?? 0;
-  const observeReadRow = (row: GatewaySessionRow, revision: number, agentId?: string | null) => {
-    observations.set(row, { revision, agentId: owner(row, agentId) });
+  const observeReadRow = (
+    row: GatewaySessionRow,
+    revision: number,
+    agentId?: string | null,
+    covered?: ReadonlySet<string>,
+  ) => {
+    observations.set(row, {
+      revision,
+      agentId: owner(row, agentId),
+      covered: covered ?? observations.get(row)?.covered ?? sessionRowCoverage(row),
+    });
   };
   const observeClears = (row: GatewaySessionRow, fields: readonly string[]) => {
     const cleared = new Set(observations.get(row)?.cleared);
@@ -92,23 +103,15 @@ export function createSessionRowProvenance() {
             : current;
     const older = newer === offered ? current : offered;
     const olderValues: Record<string, unknown> = older;
-    const next = { ...newer, key: current.key };
-    // Compact rows and optional enrichment omit fields rather than clearing them.
-    for (const field of [
-      ...enrichmentFields,
-      ...(newer.rowMode === "dashboard" || newer.rowMode === "sidebar"
-        ? Object.keys(older).filter(
-            (name) =>
-              !(
-                newer.rowMode === "sidebar"
-                  ? SESSION_SIDEBAR_ROW_FIELDS
-                  : SESSION_DASHBOARD_ROW_FIELDS
-              ).has(name),
-          )
-        : newer.rowMode === "compact"
-          ? SESSION_ROW_DETAIL_FIELDS
-          : []),
-    ]) {
+    const covered = observations.get(newer)?.covered ?? sessionRowCoverage(newer);
+    const next = {
+      ...preserveUncoveredSessionRowFields(newer, older, covered),
+      key: current.key,
+    };
+    for (const field of observations.get(newer)?.cleared ?? []) {
+      Reflect.deleteProperty(next, field);
+    }
+    for (const field of newer.rowMode === "fields" ? [] : enrichmentFields) {
       if (
         !Object.hasOwn(next, field) &&
         !observations.get(newer)?.cleared?.has(field) &&
@@ -147,6 +150,15 @@ export function createSessionRowProvenance() {
     inheritRow,
     mergeRow,
     observeReadRow,
+    observeProjection: (row: GatewaySessionRow, projection: SessionRowProjection | undefined) => {
+      const observed = observations.get(row);
+      observeReadRow(
+        row,
+        observed?.revision ?? 0,
+        observed?.agentId,
+        sessionRowCoverage(row, projection),
+      );
+    },
     observeClears,
     rowRevision,
     reset: () => {

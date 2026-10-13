@@ -161,7 +161,7 @@ describe("AppSidebar session attention", () => {
     await settleRoster(sidebar);
     const publishRows = async (rows: GatewaySessionRow[]) => {
       setRows(sessionsHarness, rows);
-      await rosterActivityStore(context).refresh();
+      await rosterActivityStore(context, "sidebar").refresh();
       await settleRoster(sidebar);
     };
     const home = sidebar.querySelector('[data-agent-group="main"] .sidebar-agent-roster__header');
@@ -518,7 +518,7 @@ describe("AppSidebar session attention", () => {
       row.key === failedKey ? Object.assign({}, row, { lastReadAt: 2 }) : row,
     );
     setRows(sessionsHarness, result.sessions);
-    await rosterActivityStore(context).refresh();
+    await rosterActivityStore(context, "sidebar").refresh();
     await waitForFast(() => {
       expect(parentRow()).not.toBeNull();
       expect(parentRow().querySelector('[data-session-attention="error"]')).toBeNull();

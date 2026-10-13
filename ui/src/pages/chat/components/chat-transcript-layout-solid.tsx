@@ -189,7 +189,13 @@ export class ChatTranscriptRenderer {
     return this.lifecycle.afterCommit(effect, onCancel);
   }
 
-  queueAfterLayout(effect: () => void): void {
+  syncInitialPosition(): void {
+    if (this.element && this.accepted) {
+      this.element.style.visibility = this.accepted.initialPositionPending() ? "hidden" : "";
+    }
+  }
+
+  queueAfterCommit(effect: () => void): void {
     if (!this.lifecycle || this.layoutEffects.has(effect)) {
       return;
     }
@@ -197,9 +203,14 @@ export class ChatTranscriptRenderer {
     const release = () => {
       this.layoutEffects.delete(effect);
     };
-    this.lifecycle.afterLayout(() => {
-      release();
-      effect();
+    this.lifecycle.afterCommit(() => {
+      // Nested row islands finish their commits before initial geometry is read.
+      queueMicrotask(() => {
+        release();
+        if (this.isPresented()) {
+          effect();
+        }
+      });
     }, release);
   }
 
@@ -218,7 +229,7 @@ export class ChatTranscriptRenderer {
         this.committed = current;
         // Keep layout measurable, but do not paint the initial estimated range
         // before the session owner has placed it at the correct reading edge.
-        this.element.style.visibility = current.initialPositionPending ? "hidden" : "";
+        this.syncInitialPosition();
         this.element.toggleAttribute("data-measuring-rows", current.measureRows);
         current.layout.commitRange(
           this.element,
@@ -243,6 +254,7 @@ export class ChatTranscriptRenderer {
     if (!this.element) {
       const element = document.createElement("div");
       element.className = "chat-thread-inner chat-thread-inner--virtual";
+      element.style.visibility = next.initialPositionPending() ? "hidden" : "";
       this.element = element;
       // A session outlives the render computation that first introduces its DOM.
       this.disposeRoot = runWithOwner(null, () =>

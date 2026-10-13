@@ -11,6 +11,7 @@ import {
   WorkerTaskPool,
 } from "openclaw/plugin-sdk/process-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
+import { codexHistoryWorkerEntrypoint } from "./session-history-worker-entrypoint.js";
 import {
   runCodexHistoryWorkerInput,
   type CodexHistoryWorkerInput,
@@ -28,16 +29,6 @@ import {
 } from "./src/app-server/session-history.js";
 import type { SettledTurnMessages } from "./src/app-server/settled-turn-evidence.js";
 import { projectVerifiedSettledCodexMessages } from "./src/app-server/settled-turn-evidence.js";
-
-const codexHistoryWorkerEntrypoint = {
-  currentModuleUrl: import.meta.url,
-  sourceWorkerName: "session-history.worker",
-  distWorkerPath: "extensions/codex/session-history.worker.js",
-  package: {
-    name: "@openclaw/codex",
-    distWorkerPath: "session-history.worker.js",
-  },
-} as const;
 
 const sourceWorkerUrl = resolveRuntimeWorkerUrl(codexHistoryWorkerEntrypoint);
 const sourceNeedsBuiltFallback =

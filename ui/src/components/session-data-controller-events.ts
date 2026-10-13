@@ -11,6 +11,11 @@ import type {
   SessionListSnapshot,
 } from "../lib/sessions/index.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import {
+  canSelectSessionRowFields,
+  sessionRowFieldsSelection,
+} from "../lib/sessions/session-row-fields.ts";
+import { SIDEBAR_ROW_FIELDS } from "./app-sidebar-session-row-fields.ts";
 import type {
   SidebarSessionOwnerFilter,
   SidebarSessionStatusFilter,
@@ -126,7 +131,11 @@ export function sidebarSessionListQuery(
     agentId: ownerId && ownerId === selfId ? undefined : agentId,
     archivedFilter: owner.sidebarSessionStatusFilter(),
     limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-    rowMode: "sidebar",
+    ...sessionRowFieldsSelection(
+      SIDEBAR_ROW_FIELDS,
+      "sidebar",
+      canSelectSessionRowFields(owner.sessionDataContext?.gateway.snapshot.hello),
+    ),
     includeDerivedTitles: true,
     includeLastMessage: true,
   } as const;

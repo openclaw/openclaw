@@ -5,6 +5,11 @@ import {
   type SessionListOptions,
 } from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import {
+  canSelectSessionRowFields,
+  sessionRowFieldsSelection,
+} from "../../lib/sessions/session-row-fields.ts";
+import { SESSIONS_PAGE_ROW_FIELDS } from "./session-row-fields.ts";
 
 type SessionsPageListFilters = {
   activeMinutes?: number;
@@ -17,7 +22,7 @@ type SessionsPageListFilters = {
 };
 
 export function buildSessionsListQuery(
-  context: Pick<ApplicationContext, "agentSelection">,
+  context: Pick<ApplicationContext, "agentSelection" | "gateway">,
   filters: SessionsPageListFilters,
 ): SessionListOptions {
   const deepLinkSessionKey = filters.deepLinkSessionKey?.trim() || null;
@@ -29,7 +34,11 @@ export function buildSessionsListQuery(
   return {
     source: "sessions-page",
     excludeDock: !deepLinkSessionKey,
-    rowMode: "compact",
+    ...sessionRowFieldsSelection(
+      SESSIONS_PAGE_ROW_FIELDS,
+      "compact",
+      canSelectSessionRowFields(context.gateway.snapshot.hello),
+    ),
     limit: deepLinkSessionKey ? SESSIONS_PAGE_DEFAULT_LIMIT : filters.limit,
     ...(activeMinutes ? { activeMinutes } : {}),
     ...(deepLinkSessionKey || filters.search?.trim()

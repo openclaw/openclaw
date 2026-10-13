@@ -807,7 +807,7 @@ async function replaceConfigFileUnlocked(
         writeOptions: params.writeOptions,
       });
   const { snapshot, writeOptions } = prepared;
-  const deferredPluginMigrations = readConfigWriteMigrationFacts(snapshot, params.io?.env);
+  const deferredPluginMigrations = await readConfigWriteMigrationFacts(snapshot, params.io?.env);
   const mergedWriteOptions = mergeConfigMutationWriteOptions(writeOptions, params.writeOptions);
   const nextConfig = preserveDeferredPluginMigrationConfig({
     sourceConfig: snapshot.sourceConfig,

@@ -13,6 +13,7 @@ import type {
   SessionEntryArchiveReason,
   SessionRow,
 } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import type { SessionRowProjection } from "../../../packages/gateway-protocol/src/session-row-fields.js";
 import type { CronListPageResult } from "../../../src/cron/service/list-page-types.js";
 import type { CronStatusSummary } from "../../../src/cron/service/state.js";
 import type { ModelAuthStatusResult } from "../../../src/gateway/server-methods/models-auth-status.types.js";
@@ -183,7 +184,7 @@ export type GatewaySessionRow = Omit<GatewayWireSessionRow, "archivedBy" | "upda
 export type SessionsListResult = SessionsListResultBase<
   GatewayWireSessionsDefaults,
   GatewaySessionRow
->;
+> & { rowProjection?: SessionRowProjection };
 
 export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;

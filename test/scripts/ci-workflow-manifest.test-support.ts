@@ -359,12 +359,12 @@ export function runCiManifestFixture(options: {
       }
       writeFileSync(
         path.join(root, "scripts/check-changed.mts"),
-        `export const createChangedCiLintPlan = () => (${JSON.stringify(options.ciLintPlan ?? null)});\n`,
+        `export const createChangedCiLintPlan = () => (${JSON.stringify(options.ciLintPlan ?? null)});\nexport { createChangedCheckPlan } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/check-changed.mts")).href)};\n`,
       );
       if (!options.changedCoreTestSupport) {
         writeFileSync(
           path.join(root, "scripts/changed-lanes.mts"),
-          "export const detectChangedLanes = (paths) => ({ paths });\n",
+          `export { detectChangedLanes } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/changed-lanes.mts")).href)};\n`,
         );
       }
       // Substitute the native compiler inventory, retaining canonical graph selection

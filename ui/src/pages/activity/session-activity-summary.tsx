@@ -1,11 +1,11 @@
 import { createMemo } from "@solidjs/signals";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import type { ActivityHistoryRow } from "./session-row-fields.ts";
 
 type SessionActivitySummaryProps = {
-  row: GatewaySessionRow;
-  onRetry?: (row: GatewaySessionRow) => void;
+  row: ActivityHistoryRow;
+  onRetry?: (row: ActivityHistoryRow) => void;
 };
 
 export function renderSessionActivitySummary(props: SessionActivitySummaryProps) {

@@ -2,17 +2,17 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { SessionsSearchResult } from "../../../packages/gateway-protocol/src/index.js";
 import { indexFirstByKey } from "../../../src/shared/dedupe-by-key.ts";
 import { normalizeSessionSearchText } from "../../../src/shared/session-search-text.ts";
-import type { GatewaySessionRow } from "../api/types.ts";
 import { clampText } from "../lib/format.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import type { CommandPaletteItem } from "./command-palette-catalog-search.ts";
+import type { CommandPaletteSessionRow } from "./command-palette-row-fields.ts";
 
 export const SESSION_ACTION_PREFIX = "session:";
 export const SESSION_SEARCH_LIMIT = 10;
 const SESSION_SEARCH_SNIPPET_MAX_CHARS = 160;
 
 function sessionMetadataMatchRank(
-  row: GatewaySessionRow,
+  row: CommandPaletteSessionRow,
   normalizedSearch: string,
   titleSearch: string,
   label: string,
@@ -51,9 +51,11 @@ function sessionMetadataMatchRank(
 }
 
 export function buildCommandPaletteSessionItems(params: {
-  visibleRows: readonly GatewaySessionRow[];
+  visibleRows: readonly CommandPaletteSessionRow[];
   visibleKeys: ReadonlySet<string>;
-  transcriptResult: (SessionsSearchResult & { sessions: readonly GatewaySessionRow[] }) | null;
+  transcriptResult:
+    | (Omit<SessionsSearchResult, "sessions"> & { sessions: readonly CommandPaletteSessionRow[] })
+    | null;
   search: string;
 }): CommandPaletteItem[] {
   const { visibleRows, visibleKeys, transcriptResult } = params;

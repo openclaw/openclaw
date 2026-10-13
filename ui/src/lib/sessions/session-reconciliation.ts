@@ -33,6 +33,7 @@ import type { createSessionMutations } from "./session-mutations.ts";
 import { optimisticSessionRowFields, type SessionPatchRowFact } from "./session-pending-rows.ts";
 import type { createSessionPermissionProjection } from "./session-permission-projection.ts";
 import type { createSessionRosterRefresh } from "./session-roster-refresh.ts";
+import { sessionRowCoverage } from "./session-row-fields.ts";
 import { sessionChangedSnapshots, type SessionChangedEventInfo } from "./session-row-reconcile.ts";
 import type { createSessionThinkingClaims } from "./session-thinking-claims.ts";
 
@@ -471,7 +472,12 @@ export function createSessionReconciliation(host: Host) {
         : admitted;
       roster.observations.inheritRow(corrected, previousRow);
       const source = roster.observations.inheritRow({ ...corrected }, corrected);
-      roster.observations.observeReadRow(source, eventObservation.revision, ownerAgentId);
+      roster.observations.observeReadRow(
+        source,
+        eventObservation.revision,
+        ownerAgentId,
+        rowInfo.rowProjection ? sessionRowCoverage(source, rowInfo.rowProjection) : new Set(fields),
+      );
       roster.observations.observeClears(source, fields);
       const projected = projection.projectFields(source, ownerAgentId);
       if (rowInfo.archived !== null || fields.includes("archived")) {

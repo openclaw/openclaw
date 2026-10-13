@@ -501,7 +501,7 @@ describe("AppSidebar agent roster", () => {
     await vi.waitFor(() =>
       expect(sidebar.querySelectorAll("openclaw-sidebar-new-session-menu")).toHaveLength(1),
     );
-    const store = rosterActivityStore(context);
+    const store = rosterActivityStore(context, "sidebar");
     await vi.waitFor(() => expect(store.snapshot.loading).toBe(false));
     const listCount = () =>
       sessions.list.mock.calls.filter(

@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createMemo, For } from "solid-js";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import type { SessionsPageRow } from "./session-row-fields.ts";
 
 type CategoryCellProps = {
   loading: boolean;
@@ -11,7 +11,7 @@ type CategoryCellProps = {
   onRequestNewCategory: (sessionKey?: string) => void;
 };
 
-export function CategoryCell(props: CategoryCellProps & { row: GatewaySessionRow }) {
+export function CategoryCell(props: CategoryCellProps & { row: SessionsPageRow }) {
   const current = createMemo(() => normalizeOptionalString(props.row.category) ?? "");
   const options = createMemo(() =>
     current() && !props.knownCategories.includes(current())

@@ -287,7 +287,7 @@ describe("sidebar projection memo", () => {
     await settleRoster(mounted.sidebar);
     const newSession = sidebar.querySelector<LitElement>("openclaw-sidebar-new-session-menu")!;
     await newSession.updateComplete;
-    await rosterActivityStore(mounted.context).refresh();
+    await rosterActivityStore(mounted.context, "sidebar").refresh();
     await settleRoster(mounted.sidebar);
     await newSession.updateComplete;
     const menuUpdate = vi.spyOn(newSession, "performUpdate");

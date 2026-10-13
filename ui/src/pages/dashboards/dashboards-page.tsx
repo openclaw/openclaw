@@ -20,7 +20,9 @@ export function DashboardsPage(props: DashboardsPageProps) {
 
   const selection = projectAgentSelection(context.agentSelection);
   const scopeId = createMemo(() => selection.read().state.scopeId?.trim() || null);
-  const query = createMemo(() => dashboardSessionListQuery(scopeId()));
+  const query = createMemo(() =>
+    dashboardSessionListQuery(scopeId(), gateway.read().snapshot.hello),
+  );
   const list = createMemo(() => projectSessionList({ sessions: context.sessions, scope: query() }));
   createEffect(
     () => ({ projection: list(), scope: query() }),

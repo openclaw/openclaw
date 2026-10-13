@@ -32,6 +32,7 @@ import { formatSessionArchiveReason } from "../../lib/sessions/session-archive-r
 import { parseAgentSessionKey, parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
 import type { JSX as SolidJSX } from "../../types/solid-elements.js";
 import { CategoryCell } from "./category-cell.tsx";
+import type { SessionsPageRow } from "./session-row-fields.ts";
 import { SessionStatusBadge } from "./session-status.tsx";
 import { categoryDropHandlers } from "./sessions-filters.tsx";
 import type { SessionsProps } from "./view-types.ts";
@@ -75,7 +76,7 @@ const SESSION_KIND_ICONS = {
 
 // Kind glyph anchors each row; the dot mirrors isSessionRunActive so run
 // state also reads at the identity anchor while scanning the key column.
-function renderSessionAvatar(row: GatewaySessionRow) {
+function renderSessionAvatar(row: SessionsPageRow) {
   const displayKind = resolveSessionDisplayKind(row);
   return (
     <span class={`session-avatar session-avatar--${displayKind}`} aria-hidden="true">
@@ -88,7 +89,7 @@ function renderSessionAvatar(row: GatewaySessionRow) {
 const CONTEXT_METER_WARN_PERCENT = 65;
 const CONTEXT_METER_DANGER_PERCENT = 85;
 
-function renderTokensCell(row: GatewaySessionRow) {
+function renderTokensCell(row: SessionsPageRow) {
   const total = row.totalTokens;
   if (typeof total !== "number" || !Number.isFinite(total)) {
     return <span class="muted">{t("common.na")}</span>;
@@ -228,7 +229,7 @@ function isRowControlTarget(target: EventTarget | null): boolean {
 }
 
 export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
-  const row = createMemo(() => props.row);
+  const row = createMemo<SessionsPageRow>(() => props.row);
   const updated = createMemo(() =>
     row().updatedAt ? formatRelativeTimestamp(row().updatedAt) : t("common.na"),
   );
@@ -450,6 +451,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
   );
 
   function SessionDetails() {
+    const row = createMemo<GatewaySessionRow>(() => props.row);
     const labelDisabledReason = createMemo(() => props.labelDisabledReason?.(row()));
     const labelValue = createMemo(() => row().label ?? "");
     const rawThinking = createMemo(() => row().thinkingLevel ?? "");

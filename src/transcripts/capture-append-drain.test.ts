@@ -117,7 +117,7 @@ describe("transcript capture accepted append drainage", () => {
         titleFailed.resolve();
         throw new Error("Title write unavailable");
       }
-      await writeSession(...args);
+      return writeSession(...args);
     });
     let first: Promise<void> | undefined;
     let late: Promise<void> | undefined;
@@ -244,16 +244,13 @@ describe("transcript capture accepted append drainage", () => {
       });
       const writeSession = f.store.writeSession.bind(f.store);
       vi.spyOn(f.store, "writeSession").mockImplementation(async (...args) => {
+        const receipt = await writeSession(...args);
         if (args[0].stoppedAt) {
-          events.push("restored stop state");
+          events.push("restored stop state and revision");
         }
-        return writeSession(...args);
+        return receipt;
       });
       const readRevision = f.store.readSummaryInputRevision.bind(f.store);
-      vi.spyOn(f.store, "readSummaryInputRevision").mockImplementation(async (...args) => {
-        events.push("retry revision");
-        return readRevision(...args);
-      });
       let accepted: Promise<void> | undefined;
       f.provider.start = async (request) => {
         started.resolve(request);
@@ -313,8 +310,7 @@ describe("transcript capture accepted append drainage", () => {
         .soft(events)
         .toEqual([
           ...(reopened ? [] : ["accepted speech"]),
-          "restored stop state",
-          "retry revision",
+          "restored stop state and revision",
           "start rejected",
         ]);
       expect(failure.retry?.revision).toBe(await readRevision(request.session));
@@ -328,6 +324,7 @@ describe("transcript capture accepted append drainage", () => {
         expect(failure.retry).toEqual({
           session: original,
           revision: await readRevision(original),
+          discardOnAbandon: false,
         });
         expect(failure.cause).toBeInstanceOf(AggregateError);
         expect(failure.cause).toMatchObject({ errors: [providerFailure, appendFailure] });

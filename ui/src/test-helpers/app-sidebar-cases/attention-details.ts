@@ -113,7 +113,7 @@ describe("AppSidebar session attention details", () => {
       await settleRoster(sidebar);
       await waitForFast(() => expect(header()).not.toBeNull());
       sessionsHarness.publishList({ result: { ...result, count: 0, sessions: [] } });
-      await rosterActivityStore(context).refresh();
+      await rosterActivityStore(context, "sidebar").refresh();
       await settleRoster(sidebar);
       expect(
         sidebar

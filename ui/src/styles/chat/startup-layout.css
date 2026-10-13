@@ -145,6 +145,7 @@
 
   position: absolute;
   inset: 0;
+  inset-inline-end: var(--chat-details-space, 0px);
   container: chat-conversation / size;
   display: flex;
   min-width: 0;

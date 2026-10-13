@@ -5,9 +5,14 @@ export function installColdLoadProbes(input: {
   events: Array<{ event: string; payload: unknown }>;
 }) {
   const updates = new Map<string, { count: number; ms: number }>();
-  const rpcs: Array<{ method: string; requestBytes: number; responseBytes: number; ms: number }> =
-    [];
-  const pending = new Map<string, { method: string; bytes: number; at: number }>();
+  const rpcs: Array<{
+    method: string;
+    source?: string;
+    requestBytes: number;
+    responseBytes: number;
+    ms: number;
+  }> = [];
+  const pending = new Map<string, { method: string; source?: string; bytes: number; at: number }>();
   let lastActivity = performance.now();
   let queued = 0;
   let sentEvents = 0;
@@ -53,6 +58,7 @@ export function installColdLoadProbes(input: {
           if (frame.type === "req") {
             pending.set(frame.id, {
               method: frame.method,
+              source: frame.params?.source,
               bytes: new TextEncoder().encode(data).length,
               at: performance.now(),
             });
@@ -103,6 +109,7 @@ export function installColdLoadProbes(input: {
               pending.delete(frame.id);
               rpcs.push({
                 method: request.method,
+                source: request.source,
                 requestBytes: request.bytes,
                 responseBytes: new TextEncoder().encode(event.data).length,
                 ms: performance.now() - request.at,

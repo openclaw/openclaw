@@ -25,6 +25,7 @@ import {
   runSessionNavigationAction,
 } from "../../lib/sessions/session-menu-navigation.ts";
 import { pluginSessionMenuActions } from "../../plugins/control-ui-actions.ts";
+import type { SessionsPageRow } from "./session-row-fields.ts";
 
 type SessionMenuElement = HTMLElementTagNameMap["openclaw-session-menu"];
 type SessionMenuProperties = Pick<
@@ -65,7 +66,7 @@ type SessionsPageMenuAction = Exclude<SessionMenuAction, { kind: "snooze" | "wak
 
 export type SessionsPageMenuProps = {
   context: ApplicationContext;
-  row: GatewaySessionRow;
+  row: SessionsPageRow;
   menu: { key: string; sessionId?: string; x: number; y: number };
   trigger: HTMLElement | null;
   disabled: boolean;

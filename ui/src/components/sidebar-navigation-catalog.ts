@@ -46,7 +46,7 @@ export class SidebarNavigationCatalog implements ReactiveController {
       this.agentId = agentId;
     }
     if (source && this.host.navigationView === "pages" && !this.pages) {
-      const query = dashboardSessionListQuery(agentId);
+      const query = dashboardSessionListQuery(agentId, context?.gateway.snapshot.hello);
       this.pages = source.observeList(query, (snapshot) => {
         this.dashboards = snapshot;
         this.host.requestUpdate();
@@ -61,7 +61,7 @@ export class SidebarNavigationCatalog implements ReactiveController {
     }
     void this.source
       .refreshList({
-        ...dashboardSessionListQuery(this.agentId),
+        ...dashboardSessionListQuery(this.agentId, this.getContext()?.gateway.snapshot.hello),
         append: true,
         offset: this.dashboards.result.nextOffset ?? this.dashboards.result.sessions.length,
       })

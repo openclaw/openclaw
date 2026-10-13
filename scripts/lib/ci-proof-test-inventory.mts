@@ -1225,6 +1225,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/model-auth-env.provider-aliases.test.ts",
   "src/agents/model-auth.profiles.test.ts",
   "src/agents/model-catalog-decisions.test.ts",
+  "src/agents/prepared-model-runtime.catalog-auth.test.ts",
   "src/agents/model-catalog.test.ts",
   "src/agents/model-compat.test.ts",
   "src/agents/model-fallback.probe.test.ts",

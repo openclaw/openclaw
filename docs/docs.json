@@ -1854,6 +1854,7 @@
                       "plugins/cloudflare",
                       "plugins/geolocation",
                       "plugins/logbook",
+                      "plugins/mcp-relay",
                       "plugins/oc-path",
                       "plugins/session-share",
                       "plugins/workboard",
@@ -3014,6 +3015,7 @@
                     ]
                   },
                   "plugins/sdk-subpaths",
+                  "plugins/sdk-gateway-ingress",
                   "plugins/sdk-entrypoints",
                   {
                     "group": "Plugin entry points",

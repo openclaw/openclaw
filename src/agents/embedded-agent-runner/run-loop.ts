@@ -12,6 +12,7 @@ import { isStrictAgenticExecutionContractActive } from "../execution-contract.js
 import type { FailoverReason } from "../failover/signal.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeUsage } from "../usage.js";
+import { resolveSourceReplyDelivery } from "./delivery-evidence.js";
 import { log } from "./logger.js";
 import type { EmbeddedPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import {
@@ -349,7 +350,14 @@ export async function runPreparedEmbeddedLoop(
       const { dispatchedAttempt, runtimePlan } = dispatch;
       const refusal = await providerReview.settle(dispatchedAttempt.rawAttempt);
       failoverRetryController.observeAttempt(dispatchedAttempt.rawAttempt);
-      attemptCarryover.apply(refresh.applyDeliveryState(dispatchedAttempt.rawAttempt));
+      const rawAttempt = refresh.applyDeliveryState(dispatchedAttempt.rawAttempt);
+      attemptCarryover.apply(rawAttempt);
+      // Attempt subscriptions reset on retry; the reply owner retains final source
+      // delivery and clears it when a newly admitted steered input needs an answer.
+      rawAttempt.sourceReplyDeliveryState = resolveSourceReplyDelivery(
+        rawAttempt,
+        params.replyOperation?.sourceReplyDelivered ? "delivered" : "missing",
+      );
       const normalization = {
         runInput: admittedRunInput,
         preparedRuntime,

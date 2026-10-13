@@ -57,6 +57,7 @@ host and view types). The contract and Control UI subpaths are browser safe;
 | `plugin-sdk/migration`              | Private-local after July 2026; Migration provider item helpers such as `createMigrationItem`, reason constants, item status markers, redaction helpers, and `summarizeMigrationItems`                   |
 | `plugin-sdk/migration-runtime`      | Private-local after July 2026; Runtime migration helpers such as `copyMigrationFileItem`, `resolvePlannedMigrationTargets`, `withCachedMigrationConfigRuntime`, and `writeMigrationReport`              |
 | `plugin-sdk/health`                 | Doctor health-check registration, detection, repair, selection, severity, and finding types for bundled health consumers                                                                                |
+| `plugin-sdk/gateway-ingress`        | Service-owned remote Control UI ingress factory, handle, socket, request, cookie, and typed error contracts; see [remote Control UI ingress](/plugins/sdk-gateway-ingress)                              |
 | `plugin-sdk/channel-entry-contract` | Bundled channel entry and setup-entry contracts, feature declarations, and lazy module-loading helpers                                                                                                  |
 
 Navigation items registered with `host.ui.registerNavigation` can set `parent`

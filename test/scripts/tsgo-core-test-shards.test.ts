@@ -623,14 +623,18 @@ import { checkCoreTsgoGraphBoundary } from "./check-tsgo-core-boundary.mts";
 if (process.argv[2] === "boundary") {
   await checkCoreTsgoGraphBoundary();
 } else {
-  const plan = await createChangedCiTypeCheckPlan([process.argv[2] === "core-plan" ? ${JSON.stringify(helper)} : ${JSON.stringify(extension)}], {
+  const plan = await createChangedCiTypeCheckPlan([process.argv[2] === "core-plan" ? ${JSON.stringify(helper)} : ${JSON.stringify(extension)}, ...JSON.parse(process.argv[3])], {
     cwd: process.cwd(), coreBoundaryOwner: "additional-checks",
   });
   console.log(JSON.stringify({ mode: plan.mode, names: plan.graphs.map(({ name }) => name) }));
 }
 `,
       );
-      const inspectExtension = async (mode: "plan" | "core-plan" | "boundary", serial = "") => {
+      const inspectExtension = async (
+        mode: "plan" | "core-plan" | "boundary",
+        serial = "",
+        extraPaths: string[] = [],
+      ) => {
         write("compiler-events.tsv", "");
         return await lifetime.track(
           runNodeScript(
@@ -639,6 +643,7 @@ if (process.argv[2] === "boundary") {
               pathToFileURL(path.join(sourceRoot, "scripts/tsx.mjs")).href,
               plannerDriver,
               mode,
+              JSON.stringify(extraPaths),
             ],
             { ...env, OPENCLAW_CI_TYPE_PLAN_SERIAL: serial },
             undefined,
@@ -646,8 +651,9 @@ if (process.argv[2] === "boundary") {
           ),
         );
       };
+      const deletedNonCompilerPaths = ["docs/removed.md", "docs/removed.mdx", "ui/src/removed.css"];
       for (const serial of ["", "1"]) {
-        const extensionPlan = await inspectExtension("plan", serial);
+        const extensionPlan = await inspectExtension("plan", serial, deletedNonCompilerPaths);
         expect(extensionPlan.status, extensionPlan.stderr).toBe(0);
         expect(JSON.parse(extensionPlan.stdout.trim())).toEqual({
           mode: "changed",
@@ -658,13 +664,19 @@ if (process.argv[2] === "boundary") {
         expect(discovery.every((args) => args.includes(serial ? "--listFilesOnly" : "--api"))).toBe(
           true,
         );
-        const corePlan = await inspectExtension("core-plan", serial);
+        const corePlan = await inspectExtension("core-plan", serial, deletedNonCompilerPaths);
         expect(corePlan.status, corePlan.stderr).toBe(0);
         expect(JSON.parse(corePlan.stdout.trim())).toEqual({
           mode: "changed",
           names: ["core-test-agents-other"],
         });
       }
+      const deletedCompilerPlan = await inspectExtension("plan", "", [
+        "extensions/example/removed.ts",
+      ]);
+      expect(deletedCompilerPlan.status, deletedCompilerPlan.stderr).toBe(0);
+      expect(JSON.parse(deletedCompilerPlan.stdout.trim()).mode).toBe("full");
+      expect(compilerEvents()).toEqual([]);
       // Its parallel owner must still reject a type-only edge into an extension.
       write(
         consumer,

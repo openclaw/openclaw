@@ -28,7 +28,6 @@ type SessionChannelRow = Pick<
   | "accountId"
   | "subject"
   | "groupChannel"
-  | "space"
   | "deliveryContext"
 >;
 

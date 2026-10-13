@@ -1,6 +1,5 @@
 import { dynamic } from "@solidjs/web";
 import { For, createMemo } from "solid-js";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
@@ -12,7 +11,9 @@ import {
   resolveSessionPreferredFace,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
+import type { ProjectedSessionListResult } from "../../lib/sessions/session-row-fields.ts";
 import { currentWorkIdentity } from "./current-work.ts";
+import type { CURRENT_WORK_ROW_FIELDS, CurrentWorkRow } from "./session-row-fields.ts";
 
 registerEnglishCatalog(registerActivityEnglish);
 
@@ -23,14 +24,14 @@ type CurrentWorkProps = {
   globalScope: boolean;
   navigate: ApplicationContext["navigate"];
   connected: boolean;
-  result?: SessionsListResult;
+  result?: ProjectedSessionListResult<typeof CURRENT_WORK_ROW_FIELDS>;
   loading: boolean;
   incomplete: boolean;
   error?: string;
   onRetry: () => void;
 };
 
-function CurrentSession(props: { owner: CurrentWorkProps; row: GatewaySessionRow }) {
+function CurrentSession(props: { owner: CurrentWorkProps; row: CurrentWorkRow }) {
   const face = createMemo(() => resolveSessionPreferredFace(props.row));
   const target = createMemo(() =>
     isSessionKeyAddressable(props.row.key, props.owner.globalScope)

@@ -202,7 +202,7 @@ describe("AppSidebar delegated activity", () => {
       rosterRows[2]!,
     ];
     mixed.sessions.publishList({ result: mixed.result });
-    await rosterActivityStore(mixed.context).refresh();
+    await rosterActivityStore(mixed.context, "sidebar").refresh();
     await waitForFast(
       () => expect(rosterParent().querySelector('[data-session-attention="error"]')).not.toBeNull(),
       { timeout: 5_000 },

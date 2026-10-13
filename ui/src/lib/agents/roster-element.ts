@@ -5,7 +5,7 @@ import { IdentityAvatarController } from "../../lib/identity-avatar-loader.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { rosterActivityStore } from "./roster-activity-store.ts";
+import { rosterActivityStore, type RosterSessionView } from "./roster-activity-store.ts";
 
 export abstract class AgentRosterElement extends OpenClawLightDomElement {
   @property({ attribute: false }) active = true;
@@ -13,10 +13,16 @@ export abstract class AgentRosterElement extends OpenClawLightDomElement {
   protected context!: ApplicationContext;
 
   protected readonly avatars = new IdentityAvatarController(this);
+  protected get rosterView(): RosterSessionView {
+    return "activity";
+  }
   constructor() {
     super();
     new SubscriptionsController(this).effect(
-      () => (this.active && this.context ? rosterActivityStore(this.context) : undefined),
+      () =>
+        this.active && this.context
+          ? rosterActivityStore(this.context, this.rosterView)
+          : undefined,
       (store) => store.subscribe(() => this.requestRosterUpdate()),
     );
   }
@@ -26,7 +32,7 @@ export abstract class AgentRosterElement extends OpenClawLightDomElement {
   }
 
   protected get roster() {
-    return rosterActivityStore(this.context).snapshot;
+    return rosterActivityStore(this.context, this.rosterView).snapshot;
   }
 
   protected get connected() {
@@ -34,7 +40,7 @@ export abstract class AgentRosterElement extends OpenClawLightDomElement {
   }
 
   protected refresh(): Promise<void> {
-    return rosterActivityStore(this.context).refresh();
+    return rosterActivityStore(this.context, this.rosterView).refresh();
   }
 
   protected cards() {

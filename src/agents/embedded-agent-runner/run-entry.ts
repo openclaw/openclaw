@@ -566,6 +566,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
     failed = terminalOutcome.status === "error";
     const result = mergeRunEntryExecutionTrace({
       result: candidateResult,
+      config: params.selection.cfg,
       terminalStatus: terminalOutcome.status,
       provider: fallbackResult.provider,
       model: fallbackResult.model,

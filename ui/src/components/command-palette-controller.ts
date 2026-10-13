@@ -9,6 +9,10 @@ import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
 import { ModelCatalogReader } from "../lib/model-catalog-reader.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { resolveUiSelectedGlobalAgentId } from "../lib/sessions/session-key.ts";
+import {
+  canSelectSessionRowFields,
+  sessionRowFieldsSelection,
+} from "../lib/sessions/session-row-fields.ts";
 import { searchVisibleSessionTranscripts } from "../lib/sessions/transcript-search.ts";
 import { GatewayPageController } from "../lit/gateway-page-controller.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
@@ -32,6 +36,7 @@ import {
   type CommandPaletteOpenInput,
   type CommandPaletteInputHandoff,
 } from "./command-palette-contract.ts";
+import { COMMAND_PALETTE_ROW_FIELDS } from "./command-palette-row-fields.ts";
 import {
   buildCommandPaletteSessionItems,
   SESSION_SEARCH_LIMIT,
@@ -523,6 +528,11 @@ export class PaletteController {
     try {
       const result = await sessions.list({
         ...SESSION_SEARCH_SCOPE,
+        ...sessionRowFieldsSelection(
+          COMMAND_PALETTE_ROW_FIELDS,
+          "compact",
+          canSelectSessionRowFields(gateway.snapshot.hello),
+        ),
         source: "command-palette",
         search,
         limit: SESSION_SEARCH_LIMIT,

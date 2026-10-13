@@ -1,3 +1,4 @@
+import type { SessionRowProjection } from "../../../../packages/gateway-protocol/src/session-row-fields.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
 import { projectSessionResultRows, reconcileRosterPresentationMetadata } from "./reconcile.ts";
@@ -302,6 +303,7 @@ export function createSessionRosterObservations(
   const descriptions = createSessionDescribeReads({
     connection: host.connection,
     canReuse: () => host.observerError() === null,
+    observeProjection: provenance.observeProjection,
     currentRow: (params) =>
       publishedRow((row, agentId) =>
         matchesExistingSession(row, params.key, params.agentId ?? agentId ?? null),
@@ -380,9 +382,11 @@ export function createSessionRosterObservations(
       rows: readonly GatewaySessionRow[],
       revision: number,
       agentId?: string | null,
+      projection?: SessionRowProjection,
     ) => {
+      const covered = projection && new Set(projection.fields);
       for (const row of rows) {
-        observeReadRow(row, revision, agentId);
+        observeReadRow(row, revision, agentId, row.rowMode === "fields" ? covered : undefined);
       }
     },
     stageRunTerminal: createSessionRunTerminalStaging({

@@ -6,6 +6,10 @@ import { activityPersonFromPath, activityPersonLocation } from "../../app-route-
 import type { PresenceViewer } from "../../lib/presence-users.ts";
 import { createSessionEventRefreshCoordinator } from "../../lib/sessions/event-refresh-coordinator.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import {
+  expandSessionListResult,
+  sessionRowFieldsSelection,
+} from "../../lib/sessions/session-row-fields.ts";
 import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
 import { activityPulseBoundaries } from "./activity-pulse-window.ts";
 import {
@@ -24,6 +28,7 @@ import {
   sessionActivityLocation,
   type SessionActivityFilters,
 } from "./session-activity.ts";
+import { ACTIVITY_HISTORY_ROW_FIELDS, CURRENT_WORK_ROW_FIELDS } from "./session-row-fields.ts";
 
 type ActivityQuery = SessionActivityFilters | "current";
 export const ACTIVITY_SUMMARY_ENSURE_METHOD = "sessions.activitySummary.ensure";
@@ -76,6 +81,7 @@ export class SessionActivityController {
   private readonly summaryAttempts = new Map<string, string>();
   private readonly summaryRetries = new Set<string>();
   private canEnsureSummaries = false;
+  private canSelectRowFields = false;
   private filters: ActivityQuery | null = null;
   private bucketRollover?: ReturnType<typeof setTimeout>;
   private pendingChanges: CurrentWorkChange[] = [];
@@ -437,8 +443,10 @@ export class SessionActivityController {
     filters: ActivityQuery | null,
     reason: "query" | "refresh" | "retry" = "query",
     canEnsureSummaries = this.canEnsureSummaries,
+    canSelectRowFields = this.canSelectRowFields,
   ): Promise<void> {
     this.canEnsureSummaries = canEnsureSummaries;
+    this.canSelectRowFields = canSelectRowFields;
     if (!canEnsureSummaries) {
       this.resetSummaries();
     }
@@ -463,7 +471,11 @@ export class SessionActivityController {
     const request = {
       source: "activity",
       excludeDock: true,
-      rowMode: "compact",
+      ...sessionRowFieldsSelection(
+        filters === "current" ? CURRENT_WORK_ROW_FIELDS : ACTIVITY_HISTORY_ROW_FIELDS,
+        "compact",
+        canSelectRowFields,
+      ),
       archived: "all",
       includeGlobal: true,
       includeUnknown: true,
@@ -520,6 +532,7 @@ export class SessionActivityController {
     this.notify();
     void client
       .request<SessionsListResult>("sessions.list", request, { signal: pending.controller.signal })
+      .then(expandSessionListResult)
       .then((result) => {
         if (this.pending === pending) {
           if (filters === "current") {

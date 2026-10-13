@@ -5,10 +5,11 @@ import type {
   SessionsPatchManyParams,
   SessionsPatchManyResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import { expandSessionRowFacts } from "../../../../packages/gateway-protocol/src/session-row-fields.js";
 import { SESSION_ARCHIVE_REQUEST_OPTIONS } from "../../../../src/shared/session-archive-timeout.ts";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
+import type { GatewayHelloOk } from "../../api/gateway.ts";
 import type { SessionsListResult, SessionsPatchResult } from "../../api/types.ts";
+import { DASHBOARD_ROW_FIELDS } from "../../pages/dashboards/session-row-fields.ts";
 import type { SessionPatch } from "./patch.ts";
 import { appendSessionResults } from "./reconcile.ts";
 import type {
@@ -17,6 +18,11 @@ import type {
   SessionRequestClient,
   SessionResetOptions,
 } from "./session-capability.ts";
+import {
+  canSelectSessionRowFields,
+  expandSessionListResult,
+  sessionRowFieldsSelection,
+} from "./session-row-fields.ts";
 
 /** Personal list choices share one RPC contract across all session menus. */
 export async function requestSessionInvolvement(
@@ -34,11 +40,18 @@ export const DEFAULT_SESSION_LIST_QUERY = {
   limit: SIDEBAR_SESSION_ROSTER_LIMIT,
 } as const satisfies SessionListOptions;
 
-export function dashboardSessionListQuery(agentId?: string | null): SessionListOptions {
+export function dashboardSessionListQuery(
+  agentId?: string | null,
+  hello?: GatewayHelloOk | null,
+): SessionListOptions {
   const normalizedAgentId = agentId?.trim();
   return {
     ...DEFAULT_SESSION_LIST_QUERY,
-    rowMode: "dashboard",
+    ...sessionRowFieldsSelection(
+      DASHBOARD_ROW_FIELDS,
+      "dashboard",
+      canSelectSessionRowFields(hello),
+    ),
     source: "dashboard",
     excludeDock: true,
     hasBoard: true,
@@ -80,7 +93,12 @@ export function buildSessionRequestParams(
 
 export function buildSessionListParams(options: SessionListOptions = {}): SessionsListParams {
   const params: SessionsListParams = {
-    rowMode: options.rowMode ?? "compact",
+    ...(options.fields
+      ? {
+          fields: [...new Set(options.fields)].sort(),
+          ...(options.rowMode ? { rowMode: options.rowMode } : {}),
+        }
+      : { rowMode: options.rowMode ?? "compact" }),
     source: options.source ?? "chat-pane",
     includeGlobal: true,
     includeUnknown: true,
@@ -112,7 +130,11 @@ export function buildSessionListParams(options: SessionListOptions = {}): Sessio
     "ownerFirst",
     "involvingMe",
   ] as const) {
-    if (options[key] === true) {
+    if (
+      options[key] === true &&
+      !(key === "includeDerivedTitles" && options.fields?.includes("derivedTitle")) &&
+      !(key === "includeLastMessage" && options.fields?.includes("lastMessagePreview"))
+    ) {
       params[key] = true;
     }
   }
@@ -181,11 +203,7 @@ export async function requestSessionListParams(
   const { pageSize, ...params } = query;
   const read = async (request: SessionsListParams) => {
     const result = await client.request<SessionsListResult | undefined>("sessions.list", request);
-    if (!result?.sharedFacts) {
-      return result ?? null;
-    }
-    const { sharedFacts, ...list } = result;
-    return { ...list, sessions: expandSessionRowFacts(list.sessions, sharedFacts) };
+    return result ? expandSessionListResult(result) : null;
   };
   if (!pageSize || !params.limit || params.limit <= pageSize) {
     return read(params);

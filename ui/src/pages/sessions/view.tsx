@@ -4,7 +4,6 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { createMemo, For } from "solid-js";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsPage,
@@ -21,6 +20,7 @@ import {
   UNGROUPED_ID,
 } from "../../lib/sessions/grouping.ts";
 import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
+import type { SessionsPageRow } from "./session-row-fields.ts";
 import { getAgentIdentity, SessionRows, sessionsTableColumnCount } from "./session-row.tsx";
 import {
   categoryDropHandlers,
@@ -35,7 +35,7 @@ import "../../styles/sessions.css";
 const PAGE_SIZES = [10, 25, 50, 100] as const;
 
 function renderSessionsHeadingFacts(
-  rows: GatewaySessionRow[],
+  rows: SessionsPageRow[],
   liveCount: number,
   statusFilter: SessionArchivedFilter,
 ) {
@@ -156,7 +156,7 @@ function renderGroupHeaderRow(group: SessionRowGroup, props: SessionsProps) {
 }
 
 export function SessionsView(props: SessionsProps) {
-  const rows = createMemo(() => props.result?.sessions ?? []);
+  const rows = createMemo<SessionsPageRow[]>(() => props.result?.sessions ?? []);
   const liveCount = createMemo(() => rows().filter(isSessionRunActive).length);
   const archivedCount = createMemo(() => rows().filter((row) => row.archived === true).length);
   return (
@@ -241,7 +241,7 @@ function SortHeader(
 }
 
 function SessionsTable(props: SessionsProps) {
-  const rawRows = createMemo(() => props.result?.sessions ?? []);
+  const rawRows = createMemo<SessionsPageRow[]>(() => props.result?.sessions ?? []);
   const searchQuery = createMemo(() => props.searchQuery);
   const pageSizeValue = createMemo(() => String(props.pageSize));
   const direction = createMemo(() => (props.sortDir === "asc" ? 1 : -1));

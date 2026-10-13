@@ -1,6 +1,7 @@
 import { SESSIONS_LIST_TRANSCRIPT_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { SIDEBAR_ROW_FIELDS } from "../../components/app-sidebar-session-row-fields.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../format-error.ts";
 import { createGatewaySetSyncLifecycle } from "../gateway-set-sync-lifecycle.ts";
@@ -10,8 +11,13 @@ import type {
   SessionListSnapshot,
   SessionListScope,
 } from "../sessions/session-capability.ts";
+import {
+  canSelectSessionRowFields,
+  sessionRowFieldsSelection,
+} from "../sessions/session-row-fields.ts";
 import { selectableAgentsList } from "./display.ts";
 import { agentRosterCards } from "./roster-activity.ts";
+import { AGENT_ROSTER_ROW_FIELDS } from "./roster-row-fields.ts";
 
 type RosterContext = Pick<ApplicationContext, "gateway" | "agents" | "agentIdentity" | "sessions">;
 type RosterActivitySnapshot = {
@@ -43,15 +49,24 @@ const emptySnapshot: RosterActivitySnapshot = {
   error: null,
   subscriptionError: null,
 };
-const stores = new WeakMap<SessionCapability, RosterActivityStore>();
+export type RosterSessionView = "activity" | "sidebar";
+const stores = new WeakMap<SessionCapability, Map<RosterSessionView, RosterActivityStore>>();
 const ROSTER_SESSION_LIMIT = 300;
 
 /** Visible roster consumers share a capability-owned all-agent window and identity projection. */
-export function rosterActivityStore(context: RosterContext): RosterActivityStore {
-  let store = stores.get(context.sessions);
+export function rosterActivityStore(
+  context: RosterContext,
+  view: RosterSessionView = "activity",
+): RosterActivityStore {
+  let views = stores.get(context.sessions);
+  if (!views) {
+    views = new Map();
+    stores.set(context.sessions, views);
+  }
+  let store = views.get(view);
   if (!store) {
-    store = new RosterActivityStore(context);
-    stores.set(context.sessions, store);
+    store = new RosterActivityStore(context, view);
+    views.set(view, store);
   }
   return store;
 }
@@ -63,7 +78,10 @@ class RosterActivityStore {
   private binding: RosterBinding | null = null;
   private involvingMe = false;
 
-  constructor(private readonly context: RosterContext) {
+  constructor(
+    private readonly context: RosterContext,
+    private readonly view: RosterSessionView,
+  ) {
     let cleanups: Array<() => void> = [];
     this.observation = createGatewaySetSyncLifecycle(context.gateway, {
       sync: () => this.synchronize(),
@@ -167,13 +185,17 @@ class RosterActivityStore {
       return;
     }
     if (!this.binding) {
+      const selectFields = canSelectSessionRowFields(this.context.gateway.snapshot.hello);
       const binding: RosterBinding = {
         connection,
         query: {
           source: "agent-roster",
-          rowMode: "compact",
-          includeDerivedTitles: true,
-          includeLastMessage: true,
+          ...sessionRowFieldsSelection(
+            this.view === "sidebar" ? SIDEBAR_ROW_FIELDS : AGENT_ROSTER_ROW_FIELDS,
+            this.view === "sidebar" ? "sidebar" : "compact",
+            selectFields,
+          ),
+          ...(!selectFields ? { includeDerivedTitles: true, includeLastMessage: true } : {}),
           archivedFilter: "all",
           involvingMe: this.involvingMe,
           excludeDock: true,

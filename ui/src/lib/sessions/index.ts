@@ -253,7 +253,12 @@ export function createSessionCapability(
         revision,
         agentId,
       );
-      roster.observations.observeReadRows(admitted?.sessions ?? [], revision, agentId);
+      roster.observations.observeReadRows(
+        admitted?.sessions ?? [],
+        revision,
+        agentId,
+        admitted?.rowProjection,
+      );
       for (const row of admitted?.sessions ?? []) {
         mutations.observeArchiveRead(row);
       }

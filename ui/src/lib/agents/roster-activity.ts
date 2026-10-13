@@ -1,4 +1,4 @@
-import type { AgentIdentityResult, AgentsListResult, GatewaySessionRow } from "../../api/types.ts";
+import type { AgentIdentityResult, AgentsListResult } from "../../api/types.ts";
 import { resolveAgentAvatarUrl } from "../avatar.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
 import {
@@ -6,11 +6,12 @@ import {
   resolveUiSessionRowAgentId,
 } from "../sessions/session-key.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar, selectableAgentsList } from "./display.ts";
+import type { AgentRosterSessionRow } from "./roster-row-fields.ts";
 
 /** Shared identity and activity in configured roster order. */
 export function agentRosterCards(
   roster: AgentsListResult | undefined,
-  rows: readonly GatewaySessionRow[],
+  rows: readonly AgentRosterSessionRow[],
   identityFor: (id: string) => AgentIdentityResult | null = () => null,
 ) {
   if (!roster) {
@@ -20,7 +21,7 @@ export function agentRosterCards(
   if (agents.length === 0) {
     return [];
   }
-  const sessionsByAgent = new Map<string, GatewaySessionRow[]>();
+  const sessionsByAgent = new Map<string, AgentRosterSessionRow[]>();
   rows.forEach((row) => {
     const agentId = resolveUiSessionRowAgentId(row, roster.defaultId);
     const sessions = sessionsByAgent.get(agentId) ?? [];
@@ -36,7 +37,7 @@ export function agentRosterCards(
       agent.id,
     ).sessionKey;
     const sessions = sessionsByAgent.get(agent.id) ?? [];
-    const recent = sessions.reduce<GatewaySessionRow | undefined>(
+    const recent = sessions.reduce<AgentRosterSessionRow | undefined>(
       (latest, row) => (!latest || (row.updatedAt ?? 0) > (latest.updatedAt ?? 0) ? row : latest),
       undefined,
     );

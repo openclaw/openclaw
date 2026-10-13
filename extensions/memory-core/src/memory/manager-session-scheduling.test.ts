@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
   emitSessionTranscriptUpdate,
   resetTranscriptUpdateListener,
@@ -102,16 +103,33 @@ describe("session index scheduling", () => {
     ]);
   });
 
-  it("waits for a long running turn to settle before starting its quiet period", async () => {
+  it("starts overdue work as soon as a long running turn settles", async () => {
     activity.listener?.(true);
     const target = append("busy");
     await vi.advanceTimersByTimeAsync(360_000);
     expect(harness.syncCalls).toEqual([]);
 
     activity.listener?.(false);
-    await vi.advanceTimersByTimeAsync(29_999);
-    expect(harness.syncCalls).toEqual([]);
     await vi.advanceTimersByTimeAsync(1);
+    await harness.waitForSessionSync();
+    expect(harness.syncCalls).toEqual([
+      { reason: "session-delta", sessions: [target], archiveFiles: [] },
+    ]);
+  });
+
+  it("caps deferral across back-to-back turns and only starts in an idle gap", async () => {
+    const target = { agentId: "main", sessionId: "busy", sessionKey: "agent:main:chat:busy" };
+    for (let turn = 0; turn < 15; turn++) {
+      activity.listener?.(true);
+      append("busy");
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(harness.syncCalls).toEqual([]);
+      activity.listener?.(false);
+      await vi.advanceTimersByTimeAsync(1);
+      if (turn < 14) {
+        expect(harness.syncCalls).toEqual([]);
+      }
+    }
     await harness.waitForSessionSync();
     expect(harness.syncCalls).toEqual([
       { reason: "session-delta", sessions: [target], archiveFiles: [] },
@@ -153,7 +171,7 @@ describe("session index scheduling", () => {
     expect(harness.syncCalls).toEqual([
       { reason: "session-delta", sessions: [first, second], archiveFiles: [] },
     ]);
-    await vi.advanceTimersByTimeAsync(29_999);
+    await vi.advanceTimersByTimeAsync(59_999);
     expect(harness.syncCalls).toHaveLength(1);
 
     await vi.advanceTimersByTimeAsync(1);
@@ -165,5 +183,70 @@ describe("session index scheduling", () => {
     await vi.advanceTimersByTimeAsync(300_000);
     expect(harness.syncCalls).toHaveLength(2);
     sync.mockRestore();
+  });
+
+  it("backs off handled fallback failures, yields to turns, and stops retrying until new activity", async () => {
+    const target = append("fallback");
+    const sessionFile = "/tmp/fallback.jsonl";
+    const index = vi.fn(async () => {});
+    const error = createMemoryEmbeddingOperationError({
+      operation: "batch",
+      cause: "embedding backend failed",
+    });
+    let lastAttemptAt = 0;
+    index.mockImplementation(async () => {
+      lastAttemptAt = Date.now();
+      throw error;
+    });
+    harness["syncArchiveFiles"] = index;
+    harness["activateFallbackProvider"] = vi.fn(async () => true);
+    let deferForRebuildCooldown = false;
+    harness["sync"] = async (params) => {
+      harness.syncCalls.push(params ?? {});
+      if (deferForRebuildCooldown) {
+        deferForRebuildCooldown = false;
+        await harness.runSyncForTest(params);
+        return;
+      }
+      await harness["syncTargetedSessions"](new Set([sessionFile]));
+    };
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(index).toHaveBeenCalledTimes(1);
+    for (const [attempt, delay] of [60_000, 300_000, 900_000].entries()) {
+      await vi.advanceTimersByTimeAsync(lastAttemptAt + delay - Date.now() - 1);
+      expect(index).toHaveBeenCalledTimes(attempt + 1);
+      if (attempt === 1) {
+        activity.listener?.(true);
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(index).toHaveBeenCalledTimes(attempt + 1);
+        activity.listener?.(false);
+      }
+      await vi.advanceTimersByTimeAsync(1);
+      expect(index).toHaveBeenCalledTimes(attempt + 2);
+    }
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    expect(index).toHaveBeenCalledTimes(4);
+    expect(harness.syncCalls).toEqual([
+      { reason: "session-delta", sessions: [target], archiveFiles: [] },
+      ...Array.from({ length: 3 }, () => ({ reason: "session-startup-catchup" })),
+    ]);
+    expect(harness["sessionsFullRetryDirty"]).toBe(true);
+
+    index.mockResolvedValue(undefined);
+    activity.listener?.(true);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(index).toHaveBeenCalledTimes(4);
+    harness["recordFullReindexFailure"](false);
+    deferForRebuildCooldown = true;
+    activity.listener?.(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(index).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(59_998);
+    expect(index).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(2);
+    expect(index).toHaveBeenCalledTimes(5);
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    expect(index).toHaveBeenCalledTimes(5);
   });
 });

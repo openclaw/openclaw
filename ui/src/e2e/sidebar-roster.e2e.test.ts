@@ -8,6 +8,7 @@ import type {
   SessionsListResult,
 } from "../api/types.ts";
 import type { AppSidebarSessionNavigationElement } from "../components/app-sidebar-session-navigation.ts";
+import { SIDEBAR_ROW_FIELDS } from "../components/app-sidebar-session-row-fields.ts";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -129,6 +130,7 @@ suite.define(() => {
           },
         );
         const gateway = await installMockGateway(page, {
+          featureCapabilities: ["sessions.rowFields"],
           sessions: sessions.sessions,
           methodResponses: {
             "agents.list": agentsList,
@@ -259,8 +261,7 @@ suite.define(() => {
 
         const activityQuery = {
           archived: "all",
-          includeDerivedTitles: true,
-          includeLastMessage: true,
+          fields: [...SIDEBAR_ROW_FIELDS].sort(),
           limit: 100,
         };
         const activityReads = () => gateway.getRequests("sessions.list", activityQuery);

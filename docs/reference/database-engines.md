@@ -67,7 +67,10 @@ One Gateway owns each store. PostgreSQL does not enable multiple active Gateways
 external writers, replication management, or connection-pool management.
 
 Writers use `READ COMMITTED` and a transaction-scoped advisory lock derived from
-the store identity. Snapshot reads use `REPEATABLE READ READ ONLY`. Connections
+the store identity. Every PostgreSQL write, including a single statement, uses
+the adapter's `runTransaction` so it retains that lock and publishes its write
+token. A single-statement read may use autocommit; multi-statement snapshot reads
+use `REPEATABLE READ READ ONLY`. Connections
 set `synchronous_commit=off` to match SQLite WAL with `synchronous=NORMAL`: a
 server or operating-system crash can lose recently acknowledged commits. Backups
 and recovery must account for that durability policy. The adapter sets generous
@@ -94,10 +97,13 @@ repair, and file-snapshot requests refuse with a PostgreSQL recovery instruction
 Runtime PostgreSQL queries run in workers. Physical open and boot migration code
 may use the synchronous `withEngineStoreAdmission` scope from
 `openclaw/plugin-sdk/database-engine-worker-runtime`; retaining a connection after
-that scope ends does not authorize main-thread queries. Close remains available
-to settle resources. The store owner supplies `openEngineStore` with its existing
-SQLite-data decision, so partially initialized stores are also protected from an
-accidental engine switch.
+that scope ends does not authorize main-thread queries. The callback must remain
+synchronous. Close remains available to settle resources. The store owner supplies
+`openEngineStore` with `inspectSqlite(): { hasExistingData, hasEngineAnchor }`,
+so partially initialized stores are also protected from an accidental engine
+switch. See the canonical
+[`admission scope`](https://github.com/openclaw/openclaw/blob/main/src/infra/database-engine/admission-scope.ts)
+and [`engine opener`](https://github.com/openclaw/openclaw/blob/main/src/infra/database-engine/open.ts).
 
 Back up both the local anchor and its PostgreSQL schema as a matched set. Stop
 the Gateway while taking or restoring that pair, and include the SQLite stores

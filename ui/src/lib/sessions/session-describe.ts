@@ -1,3 +1,7 @@
+import {
+  resolveSessionRowProjection,
+  type SessionRowProjection,
+} from "../../../../packages/gateway-protocol/src/session-row-fields.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type {
   SessionCapability,
@@ -33,6 +37,7 @@ export function createSessionDescribeReads(host: {
   connection: SessionConnectionOwner;
   canReuse: () => boolean;
   currentRow: (params: Params) => GatewaySessionRow | undefined;
+  observeProjection: (row: GatewaySessionRow, projection: SessionRowProjection | undefined) => void;
 }) {
   const reads = new Map<string, Read>();
   const trim = () => {
@@ -81,6 +86,8 @@ export function createSessionDescribeReads(host: {
         : params.agentId,
       params.includeDerivedTitles,
       params.includeLastMessage,
+      params.rowMode,
+      resolveSessionRowProjection(params)?.id,
       options.timeoutMs,
     ]);
     const read = reads.get(key);
@@ -106,6 +113,9 @@ export function createSessionDescribeReads(host: {
                 session: { ...response.session, runtimeSampledAt: Date.now() },
               };
         if (reads.get(key) === pending && host.connection.isCurrent(scope)) {
+          if (result.session) {
+            host.observeProjection(result.session, result.rowProjection);
+          }
           pending.result = result;
           if (!pending.reusable || !host.canReuse() || !current(pending)) {
             reads.delete(key);

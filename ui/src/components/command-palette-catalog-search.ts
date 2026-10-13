@@ -1,11 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type {
-  AgentsListResult,
-  GatewaySessionRow,
-  ModelCatalogResult,
-  SkillStatusReport,
-} from "../api/types.ts";
+import type { AgentsListResult, ModelCatalogResult, SkillStatusReport } from "../api/types.ts";
 import {
   SETTINGS_SEARCHABLE_SUBPAGE_ROUTES,
   subtitleForRoute,
@@ -20,6 +15,7 @@ import { loadCronCatalog } from "../lib/cron/catalog.ts";
 import type { PluginListResult } from "../lib/plugins/index.ts";
 import { settingsNavigationLabelForRoute } from "../lib/settings-navigation.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
+import type { CommandPaletteSessionRow } from "./command-palette-row-fields.ts";
 import type { IconName } from "./icons.ts";
 import { askBrandLabel } from "./theme-brand-label.ts";
 
@@ -44,7 +40,7 @@ export type CommandPaletteItem = {
     | "chats"
     | "messages";
   action: string;
-  session?: GatewaySessionRow;
+  session?: CommandPaletteSessionRow;
   search?: string;
   hash?: string;
   agentId?: string;

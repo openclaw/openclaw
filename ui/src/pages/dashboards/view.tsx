@@ -1,5 +1,4 @@
 import { For, Show, createMemo } from "solid-js";
-import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -14,10 +13,13 @@ import {
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import "../../styles/dashboards.css";
+import type { ProjectedSessionListResult } from "../../lib/sessions/session-row-fields.ts";
 import { DashboardPreview } from "./dashboard-preview.ts";
+import type { DashboardRow } from "./session-row-fields.ts";
+import type { DASHBOARD_ROW_FIELDS } from "./session-row-fields.ts";
 
 export type DashboardsRouteData = {
-  result: SessionsListResult | null;
+  result: ProjectedSessionListResult<typeof DASHBOARD_ROW_FIELDS> | null;
   error: string | null;
   basePath: string;
   fallbackAgentId: string;
@@ -35,8 +37,6 @@ export type DashboardGalleryHandlers = {
   onFilterChange: (filter: Partial<DashboardGalleryFilters>) => void;
   onNavigate?: ApplicationContext["navigate"];
 };
-
-type DashboardRow = SessionsListResult["sessions"][number];
 
 function dashboardAuthor(row: DashboardRow, fallbackAgentId: string) {
   const actor = row.createdActor ?? row.owner?.actor;

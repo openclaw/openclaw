@@ -1875,18 +1875,33 @@ openclaw-settings-save-indicator:empty {
   --sidebar-child-session-toggle-width: max(34px, calc(36px * var(--control-ui-text-scale)));
   --session-row-bg: var(--session-row-tint, transparent);
 
+  position: relative;
+  isolation: isolate;
   display: flex;
   align-items: center;
   min-width: 0;
   min-height: var(--sidebar-session-row-min-height);
   padding-right: 2px;
   border-radius: var(--radius-md);
-  background: var(--session-row-bg);
   color: var(--muted);
   cursor: var(--cursor-action);
   transition:
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
+}
+
+/* Inset only the paint: adjacent fills need breathing room without shrinking
+   click targets, moving text, or changing the list's density. */
+.sidebar-recent-session::after {
+  content: "";
+  position: absolute;
+  inset: 2px 0;
+  z-index: -1;
+  border: 1px solid var(--session-row-border, transparent);
+  border-radius: inherit;
+  background: var(--session-row-bg);
+  pointer-events: none;
+  transition: inherit;
 }
 
 /* A wash makes tags scannable without coloring the title or replacing the
@@ -3042,13 +3057,17 @@ a:is(
   min-height: max(32px, var(--sidebar-session-row-min-height));
   padding: 0 8px;
   border: 1px solid transparent;
-  background: var(--session-row-bg);
   color: var(--muted);
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
     color var(--duration-fast) ease,
     transform var(--duration-fast) ease;
+}
+
+.sidebar-zone-entry .sidebar-recent-session::after {
+  /* The host's transparent border still owns its original layout footprint. */
+  inset: 1px -1px;
 }
 
 .sidebar-zone-entry .sidebar-recent-session__link {
@@ -3085,15 +3104,17 @@ a:is(
     color-mix(in srgb, var(--bg-hover) 84%, transparent)
   );
 
+  --session-row-border: color-mix(in srgb, var(--border) 72%, transparent);
+
   color: var(--text);
-  border-color: color-mix(in srgb, var(--border) 72%, transparent);
 }
 
 .sidebar-zone-entry .sidebar-recent-session.sidebar-recent-session--active {
   --session-row-bg: color-mix(in srgb, var(--text) 10%, transparent);
 
+  --session-row-border: color-mix(in srgb, var(--accent) 16%, transparent);
+
   color: var(--text-strong);
-  border-color: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 /* Multi-select overrides both tag and active fills, including pinned rows. */

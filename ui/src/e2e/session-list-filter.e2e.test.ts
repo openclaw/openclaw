@@ -29,6 +29,52 @@ suite.define(() => {
     page = undefined;
   });
 
+  it("renders selected row fields and fetches expanded settings on demand", async () => {
+    const key = "agent:main:projected-settings";
+    const label = "Projected settings session";
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const gateway = await installMockGateway(currentPage, {
+      sessionKey: "unknown",
+      featureCapabilities: ["sessions.rowFields"],
+      sessions: [
+        {
+          key,
+          sessionId: "projected-settings-session",
+          kind: "direct",
+          label,
+          updatedAt: 1,
+          model: "fixture-settings-model",
+          modelProvider: "fixture-provider",
+          totalTokens: 1234,
+        },
+      ],
+    });
+    await currentPage.goto(`${suite.server?.baseUrl ?? ""}sessions`);
+    await currentPage.getByText(label, { exact: true }).first().waitFor();
+    const request = (await gateway.getRequests("sessions.list")).find(
+      (item) => item.params?.source === "sessions-page",
+    );
+    expect(request?.params).toMatchObject({
+      fields: expect.arrayContaining(["label", "owner", "totalTokens"]),
+    });
+    expect(request?.params).not.toHaveProperty("rowMode");
+    expect(request?.params?.fields).not.toContain("model");
+    expect(await currentPage.getByText("fixture-settings-model", { exact: true }).count()).toBe(0);
+    await currentPage.getByRole("button", { name: /Show.*details/ }).click();
+    await currentPage
+      .locator(".session-detail-stat__value")
+      .filter({ hasText: "fixture-settings-model" })
+      .waitFor();
+    const descriptions = (await gateway.getRequests("sessions.describe")).filter(
+      (item) => item.params?.key === key,
+    );
+    expect(descriptions).toHaveLength(1);
+    expect(descriptions[0]?.params).not.toHaveProperty("fields");
+    await currentPage.getByText(label, { exact: true }).first().waitFor();
+  });
+
   it("refetches instead of showing a row excluded by configured-agent filtering", async () => {
     const visibleLabel = "Visible configured session";
     const hiddenLabel = "Hidden unconfigured session";

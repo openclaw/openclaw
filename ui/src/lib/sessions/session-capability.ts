@@ -12,6 +12,10 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { SchemaContract } from "../../../../packages/gateway-protocol/src/schema-contract.js";
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import type {
+  SessionRowField,
+  SessionRowProjection,
+} from "../../../../packages/gateway-protocol/src/session-row-fields.js";
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
@@ -70,6 +74,7 @@ export type SessionListOptions = SchemaContract<
   Omit<
     SessionsListParams,
     | "source"
+    | "fields"
     | "activityPulseBoundaries"
     | "activeOnly"
     | "requireLastInteraction"
@@ -87,6 +92,7 @@ export type SessionListOptions = SchemaContract<
     | "archived"
   >
 > & {
+  fields?: readonly SessionRowField[];
   source?: SessionsListParams["source"];
   /** Physical read size for a managed window that needs every page enriched. */
   pageSize?: number;
@@ -249,7 +255,7 @@ export type SessionCapability = {
   describe: (
     params: SessionsDescribeParams,
     options?: { refresh?: boolean; timeoutMs?: number; client?: SessionRequestClient },
-  ) => Promise<{ session?: GatewaySessionRow | null }>;
+  ) => Promise<{ session?: GatewaySessionRow | null; rowProjection?: SessionRowProjection }>;
   list: (options?: SessionListOptions) => Promise<SessionsListResult | null>;
   listSnapshot: (scope: SessionListScope) => SessionListSnapshot;
   subscribeList: (

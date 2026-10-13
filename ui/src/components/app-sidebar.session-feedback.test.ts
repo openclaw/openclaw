@@ -45,7 +45,7 @@ async function useSidebarMode(
   await settleLitElement(sidebar);
   if (mode === "roster") {
     await vi.waitFor(() =>
-      expect(rosterActivityStore(context).snapshot).toMatchObject({
+      expect(rosterActivityStore(context, "sidebar").snapshot).toMatchObject({
         loading: false,
         result: expect.anything(),
       }),
@@ -242,7 +242,7 @@ describe("sidebar session feedback", () => {
       if (failure) {
         const pending = createDeferred<never>();
         sessions.list.mockImplementation(async () => await pending.promise);
-        const refresh = rosterActivityStore(context).refresh();
+        const refresh = rosterActivityStore(context, "sidebar").refresh();
         await settleLitElement(sidebar);
         expect(sidebar.textContent).not.toContain(hint);
         pending.reject(new Error("Fixture list failed"));
@@ -262,7 +262,7 @@ describe("sidebar session feedback", () => {
         await vi.waitFor(() => expect(sidebar.textContent).toContain(hint));
         if (mode === "roster") {
           result.hasMore = true;
-          await rosterActivityStore(context).refresh();
+          await rosterActivityStore(context, "sidebar").refresh();
         } else {
           sidebar.sessionData.sessionsResult = {
             ...sidebar.sessionData.sessionsResult!,

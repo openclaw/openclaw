@@ -267,7 +267,7 @@ describe("AppSidebar agent roster", () => {
         updatedAt: row.agentId === "recent" ? 999 : 1,
       }),
     );
-    await rosterActivityStore(context).refresh();
+    await rosterActivityStore(context, "sidebar").refresh();
     expect(agentIds(sidebar)).toEqual(["main", "recent", "working"]);
   });
 

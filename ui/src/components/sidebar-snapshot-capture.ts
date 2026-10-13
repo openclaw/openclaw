@@ -38,7 +38,10 @@ export function captureSidebarSnapshotModel(
     return null;
   }
   const zone = host.reconciledSidebarZone(rows);
-  const roster = rosterActivityStore(context).snapshot;
+  const roster = rosterActivityStore(
+    context,
+    host.sidebarAgentsMode === "roster" ? "sidebar" : "activity",
+  ).snapshot;
   if (
     host.sidebarSnapshot ||
     (host.navigationView === "pages" &&

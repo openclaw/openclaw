@@ -2,7 +2,6 @@ import { createEffect, createSignal, onCleanup, onSettled, untrack } from "solid
 import type { ArtifactsListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { resolveArtifactDownloadSource } from "../../api/artifact-download.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
@@ -18,6 +17,7 @@ import {
   type ImageBlock,
 } from "../chat/components/chat-message-media.ts";
 import "./session-activity-media.css";
+import type { ActivityHistoryRow } from "./session-row-fields.ts";
 
 registerEnglishCatalog(registerActivityEnglish);
 
@@ -90,7 +90,7 @@ export type ActivitySessionMediaProps = {
   sessionKey: string;
   agentId: string;
   revision: number;
-  session?: GatewaySessionRow;
+  session?: ActivityHistoryRow;
 };
 
 function ActivitySessionMediaContent(

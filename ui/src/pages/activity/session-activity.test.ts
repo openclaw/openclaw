@@ -1,8 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { resolveSessionRowProjection } from "../../../../packages/gateway-protocol/src/session-row-fields.js";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { activityPersonFromPath } from "../../app-route-paths.ts";
+import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
 import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
 import { useSessionActivityControllerFixture } from "./session-activity-controller.test-support.ts";
 import {
@@ -10,10 +12,49 @@ import {
   canonicalSessionActivityLocation,
   projectSessionActivity,
   reconcileSessionActivityRead,
+  reconcileSessionActivity,
   sessionActivityLocation,
 } from "./session-activity.ts";
 
 const { active, listing, setup } = useSessionActivityControllerFixture();
+
+it("updates selected Activity rows from deltas without a projection descriptor", () => {
+  const provenance = createSessionRowProvenance();
+  const projection = resolveSessionRowProjection({ fields: ["label", "model"] })!;
+  const row = {
+    ...active,
+    rowMode: "fields" as const,
+    rowProjectionId: projection.id,
+    label: "Earlier title",
+    model: "fixture-model",
+  };
+  const initial = reconcileSessionActivityRead(
+    { ...listing([row]), rowProjection: projection },
+    undefined,
+    provenance,
+    1,
+  ).result;
+  const payload = {
+    agentId: row.agentId,
+    reason: "patch",
+    session: {
+      key: row.key,
+      sessionId: row.sessionId,
+      updatedAt: (row.updatedAt ?? 0) + 1,
+      label: "Delta title",
+      model: null,
+    },
+  };
+  const changed = reconcileSessionActivity(
+    initial,
+    [{ ...readSessionChangedEvent(payload)!, snapshot: payload, parentKeys: [] }],
+    provenance,
+    2,
+  );
+  expect(changed.requiresRefresh).toBe(false);
+  expect(changed.result.sessions[0]?.label).toBe("Delta title");
+  expect(changed.result.sessions[0]?.model).toBeUndefined();
+});
 
 it("orders refreshed membership by the activity timestamps actually displayed", () => {
   const provenance = createSessionRowProvenance();

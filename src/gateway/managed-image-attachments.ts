@@ -53,6 +53,7 @@ import {
   resolveSharedSecretHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
+import { getRemoteControlUiIngressContext } from "./ingress-attribution.js";
 import {
   resolveManagedImageOriginalPath,
   deleteManagedImageRecordArtifacts,
@@ -90,6 +91,7 @@ import {
   parseManagedOutgoingArtifactId,
 } from "./managed-outgoing-artifact-id.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { prepareRemoteIngressSessionRead } from "./remote-ingress-session-read.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import {
   readSessionMessagesMatchingIdAsync,
@@ -1378,6 +1380,15 @@ export async function handleManagedOutgoingMediaHttpRequest(
   };
   const stateDir = opts.stateDir ?? resolveStateDir();
   try {
+    using ingressRead = await prepareRemoteIngressSessionRead(
+      getRemoteControlUiIngressContext(req)?.resolvePrincipal(),
+      sessionKey,
+    );
+    const assertRequest = assertRequestCurrent;
+    assertRequestCurrent = () => {
+      assertRequest?.();
+      ingressRead.assertCurrent();
+    };
     const record = await readManagedImageRecord(attachmentId, stateDir);
     assertCallerCurrent();
     if (!record || record.sessionKey !== sessionKey) {

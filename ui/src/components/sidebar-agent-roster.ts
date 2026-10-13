@@ -5,7 +5,10 @@ import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { loadSettings, patchSettings } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
 import { registerAgentsHomeEnglish } from "../i18n/locales/en-agents-home.ts";
-import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
+import {
+  rosterActivityStore,
+  type RosterSessionView,
+} from "../lib/agents/roster-activity-store.ts";
 import { AgentRosterElement } from "../lib/agents/roster-element.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { SessionMethodAccess } from "../lib/session-method-access.ts";
@@ -54,6 +57,9 @@ function cachedRosterCards(host: RosterHost) {
 }
 
 class SidebarAgentRoster extends AgentRosterElement {
+  protected override get rosterView() {
+    return "sidebar" as const;
+  }
   protected override requestRosterUpdate(): void {
     this.host.sessionData.requestSessionDataUpdate();
   }
@@ -80,30 +86,14 @@ class SidebarAgentRoster extends AgentRosterElement {
           [],
       );
     }
-    const store = rosterActivityStore(this.context);
+    const store = rosterActivityStore(this.context, "sidebar");
     store.setInvolvingMe(this.involvingMe);
-    const snapshot = store.snapshot;
-    const source = this.host.rosterSessionSource;
-    const agentIds = snapshot.cards.map((card) => card.id);
-    if (
-      !source ||
-      source.result !== snapshot.result ||
-      source.collapsedAgentIds !== this.collapsed ||
-      source.agentIds.length !== agentIds.length ||
-      source.agentIds.some((id, index) => id !== agentIds[index])
-    ) {
-      this.host.rosterSessionSource = {
-        result: snapshot.result,
-        agentIds,
-        collapsedAgentIds: this.collapsed,
-      };
-    }
+    this.host.rosterCollapsedAgentIds = this.collapsed;
   }
 
   override disconnectedCallback() {
-    this.host.rosterSessionSource = null;
-    // Agents home keeps the shared window alive after the grouped filter leaves.
-    rosterActivityStore(this.context).setInvolvingMe(false);
+    this.host.rosterCollapsedAgentIds = null;
+    rosterActivityStore(this.context, "sidebar").setInvolvingMe(false);
     super.disconnectedCallback();
   }
 
@@ -347,6 +337,10 @@ class SidebarAgentRoster extends AgentRosterElement {
 customElements.define("openclaw-sidebar-agent-roster", SidebarAgentRoster);
 
 class SidebarNewSessionMenu extends AgentRosterElement {
+  protected override get rosterView() {
+    return this.sessionView;
+  }
+  @property({ attribute: false }) sessionView: RosterSessionView = "activity";
   protected override cards() {
     return cachedRosterCards(this.host) ?? super.cards();
   }
@@ -434,6 +428,7 @@ customElements.define("openclaw-sidebar-new-session-menu", SidebarNewSessionMenu
 export function renderSidebarNewSessionMenu(host: RosterHost) {
   return html`<openclaw-sidebar-new-session-menu
     .host=${host}
+    .sessionView=${host.sidebarAgentsMode === "roster" ? "sidebar" : "activity"}
     .snapshot=${host.sidebarSnapshot}
     .access=${host.readNewSessionAccess()}
     .active=${host.navigationVisible}
@@ -444,7 +439,12 @@ export function renderSidebarPinnedSession(host: RosterHost, session: SidebarRec
   const agentId = host.sessionNavigationAgentId(session);
   const cards =
     cachedRosterCards(host) ??
-    (host.sessionDataContext ? rosterActivityStore(host.sessionDataContext).snapshot.cards : []);
+    (host.sessionDataContext
+      ? rosterActivityStore(
+          host.sessionDataContext,
+          host.sidebarAgentsMode === "roster" ? "sidebar" : "activity",
+        ).snapshot.cards
+      : []);
   const card = cards.find((agent) => agent.id === agentId);
   return renderSessionTree({
     host,

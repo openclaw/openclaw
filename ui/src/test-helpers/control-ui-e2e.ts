@@ -11,6 +11,12 @@ import type { Locator, Page } from "playwright";
 import type { InlineConfig, Plugin, PreviewServer, ViteDevServer } from "vite";
 import type { MigrationsMemoryPlanResult } from "../../../packages/gateway-protocol/src/schema/migrations.ts";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
+import {
+  resolveSessionRowProjection,
+  SESSION_ROW_BASE_FIELDS,
+  SESSION_ROW_FIELDS,
+  SESSION_ROW_PRESETS,
+} from "../../../packages/gateway-protocol/src/session-row-fields.js";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import { controlUiPluginAssetRoot } from "../../../src/gateway/control-ui-plugin-assets-contract.js";
@@ -1037,7 +1043,7 @@ export function createControlUiMockGatewayInitScript(
     protocolVersion: PROTOCOL_VERSION,
     scenario: normalizeScenario(scenario),
   };
-  return `${json5BrowserSource}\n;(() => { const __name = (target) => target; (${installControlUiMockGateway.toString()})(${JSON.stringify(input)}, globalThis.JSON5.parse, ${createControlUiSessionFixtures.toString()}, ${createControlUiAttachmentFacts.toString()}, ${createControlUiMockResponses.toString()}, ${createControlUiMockDeferredRequests.toString()}, ${createControlUiMockSessionSubscriptions.toString()}, ${createControlUiMockPresence.toString()}, ${createControlUiMockReactions.toString()}); })();`;
+  return `${json5BrowserSource}\n;(() => { const __name = (target) => target; const SESSION_ROW_FIELDS = ${JSON.stringify(SESSION_ROW_FIELDS)}; const SESSION_ROW_BASE_FIELDS = ${JSON.stringify(SESSION_ROW_BASE_FIELDS)}; const SESSION_ROW_PRESETS = ${JSON.stringify(SESSION_ROW_PRESETS)}; (${installControlUiMockGateway.toString()})(${JSON.stringify(input)}, globalThis.JSON5.parse, ${createControlUiSessionFixtures.toString()}, ${createControlUiAttachmentFacts.toString()}, ${createControlUiMockResponses.toString()}, ${createControlUiMockDeferredRequests.toString()}, ${createControlUiMockSessionSubscriptions.toString()}, ${createControlUiMockPresence.toString()}, ${createControlUiMockReactions.toString()}, ${resolveSessionRowProjection.toString()}); })();`;
 }
 
 function installControlUiMockGateway(
@@ -1053,6 +1059,7 @@ function installControlUiMockGateway(
   createSubscriptions: typeof createControlUiMockSessionSubscriptions,
   createPresence: typeof createControlUiMockPresence,
   createReactions: typeof createControlUiMockReactions,
+  resolveRowProjection: typeof resolveSessionRowProjection,
 ) {
   const NativeWebSocket = window.WebSocket;
   type BrowserFrame = {
@@ -1140,6 +1147,7 @@ function installControlUiMockGateway(
       mainKey: scenario.mainSessionKey,
     },
     isRecord,
+    resolveRowProjection,
   );
   if (hasCanonicalSessionsOverride) {
     // Persisted explicit snapshots bypass scenario-default enrichment so reload
@@ -1812,7 +1820,9 @@ function installControlUiMockGateway(
             renames: groupsState.renames,
             archiveFiltering: scenario.sessionArchiveFiltering,
           })
-        : configuredValue;
+        : method === "sessions.describe"
+          ? sessions.describeResponse(configuredValue, params)
+          : configuredValue;
     }
     switch (method) {
       case "session.reactions.list":

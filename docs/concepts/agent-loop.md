@@ -135,6 +135,7 @@ Final payloads are assembled from assistant text (plus optional reasoning), inli
 
 - The exact silent token `NO_REPLY` is filtered from outgoing payloads.
 - Messaging tool duplicates are removed from the final payload list.
+- A confirmed final messaging-tool reply to the current source remains completion evidence across provider retries. Progress-only, failed, partial, dry-run, and other-destination sends do not satisfy that requirement. A newly accepted steered input needs its own answer.
 - A fallback tool error warning appears only when a run ends with a tool failure and would otherwise leave the user with no reply. This guard is not configurable; a user-facing reply, including one already delivered by a messaging tool, prevents the warning.
 
 The host decides whether an input requires a visible reply. Direct requests and accepted group/channel requests require an answer by default. Unaddressed group requests remain optional only when the operator explicitly allows the [silence policy](/concepts/messages#silent-replies); mentions and authorized commands still require a response. Ambient room events and internal helper turns remain optional. Model-authored `NO_REPLY` is empty output, not permission to waive a required response; required turns with no delivered reply still need an answer.

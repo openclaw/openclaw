@@ -141,7 +141,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       return false;
     }
     if (this.sidebarAgentsMode === "roster") {
-      const roster = rosterActivityStore(context).snapshot;
+      const roster = rosterActivityStore(context, "sidebar").snapshot;
       return (
         (roster.membershipReady || roster.error !== null) &&
         !roster.loading &&

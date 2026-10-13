@@ -26,6 +26,7 @@ import type {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import { NativeGatewayAuthUnavailableError } from "../app/native-gateway-auth.ts";
+import { isRemoteControlUiIngress } from "../app/remote-ingress.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { isLoopbackHostname } from "../lib/gateway-locality.ts";
 import {
@@ -144,6 +145,7 @@ export class GatewayBrowserClient {
   private tickWatchTimer: ReturnType<typeof setInterval> | null = null;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
+  private readonly remoteIngress = isRemoteControlUiIngress();
   private nativeAuthAbort: AbortController | null = null;
   private nativeAuthError: GatewayRequestError | null = null;
   // Close/stop advances this generation before another socket can make stale hello work look active.
@@ -154,6 +156,17 @@ export class GatewayBrowserClient {
   private pairingFailure: GatewayRequestError | null = null;
 
   constructor(private opts: GatewayBrowserClientOptions) {
+    if (this.remoteIngress) {
+      // The ingress owns admission and supplies its scope ceiling for an empty request.
+      Object.assign(this.opts, {
+        token: undefined,
+        password: undefined,
+        bootstrapToken: undefined,
+        bootstrapProfile: undefined,
+        nativeConnectAuth: undefined,
+        scopes: [],
+      });
+    }
     this.client = new GatewayProtocolClient<ConnectPlan>({
       createSocket: (handlers) => {
         this.pendingPairing = null;
@@ -379,12 +392,15 @@ export class GatewayBrowserClient {
     this.deviceTokenRetryBudgetUsed = false;
     this.opts.bootstrapToken = undefined;
     this.opts.bootstrapProfile = undefined;
-    this.scopeUpgradeBinding = plan.deviceIdentity && {
-      clientId: plan.params.client.id,
-      deviceId: plan.deviceIdentity.deviceId,
-      role: plan.params.role ?? CONTROL_UI_OPERATOR_ROLE,
-    };
-    if (hello?.auth?.deviceToken && plan.deviceIdentity) {
+    this.scopeUpgradeBinding =
+      !this.remoteIngress && plan.deviceIdentity
+        ? {
+            clientId: plan.params.client.id,
+            deviceId: plan.deviceIdentity.deviceId,
+            role: plan.params.role ?? CONTROL_UI_OPERATOR_ROLE,
+          }
+        : null;
+    if (!this.remoteIngress && hello?.auth?.deviceToken && plan.deviceIdentity) {
       const role = hello.auth.role ?? plan.params.role ?? CONTROL_UI_OPERATOR_ROLE;
       const scopes =
         role === plan.params.role && hello.auth.deviceToken === plan.selectedAuth.storedToken
@@ -404,10 +420,12 @@ export class GatewayBrowserClient {
   private async resolveRecoveryScope(hello: GatewayHelloOk, plan: ConnectPlan) {
     const serverScope = hello.auth?.recoveryScope;
     const legacyScope = await deriveLegacyV4RecoveryScope(
-      hello.auth?.deviceToken ??
-        plan.selectedAuth.authDeviceToken ??
-        plan.selectedAuth.resolvedDeviceToken ??
-        plan.selectedAuth.authToken,
+      this.remoteIngress
+        ? undefined
+        : (hello.auth?.deviceToken ??
+            plan.selectedAuth.authDeviceToken ??
+            plan.selectedAuth.resolvedDeviceToken ??
+            plan.selectedAuth.authToken),
     );
     const migrateRecoveryScope =
       serverScope && hello.auth?.recoveryMigrationAllowed === true && legacyScope
@@ -560,6 +578,9 @@ export class GatewayBrowserClient {
     role: string;
     deviceId: string;
   }): GatewayConnectAuthSelection {
+    if (this.remoteIngress) {
+      return {};
+    }
     const storedEntry = loadDeviceAuthToken({
       deviceId: params.deviceId,
       gatewayUrl: this.opts.url,

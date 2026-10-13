@@ -39,6 +39,7 @@ import { reconcileSidebarZone } from "../lib/sidebar-zone.ts";
 import { pluginTabKey } from "../pages/plugin/route.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
+import type { SidebarSessionRow } from "./app-sidebar-session-row-fields.ts";
 import {
   SIDEBAR_SESSION_NO_ATTENTION,
   type SidebarRecentSession,
@@ -48,7 +49,7 @@ import {
 import { resolveCloudWorkerStopAction } from "./cloud-worker-stop.ts";
 import { restoreSnapshotSession, type SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
-type SessionRow = SessionsListResult["sessions"][number];
+type SessionRow = SidebarSessionRow;
 
 type SidebarSessionSortOptions = {
   sortMode: SidebarSessionSortMode;

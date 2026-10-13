@@ -30,6 +30,7 @@ const { values } = parseArgs({
     "latency-ms": { type: "string", default: "35" },
     "frame-gap-ms": { type: "string", default: "4" },
     "sidebar-view": { type: "string", default: "sessions" },
+    "session-row-fields": { type: "boolean", default: false },
     output: { type: "string", default: ".artifacts/control-ui-cold-load" },
   },
 });
@@ -75,6 +76,9 @@ const results = [];
 try {
   const prepared = await prepareControlUiMockGatewayScenario({
     ...fixture.scenario,
+    featureCapabilities: values["session-row-fields"]
+      ? [...(fixture.scenario.featureCapabilities ?? []), "sessions.rowFields"]
+      : fixture.scenario.featureCapabilities,
     serverBuildId: head,
     serverVersion: JSON.parse(await readFile("package.json", "utf8")).version,
   });
@@ -310,7 +314,16 @@ try {
   await writeFile(
     path.join(artifactDir, "summary.json"),
     JSON.stringify(
-      { head, dirty, fixture: fixture.counts, sidebarView, latencyMs, frameGapMs, results },
+      {
+        head,
+        dirty,
+        fixture: fixture.counts,
+        sidebarView,
+        sessionRowFields: values["session-row-fields"],
+        latencyMs,
+        frameGapMs,
+        results,
+      },
       null,
       2,
     ),

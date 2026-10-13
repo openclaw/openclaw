@@ -12,8 +12,9 @@ read_when:
 
 Use the canonical
 [proof policy](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-testing/SKILL.md#proof-policy)
-to decide whether remote proof is needed. The procedures below apply only to
-that exception. Never execute untrusted repository tooling locally; use
+to select a qualified proof route. Prefer bounded local proof on an available
+host; expensive checks and busy or unqualified local hosts can use remote proof.
+Never execute untrusted repository tooling locally; use
 secretless fork CI or sanitized direct AWS, never credential-hydrated Testbox.
 
 Acquire only when the command is ready; reuse task-owned leases and stop them
@@ -24,7 +25,15 @@ inherit the maintained spending limits. The wrapper overrides configured workflo
 refs and rejects an explicit `--blacksmith-ref` other than `main`. Choose the
 source revision in your local checkout; its source capsule and frozen dependency
 install preserve that selection independently of the workflow ref. Explicit
-workflow and job selection still support the high-memory profile.
+workflow and job selection still support the high-memory profile. Neither
+`--class` nor `--type` sizes delegated Testbox leases. Before changing a workflow
+runner tier, qualify actual CPU affinity, cgroup limits, peak memory, OOM events,
+hydration and payload time; runner labels alone do not establish usable RAM.
+
+All profiles retain the same 32-slot concurrency namespace; memory-heavy proof
+shares four of those slots. Hash collisions can queue even when another slot is
+free. Stop only task-owned queued allocations; use PR CI or a safe local scope
+and preserve uncovered platform requirements.
 
 At allocation, the wrapper records the caller task, physical checkout, HEAD,
 base, dependency inputs, and Testbox preparation fingerprint under

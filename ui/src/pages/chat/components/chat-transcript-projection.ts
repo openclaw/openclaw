@@ -226,8 +226,13 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
   const hasTypingActors = (props.typingActors?.length ?? 0) > 0;
   const hasLiveContent = Boolean(subagents.wait || hasTypingActors || hasRealtimeTalkConversation);
-  // Rows, not items: a handoff boundary is structure and draws nothing.
-  const isEmpty = transcriptItems.length === 0 && !props.loading && !hasLiveContent;
+  // An empty page is not an empty conversation. Keep the transcript mounted
+  // while older history exists so its viewport can bootstrap the next page.
+  const isEmpty =
+    transcriptItems.length === 0 &&
+    !props.loading &&
+    !hasLiveContent &&
+    (!props.historyPagination?.hasMore || state.searchOpen);
   transcript.setContentReady(!props.loading);
   const { isDirectThread, avatarPlacement } = resolveTranscriptAvatarPlacement(
     props,

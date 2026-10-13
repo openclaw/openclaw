@@ -23,29 +23,20 @@ import { maintenanceLane } from "./session-transcript-worker-resources.js";
 import type { SessionStoreTarget } from "./targets.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
-export type SessionCleanupSource = {
-  database: { agentId: string; path: string; env: NodeJS.ProcessEnv };
-  identity?: DatabaseFileIdentity;
-  nativeIncarnation?: string;
-};
-
 type SessionCleanupStoreOwner = {
-  source: SessionCleanupSource;
   resolved: ResolvedSqliteScope & { env: NodeJS.ProcessEnv; path: string };
   assertCurrent: () => void;
   read: (fixMissing?: boolean) => Promise<SessionCleanupReadResult>;
 };
-type SessionCleanupStoreOptions = { source?: SessionCleanupSource; assertCurrent?: () => void };
+type SessionCleanupStoreOptions = { assertCurrent?: () => void };
 
-/** Retain the preview's physical owner through fresh classification and lifecycle settlement. */
+/** Retain one physical owner through classification and lifecycle settlement. */
 export function withSessionCleanupStore<T>(
   target: SessionStoreTarget,
   consume: (owner: SessionCleanupStoreOwner) => Promise<T>,
   options: SessionCleanupStoreOptions = {},
 ): Promise<T> {
-  const env = captureSessionTranscriptStorageEnvironment(
-    options.source?.database.env ?? process.env,
-  );
+  const env = captureSessionTranscriptStorageEnvironment(process.env);
   const path = resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path;
   if (isIncognitoOpenClawAgentSqlitePath(path, { agentId: target.agentId, env })) {
     return withNativeSessionCleanupStore(
@@ -62,26 +53,15 @@ export function withSessionCleanupStore<T>(
   return withSessionStoreReaderInWorker(
     { ...target, env },
     async ({ reader, database, logicalAgentId, continuation, assertCurrent: assertReader }) => {
-      const source = { database, identity };
       const assertCurrent = () => {
         assertReader();
         options.assertCurrent?.();
-        if (
-          options.source &&
-          (database.path !== options.source.database.path ||
-            database.agentId !== options.source.database.agentId)
-        ) {
-          throw new Error("Session cleanup changed its physical store");
-        }
-        for (const expected of [options.source?.identity, identity]) {
-          if (expected) {
-            assertExistingDatabaseIdentity(database.path, expected.key, expected.birthtime);
-          }
+        if (identity) {
+          assertExistingDatabaseIdentity(database.path, identity.key, identity.birthtime);
         }
       };
       assertCurrent();
       const result = await consume({
-        source,
         resolved: {
           agentId: logicalAgentId,
           databaseAgentId: database.agentId,
@@ -104,7 +84,6 @@ export function withSessionCleanupStore<T>(
               key: `file:${snapshot.source.databaseIdentity}`,
               birthtime: snapshot.source.databaseBirthtime,
             };
-            source.identity = identity;
           }
           assertCurrent();
           return snapshot;
@@ -137,30 +116,26 @@ export function withSessionCleanupStore<T>(
 /** An explicit process-held selector keeps the same kernel on its original native owner. */
 async function withNativeSessionCleanupStore<T>(
   target: SessionStoreTarget,
-  database: SessionCleanupSource["database"],
+  database: { agentId: string; path: string; env: NodeJS.ProcessEnv },
   consume: (owner: SessionCleanupStoreOwner) => Promise<T>,
   options: SessionCleanupStoreOptions,
 ): Promise<T> {
-  const source: SessionCleanupSource = {
-    database,
-    nativeIncarnation: options.source?.nativeIncarnation,
-  };
+  let nativeIncarnation: string | undefined;
   const native: { claim?: OpenClawAgentDatabaseClaim } = {};
   const assertCurrent = () => {
     options.assertCurrent?.();
     native.claim?.assertCurrent();
     const current = getOpenClawAgentDatabaseIfOpen(database);
     if (
-      source.nativeIncarnation &&
-      (!current ||
-        readOpenClawAgentDatabaseIdentity(current).incarnation !== source.nativeIncarnation)
+      nativeIncarnation &&
+      (!current || readOpenClawAgentDatabaseIdentity(current).incarnation !== nativeIncarnation)
     ) {
       throw new Error("Session cleanup changed its process-held owner");
     }
     if (current && !native.claim) {
       const borrowed = borrowOpenClawAgentDatabase(database);
       native.claim = createOpenClawAgentDatabaseClaim(current, borrowed.release);
-      source.nativeIncarnation = readOpenClawAgentDatabaseIdentity(current).incarnation;
+      nativeIncarnation = readOpenClawAgentDatabaseIdentity(current).incarnation;
     }
     return current;
   };
@@ -170,7 +145,6 @@ async function withNativeSessionCleanupStore<T>(
       await import("./cleanup-service-read.kernel.js");
     assertCurrent();
     const result = await consume({
-      source,
       resolved: { ...database, sessionKey: "", ownerStorePath: target.storePath },
       assertCurrent,
       read: async (fixMissing = false) => {

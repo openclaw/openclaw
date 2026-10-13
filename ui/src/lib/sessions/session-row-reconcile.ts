@@ -1,5 +1,6 @@
 import { asNullableRecord as recordOrNull } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as stringValue } from "@openclaw/normalization-core/string-coerce";
+import type { SessionRowProjection } from "../../../../packages/gateway-protocol/src/session-row-fields.js";
 import type { GatewaySessionRow, SessionRunStatus } from "../../api/types.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
 import { sessionMatchesArchivedFilter, type SessionArchivedFilter } from "./navigation.ts";
@@ -10,6 +11,11 @@ import {
   parseAgentSessionKey,
 } from "./session-key.ts";
 import { isShallowEqualSessionRow } from "./session-row-equality.ts";
+import {
+  preserveUncoveredSessionRowFields,
+  readSessionRowProjection,
+  sessionRowCoverage,
+} from "./session-row-fields.ts";
 import {
   preserveOmittedThinkingMetadata,
   stripThinkingMetadata,
@@ -69,6 +75,7 @@ export type SessionChangedEventInfo = {
   archived: boolean | null;
   isChatTurn: boolean;
   isAncestorReference: boolean;
+  rowProjection?: SessionRowProjection;
 };
 
 export function sanitizeSessionRow(row: GatewaySessionRow): GatewaySessionRow {
@@ -329,6 +336,8 @@ export function parseSessionChangedEvent(payload: unknown): ParsedSessionChanged
         reason === "send" ||
         reason === "steer",
       isAncestorReference: event.ancestorSessionRef === true,
+      rowProjection:
+        source.rowMode === "fields" ? readSessionRowProjection(event.rowProjection) : undefined,
     },
     event,
     source,
@@ -359,6 +368,7 @@ export function sessionChangedSnapshots(payload: unknown): unknown[] {
           session: row,
           agentId: stringValue(row.agentId) ?? parseAgentSessionKey(key)?.agentId,
           ts: event.ts,
+          ...(event.rowProjection ? { rowProjection: event.rowProjection } : {}),
           ancestorSessions: [],
           ...(reference ? { ancestorSessionRef: true } : {}),
         },
@@ -473,13 +483,13 @@ export function reconcileSessionRow(
     return reject("unpersisted");
   }
   const visibleKey = previous?.key ?? session.key;
-  let admittedRow = preserveRosterPresentationMetadata(
-    preserveOmittedThinkingMetadata(
-      visibleKey === session.key ? session : { ...session, key: visibleKey },
+  let admittedRow = visibleKey === session.key ? session : { ...session, key: visibleKey };
+  if (session.rowMode !== "fields") {
+    admittedRow = preserveRosterPresentationMetadata(
+      preserveOmittedThinkingMetadata(admittedRow, existing),
       existing,
-    ),
-    existing,
-  );
+    );
+  }
   if (isStaleForActiveSession(admittedRow, previous)) {
     return reject("stale-active");
   }
@@ -533,6 +543,7 @@ export function reconcileSessionChangedRow(
     phase: _phase,
     reason: _reason,
     runId: _runId,
+    rowProjection: _rowProjection,
     session: _session,
     sessionKey: _sessionKey,
     ts: _ts,
@@ -589,7 +600,7 @@ export function reconcileSessionChangedRow(
       ? stripThinkingMetadata(existing)
       : existing;
   const snapshotAgentId = stringValue(recordOrNull(event.session)?.agentId);
-  const offered = {
+  const offered: GatewaySessionRow = {
     ...(fullSnapshot ? {} : existingFields),
     ...rowFields,
     key: existing?.key ?? key,
@@ -604,12 +615,19 @@ export function reconcileSessionChangedRow(
       Reflect.deleteProperty(offered, field);
     }
   }
+  const covered =
+    fullSnapshot || Object.hasOwn(rowFields, "rowMode")
+      ? sessionRowCoverage(offered, info.rowProjection)
+      : undefined;
   const fields = [
-    ...Object.keys(rowFields).filter((field) => rowFields[field] !== undefined),
+    ...Object.keys(rowFields).filter(
+      (field) => rowFields[field] !== undefined && (!covered || covered.has(field)),
+    ),
     ...(existingFields !== existing ? thinkingMetadataFields : []),
   ];
+  const coveredOffered = preserveUncoveredSessionRowFields(offered, existing, covered);
   const reduced = reconcileSessionRow(
-    offered,
+    coveredOffered,
     existing,
     {
       ...options,
@@ -624,7 +642,9 @@ export function reconcileSessionChangedRow(
               fullSnapshot
                 ? [
                     ...fields,
-                    ...Object.keys(existing).filter((field) => !Object.hasOwn(row, field)),
+                    ...Object.keys(existing).filter(
+                      (field) => !Object.hasOwn(row, field) && (!covered || covered.has(field)),
+                    ),
                   ]
                 : fields,
               info,

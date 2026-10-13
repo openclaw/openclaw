@@ -1,12 +1,164 @@
 ---
 doc-schema-version: 1
-summary: "Move Gateway database access into existing workers while preserving admission, revisions, and publication"
+summary: "Worker-owned database access, write receipts, session actors, and final authority"
 read_when:
   - Adding or migrating runtime database access
   - Removing SQLite work from the Gateway main thread
   - Reviewing worker result publication or database lifecycle ownership
 title: "Database access in workers"
 ---
+
+Runtime SQL belongs in the store's existing worker. The Gateway main thread
+awaits operations, retains owner-published facts, and checks current authority
+before effects. Moving a query to a worker is not enough: reuse those facts and
+batch related work so ordinary requests do not repeat database calls.
+
+## Choose the execution owner
+
+Use the existing read-only worker scope for descriptive reads and the store's
+writer broker for mutations. Keep multi-statement snapshot reads together; use
+the writer's ordered operation when a read must follow its accepted writes.
+Do not open a second main-thread connection or add a synchronous fallback.
+The shared implementations are
+[`sqlite-readonly-worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/infra/sqlite-readonly-worker.ts),
+[`openclaw-state-read-worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/state/openclaw-state-read-worker.ts),
+[`openclaw-state-worker-owner.ts`](https://github.com/openclaw/openclaw/blob/main/src/state/openclaw-state-worker-owner.ts),
+and the agent's
+[`openclaw-agent-execution.worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/state/openclaw-agent-execution.worker.ts).
+The lifecycle owner closes its read scope and drains accepted writes before
+retiring the store.
+
+Synchronous boot admission, migrations, Doctor/CLI one-shots, and lock primitives
+are the limited exceptions. Runtime access still using them is migration debt.
+For engine stores, the synchronous `withEngineStoreAdmission` scope is lexical:
+it cannot return a Promise, and a retained connection does not extend it.
+PostgreSQL rejects construction and SQL on the main thread outside that scope.
+Each `openEngineStore` caller supplies `inspectSqlite()` with explicit
+`hasExistingData` and `hasEngineAnchor` facts; table-name prefixes cannot decide
+whether an engine switch is safe. See
+[`admission-scope.ts`](https://github.com/openclaw/openclaw/blob/main/src/infra/database-engine/admission-scope.ts),
+[`open.ts`](https://github.com/openclaw/openclaw/blob/main/src/infra/database-engine/open.ts),
+and [Database engines](/reference/database-engines#anchors-and-backups).
+
+The [generated inventory](/reference/database-schemas/worker-access-inventory)
+classifies static call sites, not observed query counts:
+
+| Tier      | Meaning                                                                        |
+| --------- | ------------------------------------------------------------------------------ |
+| T1        | Request, event, or timer paths, including mixed or unproven runtime callers.   |
+| T1-compat | Deprecated-only synchronous SDK paths with mechanically verified entry guards. |
+| T2        | Boot, migration, or named lock exceptions requiring caller evidence.           |
+| T3        | CLI, Doctor, or developer one-shots.                                           |
+| W         | SQL executing inside workers.                                                  |
+
+`pnpm check:database-worker-ratchet` prevents new main-thread debt. Mark a
+worker-only module `*.worker.ts`, or record it in `workerModules` in
+[`database-worker-inventory.mjs`](https://github.com/openclaw/openclaw/blob/main/scripts/database-worker-inventory.mjs)
+with evidence for every caller. A filename or an async function alone does not
+prove worker execution. Update the generator's evidence, not its generated page.
+
+## Check once on load; trust the owner
+
+The Gateway is the single runtime owner of its databases. Load physical format,
+schema, integrity, and canonical-index facts through the shared admission owner,
+then reuse them across handles and workers while admission retains a live
+reference. An idle reopen can reuse facts retained by another handle; closing
+the final handle retires those facts, so the next open admits the database again.
+Replacement files also require new admission; migration and repair owners publish
+replacement facts after committed DDL. Doctor and explicit verification retain
+their checks. See [integrity admission](/reference/database-schemas/integrity-and-recovery).
+
+For row data, hydrate once and update or invalidate the owner's in-memory facts
+from committed write receipts. Every writer must participate. A receipt may
+supply a postimage or explicit absence; missing coverage is unknown, not absence.
+Do not add per-request `data_version` probes, repeated schema checks, or
+read-after-write certification. An owner without complete receipt coverage must
+use its canonical reader until that coverage exists. Other processes route
+writes through the Gateway or hold exclusive ownership while it is stopped.
+
+Scope receipts to the data actually changed. Memory-index DML, for example,
+declares no session-row or transcript changes and preserves unrelated session
+actor replicas. Transcript mutations still update or invalidate their session
+facts; unknown write coverage invalidates conservatively. The shared mechanism is
+[`sqlite-database-write-receipts.ts`](https://github.com/openclaw/openclaw/blob/main/src/infra/sqlite-database-write-receipts.ts).
+
+## Final authority without SQL
+
+Cached data and permission are different contracts. Credentials, approvals,
+tool/command execution, external effects, and cross-user disclosure need current
+owner-held authority at the effect boundary, after awaited preparation. With
+complete writer coverage, this final guard is a synchronous memory read: no SQL
+and no worker round trip.
+
+[`state-domain-publication.ts`](https://github.com/openclaw/openclaw/blob/main/src/state/state-domain-publication.ts)
+provides the publication lifecycle; each domain owns its facts and denial policy:
+
+| Publication | Authority-owner response                                                                             |
+| ----------- | ---------------------------------------------------------------------------------------------------- |
+| `pending`   | Deny affected use before dispatching the mutation.                                                   |
+| `committed` | Install committed postimages or deletions before releasing the denial.                               |
+| `unknown`   | Invalidate affected facts and keep use denied until owner recovery.                                  |
+| `settled`   | Remove only this operation's pending marker; do not clear uncertainty or another operation's denial. |
+
+Confirmed rollback preserves the previous committed facts. A lost reply is not
+proof of rollback and must not trigger blind replay. Facts install before public
+observers, through
+[`sqlite-post-commit.ts`](https://github.com/openclaw/openclaw/blob/main/src/infra/sqlite-post-commit.ts).
+Personal credential and GitHub publication owners are concrete examples:
+[`user-model-account-authority.ts`](https://github.com/openclaw/openclaw/blob/main/src/state/user-model-account-authority.ts)
+and [`github-publication-receipts.ts`](https://github.com/openclaw/openclaw/blob/main/src/state/github-publication-receipts.ts).
+The credential writer-custody guard checks reviewed writer edges and table DML
+sinks through the database worker ratchet. It catches unregistered writers that
+would bypass receipt publication; it does not certify every database writer.
+See [`personal-credential-writer-guard.mts`](https://github.com/openclaw/openclaw/blob/main/scripts/lib/personal-credential-writer-guard.mts).
+
+Board uses admission-time authority for an accepted write: a write admitted
+before revocation may finish; new writes are denied. Target lifecycle and
+private-content disclosure still require current authority. See
+[`sqlite-board-store.ts`](https://github.com/openclaw/openclaw/blob/main/src/boards/sqlite-board-store.ts).
+Do not add a second
+cross-thread revocation handshake to internal bookkeeping. Owners whose native
+writers do not yet publish complete authority facts retain their documented
+[final guards](#retained-final-authority-guards) until that cutover is complete.
+
+## Session actor and memory indexing
+
+The [session actor](#session-phase-actor) owns the hot state of each active
+session inside the existing agent writer queue. The main thread keeps an
+immutable receipt-maintained replica, shared across short-lived caller handles.
+A cold actor hydrates entry, membership, pending-input custody, and transcript
+metadata in one statement; a cold mutation hydrates inside its own transaction.
+Warm readers use the replica. Complete committed postimages install before the
+command acknowledgement; eviction, replacement, incomplete coverage, and unknown
+outcomes return reads to the canonical worker. Bounded transcript payload reads
+remain with the history owner. See
+[`session-actor.worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor.worker.ts)
+and [`session-actor-replica.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor-replica.ts).
+
+Session memory indexing is background work. It batches transcript changes after
+an idle gap, pauses while the agent is busy, and yields between bounded source
+batches to foreground work. Search reads the last indexed state; it does not
+flush pending transcript indexing. The active turn already has its conversation
+context. See [built-in memory freshness](/concepts/memory-builtin) for timing,
+shutdown, and restart catch-up, and
+[`manager-session-sync-ops.ts`](https://github.com/openclaw/openclaw/blob/main/extensions/memory-core/src/memory/manager-session-sync-ops.ts)
+for scheduling ownership.
+
+## Transactions and query shape
+
+Use Kysely for ordinary queries. Raw SQL belongs to schema, migrations,
+bootstrap, or a justified engine-owned primitive. Prepare asynchronous inputs
+before a write transaction; its callback is synchronous and cannot await work.
+Use a conditional update or upsert when one statement expresses the mutation.
+`runSqliteSingleStatementSync` uses SQLite autocommit with committed-fact
+publication; PostgreSQL writes still use `runTransaction` for writer custody.
+Keep an explicit snapshot for related reads that must agree. The shared helpers
+live in [`sqlite-transaction.ts`](https://github.com/openclaw/openclaw/blob/main/src/infra/sqlite-transaction.ts).
+
+Do not move size-limiting JSON projections out of SQL: selecting full transcript
+bodies or blobs to discard most fields in TypeScript adds transfer and parsing
+cost. Engine-specific projections belong behind the engine's helper. See
+[storage-change contracts](/reference/database-schemas/storage-changes).
 
 Canonical session writers validate the serialized node they already hold and
 persist its final validity with the entry. They do not enqueue or reread their own
@@ -77,11 +229,7 @@ continue through the shared-state read worker.
 
 Runtime database access belongs in workers. The Gateway main thread owns live
 projections, caches, and caller authority; it awaits prepared facts and installs
-committed results. Synchronous boot admission, migrations, Doctor/CLI one-shots,
-and lock/lease primitives are the limited exceptions. Existing synchronous runtime
-paths are migration debt, not a pattern to extend. The
-[migration inventory](/reference/database-schemas/worker-access-inventory) separates
-candidate main-thread paths from SQL already executing in workers.
+committed results. The contracts above apply to each owner below.
 
 Gateway startup awaits business initialization before accepting connections.
 Approval recovery closes prior-runtime requests and prunes terminal rows in one
@@ -115,11 +263,6 @@ the migration inventory records remaining synchronous compatibility paths.
 | Plugin state                    | Plugin-state worker                                  | Bounded keyed postimages and absence facts serve warm reads. Namespace lists wait for earlier writes to that namespace, then reuse committed receipts even during unrelated writes. Unknown settlement invalidates facts; expiry is evaluated on read.      |
 | Memory index                    | Index publication and retrieval workers              | Index-facts postimages supply source invalidation and vector-completeness facts. The publication owner updates them after index changes; retrieval owns read-only capability probing.                                                                       |
 | Outbound recovery and Web Push  | Existing shared-state workers                        | Queue insertion/replacement invalidates the empty-recovery fact. Subscription writes publish or invalidate subscription presence. These facts never authorize delivery.                                                                                     |
-
-Schema and physical-file admission are shared process facts, not per-request
-cache refreshes. Row receipts do not grant permission, and a missing receipt is
-not proof of absence. Outside processes use the Gateway or exclusive offline
-ownership; ordinary readers do not poll for foreign commits.
 
 Agent read-only opens reuse the physical owner's admitted schema and ownership
 proof. Tracked DDL or file replacement requires fresh admission; the durable
@@ -221,7 +364,8 @@ it does not overwrite a newer child row.
 Session initialization retains its synchronous current-row guard immediately
 before external policy injection. Lifecycle custody alone does not observe a
 revoked child row. Retire this guard when initialization has complete revocation
-receipt coverage and the next Plugin SDK major removes raw synchronous writers.
+receipt coverage and the deprecated synchronous writer path can be removed
+after its stable-release migration period.
 
 Bundled accepted-input completion writes use the async pending-input owner. The
 deprecated synchronous recorder SDK retains native completion until the next
@@ -830,9 +974,9 @@ Gateway startup also batches orphan cancellation and terminal retention pruning
 through the approval worker, then awaits the committed recovery before accepting
 requests. Browser notification recovery waits for that commit but remains
 background work joined by Gateway close.
-The final exec-policy SELECT, current
-placement/parent checks, and released opaque callback guards remain current
-authority boundaries. This cutover adds no freshness probes, persistent schema,
+Owners without complete publication coverage retain their native final-authority
+guards. Published credential owners instead use the memory checks described
+above. This cutover adds no freshness probes, persistent schema,
 stored-byte, durability, retention, or update migration.
 
 Synchronous compatibility writers and workers share the existing postcommit
@@ -1280,15 +1424,13 @@ external effects; work already handed to a transport may finish during closure.
 Talk's voice-session metadata retains its separately selected durable owner;
 incognito transcript storage does not change its reservation or confirmation contract.
 
-Native incognito acquisition returns `not-actor-owned`; those sessions keep
-their existing owner and get no actor savings until Phase E / P12. The actor
-has no native incognito adapter. Worker-backed incognito acquisition selects
-the captured memory execution owner. Closing that owner invalidates captured
-targets; acquisition cannot revive its old run authority or create a replacement
-memory database. Follow-on input, turn, and delivery cutovers must honor the
-native decline until all entry, transcript, history, and side-data consumers move
-to the memory backend together. Explicit memory acquisition is available for that
-cutover; it never mirrors an existing native or worker-backed incognito database.
+Acquisition binds one backend and lifecycle. The memory backend is authoritative
+until session or database closure; it is never evicted into durable storage.
+Legacy process-held incognito paths retain their native owner until their
+consumers move together. They must not be mirrored into another actor or used as
+a fallback after worker failure. Closing an owner invalidates its captured
+targets and cannot revive old run authority. See
+[`session-actor-memory.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor-memory.ts).
 
 Agent attempts retain this actor for SessionManager transcript and tool-result
 appends. Each append captures its exact committed snapshot before fallible
@@ -2190,10 +2332,10 @@ ClickClack reconciliation reads sibling title support only when a legacy binding
 needs title backfill. After that worker read, it rechecks the exact binding and
 revocation before changing its session attachment or remote metadata.
 
-Each retained guard is scheduled for retirement at the next Plugin SDK major, when
-raw synchronous writers can be removed and the owning workers can publish complete
-revocation facts or consume authority at the actual effect boundary. Until that
-cutover, these are documented T1 sites, not worker-only operations. Direct
+Retire each native guard when all of its writers publish complete revocation
+facts or the owning worker consumes authority at the actual effect boundary.
+Stable SDK contracts require deprecation and migration before removal in a later
+release. Until that cutover, native guards remain documented T1 sites. Direct
 remote-shell dispatch retains in-process launch because its synchronous SDK callback
 cannot cross deferred broker preparation. A future broker path must revalidate at
 its final launch frame after queued preparation and settle accepted work through the

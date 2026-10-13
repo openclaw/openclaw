@@ -30,7 +30,10 @@ export function dashboardsRouteData(
 }
 
 async function loadDashboardsRoute(context: ApplicationContext): Promise<DashboardsRouteData> {
-  const query = dashboardSessionListQuery(context.agentSelection.state.scopeId);
+  const query = dashboardSessionListQuery(
+    context.agentSelection.state.scopeId,
+    context.gateway.snapshot.hello,
+  );
   let snapshot = context.sessions.listSnapshot(query);
   if (!snapshot.result && !snapshot.loading) {
     await context.sessions.refreshList(query);

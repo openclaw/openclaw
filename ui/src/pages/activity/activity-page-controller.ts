@@ -13,6 +13,7 @@ import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { projectPresencePayload } from "../../lib/presence-users.ts";
 import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
+import { canSelectSessionRowFields } from "../../lib/sessions/session-row-fields.ts";
 import { createLiveActivity } from "./live-activity.ts";
 import {
   activityRunInspectorSearch,
@@ -197,6 +198,7 @@ export class ActivityPageController {
       canCallGatewayMethod(snapshot, ACTIVITY_SUMMARY_ENSURE_METHOD, "operator.write", {
         requireAdvertisement: false,
       }),
+      canSelectSessionRowFields(snapshot?.hello),
     );
   }
 

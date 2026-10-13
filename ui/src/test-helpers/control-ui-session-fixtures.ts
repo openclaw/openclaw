@@ -3,6 +3,7 @@ import type {
   SessionsResolveCandidate,
   SessionsResolveResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { resolveSessionRowProjection } from "../../../packages/gateway-protocol/src/session-row-fields.js";
 
 export type ControlUiSessionFixture = {
   key: string;
@@ -83,6 +84,7 @@ export function createControlUiSessionFixtures(
     mainKey: string;
   },
   isRecord: (value: unknown) => value is Record<string, unknown>,
+  resolveProjection?: typeof resolveSessionRowProjection,
 ) {
   const records = new Map<
     string,
@@ -470,6 +472,50 @@ export function createControlUiSessionFixtures(
       ...[...materialized].filter((key) => !keys.has(key)).map(read),
     ];
   };
+  const projectResponse = (response: unknown, params: unknown, field: "sessions" | "session") => {
+    if (!isRecord(response) || !isRecord(params) || !Array.isArray(params.fields)) {
+      return response;
+    }
+    const projection = resolveProjection?.(params);
+    if (!projection) {
+      return response;
+    }
+    const projectRow = (row: unknown) => {
+      if (!isRecord(row)) {
+        return row;
+      }
+      const source: Record<string, unknown> = {};
+      if (Array.isArray(row.sharedFacts) && Array.isArray(response.sharedFacts)) {
+        for (const index of row.sharedFacts) {
+          if (typeof index === "number" && isRecord(response.sharedFacts[index])) {
+            Object.assign(source, response.sharedFacts[index]);
+          }
+        }
+      }
+      Object.assign(source, row);
+      const projected: Record<string, unknown> = {
+        rowMode: "fields",
+        rowProjectionId: projection.id,
+      };
+      for (const name of projection.fields) {
+        if (name !== "rowMode" && name !== "rowProjectionId" && name !== "sharedFacts") {
+          if (Object.hasOwn(source, name)) {
+            projected[name] = source[name];
+          }
+        }
+      }
+      return projected;
+    };
+    const { sharedFacts: _sharedFacts, ...result } = response;
+    return {
+      ...result,
+      rowProjection: projection,
+      [field]:
+        field === "sessions" && Array.isArray(response.sessions)
+          ? response.sessions.map(projectRow)
+          : projectRow(response[field]),
+    };
+  };
   function listResponse(
     response: unknown,
     params: unknown,
@@ -534,26 +580,34 @@ export function createControlUiSessionFixtures(
       response.hasMore !== true &&
       response.nextOffset == null;
     if (!options.archiveFiltering) {
-      return {
-        ...response,
-        ...(completeChildFixture ? { totalCount: childSessions.length } : {}),
-        ...(childSessions.length !== projectedSessions.length || materializedSequence > 0
-          ? { count: childSessions.length }
-          : {}),
-        sessions: childSessions,
-      };
+      return projectResponse(
+        {
+          ...response,
+          ...(completeChildFixture ? { totalCount: childSessions.length } : {}),
+          ...(childSessions.length !== projectedSessions.length || materializedSequence > 0
+            ? { count: childSessions.length }
+            : {}),
+          sessions: childSessions,
+        },
+        params,
+        "sessions",
+      );
     }
     const filteredSessions = childSessions.filter(
       (row) =>
         isRecord(row) &&
         (archivedFilter === "all" || (row.archived === true) === (archivedFilter === "archived")),
     );
-    return {
-      ...response,
-      ...(completeChildFixture ? { totalCount: filteredSessions.length } : {}),
-      count: filteredSessions.length,
-      sessions: filteredSessions,
-    };
+    return projectResponse(
+      {
+        ...response,
+        ...(completeChildFixture ? { totalCount: filteredSessions.length } : {}),
+        count: filteredSessions.length,
+        sessions: filteredSessions,
+      },
+      params,
+      "sessions",
+    );
   }
 
   const resolve = (params: {
@@ -612,6 +666,8 @@ export function createControlUiSessionFixtures(
     read,
     resolve,
     sessionInfo,
+    describeResponse: (response: unknown, params: unknown) =>
+      projectResponse(response, params, "session"),
     readResponse(
       method: "sessions.resolve" | "sessions.describe" | "session.members.listEvidence",
       params: unknown,
@@ -624,7 +680,7 @@ export function createControlUiSessionFixtures(
       const requestedKey = isRecord(params) ? params[field] : undefined;
       const key = typeof requestedKey === "string" ? requestedKey : scenario.sessionKey;
       if (method === "sessions.describe") {
-        return { session: sessionInfo(key) ?? null };
+        return projectResponse({ session: sessionInfo(key) ?? null }, params, "session");
       }
       const row = read(key);
       return {

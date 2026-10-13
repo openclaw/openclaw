@@ -13,8 +13,11 @@ import { readAvatarGatewayContext } from "../../lib/identity-avatar-context.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
 import { reconcileSessionChanged } from "../../lib/sessions/reconcile.ts";
 import { canApplySessionListSnapshot } from "../../lib/sessions/session-list-query.ts";
+import type { ProjectedSessionListResult } from "../../lib/sessions/session-row-fields.ts";
+import { sessionRowCoverage } from "../../lib/sessions/session-row-fields.ts";
 import type { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
 import type { CurrentWorkChange } from "./current-work.ts";
+import type { ACTIVITY_HISTORY_ROW_FIELDS, ActivityHistoryRow } from "./session-row-fields.ts";
 
 export const ACTIVITY_TIME_FILTERS = ["24h", "7d", "30d", "all"] as const;
 export type ActivityTimeFilter = (typeof ACTIVITY_TIME_FILTERS)[number];
@@ -119,10 +122,16 @@ export function reconcileSessionActivityRead(
     }),
   );
   let orderChanged = false;
+  const covered = incoming.rowProjection && new Set(incoming.rowProjection.fields);
   const sessions = incoming.sessions.map((row) => {
     const identity = provenance.identity(row);
     const existing = identity ? held.get(identity) : undefined;
-    provenance.observeReadRow(row, revision, row.agentId);
+    provenance.observeReadRow(
+      row,
+      revision,
+      row.agentId,
+      row.rowMode === "fields" ? covered : undefined,
+    );
     const merged = existing ? provenance.mergeRow(existing, row, row.agentId) : row;
     orderChanged ||= sessionActivityTimestamp(merged) !== sessionActivityTimestamp(row);
     return merged;
@@ -162,8 +171,14 @@ export function reconcileSessionActivity(
       nextResult,
       change.snapshot,
       { archivedFilter: "all" },
-      (row, existing, _fields, info) => {
-        provenance.observeReadRow(row, revision, info.agentId);
+      (row, existing, fields, info) => {
+        provenance.observeReadRow(
+          row,
+          revision,
+          info.agentId,
+          info.rowProjection ? sessionRowCoverage(row, info.rowProjection) : new Set(fields),
+        );
+        provenance.observeClears(row, fields);
         return !info.hasActivitySummary &&
           row.activitySummary === undefined &&
           existing.activitySummary
@@ -178,7 +193,7 @@ export function reconcileSessionActivity(
   return { result: nextResult, requiresRefresh };
 }
 
-export function sessionActivityOwner(row: GatewaySessionRow): PresenceViewer {
+export function sessionActivityOwner(row: ActivityHistoryRow): PresenceViewer {
   const actor = row.owner?.actor ?? row.createdActor;
   const agentId = normalizeOptionalString(row.agentId);
   const { resourceBasePath } = readAvatarGatewayContext();
@@ -201,7 +216,9 @@ function dayKey(timestamp: number): string {
   return `${date.getFullYear()}-${month}-${day}`;
 }
 
-export function projectSessionActivity(result: SessionsListResult | undefined) {
+export function projectSessionActivity(
+  result: ProjectedSessionListResult<typeof ACTIVITY_HISTORY_ROW_FIELDS> | undefined,
+) {
   const visible = result?.sessions ?? [];
   const people = (result?.people ?? []).map((person) => ({
     id: person.identity.id,
@@ -210,7 +227,7 @@ export function projectSessionActivity(result: SessionsListResult | undefined) {
     watchedSessions: [],
     count: person.sessionCount,
   }));
-  const grouped = new Map<string, GatewaySessionRow[]>();
+  const grouped = new Map<string, ActivityHistoryRow[]>();
   for (const row of visible) {
     const timestamp = sessionActivityTimestamp(row);
     const key = timestamp > 0 ? dayKey(timestamp) : "unknown";
@@ -240,8 +257,8 @@ export function projectSessionActivity(result: SessionsListResult | undefined) {
 
 export function resolveViewingNow(
   identity: PresenceViewer,
-  rows: readonly GatewaySessionRow[],
-): readonly GatewaySessionRow[] {
+  rows: readonly ActivityHistoryRow[],
+): readonly ActivityHistoryRow[] {
   const watched = new Set(identity.watchedSessions);
   return rows.filter((row) => watched.has(row.key)).toSorted(compareSessionActivity);
 }
