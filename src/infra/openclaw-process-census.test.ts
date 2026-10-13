@@ -514,6 +514,19 @@ it.each([
 const references = { runId: "update-run-123", artifactPaths: ["/tmp/retained runtime"] };
 const denied = () => Object.assign(new Error("denied"), { code: "EACCES" });
 
+it.each(["/usr/lib/systemd/systemd", "/lib/systemd/systemd"])(
+  "does not let the user manager pin abandoned runtimes when cwd is denied (%s)",
+  (executable) => {
+    rows.set(peer, { ppid: 1, argv: [executable, "--user"], uid: 1000, cwd: denied() });
+    expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });
+    rows.get(peer)!.cwd = "/tmp/openclaw-update-runtime-Ab1234";
+    expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [peer] });
+    rows.get(peer)!.cwd = denied();
+    rows.get(peer)!.argv.push("/tmp/openclaw-update-runtime-Ab1234");
+    expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [peer] });
+  },
+);
+
 it.each(["foreign", "same", "unknown process", "unknown inspector"])(
   "requires a positively foreign UID to exclude systemd with denied cwd (%s)",
   (owner) => {

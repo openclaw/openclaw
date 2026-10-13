@@ -74,7 +74,15 @@ function classifyProcessArtifactCustody(
         position.kind === "not-runtime" &&
         command.uid !== undefined &&
         inspectorUid !== undefined &&
-        command.uid !== inspectorUid
+        (command.uid !== inspectorUid ||
+          // systemd's user manager changes to / before serving, including on reexec.
+          // Its non-dumpable process can deny /proc cwd even to the same account.
+          // A brief pre-initialization census may miss its inherited cwd; the
+          // manager does not consume OpenClaw artifacts before that directory change.
+          (process.platform === "linux" &&
+            argv.length === 2 &&
+            argv[1] === "--user" &&
+            (argv[0] === "/usr/lib/systemd/systemd" || argv[0] === "/lib/systemd/systemd")))
       ) {
         return { kind: "non-holder" };
       }
