@@ -101,7 +101,7 @@ suite.define(() => {
             try {
               await capture("before");
             } finally {
-              await baseline.evaluate((element) => element.remove());
+              await baseline.evaluate((element) => element.parentNode?.removeChild(element));
             }
             await capture("after");
             await writeFile(path.join(dir, "geometry.json"), JSON.stringify(geometry, null, 2));
