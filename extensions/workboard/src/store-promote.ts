@@ -45,12 +45,11 @@ export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
             throw new Error("Cannot promote a completed Workboard card.");
           }
           assertCanMutateClaimedCard(current, scope === null ? undefined : scope);
-          const comments = appendComment(current.metadata?.comments, reason);
           return {
             status: "ready",
             metadata: {
               ...clearDiagnostics(current.metadata, ["stranded_ready", "blocked_too_long"]),
-              comments,
+              comments: appendComment(current.metadata?.comments, reason),
               stale: null,
             },
           };
