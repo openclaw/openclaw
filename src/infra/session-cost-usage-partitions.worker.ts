@@ -4,7 +4,6 @@ import { expressionBuilder } from "kysely";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import { chunkItems } from "../utils/chunk-items.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-import type { SessionCostUsageRollupSnapshot } from "./session-cost-usage-cache.kernel.js";
 import {
   USAGE_COST_PARTITION_SCOPE,
   usageCostPartitionKey,
@@ -105,7 +104,7 @@ export function readSessionCostUsagePartitionsInDatabase(
 
 export function readSessionCostUsageRollupWithPartitionsInDatabase(
   db: DatabaseSync,
-  snapshot: SessionCostUsageRollupSnapshot,
+  snapshot: { key: string; updatedAt: number; valueJson: string | Uint8Array },
 ): { blob: Uint8Array | null; partitions: UsageCostPartition[] } | undefined {
   assertUsagePartitionWorker();
   const expression = expressionBuilder<CacheDatabase, "cache_entries">();
