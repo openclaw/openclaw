@@ -11,6 +11,7 @@ type CronJobMutationOptions = Pick<
   CronAddOptions,
   | "enabledExplicit"
   | "systemOwned"
+  | "enforceJobLimit"
   | "createdActor"
   | "sourceConversation"
   | "skillLibrarySelections"

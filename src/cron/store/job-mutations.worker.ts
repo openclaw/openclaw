@@ -13,7 +13,7 @@ import {
 } from "../service/jobs-tool-policy.js";
 import { applyDeclarativeJobSpec, applyJobPatch, createJob } from "../service/jobs.js";
 import { isSystemMonitorDeclaration } from "../system-owned-declaration.js";
-import type { CronStoredJob, CronStoreFile } from "../types.js";
+import { isSystemOwnedCronPayloadKind, type CronStoredJob, type CronStoreFile } from "../types.js";
 import type {
   CronJobMutation,
   CronJobMutationPlan,
@@ -52,6 +52,19 @@ export function resolveCronJobMutationSnapshot(
         configuredChannels: configured.configuredChannels,
       }
     : { nowMs: snapshot.nowMs };
+}
+
+/** Heartbeat monitors are reconciled from agent config, so they never use up the limit. */
+function assertCronJobCapacity(jobs: readonly CronStoredJob[], maxJobs: number | undefined) {
+  if (maxJobs === undefined) {
+    return;
+  }
+  const count = jobs.filter((job) => !isSystemOwnedCronPayloadKind(job.payload.kind)).length;
+  if (count >= maxJobs) {
+    throw new Error(
+      `cron job limit reached: ${count} of ${maxJobs} jobs allowed by cron.maxJobs already exist; remove a job or update an existing one instead of adding another`,
+    );
+  }
 }
 
 /** Both preparation and commit use this owner; only committed results are published. */
@@ -113,6 +126,9 @@ export function planCronJobMutation(
       } else {
         if (next.jobs.some((job) => job.id === mutation.input.id)) {
           throw new Error(`cron job already exists: ${mutation.input.id}`);
+        }
+        if (options.enforceJobLimit) {
+          assertCronJobCapacity(next.jobs, cronConfig?.maxJobs);
         }
         nextJob = createJob(
           { deps: { nowMs: () => now, defaultAgentId, cronConfig } },

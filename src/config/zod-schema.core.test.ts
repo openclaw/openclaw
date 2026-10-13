@@ -13,6 +13,13 @@ describe("config schema regressions", () => {
     expect(MarkdownConfigSchema.parse({ tables: "block" })).toEqual({ tables: "block" });
   });
 
+  it("accepts a positive integer cron.maxJobs and rejects other limits", () => {
+    expect(OpenClawSchema.parse({ cron: { maxJobs: 20 } }).cron?.maxJobs).toBe(20);
+    for (const maxJobs of [0, -1, 2.5]) {
+      expect(OpenClawSchema.safeParse({ cron: { maxJobs } }).success).toBe(false);
+    }
+  });
+
   it("rejects invalid cron.sessionRetention durations", () => {
     expect(() => OpenClawSchema.parse({ cron: { sessionRetention: "abc" } })).toThrow(
       /sessionRetention|duration/i,

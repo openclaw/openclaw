@@ -390,6 +390,8 @@ export const OpenClawSchemaShape = {
       enabled: z.boolean().optional(),
       /** Skip missed recurring slots at startup; one-shot catch-up is unchanged. Default: false. */
       skipMissedJobs: z.boolean().optional(),
+      /** Refuse `cron.add` creates once this many jobs exist; heartbeat monitors do not count. Default: no limit. */
+      maxJobs: z.number().int().min(1).optional(),
       triggers: z
         .strictObject({
           enabled: z.boolean().optional(),

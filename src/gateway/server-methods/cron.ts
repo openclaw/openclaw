@@ -202,6 +202,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     try {
       result = await context.cron.add(jobCreate, {
         enabledExplicit,
+        enforceJobLimit: true,
         ...creatorOptions,
         commitGuard,
         ...(captureRuntimeAuthority ? { captureRuntimeAuthority } : {}),
