@@ -126,11 +126,6 @@ export function bindSqliteWorkerBackend(
                   database,
                   scope.sessionKey,
                   command.input.params,
-                  {
-                    agentId: database.agentId,
-                    path: database.path,
-                    env: scope.env,
-                  },
                 );
               }
               if (command.type === "suggestion.claim") {
@@ -139,11 +134,6 @@ export function bindSqliteWorkerBackend(
                   database,
                   scope.sessionKey,
                   command.input.params,
-                  {
-                    agentId: database.agentId,
-                    path: database.path,
-                    env: scope.env,
-                  },
                 );
               }
               if (command.type === "suggestion.release") {
@@ -152,11 +142,6 @@ export function bindSqliteWorkerBackend(
                   database,
                   scope.sessionKey,
                   command.input.params,
-                  {
-                    agentId: database.agentId,
-                    path: database.path,
-                    env: scope.env,
-                  },
                 );
               }
               if (command.type === "suggestion.finalize") {
@@ -165,11 +150,6 @@ export function bindSqliteWorkerBackend(
                   database,
                   scope.sessionKey,
                   command.input.params,
-                  {
-                    agentId: database.agentId,
-                    path: database.path,
-                    env: scope.env,
-                  },
                 );
               }
               if (command.type === "category.apply") {

@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { performance } from "node:perf_hooks";
 import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
@@ -36,6 +37,7 @@ import { createWorkerSessionPlacementStore } from "../worker-environments/placem
 import { advancePlacementFixtureToActive } from "../worker-environments/placement-test-fixtures.js";
 import { stagePlacementTurnClaimWorkerPublication } from "../worker-environments/placement-turn-authority.js";
 import { admitChatSend } from "./chat-send-admission.js";
+import { startChatSendDiagnostics } from "./chat-send-diagnostics.js";
 import { runChatSendPreAdmission } from "./chat-send-pre-admission.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { prepareChatSendSession, qualifyChatSendSession } from "./chat-send-session.js";
@@ -187,6 +189,19 @@ it.each(["unchanged", "caller revoked", "session replaced"] as const)(
         throw new Error("Session preparation failed");
       }
       const session = await qualifyChatSendSession(prepared.value);
+      let clock = 0;
+      using _ = vi.spyOn(performance, "now").mockImplementation(() => clock);
+      const log = { info: vi.fn() };
+      using diagnostics = startChatSendDiagnostics(log);
+      const queued = createDeferred();
+      const begin = createDeferred();
+      const beginAdmission = sessionLifecycle.beginSessionWorkAdmission;
+      using delayedAdmission = vi.spyOn(sessionLifecycle, "beginSessionWorkAdmission");
+      delayedAdmission.mockImplementationOnce(async (params) => {
+        queued.resolve();
+        await begin.promise;
+        return beginAdmission(params);
+      });
       const acquired = createDeferred();
       const consume = createDeferred();
       const committed = createDeferred();
@@ -257,9 +272,17 @@ it.each(["unchanged", "caller revoked", "session replaced"] as const)(
             consuming.resolve();
           }
         },
+        diagnostics,
       });
       let admitted: Awaited<typeof pending> | undefined;
       try {
+        await awaitGateBeforeSettlement(
+          queued.promise,
+          pending,
+          "chat skipped lifecycle admission",
+        );
+        clock = 300;
+        begin.resolve();
         await awaitGateBeforeSettlement(
           acquired.promise,
           pending,
@@ -271,6 +294,7 @@ it.each(["unchanged", "caller revoked", "session replaced"] as const)(
           completion,
           "worker completion skipped its native commit",
         );
+        clock = 600;
         nativePending = true;
         consume.resolve();
         await awaitGateBeforeSettlement(
@@ -283,10 +307,17 @@ it.each(["unchanged", "caller revoked", "session replaced"] as const)(
         } else if (change === "session replaced") {
           replaceSessionEntrySync(scope, { sessionId: "replacement-session", updatedAt: 2 });
         }
+        clock = 900;
         nativePending = false;
         publishCommit?.();
         releaseReply.resolve();
         admitted = await pending;
+        clock = 1_900;
+        diagnostics.finish();
+        // Later reporting cannot extend either a completed or rejected owner's span.
+        expect(log.info).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining("detail.admission.revalidate=600ms detail.admission.work=900ms"),
+        );
         expect(admitted.ok, JSON.stringify(respond.mock.calls[0]?.[2])).toBe(
           change === "unchanged",
         );
@@ -302,6 +333,7 @@ it.each(["unchanged", "caller revoked", "session replaced"] as const)(
           );
         }
       } finally {
+        begin.resolve();
         consume.resolve();
         publishCommit?.();
         releaseReply.resolve();

@@ -14,7 +14,6 @@ export { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 export { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store.js";
 export { resolveCanonicalGatewaySessionStoreKey } from "./session-utils-store.js";
 export { listAgentsForGateway } from "./session-utils-store.js";
-export { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store-lookup.js";
 export {
   loadGatewaySessionEntryReadOnlyInWorker,
   resolveGatewaySessionStoreTargetInWorker,

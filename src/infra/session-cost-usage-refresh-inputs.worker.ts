@@ -4,13 +4,11 @@ import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-m
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
 import { readTranscriptStatsBatchFromDatabase } from "../config/sessions/session-accessor.sqlite-transcript-stats.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
-import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { SessionMetadataUnavailableError } from "../state/session-metadata-unavailable-error.js";
 import { LruCache } from "./lru-cache.js";
 import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
 import {
   listUsageCountedTranscriptStats,
-  resolveUsageCostTranscriptFiles,
   type UsageCostCollectionAccess,
 } from "./session-cost-usage-collection.js";
 import type { UsageCostPartition } from "./session-cost-usage-partitions.js";
@@ -18,7 +16,6 @@ import { USAGE_COST_ROLLUP_SCOPE } from "./session-cost-usage-rollup-codec.js";
 import type {
   UsageCostWorkerInput,
   UsageCostWorkerDatabase,
-  UsageCostWorkerHostEffects,
 } from "./session-cost-usage-worker.types.js";
 import {
   readSqliteDatabaseScopedWriteTokenForPath,
@@ -80,12 +77,8 @@ export function createUsageCostCollectionAccess(params: {
   control: WorkerTaskControl;
   target: (agentId: string, storePath: string) => UsageCostWorkerDatabase;
   readStore: <T>(agentId: string, storePath: string, read: () => T) => Promise<T>;
-  host: <Kind extends "memory-instances" | "memory-stats">(
-    kind: Kind,
-    input: UsageCostWorkerHostEffects[Kind]["input"],
-  ) => Promise<UsageCostWorkerHostEffects[Kind]["output"]>;
 }) {
-  const { input, control, target, readStore, host } = params;
+  const { input, control, target, readStore } = params;
   const { location, operation } = input;
   const { env } = location;
   const transcriptFacts = new Map<string, { generation: string | null; cold: boolean }>();
@@ -102,12 +95,9 @@ export function createUsageCostCollectionAccess(params: {
     listSqliteInstances: async (agentId, storePath) => {
       const { listSessionTranscriptInstances } =
         await import("../config/sessions/session-history.js");
-      const database = target(agentId, storePath);
-      return isIncognitoOpenClawAgentSqlitePath(database.path, { agentId: database.agentId, env })
-        ? host("memory-instances", { agentId, storePath })
-        : readStore(agentId, storePath, () =>
-            listSessionTranscriptInstances({ agentId, storePath, env, projection: "list" }),
-          );
+      return readStore(agentId, storePath, () =>
+        listSessionTranscriptInstances({ agentId, storePath, env, projection: "list" }),
+      );
     },
     readSqliteStats: async (markers) => {
       const result: Array<SessionTranscriptStats | undefined> = Array(markers.length);
@@ -141,44 +131,36 @@ export function createUsageCostCollectionAccess(params: {
         const database = target(marker.agentId, marker.storePath);
         const inputs = operation.kind === "refresh" ? usageRefreshInputs(database.path) : undefined;
         const receipts = group.map(({ receipt }) => receipt);
-        const loadedStats = isIncognitoOpenClawAgentSqlitePath(database.path, {
-          agentId: database.agentId,
-          env,
-        })
-          ? await host(
-              "memory-stats",
-              group.map((item) => item.marker),
-            )
-          : await readStore(marker.agentId, marker.storePath, () => {
-              try {
-                const read = withOpenClawAgentDatabaseReadOnly(
-                  (opened) =>
-                    readTranscriptStatsBatchFromDatabase(
-                      opened,
-                      group.map((item) => item.marker.sessionId),
-                      { includeGeneration: true },
-                    ),
-                  { ...database, env },
-                );
-                if (!read.found) {
-                  return [];
-                }
-                for (const [index, item] of group.entries()) {
-                  const facts = read.value[index]!;
-                  inputs?.retainStats(item.marker.sessionId, receipts[index], facts);
-                  transcriptFacts.set(transcriptKey(item.marker), {
-                    generation: facts.generation ?? null,
-                    cold: facts.cold === true,
-                  });
-                }
-                return read.value;
-              } catch (error) {
-                if (!(error instanceof SessionMetadataUnavailableError)) {
-                  throw error;
-                }
-                return [];
-              }
-            });
+        const loadedStats = await readStore(marker.agentId, marker.storePath, () => {
+          try {
+            const read = withOpenClawAgentDatabaseReadOnly(
+              (opened) =>
+                readTranscriptStatsBatchFromDatabase(
+                  opened,
+                  group.map((item) => item.marker.sessionId),
+                  { includeGeneration: true },
+                ),
+              { ...database, env },
+            );
+            if (!read.found) {
+              return [];
+            }
+            for (const [index, item] of group.entries()) {
+              const facts = read.value[index]!;
+              inputs?.retainStats(item.marker.sessionId, receipts[index], facts);
+              transcriptFacts.set(transcriptKey(item.marker), {
+                generation: facts.generation ?? null,
+                cold: facts.cold === true,
+              });
+            }
+            return read.value;
+          } catch (error) {
+            if (!(error instanceof SessionMetadataUnavailableError)) {
+              throw error;
+            }
+            return [];
+          }
+        });
         for (const [index, item] of group.entries()) {
           result[item.index] = loadedStats[index] ?? undefined;
         }
@@ -188,15 +170,11 @@ export function createUsageCostCollectionAccess(params: {
   };
 
   const inventory = async (sessionsDir?: string) =>
-    input.transcriptFiles
-      ? (await resolveUsageCostTranscriptFiles(input.transcriptFiles, access)).filter(
-          (file) => file !== undefined,
-        )
-      : listUsageCountedTranscriptStats(location.agentId, {
-          ...access,
-          storePath: location.storePath,
-          sessionsDir,
-        });
+    listUsageCountedTranscriptStats(location.agentId, {
+      ...access,
+      storePath: location.storePath,
+      sessionsDir,
+    });
   return {
     access,
     inventory,

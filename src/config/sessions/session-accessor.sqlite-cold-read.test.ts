@@ -20,9 +20,7 @@ import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
-  isOpenClawAgentDatabaseOpen,
   openOpenClawAgentDatabase,
-  resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
@@ -520,42 +518,6 @@ it("preserves partial-store statistics, UTF-8 bytes, and scope-cache freshness i
     } finally {
       resolve.mockRestore();
     }
-  });
-});
-
-it("reads only process-held incognito statistics and keeps each store's batch results separate", async () => {
-  await withOpenClawTestState({ label: "stats-batch-incognito" }, async (state) => {
-    await captureRuntimeConfigAsyncReader()();
-    const scope = {
-      agentId: "main",
-      env: state.env,
-      sessionId: "private",
-      sessionKey: "agent:main:dashboard:incognito-stats",
-    };
-    const incognitoPath = resolveIncognitoOpenClawAgentSqlitePath(scope);
-    const scopes = Array.from({ length: 11 }, (_, index) => ({
-      ...scope,
-      sessionId: index === 0 ? scope.sessionId : `missing-${index}`,
-    }));
-    expect(readTranscriptStatsBatchReadOnlySync(scopes)).toEqual(scopes.map(() => null));
-    expect(isOpenClawAgentDatabaseOpen(incognitoPath)).toBe(false);
-    await replaceTranscriptEvents(scope, [{ type: "session", id: scope.sessionId, version: 3 }]);
-    const publicScope = { ...scope, sessionKey: "agent:main:public" };
-    await replaceTranscriptEvents(publicScope, [
-      { type: "session", id: scope.sessionId, version: 3 },
-      { type: "message", message: { role: "user", content: "Public" } },
-    ]);
-    const expected = readTranscriptStatsSync(scope);
-    const publicStats = readTranscriptStatsSync(publicScope);
-    expect(expected.eventCount).toBe(1);
-    expect(publicStats.eventCount).toBe(2);
-    expect(readTranscriptStatsBatchReadOnlySync([publicScope, ...scopes, publicScope])).toEqual([
-      publicStats,
-      expected,
-      ...scopes.slice(1).map(() => ({ eventCount: 0, maxSeq: 0, sizeBytes: 0 })),
-      publicStats,
-    ]);
-    await expect(fs.stat(incognitoPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
 

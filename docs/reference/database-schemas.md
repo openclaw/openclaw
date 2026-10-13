@@ -101,6 +101,15 @@ does not redirect that operation to the replacement file; the next admission or
 open detects it through the database lifecycle owner. Commit authority checks and
 Doctor's explicit verification remain in place.
 
+Fresh agent databases install the current canonical schema directly, without
+running legacy migration discovery or repairing indexes that were just created.
+After the creation transaction commits, the schema owner publishes the admitted
+catalog and canonical-validation facts for later opens and workers. Tracked DDL
+and rollback still invalidate those facts; existing databases retain their first
+admission and migration checks. Connection lock timeouts are assigned through
+the shared per-handle owner so repeated setup does not repeat the PRAGMA.
+Schemas, stored bytes, and upgrade or downgrade behavior are unchanged.
+
 Chat input actors reuse their native owner’s admitted physical identity and
 canonical location, without queuing another writer reservation just to acquire
 the actor. Cold owners still prepare their database identity first. Captured

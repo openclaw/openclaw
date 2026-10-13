@@ -479,11 +479,7 @@ const callers = new Map<string, readonly string[]>([
   ...publicationWriters,
   ...["addSessionMember", "removeSessionMember"].map((name): [string, string[]] => [
     key(sessionMembers, name),
-    [
-      key("src/config/sessions/session-sharing-store.worker.ts", "bindSqliteWorkerBackend/execute"),
-      // Existing process-held incognito owner; its native transaction stages and publishes sharing facts.
-      key("src/config/sessions/session-sharing-store.async.ts", `${name}InWorker`),
-    ],
+    [key("src/config/sessions/session-sharing-store.worker.ts", "bindSqliteWorkerBackend/execute")],
   ]),
   [
     key(sessionArtifacts, "clearSessionCollaborationForKey"),
