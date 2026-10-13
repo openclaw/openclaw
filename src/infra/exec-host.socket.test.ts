@@ -3,9 +3,11 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import crypto from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import net from "node:net";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import timers from "node:timers";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { requestExecHostViaSocket, type ExecHostRequest } from "./exec-host.js";
@@ -120,6 +122,87 @@ async function withExecPeer(
 }
 
 describe.runIf(process.platform !== "win32")("exec host real UDS boundary", () => {
+  it.each([
+    {
+      name: "completion after 20 seconds",
+      commandTimeout: 35_000,
+      elapsed: 22_000,
+      response: success,
+    },
+    {
+      name: "native timeout receipt",
+      commandTimeout: 35_000,
+      elapsed: 35_000,
+      response: {
+        ok: true,
+        payload: { exitCode: 143, timedOut: true, success: false, stdout: "", stderr: "" },
+      },
+    },
+    {
+      name: "caller cancellation without a process deadline",
+      commandTimeout: 0,
+      elapsed: 60_000,
+      response: null,
+    },
+    {
+      name: "response deadline after process budget and grace",
+      commandTimeout: 35_000,
+      elapsed: 45_000,
+      response: null,
+    },
+  ])(
+    "retains authenticated outcome lifetime: $name",
+    async ({ commandTimeout, elapsed, response }) => {
+      await withExecPeer(async ({ socketPath, onRequest }) => {
+        const received = createDeferred<{ socket: net.Socket; id: string }>();
+        onRequest(async (socket, request, id) => {
+          expect(request.timeoutMs).toBe(commandTimeout);
+          received.resolve({ socket, id });
+        });
+        // Freeze only deadline timers. Real UDS events still establish delivery.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const schedule = vi.spyOn(timers, "setTimeout").mockImplementation(setTimeout);
+        const clear = vi.spyOn(timers, "clearTimeout").mockImplementation(clearTimeout);
+        syncBuiltinESMExports();
+        const controller = new AbortController();
+        const completed = vi.fn();
+        const pending = requestExecHostViaSocket({
+          socketPath,
+          token,
+          request: { command: ["/bin/echo", "done"], timeoutMs: commandTimeout },
+          signal: controller.signal,
+        }).then((result) => {
+          completed(result);
+          return result;
+        });
+        try {
+          const { socket, id } = await received.promise;
+          await vi.advanceTimersByTimeAsync(elapsed);
+          if (response !== null) {
+            expect(completed).not.toHaveBeenCalled();
+            socket.end(`${JSON.stringify({ type: "exec-res", id, ...response })}\n`);
+            await expect(pending).resolves.toEqual(response);
+          } else if (commandTimeout === 0) {
+            expect(completed).not.toHaveBeenCalled();
+            controller.abort();
+            await expect(pending).resolves.toBeNull();
+          } else {
+            await expect(pending).resolves.toBeNull();
+            expect(completed).toHaveBeenCalledOnce();
+          }
+          expect(vi.getTimerCount()).toBe(0);
+        } finally {
+          controller.abort();
+          await pending;
+          schedule.mockRestore();
+          clear.mockRestore();
+          vi.useRealTimers();
+          syncBuiltinESMExports();
+        }
+      });
+    },
+  );
+
   it("characterizes a missing socket before any request can execute", async () => {
     await withTestDir({ prefix: "oc-exec-", parentDir: "/tmp" }, async (dir) => {
       const marker = path.join(dir, "never-started");
