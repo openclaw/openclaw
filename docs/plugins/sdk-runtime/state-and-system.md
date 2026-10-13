@@ -25,6 +25,11 @@ Memory Core's private shadow-index owner uses
 `memory-core-host-engine-storage` facade before draining its private queue and
 closing the connection.
 
+Memory Core's `MemorySearchManager.status({ includeCounts: false })` returns
+in-process provider and index facts without synchronous database diagnostics.
+Use it on query paths; file, chunk, source, storage, and embedding-cache counts
+are omitted. Calling `status()` retains the full diagnostic result.
+
 ## State, config, and system namespaces
 
 <AccordionGroup>

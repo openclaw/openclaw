@@ -506,14 +506,14 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     return this.syncing;
   }
 
-  status(): MemoryProviderStatus {
+  status(options?: { includeCounts?: boolean }): MemoryProviderStatus {
     if (this.closing || this.closed) {
       throw new Error("Memory index manager is closed");
     }
-    return this.withPublishedDatabase(() => this.publishedStatus());
+    return this.withPublishedDatabase(() => this.publishedStatus(options?.includeCounts !== false));
   }
 
-  private publishedStatus(): MemoryProviderStatus {
+  private publishedStatus(includeCounts: boolean): MemoryProviderStatus {
     if (this.embeddingBootstrapFailure) {
       this.refreshKeywordFallbackIndexIdentity();
     } else {
@@ -523,14 +523,15 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     }
     const sourceFilter = this.buildSourceFilter();
     const statusDb = this.database.hasIndex ? this.db : undefined;
-    const aggregateState = collectMemoryStatusAggregate({
-      db: statusDb,
-      sources: this.sources,
-      sourceFilterSql: sourceFilter.sql,
-      sourceFilterParams: sourceFilter.params,
-      // Source inspection is explicit; routine query status must stay count-only.
-      includeChunkBytes: this.sourceInspections.size > 0,
-    });
+    const aggregateState = includeCounts
+      ? collectMemoryStatusAggregate({
+          db: statusDb,
+          sources: this.sources,
+          sourceFilterSql: sourceFilter.sql,
+          sourceFilterParams: sourceFilter.params,
+          includeChunkBytes: this.sourceInspections.size > 0,
+        })
+      : undefined;
 
     // Status projects the effective keyword-only search mode while degraded.
     // Sync generations still snapshot this.provider so recovery can rebuild vectors.
@@ -542,13 +543,13 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         this.resolveConfiguredIndexIdentity()?.provider.model || this.settings.model,
     });
     const storage =
-      this.sourceInspections.size > 0
+      includeCounts && this.sourceInspections.size > 0
         ? collectMemoryStorageStatus(statusDb, resolveUserPath(this.settings.store.databasePath))
         : undefined;
     return {
       backend: "builtin",
-      files: aggregateState.files,
-      chunks: aggregateState.chunks,
+      files: aggregateState?.files,
+      chunks: aggregateState?.chunks,
       dirty:
         this.dirty ||
         this.sessionsDirty ||
@@ -564,20 +565,21 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       requestedProvider: this.settings.provider,
       sources: Array.from(this.sources),
       extraPaths: this.settings.extraPaths,
-      sourceCounts: aggregateState.sourceCounts.map((entry) =>
+      sourceCounts: aggregateState?.sourceCounts.map((entry) =>
         Object.assign(entry, this.sourceInspections.get(entry.source) ?? {}),
       ),
       cache: this.cache.enabled
         ? {
             enabled: true,
-            entries:
-              storage?.embeddingCacheEntries ??
-              (
-                statusDb
-                  ?.prepare(`SELECT COUNT(*) as c FROM ${MEMORY_EMBEDDING_CACHE_TABLE}`)
-                  .get() as { c: number } | undefined
-              )?.c ??
-              0,
+            entries: includeCounts
+              ? (storage?.embeddingCacheEntries ??
+                (
+                  statusDb
+                    ?.prepare(`SELECT COUNT(*) as c FROM ${MEMORY_EMBEDDING_CACHE_TABLE}`)
+                    .get() as { c: number } | undefined
+                )?.c ??
+                0)
+              : undefined,
             maxEntries: this.cache.maxEntries,
           }
         : { enabled: false, maxEntries: this.cache.maxEntries },

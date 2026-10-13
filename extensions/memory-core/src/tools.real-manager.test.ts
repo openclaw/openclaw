@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MEMORY_SEARCH_DEADLINE_CONTROL } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type {
@@ -321,6 +322,38 @@ describe("memory_search real manager", () => {
     }
   });
 
+  it("reads published memory changes without synchronous diagnostic queries", async () => {
+    const cfg = keywordConfig();
+    const manager = await indexedManager(cfg);
+    const tool = searchTool(cfg);
+
+    for (const marker of ["violetcompass", "ambercompass"]) {
+      await fs.writeFile(path.join(fixture.paths.memory, "current.md"), `Remember ${marker}.`);
+      await manager.sync({ reason: "published-memory-edit", force: true });
+      const db = Reflect.get(manager, "db") as DatabaseSync;
+      using prepare = vi.spyOn(db, "prepare");
+      const result = await tool.execute(marker, { query: marker, corpus: "memory" });
+
+      expect(result.details).toMatchObject({
+        results: [expect.objectContaining({ snippet: expect.stringContaining(marker) })],
+      });
+      expect(prepare).not.toHaveBeenCalled();
+    }
+
+    const diagnostics = manager.status();
+    expect(diagnostics.files).toBeGreaterThan(0);
+    expect(diagnostics.chunks).toBeGreaterThan(0);
+    expect(diagnostics.sourceCounts).toEqual([
+      expect.objectContaining({ source: "memory", files: diagnostics.files }),
+    ]);
+    expect(manager.status({ includeCounts: false })).toMatchObject({
+      files: undefined,
+      chunks: undefined,
+      sourceCounts: undefined,
+      cache: expect.objectContaining({ entries: undefined }),
+    });
+  });
+
   it("backfills visible sessions with one bounded query embedding", async () => {
     const cfg = createConfig({ sources: ["sessions"], sessionMemory: true, vectorEnabled: false });
     cfg.memory = { ...cfg.memory, citations: "off" };
@@ -362,7 +395,7 @@ describe("memory_search real manager", () => {
         expect.objectContaining({ snippet: expect.stringContaining("visible private a") }),
         expect.objectContaining({ snippet: expect.stringContaining("visible private b") }),
       ]),
-      debug: { hits: 2, candidateHits: 4, withheldHits: 2, searchWindow: 4 },
+      debug: { hits: 2, candidateHits: 4, withheldHits: 2, searchWindow: 200 },
     });
     expect(result.details).toHaveProperty("results.length", 2);
     expect(provider.embedQueryCalls).toBe(1);

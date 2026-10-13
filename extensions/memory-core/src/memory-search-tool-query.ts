@@ -91,20 +91,14 @@ export async function executeMemorySearchToolQuery(params: {
   };
 
   const searchOnce = async () => {
-    params.onRebuildNotice?.(captureMemoryRebuildNotice(active.manager.status()));
-    const allowedSources = searchSources ? new Set(searchSources) : undefined;
+    params.onRebuildNotice?.(
+      captureMemoryRebuildNotice(active.manager.status({ includeCounts: false })),
+    );
     const searchesSessions = searchSources?.includes("sessions") === true;
-    const indexedCandidateCount = searchesSessions
-      ? (active.manager.status().sourceCounts ?? [])
-          .filter((entry) => allowedSources?.has(entry.source))
-          .reduce((total, entry) => total + entry.chunks, 0)
-      : query.resultLimit;
-    // A zero-count index can populate during first-search bootstrap. Reserve the
-    // full bounded window so that bootstrap cannot recreate post-filter starvation.
-    const availableCandidates =
-      indexedCandidateCount > 0 ? indexedCandidateCount : MEMORY_SEARCH_POST_FILTER_MAX_CANDIDATES;
+    // Search already bounds available hits; no inventory scan is needed before
+    // reserving room for session visibility filtering or first-search bootstrap.
     const searchWindow = searchesSessions
-      ? Math.min(MEMORY_SEARCH_POST_FILTER_MAX_CANDIDATES, availableCandidates)
+      ? MEMORY_SEARCH_POST_FILTER_MAX_CANDIDATES
       : query.resultLimit;
     const candidates = await active.manager.search(query.text, {
       maxResults: searchWindow,
@@ -145,7 +139,10 @@ export async function executeMemorySearchToolQuery(params: {
         : undefined,
       ...(searchSources ? { sources: searchSources } : {}),
     });
-    return { searched: { candidates, searchWindow }, status: active.manager.status() };
+    return {
+      searched: { candidates, searchWindow },
+      status: active.manager.status({ includeCounts: false }),
+    };
   };
 
   const searched = await searchOnce();
@@ -170,7 +167,7 @@ async function finalizeMemorySearchToolQuery(params: {
   effectiveMode?: string;
 }) {
   const { active, searched, query, visibility, searchSources, runtimeDebug, startedAt } = params;
-  const status = params.status ?? active.manager.status();
+  const status = params.status ?? active.manager.status({ includeCounts: false });
   const pausedIndexIdentity = resolveMemoryIndexIdentityDiagnostic(status);
   // A pending format upgrade on an otherwise matching corpus degrades to
   // keyword-only results instead of pausing memory search; every other

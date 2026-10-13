@@ -437,7 +437,8 @@ export interface MemorySearchManager {
     limit?: number;
   }): Promise<MemorySearchResult[]>;
   readFile(params: { relPath: string; from?: number; lines?: number }): Promise<MemoryReadResult>;
-  status(): MemoryProviderStatus;
+  /** Set includeCounts to false for query-path facts without database diagnostics. */
+  status(options?: { includeCounts?: boolean }): MemoryProviderStatus;
   sync?(params?: MemorySyncParams): Promise<void>;
   getCachedEmbeddingAvailability?(): MemoryEmbeddingProbeResult | null;
   probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult>;
