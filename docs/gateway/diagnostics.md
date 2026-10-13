@@ -328,11 +328,14 @@ response limit does not bound the runtime's internal allocation during that dela
 samples describe this isolate, not all process threads, and are not exact
 per-function CPU accounting.
 
-On Node, starting a CPU profile synchronously scans V8's heap to build its code map. On a
-large Gateway this can block the main event loop for seconds on every capture
-(about 3.5 seconds has been observed with a 3 GB heap),
-before regular sampling begins. Keeping the inspector domain enabled or sending
-the request from a Worker does not avoid that main-isolate work.
+On Node, CPU captures share the native profiler with the Gateway's stall flight
+recorder. While that recorder is active on Node 26, starting an operator capture
+reuses its code map without scanning the heap again. If no native profile is
+already active, starting a CPU profile synchronously scans V8's heap to build
+the code map. On a large Gateway this can block the main event loop for seconds
+(about 3.5 seconds has been observed with a 3 GB heap). Bun uses its inspector
+profiler. Keeping an inspector domain enabled or sending a request from a Worker
+does not avoid V8's main-isolate scan.
 `startBlockedMs` measures the synchronous start call with a monotonic clock,
 excluding promise waits, setup, sampling time, and stop/cleanup. Use it to
 attribute capture-induced stalls when analyzing an individual capture; it cannot
