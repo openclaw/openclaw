@@ -98,7 +98,7 @@ export abstract class MemoryManagerSyncBase {
   protected closed = false;
 
   protected assertDatabaseMutationCurrent(database: MemoryIndexDatabase): void {
-    if (this.closed || database.closed || !database.db.isOpen || this.database !== database) {
+    if (this.closed || !database.isOpen || this.database !== database) {
       throw new Error("Memory database owner closed or changed before write admission");
     }
     if (database.readOnly) {
@@ -601,7 +601,7 @@ export abstract class MemoryManagerSyncBase {
         : undefined;
       const database = this.database;
       const loaded = await database.prepareVector(resolvedPath, () => {
-        if (this.closed || database.closed || !database.db.isOpen) {
+        if (this.closed || !database.isOpen) {
           throw new Error("Memory database owner closed before vector preparation");
         }
       });

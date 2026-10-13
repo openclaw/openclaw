@@ -41,10 +41,10 @@ Gateway startup binds existing auth-file observers to its read-only scope and
 spawn broker, including observations retained across an in-process restart.
 New observers capture those resources when admitting a directory. File scans
 publish through the current binding, including scans spanning a restart.
-Detached filesystem notifications reuse that scope's
-serialized child; they do not launch a native process for each WAL change.
+Detached filesystem notifications use that cancellation scope and the shared
+serialized process pool; they do not launch a native process for each WAL change.
 Every refresh still re-admits the current database source and checks its authority.
-Reader retirement stops change publications and joins the retained reader;
+Scope retirement stops change publications and joins accepted reads;
 the next Gateway generation rebinds retained observers before startup admission.
 
 Persisted auth-row observation belongs to the host. Catalog workers reload
@@ -52,6 +52,36 @@ credentials through their native task owner instead of retaining background row
 readers for WAL notifications. Workers still observe physical file replacement
 to retire native SQLite handles; session-only WAL activity needs no worker auth
 reread.
+
+Generic scoped SQLite reads share at most four process slots, matched by captured
+runtime generation, environment, working directory, and spawn-broker owner.
+Compatible requests serialize on their slot and pass their database identity,
+command, and artifact-preserving scope on every request. Closing a caller scope
+cancels and joins its reads; it does not close an idle pooled process. Each read
+releases its native readers before its reply. Idle processes retire after one
+minute, and failed or cancelled processes retire before another request reuses
+that slot. Runtimes without qualified native SQLite close still require process
+retirement before releasing snapshot custody.
+Unconfirmed native cleanup quarantines its slot without releasing that custody.
+Reads use remaining healthy capacity; four quarantined slots reject visibly
+instead of launching another process or waiting indefinitely.
+
+Paced page-cache warming leases one of those same slots until its caller scope
+closes. Its iterator stays in one exclusive child across `begin` and `step`
+requests; other reads cannot interleave or evict it. Closing the scope joins child
+retirement even when warming is abandoned between steps. A cancelled reservation
+that never entered the child releases promptly without retiring another caller's
+active read. When all slots are leased, new requests wait with cancellation.
+
+Read requests launch through the Gateway's spawn broker when available. Broker
+nonadmission fails the request rather than spawning a native replacement on the
+Gateway thread. CLI contexts without a broker use the same bounded pool with
+native launches; idle children do not keep the CLI alive. Caller-owned staging
+and raw snapshot-copy sessions keep their existing native-close lifecycle.
+The existing `openclaw_child_process_spawn_total` operation label distinguishes
+`sqlite.scoped-read.broker`, `sqlite.scoped-read.native`, and caller-owned
+`sqlite.session.broker` / `sqlite.session.native` launches without recording
+paths, database identities, or commands.
 
 Synchronous boot admission, migrations, Doctor/CLI one-shots, and lock primitives
 are the limited exceptions. Runtime access still using them is migration debt.
@@ -144,6 +174,12 @@ committed inserts/deletes, and reloads after unscoped writes or schema changes.
 Pruning uses that count and one bounded oldest-row delete. Unbounded replacement
 writes may overestimate this disposable cache and evict entries early; bounded
 writes still reserve space before insertion.
+
+Memory managers receive schema, table-presence, and index facts from worker
+admission without opening a host reader. Bundled status callers await the same
+retrieval worker through `readMemorySearchManagerStatus`. The released synchronous
+`status()` method remains deprecated compatibility and opens its native reader
+only when explicitly called; it is not a fallback for worker failures.
 
 ## Final authority without SQL
 
@@ -404,6 +440,17 @@ updates those records in its existing transaction and publishes them on commit;
 rollback retains the previous facts. Cold, evicted, or invalidated actors use the
 canonical participant read. Participant updates remain independent of metadata CAS.
 This changes no schema, retention, stored format, or update behavior.
+
+Reply-initialization cohorts reuse those entry facts only when the selected entry
+and its parent are both covered. Cold-archive absence requires a complete actor
+snapshot; entry-only facts do not prove it. Archive/restore receipts invalidate
+that snapshot. Lifecycle planning and commit reuse the current actor entry for
+single-entry changes, while retaining the lost-update comparison and uncovered
+count, archive, and maintenance reads. Pending-input history can skip its worker
+request only when the complete actor snapshot proves no unconsumed inputs for
+the requested current window. Staging, consumption, replacement, and unknown
+writes update or invalidate these facts through existing owner receipts; restart
+and eviction return to the canonical readers.
 
 ## Session and ancillary worker operations
 
@@ -4350,7 +4397,7 @@ rewrite/append watermark. Read workers validate that snapshot before extending
 it, so worker retirement does not discard the cache. Workers also adopt the host's
 live database validation receipt before canonical admission, preserving pending-row
 checks without repeating whole-store validation. Branch reads share the existing
-maintenance reader's prewarming, thirty-minute idle window, database custody, and
+maintenance reader's prewarming, five-minute idle window, database custody, and
 memory-pressure retirement. They no longer start a dedicated worker after short
 idle gaps, and foreground history retains its separate reader. Branch identity and lifecycle
 reads use metadata without loading saved prompts or diff snapshots. After a complete scan
@@ -4921,7 +4968,7 @@ foreground browser loading; main-thread handler and optional discovery preparati
 still wait for idle time. An admitted operator connection also starts detached
 prewarming when that lane is cold. Prewarming reads
 no transcripts, writes no data, and uses normal database custody and cleanup. Warm
-calls coalesce without extending the 30-minute idle retirement deadline; failures
+calls coalesce without extending the five-minute lane idle retirement deadline; failures
 are debug-only and never block startup or connection admission. Schemas, retention,
 and update behavior are unchanged.
 

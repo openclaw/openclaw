@@ -126,10 +126,13 @@ async function mountBrowserCard() {
   await card.updateComplete;
   return {
     card,
-    copy: () =>
-      card
-        .querySelector("wa-dropdown")
-        ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "copy-url" } } })),
+    copy: async () => {
+      card.querySelector<HTMLButtonElement>(".more")!.click();
+      const menu = card.querySelector<HTMLElement>(".oc-menu")!;
+      await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(true));
+      card.querySelector<HTMLButtonElement>('[data-value="copy-url"]')!.click();
+      await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(false));
+    },
   };
 }
 
@@ -234,7 +237,7 @@ describe("Markdown clipboard operation lifetime", () => {
   it("copies browser-card URLs when the Clipboard API is absent on plain HTTP", async () => {
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
     const browser = await mountBrowserCard();
-    browser.copy();
+    await browser.copy();
     await flushCopy();
     expect(clipboard).toBe("https://example.com/document");
     expect(fallbackCopies).toEqual(["https://example.com/document"]);
@@ -245,7 +248,7 @@ describe("Markdown clipboard operation lifetime", () => {
     const code = await mountCopy("code");
     const browser = await mountBrowserCard();
     code.button.click();
-    browser.copy();
+    await browser.copy();
     await flushCopy();
     expect(clipboard).toBe("https://example.com/document");
     pending.reject(new Error("Synthetic clipboard rejection"));
@@ -259,7 +262,7 @@ describe("Markdown clipboard operation lifetime", () => {
     async (change) => {
       const pending = delayFirstWrite();
       const browser = await mountBrowserCard();
-      browser.copy();
+      await browser.copy();
       if (change === "removed") {
         browser.card.remove();
       } else {

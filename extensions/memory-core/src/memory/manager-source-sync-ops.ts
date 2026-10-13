@@ -74,7 +74,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
           this.closed ||
           database.closed ||
           database.readOnly ||
-          !database.db.isOpen ||
+          !database.isOpen ||
           this.database !== database
         ) {
           throw new Error("Memory source owner changed before deletion");
@@ -297,7 +297,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       }
       const database = this.database;
       const assertCurrent = () => {
-        if (this.closed || database.closed || !database.db.isOpen || this.database !== database) {
+        if (this.closed || !database.isOpen || this.database !== database) {
           throw new Error("Memory source owner changed during hash lookup");
         }
       };
