@@ -29,7 +29,7 @@ import * as support from "./service.test-support.js";
 import { createWorkerTranscriptCommitStore } from "./transcript-commit-ledger.js";
 import { createWorkerTranscriptCommitter } from "./transcript-commit.js";
 import { claimWorkerPlacement } from "./worker-turn-rpc.test-support.js";
-import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
+import { prepareWorkerTurnTranscriptSource } from "./worker-turn-transcript-target.js";
 
 describe("worker transcript claim fences", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -263,10 +263,9 @@ describe("worker transcript claim fences", () => {
       });
       const instance = createOperationalRunInstanceRef(claim.runId);
       const authority = claimAgentRunDelegatedAuthority(instance);
+      await using source = await prepareWorkerTurnTranscriptSource(original);
       try {
-        await bindWorkerTurnOwner(store, claim, undefined, instance, original, () => {
-          resolveWorkerTurnTranscriptTarget({ ...original, sessionTarget: original });
-        });
+        await bindWorkerTurnOwner(store, claim, undefined, instance, original, source);
         support.testState.config.session = { store: replacement.storePath };
         if (scenario === "deleted") {
           await expect(

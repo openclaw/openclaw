@@ -168,7 +168,7 @@ export function WorkspaceConflictNotice(props: {
   );
 }
 
-export function WorkspaceConflictTranscriptMessage(props: {
+function WorkspaceConflictTranscriptMessage(props: {
   conflict: WorkspaceResultConflict;
   messageKey: string;
   entryId?: string;

@@ -952,8 +952,8 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     compaction occurs, OpenClaw assembles the streamed summary and stores it
     with the provider's opaque compaction metadata as hidden replay state. Both
     survive session reopening and are sent first on the next matching request.
-    Summary text still passes through transcript redaction; opaque metadata is
-    preserved for replay. The full transcript remains local; only the outbound
+    Summary text and opaque metadata are preserved without secret masking for
+    replay. The full transcript remains local; only the outbound
     history before the checkpoint is omitted. An empty compaction block is not
     stored as a checkpoint, so the next request sends the same history as
     before and OpenClaw's client-side compaction stays available. If Anthropic
@@ -1067,6 +1067,13 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 ## Troubleshooting
 
 <AccordionGroup>
+  <Accordion title="Claude CLI login could not be verified">
+    OpenClaw waits up to 10 seconds for `claude auth status --json`, including
+    startup on slow hosts. A timeout does not mean that you are logged out.
+    Run that command as the Gateway user on the same host, then retry setup.
+    If it reports `loggedIn: false`, run `claude auth login` first.
+  </Accordion>
+
   <Accordion title="Claude CLI OAuth session expired or could not be refreshed">
     Run these commands as the Gateway user on the Gateway host:
 

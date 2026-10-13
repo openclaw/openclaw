@@ -14,6 +14,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../io.js";
 import {
   applySessionEntryLifecycleMutation,
   appendTranscriptMessage,
@@ -75,6 +76,7 @@ describe("SQLite session handle lifecycle", () => {
       sessionKey: "agent:main:handle-session",
       storePath: path.join(tempDirs.make("openclaw-session-handle-"), "sessions.json"),
     };
+    setRuntimeConfigSnapshot({ session: { store: scope.storePath } });
     await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     databasePath = resolveSqliteTargetFromSessionStorePath(scope.storePath).path!;
   });
@@ -83,6 +85,7 @@ describe("SQLite session handle lifecycle", () => {
     archiveMaterializationHook.afterMaterialize = undefined;
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    clearRuntimeConfigSnapshot();
   });
 
   it("releases a transcript read after JSON parsing fails mid-stream", async () => {
@@ -262,7 +265,7 @@ describe("SQLite session handle lifecycle", () => {
 
       await withTranscriptWriteLock(scope, async (transcript) => {
         const before = await transcript.readEvents();
-        closeCachedOpenClawAgentDatabase(database, { eviction: true });
+        closeCachedOpenClawAgentDatabase(database);
         expect(database.db.isOpen).toBe(false);
         if (kind === "events") {
           await expect(transcript.readEvents()).resolves.toEqual(before);
@@ -332,7 +335,7 @@ describe("SQLite session handle lifecycle", () => {
     );
     expect(drains).not.toHaveLength(0);
 
-    closeCachedOpenClawAgentDatabase(database, { eviction: true });
+    closeCachedOpenClawAgentDatabase(database);
     expect(database.db.isOpen).toBe(false);
     const replacement = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
     writerRelease.resolve();
@@ -357,7 +360,7 @@ describe("SQLite session handle lifecycle", () => {
               if (closure === "database retirement") {
                 expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
               } else {
-                closeCachedOpenClawAgentDatabase(planningDatabase, { eviction: true });
+                closeCachedOpenClawAgentDatabase(planningDatabase);
                 expect(planningDatabase.db.isOpen).toBe(false);
               }
               return { ...currentEntry!, label: "built after close" };
@@ -482,7 +485,7 @@ describe("SQLite session handle lifecycle", () => {
     const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
     const closeHandle = vi.fn(() => {
       expect(database.db.isOpen).toBe(true);
-      closeCachedOpenClawAgentDatabase(database, { eviction: true });
+      closeCachedOpenClawAgentDatabase(database);
       expect(database.db.isOpen).toBe(false);
     });
     archiveMaterializationHook.afterMaterialize = closeHandle;

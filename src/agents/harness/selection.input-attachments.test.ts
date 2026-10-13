@@ -4,6 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { registerInternalHook, unregisterInternalHook } from "../../hooks/internal-hooks.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import * as fsSafe from "../../infra/fs-safe.js";
@@ -53,7 +57,10 @@ beforeEach(async () => {
     operationalRunInstance: createOperationalRunInstanceRef("attachment-test"),
   });
   const context = await admission.admit("plugin-harness", "attachment-test");
-  createAttemptParams = (config) => createHarnessAttemptParams(context, config);
+  createAttemptParams = (config) => {
+    setRuntimeConfigSnapshot(config ?? {}, config);
+    return createHarnessAttemptParams(context, config);
+  };
 });
 afterEach(async () => {
   resetGlobalHookRunner();
@@ -64,6 +71,7 @@ afterEach(async () => {
   await closeStateDatabaseForTest();
   vi.unstubAllEnvs();
   trajectoryTempDirs.cleanup();
+  clearRuntimeConfigSnapshot();
 });
 
 function createAttributionRecorder(registered = true) {

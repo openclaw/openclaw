@@ -102,7 +102,7 @@ function createRunContext(params: {
       prompt: "hello",
       provider: "test-cli",
       model: "test-model",
-      timeoutMs: 1_000,
+      timeoutMs: 60_000,
       runId: params.runId,
       ...(params.signal ? { abortSignal: params.signal } : {}),
       ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
@@ -146,11 +146,14 @@ describe("CLI execution cancellation", () => {
   afterEach(() => {
     setCliRunnerExecuteTestDeps({ getProcessSupervisor: restoreProcessSupervisor });
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it.each([true, false])(
     "marks only rejected protocol on interruption (protocol=%s)",
     async (protocol) => {
+      // Reach the fixture's explicit abort even when policy workers start cold.
+      vi.useFakeTimers({ toFake: ["Date"] });
       const controller = new AbortController();
       const context = createRunContext({ runId: "interrupted-output", signal: controller.signal });
       context.preparedBackend.backend.command = process.execPath;

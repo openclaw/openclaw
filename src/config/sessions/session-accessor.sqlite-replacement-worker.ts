@@ -7,6 +7,7 @@ import {
   retainSqliteWorkerErrorCode,
   SqliteWorkerError,
 } from "../../infra/sqlite-worker-contract.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerOperationAdmission,
@@ -97,6 +98,10 @@ export async function withSessionEntryWorker<T>(
       assertAgentSessionWriteAdmission(options);
     }
     env = Object.freeze({ ...(options.env ?? process.env) });
+    const targetIdentity =
+      !retainedExecution && !databaseIdentity
+        ? readDatabasePathIdentitySync(options.path)
+        : undefined;
     execution =
       retainedExecution ??
       captureOpenClawAgentDatabaseExecution(
@@ -109,7 +114,9 @@ export async function withSessionEntryWorker<T>(
                 nativeLocation: options.path,
               },
             }
-          : {},
+          : targetIdentity?.key.startsWith("path:")
+            ? { expectedCreationIdentity: targetIdentity }
+            : {},
       );
   } catch (error) {
     try {
@@ -321,12 +328,19 @@ export function prepareSessionEntryReplacementDatabase(
   options: ReplacementDatabaseOptions,
   assertCurrent: () => void,
   retainedExecution?: OpenClawAgentDatabaseExecution,
+  followRegistration?: AgentDatabaseRequestExecutionSource["onRegistryChange"],
 ): Promise<void> {
+  const prepared = retainedExecution?.capturePreparedGenerationClaim();
+  if (prepared) {
+    assertCurrent();
+    prepared.assertCurrent();
+    return Promise.resolve();
+  }
   return withSessionEntryWorker(
     options,
     undefined,
     assertCurrent,
-    (execution, source) => execution.prepare(source),
+    (execution, source) => execution.prepare({ ...source, onRegistryChange: followRegistration }),
     undefined,
     retainedExecution,
   );
@@ -433,7 +447,7 @@ export type SessionEntryWorkerMutationResult<T> =
 
 export async function runSessionEntryWorkerMutation<T>(
   options: ReplacementDatabaseOptions,
-  databaseIdentity: string,
+  databaseIdentity: string | undefined,
   assertCurrent: () => void,
   run: (worker: AgentDatabaseExecutionScope) => Promise<SessionEntryWorkerMutationResult<T>>,
   lifecycle: {
@@ -446,20 +460,21 @@ export async function runSessionEntryWorkerMutation<T>(
     retainedExecution?: OpenClawAgentDatabaseExecution;
     signal?: AbortSignal;
     prepare?: SessionEntryWorkerPreparation;
+    errors?: { identity: string; unknown: string; missing: string; publication: string };
   } = {},
 ): Promise<T> {
   const unknownMessage =
+    executionOptions.errors?.unknown ??
     "Session entry mutation has no confirmed native completion and commit receipt";
-  const publication = retainSessionEntryWorkerPublication({
-    agentId: lifecycle.identityAgentId,
-    storePath: options.path,
-    databaseIdentity,
-  });
+  let publication: ReturnType<typeof retainSessionEntryWorkerPublication> | undefined;
   let completed: SessionEntryWorkerMutationResult<T> | undefined;
   let admitted:
     | { admission: SqliteWorkerOperationAdmission; retained: RetainedWorkerTransactionAdmission }
     | undefined;
-  const settle = async () => {
+  const settle = async (
+    retainedPublication: ReturnType<typeof retainSessionEntryWorkerPublication>,
+    identity: string,
+  ) => {
     if (!admitted) {
       if (completed?.kind === "committed") {
         return true;
@@ -490,11 +505,11 @@ export async function runSessionEntryWorkerMutation<T>(
         }
       } finally {
         // Result adoption precedes observers, but its failure cannot retain publication custody.
-        const published = publication.settle(receipt, unknown);
+        const published = retainedPublication.settle(receipt, unknown);
         if (published) {
           publishCommittedSessionIdentity(
             lifecycle.identityAgentId,
-            databaseIdentity,
+            identity,
             published.previous,
             published.current,
             published.prepared,
@@ -516,6 +531,18 @@ export async function runSessionEntryWorkerMutation<T>(
     (execution, source, context) =>
       execution
         .runExisting(source, async (worker) => {
+          const identity = databaseIdentity ?? execution.fileIdentity?.physicalIdentity;
+          if (!identity) {
+            throw new Error(
+              executionOptions.errors?.identity ??
+                "Session entry mutation has no prepared native database identity",
+            );
+          }
+          publication = retainSessionEntryWorkerPublication({
+            agentId: lifecycle.identityAgentId,
+            storePath: execution.path,
+            databaseIdentity: identity,
+          });
           const outcome = await run(worker).then(
             (value) => ({ ok: true as const, value }),
             (error: unknown) => ({ ok: false as const, error }),
@@ -525,7 +552,7 @@ export async function runSessionEntryWorkerMutation<T>(
           }
           // Keep the executing scope and FIFO writer through native publication settlement.
           // Close joins this callback; a delayed result cannot borrow a successor owner.
-          if (await settle()) {
+          if (await settle(publication, identity)) {
             rejectUnknownSessionEntryOutcome(
               unknownMessage,
               outcome.ok ? undefined : outcome.error,
@@ -541,7 +568,9 @@ export async function runSessionEntryWorkerMutation<T>(
         })
         .then((result) => {
           if (!result) {
-            throw new Error("Session database disappeared before mutation");
+            throw new Error(
+              executionOptions.errors?.missing ?? "Session database disappeared before mutation",
+            );
           }
           return result.value;
         }),
@@ -549,9 +578,13 @@ export async function runSessionEntryWorkerMutation<T>(
       if (
         !isRecord(facts) ||
         !isRecord(facts.publication) ||
-        facts.publication.kind !== "session-entry-replacements"
+        facts.publication.kind !== "session-entry-replacements" ||
+        !publication
       ) {
-        throw new Error("Session entry mutation commit omitted its publication keys");
+        throw new Error(
+          executionOptions.errors?.publication ??
+            "Session entry mutation commit omitted its publication keys",
+        );
       }
       admitted = { admission, retained };
       // SAFETY: This command's native kernel supplies the typed publication, not external input.
@@ -562,6 +595,11 @@ export async function runSessionEntryWorkerMutation<T>(
         committed.sharingUnchangedKeys,
         committed.generationUnchangedKeys,
         committed.transcriptPublication,
+        new Map(
+          [...committed.current].filter(
+            ([key]) => !committed.unavailableParticipantKeys?.includes(key),
+          ),
+        ),
       );
     },
     executionOptions.retainedExecution,

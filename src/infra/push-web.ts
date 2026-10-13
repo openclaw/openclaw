@@ -233,11 +233,7 @@ async function sendPreparedWebPushNotifications(params: {
         subscription,
         params.payload,
         params.deliveryOptions,
-      ).catch((reason: unknown) => ({
-        ok: false,
-        subscriptionId: subscription.subscriptionId,
-        error: reason instanceof Error ? reason.message : "unknown error",
-      })),
+      ),
     ),
   );
 

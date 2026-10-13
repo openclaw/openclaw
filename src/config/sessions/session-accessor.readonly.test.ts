@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isSessionNodePayloadSelect,
   trackSqliteStatementExecutions,
@@ -14,6 +14,7 @@ import {
 } from "../../../test/helpers/temp-dir.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -27,6 +28,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   listSessionEntriesCore,
   listSessionEntriesReadOnly,
@@ -59,12 +61,17 @@ function clearRegisteredAgentDatabases(env: NodeJS.ProcessEnv): void {
   openOpenClawStateDatabase({ env }).db.prepare("DELETE FROM agent_databases").run();
 }
 
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+});
+
 afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
   cleanupTempDirs(tempDirs);
   vi.useRealTimers();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("session accessor readonly listing", () => {
@@ -420,6 +427,7 @@ describe("session accessor readonly listing", () => {
     );
 
     closeOpenClawAgentDatabasesForTest();
+    revokeSqliteDatabaseAdmissionsForPath(database.path);
     expect(() => readSessionStoreSummaryReadOnly(scope, options)).toThrow("openclaw doctor --fix");
     expect(
       loadExactSessionEntryCandidatesReadOnlyBatch(

@@ -6,6 +6,10 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ExecApprovalsFile } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
@@ -386,11 +390,13 @@ describe("codex conversation binding", () => {
   afterAll(() => closeOpenClawAgentDatabasesAsync());
 
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     resetCodexTestBindingStore();
     tempDir = sessionDirs.make();
   });
 
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
     publicBindingMocks.readBinding.mockReset();
     publicBindingMocks.readBinding.mockReturnValue({ bindingId: "binding-1" });
     sharedClientMocks.getSharedCodexAppServerClient.mockReset();
@@ -1183,13 +1189,13 @@ describe("codex conversation binding", () => {
             workspaceDir: tempDir,
             bindingStore: {
               ...testCodexAppServerBindingStore,
-              read: (identity) => {
+              readAsync: async (identity) => {
                 if (resumeAccepted) {
                   if (expiresDuring === "retention") {
                     elapsedClock.mockReturnValue(1_001);
                   }
                 }
-                return testCodexAppServerBindingStore.read(identity);
+                return await testCodexAppServerBindingStore.readAsync(identity);
               },
               mutate: async (...args) => {
                 if (expiresDuring === "commit") {
@@ -1682,6 +1688,8 @@ describe("codex conversation binding", () => {
 
   it("blocks bound Codex CLI node turns when the current OpenClaw session is sandboxed", async () => {
     const resumeCodexCliSessionOnNode = vi.fn();
+    const config = { agents: { defaults: { sandbox: { mode: "all" as const } } } };
+    setRuntimeConfigSnapshot(config);
 
     const result = await handleCodexConversationInboundClaim(
       conversationMessage("continue the task", {
@@ -1701,7 +1709,7 @@ describe("codex conversation binding", () => {
         { channel: "discord", conversationId: "channel-1" },
       ),
       {
-        config: { agents: { defaults: { sandbox: { mode: "all" } } } },
+        config,
         resumeCodexCliSessionOnNode,
       },
     );
@@ -2037,7 +2045,11 @@ describe("codex conversation binding", () => {
       { role: "user", content: [{ text: "Earlier question" }] },
       { role: "assistant", content: [{ text: "Earlier answer" }] },
     ]);
-    expect(releaseSource).toHaveBeenCalledExactlyOnceWith("thread-source", expect.any(Function));
+    expect(releaseSource).toHaveBeenCalledExactlyOnceWith(
+      "thread-source",
+      undefined,
+      expect.any(Function),
+    );
     expect(testCodexAppServerBindingStore.read(sourceIdentity)).toBeUndefined();
     await expect(consumeCodexAppServerLiveThread(client, "thread-bound")).resolves.toEqual(
       expect.objectContaining({ release: expect.any(Function) }),

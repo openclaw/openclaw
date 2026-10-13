@@ -246,7 +246,7 @@ extension TalkModeRuntime {
 
     func fallbackTalkConfig() -> TalkModeGatewayConfigState {
         let env = ProcessInfo.processInfo.environment
-        return TalkModeGatewayConfigParser.fallback(
+        return TalkModeGatewayConfigParser.parse(
             defaultModelIdFallback: Self.defaultModelIdFallback,
             defaultSilenceTimeoutMs: Self.defaultSilenceTimeoutMs,
             envVoice: env["ELEVENLABS_VOICE_ID"],

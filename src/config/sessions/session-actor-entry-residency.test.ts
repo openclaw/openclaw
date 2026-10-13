@@ -1,6 +1,14 @@
 import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import { loadUsageCacheOperations } from "../../state/openclaw-agent-execution-operations.js";
+import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import {
+  participantRecordsBySessionKey,
+  projectSqliteSessionParticipants,
+} from "./session-accessor.sqlite-participant-projection.js";
+import { recordSessionParticipantFromWorker } from "./session-accessor.sqlite-participants.native.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { withActor, type Mutation } from "./session-actor-worker.test-support.js";
@@ -11,6 +19,170 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 }));
 // mock-isolation: The fixture owns its database lifetime without background history eviction.
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
+
+it("reads committed participant counts and ordering in the same and next turn without SQL", async () => {
+  await withActor((f) => {
+    f.read();
+    const reads = trackSqliteStatementExecutions(
+      f.database.db,
+      ["participant", "hydration"],
+      (sql) => {
+        if (sql.includes('as "actor_participants"')) {
+          return "hydration";
+        }
+        return /^select\b/iu.test(sql) && sql.includes('"session_participants"')
+          ? "participant"
+          : null;
+      },
+    );
+    const record = (id: string, promptedAt: number) =>
+      recordSessionParticipantFromWorker(f.database, f.scope, {
+        identity: { type: "agent", id },
+        promptedAt,
+      });
+    const participants = () =>
+      participantRecordsBySessionKey(f.database.db, [f.target.sessionKey]).get(f.target.sessionKey);
+    try {
+      runSqliteImmediateTransactionSync(f.database.db, () => {
+        expect(record("second", 20).value).toBe("inserted");
+        expect(participants()).toMatchObject([
+          {
+            identity: { id: "second" },
+            contributionCount: 1,
+            firstPromptedAt: 20,
+            lastPromptedAt: 20,
+          },
+        ]);
+        expect(record("first", 10).value).toBe("inserted");
+        expect(record("second", 5).value).toBe("updated");
+        expect(participants()?.map((participant) => participant.identity.id)).toEqual([
+          "second",
+          "first",
+        ]);
+      });
+      expect(f.read().participants).toEqual(participants());
+      expect(participants()).toMatchObject([
+        {
+          identity: { id: "second" },
+          contributionCount: 2,
+          firstPromptedAt: 5,
+          lastPromptedAt: 20,
+        },
+        {
+          identity: { id: "first" },
+          contributionCount: 1,
+          firstPromptedAt: 10,
+          lastPromptedAt: 10,
+        },
+      ]);
+      runSqliteImmediateTransactionSync(f.database.db, () => record("second", 30));
+      const next = f.read();
+      expect(next.participants[0]).toMatchObject({ contributionCount: 3, lastPromptedAt: 30 });
+      expect(
+        projectSqliteSessionParticipants(f.database.db, f.target.sessionKey, next.entry!),
+      ).toMatchObject({
+        participantCount: 2,
+        participants: [{ identity: { id: "second" } }, { identity: { id: "first" } }],
+      });
+      expect(reads.counts).toEqual({ participant: 0, hydration: 0 });
+    } finally {
+      reads.restore();
+    }
+  });
+});
+
+it("discards rolled-back participant facts and retains the next committed contribution", async () => {
+  await withActor((f) => {
+    const before = f.read();
+    const record = () =>
+      recordSessionParticipantFromWorker(f.database, f.scope, {
+        identity: { type: "agent", id: "peer" },
+        promptedAt: 10,
+      });
+    expect(() =>
+      runSqliteImmediateTransactionSync(f.database.db, () => {
+        record();
+        expect(
+          participantRecordsBySessionKey(f.database.db, [f.target.sessionKey]).get(
+            f.target.sessionKey,
+          ),
+        ).toMatchObject([{ identity: { id: "peer" }, contributionCount: 1 }]);
+        throw new Error("rollback participant");
+      }),
+    ).toThrow("rollback participant");
+    const rolledBack = f.read();
+    expect(rolledBack.participants).toEqual(before.participants);
+    expect(rolledBack.entry).toEqual(before.entry);
+    runSqliteImmediateTransactionSync(f.database.db, record);
+    expect(f.read().participants).toMatchObject([
+      { identity: { id: "peer" }, contributionCount: 1 },
+    ]);
+    f.restartActor();
+    expect(f.read().participants).toMatchObject([
+      { identity: { id: "peer" }, contributionCount: 1 },
+    ]);
+  });
+});
+
+it("retains resident session facts across usage cache writes and reloads actual session changes", async () => {
+  const usage = await loadUsageCacheOperations();
+  await withActor((f) => {
+    const initial = f.read();
+    const context: AgentWorkerOperationContext = {
+      open: () => f.database,
+      options: { agentId: f.database.agentId, path: f.database.path },
+      admit() {},
+      writeTransaction: (_label, _owner, write) =>
+        runSqliteImmediateTransactionSync(f.database.db, () => write(f.database)),
+    };
+    const reads = trackSqliteStatementExecutions(f.database.db, ["hydration"], (sql) =>
+      sql.includes('as "actor_participants"') ? "hydration" : null,
+    );
+    const unchanged = () => {
+      expect(f.read()).toEqual(initial);
+      expect(reads.counts.hydration).toBe(0);
+    };
+    try {
+      expect(
+        usage["usageCache.acquireLock"](
+          { previousRaw: null, previousOwnerIsRunning: false, lockJson: "lock", startedAt: 1 },
+          context,
+        ),
+      ).toBe(true);
+      unchanged();
+      expect(
+        usage["usageCache.writeRollup"](
+          {
+            rollupId: "synthetic-rollup",
+            valueJson: new TextEncoder().encode("{}"),
+            blob: null,
+            updatedAt: 2,
+          },
+          context,
+        ),
+      ).toBe(true);
+      unchanged();
+      usage["usageCache.prune"](
+        [{ key: "synthetic-rollup", valueJson: "{}", updatedAt: 2 }],
+        context,
+      );
+      unchanged();
+      usage["usageCache.releaseLock"]("lock", context);
+      unchanged();
+
+      runSqliteImmediateTransactionSync(f.database.db, () =>
+        writeSessionEntry(f.database, f.target.sessionKey, {
+          ...initial.entry!,
+          label: "changed by the session owner",
+        }),
+      );
+      expect(f.read().entry?.label).toBe("changed by the session owner");
+      expect(reads.counts.hydration).toBe(1);
+    } finally {
+      reads.restore();
+    }
+  });
+});
 
 it("keeps transcript residency across entry patches without losing either owner's writes", async () => {
   await withActor(async (f) => {

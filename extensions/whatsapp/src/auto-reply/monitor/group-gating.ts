@@ -247,7 +247,7 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
         : formatAudioTranscriptForAgent(params.mentionText);
     return skipGroupMessageAndStoreHistory(
       params,
-      `Group message stored for context (no mention detected) in ${conversationId}: ${mentionMsg.payload.body}`,
+      `Group message stored for context (no mention detected) in ${conversationId}`,
       pendingHistoryBody,
     );
   }

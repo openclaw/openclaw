@@ -7,6 +7,7 @@ import { convertMessages } from "../../../packages/ai/src/openai-completions-mes
 import { resolveOpenAICompletionsCompat } from "../../../packages/ai/src/transports/openai-completions-compat.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   listSessionPendingInputReceipts,
@@ -82,6 +83,7 @@ async function withAdmission(
   } = {},
 ) {
   await withOpenClawTestState({ label: "admission-annotation" }, async (state) => {
+    setRuntimeConfigSnapshot(options.config ?? {}, options.config);
     const fixture = await prepareAdmission(
       path.join(state.sessionsDir(), "sessions.json"),
       options,
@@ -546,7 +548,6 @@ describe("host-owned current admission annotation", () => {
     "admission-close",
     "abort",
     "writer",
-    "lifecycle",
     "session",
     "replacement",
     "blocked",
@@ -570,9 +571,6 @@ describe("host-owned current admission annotation", () => {
         }
         if (reason === "writer") {
           f.patchSession({ activeWriterRunId: "successor" });
-        }
-        if (reason === "lifecycle") {
-          f.patchSession({ lifecycleRevision: "successor" });
         }
         if (reason === "session") {
           f.patchSession({ sessionId: "successor" });
@@ -706,14 +704,16 @@ describe("host-owned current admission annotation", () => {
     );
   });
 
-  it("never restores upstream text removed by storage redaction", async () => {
+  it("preserves admitted upstream text independently of diagnostic redaction patterns", async () => {
     await withAdmission(
       async (f) => {
         const before = await loadTranscriptEvents(f.target);
-        await expect(f.annotate(nativeAnnotation("prompt", "private-value"))).rejects.toThrow(
-          "redacted",
-        );
-        expect(await loadTranscriptEvents(f.target)).toEqual(before);
+        await f.annotate(nativeAnnotation("prompt", "private-value"));
+        expect(f.recorder.getPersistedMessage?.()).toMatchObject({
+          content: "prompt",
+          __openclaw: { upstreamUserText: "private-value" },
+        });
+        expect(await loadTranscriptEvents(f.target)).toHaveLength(before.length);
       },
       { config: { logging: { redactPatterns: ["private-value"] } } },
     );

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
@@ -12,6 +13,7 @@ import {
   placementAuthorityOwnerFor as ownerFor,
   placementAuthorityOwners as owners,
 } from "./placement-authority-owner.js";
+import { WorkerPlacementInventoryChangedError } from "./placement-inventory-changed-error.js";
 import {
   affectsPlacementObservation,
   applyPlacementReadPublication,
@@ -19,11 +21,16 @@ import {
   prepareCachedPlacementPreservationRead,
   preparePlacementRead,
   projectCachedLocalPlacementTurnClaim,
+  prunePublication,
+  readCachedPlacementRecoveryCandidates,
   readCachedPlacementProjection,
   retainProjection,
   retainSessionPlacementRead,
 } from "./placement-read-authority.js";
-import type { WorkerSessionPlacementReadResult } from "./placement-read-projection.types.js";
+import type {
+  WorkerPlacementRecoveryCandidate,
+  WorkerSessionPlacementReadResult,
+} from "./placement-read-projection.types.js";
 import {
   isCurrentPlacementTurnClaim,
   sameWorkerSessionTurnClaim,
@@ -60,21 +67,6 @@ function allows(change: ClaimChange, claim: WorkerSessionTurnClaim): boolean {
   );
 }
 
-function prunePublication(owner: PlacementAuthorityOwner, sessionId: string): void {
-  if (
-    !owner.claims.has(sessionId) &&
-    !owner.workspaceResults.has(sessionId) &&
-    !owner.observations.has(sessionId) &&
-    !owner.placementReaders.has(sessionId) &&
-    ![...owner.pending].some((change) => change.sessionId === sessionId)
-  ) {
-    owner.published.delete(sessionId);
-    if (!owner.tools.get(sessionId)?.authority) {
-      owner.tools.delete(sessionId);
-    }
-  }
-}
-
 function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, sequence: number): void {
   owner.pending.delete(change);
   if (!owner.active) {
@@ -101,6 +93,7 @@ function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, seque
     owner.preservation = undefined;
   }
   if (change.kind !== "tools") {
+    owner.recoveryCandidatesEmpty = undefined;
     owner.projections.delete(change.sessionId);
     if (change.kind === "claim" && change.projection && !change.indeterminate) {
       retainProjection(owner, change.sessionId, change.projection);
@@ -120,7 +113,7 @@ function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, seque
   for (const sessionId of [change.sessionId, undefined]) {
     if (affectsPlacementObservation(change, sessionId)) {
       for (const observation of owner.observations.get(sessionId) ?? []) {
-        observation.revoked = true;
+        observation.revokedBy.add(change.sessionId);
         observation.indeterminate ||= change.indeterminate === true;
       }
     }
@@ -201,7 +194,7 @@ function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, seque
 function capturePlacementObservation(pathname: string, sessionId?: string) {
   const context = captureOpenClawStateWorkerContext({ path: pathname });
   const owner = ownerFor(context.admission.identity);
-  const observation = { revoked: false, indeterminate: false };
+  const observation = { revokedBy: new Set<string>(), indeterminate: false };
   const observations = owner.observations.get(sessionId) ?? new Set<typeof observation>();
   observations.add(observation);
   owner.observations.set(sessionId, observations);
@@ -210,6 +203,10 @@ function capturePlacementObservation(pathname: string, sessionId?: string) {
     sessionId === undefined
       ? "Worker placement inventory changed"
       : `Session ${sessionId} placement authority changed`;
+  const changed = () => {
+    const error = new Error(changedMessage);
+    return attachErrorDiagnostic(error, error.stack ?? changedMessage);
+  };
   const assertUsable = () => {
     context.admission.assertCurrent();
     if (
@@ -218,14 +215,24 @@ function capturePlacementObservation(pathname: string, sessionId?: string) {
       !owner.active ||
       owners.get(owner.identity.key) !== owner
     ) {
-      throw new Error(changedMessage);
+      throw changed();
     }
   };
   const authority = {
     assertCurrent(this: void) {
       assertUsable();
-      if (observation.revoked || hasPendingPublication(owner, sessionId)) {
-        throw new Error(changedMessage);
+      if (observation.revokedBy.size > 0 || hasPendingPublication(owner, sessionId)) {
+        if (sessionId === undefined) {
+          throw new WorkerPlacementInventoryChangedError(
+            new Set([
+              ...observation.revokedBy,
+              ...[...owner.pending]
+                .filter((change) => affectsPlacementObservation(change))
+                .map((change) => change.sessionId),
+            ]),
+          );
+        }
+        throw changed();
       }
     },
     release(this: void) {
@@ -242,12 +249,6 @@ function capturePlacementObservation(pathname: string, sessionId?: string) {
   return { authority, observation, owner, assertUsable };
 }
 
-/** Omit the session to fence non-local placements, including creations after an empty read. */
-function observePlacementAuthority(pathname: string, sessionId?: string) {
-  return capturePlacementObservation(pathname, sessionId).authority;
-}
-
-/** A concurrent placement mutation fails this read; the caller can retry it. */
 export async function preparePlacementAuthorityRead<T>(
   pathname: string,
   sessionId: string | undefined,
@@ -255,7 +256,6 @@ export async function preparePlacementAuthorityRead<T>(
 ) {
   return await preparePlacementRead(
     capturePlacementObservation(pathname, sessionId),
-    sessionId,
     read,
     (value, { authority }) => ({
       value,
@@ -264,7 +264,6 @@ export async function preparePlacementAuthorityRead<T>(
   );
 }
 
-/** The authority owner retains exact reads until one of its writers publishes a change. */
 export async function readPlacementProjection(
   pathname: string,
   sessionId: string,
@@ -291,20 +290,28 @@ export async function preparePlacementPreservationRead(
   return await prepareCachedPlacementPreservationRead(capturePlacementObservation(pathname), read);
 }
 
+export function readPlacementRecoveryCandidates(
+  pathname: string,
+  read: () => Promise<WorkerPlacementRecoveryCandidate[]>,
+): Promise<WorkerPlacementRecoveryCandidate[]> {
+  return readCachedPlacementRecoveryCandidates(capturePlacementObservation(pathname), read);
+}
+
 /** Retain writer postimages, rather than invalidating a destination on ordinary turn claims. */
 export async function prepareSessionPlacementRead(
   pathname: string,
   sessionId: string,
   read: () => Promise<WorkerSessionPlacementRecord | undefined>,
 ) {
-  return await preparePlacementRead(
-    capturePlacementObservation(pathname, sessionId),
-    sessionId,
-    read,
-    (placement, captured) => {
-      return retainSessionPlacementRead(sessionId, placement, captured);
-    },
-  );
+  const captured = capturePlacementObservation(pathname, sessionId);
+  try {
+    const placement = await read();
+    captured.assertUsable();
+    return retainSessionPlacementRead(sessionId, placement, captured);
+  } catch (error) {
+    captured.authority.release();
+    throw error;
+  }
 }
 
 function stageChange(db: DatabaseSync, change: ClaimChange): void {
@@ -472,7 +479,7 @@ export async function preparePlacementWorkspaceResultAuthority(
   const claim = structuredClone(requestedClaim);
   claim.sessionId = required(claim.sessionId, "session id");
   const publicationSequence = owner.published.get(claim.sessionId) ?? 0;
-  const observation = observePlacementAuthority(pathname, claim.sessionId);
+  const observation = capturePlacementObservation(pathname, claim.sessionId).authority;
   try {
     const projection = await read([claim.sessionId]);
     context.admission.assertCurrent();

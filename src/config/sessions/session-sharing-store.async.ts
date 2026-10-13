@@ -30,6 +30,7 @@ import { readResidentUserProfileAliases } from "../../state/user-profile-list.js
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
+import { recordCommittedSessionMetadataPublication } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { bindSessionEntryPublicationSource } from "./session-accessor.sqlite-entry-cache-publication.js";
 import { publishSessionSharingMemberChange } from "./session-accessor.sqlite-entry-cache.js";
 import { retainSessionEntryWorkerPublication } from "./session-accessor.sqlite-entry-worker-publication.js";
@@ -333,12 +334,35 @@ export async function runSessionCollaborationWrite<
                     mutationAdmission = activeAdmission;
                     if (!capturedCommand.type.startsWith("suggestion.")) {
                       const memberships = new Map<string, string>();
+                      const participantProjections = new Map<
+                        string,
+                        | SessionSharingWorkerOperations["participant"]["output"]["participants"]
+                        | undefined
+                      >();
                       for (const [key, fact] of candidate?.publication.facts ?? []) {
                         if (fact.kind === "postimage" && fact.value[0]?.kind === "member") {
                           memberships.set(key, fact.value[0].sessionId);
                         }
+                        if (
+                          capturedCommand.type === "participant" &&
+                          fact.kind === "postimage" &&
+                          fact.value[0]?.kind === "participants" &&
+                          fact.value[0].projection
+                        ) {
+                          participantProjections.set(key, fact.value[0].projection);
+                        } else if (
+                          capturedCommand.type === "participant" &&
+                          fact.kind === "unchanged"
+                        ) {
+                          participantProjections.set(key, undefined);
+                        }
                       }
-                      publication.beginChanges(publicationKeys, memberships);
+                      publication.beginChanges(
+                        publicationKeys,
+                        memberships,
+                        publicationKeys,
+                        participantProjections,
+                      );
                     }
                   }
                 },
@@ -568,17 +592,21 @@ export function recordSessionParticipantInWorker(
         (result.value === "inserted" || result.value === "updated") &&
         (!currentKeys || currentKeys.has(location.sessionKey))
       ) {
-        if (result.projectionChanged) {
-          const change: SessionRowChange = {
-            ...location,
-            scope: "session-entry",
-            facts: { kind: "participants", projection: result.participants },
-          };
-          sessionChanges.emit(
-            database ? bindSessionEntryPublicationSource(change, database) : change,
-            database?.db,
-          );
+        const change: SessionRowChange = {
+          ...location,
+          scope: "session-entry",
+          facts: result.projectionChanged
+            ? { kind: "participants", projection: result.participants }
+            : { kind: "participants", projectionChanged: false },
+        };
+        if (database && result.projectionChanged) {
+          recordCommittedSessionMetadataPublication(database, location.sessionKey, change.facts);
         }
+        // Count-only writes still invalidate exact aggregate records in the actor replica.
+        sessionChanges.emit(
+          database ? bindSessionEntryPublicationSource(change, database) : change,
+          database?.db,
+        );
         const notify = () =>
           emitSessionLifecycleEvent({
             agentId: location.agentId,

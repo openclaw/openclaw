@@ -38,7 +38,8 @@ describe("i18n", () => {
     await translate.i18n.setLocale("en");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await vi.dynamicImportSettled();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -58,9 +59,8 @@ describe("i18n", () => {
   it("loads saved non-English locale on startup", async () => {
     localStorage.setItem("openclaw.i18n.locale", "zh-CN");
     const fresh = await importFreshTranslate();
-    await vi.waitFor(() => {
-      expect(fresh.i18n.getLocale()).toBe("zh-CN");
-    });
+    await vi.dynamicImportSettled();
+    expect(fresh.i18n.getLocale()).toBe("zh-CN");
     expect(fresh.t("common.health")).toBe(
       readTranslationString(await loadLazyLocaleTranslation("zh-CN"), "common.health"),
     );
@@ -73,7 +73,8 @@ describe("i18n", () => {
 
     const fresh = await importFreshTranslate();
 
-    await vi.waitFor(() => expect(fresh.i18n.getLocale()).toBe("fa"));
+    await vi.dynamicImportSettled();
+    expect(fresh.i18n.getLocale()).toBe("fa");
     expect(documentElement).toEqual({ lang: "fa", dir: "rtl" });
     expect(localStorage.getItem("openclaw.i18n.locale")).toBeNull();
   });
@@ -105,7 +106,8 @@ describe("i18n", () => {
 
     const fresh = await importFreshTranslate();
 
-    await vi.waitFor(() => expect(fresh.i18n.getLocale()).toBe("zh-TW"));
+    await vi.dynamicImportSettled();
+    expect(fresh.i18n.getLocale()).toBe("zh-TW");
     expect(fresh.t("common.health")).toBe(
       readTranslationString(await loadLazyLocaleTranslation("zh-TW"), "common.health"),
     );

@@ -78,7 +78,7 @@ describe("AppSidebar new session navigation", () => {
     await sidebar.updateComplete;
 
     const newSessionLink = sidebar.querySelector<HTMLAnchorElement>(
-      ".sidebar-session-toolbar .sidebar-new-session",
+      ".sidebar-rail .sidebar-new-session",
     );
     expect(sidebar.querySelectorAll(".sidebar-new-session")).toHaveLength(1);
     expect(sidebar.querySelector(".sidebar-brand__collapse")).toBeNull();
@@ -96,9 +96,7 @@ describe("AppSidebar new session navigation", () => {
 
     sidebar.connected = true;
     await sidebar.updateComplete;
-    const link = sidebar.querySelector<HTMLAnchorElement>(
-      ".sidebar-session-toolbar .sidebar-new-session",
-    )!;
+    const link = sidebar.querySelector<HTMLAnchorElement>(".sidebar-rail .sidebar-new-session")!;
     expect(link.getAttribute("aria-label")).toBe("New conversation");
     expect(link.getAttribute("href")).toBe("/control/new?agent=research");
     expect(link.hasAttribute("aria-disabled")).toBe(false);
@@ -113,9 +111,22 @@ describe("AppSidebar new session navigation", () => {
       expect(event.defaultPrevented).toBe(false);
       expect(onOpenNewSession).not.toHaveBeenCalled();
     }
-    link.click();
-    expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("research");
-    onOpenNewSession.mockClear();
+    for (const view of ["pages", "sessions", "online"] as const) {
+      for (const collapsed of [false, true]) {
+        sidebar.navigationView = view;
+        sidebar.navigationCollapsed = collapsed;
+        await sidebar.updateComplete;
+        const current = sidebar.querySelector<HTMLAnchorElement>(
+          ".sidebar-rail .sidebar-new-session",
+        );
+        expect(current).toBe(link);
+        expect(sidebar.querySelectorAll(".sidebar-new-session")).toHaveLength(1);
+        expect(sidebar.querySelector(".sidebar-session-toolbar .sidebar-new-session")).toBeNull();
+        current!.click();
+        expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("research");
+        onOpenNewSession.mockClear();
+      }
+    }
   });
 
   it("opens a catalog-targeted draft from its new-session action", async () => {
@@ -556,13 +567,16 @@ describe("AppSidebar agent chip", () => {
         "[data-agent-group=main] .sidebar-agent-roster__header .session-glyph__ring",
       ),
     ).toBeNull();
-    expect(
-      sidebar.querySelector(
-        '[data-agent-group=main] .sidebar-agent-roster__header [data-session-attention="error"]',
-      ),
-    ).not.toBeNull();
-    expect(
-      sidebar.querySelector("[data-agent-group=main] .sidebar-agent-roster__header")?.textContent,
-    ).toContain("Child session Spawned thread failed: Review failed");
+    const attention = sidebar.querySelector(
+      '[data-agent-group=main] .sidebar-agent-roster__header [data-session-attention="error"]',
+    )!;
+    expect(attention).not.toBeNull();
+    await attention.closest<HTMLElementTagNameMap["openclaw-tooltip"]>("openclaw-tooltip")!
+      .updateComplete;
+    const description = (attention.getAttribute("aria-describedby") ?? "")
+      .split(/\s+/u)
+      .map((id) => attention.ownerDocument.getElementById(id)?.textContent ?? "")
+      .join(" ");
+    expect(description).toContain("Child session Spawned thread failed: Review failed");
   });
 });

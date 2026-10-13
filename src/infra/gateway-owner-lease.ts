@@ -28,7 +28,7 @@ import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-w
 import {
   classifyGatewayOwnerProcessNamespace,
   describeGatewayLockHolder,
-  GATEWAY_OWNER_HEARTBEAT_MS,
+  GATEWAY_OWNER_HEARTBEAT_STALE_MS,
   GatewayLockNamespaceError,
   readGatewayLockProcessNamespace,
 } from "./gateway-lock-payload.js";
@@ -261,7 +261,7 @@ export function acquireGatewayOwnerLease(params: {
             operationLabel: `gateway.owner-lease.${operation}`,
           },
         ),
-      { env, path: databasePath },
+      { env, path: databasePath, sealOnClose: operation === "release" },
     );
   const expiresAt = mutateLease("acquire", (db) => {
     const previous = resolveStoppedGatewayOwnerLease(readGatewayOwnerLeaseFromDatabase(db));
@@ -291,7 +291,10 @@ export function acquireGatewayOwnerLease(params: {
         leaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
         acquiredAt: expiresAt - STARTUP_MIGRATION_LEASE_TTL_MS,
         expiresAt,
-        heartbeatMs: GATEWAY_OWNER_HEARTBEAT_MS,
+        // Foreign-namespace recovery expires heartbeat evidence before the lease's TTL.
+        heartbeatMs: Math.floor(
+          Math.min(STARTUP_MIGRATION_LEASE_TTL_MS, GATEWAY_OWNER_HEARTBEAT_STALE_MS) / 3,
+        ),
         ...(processOwner.startedAt === null
           ? { processOwner: { identity: processOwner, env: resolveDiagnosticProcessEnv(env) } }
           : {}),

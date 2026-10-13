@@ -159,6 +159,39 @@ describe("project GitHub search", () => {
     ]);
   });
 
+  it("keeps another query available when the shared affiliated page's initiating caller retires", async () => {
+    const gate = createDeferredCore<Response>();
+    const started = createDeferredCore();
+    const firstAbort = new AbortController();
+    const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+      if (new URL(requestUrl(input)).pathname === "/user/repos") {
+        started.resolve();
+        return gate.promise;
+      }
+      return json({ items: [repository("acme/public-project", "2026-10-01")] });
+    });
+    const options = { token: "synthetic-shared-retirement-token", fetchImpl };
+    const first = searchRemoteProjects("first", {
+      ...options,
+      signal: firstAbort.signal,
+      assertCurrent: () => firstAbort.signal.throwIfAborted(),
+    });
+    const rejected = expect(first).rejects.toThrow("First query retired");
+    await started.promise;
+    const second = searchRemoteProjects("second", { ...options, assertCurrent: () => {} });
+    firstAbort.abort(new Error("First query retired"));
+    gate.resolve(json([]));
+    await rejected;
+    await expect(second).resolves.toMatchObject({
+      projects: [{ fullName: "acme/public-project" }],
+    });
+    expect(
+      fetchImpl.mock.calls.filter(
+        ([input]) => new URL(requestUrl(input)).pathname === "/user/repos",
+      ),
+    ).toHaveLength(1);
+  });
+
   it("returns anonymous public results with a typed missing-credential state", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       json({
@@ -228,6 +261,55 @@ describe("project GitHub search", () => {
       "Authorization",
       "Bearer test-github-token",
     );
+  });
+
+  it("shares affiliated pages across queries, conditionally refreshes, and isolates credentials", async () => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const tasks: Promise<unknown>[] = [];
+    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+      const url = new URL(requestUrl(input));
+      const headers = new Headers(init?.headers);
+      if (headers.has("if-none-match")) {
+        return new Response(null, { status: 304 });
+      }
+      const data =
+        url.pathname === "/user/repos"
+          ? [repository("acme/shared-project", "2026-10-01")]
+          : { items: [] };
+      return new Response(JSON.stringify(data), { headers: { etag: '"page-v1"' } });
+    });
+    const options = {
+      token: "synthetic-shared-project-token",
+      fetchImpl,
+      trackExecution: <T>(run: () => Promise<T>) => {
+        const task = run();
+        tasks.push(task);
+        return task;
+      },
+    };
+    const results = await Promise.all(
+      ["shared", "project"].map((query) => searchRemoteProjects(query, options)),
+    );
+    expect(results.map((result) => result.projects.map((project) => project.fullName))).toEqual([
+      ["acme/shared-project"],
+      ["acme/shared-project"],
+    ]);
+    const affiliatedCalls = () =>
+      fetchImpl.mock.calls.filter(
+        ([input]) => new URL(requestUrl(input)).pathname === "/user/repos",
+      );
+    expect(affiliatedCalls()).toHaveLength(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    now += 60_001;
+    expect(await searchRemoteProjects("shared", options)).toMatchObject({ stale: true });
+    await Promise.all(tasks);
+    expect(await searchRemoteProjects("shared", options)).toEqual(results[0]);
+    expect(affiliatedCalls()).toHaveLength(2);
+    expect(new Headers(affiliatedCalls()[1]?.[1]?.headers).get("if-none-match")).toBe('"page-v1"');
+    await searchRemoteProjects("shared", { ...options, token: "synthetic-other-project-token" });
+    expect(affiliatedCalls()).toHaveLength(3);
+    expect(new Headers(affiliatedCalls()[2]?.[1]?.headers).has("if-none-match")).toBe(false);
   });
 
   it("accepts an explicitly prepared native credential without ambient token state", async () => {
@@ -338,6 +420,13 @@ describe("project GitHub search", () => {
     });
 
     expect(result.projects.map((project) => project.fullName)).toEqual(["acme/still-works"]);
+    expect(
+      await searchRemoteProjects("acme/still-works", {
+        env: { GH_TOKEN: "test-github-token" },
+        fetchImpl,
+      }),
+    ).toEqual(result);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
   it("returns marked stale normalized results while one refresh runs, then publishes fresh results", async ({
@@ -362,7 +451,7 @@ describe("project GitHub search", () => {
     };
     const first = await searchRemoteProjects("Cache-Query", options);
     now = 60_999;
-    expect(await searchRemoteProjects(" cache-query ", options)).toBe(first);
+    expect(await searchRemoteProjects(" cache-query ", options)).toEqual(first);
     now = 61_001;
     try {
       const stale = await withinTest(searchRemoteProjects("cache-query", options), signal);

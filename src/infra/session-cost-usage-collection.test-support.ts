@@ -4,17 +4,19 @@ import {
   readTranscriptStatsSync,
 } from "../config/sessions/session-accessor.sqlite-read.js";
 import { listSessionTranscriptInstances } from "../config/sessions/session-history.js";
+import { listDurableSqliteTargetPathsForSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
   listUsageCountedTranscriptStats as collectTranscriptStats,
-  resolveUsageCostTranscriptFile as resolveTranscriptFile,
+  resolveUsageCostTranscriptFiles,
   type UsageCostCollectionAccess,
 } from "./session-cost-usage-collection.js";
 
 // These storage tests inspect their own native handles; runtime collection uses worker custody.
-export function createNativeStorageUsageAccess(env?: NodeJS.ProcessEnv): UsageCostCollectionAccess {
+function createNativeStorageUsageAccess(env?: NodeJS.ProcessEnv): UsageCostCollectionAccess {
   return {
     env,
     materializeArchive: async (sourcePath) => materializeSessionArchiveForRead(sourcePath),
+    listSqliteMetadataStores: listDurableSqliteTargetPathsForSessionStorePath,
     readSqliteMetadata: async (_storePath, read) => read(),
     listSqliteInstances: async (agentId, storePath) =>
       listSessionTranscriptInstances({ agentId, storePath, env, projection: "list" }),
@@ -40,6 +42,8 @@ export function listUsageCountedTranscriptStats(
   });
 }
 
-export function resolveUsageCostTranscriptFile(sessionFile: string) {
-  return resolveTranscriptFile(sessionFile, createNativeStorageUsageAccess());
+export async function resolveUsageCostTranscriptFile(sessionFile: string) {
+  return (
+    await resolveUsageCostTranscriptFiles([sessionFile], createNativeStorageUsageAccess())
+  )[0];
 }

@@ -339,6 +339,7 @@ type GatewaySessionLifecycleEventParams = {
   event: LifecycleEventLike;
   assertCommitAllowed?: () => void;
   expectedWriter?: {
+    requireYielded?: true;
     runId: string;
     sessionId: string;
     lifecycleRevision?: string;
@@ -430,6 +431,14 @@ async function persistPreparedGatewaySessionLifecycleEvent(
           (entry.activeWriterRunId !== expected.runId && entry.lifecycleRunId !== expected.runId) ||
           (entry.activeWriterRunId !== undefined && entry.activeWriterRunId !== expected.runId) ||
           (entry.lifecycleRunId !== undefined && entry.lifecycleRunId !== expected.runId))
+      ) {
+        return null;
+      }
+      if (
+        expected?.requireYielded &&
+        (entry.status !== undefined ||
+          !Number.isFinite(entry.endedAt) ||
+          entry.pendingFinalDelivery !== undefined)
       ) {
         return null;
       }

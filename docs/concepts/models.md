@@ -67,12 +67,13 @@ Related model-config surfaces:
 
 Full key reference, defaults, and JSON5 examples: [Configuration reference](/gateway/config-agents#agent-defaults).
 
-Utility tasks reserve additional output tokens for reasoning-capable models,
-within the selected model's output limit, so reasoning can finish before the
-title, observer digest, or summary. Non-reasoning models keep the smaller task
-budget. This does not change the model's thinking settings or the task's timeout.
-For native Ollama, configured per-model `params.think`/`params.thinking` and
-`params.num_ctx` still apply; see [Ollama thinking control](/providers/ollama/advanced).
+Utility tasks request thinking off so their bounded output budgets go to the
+title, observer digest, or summary rather than hidden reasoning. This also
+overrides configured native Ollama `think`/`thinking` and OpenAI-compatible
+`enable_thinking` switches for these requests, without changing ordinary chat
+reasoning, other model parameters, or task timeouts. Providers that require
+reasoning still apply their supported minimum; see
+[Ollama thinking control](/providers/ollama/advanced).
 
 For the typed decision model class, available models, rubrics, and plugin API,
 see [Decision models](/concepts/decision-models).
@@ -324,7 +325,7 @@ configured `agentRuntime` remains the default:
 }
 ```
 
-The Gateway keeps one canonical model and checks each additional runtime against
+The Gateway keeps one underlying model and checks each additional runtime against
 the current account, route, and enabled harness. A choice does not grant access,
 change credentials, or rename the upstream model. Each runtime supplies its own
 availability, reasoning controls, context window, and placement capabilities.
@@ -433,6 +434,7 @@ Without a scope flag, selections change only the current session. `agents.defaul
 - A user-selected `/model` ref is strict for that session: if it becomes unreachable, the reply fails visibly instead of silently falling back through `agents.defaults.model.fallbacks`. Configured defaults and cron job primaries still use fallback chains.
 - If you select another model while a live switch is queued, the newer selection stays pending for the next safe retry opportunity.
 - `/model status` is the detailed view: auth candidates per provider, and (when configured) the provider endpoint `baseUrl` plus `api` mode.
+- `/status` and `session_status` report the selected credential source, including `models.json` for configured keys and `environment` for environment credentials. Custom providers sharing an endpoint keep their own credential selection; a different saved profile does not replace the selected source in status output.
 - Model refs are parsed by splitting on the first `/`. Type `provider/model`. If the model ID itself contains `/` (OpenRouter-style), include the provider prefix, for example `/model openrouter/moonshotai/kimi-k2`. If you omit the provider, OpenClaw tries an alias match first. It then tries a unique configured-provider match for that exact unprefixed model id. It then tries the configured default provider, which is a deprecated fallback. If that provider no longer exposes the configured default model, OpenClaw uses the first configured provider and model instead. This avoids surfacing a stale removed-provider default.
 - An alias cannot redirect an explicit registered or configured provider ref to another provider, including when the ref has an auth-profile suffix. A colliding alias remains usable with its own provider prefix. Slash-form aliases whose leading segment is a model namespace still work.
 - When inferring a provider, exact model ID case takes precedence over case-insensitive matches within the same configuration scope. A case-insensitive match is used only when it identifies one provider. Per-agent model entries take precedence over global entries and configured provider catalogs.
@@ -459,7 +461,7 @@ openclaw models auth list|add|login|paste-api-key|paste-token|setup-token|order
 
 <AccordionGroup>
   <Accordion title="Scanning (OpenRouter free models)">
-    `openclaw models scan` inspects OpenRouter's public free-model catalog and can check candidates for tool and image support live. The catalog itself is public, so metadata-only scans (`--no-probe`) need no key. Live checking and `--set-default`/`--set-image` require an OpenRouter API key (auth profile or `OPENROUTER_API_KEY`). Without one they fail closed to metadata-only output.
+    `openclaw models scan` inspects OpenRouter's public free-model catalog and can check candidates for tool and image support live. The catalog itself is public, so metadata-only scans (`--no-probe`) need no key. Live checking and `--set-default`/`--set-image` require an OpenRouter API key (auth profile or `OPENROUTER_API_KEY`). Without one they are limited to metadata-only output.
 
     Results rank by: image support, then tool latency, then context size, then parameter count. In a TTY, checked results prompt an interactive fallback selection. Non-interactive mode needs `--yes` to accept defaults.
 
@@ -469,6 +471,12 @@ openclaw models auth list|add|login|paste-api-key|paste-token|setup-token|order
 </AccordionGroup>
 
 ## Models registry (`models.json`)
+
+When a saved catalog has a malformed model `cost` block, OpenClaw skips that model
+and records a warning naming it. Other valid models in the same catalog remain
+available. The saved catalog is left unchanged; correct the model's pricing to
+make it available again. Other schema errors and invalid model API or token limits
+still reject the affected catalog, even on a model with malformed pricing.
 
 ### Hosted catalog updates
 

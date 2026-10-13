@@ -391,6 +391,91 @@ describe("convertResponsesMessages", () => {
     expect(JSON.stringify(input)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
   });
 
+  it.each(["stop", "error", "aborted"] as const)(
+    "keeps unsigned assistant replay bytes stable when older history retires (%s)",
+    (stopReason) => {
+      const retired = { ...assistant([{ type: "text", text: "Earlier answer" }]), timestamp: 1 };
+      const retained = {
+        ...assistant([
+          { type: "text", text: "Partial answer" },
+          { type: "text", text: "Another text block" },
+        ]),
+        responseId: "resp_retained",
+        timestamp: 2,
+        stopReason,
+        errorMessage: "off-wire synthetic diagnostic",
+        __openclaw: { diagnostic: "off-wire metadata" },
+      };
+      const original = structuredClone(retained);
+      const before = replay({ messages: [retired, retained] });
+      const after = replay({ messages: [retained] });
+      expect(after).toEqual(before.slice(1));
+      expect(JSON.stringify(after)).not.toContain("off-wire");
+      expect(retained).toEqual(original);
+
+      const repeated = replay({
+        messages: [retained, { ...retained, responseId: "resp_next" }],
+      });
+      const ids = repeated.flatMap((item) =>
+        "id" in item && typeof item.id === "string" ? [item.id] : [],
+      );
+      expect(ids.length).toBeGreaterThan(0);
+      expect(new Set(ids).size).toBe(ids.length);
+    },
+  );
+
+  it("keeps async prefixes and a failed tail distinct within one source response", () => {
+    const source = { responseId: "resp_shared", turnId: "turn_shared", timestamp: 2 };
+    const prefix = (id: string) => ({
+      ...assistant([
+        { type: "text", text: "Working" },
+        { type: "toolCall", id, name: "probe", arguments: {}, async: true },
+      ]),
+      ...source,
+      stopReason: "toolUse" as const,
+    });
+    const messages = [
+      prefix("call_one|fc_one"),
+      prefix("call_two|fc_two"),
+      {
+        ...assistant([{ type: "text", text: "Working" }]),
+        ...source,
+        stopReason: "error" as const,
+      },
+      makeTextToolResult("call_one|fc_one", "probe", "one", false, 3),
+      makeTextToolResult("call_two|fc_two", "probe", "two", false, 4),
+    ];
+    const input = replay({ messages });
+    const ids = input.flatMap((item) =>
+      item.type === "message" && item.role === "assistant" && "id" in item ? [item.id] : [],
+    );
+    expect(ids).toHaveLength(3);
+    expect(new Set(ids).size).toBe(3);
+    const retired = { role: "user" as const, content: "Earlier turn", timestamp: 1 };
+    expect(replay({ messages: [retired, ...messages] }).slice(1)).toEqual(input);
+  });
+
+  it("keeps the early turn identity when a response ID arrives later", () => {
+    const early = {
+      ...assistant([{ type: "text", text: "Working" }]),
+      turnId: "turn_early",
+      timestamp: 2,
+    };
+    expect(replay({ messages: [{ ...early, responseId: "resp_late" }] })).toEqual(
+      replay({ messages: [early] }),
+    );
+  });
+
+  it("keeps legacy same-timestamp inputs distinct without a source turn identity", () => {
+    const message = { ...assistant([{ type: "text", text: "Repeated answer" }]), timestamp: 1 };
+    const input = replay({ messages: [message, { ...message }] });
+    const ids = input.flatMap((item) =>
+      "id" in item && typeof item.id === "string" ? [item.id] : [],
+    );
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
+  });
+
   it("omits phase-tagged assistant replay ids without reasoning", () => {
     const input = replay(
       {
@@ -1571,6 +1656,49 @@ describe("processResponsesStream", () => {
     ]);
     expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(2);
   });
+
+  it.each(["item-done", "terminal"])(
+    "keeps provider name validation independent of consumer normalization at %s",
+    async (completion) => {
+      const output = createAssistantOutput();
+      const { stream, events } = createCapturedAssistantMessageEventStream();
+      const push = stream.push.bind(stream);
+      stream.push = (event) => {
+        // The runner normalizes aliases on the shared partial before completion.
+        if ("partial" in event && event.partial) {
+          for (const block of event.partial.content) {
+            if (block.type === "toolCall" && block.name === "tool_call") {
+              block.name = "dispatch_action";
+            }
+          }
+        }
+        push(event);
+      };
+      const item = toolItem("alias", '{"id":"sessions_spawn","args":{}}', "tool_call");
+      await processResponsesStream(
+        streamResponsesEvents([
+          itemEvent("added", { ...item, arguments: "" }, 0),
+          ...(completion === "item-done" ? [itemEvent("done", item, 0)] : []),
+          {
+            type: "response.completed",
+            response: { id: "resp_alias", status: "completed", output: [item] },
+          },
+        ]),
+        output,
+        stream,
+        nativeOpenAIModel,
+      );
+      expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(1);
+      expect(output.content).toEqual([
+        {
+          type: "toolCall",
+          id: "call_alias|fc_alias",
+          name: "dispatch_action",
+          arguments: { id: "sessions_spawn", args: {} },
+        },
+      ]);
+    },
+  );
 
   it("rejects a completed Responses tool call whose function name changed", async () => {
     const output = createAssistantOutput();

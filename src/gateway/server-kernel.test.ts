@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import {
   getConfigOverrides,
@@ -22,6 +22,7 @@ import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
   stageActivePluginRegistry,
+  waitForPluginRegistryRetirement,
 } from "../plugins/runtime.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
@@ -621,6 +622,11 @@ describe("createGatewayKernel", () => {
       kernel.kernel.unlockStartupMethods();
       kernel.kernel.markSidecarsReady();
 
+      expect(getReadiness()).toMatchObject({
+        ready: false,
+        failing: ["startup-sidecars"],
+      });
+      kernel.kernel.setDispatchReady(true);
       expectCoreAgentDatabaseReadiness(getReadiness, state);
       await expect(
         dispatchGatewayRequestInProcess("chat.send", chatParams, dispatchOptions),
@@ -784,7 +790,7 @@ describe("createGatewayKernel", () => {
     }
   });
 
-  it("dispatches health and an agent turn without creating a transport", async () => {
+  it("dispatches health and an agent turn without creating a transport", async ({ signal }) => {
     const port = await getFreePort();
     const state = await createOpenClawTestState({
       label: "gateway-kernel-no-transport",
@@ -930,6 +936,7 @@ describe("createGatewayKernel", () => {
         "config.auth.secrets-activate",
         "agents.github-profile-cleanup",
         "plugins.bootstrap-imports",
+        "cron.store-path",
         "plugins.bootstrap",
         "gateway.kernel-state",
         "node-desktop.runtime-import",
@@ -956,9 +963,9 @@ describe("createGatewayKernel", () => {
         "gateway.config-revision-key",
         "gateway.request-context",
         "sessions.projection",
+        "gateway.instance-runtime-import",
         "sessions.materialize",
         "gateway.lifetime-sidecars",
-        "gateway.instance-runtime-import",
       ]);
     } finally {
       try {
@@ -966,18 +973,20 @@ describe("createGatewayKernel", () => {
       } finally {
         try {
           flushDiagnosticsTimeline();
-          await state.cleanup();
-        } finally {
           if (capturedLoadedPluginRegistry) {
             restoreActivePluginRegistrySnapshot(capturedLoadedPluginRegistry);
           }
           prematureCleanupCalls = capturedRegistryCleanup.mock.calls.length;
           restoreActivePluginRegistrySnapshot(originalPluginRegistry);
+          await waitForPluginRegistryRetirement(ambientRegistry);
+        } finally {
+          await state.cleanup();
         }
       }
     }
     expect(prematureCleanupCalls).toBe(0);
-    await vi.waitFor(() => expect(capturedRegistryCleanup).toHaveBeenCalledOnce());
+    await withinTest(waitForPluginRegistryRetirement(ambientRegistry), signal);
+    expect(capturedRegistryCleanup).toHaveBeenCalledOnce();
     expect(inspectAccount).not.toHaveBeenCalled();
   });
 

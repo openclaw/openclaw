@@ -9,7 +9,7 @@ import type { RenderMessageGroupOptions } from "./chat-message-group-options.ts"
 import { renderChatTimestamp } from "./chat-message-timestamp.ts";
 import "./chat-session-activity.css";
 
-export type ChatSessionActivityProps = {
+type ChatSessionActivityProps = {
   group: MessageGroup;
   options: RenderMessageGroupOptions;
   renderEntry: (

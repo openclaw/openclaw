@@ -208,6 +208,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     ...options,
     store,
     getCleanupError: (record) => sessionAttachments.getCleanupError(record),
+    readStartStatus: providerLifecycle.readStartStatus,
     prepareCurrentBundle: async () => await prepareInstallation("bundle"),
     now,
     identityResolverFor: providerLifecycle.identityResolverFor,
@@ -357,7 +358,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     if (environmentId !== undefined) {
       return;
     }
-    await store.pruneTerminalEnvironments({ canPruneDemand: preparedPool.canPruneDemand });
+    // The resident inventory includes terminal rows and receives every committed store write.
+    if (store.list().length > 0) {
+      await store.pruneTerminalEnvironments({ canPruneDemand: preparedPool.canPruneDemand });
+    }
   };
 
   const reconcileOnce = (environmentId?: string) => {

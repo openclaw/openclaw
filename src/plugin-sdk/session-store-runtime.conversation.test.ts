@@ -6,6 +6,10 @@ import {
   isSessionEntryDataSql,
   observeHostDataSql,
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../state/openclaw-agent-db-resources.js";
 import {
@@ -18,7 +22,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import {
-  captureSessionEntryCurrentCheck,
+  captureSessionEntryCurrentCheckAsync,
   composeSessionEntryCommitGuards,
 } from "./session-binding-runtime.js";
 import {
@@ -38,6 +42,7 @@ describe("current conversation session binding", () => {
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-conversation-"));
     storePath = path.join(tempDir, "sessions.sqlite");
+    setRuntimeConfigSnapshot({});
   });
 
   afterEach(async () => {
@@ -46,10 +51,73 @@ describe("current conversation session binding", () => {
     closeOpenClawAgentDatabasesForTest();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
     fs.rmSync(tempDir, { recursive: true, force: true });
     // A Vitest thread cannot retire an escaped reclamation lease after this case.
     expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
   });
+
+  it.each(["policy", "conversation"] as const)(
+    "observes committed %s changes in async effect checks without host SQLite",
+    async (change) => {
+      const scope = { agentId: "main", storePath, sessionKey: "agent:main:reef:group:room" };
+      const address = {
+        ...scope,
+        channel: "reef",
+        accountId: "default",
+        kind: "group" as const,
+        peerId: "room",
+        threadId: "first",
+      };
+      const delivery = normalizeSessionDeliveryState({
+        context: { channel: "reef", accountId: "default", to: "group:room", threadId: "first" },
+      });
+      await upsertSessionEntry({
+        ...scope,
+        entry: {
+          sessionId: "original",
+          updatedAt: 100,
+          permissionMode: "workspace",
+          chatType: "group",
+          delivery,
+        },
+      });
+      const current = await captureSessionEntryCurrentCheckAsync({
+        ...scope,
+        fields: ["permissionMode"],
+        alternatives: [{ conversations: [{ ...address, sessionKey: scope.sessionKey }] }],
+      });
+      const hostSql = observeHostDataSql();
+      try {
+        await expect(current.isCurrent()).resolves.toBe(true);
+        await expect(current.assertCurrent()).resolves.toBeUndefined();
+        current.source.assertScopeCurrent();
+      } finally {
+        hostSql.restore();
+      }
+      expect(hostSql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+      await upsertSessionEntry({
+        ...scope,
+        sessionKey:
+          change === "conversation" ? `${scope.sessionKey}:thread:first` : scope.sessionKey,
+        entry: {
+          sessionId: change === "conversation" ? "replacement" : "original",
+          updatedAt: 200,
+          permissionMode: "full",
+          chatType: "group",
+          delivery,
+        },
+      });
+      const changedSql = observeHostDataSql();
+      try {
+        await expect(current.isCurrent()).resolves.toBe(false);
+        await expect(current.assertCurrent()).rejects.toThrow("selected session changed");
+      } finally {
+        changedSql.restore();
+      }
+      expect(changedSql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+    },
+  );
 
   it("reads conversation changes inside their owning transaction and respects rollback", async () => {
     const databaseOptions = { agentId: "main", env: { OPENCLAW_STATE_DIR: tempDir } };
@@ -118,15 +186,15 @@ describe("current conversation session binding", () => {
       entry: { sessionId: "original", updatedAt: 100 },
     });
     for (const sessionKey of [" main ", " AGENT:MAIN:main "]) {
-      const current = await captureSessionEntryCurrentCheck({ ...scope, sessionKey });
-      expect(current.isCurrent()).toBe(true);
+      const current = await captureSessionEntryCurrentCheckAsync({ ...scope, sessionKey });
+      await expect(current.isCurrent()).resolves.toBe(true);
       const hostSql = observeHostDataSql();
       try {
         await patchSessionEntry({
           ...scope,
           sessionKey,
           skipMaintenance: true,
-          assertCommitAllowed: current.assertCurrent,
+          assertCommitAllowed: current.source,
           update: () => ({ displayName: sessionKey }),
         });
       } finally {
@@ -175,16 +243,16 @@ describe("current conversation session binding", () => {
     }
     const linkType = process.platform === "win32" ? "junction" : "dir";
     fs.symlinkSync(firstDirectory, aliasDirectory, linkType);
-    const current = await captureSessionEntryCurrentCheck({
+    const current = await captureSessionEntryCurrentCheckAsync({
       ...scope,
       alternatives: [{ conversations: [{ ...address, sessionKey: conversationKey }] }],
       errorMessage: "Conversation source changed before title commit",
     });
-    expect(current.isCurrent()).toBe(true);
+    await expect(current.isCurrent()).resolves.toBe(true);
     await patchSessionEntry({
       ...scope,
       skipMaintenance: true,
-      assertCommitAllowed: current.assertCurrent,
+      assertCommitAllowed: current.source,
       update: () => ({ displayName: "Accepted title" }),
     });
     expect(getSessionEntry(scope)?.displayName).toBe("Accepted title");
@@ -199,7 +267,7 @@ describe("current conversation session binding", () => {
       patchSessionEntry({
         ...scope,
         skipMaintenance: true,
-        assertCommitAllowed: current.assertCurrent,
+        assertCommitAllowed: current.source,
         update: () => ({ displayName: "Rejected title" }),
       }),
     ).rejects.toThrow("Conversation source changed before title commit");
@@ -254,7 +322,7 @@ describe("current conversation session binding", () => {
       });
       const current =
         guardKind !== "opaque"
-          ? await captureSessionEntryCurrentCheck({
+          ? await captureSessionEntryCurrentCheckAsync({
               ...scope,
               matchGeneration: false,
               alternatives: [{ conversations: [{ ...address, sessionKey: scope.sessionKey }] }],
@@ -264,8 +332,8 @@ describe("current conversation session binding", () => {
       const assertCurrent =
         current &&
         (guardKind === "composed"
-          ? composeSessionEntryCommitGuards([current.assertCurrent])
-          : current.assertCurrent);
+          ? composeSessionEntryCommitGuards([current.source])
+          : current.source);
       if (current) {
         const hostSql = observeHostDataSql();
         try {

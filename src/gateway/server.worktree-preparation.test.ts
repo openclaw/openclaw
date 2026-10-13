@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import { resolveBootstrapContextForRun } from "../agents/bootstrap-files.js";
 import { requireGit } from "../agents/worktrees/git.js";
 import { getRegistryWorktree } from "../agents/worktrees/registry.test-support.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import bootstrapExtraFilesHook from "../hooks/bundled/bootstrap-extra-files/handler.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
@@ -52,6 +53,7 @@ it.each([
           },
         },
       };
+      setRuntimeConfigSnapshot(cfg);
       if (hookEvent) {
         registerInternalHook(hookEvent, bootstrapExtraFilesHook);
       }

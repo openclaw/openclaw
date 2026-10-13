@@ -86,7 +86,15 @@ describe("worktree template custody", () => {
     const unavailableValidation = async () => {
       throw new Error("validation must not hold up a concurrent clone");
     };
-    const second = await prepareWorktreeTemplate({ ...params, validate: unavailableValidation });
+    const second = await allocation.withWorktreeMutationLease(
+      { env, ...options, id: `template:${params.cacheKey}` },
+      async () =>
+        prepareWorktreeTemplate({
+          ...params,
+          validate: unavailableValidation,
+          options: { ...options, waitBudget: { remainingMs: 0 } },
+        }),
+    );
     expect(second?.id).toBe(first?.id);
     expect(await fs.readFile(path.join(second!.path, "source"), "utf8")).toBe("source");
     await first?.release();
@@ -98,7 +106,7 @@ describe("worktree template custody", () => {
     await next?.release();
   });
 
-  it.each(["settled", "worker", "process"])(
+  it.each(["settled", "process"])(
     "retains a failed builder only while its native outcome is uncertain (%s)",
     async (kind) => {
       const uncertain = kind !== "settled";

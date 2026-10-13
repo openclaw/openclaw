@@ -51,6 +51,15 @@ the original refusal in its output. The updater can then revalidate and restart
 the preserved service definition. Actual loss of native service authority still
 leaves recovery pending until ownership and restoration can be verified.
 
+Load slows updates rather than establishing failure: startup inspections and
+recovery backlogs keep acceptance pending within the installation owner's bounded
+readiness budget. The managed-release controller waits for the marker agent's
+admission and a responsive Gateway, and retries timed-out marker dispatch with
+its original idempotency key only after proving the selected process is healthy.
+The restored predecessor uses the same acceptance rules. Wrong identity, physical
+corruption, a wrong marker reply, or exhaustion of the readiness budget still
+requires failure recovery.
+
 Channel health collection timeouts are warnings during post-update verification.
 The Gateway must still answer, report the expected version and build, pass HTTP
 readiness, and pass the normal health-settle checks. An explicit negative channel
@@ -757,6 +766,23 @@ against that receipt before replacing any live database, so later snapshot chang
 are rejected. This saving requires the installed updater to contain the fix;
 older updaters retain their original backup path.
 
+The native supervisor's `update migrate --backup-root` capture runs with the
+Gateway stopped. Checkpointed database files use filesystem clones when available
+(including APFS and reflink-capable Linux filesystems), with an independent byte
+copy on other filesystems. The capture checks the SQLite header/schema, records
+one SHA-256 digest for the existing restore contract, and verifies that source
+files and journal state stayed unchanged. Clone creation avoids copying payload
+pages, but the required digest still reads each snapshot once. Retained WAL or
+rollback journals use the existing coherent, fully verified snapshot path.
+
+Every discovered agent database remains covered even during a shared-state-only
+schema upgrade: Doctor can write agent bookkeeping without advancing its schema.
+Update-time Doctor defers media content maintenance on databases whose schema is
+already current; explicit `openclaw doctor --fix` still performs that maintenance.
+Databases needing schema repair or carrying recorded corruption retain the repair
+path. This avoids repeated backup integrity audits and unnecessary writable opens
+while the service is stopped; startup validation retains its own policy.
+
 Settled, verified successful activation removes the current update's database
 snapshots, together with the old package backup. Rollback, failed or unverified
 completion, and restore refusal keep them. Cleanup failures produce a maintenance warning with
@@ -1170,6 +1196,10 @@ the sentinel.
 
     The updater prepares the built runtime (`dist`, `dist-runtime`, and dependencies, including nested workspace outputs) on the destination filesystem and removes the temporary Git worktree registration before changing the live checkout. Cleanup failures remain visible in the update result. If an interruption leaves staging behind, artifact-area staging does not dirty the checkout or block the next update's clean check.
 
+    On Windows, runtime staging recreates directory links as junctions without requiring elevation or Developer Mode, instead of expanding them into directories. Packaged plugin dependencies use the shared SDK alias instead of checkout back-links and omit ancestor targets. Failed runtime staging leaves the original checkout and build intact; the updater verifies that build before restarting a service it stopped. Admission and publication refusals keep their caller's classification, and uncertain command cleanup still prevents restart.
+
+    These protections belong to the installed updater. A candidate cannot repair an older updater that fails while copying it; update the source installation through its [manual method](/install/updating/update-methods) first.
+
     Dev can walk back up to 10 commits to find the newest buildable version. Confirmed ENOSPC storage failures stop immediately with `preflight-insufficient-space`; free space on the preflight staging and package-manager store filesystems before retrying. Shared package-manager stores are not deleted. Update builds skip TypeScript declaration generation by default. Set `OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0` to explicitly request declarations. Set `OPENCLAW_UPDATE_PREFLIGHT_LINT=1` to also run source lint during this preflight; lint runs in constrained serial mode because user update hosts are often smaller than CI runners.
 
     The updater already running owns staging. Artifact-area staging first shipped in 2026.8.1; updating to a commit that contains it cannot change an older published updater's first hop, which still stages under the system temporary directory.
@@ -1199,7 +1229,9 @@ the sentinel.
 
   </Step>
   <Step title="Sync plugins">
-    Against the installed target, syncs plugins to the active channel before restarting the managed service. Dev uses bundled plugins; stable and beta use npm or ClawHub while preserving recorded source choices. A changed plugin snapshot or deferred model retirement recorded by this update runs fresh Doctor repairs. Unchanged plugins with no pending repair do not run another full Doctor pass. The updater then revalidates the service owner, starts the Gateway, and verifies the final snapshot.
+    Against the installed target, syncs plugins to the active channel before restarting the managed service. Dev uses bundled plugins; stable and beta use npm or ClawHub while preserving recorded source choices. A changed plugin snapshot, pending plugin data/settings upgrade, or deferred model retirement recorded by this update runs fresh Doctor repairs. Unchanged plugins with no pending repair do not run another full Doctor pass. The updater then revalidates the service owner, starts the Gateway, and verifies the final snapshot.
+
+    If plugin data/settings upgrades remain pending after Doctor, the update records a warning naming each plugin and its recovery command, such as `openclaw doctor --fix`. Doctor-only and after-session repairs keep their existing offline ownership requirements; pending work does not by itself fail the core update. Skipped plugin updates also print the plugin name and skip reason alongside the summary counts.
 
     The updater performing plugin convergence owns this deferred-repair decision. Package updates that delegate this work to the new version can use its repair immediately. If an older updater leaves model retirement deferred, run the newly installed `openclaw doctor --fix` once to finish it. Later updates use their own run history to complete the follow-up; they do not use another update's pending marker.
 

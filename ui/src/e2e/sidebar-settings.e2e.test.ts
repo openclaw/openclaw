@@ -388,14 +388,7 @@ suite.define(() => {
       await page.getByLabel("Gateway secret", { exact: true }).fill("replacement-owner-token");
       await page.getByRole("button", { name: "Apply and reconnect", exact: true }).click();
       await expect
-        .poll(() =>
-          page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-            };
-            return app.runtime?.context.gateway.snapshot.phase;
-          }),
-        )
+        .poll(() => page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase))
         .toBe("connected");
       await page.keyboard.press("Escape");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");

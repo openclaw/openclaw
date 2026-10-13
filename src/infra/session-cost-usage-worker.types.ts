@@ -83,6 +83,8 @@ export type UsageCostWorkerInput = {
   kind: "usage-cost";
   location: UsageCostWorkerLocation;
   databases: UsageCostWorkerDatabase[];
+  /** Archive metadata discovery shares the roster captured before database custody. */
+  archiveStorePaths: string[];
   operation: UsageCostWorkerOperation;
   /** Captured transcript selection; supplied actor work never discovers disk artifacts. */
   transcriptFiles?: string[];
@@ -143,7 +145,6 @@ export type UsageCostWorkerReply =
 
 type UsageCostPreparedRollup = {
   key: string;
-  previousValue: Uint8Array | null;
   value: Uint8Array;
   blob: Uint8Array;
   updatedAt: number;

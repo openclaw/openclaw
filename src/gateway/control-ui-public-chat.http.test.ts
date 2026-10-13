@@ -5,6 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { reloadControlUiDocument } from "../../ui/src/app/stale-chunk-reload.ts";
 import { sessionNavigationTarget } from "../../ui/src/lib/sessions/route-navigation.ts";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { computeInlineScriptHashes } from "./control-ui-csp.js";
 import { AUTH_TOKEN, createTestGatewayServer, sendRequest } from "./server-http.test-harness.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
@@ -32,21 +36,13 @@ vi.mock(import("./session-row-projection-access.js"), async (importOriginal) => 
   getSessionRowProjection: () => projection,
 }));
 const key = "agent:main:dashboard:12345678-aaaa-4000-8000-000000000001";
-const projection = createSessionRowProjectionFixture({
-  cfg: { agents: { entries: { main: {} } } },
-  store: {
-    [key]: {
-      sessionId: "generation",
-      updatedAt: 1,
-      publicShare: { id: "a".repeat(48), sessionId: "generation", createdAt: 1 },
-    },
-  },
-});
+let projection: ReturnType<typeof createSessionRowProjectionFixture>;
 const route = "/control/chat/main/launch-12345678aaaa40008000000000000001";
 const servers: Server[] = [];
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 function server(mode: "token" | "password" = "token") {
   const cfg = { gateway: { publicOrigin: "https://example.test", trustedProxies: ["127.0.0.1"] } };
+  setRuntimeConfigSnapshot(cfg);
   const root = dirs.make("chat-deeplink-");
   fs.writeFileSync(
     path.join(root, "index.html"),
@@ -79,6 +75,18 @@ function request(
   });
 }
 beforeEach(() => {
+  setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
+  projection = createSessionRowProjectionFixture({
+    cfg: { agents: { entries: { main: {} } } },
+    store: {
+      [key]: {
+        sessionId: "generation",
+        updatedAt: 1,
+        publicShare: { id: "a".repeat(48), sessionId: "generation", createdAt: 1 },
+      },
+    },
+  });
+
   resolveSession.mockReset().mockResolvedValue({ key, agentId: "main" });
   reader.mockReset().mockResolvedValue({
     title: "Public launch notes",
@@ -92,6 +100,8 @@ afterEach(() => {
   for (const instance of servers.splice(0)) {
     instance.emit("close");
   }
+  projection.dispose();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("canonical anonymous HTTP entry", () => {

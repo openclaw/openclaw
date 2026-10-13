@@ -19,7 +19,6 @@ export async function recordSkippedCronRuns(params: {
   source: SchedulerSource;
   change: CronRuntimeMutationInputs["cron.recordSkippedRuns"]["change"];
   nowMs: number;
-  assertCurrent?: () => void;
   afterCommit: (outcome: SkippedOutcome, historySource: CronRunHistorySource) => Promise<void>;
 }): Promise<void> {
   const { state, source } = params;
@@ -29,10 +28,9 @@ export async function recordSkippedCronRuns(params: {
     ? state.deps.resolveDefaultAgentId()
     : state.deps.defaultAgentId;
   const historySource: CronRunHistorySource = {
-    ...source,
+    context: source.context,
+    storeKey: source.storeKey,
     defaultAgentId: defaultAgentId ?? state.deps.defaultAgentId,
-    // A committed completion keeps its original attribution when routing refreshes.
-    assertCurrent: () => source.assertStorageCurrent(),
   };
   let failure: { error: unknown } | undefined;
   try {
@@ -40,10 +38,7 @@ export async function recordSkippedCronRuns(params: {
       context: source.context,
       type: "cron.recordSkippedRuns",
       input: { storeKey: source.storeKey, change },
-      assertCurrent() {
-        source.assertCurrent();
-        params.assertCurrent?.();
-      },
+      assertCurrent: () => source.assertCurrent(),
       // Routing and activity may change after submission; this snapshot owns the outcome.
       snapshot: {
         nowMs: params.nowMs,
@@ -53,6 +48,7 @@ export async function recordSkippedCronRuns(params: {
           state.deps.defaultAgentId,
         ),
         cronConfig: structuredClone(state.deps.cronConfig),
+        failureRepairTimeoutMs: state.deps.failureRepairTimeoutMs,
         ownership: (state.store?.jobs ?? []).map((job) => ({
           jobId: job.id,
           active: isCronJobActive(job.id),
@@ -71,7 +67,6 @@ export async function recordSkippedCronRuns(params: {
   }
   if (committed) {
     try {
-      historySource.assertCurrent();
       await params.afterCommit(committed, historySource);
     } catch (error) {
       failure ??= { error };

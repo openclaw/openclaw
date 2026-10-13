@@ -445,7 +445,7 @@ describe("settings sidebar search", () => {
       "Communications",
       "Talk",
       "Devices",
-      "Cloud workers",
+      "Cloud environments",
     ]);
 
     enterQuery("does-not-exist");

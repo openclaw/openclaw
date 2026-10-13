@@ -7,6 +7,7 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import { readSessionPendingInputByKey } from "./session-accessor.sqlite-pending-inputs.js";
@@ -20,6 +21,63 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it.each([false, true])(
+  "commits initialized first input from an absent preimage (warm=%s)",
+  async (warm) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const f = fixture();
+      const scope = { ...f.scope, sessionKey: "agent:main:first-input", sessionId: "first-input" };
+      const input = expectDefined(
+        await acquireSessionInputActor(
+          { ...scope, target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] } },
+          { assertCurrent() {}, assertReadable() {} },
+        ),
+        "initial input actor",
+      );
+      const recorder = createUserTurnTranscriptRecorder({
+        message: {
+          role: "user",
+          content: "Initial lifecycle",
+          timestamp: 1,
+          idempotencyKey: "first-input:user",
+        },
+        target: {
+          ...scope,
+          expectedSessionId: scope.sessionId,
+          sessionEntry: undefined,
+          initialSessionEntry: {
+            sessionId: scope.sessionId,
+            updatedAt: 1,
+            status: "done",
+            abortedLastRun: false,
+          },
+        },
+        updateMode: "none",
+      });
+      try {
+        if (warm) {
+          await input.actor.read({ assertCurrent() {}, authorize() {} });
+        }
+        bindUserTurnInputActor(recorder, { phase: "acceptInput", acquire: async () => input });
+        await expect(recorder.persistApproved()).resolves.toMatchObject({ appended: true });
+        expect(readExactSessionEntryRow(f.database, scope.sessionKey)?.entry).toMatchObject({
+          sessionId: scope.sessionId,
+          status: "done",
+          abortedLastRun: false,
+        });
+        expect(
+          readTranscriptEventRows(f.database, scope.sessionId)
+            .map((row) => JSON.parse(row.eventJson))
+            .filter((event) => event.type === "message"),
+        ).toHaveLength(1);
+      } finally {
+        await input.actor.release();
+      }
+    });
+  },
+);
+
 it.each([
   { phase: "acceptInput", change: "metadata" },
   { phase: "adoptRun", change: "metadata" },
@@ -29,6 +87,7 @@ it.each([
   "preserves input custody across a $change write before $phase admission",
   async ({ phase, change }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const f = fixture();
       const input = expectDefined(
         await acquireSessionInputActor(
@@ -106,6 +165,7 @@ it.each([
 
 it("retains actor-bound recorder custody through a durable worker publication failure", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const f = fixture();
     const input = await acquireSessionInputActor(
       { agentId: f.scope.agentId, storePath: f.scope.storePath, target: f.target },
@@ -191,6 +251,7 @@ it.each(["fresh", "replay"])(
   "fences unstaged original input at COMMIT while retaining %s semantics",
   async (mode) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const f = fixture();
       let live = true;
       const sourceCommitted = vi.fn();
@@ -254,6 +315,7 @@ it.each(["worker", "native"] as const)(
   "retains a new Goal's committed store through a %s postcommit failure",
   async (writer) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:goal-source-custody",

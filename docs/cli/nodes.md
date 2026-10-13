@@ -86,7 +86,7 @@ Flags:
 
 The invocation timeout covers Gateway checks, node wake-up, readiness retries, and the node response. Clock adjustments do not reset or extend this elapsed-time budget.
 
-`system.run` and `system.run.prepare` are blocked here. Use the `exec` tool with `host=node` for shell execution instead. `system.which` is allowed through `invoke`.
+`system.run` and `system.run.prepare` are blocked here. Use the `exec` tool with `host=node` for shell execution instead. `system.which` is allowed through `invoke`. `fs.listDir` returns sub-directories only (the new-session folder picker contract); use the `exec` tool with `host=node` to list files or full directory contents.
 
 ## Notify, push, location, screen
 

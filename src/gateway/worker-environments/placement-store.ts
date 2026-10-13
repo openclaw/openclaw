@@ -28,6 +28,7 @@ import {
   preparePlacementPreservationRead,
   preparePlacementTurnClaimAuthority,
   prepareSessionPlacementRead,
+  readPlacementRecoveryCandidates,
   readPlacementProjection,
   type PlacementTurnClaimAuthority,
 } from "./placement-turn-authority.js";
@@ -321,15 +322,17 @@ export function createWorkerSessionPlacementStore(
     },
 
     async readRecoveryCandidates() {
-      const result = await executeExistingOpenClawStateRead(
-        { path },
-        { type: "workers.placementRecoveryCandidates" },
-        { current: true },
-      );
-      if (!result || !result.ok || result.type !== "workers.placementRecoveryCandidates") {
-        throw new Error("Worker placement recovery candidates source is unavailable");
-      }
-      return result.candidates;
+      return await readPlacementRecoveryCandidates(path, async () => {
+        const result = await executeExistingOpenClawStateRead(
+          { path },
+          { type: "workers.placementRecoveryCandidates" },
+          { current: true },
+        );
+        if (!result || !result.ok || result.type !== "workers.placementRecoveryCandidates") {
+          throw new Error("Worker placement recovery candidates source is unavailable");
+        }
+        return result.candidates;
+      });
     },
 
     /** @deprecated Await getManyAsync; retained through the next Plugin SDK major. */

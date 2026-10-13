@@ -19,12 +19,16 @@ import {
   toDatabaseOptions,
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
-import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
+import { sanitizeTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
 import type {
   SessionTranscriptTurnMessageAppend,
   SessionTranscriptTurnWriteContext,
 } from "./session-accessor.types.js";
-import type { SessionActorAuthority, SessionActorPhaseResults } from "./session-actor-contract.js";
+import type {
+  SessionActorAuthority,
+  SessionActorAuthorityFacts,
+  SessionActorPhaseResults,
+} from "./session-actor-contract.js";
 import { runSessionActorCommand } from "./session-actor-scope.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
@@ -43,6 +47,7 @@ import {
   type SessionSourceValidation,
 } from "./session-source-authority.js";
 import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { restoreSessionTurnColdTranscript } from "./session-turn-cold.js";
 import {
   completeSessionTurnPublication,
   publishCommittedSessionTurn,
@@ -139,7 +144,9 @@ export async function appendSessionTurnInWorker(
     relocation: custody?.relocation,
   };
   const actor = inputActor?.actor;
+  let inputExpectedState = options.expectedSessionState;
   const fixedVoiceTranscript =
+    !actor &&
     !incognito &&
     !memory &&
     Boolean(options.voiceTranscript) &&
@@ -195,40 +202,12 @@ export async function appendSessionTurnInWorker(
       if (incognito || memory) {
         return undefined;
       }
-      const { restoreSessionColdTranscript, SessionColdTurnReboundError } =
-        await import("./session-cold-storage.js");
-      assertCurrent();
-      try {
-        await restoreSessionColdTranscript(
-          { ...scope, storePath: scope.path },
-          assertCurrent,
-          undefined,
-          options.keyFormat === "agent-qualified"
-            ? {
-                kind: "turn",
-                agentId: scope.agentId,
-                sessionKey: scope.sessionKey,
-                options: {
-                  keyFormat: options.keyFormat,
-                  expectedSessionId: options.expectedSessionId,
-                  selectedSessionId: options.selectedSessionId,
-                  selectedLifecycleRevision: options.selectedLifecycleRevision,
-                  expectedLifecycleRevision: options.expectedLifecycleRevision,
-                  expectedWriterRunId: options.expectedWriterRunId,
-                  expectedSessionState: options.expectedSessionState,
-                  initialSessionEntry: plan.options.initialSessionEntry,
-                },
-                goalOperation: options.sessionTurnMutation?.operation,
-              }
-            : undefined,
-        );
-      } catch (error) {
-        if (error instanceof SessionColdTurnReboundError) {
-          return { ...error.result, sessionFile: options.sessionFile };
-        }
-        throw error;
-      }
-      return undefined;
+      return restoreSessionTurnColdTranscript(
+        scope,
+        options,
+        assertCurrent,
+        plan.options.initialSessionEntry,
+      );
     };
     if (!prepareColdTranscript) {
       const rebound = await restore();
@@ -291,14 +270,12 @@ export async function appendSessionTurnInWorker(
       async run(prepareTurn, commit) {
         if (fixedVoiceTranscript) {
           // Fixed voice events keep transaction-local validation without a planning read.
-          plan.options.messages = messages.map(({ config, ...message }) => ({
+          plan.options.messages = messages.map(({ config: _messageConfig, ...message }) => ({
             ...message,
             message:
               options.atomicGroup === true
                 ? message.message
-                : redactTranscriptMessageForStorage(message.message, {
-                    config: config ?? options.config,
-                  }),
+                : sanitizeTranscriptMessageForStorage(message.message),
           }));
           return commit();
         }
@@ -312,6 +289,9 @@ export async function appendSessionTurnInWorker(
           }
           if (ownerSource) {
             acceptSessionSourceValidation(ownerSource, prepared.ownerSourceValidation);
+          }
+          if (actor) {
+            inputExpectedState ??= prepared.expectedSessionState;
           }
           return prepared;
         };
@@ -344,6 +324,7 @@ export async function appendSessionTurnInWorker(
         );
         // Keyed user messages may already own accepted bytes and skip host preparation.
         const needsPreparation =
+          actor ||
           sessionTurnMutation ||
           accepted.some(
             (append) =>
@@ -386,7 +367,6 @@ export async function appendSessionTurnInWorker(
         for (const [index, append] of plan.options.messages.entries()) {
           const hooks = accepted[index]!.workerPreparation;
           const facts = preparation?.messages[index];
-          const config = accepted[index]!.config ?? options.config;
           const prepare =
             hooks?.prepareMessageAfterIdempotencyCheckAsync ??
             hooks?.prepareMessageAfterIdempotencyCheck;
@@ -407,7 +387,7 @@ export async function appendSessionTurnInWorker(
             append.freshGuard = true;
           }
           if (!facts?.pending && message !== undefined && options.atomicGroup !== true) {
-            message = redactTranscriptMessageForStorage(message, { config });
+            message = sanitizeTranscriptMessageForStorage(message);
           }
           plan.options.messages[index] = {
             ...append,
@@ -453,6 +433,7 @@ export async function appendSessionTurnInWorker(
     const run = () => {
       if (actor && inputActor) {
         let authorityFailure: unknown;
+        let previousEntry: SessionActorAuthorityFacts["entry"];
         const checkAuthority = (check: () => void) => {
           try {
             check();
@@ -465,6 +446,9 @@ export async function appendSessionTurnInWorker(
           assertCurrent: () => checkAuthority(assertCurrent),
           authorize(stage, state, publication) {
             checkAuthority(() => {
+              if (stage === "transaction" && publication === undefined) {
+                previousEntry = state.entry;
+              }
               inputActor.storageAuthority?.authorize(stage, state, publication);
               operation.onTransactionFacts(publication);
               if (isRecord(publication) && publication.kind === "session-turn") {
@@ -477,8 +461,8 @@ export async function appendSessionTurnInWorker(
         };
         return operation.run(
           async () => {
-            const hot = inputActor.snapshot(authority) ?? (await actor.read(authority));
-            const replicaPreparation = prepareSessionInputFromReplica(plan, hot, scope);
+            const hot = inputActor.snapshot(authority);
+            const replicaPreparation = hot && prepareSessionInputFromReplica(plan, hot, scope);
             if (replicaPreparation) {
               return replicaPreparation;
             }
@@ -517,7 +501,7 @@ export async function appendSessionTurnInWorker(
             );
           },
           async () => {
-            let expectedState = options.expectedSessionState;
+            let expectedState = inputExpectedState;
             let candidate: SessionTurnCommitted | undefined;
             const actorOutcome = await runSessionActorCommand<
               SessionActorPhaseResults["acceptInput" | "adoptRun"]
@@ -525,11 +509,16 @@ export async function appendSessionTurnInWorker(
               { ...actor, snapshot: (current) => inputActor.snapshot(current) },
               authority,
               async (snapshot) => {
-                const before = snapshot ?? (await actor.read(authority));
+                const before = snapshot;
                 // Rebase the cache version, retaining the originally selected lifecycle.
-                expectedState ??= buildRestartRecoveryExpectedState(
-                  before.entry ?? { sessionId: options.expectedSessionId, updatedAt: 0 },
-                );
+                if (before) {
+                  expectedState ??= buildRestartRecoveryExpectedState(
+                    before.entry ?? { sessionId: options.expectedSessionId, updatedAt: 0 },
+                  );
+                }
+                if (!expectedState) {
+                  throw new Error("Input preparation omitted its lifecycle expectation");
+                }
                 const record = (turn: SessionTurnCommitted | undefined) => {
                   if (!turn) {
                     throw new Error("Input actor omitted its committed turn");
@@ -542,7 +531,7 @@ export async function appendSessionTurnInWorker(
                       publishIncognitoSessionEntry(
                         incognito.actor,
                         scope.sessionKey,
-                        before.entry,
+                        previousEntry,
                         turn.result.sessionEntry,
                       );
                     } else if (
@@ -553,7 +542,7 @@ export async function appendSessionTurnInWorker(
                       publishCommittedSessionIdentity(
                         scope.agentId,
                         inputActor.target.readSource.databaseIdentity,
-                        new Map(before.entry ? [[scope.sessionKey, before.entry]] : []),
+                        new Map(previousEntry ? [[scope.sessionKey, previousEntry]] : []),
                         new Map([[scope.sessionKey, turn.result.sessionEntry]]),
                       );
                     }
@@ -563,7 +552,7 @@ export async function appendSessionTurnInWorker(
                   commandId: randomUUID(),
                   phaseId: `${inputActor.phase}:${options.expectedSessionId}`,
                   // Memory commands use their FIFO owner's current state, not a cached version.
-                  expected: memory ? undefined : before.version,
+                  expected: memory ? undefined : before?.version,
                   expectedState,
                   lifecycle: {},
                   turn: plan,

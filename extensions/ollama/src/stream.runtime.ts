@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
-import { parseJsonPreservingUnsafeIntegers } from "openclaw/plugin-sdk/json-unsafe-integers";
 import type {
   AssistantMessage,
   TextContent,
@@ -46,6 +45,7 @@ import { resolveOllamaBaseUrlForRun } from "./provider-base-url.js";
 import { buildOllamaBaseUrlSsrFPolicy, isOllamaCloudModel } from "./provider-models.js";
 import {
   createOllamaVisibleContentSanitizer,
+  isLikelyGarbledVisibleText,
   sanitizeOllamaFinalVisibleContent,
 } from "./sanitizers/visible-content.js";
 import {
@@ -61,7 +61,7 @@ import {
   type OllamaToolCall,
   type OllamaToolCallNameOptions,
 } from "./stream-messages.js";
-import { checkNdjsonRecordCap } from "./stream-ndjson-cap.js";
+import { parseNdjsonStream, type OllamaChatResponse } from "./stream-ndjson.js";
 import type { OllamaLocalService } from "./stream-registration.js";
 import { normalizeOllamaToolCallName, wrapOllamaToolNames } from "./tool-name-aliases.js";
 import { normalizeOllamaToolSchema } from "./tool-schema.runtime.js";
@@ -73,11 +73,6 @@ export const OLLAMA_NATIVE_BASE_URL = OLLAMA_DEFAULT_BASE_URL;
 const OLLAMA_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
 const OLLAMA_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
 const OLLAMA_STREAM_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
-const GARBLED_VISIBLE_TEXT_MODEL_RE = /\b(?:glm|kimi)\b/i;
-const GARBLED_VISIBLE_TEXT_MIN_CHARS = 80;
-const GARBLED_VISIBLE_TEXT_SYMBOL_RE = /[$#%&="'_~`^|\\/*+\-[\]{}()<>:;,.!?]/gu;
-const LETTER_OR_DIGIT_RE = /[\p{L}\p{N}]/gu;
-
 function throwIfOllamaStreamAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw new Error("Request was aborted");
@@ -106,45 +101,6 @@ function createOllamaStreamCooperativeScheduler(signal?: AbortSignal) {
       throwIfOllamaStreamAborted(signal);
     },
   };
-}
-
-function countMatches(text: string, re: RegExp): number {
-  re.lastIndex = 0;
-  return Array.from(text.matchAll(re)).length;
-}
-
-function maxCharacterFrequency(text: string): number {
-  const counts = new Map<string, number>();
-  let max = 0;
-  for (const char of text) {
-    const count = (counts.get(char) ?? 0) + 1;
-    counts.set(char, count);
-    max = Math.max(max, count);
-  }
-  return max;
-}
-
-function isLikelyGarbledVisibleText(params: { text: string; modelId: string }): boolean {
-  if (!GARBLED_VISIBLE_TEXT_MODEL_RE.test(params.modelId)) {
-    return false;
-  }
-  const compact = params.text.replace(/\s+/g, "");
-  if (compact.length < GARBLED_VISIBLE_TEXT_MIN_CHARS) {
-    return false;
-  }
-
-  const letterOrDigitCount = countMatches(compact, LETTER_OR_DIGIT_RE);
-  const symbolCount = countMatches(compact, GARBLED_VISIBLE_TEXT_SYMBOL_RE);
-  const maxFrequency = maxCharacterFrequency(compact);
-  const letterOrDigitRatio = letterOrDigitCount / compact.length;
-  const symbolRatio = symbolCount / compact.length;
-  const dominantCharacterRatio = maxFrequency / compact.length;
-
-  return (
-    letterOrDigitRatio < 0.08 &&
-    symbolRatio > 0.6 &&
-    (dominantCharacterRatio > 0.22 || /[$#%&="'_~`^|\\/*+\-[\]{}()<>:;,.!?]{12,}/u.test(compact))
-  );
 }
 
 export { resolveOllamaBaseUrlForRun } from "./provider-base-url.js";
@@ -309,27 +265,6 @@ interface OllamaTool {
   };
 }
 
-interface OllamaChatResponse extends Record<string, unknown> {
-  model: string;
-  created_at: string;
-  message: {
-    role: "assistant";
-    content: string;
-    thinking?: string;
-    reasoning?: string;
-    tool_calls?: OllamaToolCall[];
-  };
-  done: boolean;
-  done_reason?: string;
-  total_duration?: number;
-  load_duration?: number;
-  prompt_eval_count?: number;
-  prompt_eval_cached_count?: number;
-  prompt_eval_duration?: number;
-  eval_count?: number;
-  eval_duration?: number;
-}
-
 function safeJsonLength(value: unknown): number {
   try {
     const serialized = JSON.stringify(value);
@@ -471,7 +406,7 @@ export function buildAssistantMessage(
       ? { state: "available", promptTokens, totalTokens: promptTokens + outputTokens }
       : undefined;
 
-  return buildStreamAssistantMessage({
+  const message = buildStreamAssistantMessage({
     model: modelInfo,
     content,
     stopReason: resolveOllamaStopReason(response),
@@ -481,78 +416,24 @@ export function buildAssistantMessage(
       output: outputTokens,
       cacheRead: cacheRead ?? 0,
       cacheTelemetry: { state: cacheRead === undefined ? "unavailable" : "available" },
+      usageReport: { state: contextUsage ? "available" : "unavailable" },
       totalTokens: promptTokens + outputTokens,
       ...(contextUsage ? { contextUsage } : {}),
     },
   });
-}
-
-export async function* parseNdjsonStream(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-): AsyncGenerator<OllamaChatResponse> {
-  const decoder = new TextDecoder("utf-8", { fatal: true });
-  let buffer = "";
-  let pendingRecordBytes = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      pendingRecordBytes = checkNdjsonRecordCap(value, pendingRecordBytes);
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) {
-          continue;
-        }
-        yield parseOllamaNdjsonRecord(trimmed);
-      }
-    }
-
-    buffer += decoder.decode();
-    if (buffer.trim()) {
-      yield parseOllamaNdjsonRecord(buffer.trim());
-    }
-  } finally {
-    // Start cancellation best-effort; do not await it — a pending cancel
-    // must not stall releaseLock() and keep the reader locked.
-    void reader.cancel().catch(() => undefined);
-    reader.releaseLock();
+  const promptNs = asNonNegativeFiniteNumber(response.prompt_eval_duration);
+  const evalNs = asNonNegativeFiniteNumber(response.eval_duration);
+  const processingMs =
+    promptNs !== undefined && evalNs !== undefined
+      ? asNonNegativeFiniteNumber((promptNs + evalNs) / 1e6)
+      : undefined;
+  if (response.done && processingMs !== undefined) {
+    message.diagnostics = [
+      ...(message.diagnostics ?? []),
+      { type: "provider_timing", timestamp: Date.now(), details: { processingMs } },
+    ];
   }
-}
-
-function parseOllamaNdjsonRecord(value: string): OllamaChatResponse {
-  let parsed: unknown;
-  try {
-    parsed = parseJsonPreservingUnsafeIntegers(value);
-  } catch {
-    throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
-  }
-  if (!isRecord(parsed)) {
-    throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
-  }
-  if (typeof parsed.error === "string") {
-    const status =
-      typeof parsed.status === "number" && Number.isFinite(parsed.status)
-        ? parsed.status
-        : undefined;
-    throw Object.assign(
-      new Error(status === undefined ? parsed.error : `${status}: ${parsed.error}`),
-      {
-        ...(status === undefined ? {} : { status }),
-        body: parsed,
-      },
-    );
-  }
-  if (!isRecord(parsed.message) || typeof parsed.done !== "boolean") {
-    throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
-  }
-  // SAFETY: Required Ollama chat-record fields are validated above; optional fields remain inert.
-  return parsed as OllamaChatResponse;
+  return message;
 }
 
 function resolveOllamaChatUrl(baseUrl: string): string {
@@ -682,6 +563,8 @@ function createRawOllamaStreamFn(
           model,
           options as { requestTimeoutMs?: unknown; timeoutMs?: unknown } | undefined,
         );
+        // Applied after payload hooks, so a `false` from any writer gets the model's floor.
+        const serializedBody = JSON.stringify(applyOllamaThinkingFloor(requestBody, model));
 
         // Acquire after request composition and release after guarded cleanup;
         // reversing either boundary can leak the lease or stop inference mid-stream.
@@ -703,8 +586,7 @@ function createRawOllamaStreamFn(
           init: {
             method: "POST",
             headers,
-            // Applied after payload hooks, so a `false` from any writer gets the model's floor.
-            body: JSON.stringify(applyOllamaThinkingFloor(requestBody, model)),
+            body: serializedBody,
           },
           policy: ssrfPolicy,
           ...(options?.signal ? { signal: options.signal } : {}),

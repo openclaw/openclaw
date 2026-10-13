@@ -11,7 +11,7 @@ import {
 } from "./crabbox-worker-command.js";
 import { CRABBOX_CONFIG_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
-async function loadCrabboxConfigShow(params: {
+export async function loadCrabboxConfigShow(params: {
   binary: string;
   runCommand: CrabboxCommandRunner;
   signal?: AbortSignal;

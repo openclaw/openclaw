@@ -16,8 +16,11 @@ import { handlePeopleMenuKeydown } from "../../../components/searchable-people-m
 import { renderSessionOwnerChip } from "../../../components/session-owner-chip.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerSessionPeopleEnglish } from "../../../i18n/locales/en-session-people.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { LitContent } from "../../../lit/solid-content.tsx";
+
+registerEnglishCatalog(registerSessionPeopleEnglish);
 
 export type ChatSessionSharingState = {
   loading: boolean;
@@ -391,6 +394,7 @@ function SharingContent(props: ChatSessionSharingProps) {
 }
 
 export function ChatSessionSharing(props: ChatSessionSharingProps & { inline?: boolean }) {
+  const [opened, setOpened] = createSignal(false);
   const visibility = () => props.session?.visibility ?? "shared";
   const owner = () => props.state?.result?.owner ?? props.session?.owner?.actor;
   const canManage = () => props.session && canManageChatSessionSharing(props.session);
@@ -438,6 +442,7 @@ export function ChatSessionSharing(props: ChatSessionSharingProps & { inline?: b
             placement="bottom-end"
             onKeyDown={handlePeopleMenuKeydown}
             onWa-show={() => {
+              setOpened(true);
               if (!props.openDisabledReason) {
                 props.onOpen();
               }
@@ -462,7 +467,9 @@ export function ChatSessionSharing(props: ChatSessionSharingProps & { inline?: b
               <SharingIcon visibility={visibility()} />
               <span>{t("chat.sessionSharing.share")}</span>
             </button>
-            <SharingContent {...props} />
+            <Show when={opened()}>
+              <SharingContent {...props} />
+            </Show>
           </wa-dropdown>
         </Show>
       </Show>

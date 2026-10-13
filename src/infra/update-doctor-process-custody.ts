@@ -174,6 +174,7 @@ export async function retainUpdateDoctorProcesses(
         writeReceipt(file, receipt);
       } catch (error) {
         retained.settled();
+        receipt.slots.splice(receipt.slots.indexOf(slot), 1);
         throw error;
       }
       return {

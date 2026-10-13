@@ -4,8 +4,6 @@ import { escapeRegExp } from "../shared/regexp.js";
 export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 /** Token that marks an auto-reply response as intentionally silent. */
 export const SILENT_REPLY_TOKEN = "NO_REPLY";
-/** Exact first line of an unattended automation reply that records the run as failed. */
-export const AUTOMATION_FAILED_TOKEN = "AUTOMATION_FAILED";
 
 const HARMONY_CHANNEL_MARKER_RE = /^\s*(?:set-thought\s+)?<[\w]*\|[^>]*>\s*$/;
 const BOX_DRAWING_HR_ONLY_RE = /^\s*─{3,}\s*$/;
@@ -191,13 +189,18 @@ function isReasoningPrefixedSilentReplyText(text: string | undefined, token: str
   );
 }
 
-/** Returns true for token-only, JSON-envelope, or reasoning-prefixed silent payload text. */
+/** Returns true for token-only, truncated, JSON-envelope, or reasoning-prefixed silent payloads. */
 export function isSilentReplyPayloadText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,
 ): boolean {
+  const trimmed = text?.trim();
   return (
     isSilentReplyText(text, token) ||
+    // Final fragments need the underscore; a complete answer of "NO" is legitimate text.
+    (token === SILENT_REPLY_TOKEN &&
+      trimmed?.startsWith("NO_") === true &&
+      isSilentReplyPrefixText(trimmed, token)) ||
     isSilentReplyJsonText(text, token) ||
     isReasoningPrefixedSilentReplyText(text, token)
   );

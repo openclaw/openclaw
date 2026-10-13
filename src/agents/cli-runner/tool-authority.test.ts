@@ -14,7 +14,7 @@ describe("CLI question creator binding", () => {
         }
       },
     });
-    const authority = captureCliRunToolAuthority(
+    using authority = captureCliRunToolAuthority(
       {
         sessionId: "agent:main:question",
         sessionFile: "/workspace/session.jsonl",

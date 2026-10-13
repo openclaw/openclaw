@@ -2,6 +2,8 @@ import type { SessionsListParams } from "../../packages/gateway-protocol/src/ind
 import {
   SESSION_DASHBOARD_ROW_FIELDS,
   SESSION_ROW_DETAIL_FIELDS,
+  SESSION_SIDEBAR_ROW_FIELDS,
+  shareSessionRowFacts,
 } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
@@ -82,6 +84,20 @@ const publications = new WeakMap<
   } & Publication
 >();
 const encodings = new WeakMap<GatewaySessionRow, string>();
+const sharedLists = new WeakMap<
+  GatewaySessionRow[],
+  ReturnType<typeof shareSessionRowFacts<GatewaySessionRow>>
+>();
+
+export function shareSidebarSessionRows(rows: GatewaySessionRow[]) {
+  let shared = sharedLists.get(rows);
+  if (!shared) {
+    shared = freezeJsonSnapshot(shareSessionRowFacts(rows));
+    registerSerializedJsonArray(shared.sessions, shared.sessions.map(serializeSessionRow));
+    sharedLists.set(rows, shared);
+  }
+  return shared;
+}
 
 /** Only the immutable presentation is encoded; recipient-specific list wrappers stay private. */
 export function serializeSessionRow(row: GatewaySessionRow): string {
@@ -219,16 +235,9 @@ export function prepareProjectedSessionPresentation(
         : null),
   });
   const present = (
-    captured: records.MaterializedRow,
+    record: records.MaterializedRow,
     options: PresentationOptions = {},
   ): GatewaySessionRow | null => {
-    const record = projection.describe(
-      { agentId: captured.agentId, key: captured.key, storePath: captured.storeTarget.storePath },
-      captured,
-    );
-    if (!record) {
-      return null;
-    }
     const run = active(record.key, record.entry, record.agentId);
     const preparedFacts = record.facts?.present();
     const childOwnerSessionKeys = resolveSessionChildOwners({
@@ -408,13 +417,15 @@ export function prepareProjectedSessionPresentation(
         row.activitySummary = { ...row.activitySummary, canEnsure: canEnsure === true };
       }
     }
-    if (options.rowMode === "dashboard") {
+    if (options.rowMode === "dashboard" || options.rowMode === "sidebar") {
+      const fields =
+        options.rowMode === "sidebar" ? SESSION_SIDEBAR_ROW_FIELDS : SESSION_DASHBOARD_ROW_FIELDS;
       for (const field of Object.keys(row)) {
-        if (!SESSION_DASHBOARD_ROW_FIELDS.has(field)) {
+        if (!fields.has(field)) {
           Reflect.deleteProperty(row, field);
         }
       }
-      row.rowMode = "dashboard";
+      row.rowMode = options.rowMode;
     } else if (options.rowMode === "compact") {
       for (const field of SESSION_ROW_DETAIL_FIELDS) {
         delete row[field];
@@ -455,7 +466,13 @@ export function prepareProjectedSessionPresentation(
     active,
     sharing,
     target,
-    present,
+    present(captured: records.MaterializedRow, options: PresentationOptions = {}) {
+      const record = projection.describe(
+        { agentId: captured.agentId, key: captured.key, storePath: captured.storeTarget.storePath },
+        captured,
+      );
+      return record ? present(record, options) : null;
+    },
     select(opts: SessionsListParams, select: () => SessionEntrySelection) {
       // These queries consume clock or transient run facts independently of row publications.
       if (
@@ -502,8 +519,8 @@ export function prepareProjectedSessionPresentation(
     snapshot(query: records.Lookup, options: PresentationOptions = {}) {
       const record = projection.describe(query);
       return record
-        ? { row: present(record, options), lifecycleRunId: record.entry.lifecycleRunId }
-        : { row: null };
+        ? { row: present(record, options), record, lifecycleRunId: record.entry.lifecycleRunId }
+        : { row: null, record };
     },
     authorizeDescription(query: records.Lookup) {
       return authorizeIncognitoSessionTarget({

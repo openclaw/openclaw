@@ -65,6 +65,17 @@ describe("release load acceptance", () => {
       }
     }
   });
+  test("responsive CPU/utilization warnings permit default acceptance", () => {
+    const snapshot=snapshots();
+    for(const value of [snapshot.readiness.eventLoop,snapshot.channels.eventLoop]) {
+      Object.assign(value,{reasons:["cpu","event_loop_utilization"],delayP99Ms:50,delayMaxMs:50});
+    }
+    for(const command of ["channels","probes"]) {
+      const result=check(command,snapshot,false);
+      assert.equal(result.status,0,result.stderr);
+      assert.match(result.stdout,/^(CHANNELS_OK|READY)\n$/);
+    }
+  });
 
   test("load acceptance retains malformed evidence and channel failure gates", () => {
     for (const mutate of [
@@ -1667,7 +1678,7 @@ describe("Team marker terminal observation", () => {
     assert.doesNotMatch(events(f),/service\..*\.(stop|start|restart)/);
   });
   for(const [label,failure] of [
-    ["unacknowledged dispatch timeout",{method:"agent",error:{name:"GatewayTransportError",kind:"timeout",connectionDetails:{}}}],
+    ["unacknowledged protocol close",{method:"agent",error:{name:"GatewayTransportError",kind:"closed",code:1002,connectionDetails:{}}}],
     ["authentication error",{method:"agent.wait",error:{name:"GatewayClientRequestError",gatewayCode:"UNAUTHORIZED"}}],
     ["protocol close",{method:"agent.wait",error:{name:"GatewayTransportError",kind:"closed",code:1002,connectionDetails:{}}}],
     ["policy close",{method:"agent.wait",error:{name:"GatewayTransportError",kind:"closed",code:1008,connectionDetails:{}}}],
@@ -1681,6 +1692,18 @@ describe("Team marker terminal observation", () => {
     assert.equal(events(f).split("gateway gateway call agent\n").length-1,1);
     assert.equal(events(f).split("gateway gateway call agent.wait\n").length-1,failure.method==="agent"?0:1);
     assert.doesNotMatch(result.stdout,/MARKER_VERIFIED|RECOVERED/);
+    assert.doesNotMatch(events(f),/service\..*\.(stop|start|restart)/);
+  });
+  test("a typed dispatch timeout reconciles native minimal in-flight replay on the same healthy generation", t => {
+    const f=failedReleaseFixture(t,true);
+    writeFileSync(join(f.state,"marker-rpc-failure"),JSON.stringify({method:"agent",once:true,
+      error:{name:"GatewayTransportError",kind:"timeout",connectionDetails:{}}}));
+    const result=runOwner(f,["--recover"]);assert.ifError(result.error);
+    assert.equal(result.status,0,result.stderr+events(f));
+    assert.match(result.stdout,/MARKER_VERIFIED/);
+    assert.equal(events(f).split("gateway gateway call agent\n").length-1,2);
+    assert.equal(events(f).split("gateway gateway call agent.wait\n").length-1,1);
+    assert.equal(existsSync(f.journal),false);
     assert.doesNotMatch(events(f),/service\..*\.(stop|start|restart)/);
   });
   test("an untyped observation failure retains recovery evidence without another observation", t => {

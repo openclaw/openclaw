@@ -166,20 +166,44 @@ collectors. Successful cancellation keeps selected queued collectors from
 starting while running children stop. Exact-run cancellation does not cancel
 unrelated turns or clear unrelated session-wide queues.
 
-For raw child session keys such as `global`, registration records the known
-owning agent as `childAgentId`. Child cancellation derives that agent's session
-store from current configuration, just as it does for agent-qualified keys,
-which need no recorded binding. Clearing the child's queued follow-ups and
-commands stays within that agent, even when another agent uses the same raw
-session key. Legacy runs without a recorded owner use current configuration to
-resolve one agent and clear only that agent's queues. The optional binding stays
-in `payload_json` when an older build rewrites the run.
+Every new registration records its selected owning agent as `childAgentId`,
+including agent-qualified child keys, and the original child session identity.
+If a visible spawn's creation receipt omits that identity, the spawn reports an
+error with the child and run identifiers instead of accepting an undeliverable
+child. Inspect that retained child before retrying; do not spawn a replacement.
 
-Owner-aware child lookups keep watched follow-ups, steering, run generations,
-completion transcripts, and timeout reconciliation separate when agents share a
-raw key. Terminal events and session timing updates use that same child owner.
-Rows without a recorded owner and callers without an explicit owner retain their
-existing key-only lookup behavior.
+Historical records with a valid agent-qualified key retain that recorded
+ownership without migration. An explicit
+owner must agree with the key's namespace. Current defaults and the requester's
+agent never supply missing child ownership.
+
+Child-session mutation requires both recorded ownership and the original child
+session incarnation. An explicitly selected run whose owner is unresolved or whose
+recorded incarnation conflicts with the current session
+returns `found: true`, `killed: false`, and an explanation without touching child
+work. Bulk cancellation reports unresolved members and continues independently
+authorized siblings. Inspect the retained run and original execution evidence;
+do not bind it to whichever session currently occupies the same key. Unresolved
+child-session cleanup obligations are not guessed after ordinary cleanup deadlines.
+Child authority has three states: verified, legacy-unverified, or mismatch.
+Legacy-unverified records have resolvable child and requester owners but lack the
+original session identity or lifecycle revision. They can settle, deliver,
+finish cleanup bookkeeping, resume, and stop under the authorized requester.
+Legacy Stop cancels the exact task and its registered execution, when available;
+it does not guess which current session or successor to interrupt. OpenClaw
+warns once per Gateway process after registry restore, with a count of unique
+legacy run IDs and a few sample IDs, and suppresses child-session mutations, including
+deletion, reset, and transcript cleanup. Missing historical identity is never
+backfilled. A conflicting recorded identity remains a mismatch, not a legacy exception.
+
+Registry child lookups use recorded ownership when agents share a raw key.
+Terminal events and session timing updates use that same child owner.
+Raw-key lookups require an explicit owner. Unknown records remain inspectable by
+run ID but cannot supersede an owned run or authorize child operations.
+
+Explicitly owned raw-key children still deliver completion and wake their
+requesters. Their recorded agent also scopes browser cleanup, so successful
+cleanup completes the same bookkeeping as an agent-qualified child key.
 
 Stop also retires pending completion continuations for the selected work, even
 when a child has already finished. Cancelling a completion turn retires its
@@ -215,6 +239,9 @@ A typed `/stop` sent through `chat.send` honors `expectedLeafEntryId` and, when
 that branch check is present, `sessionId`. If the check fails during descendant
 cancellation, the Gateway refuses further cancellation and reports
 `active-leaf-changed`. Cancellation already accepted by a child still settles.
+If child ownership refuses cancellation before the branch check runs, the Gateway
+rechecks the requested leaf: a changed leaf takes precedence, while an unchanged
+leaf preserves the ownership error. Neither outcome authorizes changing a replacement child.
 The cancellation result waits for pending child-session metadata writes before
 checking that the original session still owns the outcome.
 
@@ -237,3 +264,9 @@ timeout. Those events do not automatically cancel them.
 - Sub-agent context only injects `AGENTS.md` (no `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, or `BOOTSTRAP.md`). Its `## Tools` section carries environment-specific notes. Codex-native subagents follow the same boundary through native `AGENTS.md` discovery, while parent-only persona, identity, and user files are injected as turn-scoped collaboration instructions so children do not clone them.
 - Recursive spawning is enabled through depth `5` by default. Set `maxSpawnDepth` from `1` through `5` to lower the boundary.
 - `maxChildrenPerAgent` caps active children per session (default `5`, range `1-20`).
+
+Subagent lifecycle warnings retain the error name, message, code, and full stack
+in file logs; console output includes the first six stack lines. Direct announce
+and requester-settle retry warnings
+also include the requester and delivery idempotency key so retries can be traced
+without logging message content.

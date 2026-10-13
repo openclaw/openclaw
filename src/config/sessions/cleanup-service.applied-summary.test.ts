@@ -16,12 +16,13 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import * as cleanupReads from "./cleanup-service-read.js";
 import { setCleanupDeleteFault } from "./cleanup-service.delete-fault.test-support.js";
 import { resolveSessionWorkStartError } from "./lifecycle.js";
 
 const cleanupRace = vi.hoisted(() => ({
-  afterPreview: undefined as (() => void) | undefined,
   postCommitFailureStorePath: undefined as string | undefined,
 }));
 
@@ -44,11 +45,6 @@ vi.mock("./disk-budget.js", async (importOriginal) => {
     ...actual,
     pruneUnreferencedSessionArtifacts: vi.fn(async (params) => {
       const result = await actual.pruneUnreferencedSessionArtifacts(params);
-      if (params.dryRun && cleanupRace.afterPreview) {
-        const afterPreview = cleanupRace.afterPreview;
-        cleanupRace.afterPreview = undefined;
-        afterPreview();
-      }
       if (!params.dryRun && cleanupRace.postCommitFailureStorePath === params.storePath) {
         throw new Error("injected post-commit artifact failure");
       }
@@ -73,11 +69,34 @@ import type { SessionEntry } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function afterCleanupRead(callback: () => void) {
+  const withStore = cleanupReads.withSessionCleanupStore;
+  let pending = true;
+  vi.spyOn(cleanupReads, "withSessionCleanupStore").mockImplementation((target, consume, options) =>
+    withStore(
+      target,
+      (owner) =>
+        consume({
+          ...owner,
+          read: async (fixMissing) => {
+            const snapshot = await owner.read(fixMissing);
+            if (pending) {
+              pending = false;
+              callback();
+            }
+            return snapshot;
+          },
+        }),
+      options,
+    ),
+  );
+}
+
 describe("sessions cleanup applied summary", () => {
   afterEach(async () => {
     setCleanupDeleteFault(undefined);
-    cleanupRace.afterPreview = undefined;
     cleanupRace.postCommitFailureStorePath = undefined;
+    vi.restoreAllMocks();
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
   });
@@ -99,6 +118,7 @@ describe("sessions cleanup applied summary", () => {
           },
         } satisfies OpenClawConfig;
         await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg);
         const now = Date.now();
         const old = now - 31 * 24 * 60 * 60_000;
         const scope = (name: string) => ({
@@ -119,10 +139,10 @@ describe("sessions cleanup applied summary", () => {
           message: { role: "user", content: [{ type: "text", text: "Keep my conversation" }] },
         });
         const history = loadTranscriptEventsSync(scope("conversation"));
-        const run = () =>
+        const run = (dryRun = false) =>
           runSessionsCleanup({
             cfg,
-            opts: { enforce: true },
+            opts: { enforce: true, dryRun },
             targets: [{ agentId: "main", storePath }],
             commitGuard: () => {},
           });
@@ -131,6 +151,7 @@ describe("sessions cleanup applied summary", () => {
             ({ entry }) => entry.archivedAt === undefined,
           ).length;
         expect(activeCount()).toBe(3);
+        const preview = await run(true);
         const sql = observeHostDataSql();
         const result = await run().finally(sql.restore);
         expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
@@ -144,7 +165,8 @@ describe("sessions cleanup applied summary", () => {
           capped: pressure === "count" ? 2 : 0,
           wouldMutate: true,
         };
-        expect(result.previewResults[0]?.summary).toMatchObject(expected);
+        expect(preview.previewResults[0]?.summary).toMatchObject(expected);
+        expect(result.previewResults).toEqual([]);
         expect(result.appliedSummaries[0]).toMatchObject(expected);
         expect(loadSessionEntry(scope("hook:disposable"))).toBeUndefined();
         let resourceRetired = false;
@@ -168,16 +190,14 @@ describe("sessions cleanup applied summary", () => {
         });
         expect(loadTranscriptEventsSync(scope("conversation"))).toEqual(history);
         const repeated = await run();
-        for (const summary of [repeated.previewResults[0]?.summary, repeated.appliedSummaries[0]]) {
-          expect(summary).toMatchObject({
-            beforeCount: 3,
-            afterCount: 3,
-            archived: 0,
-            pruned: 0,
-            capped: 0,
-            wouldMutate: false,
-          });
-        }
+        expect(repeated.appliedSummaries[0]).toMatchObject({
+          beforeCount: 3,
+          afterCount: 3,
+          archived: 0,
+          pruned: 0,
+          capped: 0,
+          wouldMutate: false,
+        });
         expect(loadTranscriptEventsSync(scope("conversation"))).toEqual(history);
       });
     },
@@ -295,6 +315,7 @@ describe("sessions cleanup applied summary", () => {
           session: { maintenance: { mode: "enforce", maxDiskBytes: false, pruneAfter: "1s" } },
         } satisfies OpenClawConfig;
         await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg);
         await fs.mkdir(state.sessionsDir(), { recursive: true });
         const orphan = path.join(state.sessionsDir(), "orphan.jsonl");
         await fs.writeFile(orphan, "");
@@ -314,8 +335,8 @@ describe("sessions cleanup applied summary", () => {
           diskBudget: null,
           unreferencedArtifacts: { removedFiles: 1, freedBytes: 0 },
         };
-        expect(result.previewResults[0]?.summary).toMatchObject({ ...expected, dryRun });
         if (dryRun) {
+          expect(result.previewResults[0]?.summary).toMatchObject({ ...expected, dryRun });
           expect(result.appliedSummaries).toEqual([]);
           await expect(fs.readFile(orphan, "utf8")).resolves.toBe("");
         } else {
@@ -328,7 +349,7 @@ describe("sessions cleanup applied summary", () => {
     },
   );
 
-  it("applies the selected agent's preview without pruning a sibling behind the same selector", async () => {
+  it("cleans the selected agent without pruning a sibling behind the same selector", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
       const storePath = state.statePath("shared.json");
       const cfg = {
@@ -336,6 +357,7 @@ describe("sessions cleanup applied summary", () => {
         session: { store: storePath, maintenance: { mode: "warn", pruneAfter: "1d" } },
       } satisfies OpenClawConfig;
       await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       const scopes = ["main", "beta"].map((agentId) => ({
         agentId,
         sessionKey: `agent:${agentId}:hook:stale`,
@@ -352,12 +374,6 @@ describe("sessions cleanup applied summary", () => {
 
       const result = await runSessionsCleanup({ cfg, opts: { agent: "beta", enforce: true } });
 
-      expect(result.previewResults[0]?.summary).toMatchObject({
-        agentId: "beta",
-        beforeCount: 1,
-        afterCount: 0,
-        pruned: 1,
-      });
       expect(result.appliedSummaries[0]).toMatchObject({
         agentId: "beta",
         beforeCount: 1,
@@ -370,15 +386,15 @@ describe("sessions cleanup applied summary", () => {
     });
   });
 
-  it("preserves sessions when cleanup authority is revoked after preview", async () => {
+  it("preserves sessions when cleanup authority is revoked after classification", async () => {
     await withOpenClawTestState({}, async (state) => {
       const storePath = path.join(state.sessionsDir(), "sessions.json");
       const scope = { sessionKey: "agent:main:hook:guard", storePath };
       await replaceSessionEntry(scope, { sessionId: "guarded-cleanup", updatedAt: Date.now() });
       let authorized = true;
-      cleanupRace.afterPreview = () => {
+      afterCleanupRead(() => {
         authorized = false;
-      };
+      });
 
       await expect(
         runSessionsCleanup({
@@ -402,7 +418,7 @@ describe("sessions cleanup applied summary", () => {
     });
   });
 
-  it("reports authoritative counts when a preview removal becomes stale before apply", async () => {
+  it("reports authoritative counts when a removal classification becomes stale before apply", async () => {
     const storePath = path.join(
       tempDirs.make("openclaw-cleanup-applied-summary-"),
       "agents",
@@ -414,12 +430,12 @@ describe("sessions cleanup applied summary", () => {
     const sessionId = "preview-became-live";
     const scope = { sessionId, sessionKey, storePath };
     await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now() });
-    cleanupRace.afterPreview = () => {
+    afterCleanupRead(() => {
       appendTranscriptMessageSync(scope, {
         eventId: "message-after-preview",
         message: { role: "user", content: [{ type: "text", text: "keep this session" }] },
       });
-    };
+    });
 
     const result = await runSessionsCleanup({
       cfg: {},

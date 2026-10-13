@@ -313,21 +313,12 @@ async function runGatewayUpdateCheckOwned(
   const autoDisabledByExternalSupervisor = isGatewayExternallySupervised();
   const initialized = await lifecycle.initialize();
   params.signal.throwIfAborted();
-  const initialChannel = resolveEffectiveUpdateChannel({
-    configChannel,
-    currentVersion: VERSION,
-    ...initialized.status,
-  }).channel;
+  // Discovery keeps its starting channel; campaign admission rechecks live policy.
   // Opt-outs replace the background owner without superseding explicit discovery.
   const isCurrent = () =>
     lifecycle.isCurrent() &&
     lifecycle.announceDevGitUpdate === announceDevGitUpdate &&
     lifecycle.installStatus?.status.installKind === initialized.status.installKind &&
-    resolveEffectiveUpdateChannel({
-      configChannel: normalizeUpdateChannel(params.getConfig().update?.channel),
-      currentVersion: VERSION,
-      ...initialized.status,
-    }).channel === initialChannel &&
     !params.signal.aborted &&
     updateCampaign.getState()?.state !== "applying" &&
     generation === lifecycle.publicationGeneration;

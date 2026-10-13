@@ -60,6 +60,17 @@ commit without a generated summary; see [Auto-compaction](#auto-compaction).
 
 Auto-compaction is on by default. It runs when the session nears the context limit, or when the model returns a context-overflow error (in which case OpenClaw compacts and retries).
 
+In the built-in runtime, native ChatGPT sign-in uses V2 compaction at normal
+request boundaries, including between completed tool rounds. It starts when the
+known or projected request occupancy reaches the smaller of the reserve-based
+prompt budget and 90% of the context window (rounded down). For a 500,000-token
+window with a 20,000-token reserve, that means 450,000 tokens, not 480,000.
+The complete outgoing request must still fit the model window: a single large
+pending message or tool result can consume the remaining headroom before a safe
+boundary, in which case OpenClaw keeps the existing client-side fallback rather
+than dropping pending content. Other providers, manual `/compact`, and
+overflow recovery keep their existing thresholds and behavior.
+
 If the provider rejects a request after tool calls have completed, the built-in runtime can compact and continue from their recorded results. It keeps the current model and account, preserves the original request, and does not replay completed actions. This recovery requires settled tool results; pending tools, approvals, cancellation, and a tool that intentionally ended the turn retain their normal handling. If a Gateway restart later interrupts that continuing run, recovery preserves the accepted input even when compaction has summarized it.
 
 For OpenAI-compatible Chat Completions, an automatically context-capped response that ends with `length` also enters this recovery. OpenClaw withholds the incomplete candidate and its tool calls until the finish reason is known. This buffering is bounded; an oversized response resumes ordinary streaming and retains its normal `length` result. Explicit output limits retain their normal behavior.
@@ -164,7 +175,7 @@ The built-in OpenClaw runtime starts compaction with the active session model. S
 }
 ```
 
-Bare configured aliases resolve to their canonical provider and model before compaction starts. If a bare value matches both an alias and a configured literal model ID, the literal model ID wins. An unmatched bare value remains a model ID on the active provider.
+Bare configured aliases resolve to their normalized provider and model before compaction starts. If a bare value matches both an alias and a configured literal model ID, the literal model ID wins. An unmatched bare value remains a model ID on the active provider.
 
 If Gateway configuration reloads while compaction is waiting to start, compaction uses the newly loaded context engine and model settings together. Its requested workspace and transcript stay the same.
 
@@ -315,16 +326,14 @@ same oversized window.
 
 A returned window keeps recent user messages verbatim, and on xAI the system
 prompt too (the public OpenAI endpoint receives it as `instructions` instead).
-If [transcript redaction](/gateway/config-observability) would change any of that content,
-OpenClaw skips the endpoint before calling it and uses client-side compaction.
-The skip, a discarded endpoint result, and an endpoint failure are each logged
-as a warning with the reason.
+Transcript preparation does not secret-mask that content. A discarded endpoint
+result or an endpoint failure is logged as a warning with the reason.
 
 If the pending input alone fills the model's context window, recovery asks for a
 smaller message or a larger-context model without repeatedly compacting history.
 Later messages retain their normal recovery budget.
 
-If an older version or transcript redaction removes the complete window needed for replay, OpenClaw asks you to run `/compact`. That command rebuilds context from the saved conversation through client-side compaction. It does not guess the missing provider context or delete the transcript.
+If an older version left the complete window needed for replay unavailable, OpenClaw asks you to run `/compact`. That command rebuilds context from the saved conversation through client-side compaction. It does not guess the missing provider context or delete the transcript.
 
 Direct Anthropic API-key requests on models that Anthropic documents for threshold compaction ask the API to compact inside an ordinary request once input reaches the threshold, and OpenClaw replays the returned summary on later requests. `params.anthropicServerCompaction: false` disables it for a model. If Anthropic returns an empty summary, OpenClaw keeps sending the existing history and its client-side compaction remains the fallback. See [Anthropic server-side compaction](/providers/anthropic#advanced-configuration).
 

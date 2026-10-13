@@ -237,6 +237,7 @@ describe("CodexNativeSubagentMonitor", () => {
       const releaseWrite = createDeferred<void>();
       const assignmentStore: CodexNativeSubagentAssignmentStore = {
         assertCurrent() {},
+        async assertCurrentAsync() {},
         read: async () => [],
         record: async () => true,
         consume: async () => {
@@ -434,6 +435,7 @@ describe("native follow-up receipt custody", () => {
     const consumed = createDeferred<void>();
     const store = {
       assertCurrent() {},
+      async assertCurrentAsync() {},
       read: async () => [],
       record: vi.fn(async () => {
         recorded.resolve();

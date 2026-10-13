@@ -162,6 +162,9 @@ function registerNativeHookRelayInternal(
   params: RegisterNativeHookRelayParams,
   owner?: NativeHookRelayOwnerOptions,
 ): OwnedNativeHookRelayRegistrationHandle {
+  if (params.requirePreToolUse && !params.runBeforeToolCall) {
+    throw new Error("Required native PreToolUse relay needs a host runBeforeToolCall capability.");
+  }
   const { retention, approvalHost } = owner ?? {};
   const executionAdmission = snapshotNativeHookRelayExecutionAdmission(owner?.executionAdmission);
   pruneExpiredNativeHookRelays();
@@ -214,12 +217,14 @@ function registerNativeHookRelayInternal(
       ...(params.approvalContext ? { approvalContext: params.approvalContext } : {}),
       allowedEvents,
       preToolUseLoopDetection: params.preToolUseLoopDetection !== false,
+      requirePreToolUse: params.requirePreToolUse,
       expiresAtMs,
       preToolUseFailureProjections: new Map(),
       ...(params.signal ? { signal: params.signal } : {}),
       ...(params.runBeforeToolCall ? { runBeforeToolCall: params.runBeforeToolCall } : {}),
       ...(approvalHost ? { approvalHost } : {}),
       ...(params.assertActive ? { assertActive: params.assertActive } : {}),
+      ...(params.assertActiveAsync ? { assertActiveAsync: params.assertActiveAsync } : {}),
       ...(params.onPreToolUseFailure ? { onPreToolUseFailure: params.onPreToolUseFailure } : {}),
       // SAFETY: the literal supplies the complete mutable internal registration contract.
     } as ActiveNativeHookRelayRegistration;
@@ -518,6 +523,7 @@ export async function invokeNativeHookRelay(
   // Policy and approval callbacks may yield while their admitted run closes.
   // Never let a late allow cross back into the native runtime.
   if (event === "pre_tool_use" || event === "permission_request") {
+    await effectiveRegistration.assertActiveAsync?.();
     effectiveRegistration.assertActive?.();
   }
   if (

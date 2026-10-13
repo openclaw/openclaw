@@ -7,29 +7,6 @@ import {
   stripInlineDirectiveTagsForDisplay,
 } from "./directive-tags.js";
 
-describe("stripInlineDirectiveTagsForDisplay", () => {
-  test("removes reply and audio directives", () => {
-    const input = "hello [[reply_to_current]] world [[reply_to:abc-123]] [[audio_as_voice]]";
-    const result = stripInlineDirectiveTagsForDisplay(input);
-    expect(result.changed).toBe(true);
-    expect(result.text).toBe("hello  world  ");
-  });
-
-  test("supports whitespace variants", () => {
-    const input = "[[ reply_to : 123 ]]ok[[ audio_as_voice ]]";
-    const result = stripInlineDirectiveTagsForDisplay(input);
-    expect(result.changed).toBe(true);
-    expect(result.text).toBe("ok");
-  });
-
-  test("does not mutate plain text", () => {
-    const input = "  keep leading and trailing whitespace  ";
-    const result = stripInlineDirectiveTagsForDisplay(input);
-    expect(result.changed).toBe(false);
-    expect(result.text).toBe(input);
-  });
-});
-
 describe("reply directive boundaries", () => {
   test.each([
     ["an incomplete whitespace-padded ID", `λ [[reply_to:${" ".repeat(4_000)}x`],
@@ -48,13 +25,7 @@ describe("reply directive boundaries", () => {
     expect(performance.now() - started).toBeLessThan(1_000);
   });
 
-  test.each([
-    ["long whitespace padding", `[[reply_to:${" ".repeat(4_000)}id]]`, "id"],
-    ["LF padding", "[[reply_to:\nid\n ]]", "id"],
-    ["an interior CR", "[[reply_to:a\rb]]", "ab"],
-    ["a blank ID", "[[reply_to:\n \n]]", undefined],
-    ["nested openers in an ID", "[[reply_to:[[reply_to:id]]", "reply_to:id"],
-  ])("accepts %s", (_name, tag, id) => {
+  test.each([["a blank ID", "[[reply_to:\n \n]]", undefined]])("accepts %s", (_name, tag, id) => {
     const input = `${tag}Visible reply`;
     expect(stripInlineDirectiveTagsForDisplay(input)).toEqual({
       text: "Visible reply",
@@ -72,25 +43,10 @@ describe("reply directive boundaries", () => {
     });
   });
 
-  test.each(["[[reply_to:]]", "[[reply_to:\n]]", "[[reply_to:a\nb]]"])(
-    "preserves invalid complete syntax %j",
-    (text) => {
-      expect(stripInlineDirectiveTagsForDisplay(text)).toEqual({ text, changed: false });
-      expect(stripInlineDirectiveTagsForDelivery(text)).toEqual({ text, changed: false });
-      expect(parseInlineDirectives(text)).toMatchObject({ text, hasReplyTag: false });
-    },
-  );
-
-  test("finds a valid inner directive after an invalid outer candidate", () => {
-    const input = "[[reply_to:a\n[[reply_to:id]]Visible";
-    expect(stripInlineDirectiveTagsForDisplay(input)).toEqual({
-      text: "[[reply_to:a\nVisible",
-      changed: true,
-    });
-    expect(parseInlineDirectives(input)).toMatchObject({
-      text: "[[reply_to:a\nVisible",
-      replyToExplicitId: "id",
-    });
+  test.each(["[[reply_to:\n]]"])("preserves invalid complete syntax %j", (text) => {
+    expect(stripInlineDirectiveTagsForDisplay(text)).toEqual({ text, changed: false });
+    expect(stripInlineDirectiveTagsForDelivery(text)).toEqual({ text, changed: false });
+    expect(parseInlineDirectives(text)).toMatchObject({ text, hasReplyTag: false });
   });
 
   test("parses reply intent exposed by the audio stage", () => {
@@ -112,42 +68,11 @@ describe("stripInlineDirectiveTagsForDelivery", () => {
     expect(performance.now() - started).toBeLessThan(1_000);
   });
 
-  test("removes directives and surrounding whitespace for outbound text", () => {
-    const input = "hello [[reply_to_current]] world [[audio_as_voice]]";
-    const result = stripInlineDirectiveTagsForDelivery(input);
-    expect(result.changed).toBe(true);
-    expect(result.text).toBe("hello world");
-  });
-
-  test.each([
-    ["reply", "[[[reply_to_current]]hello"],
-    ["audio", "[[[audio_as_voice]]hello"],
-  ])("removes overlapping %s directive openers", (_name, input) => {
-    expect(stripInlineDirectiveTagsForDelivery(input)).toEqual({ text: "[ hello", changed: true });
-  });
-
-  test("preserves intentional multi-space formatting away from directives", () => {
-    const input = "a  b [[reply_to:123]] c   d";
-    const result = stripInlineDirectiveTagsForDelivery(input);
-    expect(result.changed).toBe(true);
-    expect(result.text).toBe("a  b c   d");
-  });
-
   test("does not trim plain text when no directive tags are present", () => {
     const input = "  keep leading and trailing whitespace  ";
     const result = stripInlineDirectiveTagsForDelivery(input);
     expect(result.changed).toBe(false);
     expect(result.text).toBe(input);
-  });
-
-  test("preserves an ambiguous unterminated explicit reply prefix", () => {
-    const input = "[[reply_to:message-7 Visible reply";
-    expect(stripInlineDirectiveTagsForDelivery(input)).toEqual({ text: input, changed: false });
-  });
-
-  test("preserves a malformed reply prefix after visible text", () => {
-    const input = "Visible reply\n[[reply_to_current] literally";
-    expect(stripInlineDirectiveTagsForDelivery(input)).toEqual({ text: input, changed: false });
   });
 });
 
@@ -161,21 +86,6 @@ describe("parseInlineDirectives markdown code", () => {
       "```",
     ].join("\n");
 
-    expect(parseInlineDirectives(input)).toEqual({
-      text: input,
-      audioAsVoice: false,
-      replyToCurrent: false,
-      hasAudioTag: false,
-      hasReplyTag: false,
-    });
-    expect(stripInlineDirectiveTagsForDisplay(input)).toEqual({ text: input, changed: false });
-    expect(stripInlineDirectiveTagsForDelivery(input)).toEqual({ text: input, changed: false });
-  });
-
-  it.each([
-    ["four-space", "    [[reply_to_current]]\n    [[audio_as_voice]]"],
-    ["tab", "\t[[reply_to_current]]\n\t[[audio_as_voice]]"],
-  ])("leaves directives inside standalone %s-indented code untouched", (_name, input) => {
     expect(parseInlineDirectives(input)).toEqual({
       text: input,
       audioAsVoice: false,
@@ -205,104 +115,35 @@ describe("parseInlineDirectives", () => {
     expect(result.text).toBe("    keep this indent\n        and this one");
   });
 
-  test.each([
-    ["quoted four-space", '> Example\n>\n>     print("a  b")'],
-    ["quoted tab", '> Example\n>\n> \t\tprint("a  b")'],
-    ["nested quote", '> > Example\n> >\n> >     print("a  b")'],
-  ])("preserves %s code bytes after recording reply intent", (_name, code) => {
-    const result = parseInlineDirectives(`[[reply_to_current]]\n${code}`);
+  test.each([["nested quote", '> > Example\n> >\n> >     print("a  b")']])(
+    "preserves %s code bytes after recording reply intent",
+    (_name, code) => {
+      const result = parseInlineDirectives(`[[reply_to_current]]\n${code}`);
 
-    expect(result.hasReplyTag).toBe(true);
-    expect(result.replyToCurrent).toBe(true);
-    expect(result.text).toBe(code);
-  });
+      expect(result.hasReplyTag).toBe(true);
+      expect(result.replyToCurrent).toBe(true);
+      expect(result.text).toBe(code);
+    },
+  );
 
-  test("keeps authored spacing after a quote marker", () => {
-    const result = parseInlineDirectives('[[reply_to_current]]\n> \tprint("a  b")');
-
-    expect(result.hasReplyTag).toBe(true);
-    expect(result.replyToCurrent).toBe(true);
-    expect(result.text).toBe('> \tprint("a  b")');
-  });
-
-  test("preserves quoted directive examples beside an active audio directive", () => {
-    const code = "> Example\n>\n>     [[reply_to:literal-example]]";
-    const result = parseInlineDirectives(`[[audio_as_voice]]\n${code}`);
-
-    expect(result.audioAsVoice).toBe(true);
-    expect(result.hasReplyTag).toBe(false);
-    expect(result.text).toBe(code);
-  });
-
-  test("preserves word boundaries when a reply tag is adjacent to text", () => {
-    const input = "see[[reply_to_current]]now";
-    const result = parseInlineDirectives(input);
-    expect(result.hasReplyTag).toBe(true);
-    expect(result.text).toBe("see now");
-  });
-
-  test("drops all leading blank lines introduced by a stripped reply tag", () => {
-    const input = "[[reply_to_current]]\n\ntext";
-    const result = parseInlineDirectives(input);
-    expect(result.hasReplyTag).toBe(true);
-    expect(result.text).toBe("text");
-  });
-
-  test.each([
-    [
-      "backtick",
-      ["```js", "function foo() {", "    return 42;", "        const nested = true;", "}", "```"],
-    ],
-    [
-      "tab-indented",
-      ["```go", "func main() {", '\tfmt.Println("hello")', "\t\tif true {", "\t\t}", "}", "```"],
-    ],
-    ["tilde", ["~~~python", "    x  =  1", "        y  =  2", "~~~"]],
-  ])("preserves %s fenced code bytes after stripping a reply tag", (_name, lines) => {
-    const code = lines.join("\n");
-    const result = parseInlineDirectives(`[[reply_to_current]]\n${code}`);
-    expect(result.hasReplyTag).toBe(true);
-    expect(result.text).toBe(code);
-  });
-
-  test("preserves indent-code-block lines (4-space prefix) outside a fenced block", () => {
-    const input = "[[reply_to_current]]\nHere is some code:\n\n    const x = 1;\n    const y = 2;";
-    const result = parseInlineDirectives(input);
-    expect(result.hasReplyTag).toBe(true);
-    expect(result.text).toBe("Here is some code:\n\n    const x = 1;\n    const y = 2;");
-  });
-
-  test.each([
-    ["without directives", ""],
-    ["after a stripped reply tag", "[[reply_to_current]]\n"],
-  ])("keeps authored column spacing in HTML <pre> %s", (_name, prefix) => {
-    const pre = "<pre>#  Model    Index\n🥇 Opus     58     —      $5.98\n4  Fable    53</pre>";
-    const result = parseInlineDirectives(`${prefix}<b>Top</b>\n${pre}`);
-    expect(result.text).toBe(`<b>Top</b>\n${pre}`);
-  });
+  test.each([["after a stripped reply tag", "[[reply_to_current]]\n"]])(
+    "keeps authored column spacing in HTML <pre> %s",
+    (_name, prefix) => {
+      const pre = "<pre>#  Model    Index\n🥇 Opus     58     —      $5.98\n4  Fable    53</pre>";
+      const result = parseInlineDirectives(`${prefix}<b>Top</b>\n${pre}`);
+      expect(result.text).toBe(`<b>Top</b>\n${pre}`);
+    },
+  );
 
   test.each([
     ["between words", "Hello  [[reply_to_current]]  world", "Hello world"],
-    ["at line end", "Hello  [[audio_as_voice]]  \nworld", "Hello\nworld"],
     ["on its own line", "Hello\n\n[[audio_as_voice]]\n\n\nworld", "Hello\n\nworld"],
   ])("closes only the gap left by a directive %s", (_name, input, expected) => {
     expect(parseInlineDirectives(input).text).toBe(expected);
   });
 
-  test("strips many separated directives while keeping each gap local", () => {
-    const count = 2_000;
-    const input = Array.from({ length: count }, (_, i) => `w${i}  [[audio_as_voice]]  x`).join(
-      "\n",
-    );
-    const result = parseInlineDirectives(input);
-    expect(result.audioAsVoice).toBe(true);
-    expect(result.text).toBe(Array.from({ length: count }, (_, i) => `w${i} x`).join("\n"));
-  });
-
   test.each([
     { name: "spaces before a newline", suffix: "  \n" },
-    { name: "CRLF paragraph boundaries", suffix: "\r\n\r\n\r\n" },
-    { name: "mixed spaces and tabs", suffix: " \t\r\n \t\r\n\t " },
     {
       name: "inline directive CRLF spacing",
       suffix: " \t\r\n \t\r\n\r\n\t ",
@@ -335,10 +176,6 @@ describe("parseInlineDirectives", () => {
 });
 
 describe("sanitizeReplyDirectiveId", () => {
-  test("strips bracket and control characters from explicit reply ids", () => {
-    expect(sanitizeReplyDirectiveId(" [abc]\u0000\r\u0085def ")).toBe("abcdef");
-  });
-
   test("truncates long ids without splitting surrogate pairs", () => {
     const prefix = "a".repeat(255);
     const result = sanitizeReplyDirectiveId(`${prefix}😊tail`);

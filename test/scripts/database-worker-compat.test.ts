@@ -1,22 +1,22 @@
 import { expect, it } from "vitest";
-import { inspectDatabaseWorkerCompatibility } from "../../scripts/lib/database-worker-compat.mts";
+import { inspectDatabaseWorkerBoundaries } from "../../scripts/lib/database-worker-compat.mts";
 
 const legacyFile = "src/plugin-sdk/sqlite-runtime-legacy.ts";
 const secondFile = "src/sessions/session-upstream-links.ts";
-const first = "executeSqliteQueryTakeFirstSyncLegacy";
+const first = "sdkExecuteSqliteQueryTakeFirstSync";
 const second = "deleteSessionUpstreamLink";
 const legacy = `
-/** @deprecated Use the worker API; removed in the next SDK major. */
+/** @deprecated Use the worker API; removal follows a stable deprecation window. */
 export function ${first}() { return 1; }
 `;
 const owner = `
 import { ${first} } from '../plugin-sdk/sqlite-runtime-legacy.js';
-/** @deprecated Use the worker API; removed in the next SDK major. */
+/** @deprecated Use the worker API; removal follows a stable deprecation window. */
 export function ${second}() { return ${first}(); }
 `;
 
 function inspect(extra: Record<string, string>, source = legacy) {
-  return inspectDatabaseWorkerCompatibility(
+  return inspectDatabaseWorkerBoundaries(
     process.cwd(),
     new Map(Object.entries({ [legacyFile]: source, [secondFile]: owner, ...extra })),
   );
@@ -118,6 +118,32 @@ it("requires the reviewed declaration's deprecation marker", () => {
   ]);
 });
 
+it("permits a deprecated API only from an exact reviewed one-shot entry", () => {
+  const doctorFile = "src/flows/doctor-tool-schema-projection.ts";
+  const doctor = `import { ${first} } from '../plugin-sdk/sqlite-runtime-legacy.js';
+    export function collectAgentRuntimeToolSchemaFindings() { return ${first}(); }`;
+  const inspectDoctor = (file: string, source: string) =>
+    inspectDatabaseWorkerBoundaries(
+      process.cwd(),
+      new Map(Object.entries({ [legacyFile]: legacy, [file]: source })),
+      (candidate) => candidate === doctorFile,
+      (candidate, operation) =>
+        candidate === doctorFile && operation === "collectAgentRuntimeToolSchemaFindings"
+          ? "T3"
+          : undefined,
+    );
+  expect(inspectDoctor(doctorFile, doctor).violations).toEqual([]);
+  for (const [file, source] of [
+    [doctorFile, doctor.replace("collectAgentRuntimeToolSchemaFindings", "unreviewed")],
+    ["src/flows/unreviewed.ts", doctor],
+    [doctorFile, doctor.replace(`return ${first}()`, `return () => ${first}()`)],
+  ] as const) {
+    expect(inspectDoctor(file, source).violations).toEqual([
+      expect.stringContaining("bundled runtime reference"),
+    ]);
+  }
+});
+
 it("does not classify deprecated methods or their unverified factory objects", () => {
   const result = inspect({
     "src/gateway/github-publication-coordinator-methods.ts": `
@@ -140,6 +166,92 @@ it("does not classify deprecated methods or their unverified factory objects", (
   ]);
 });
 
+const mixedReceiverFile = "src/gateway/model-account-connect.ts";
+const mixedReceiver = `
+  import { readKernel } from '../session-kernel.js';
+  export function createModelAccountConnectService() {
+    const readLegacy = () => readKernel();
+    return {
+      /** @deprecated Await listLinksAsync. */
+      listLinks() { return readLegacy(); },
+      async listLinksAsync() { return executeSqliteQuerySync(query); },
+    };
+  }
+`;
+
+it("isolates reviewed deprecated members from their live factory and async siblings", () => {
+  const result = inspect({
+    [kernelFile]: kernel,
+    [mixedReceiverFile]: mixedReceiver,
+    "src/consumer.ts": `import { createModelAccountConnectService } from './gateway/model-account-connect.js';
+      const service = createModelAccountConnectService();
+      service.listLinksAsync();`,
+  });
+  expect(result.violations).toEqual([]);
+  expect(result.operations.get(mixedReceiverFile)).toEqual(
+    new Set([
+      "createModelAccountConnectService.listLinks",
+      "createModelAccountConnectService.readLegacy",
+    ]),
+  );
+  expect(result.operations.get(kernelFile)).toEqual(new Set(["readKernel"]));
+});
+
+it.each([
+  ["direct call", "service.listLinks();"],
+  ["escaped member", "register(service.listLinks);"],
+])("rejects a bundled %s to a reviewed deprecated member", (_label, use) => {
+  const result = inspect({
+    [kernelFile]: kernel,
+    [mixedReceiverFile]: mixedReceiver,
+    "src/consumer.ts": `import { createModelAccountConnectService } from './gateway/model-account-connect.js';
+      const service = createModelAccountConnectService(); ${use}`,
+  });
+  expect(result.operations.has(kernelFile)).toBe(false);
+  expect(result.operations.has(mixedReceiverFile)).toBe(false);
+  expect(result.violations).toEqual([expect.stringContaining("src/consumer.ts:")]);
+});
+
+it("requires the reviewed member itself to remain deprecated", () => {
+  const result = inspect({
+    [kernelFile]: kernel,
+    [mixedReceiverFile]: mixedReceiver.replace("@deprecated", "Legacy:"),
+  });
+  expect(result.operations.has(kernelFile)).toBe(false);
+  expect(result.violations).toEqual([
+    `${mixedReceiverFile}:createModelAccountConnectService.listLinks: reviewed compatibility operation must be @deprecated`,
+  ]);
+});
+
+it("keeps a local legacy helper live when an async sibling calls it", () => {
+  const result = inspect({
+    [kernelFile]: kernel,
+    [mixedReceiverFile]: mixedReceiver.replace(
+      "async listLinksAsync() { return executeSqliteQuerySync(query); }",
+      "async listLinksAsync() { return readLegacy(); }",
+    ),
+  });
+  expect(result.operations.has(kernelFile)).toBe(false);
+  expect(result.operations.get(mixedReceiverFile)?.has("createModelAccountConnectService")).toBe(
+    false,
+  );
+});
+
+it("does not trust a same-named deprecated member on another factory", () => {
+  const result = inspect({
+    [kernelFile]: kernel,
+    [mixedReceiverFile]: `${mixedReceiver}
+      export function createOtherService() {
+        return {
+          /** @deprecated Await listLinksAsync. */
+          listLinks() { return readKernel(); },
+        };
+      }`,
+  });
+  expect(result.operations.has(kernelFile)).toBe(false);
+  expect(result.operations.get(mixedReceiverFile)?.has("createOtherService.listLinks")).toBe(false);
+});
+
 it("allows async-only members selected from a dynamic namespace import", () => {
   const result = inspect({
     "src/plugin-sdk/barrel.ts": `export { ${first} as oldQuery } from './sqlite-runtime-legacy.js';
@@ -148,6 +260,29 @@ it("allows async-only members selected from a dynamic namespace import", () => {
   });
   expect(result.violations).toEqual([]);
 });
+
+it.each([".queryAsync", "['queryAsync']"])(
+  "allows a statically selected async member from an inline dynamic import: %s",
+  (selector) => {
+    const result = inspect({
+      "src/plugin-sdk/barrel.ts": `export { ${first} as oldQuery } from './sqlite-runtime-legacy.js';
+        export async function queryAsync() { return 1; }`,
+      "src/consumer.ts": `await (await import('./plugin-sdk/barrel.js'))${selector}();`,
+    });
+    expect(result.violations).toEqual([]);
+  },
+);
+
+it.each([".oldQuery", "['oldQuery']", "[key]"])(
+  "rejects a legacy or computed member from an inline dynamic import: %s",
+  (selector) => {
+    const result = inspect({
+      "src/plugin-sdk/barrel.ts": `export { ${first} as oldQuery } from './sqlite-runtime-legacy.js';`,
+      "src/consumer.ts": `const key = 'oldQuery'; (await import('./plugin-sdk/barrel.js'))${selector}();`,
+    });
+    expect(result.violations).toEqual([expect.stringContaining("src/consumer.ts:")]);
+  },
+);
 
 it("follows renamed namespace reexports and default exports", () => {
   const result = inspect({
@@ -184,9 +319,11 @@ it("retires deleted operations even when their module keeps other exports", () =
 });
 
 it("does not read missing compatibility files from the current checkout", () => {
-  expect(inspectDatabaseWorkerCompatibility(process.cwd(), new Map())).toEqual({
+  expect(inspectDatabaseWorkerBoundaries(process.cwd(), new Map())).toEqual({
     operations: new Map(),
     callLocations: new Map(),
+    nonRuntimeOperations: new Map(),
+    nonRuntimeCallLocations: new Map(),
     violations: [],
   });
 });
@@ -516,6 +653,23 @@ export function ${first}() {
   expect(result.callLocations.get(legacyFile)).toEqual(new Set(["3:3", "4:3"]));
 });
 
+it("records profile reads inside the exact synchronous alias resolver", () => {
+  const profileFile = "src/state/user-profiles-internal.ts";
+  const result = inspect(
+    {
+      [profileFile]: `function readResolvedUserProfile(id, read) { return read(id); }
+export function selectResolvedUserProfile() {
+  return readResolvedUserProfile('id', (id) => executeSqliteQueryTakeFirstSync(db, query));
+}`,
+    },
+    `import { selectResolvedUserProfile } from '../state/user-profiles-internal.js';
+/** @deprecated Use workers. */
+export function ${first}() { return selectResolvedUserProfile(); }`,
+  );
+  expect(result.violations).toEqual([]);
+  expect(result.callLocations.get(profileFile)).toEqual(new Set(["1:53", "3:10", "3:48"]));
+});
+
 it("does not confuse a nested function path with a live top-level namesake", () => {
   const result = inspect({
     [secondFile]: `import { wrapper } from '../wrapper.js';
@@ -528,4 +682,306 @@ it("does not confuse a nested function path with a live top-level namesake", () 
     export function same() { return 2; }`,
   });
   expect(result.operations.get("src/wrapper.ts")?.has("same")).toBe(false);
+});
+
+const maintenanceFile = "src/state/openclaw-state-db-maintenance.ts";
+const maintenanceSource = `
+export function writeCurrentStateSchemaMetadata() { return persistSchema(); }
+function persistSchema() { return executeSqliteQuerySync(query); }
+export function runStateSchemaMigrationTransaction(db, path, operation) { return operation(); }
+`;
+const doctorSource = `
+  import { writeCurrentStateSchemaMetadata, runStateSchemaMigrationTransaction } from '../state/openclaw-state-db-maintenance.js';
+  export function doctor() {
+    return runStateSchemaMigrationTransaction(db, path, () => writeCurrentStateSchemaMetadata());
+  }
+`;
+
+function inspectMaintenance(extra: Record<string, string> = {}) {
+  return inspectDatabaseWorkerBoundaries(
+    process.cwd(),
+    new Map(
+      Object.entries({
+        [maintenanceFile]: maintenanceSource,
+        "src/commands/doctor.ts": doctorSource,
+        ...extra,
+      }),
+    ),
+    (file) =>
+      file.startsWith("src/commands/") || file.includes("migration") || file.endsWith(".worker.ts"),
+    (file) =>
+      file === "src/commands/doctor.ts"
+        ? "T3"
+        : file === "src/read.worker.ts" || file === "src/state/user-github-connections.worker.ts"
+          ? "W"
+          : undefined,
+  );
+}
+
+it("proves maintenance-only kernels through the exact synchronous migration scope", () => {
+  const result = inspectMaintenance({
+    "src/read.worker.ts": `import { writeCurrentStateSchemaMetadata } from './state/openclaw-state-db-maintenance.js';
+      writeCurrentStateSchemaMetadata();`,
+  });
+  expect(result.violations).toEqual([]);
+  expect(result.operations.size).toBe(0);
+  expect(result.nonRuntimeOperations.get(maintenanceFile)).toEqual(
+    new Map([
+      ["writeCurrentStateSchemaMetadata", "T3"],
+      ["persistSchema", "T3"],
+    ]),
+  );
+  expect(result.nonRuntimeCallLocations.get(maintenanceFile)).toEqual(new Set(["2:60", "3:35"]));
+});
+
+it.each([
+  [
+    "Gateway caller",
+    "src/gateway/consumer.ts",
+    `import { writeCurrentStateSchemaMetadata as write } from '../state/openclaw-state-db-maintenance.js';
+    export function handle() { return write(); }`,
+  ],
+  [
+    "escaped Doctor callback",
+    "src/commands/doctor.ts",
+    `import { writeCurrentStateSchemaMetadata as write } from '../state/openclaw-state-db-maintenance.js';
+    export function doctor() { return () => write(); }`,
+  ],
+  [
+    "migration filename lead",
+    "src/infra/state-migrations.unreviewed.ts",
+    `import { writeCurrentStateSchemaMetadata as write } from '../state/openclaw-state-db-maintenance.js';
+    export function migrate() { return write(); }`,
+  ],
+  [
+    "SDK reexport",
+    "src/plugin-sdk/schema.ts",
+    `export { writeCurrentStateSchemaMetadata } from '../state/openclaw-state-db-maintenance.js';`,
+  ],
+])("keeps maintenance candidates live after a %s", (_label, file, source) => {
+  const result = inspectMaintenance({ [file]: source });
+  expect(result.violations).toEqual([]);
+  expect(result.nonRuntimeOperations.has(maintenanceFile)).toBe(false);
+});
+
+it("does not trust a same-named callback scope from another module", () => {
+  const result = inspectMaintenance({
+    "src/commands/doctor.ts":
+      doctorSource.replace(
+        "writeCurrentStateSchemaMetadata, runStateSchemaMigrationTransaction",
+        "writeCurrentStateSchemaMetadata",
+      ) + `import { runStateSchemaMigrationTransaction } from '../impostor.js';`,
+    "src/impostor.ts": `export function runStateSchemaMigrationTransaction(db, path, operation) { return operation; }`,
+  });
+  expect(result.nonRuntimeOperations.has(maintenanceFile)).toBe(false);
+});
+
+it("keeps a kernel live through an unreviewed worker-named wrapper called by the Gateway", () => {
+  const result = inspectMaintenance({
+    "src/unregistered.worker.ts": `import { writeCurrentStateSchemaMetadata } from './state/openclaw-state-db-maintenance.js';
+      export function writeSchema() { return writeCurrentStateSchemaMetadata(); }`,
+    "src/gateway/consumer.ts": `import { writeSchema } from '../unregistered.worker.js';
+      export function handle() { return writeSchema(); }`,
+  });
+  expect(result.nonRuntimeOperations.has(maintenanceFile)).toBe(false);
+});
+
+it("classifies a shared kernel with exclusively worker callers as worker-owned", () => {
+  const result = inspectMaintenance({
+    "src/commands/doctor.ts": "export {};",
+    "src/read.worker.ts": `import { writeCurrentStateSchemaMetadata } from './state/openclaw-state-db-maintenance.js';
+      writeCurrentStateSchemaMetadata();`,
+  });
+  expect(result.nonRuntimeOperations.get(maintenanceFile)).toEqual(
+    new Map([
+      ["writeCurrentStateSchemaMetadata", "W"],
+      ["persistSchema", "W"],
+    ]),
+  );
+});
+
+it.each([
+  {
+    entryFile: "src/state/user-profiles.ts",
+    entry: "ensureProfileForTailscaleIdentity",
+    workerFile: "src/state/user-profiles.worker.ts",
+    kernelFile: "src/state/user-profile-mutation.ts",
+    kernel: "runUserProfileWriteTransaction",
+    source: `import { runUserProfileWriteTransaction } from './user-profile-mutation.js';
+      export function ensureProfileForTailscaleIdentity() { return runUserProfileWriteTransaction(); }`,
+    kernelSource: `export function runUserProfileWriteTransaction() { return executeSqliteQuerySync(query); }`,
+  },
+  {
+    entryFile: "src/state/user-profile-github-identity.ts",
+    entry: "readUserProfileGitHubCommand",
+    workerFile: "src/state/user-profile-read.worker.ts",
+    kernelFile: "src/state/user-profile-github-identity.ts",
+    kernel: "selectStoredGitHubIdentities",
+    source: `function selectStoredGitHubIdentities() { return executeSqliteQuerySync(query); }
+      function resolveCachedGitHubIdentityInDatabase() { return selectStoredGitHubIdentities(); }
+      export function readUserProfileGitHubCommand() { return resolveCachedGitHubIdentityInDatabase(); }`,
+    kernelSource: undefined,
+  },
+])("proves the profile worker chain through $entry", (fixture) => {
+  const sources = new Map([
+    [fixture.entryFile, fixture.source],
+    [
+      fixture.workerFile,
+      `import { ${fixture.entry} } from './${fixture.entryFile.split("/").at(-1)!.replace(".ts", ".js")}';
+        export const handlers = { run: () => ${fixture.entry}() };`,
+    ],
+  ]);
+  if (fixture.kernelSource) {
+    sources.set(fixture.kernelFile, fixture.kernelSource);
+  }
+  const inspectProfileChain = () =>
+    inspectDatabaseWorkerBoundaries(
+      process.cwd(),
+      sources,
+      () => false,
+      (file) => (file === fixture.workerFile ? "W" : undefined),
+    );
+  expect(
+    inspectProfileChain().nonRuntimeOperations.get(fixture.kernelFile)?.get(fixture.kernel),
+  ).toBe("W");
+
+  sources.set(
+    "src/gateway/handler.ts",
+    `import { ${fixture.entry} } from '../state/${fixture.entryFile.split("/").at(-1)!.replace(".ts", ".js")}';
+      export function handle() { return ${fixture.entry}(); }`,
+  );
+  expect(
+    inspectProfileChain().nonRuntimeOperations.get(fixture.kernelFile)?.has(fixture.kernel),
+  ).not.toBe(true);
+});
+
+it.each([
+  `export const handlers = { run: () => writeCurrentStateSchemaMetadata() };`,
+  `export function createHandler() { return () => writeCurrentStateSchemaMetadata(); }`,
+])("retains callback execution inside a reviewed worker-only module: %s", (body) => {
+  const result = inspectMaintenance({
+    "src/commands/doctor.ts": "export {};",
+    "src/read.worker.ts": `import { writeCurrentStateSchemaMetadata } from './state/openclaw-state-db-maintenance.js';
+      ${body}`,
+  });
+  expect(result.nonRuntimeOperations.get(maintenanceFile)?.get("persistSchema")).toBe("W");
+});
+
+it.each(["src/unregistered.worker.ts", "src/commands/doctor.ts", "src/gateway/handler.ts"])(
+  "does not infer a worker callback boundary from %s",
+  (file) => {
+    const result = inspectMaintenance({
+      "src/commands/doctor.ts": "export {};",
+      [file]: `import { writeCurrentStateSchemaMetadata } from '${file === "src/unregistered.worker.ts" ? "./state" : "../state"}/openclaw-state-db-maintenance.js';
+        export const handlers = { run: () => writeCurrentStateSchemaMetadata() };`,
+    });
+    expect(result.nonRuntimeOperations.has(maintenanceFile)).toBe(false);
+  },
+);
+
+it("uses reviewed worker ownership for its complete handler table", () => {
+  const file = "src/state/user-github-connections.worker.ts";
+  const handler = `import { writeCurrentStateSchemaMetadata } from './openclaw-state-db-maintenance.js';
+    export const userGitHubConnectionOperations = {
+      "userGitHubConnections.list": () => writeCurrentStateSchemaMetadata(),
+    } satisfies Handlers;`;
+  const result = inspectMaintenance({ "src/commands/doctor.ts": "export {};", [file]: handler });
+  expect(
+    result.nonRuntimeOperations.get(maintenanceFile)?.get("writeCurrentStateSchemaMetadata"),
+  ).toBe("W");
+  for (const [caller, source] of [
+    [file, handler.replace("userGitHubConnections.list", "unregistered")],
+    [file, handler.replace("userGitHubConnectionOperations", "unregistered")],
+    ["src/state/unregistered.worker.ts", handler],
+  ] as const) {
+    const escaped = inspectMaintenance({
+      "src/commands/doctor.ts": "export {};",
+      [caller]: source,
+    });
+    expect(escaped.nonRuntimeOperations.has(maintenanceFile)).toBe(caller === file);
+  }
+});
+
+const channelAuthorityFile = "src/gateway/channel-operator-authority.ts";
+const profileEmailsFile = "src/state/user-profiles-internal.ts";
+
+function inspectChannelAuthority(source: string, extra: Record<string, string> = {}) {
+  return inspectDatabaseWorkerBoundaries(
+    process.cwd(),
+    new Map(
+      Object.entries({
+        [profileEmailsFile]: `export function selectUserProfileEmails() { return executeSqliteQuerySync(query); }`,
+        [channelAuthorityFile]: `import { selectUserProfileEmails } from '../state/user-profiles-internal.js';
+          function resolveChannelOperatorIdentityFacts() {
+            return { isCurrent: () => selectUserProfileEmails() };
+          }
+          ${source}`,
+        ...extra,
+      }),
+    ),
+    () => false,
+    (file, operation) =>
+      file === channelAuthorityFile &&
+      [
+        "resolveChannelOperatorAdminAuthority",
+        "resolveUpdateChannelOperatorAdminIdentityAuthority",
+      ].includes(operation)
+        ? "T3"
+        : undefined,
+  );
+}
+
+it.each([
+  ["resolveChannelOperatorAdminAuthority", "captureLinkedOperatorAdmin"],
+  ["resolveUpdateChannelOperatorAdminIdentityAuthority", "captureLinkedOperatorAdminIdentity"],
+])("proves the retained identity callback at %s", (caller, receiver) => {
+  const source = `
+    function ${receiver}(cfg, linked, isCurrent) { return { isCurrent }; }
+    export function ${caller}() {
+      const prepared = resolveChannelOperatorIdentityFacts();
+      return ${receiver}(null, null, prepared.isCurrent);
+    }
+  `;
+  const result = inspectChannelAuthority(source);
+  expect(result.nonRuntimeOperations.get(profileEmailsFile)?.get("selectUserProfileEmails")).toBe(
+    "T3",
+  );
+  const liveSibling = inspectChannelAuthority(`${source}
+    export function handle() { return resolveChannelOperatorIdentityFacts().isCurrent; }
+  `);
+  expect(liveSibling.nonRuntimeOperations.has(profileEmailsFile)).toBe(false);
+});
+
+it.each([
+  ["runtime caller", "handle", "captureLinkedOperatorAdmin(null, null, prepared.isCurrent)"],
+  [
+    "wrong argument",
+    "resolveChannelOperatorAdminAuthority",
+    "captureLinkedOperatorAdmin(null, prepared.isCurrent, null)",
+  ],
+  ["unknown consumer", "resolveChannelOperatorAdminAuthority", "save(prepared.isCurrent)"],
+])("keeps an identity callback live after a %s", (_label, caller, call) => {
+  const result = inspectChannelAuthority(`
+    function captureLinkedOperatorAdmin(cfg, linked, isCurrent) { return { isCurrent }; }
+    function save(value) { return value; }
+    export function ${caller}() {
+      const prepared = resolveChannelOperatorIdentityFacts();
+      return ${call};
+    }
+  `);
+  expect(result.nonRuntimeOperations.has(profileEmailsFile)).toBe(false);
+});
+
+it("rejects a same-named identity consumer from another module", () => {
+  const result = inspectChannelAuthority(
+    `import { captureLinkedOperatorAdmin } from './unreviewed.js';
+    export function resolveChannelOperatorAdminAuthority() {
+      const prepared = resolveChannelOperatorIdentityFacts();
+      return captureLinkedOperatorAdmin(null, null, prepared.isCurrent);
+    }`,
+    {
+      "src/gateway/unreviewed.ts": `export function captureLinkedOperatorAdmin(cfg, linked, isCurrent) { return isCurrent; }`,
+    },
+  );
+  expect(result.nonRuntimeOperations.has(profileEmailsFile)).toBe(false);
 });

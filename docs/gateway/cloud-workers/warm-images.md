@@ -16,13 +16,13 @@ On Linux, warm images are on by default when a class is known from `settings.cla
 
 Forwarded host environment values reach setup, so whatever setup derives from them could persist in a shared image. Profiles with nonempty `setupEnv` capture only when you explicitly set `settings.warmImage: true`, after checking that setup leaves no credential on disk. Explicit `true` requires a known configured or placement class before any provider command. Explicit `false` always keeps provisioning cold, for example when snapshot storage charges or provider-side retention of repository content are unwanted.
 
-For a Gateway worktree project with a Git commit, capture happens during provisioning, before node enrollment. After profile setup, OpenClaw prepares a pristine checkout of the admitted commit and, when the dispatch caller authorizes setup, runs its committed executable `.openclaw/worktree-setup.sh` at the final workspace and `HOME` paths. It installs the verified node runtime and captures the completed environment when an image is needed. An explicit setup skip uses a separate prepared cache; without setup authority, an executable recipe keeps the existing Git-seed path. The first dispatch includes that work; subsequent sessions can reuse the image without waiting for the first session to stop. Session edits, eligible untracked files, and node enrollment credentials arrive only after capture. Repository-only sessions use the same preparation flow: OpenClaw resolves the repository instance, commit, and executable setup recipe through GitHub. Public sources fetch that exact commit on the worker without credentials. Private sources fetch authenticated Git objects into temporary Gateway storage, then transfer a verified Git pack; this preparation step never puts GitHub credentials in provider scripts, worker files, or snapshots. The Gateway creates no managed checkout and runs no project setup for this transfer. Providers without project preparation retain ordinary checkout after enrollment.
+For a Gateway worktree project with a Git commit, capture happens during provisioning, before node enrollment. After profile setup, OpenClaw prepares a pristine checkout of the admitted commit and, when the dispatch caller authorizes setup, runs its resolved [repository environment recipe](/gateway/cloud-workers/environment-file) at the final workspace and `HOME` paths. A devcontainer file takes precedence over the committed executable `.openclaw/worktree-setup.sh` fallback; repositories with neither use built-in JavaScript dependency detection. Devcontainer `onCreateCommand` runs before `updateContentCommand`, and both complete before capture. `postCreateCommand` and `postStartCommand` run after enrollment and session workspace binding, before the first turn, and are never captured. OpenClaw installs the verified node runtime and captures the completed environment when an image is needed. A detected dependency-install failure records its reason and skips capture for that run while allowing the session to start cold; a declared recipe failure fails dispatch. An explicit setup skip uses a separate prepared cache; without setup authority, a recipe keeps the existing Git-seed path. The first dispatch includes that work; subsequent sessions can reuse the image without waiting for the first session to stop. Session edits, eligible untracked files, and node enrollment credentials arrive only after capture. Repository-only sessions use the same preparation flow: OpenClaw resolves the repository instance, commit, and setup recipe through GitHub. Public sources fetch that exact commit on the worker without credentials. Private sources fetch authenticated Git objects into temporary Gateway storage, then transfer a verified Git pack; this preparation step never puts GitHub credentials in provider scripts, worker files, or snapshots. The Gateway creates no managed checkout and runs no project setup for this transfer. Providers without project preparation retain ordinary checkout after enrollment.
 
 An empty committed Git tree has no project content to prepare, including the separate empty repositories created for new sessions. Those sessions use the profile's shared runtime image without a project-base pack transfer. Their Git metadata and any session files still synchronize after enrollment. Without a prepared project, image capture remains at eligible worker teardown.
 
 Private preparation needs temporary Gateway disk space for the shallow Git objects and outgoing pack. The existing 4 GiB pack limit applies to the transferred artifact; it does not cap bytes downloaded by Git before that pack is produced. Fetch uses a bounded command timeout, and temporary files are removed after the owning work settles, including cancellation.
 
-When a transferred project has no executable setup recipe, or setup was explicitly skipped, the seed transfer also completes the prepared workspace in the same remote command. Executable recipes retain a separate current-authority check before execution. Runtime installation and credential cleanup also share one remote command before project capture; snapshot creation still waits for both to finish successfully. If either step fails, dispatch stops the incomplete worker and reports the error before enrollment.
+When a transferred project has no setup commands, or setup was explicitly skipped, the seed transfer also completes the prepared workspace in the same remote command. Repository recipes retain a separate current-authority check before execution. Runtime installation and credential cleanup also share one remote command before project capture; snapshot creation still waits for both to finish successfully. If either step fails, dispatch stops the incomplete worker and reports the error before enrollment.
 
 Local project preparation retains the primary Git repository as its transport source, including a bare primary repository backing a linked checkout. It keeps the admitted session commit pinned, so archiving and removing the linked session checkout does not prevent reserve refill or select the primary checkout's newer `HEAD`. Session-file synchronization still uses the session checkout.
 
@@ -30,11 +30,13 @@ Project images also retain one verified compressed worker archive in the install
 
 Daytona requires a stopped source for filesystem snapshots. OpenClaw allows Crabbox to stop the scrubbed worker for capture. A successful capture waits for snapshot completion and restores a previously running source before project enrollment continues.
 
-Image reuse is keyed by the backend, setup command, sorted `setupEnv` variable names (not their values), desktop setting, effective operating system, exact effective machine class, and project identity when present. Project identity comes from the Gateway's namespace and the canonical shared Git directory. Linked session worktrees from the same repository share it; a new session or commit does not create another project identity. Separate repository clones have separate identities. Prepared repository identity includes the canonical URL, GitHub repository ID, current agent binding, selected shared GitHub account/profile or explicitly verified anonymous access, and a separate scope for private contents. Tokens are never persisted in that identity. Each prepared seed also records its exact commit, so a changed commit can refresh the same project's image.
+Image reuse is keyed by the provider/backend, setup command, sorted `setupEnv` variable names (not their values), desktop setting, effective operating system and architecture when known, exact effective machine class, and project identity when present. Prepared project compatibility also includes the repository setup recipe, whether that recipe is skipped, the workspace protocol, and a versioned preparation contract. Gateway versions, runtime archives, enabled plugins, execution mode, worker install method, profile names, lease lifetimes, idle timeouts, and reserve targets do not invalidate compatible snapshots. Ready workers still bind their exact runtime, profile, and commit facts. Prepared project images from the previous preparation contract are incompatible with new allocations and retire through normal retention. The outer image-record key stays stable so existing leases retain their recorded replay identity; version-3 records need no migration. Project identity comes from the Gateway's namespace and the resolved shared Git directory. Linked session worktrees from the same repository share it; a new session or commit does not create another project identity. Separate repository clones have separate identities. Prepared repository identity includes the normalized URL, GitHub repository ID, current agent binding, selected shared GitHub account/profile or explicitly verified anonymous access, and a separate scope for private contents. Tokens are never persisted in that identity. Each prepared seed also records its exact commit, so a changed commit can refresh the same project's image.
 
 Before its first provider allocation command, OpenClaw records whether the lease starts cold or from a specific checkpoint, along with its resolved operating system and class. Retries and Gateway restart reuse that exact choice; a lost response cannot switch a cold allocation to a newly available image or select a different checkpoint. The record advances through preparation and enrollment, and a selected checkpoint remains protected from deletion until the provider confirms the lease has stopped. A failed fork reports an error instead of silently changing the recorded allocation. Runtime identity is also frozen for that allocation. Replay rejects a changed or missing identity rather than relabeling an existing worker; stop it before creating a new allocation. An older allocation cannot replace an image published from a different source generation merely because their runtime digests differ.
 
-Warm images work on `machine0` through Crabbox's `--strategy image`; other backends keep their native checkpoint strategy. OpenClaw uses Crabbox's verified fork-readiness result for backend-specific image states, including Machine0's `ACTIVE` state. Unpinned project images refresh during background reserve or explicit build preparation when the requested commit changes. A foreground session that forked a compatible image prepares its new commit without waiting for replacement capture. Runtime changes, initial preparation, interrupted capture replay, and age-based refresh retain their existing capture checks; `refreshAfter` defaults to 24 hours. Non-project images refresh at the next eligible worker stop when the runtime changes or after that interval. Runtime identity includes the node archive digest, execution mode, and the worker archive digest when that archive is included in the image. Images without recorded runtime identity are refreshed at the same capture boundary. An older compatible image remains a useful setup base: the first session installs the current runtime, then captures it so subsequent sessions can reuse that installation.
+The existing session startup line shows **Starting from snapshot…** for a snapshot fork. A cold project preparation that can capture shows **Preparing cloud environment…**, then **Saving snapshot…** after capture is claimed. Other starts retain the ordinary provisioning status. Cold reasons stay in detail data: `crabbox.images.list` includes `latestColdReason` for each image record, and environment and provisioning-placement status include typed `startStatus` facts. Reasons distinguish missing, changed, retiring, or unavailable snapshots, paused or unsupported capture, unsupported operating systems, unknown classes, and disabled warm images. Existing image records without a recorded reason remain unknown; later cold allocations record one. These additive display fields require no configuration or database migration; a Gateway restart resumes the recorded allocation choice and publishes progress for its new attempt.
+
+Warm images work on `machine0` through Crabbox's `--strategy image`; other backends keep their native checkpoint strategy. OpenClaw uses Crabbox's verified fork-readiness result for backend-specific image states, including Machine0's `ACTIVE` state. Unpinned project images refresh during background reserve or explicit build preparation when the requested commit or runtime changes. A foreground session that forks a compatible image prepares its checkout and tops up an older runtime, then continues to enrollment without waiting for replacement capture solely because the runtime changed. Enrollment still verifies the runtime. Initial preparation, interrupted capture replay, required setup repair, and age-based refresh retain their capture checks; `refreshAfter` defaults to 24 hours. Non-project images refresh at the next eligible worker stop when the runtime changes or after that interval. Runtime identity includes the node archive digest, execution mode, and the worker archive digest when that archive is included in the image. Images without recorded runtime identity are refreshed at the same capture boundary. An older compatible image remains a useful setup base across Gateway updates. It picks up the current runtime at the next eligible age refresh or background reserve/build capture; foreground top-ups leave its recorded runtime identity unchanged.
 
 The current image remains recorded and usable throughout capture. By default, OpenClaw atomically records the replacement and its predecessor's deletion obligation in the same profile record, then deletes the predecessor once no allocation still needs it. With `keepPrevious: 1`, it retains the predecessor as **Previous** for rollback and retires the older previous generation first. A pinned predecessor is retained regardless of `keepPrevious`; an existing pinned previous generation is never deleted to make room. If both current and previous are pinned, OpenClaw skips replacement publication and warns once about the single-pinned-previous limit. Unpin one checkpoint to permit that replacement. Failed deletion warns, survives Gateway restart and warm reuse, and retries during periodic maintenance, later capture maintenance, or warm-image-enabled worker teardown. Further refreshes for that profile wait for deletion to succeed; replacement forks and lease teardown continue.
 
@@ -50,14 +52,15 @@ Scrubbing has a three-minute timeout. Checkpoint creation requests `--wait --wai
 
 A warm start provisions a fresh lease with fresh node enrollment. Cold allocations and snapshot forks use the same configured lease lifetime, idle timeout, desktop setting, and public networking without Tailscale. A warm start reuses machine-level caches, not a per-session snapshot or a suspended process.
 
-Project preparation checks for a verified completed checkout and pristine seed before building or uploading a Git pack. Its serialized pre-enrollment operation verifies retained Git objects and workspace contents once, then rechecks the exact completion witness and Git identity before later stages. That observation is never persisted or reused by a new operation; setup invalidates completion before mutation, and node registration independently verifies the final workspace. Reusing the same commit skips clone and setup. A changed Gateway-project commit refreshes the existing checkout with a thin Git transfer, removes obsolete eligible setup outputs, and reruns its admitted recipe while preserving compatible ignored caches and absolute paths. Tracked paths in the new commit take precedence over conflicting cache files or directories; unrelated ignored caches and the prepared `HOME` remain in place. If the Gateway has garbage-collected the previous commit after rewriting history, it transfers a full snapshot of the current commit while keeping the verified remote workspace and caches. Completion is invalidated before mutation, so interrupted setup cannot advertise readiness or silently rerun. Before enrollment, replay of an already allocated prepared worker conservatively captures its completed setup when it still owns the current source image. This can add one snapshot if an already-complete warm reuse was interrupted before enrollment; a published replacement and enrolled-session replay do not capture again. An enrolled provisioning retry only inspects the original completion witness; it never runs setup or captures a session. Already-bound session restart preserves user edits through the stored binding. Placements without a completed checkout retain the existing flow: copy the seed's Git objects into a fresh repository, recreate its Git metadata, and apply the current eligible file manifest. A matching seed skips both an origin fetch and a full Git pack download, including for private or unpublished commits. A missing seed uses the Gateway pack; an invalid prepared seed fails visibly. Workspaces without a prepared project keep the eligible origin/seed path. The Gateway builds transfer packs only on demand, and each transfer retains its original base commit even if local commits change later.
+Project preparation checks for a verified completed checkout and pristine seed before building or uploading a Git pack. Its serialized pre-enrollment operation verifies retained Git objects and workspace contents once, then rechecks the exact completion witness and Git identity before later stages. That observation is never persisted or reused by a new operation; setup invalidates completion before mutation, and node registration independently verifies the final workspace. Reusing the same commit skips clone and setup. A changed Gateway-project commit refreshes the existing checkout with a thin Git transfer, removes obsolete eligible setup outputs, and reruns only the devcontainer `updateContentCommand` while preserving compatible ignored caches and absolute paths. The fallback script or detected installer reruns for a refreshed checkout; devcontainer `onCreateCommand` does not. Tracked paths in the new commit take precedence over conflicting cache files or directories; unrelated ignored caches and the prepared `HOME` remain in place. If the Gateway has garbage-collected the previous commit after rewriting history, it transfers a full snapshot of the current commit while keeping the verified remote workspace and caches. Completion is invalidated before mutation, so interrupted setup cannot advertise readiness or silently rerun. Before enrollment, replay of an already allocated prepared worker conservatively captures its completed setup when it still owns the current source image. This can add one snapshot if an already-complete warm reuse was interrupted before enrollment; a published replacement and enrolled-session replay do not capture again. An enrolled provisioning retry only inspects the original completion witness; it never runs setup or captures a session. Already-bound session restart preserves user edits through the stored binding. Placements without a completed checkout retain the existing flow: copy the seed's Git objects into a fresh repository, recreate its Git metadata, and apply the current eligible file manifest. A matching seed skips both an origin fetch and a full Git pack download, including for private or unpublished commits. A missing seed uses the Gateway pack; an invalid prepared seed fails visibly. Workspaces without a prepared project keep the eligible origin/seed path. The Gateway builds transfer packs only on demand, and each transfer retains its original base commit even if local commits change later.
 
 ### Retention policy
 
 Set the plugin-wide policy under `plugins.entries.crabbox.config.warmImages`, or
-use the **Retention policy** card in **Snapshots**. Saving reloads the Crabbox
-plugin without restarting the Gateway. Worker lease lifetimes and the 128-profile
-capacity limit stay unchanged.
+use **Advanced → Snapshot retention** under **Cloud environments**. These controls
+apply to all repositories. Saving reloads the Crabbox plugin without restarting
+the Gateway. Worker lease lifetimes and the 128-profile capacity limit stay
+unchanged.
 
 | Key            | Default | Accepted values                                                   |
 | -------------- | ------- | ----------------------------------------------------------------- |
@@ -88,8 +91,8 @@ or `14d`; composite and fractional durations are invalid.
 
 Pinned checkpoints are exempt from age refresh, unused expiry, capacity eviction,
 and replacement retirement. For prepared project images, a pin keeps a checkpoint
-available, but a runtime or recipe change still starts new workers cold until a
-compatible capture publishes.
+available across runtime updates; workers top up the runtime after forking it. A
+recipe change still starts workers cold until a compatible capture publishes.
 Other allocation compatibility rules also remain unchanged. A newer capture for
 the same profile record moves a pinned current checkpoint to **Previous**, even
 with `keepPrevious: 0`; rollback can restore it. Unpinning restores ordinary
@@ -99,14 +102,11 @@ retirement unless pinned or still held by an allocation.
 
 ### Ready workers
 
-Open **Settings → Connections → Cloud workers → Pool** to inspect running
-prepared workers. The view groups workers by profile and shows ready, preparing,
-releasing, and attention counts, the project and prepared commit, expiry, and
-recorded failures. Capacity includes preparation and unconfirmed cleanup;
-consumed workers leave this view unless pending cleanup still reserves capacity. The inventory
-refreshes every 10 seconds while the view is visible. A failed refresh keeps the
-last result visible with a warning. The **Profiles** tab controls reserve targets
-and the shared pool limit; **Snapshots** manages the reusable disk images.
+Open **Settings → Connections → Cloud environments** and expand **Advanced**
+at the bottom. Its **Pool** line shows the ready-worker count and shared pool cap.
+Edit an individual profile under **Machines** to change its reserve target. Repositories with
+ready or building workers also appear in the environment list; select one to
+inspect a failed build or cancel an active build.
 
 Pool details require current administrator access. API clients request them with
 `includePreparedDetails: true` on `environments.list` or `environments.status`;
@@ -126,8 +126,8 @@ refill stops and unused reserves retire after 15 minutes. Changing the GitHub ho
 stale demand and unused reserves; active sessions keep their own workers.
 Repository admission, refill, and restart binding recheck current source access and visibility. Public and private repositories use separate preparation identities; a visibility change or lost access prevents reuse of earlier prepared capacity. Retention and cleanup use local ownership facts without requiring GitHub access. A slow or failed default-repository admission does not block unrelated reserve cleanup or refill from independently authorized session demand. A changed repository instance or selected account cannot consume capacity prepared for the previous owner.
 A ready-worker hit bypasses provisioning. A foreground miss provisions a worker
-from the compatible image when available. If only the project commit changed,
-it refreshes the checkout and continues to enrollment without waiting for a new
+from the compatible image when available. If only the project commit or runtime changed,
+it refreshes the checkout or runtime and continues to enrollment without waiting for a new
 snapshot; a background reserve or explicit build can publish that refreshed image.
 The first image and incompatible preparation still follow the existing capture
 requirements. Disabling reserves also disables this automatic background refresh.
@@ -191,23 +191,31 @@ an older image's demand window.
 
 ### Inspect snapshots in the Control UI
 
-Open **Settings → Connections → Cloud workers → Snapshots** to inspect local
-warm-image ownership, grouped by configured profile. **Refresh** reloads both
-snapshots and worker builds. While a build or capture is in progress, both lists
-refresh every 10 seconds; polling stops when neither remains active.
-The view shows available images, captures in progress, images held by outstanding
-allocations, and captures or checkpoint deletions that need attention. Pending
-deletions show the checkpoint and retry guidance; a retiring current image is
-labeled **Retiring**, while an available successor keeps its status when only
-an older image awaits cleanup. Group headers prefer recorded
-machine facts and fall back to the configured profile's backend, class, and
-operating system. Missing row details are omitted; unknown profile IDs appear
-under **Unlabeled profile**. Legacy allocations appear under
-**Needs migration** with Doctor recovery guidance.
-Profiles with a retained native-capture refusal show the latest Crabbox reason
-and guidance; rows without a usable snapshot are labeled **Cold only**. The
-guidance explains that capture attempts resume after `warmImages.refreshAfter`
-has elapsed since the refusal. Set
+Open **Settings → Connections → Cloud environments** to inspect snapshots by
+repository. Each row shows its repository label and one status: **Ready** with
+relative age, **Building**, **Cold only**, or **Needs attention**. Select a row
+to open its environment sheet beside the list on wide screens or below it on
+narrow screens. While a build, capture, or ready worker is present, inventory
+refreshes every 10 seconds.
+
+The sheet's **Snapshot** section shows compact rows for each profile, with the
+repository default first. Each row has its own actions and recorded snapshot
+state, short source commit, built age, and last-used age. The current listing
+does not include snapshot size. **Setup** consumes the provider's optional
+`recipePreparation` facts: setup source, phase durations, and failure output
+appear only when recorded. Sources can identify `.openclaw/worktree-setup.sh`,
+a devcontainer recipe, or detected setup; the longest recorded step is emphasized.
+Recorded failures remain visible for every profile, even when another profile has
+a newer successful setup.
+**Machine → Change** edits the repository default under
+`cloudWorkers.projectProfiles`.
+
+Failed builds, pending cleanup, native-capture refusals, and **Paused: uncertain**
+recovery appear inside the sheet for repository snapshots. Images without a
+repository appear under **Advanced → Machine images**, including their uncertain
+captures and recovery actions. A retained native-capture refusal explains why
+an image is **Cold only** when no usable snapshot remains. Capture attempts resume
+after `warmImages.refreshAfter` has elapsed since the refusal. Set
 `settings.warmImage: false` to stop capture attempts. Successful capture clears
 the marker; maintenance drops a marker-only row from local state after
 `warmImages.refreshAfter` without a new refusal. Doctor reports the same
@@ -217,58 +225,61 @@ recovery.
 The Crabbox plugin advertises `crabbox.images.list`, `crabbox.images.recover`,
 `crabbox.images.pin`, `crabbox.images.delete`, and `crabbox.images.rollback`;
 all require `operator.admin`. Each action appears only when its method is
-advertised. If the listing method is not advertised, the view
-explains that the Crabbox worker provider must be enabled. Listing reads local
-state without contacting the provider and returns an allocation count plus at
-most 20 allocation entries per image.
+advertised. Snapshot details require the Crabbox worker provider to be enabled.
+Listing reads local state without contacting the provider and returns an
+allocation count plus at most 20 allocation entries per image.
 
-**Pin** and **Unpin** apply immediately and show a failure notification if the
-request is rejected. A **Pinned** badge marks protected checkpoints. A pin is an
-operator choice; **Held** means an outstanding allocation still needs the
-checkpoint. Pin changes are unavailable while the profile has a capture or
-retirement operation, so they cannot race provider side effects.
+Use each snapshot row's overflow menu for **Pin**, **Unpin**, **Roll back**, and
+**Delete**. Pin changes apply immediately and show a failure notification if the
+request is rejected. A pin protects the checkpoint from automatic retirement; an
+outstanding allocation can also hold a checkpoint. Pin changes are unavailable
+while the profile has a capture or retirement operation, so they cannot race
+provider side effects.
 
 **Delete** asks for confirmation and is disabled with a reason when the image is
 held, capturing, or pinned. OpenClaw retains the ownership record until provider
-deletion succeeds. A failed deletion leaves the image **Retiring** and retries
+deletion succeeds. A failed deletion retains the pending retirement and retries
 during maintenance; it does not report the checkpoint as deleted.
 
-When a previous generation exists, its **Previous** line shows the checkpoint
-and creation time, with **Pin** or **Unpin** and **Roll back** actions. Confirming
-**Roll back** atomically restores that checkpoint as current. The demoted current
-image becomes previous when `keepPrevious: 1` or when it is pinned; otherwise it
+When a previous generation exists, the menu offers pinning or unpinning that
+generation and **Roll back**. Confirming **Roll back** atomically restores that
+checkpoint as current. The demoted current image becomes previous when
+`keepPrevious: 1` or when it is pinned; otherwise it
 is retired after allocations release it. Rollback therefore still works after
 lowering `keepPrevious` to `0`, while the previous checkpoint remains recorded.
 A profile with an active capture or retirement cannot roll back.
 
-The **Retention policy** card at the bottom edits the three plugin-owned keys
-above through the normal configuration patch flow. Saving validates their
-durations and generation count, then reloads the Crabbox plugin to apply the policy.
+The collapsed **Advanced** section contains **Machines**, **Pool**,
+**Snapshot retention**, and **Machine images**, in that order. Snapshot retention
+edits the three plugin-owned keys above through the normal configuration patch
+flow. Saving validates durations and generation count, then reloads the Crabbox
+plugin to apply the shared policy. The policy is not a per-repository override.
+Builds without repository metadata also appear under **Machine images**, with
+failure details and the same **Cancel** or **Dismiss** actions. Pending cleanup
+and cleanup errors remain visible even when a worker still reports a ready
+lifecycle state. Saving machine
+configuration refreshes snapshot eligibility without leaving the page.
 
-**Build snapshot** opens a profile and local repository picker when
-`environments.prepare` is available with `operator.admin`. The repository catalog
-is shared with New Session. Profiles with warm images off are disabled with their
-reason. Building prepares the selected checkout's committed `HEAD` and authorizes
-its committed setup recipe without starting a session. The notice distinguishes a
-new build from reuse of an existing build or reserve. A full pool requires raising
-the prepared pool cap or destroying an unused worker before retrying.
-
-**Rebuild** uses the project root recorded on a project image. Older images without
-a recorded root omit this action; use **Build snapshot** to select the repository.
+**Rebuild** uses the local project root recorded on the snapshot and requires an
+eligible profile, `environments.prepare`, and `operator.admin`. For repository-only
+sources, older records without a local root, and ineligible profiles, the action
+is disabled with a reason in its tooltip. It prepares the checkout's committed
+`HEAD` and authorizes its committed setup recipe without starting a session.
 Rebuild uses the normal preparation and image refresh policy, including reuse of
 matching work already in progress; it does not force replacement of a current image.
+The result distinguishes a new build from reuse of an existing build or reserve.
+A full pool requires raising the pool cap or destroying an unused worker before
+retrying.
 
-Active builds appear in their configured profile group with worker state and age.
-**Cancel** asks for confirmation, then calls `environments.destroy` and waits for
-provider work and cleanup to settle. Completed or attached workers no longer appear
-as active builds. The **Building** total also includes active image captures,
-counting a build and its capture once when they share a lease ID.
-Failed and orphaned builds remain visible with their reported error and count
-toward **Needs attention**. They do not keep polling active or offer cancellation.
-A failed build offers **Dismiss**, which confirms, calls `environments.destroy`,
-and hides the row; the Gateway keeps the terminal record until retention expires,
-so a reload can list it again. Orphaned builds keep no dismissal because their
-provider artifacts still await cleanup.
+Active builds appear inside the repository sheet. **Cancel** asks for confirmation,
+then calls `environments.destroy` and waits for provider work and cleanup to settle.
+Completed or attached workers no longer appear as active builds. Failed and orphaned
+builds retain their reported error and make the repository **Needs attention**.
+They do not keep polling active or offer cancellation. A failed build offers
+**Dismiss**, which confirms, calls `environments.destroy`, and hides the build;
+the Gateway keeps the terminal record until retention expires, so a reload can
+list it again. Orphaned builds keep no dismissal because their provider artifacts
+still await cleanup.
 
 **Recover** is available only for uncertain captures. Its required checkbox
 acknowledges that the owning capture and worker have stopped and provider
@@ -294,7 +305,7 @@ marker. On rollback, an older OpenClaw ignores the marker and returns to the
 previous behavior (a refused capture stays paused until recovery), which fails safe.
 `profileId` means the configured profile that most recently allocated from the
 image key; it is overwritten on each allocation and does not change image keys
-or reuse policy. `projectRoot` is the canonical Gateway-local repository root used for rebuilding.
+or reuse policy. `projectRoot` is the resolved Gateway-local repository root used for rebuilding.
 Project labels use the normalized origin repository identity
 `host/owner/repo`, or the project root's basename when origin cannot be resolved.
 
@@ -306,7 +317,7 @@ Inspect local ownership without contacting the cloud:
 openclaw crabbox warm-images --json
 ```
 
-The bounded status includes checkpoint IDs, project keys, recorded runtime identity, allocation choices and phases, capture selectors, source lease IDs, backend names, and timestamps; it does not include setup commands or environment values. Doctor reports pending captures and retirements but never clears them through `doctor --fix`. A capture older than 20 minutes produces a warning and can still be preparing its source or waiting for provider readiness; allow the owning capture to settle. Only an explicitly uncertain outcome carries mandatory recovery guidance. Elapsed time does not grant permission to take over. The same reservation remains authoritative across restarts; older empty reservation markers also require explicit recovery. If inspection asks for a migration, follow [Upgrade warm-image state](/gateway/cloud-workers/warm-images#upgrade-warm-image-state) first.
+The bounded status includes checkpoint IDs, project keys, recorded runtime identity, allocation choices and phases, capture selectors, source lease IDs, backend names, and timestamps. Recipe diagnostics add the resolved source, ignored-properties note, preparation phase durations, and a failure reason with an output tail limited to 16 KiB. Status does not include setup commands or environment values. Doctor reports pending captures and retirements but never clears them through `doctor --fix`. A capture older than 20 minutes produces a warning and can still be preparing its source or waiting for provider readiness; allow the owning capture to settle. Only an explicitly uncertain outcome carries mandatory recovery guidance. Elapsed time does not grant permission to take over. The same reservation remains authoritative across restarts; older empty reservation markers also require explicit recovery. If inspection asks for a migration, follow [Upgrade warm-image state](/gateway/cloud-workers/warm-images#upgrade-warm-image-state) first.
 
 The Gateway groups uncertain captures into one warning with their count and selectors. It reports them again when that set changes or the plugin restarts. This reports retained ownership; it does not attempt another capture.
 
@@ -326,7 +337,7 @@ Warm profiles use a version-3 envelope in the existing `warm-images` plugin-stat
 openclaw doctor --fix
 ```
 
-Doctor performs this migration under the Gateway's exclusive maintenance lock. It preserves legacy image metadata, allocation choices, operating-system/runtime identity, capture selectors, and retirement obligations. Historical records do not acquire preparation, reserve-purpose, or successful-demand facts. Older empty capture markers become explicitly uncertain captures with their original recovery selector. Unsupported records stay unchanged and produce a warning. Runtime provisioning requires the canonical envelope; it does not silently convert old rows.
+Doctor performs this migration under the Gateway's exclusive maintenance lock. It preserves legacy image metadata, allocation choices, operating-system/runtime identity, capture selectors, and retirement obligations. Historical records do not acquire preparation, reserve-purpose, or successful-demand facts. Older empty capture markers become explicitly uncertain captures with their original recovery selector. Unsupported records stay unchanged and produce a warning. Runtime provisioning requires the current envelope format; it does not silently convert old rows.
 
 Older `warm-leases` rows record an enrolled class but cannot establish whether a lease originally started cold or from a checkpoint. These rows block new warm-image allocations until resolved. Doctor reports their count and exact recovery commands. Resolve each lease through its original Gateway or provider, stop its worker and owning processes, and reconcile provider artifacts before using the reported selector:
 

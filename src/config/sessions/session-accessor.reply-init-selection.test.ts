@@ -94,6 +94,46 @@ it("retains only declared reply rows and their stored model parent at each snaps
     expect(committed.sessionStoreView[parentKey]?.label).toBe("before commit");
     expect(loadSessionEntry(parentScope)?.label).toBe("after commit snapshot");
     expect(loadSessionEntry({ ...scope, sessionKey: unrelatedKey })).toEqual(persistedUnrelated);
+
+    const ordinarySnapshot = await loadReplySessionInitializationSnapshot(scope);
+    const nextStoredParentKey = "agent:main:next-stored-parent";
+    await upsertSessionEntryCore(scope, {
+      ...ordinarySnapshot.currentEntry!,
+      label: "concurrent reply metadata",
+      parentSessionKey: nextStoredParentKey,
+    });
+    await upsertSessionEntryCore(
+      { ...scope, sessionKey: nextStoredParentKey },
+      { sessionId: "next-parent", updatedAt: now, label: "current stored parent" },
+    );
+    await upsertSessionEntryCore(parentScope, { ...parent, label: "current related metadata" });
+    const ordinarySql = observeHostDataSql();
+    const ordinaryCommit = await commitReplySessionInitialization({
+      ...scope,
+      activeSessionKey: sessionKey,
+      expectedRevision: ordinarySnapshot.revision,
+      sessionEntry: { ...ordinarySnapshot.currentEntry!, model: "prepared-model" },
+      snapshotEntry: ordinarySnapshot.currentEntry,
+    }).finally(() => ordinarySql.restore());
+    expect(ordinarySql.queries, "ordinary reply initialization caller-thread SQL").toEqual([]);
+    expect(ordinaryCommit.ok).toBe(true);
+    if (!ordinaryCommit.ok) {
+      throw new Error("ordinary reply initialization unexpectedly conflicted");
+    }
+    expect(ordinaryCommit.sessionEntry).toMatchObject({
+      label: "concurrent reply metadata",
+      model: "prepared-model",
+      parentSessionKey: nextStoredParentKey,
+    });
+    expect(loadSessionEntry(scope)).toMatchObject(ordinaryCommit.sessionEntry);
+    expect(Object.keys(ordinaryCommit.sessionStoreView).toSorted()).toEqual(
+      [sessionKey, nextStoredParentKey, ...relatedSessionKeys.slice(0, -1)].toSorted(),
+    );
+    expect(ordinaryCommit.sessionStoreView[nextStoredParentKey]?.label).toBe(
+      "current stored parent",
+    );
+    expect(ordinaryCommit.sessionStoreView[parentKey]?.label).toBe("current related metadata");
+    expect(loadSessionEntry({ ...scope, sessionKey: unrelatedKey })).toEqual(persistedUnrelated);
   });
 });
 

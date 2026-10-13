@@ -124,14 +124,14 @@
       "count": 1,
       "kind": "html-attribute",
       "name": "aria-label",
-      "path": "ui/src/components/app-topbar.ts",
+      "path": "ui/src/components/app-topbar-solid.tsx",
       "text": "OpenClaw"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/components/app-topbar.ts",
+      "path": "ui/src/components/app-topbar-solid.tsx",
       "text": "OpenClaw"
     },
     {
@@ -383,50 +383,71 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/config/mcp.ts",
+      "path": "ui/src/pages/cloud-workers/cloud-worker-snapshot-rows.tsx",
+      "text": ".openclaw/worktree-setup.sh"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/cloud-workers/cloud-worker-snapshots.test-support.ts",
+      "text": "github.com/acme/app"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/config/mcp.tsx",
       "text": "openclaw mcp doctor --probe"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/config/mcp.ts",
+      "path": "ui/src/pages/config/mcp.tsx",
       "text": "openclaw mcp login &lt;name&gt;"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/config/mcp.ts",
+      "path": "ui/src/pages/config/mcp.tsx",
       "text": "openclaw mcp reload"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/config/mcp.ts",
+      "path": "ui/src/pages/config/mcp.tsx",
       "text": "openclaw mcp status --verbose"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/config/updates.ts",
+      "path": "ui/src/pages/config/updates.tsx",
       "text": "openclaw triage"
     },
     {
       "count": 1,
       "kind": "html-attribute",
       "name": "placeholder",
-      "path": "ui/src/pages/config/view-appearance-preferences.ts",
+      "path": "ui/src/pages/config/view-appearance-preferences.tsx",
       "text": "48rem"
     },
     {
       "count": 1,
       "kind": "html-attribute",
       "name": "placeholder",
-      "path": "ui/src/pages/config/view-appearance.ts",
+      "path": "ui/src/pages/config/view-appearance.tsx",
       "text": "https://tweakcn.com/editor/theme?theme=... or amethyst-haze"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/config/view-appearance.tsx",
+      "text": "tweakcn"
     },
     {
       "count": 1,
@@ -460,6 +481,13 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
+      "path": "ui/src/pages/custodian/custodian-setup-card.tsx",
+      "text": "openclaw onboard"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
       "path": "ui/src/pages/debug/view.tsx",
       "text": "openclaw security audit --deep"
     },
@@ -474,28 +502,28 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/new-session/cloud-target.ts",
+      "path": "ui/src/pages/new-session/cloud-target-view.tsx",
       "text": "openclaw config set nodeHost.workerRuns.enabled true"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/new-session/cloud-target.ts",
+      "path": "ui/src/pages/new-session/cloud-target-view.tsx",
       "text": "openclaw node install --force"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/new-session/cloud-target.ts",
+      "path": "ui/src/pages/new-session/cloud-target-view.tsx",
       "text": "openclaw node restart"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/new-session/cloud-target.ts",
+      "path": "ui/src/pages/new-session/cloud-target-view.tsx",
       "text": "openclaw update"
     },
     {
@@ -642,7 +670,7 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/skills/library-detail.ts",
+      "path": "ui/src/pages/skills/library-detail.tsx",
       "text": "SKILL.md"
     },
     {

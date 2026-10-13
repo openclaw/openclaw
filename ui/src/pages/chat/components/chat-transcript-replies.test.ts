@@ -28,8 +28,9 @@ describe("chat transcript replies", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
-  function commitLayout() {
+  async function commitLayout() {
     flush();
+    await Promise.resolve();
     vi.advanceTimersToNextFrame();
     flush();
   }
@@ -73,8 +74,9 @@ describe("chat transcript replies", () => {
     "reveals loaded replies and owns their flash lifetime: $name",
     async ({ reducedMotion, textless }) => {
       const flushFrames = stubAnimationFrames();
-      const commitReplyLayout = () => {
+      const commitReplyLayout = async () => {
         flush();
+        await Promise.resolve();
         flushFrames();
         flush();
       };
@@ -120,7 +122,7 @@ describe("chat transcript replies", () => {
       try {
         preview?.click();
         await Promise.resolve();
-        commitReplyLayout();
+        await commitReplyLayout();
         expect(open).not.toHaveBeenCalled();
         expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(true);
         if (!textless) {
@@ -132,14 +134,14 @@ describe("chat transcript replies", () => {
         vi.advanceTimersByTime(duration / 2);
         preview?.click();
         await Promise.resolve();
-        commitReplyLayout();
+        await commitReplyLayout();
         vi.advanceTimersByTime(duration - 1);
         expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(true);
         vi.advanceTimersByTime(1);
         expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(false);
         preview?.click();
         await Promise.resolve();
-        commitReplyLayout();
+        await commitReplyLayout();
         transcript.hostDisconnected();
         expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(false);
       } finally {
@@ -509,7 +511,7 @@ describe("chat transcript replies", () => {
       expect(threadContainer.querySelector(sourceSelector)).toBeNull();
       requireElement(threadContainer, ".chat-reply-attribution button").click();
       await vi.advanceTimersByTimeAsync(0);
-      commitLayout();
+      await commitLayout();
 
       expect(searchContainer.querySelector("input")).toBeNull();
       if (loaded) {

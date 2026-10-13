@@ -54,7 +54,10 @@ import {
   parseSessionEntryJson as parseSessionEntryRow,
 } from "./session-accessor.sqlite-status.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
-import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import {
+  readSessionActorTransactionState,
+  replaceSessionActorStoredEntry,
+} from "./session-actor-transaction.js";
 import {
   assertCanonicalSessionEntryLineageWrite,
   assertCanonicalSessionKeyWrite,
@@ -347,6 +350,7 @@ export function writeSessionEntry(
     consumePendingReset?: boolean;
     preserveNodeSuggestions?: boolean;
     previousEntry?: SessionEntry | null;
+    observeConversation?: boolean;
     routeContext?: ConversationRouteContext | null;
   } = {},
 ): SessionEntry {
@@ -564,10 +568,14 @@ export function writeSessionEntry(
         });
       }
       const boundSessionRoot = bindSessionRoot({ entry: normalizedEntry, sessionKey, updatedAt });
-      const conversation = prepareSessionConversationForWrite({
+      const preparedWindow = options.canonicalPreviousWindow ?? canonicalFacts?.window;
+      const { conversation, primaryConversationId } = prepareSessionConversationForWrite({
         database,
         entry: normalizedEntry,
         previousEntry,
+        canonicalPreviousEntry,
+        previousWindow: actor?.window ?? preparedWindow?.row,
+        observeConversation: options.observeConversation || options.allowStoredAliases,
         ...(options.routeContext !== undefined ? { routeContext: options.routeContext } : {}),
         sessionScope: boundSessionRoot.session_scope,
       });
@@ -578,19 +586,14 @@ export function writeSessionEntry(
           updatedAt,
         );
       }
-      const boundSessionRow = {
-        ...boundSessionRoot,
-        primary_conversation_id:
-          conversation?.role === "primary" ? conversation.identity.conversationRef : null,
-      };
       const retainWindowOwner = canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId;
       const window = prepareSessionEntryWindowRow({
-        boundSessionRow,
+        boundSessionRow: { ...boundSessionRoot, primary_conversation_id: primaryConversationId },
         database,
         entry: normalizedEntry,
         previousEntry,
         retainOwner: retainWindowOwner,
-        prepared: options.canonicalPreviousWindow ?? canonicalFacts?.window,
+        prepared: preparedWindow,
         stagedTranscriptUpdatedAt: actor
           ? undefined
           : readStagedSessionTranscriptUpdatedAt(database, normalizedEntry.sessionId),
@@ -639,6 +642,15 @@ export function writeSessionEntry(
     persisted.snapshotsChanged ||
     written.window.changed ||
     written.conversationWritten;
+  const sideMetadata =
+    changed || actor || options.postimages
+      ? structuredClone({
+          owner: canonicalPreviousEntry?.owner,
+          participants: canonicalPreviousEntry?.participants,
+          participantCount: canonicalPreviousEntry?.participantCount,
+        })
+      : {};
+  const snapshots = persisted.snapshotsChanged ? persisted.snapshots : undefined;
   if (changed) {
     publishSessionEntryCacheInvalidation(
       database,
@@ -653,12 +665,8 @@ export function writeSessionEntry(
           }),
         entryJson: persisted.entryJson,
         snapshotEntry: canonicalEntry,
-        snapshots: persisted.snapshotsChanged ? persisted.snapshots : undefined,
-        sideMetadata: structuredClone({
-          owner: canonicalPreviousEntry?.owner,
-          participants: canonicalPreviousEntry?.participants,
-          participantCount: canonicalPreviousEntry?.participantCount,
-        }),
+        snapshots,
+        sideMetadata,
         previousEntry: canonicalPreviousEntry,
         ...(!options.allowStoredAliases
           ? {
@@ -683,20 +691,7 @@ export function writeSessionEntry(
   }
   const persistedEntry =
     actor || options.postimages
-      ? projectSessionEntryCacheUpdate(
-          persisted.entryJson,
-          structuredClone({
-            ...(canonicalPreviousEntry?.owner ? { owner: canonicalPreviousEntry.owner } : {}),
-            ...(canonicalPreviousEntry?.participants
-              ? { participants: canonicalPreviousEntry.participants }
-              : {}),
-            ...(canonicalPreviousEntry?.participantCount !== undefined
-              ? { participantCount: canonicalPreviousEntry.participantCount }
-              : {}),
-          }),
-          canonicalEntry,
-          persisted.snapshotsChanged ? persisted.snapshots : undefined,
-        )
+      ? projectSessionEntryCacheUpdate(persisted.entryJson, sideMetadata, canonicalEntry, snapshots)
       : undefined;
   const row = persistedEntry
     ? createSessionEntryWriteRow({
@@ -708,12 +703,11 @@ export function writeSessionEntry(
       })
     : undefined;
   if (actor && persistedEntry && row) {
-    actor.entryRows.set(sessionKey, {
-      entry: structuredClone(persistedEntry),
+    replaceSessionActorStoredEntry(actor, sessionKey, {
+      entry: persistedEntry,
       row,
+      window: written.window.postimage,
     });
-    actor.hot.entry = structuredClone(persistedEntry);
-    actor.window = written.window.postimage;
   }
   if (options.postimages && persistedEntry && row && canonicalPreviousSideTables) {
     const stagedTranscript = readStagedSessionTranscriptAuthority(database)

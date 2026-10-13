@@ -8,13 +8,14 @@ import {
 import { withSessionRegistryEntriesInWorker } from "./session-entry-read-maintenance.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { collectActiveSessionWorkAdmissionKeys } from "./store-maintenance-preserve.js";
-import { pruneStaleEntries } from "./store-maintenance.js";
+import { pruneStaleEntries, shouldPreserveMaintenanceEntry } from "./store-maintenance.js";
 import type { SessionStoreTarget } from "./targets.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionRegistryMaintenanceStoreSummary = {
   preservedRunning: number;
   pruned: number;
+  nextSweepAtMs: number | null;
 };
 
 type SessionRegistryMaintenanceStoreOptions = SessionStoreTarget & {
@@ -81,9 +82,25 @@ function pruneSessionRegistryStore(params: {
       : undefined,
     preserveKeys,
   });
+  const now = Date.now();
+  let nextSweepAtMs: number | null = null;
+  for (const [key, entry] of Object.entries(params.store)) {
+    if (
+      shouldPreserveMaintenanceEntry({ key, entry }) ||
+      typeof entry.updatedAt !== "number" ||
+      !Number.isFinite(entry.updatedAt)
+    ) {
+      continue;
+    }
+    // Expired active rows retry after their running job or session admission settles.
+    const expiresAt = entry.updatedAt + params.retentionMs + 1;
+    const deadline = expiresAt <= now ? now + 60_000 : expiresAt;
+    nextSweepAtMs = Math.min(nextSweepAtMs ?? Infinity, deadline);
+  }
   return {
     preservedRunning,
     pruned,
+    nextSweepAtMs,
   };
 }
 
@@ -102,6 +119,7 @@ export async function runSessionRegistryMaintenanceForStore(
     return {
       preservedRunning: 0,
       pruned: 0,
+      nextSweepAtMs: null,
     };
   }
   return await withSessionRegistryEntriesInWorker(
@@ -133,6 +151,10 @@ export async function runSessionRegistryMaintenanceForStore(
         return {
           preservedRunning: planned.preservedRunning,
           pruned: mutation.removedEntries,
+          nextSweepAtMs:
+            mutation.removedEntries === planned.pruned
+              ? planned.nextSweepAtMs
+              : Date.now() + 60_000,
         };
       }
       return planned;

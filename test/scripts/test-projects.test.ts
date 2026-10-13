@@ -54,6 +54,7 @@ import {
   isSharedVitestExcludedPath,
   matchesVitestCliSelection,
 } from "../vitest/vitest.pattern-file.ts";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 
 const normalizeRepoPath = toRepoPath;
 const MATRIX_TEST_PROCESS_FILE_LIMIT = 40;
@@ -2212,13 +2213,13 @@ export const single = {
         {
           encoding: "utf8",
           // Keep the native help probe inside its invocation-owned temporary directory.
-          env: { ...process.env, TMPDIR: tempDir, TMP: tempDir, TEMP: tempDir },
+          env: testRunnerFixtureEnv({ TMPDIR: tempDir, TMP: tempDir, TEMP: tempDir }),
           timeout: 5_000,
         },
       );
 
       expect(result.status).toBe(0);
-      expect(result.stdout).toContain("Usage: node --import tsx scripts/test-projects.mts");
+      expect(result.stdout).toContain("Usage: node scripts/test-projects.mts");
       expect(result.stderr).not.toContain("[test] starting");
     });
   });
@@ -2398,10 +2399,11 @@ export const single = {
     },
     {
       directory: "extensions/matrix/src/matrix/sdk",
-      selected: [
-        "extensions/matrix/src/matrix/sdk/idb-persistence.test.ts",
-        "extensions/matrix/src/matrix/sdk/recovery-key-store.test.ts",
-      ],
+      // Worker membership belongs to the database lane; this case protects the
+      // directory intersection as that membership grows.
+      selected: databaseWorkerExtensionTestFiles.filter((file) =>
+        file.startsWith("extensions/matrix/src/matrix/sdk/"),
+      ),
       inherited: ["extensions/matrix/**/*.test.ts"],
     },
   ])(

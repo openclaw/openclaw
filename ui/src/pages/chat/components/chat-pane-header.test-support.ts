@@ -2,8 +2,9 @@ import { nothing } from "lit";
 import { createComponent, createSignal, flush } from "solid-js";
 import { vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
+import { LitContent } from "../../../lit/solid-content.tsx";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { ChatPaneHeader, renderChatPaneHeader } from "./chat-pane-header.ts";
+import { renderChatPaneHeader } from "./chat-pane-header.ts";
 
 export type ChatPaneHeaderProps = Parameters<typeof renderChatPaneHeader>[0];
 
@@ -57,8 +58,15 @@ export function mountChatPaneHeader(
     ...patch,
   };
   const [current, setCurrent] = createSignal(props);
-  const liveProps = new Proxy(props, { get: (_target, key) => Reflect.get(current(), key) });
-  const mounted = mountSolid(() => createComponent(ChatPaneHeader, liveProps), { container });
+  const mounted = mountSolid(
+    () =>
+      createComponent(LitContent, {
+        get value() {
+          return renderChatPaneHeader(current());
+        },
+      }),
+    { container },
+  );
   return {
     container,
     get props() {

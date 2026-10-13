@@ -1,4 +1,8 @@
 import { once } from "node:events";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { expect, it, vi } from "vitest";
 import {
@@ -28,6 +32,7 @@ export function registerSharedClientCompactionRetentionTests() {
   it("retains ordinary native children when compaction created the cached monitor first", async () => {
     await withStateDirEnv("openclaw-codex-compaction-retention-", async ({ tempRoot }) => {
       resetCodexTestBindingStore();
+      setRuntimeConfigSnapshot({});
       const unsubscribed: string[] = [];
       const harness = createClientHarness({
         onWrite(line, send) {
@@ -189,6 +194,7 @@ export function registerSharedClientCompactionRetentionTests() {
       } finally {
         await harness.client.closeAndWait();
         resetCodexTestBindingStore();
+        clearRuntimeConfigSnapshot();
       }
     });
   });

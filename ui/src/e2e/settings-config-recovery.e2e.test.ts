@@ -123,12 +123,9 @@ suite.define(() => {
             expect(await indicator.textContent()).toContain(recoveryBackupPath);
             expect(await gateway.getRequests("config.set")).toHaveLength(1);
             await gateway.setOnline(true);
-            await page.waitForFunction(() => {
-              const app = document.querySelector("openclaw-app") as HTMLElement & {
-                runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-              };
-              return app.runtime?.context.gateway.snapshot.phase === "connected";
-            });
+            await page.waitForFunction(
+              () => window.openclawControlUi?.snapshot().gatewayPhase === "connected",
+            );
             for (const candidate of [
               { ...snapshot, exists: false, config: {}, raw: null, hash: "missing" },
               { ...snapshot, valid: false, raw: "{", hash: "invalid" },

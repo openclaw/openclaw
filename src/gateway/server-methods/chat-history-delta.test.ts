@@ -3,6 +3,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   appendSessionTranscriptReport,
   appendTranscriptMessage,
   replaceSessionEntry,
@@ -25,6 +29,7 @@ afterEach(async () => {
     await closeOpenClawAgentDatabasesAsync(directory);
     closeOpenClawAgentDatabasesForTest(directory);
   }
+  clearRuntimeConfigSnapshot();
   tempDirs.cleanup();
 });
 const maxBytes = 1_000_000;
@@ -37,6 +42,7 @@ const sessionSnapshot = buildGatewaySessionSnapshot({
 });
 
 async function createTranscript() {
+  setRuntimeConfigSnapshot({});
   const scope = {
     agentId: "main",
     sessionKey,
@@ -775,9 +781,7 @@ describe("chat history recovery cursor eligibility", () => {
       expect(await readDelta(scope, cursor)).toEqual({ kind: "reset" });
 
       const pending = await readTail(scope, offset);
-      expect(pending.messages).toContainEqual(
-        expect.objectContaining({ __openclaw: expect.objectContaining({ id: "failed-attempt" }) }),
-      );
+      expect(pending.messages).toEqual([]);
       expect(pending).not.toHaveProperty("deltaCursor");
 
       await appendTranscriptMessage(scope, {

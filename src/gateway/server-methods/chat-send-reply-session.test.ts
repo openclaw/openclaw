@@ -33,7 +33,7 @@ it.each(["release", "replacement"] as const)(
         key: scope.sessionKey,
         agentId: scope.agentId,
       });
-      const qualified = prepareQualifiedSessionEntryTarget(
+      const qualified = await prepareQualifiedSessionEntryTarget(
         {
           ...loaded,
           requestedKey: scope.sessionKey,
@@ -44,7 +44,7 @@ it.each(["release", "replacement"] as const)(
       );
       const work = createChatSendWorkAdmission({
         admission: { release: vi.fn() },
-        releaseCallerAuthority: qualified.release,
+        releaseCallerAuthority: vi.fn(),
         logGateway: { warn: vi.fn() },
       });
       const reader = createChatReplySessionReader(
@@ -55,8 +55,7 @@ it.each(["release", "replacement"] as const)(
           clientRunId: "reply-run",
           backingSessionId: "reply-session",
           sessionLoadOptions: { agentId: scope.agentId },
-          sessionTarget: qualified.target,
-          assertSessionTargetCurrent: qualified.assertCurrent,
+          sessionTarget: qualified,
         },
         getRuntimeConfig,
         () => {
@@ -138,6 +137,7 @@ it.each(["unchanged", "foreign-lifecycle", "physical-replacement"] as const)(
   "uses one entry phase and rechecks %s before the terminal delivery snapshot",
   async (change) => {
     await withOpenClawTestState({ label: "webchat-retained-terminal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const { dispatch, append, scope, runId, release } = await createReplyTranscriptFixture(
         "agent:main:retained-terminal",
         true,

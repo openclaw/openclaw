@@ -124,7 +124,7 @@ function verifyOwnerLock(owner: ProcessOwner, lock: StateOwnerFile | undefined):
   if (!lock.verifyStillHeld()) {
     loseOwner(
       owner,
-      new Error(`OpenClaw state ownership is no longer current at ${lock.lockPath}`),
+      new Error(`${lock.lockPath}: no longer current; lock removed/replaced; restart the Gateway.`),
     );
     return false;
   }
@@ -267,12 +267,20 @@ function acquireOwnerFile(
 ) {
   const deadline = performance.now() + busyTimeoutMs;
   ensureOwnerDirectory(path.dirname(pathname), createdDirectories);
-  const observed: { holder: LockPayload | null } = { holder: null };
+  const observed: { raw?: string; holder: LockPayload | null } = { holder: null };
+  const parsePayload = (raw: string) => {
+    // Physical verification still reads the lock; immutable bytes need decoding only once.
+    if (raw !== observed.raw) {
+      observed.holder = parseGatewayLockPayload(raw);
+      observed.raw = raw;
+    }
+    return observed.holder;
+  };
   const stale = ({ payload: value }: { payload: unknown }) =>
     isGatewayStateOwnerDefinitelyStale(value, pathname);
   if (busyTimeoutMs > 0) {
     try {
-      const previous = parseGatewayLockPayload(fs.readFileSync(pathname, "utf8"));
+      const previous = parsePayload(fs.readFileSync(pathname, "utf8"));
       if (
         previous &&
         !stale({ payload: previous }) &&
@@ -302,7 +310,7 @@ function acquireOwnerFile(
         staleRecovery: "remove-if-unchanged",
         reentrantOwner: payload.ownerId,
         payload: () => payload,
-        parsePayload: (raw) => (observed.holder = parseGatewayLockPayload(raw)),
+        parsePayload,
         shouldReclaim: stale,
         shouldRemoveStaleLock: stale,
       });
@@ -656,7 +664,7 @@ export function assertStateDatabaseReadAllowed(
     (owner.getProjection && !owner.getProjection()?.verifyStillHeld())
   ) {
     throw new Error(
-      `OpenClaw state ownership at ${databasePath} could not be verified; retry after maintenance finishes.`,
+      `OpenClaw state ownership at ${databasePath} was lost: ${owner.lost.signal.reason ?? "owner lock was removed or replaced"}; restart the Gateway.`,
     );
   }
   readOwnerPaths.set(key, owner);
@@ -686,10 +694,12 @@ export function assertStateDatabaseAccessAllowed(
   };
   const pathname = resolveGatewayStateOwnerPath(databasePath);
   const local = owners.get(pathname);
-  const unavailable = `OpenClaw state ownership at ${databasePath} could not be verified; retry after maintenance finishes.`;
   if (local) {
     if (!hasPhysicalOwnership(local)) {
-      throw new Error(unavailable);
+      local.lost.signal.throwIfAborted();
+      throw new Error(
+        `OpenClaw state ownership at ${databasePath} was lost: owner lock was removed or replaced; restart the Gateway.`,
+      );
     }
     const role = local.payload.role ?? "gateway";
     if (!local.accepting || (role !== "gateway" && role !== "agent-embedded")) {

@@ -10,7 +10,7 @@ export const SQLITE_RUNTIME_COMPAT_RECORDS = [
     warningStarts: "2026-10-09",
     removalGate: "next-plugin-sdk-major",
     replacement:
-      "Use openOpenClawAgentSqliteWorkerStoreV2 with required live authority and serializable domain commands. Worker backends use sqlite-worker-runtime primitives; explicit readOnly inspection and offline Doctor maintenance retain their native contracts. Native callbacks are not serialized or moved by adding await. Released calls retain their signatures and synchronous transaction ordering until the next Plugin SDK major.",
+      "Use openOpenClawAgentSqliteWorkerStoreV2 with required live authority and serializable domain commands. Worker backends use sqlite-worker-runtime primitives; explicit readOnly inspection and offline Doctor maintenance retain their native contracts. Native callbacks are not serialized or moved by adding await. Released calls retain their signatures and synchronous transaction ordering through the deprecation period and are removed in a later release.",
     docsPath: "/plugins/sdk-migration/how-to-migrate#replace-native-sqlite-runtime-writes",
     surfaces: [
       "sqlite-runtime.openNodeSqliteDatabase writable handles",
@@ -18,7 +18,6 @@ export const SQLITE_RUNTIME_COMPAT_RECORDS = [
       "sqlite-runtime.openOpenClawAgentDatabase",
       "sqlite-runtime.borrowOpenClawAgentDatabase",
       "sqlite-runtime.withOpenClawAgentDatabaseAsync",
-      "sqlite-runtime.withOpenClawAgentDatabaseRuntime",
       "sqlite-runtime.withOpenClawAgentDatabaseWrite",
       "sqlite-runtime.runOpenClawAgentWriteAdmission",
       "sqlite-runtime.runSqliteImmediateTransaction",
@@ -38,6 +37,6 @@ export const SQLITE_RUNTIME_COMPAT_RECORDS = [
       "src/state/openclaw-agent-worker-store.test.ts",
     ],
     releaseNote:
-      "Agent SQLite plugins can prepare and write through the canonical worker without borrowing a writable host handle. Memory Core uses worker commands for vector, metadata, origin, standing-intent and forget mutations. Raw SDK compatibility remains available until the next Plugin SDK major; schemas, stored data and update behavior are unchanged.",
+      "Agent SQLite plugins can prepare and write through the canonical worker without borrowing a writable host handle. Memory Core uses worker commands for vector, metadata, origin, standing-intent and forget mutations. Raw SDK compatibility remains available through the deprecation period and is removed in a later release; schemas, stored data and update behavior are unchanged.",
   },
 ] as const satisfies readonly PluginCompatRecord[];

@@ -192,17 +192,14 @@ describe("spawnSubagentDirect seam flow", () => {
     },
   );
 
-  it.each([{ collect: true }])(
-    "rejects unsupported private completion combinations before child effects: %j",
-    async (options) => {
-      const result = await spawn({ task: "private work", completionTarget: "parent", ...options });
-      expect(result).toMatchObject({
-        status: "error",
-        error: expect.stringContaining('completionTarget="parent"'),
-      });
-      expectNoChildSpawnSideEffects();
-    },
-  );
+  it("rejects private collector completion before child effects", async () => {
+    const result = await spawn({ task: "private work", completionTarget: "parent", collect: true });
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining('completionTarget="parent"'),
+    });
+    expectNoChildSpawnSideEffects();
+  });
 
   it("rejects private completion without an existing parent incarnation", async () => {
     const result = await spawn(
@@ -238,23 +235,20 @@ describe("spawnSubagentDirect seam flow", () => {
     });
   });
 
-  it.each([{ thread: true }])(
-    "rejects interactive collector mode at the direct spawn boundary",
-    async (params) => {
-      configOverride = createConfigOverride({ tools: { swarm: true } });
+  it("rejects interactive collector mode at the direct spawn boundary", async () => {
+    configOverride = createConfigOverride({ tools: { swarm: true } });
 
-      const result = await spawn(
-        { task: "collect once", collect: true, ...params },
-        collectorContext,
-      );
+    const result = await spawn(
+      { task: "collect once", collect: true, thread: true },
+      collectorContext,
+    );
 
-      expect(result).toMatchObject({
-        status: "error",
-        error: expect.stringContaining("mode=run and thread=false"),
-      });
-      expect(gatewayRequestRecords()).toEqual([]);
-    },
-  );
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("mode=run and thread=false"),
+    });
+    expect(gatewayRequestRecords()).toEqual([]);
+  });
 
   it("rejects explicit same-agent targets when allowAgents excludes the requester", async () => {
     configOverride = createConfigOverride({
@@ -417,13 +411,9 @@ describe("spawnSubagentDirect seam flow", () => {
     });
   });
 
-  it.each([
-    {
-      name: "policy refusal",
-      model: "fixture/blocked",
-      error: "model not allowed: fixture/blocked",
-    },
-  ])("returns the model owner's $name before creating child state", async ({ model, error }) => {
+  it("returns the model owner's policy refusal before creating child state", async () => {
+    const model = "fixture/blocked";
+    const error = "model not allowed: fixture/blocked";
     hoisted.prepareModelChoiceMock.mockResolvedValue({ kind: "unavailable", error });
     const result = await spawn({ task: "validate before launch", model });
     expect(result.status).toBe("error");
@@ -903,7 +893,7 @@ describe("spawnSubagentDirect seam flow", () => {
       });
       const registerInput = firstRegisteredSubagentRun();
       expect(registerInput.childSessionKey).toBe(result.childSessionKey);
-      expect(registerInput.agentId).toBe("worker");
+      expect(registerInput.childAgentId).toBe("worker");
       expect(registerInput.requesterSessionKey).toBe("global");
       expect(registerInput.requesterAgentId).toBe("main");
     },

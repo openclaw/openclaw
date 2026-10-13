@@ -87,6 +87,11 @@ the original manager and service identity. This does not start the service or
 rewrite its definition. A later refusal still uses the recorded stop to restore
 the previous Gateway; a service that was already stopped remains stopped.
 
+On macOS, a failed LaunchAgent state probe is recorded as a failed recovery
+attempt with its reason. OpenClaw leaves the service definition unchanged and
+prints `LaunchAgent state could not be inspected`. Run
+`openclaw gateway status --deep` to inspect the service before retrying recovery.
+
 An already-current installation can still need plugin maintenance. If the update
 parks its Gateway for Doctor and a maintenance step is refused, recovery uses
 the current run's latest stop and restarts the installed package after Doctor's
@@ -410,6 +415,12 @@ The same repair handles `ENOENT` when the recorded handoff lease database is
 missing, for example after a reboot clears a temporary filesystem. Its storage
 owner recreates the lease database, and repair acquires fresh update ownership
 before closing an untouched obsolete preparation as `recovery-lease-missing`.
+A recorded lease directory now owned by another local user is also treated as
+missing. Repair acquires ownership in the current user's private temporary
+directory without reading, creating, or changing files in the other user's
+directory. New managed-update leases always use the per-user temporary root,
+so their location does not depend on who creates the shared `/tmp/openclaw`
+directory first.
 A missing or changed lease never permits discarding an unfinished rollback.
 The installed package, launchers, and retained recovery evidence keep the same
 protections. Repair then continues through Doctor and plugin convergence;
@@ -657,11 +668,17 @@ diagnostics go to stderr, so stdout can be parsed directly. Plugin-only
 availability, installation, or load failures appear in
 `postUpdate.plugins.warnings`; finalization reports `status: "warning"` and exits
 successfully when required checks pass. Doctor maintenance admission refusals
-also finish with a warning when no data is at risk. Repair restores any service
-it stopped and leaves migrations pending. When Doctor could not run, the saved
-run is `skipped` with reason `doctor-maintenance-pending`, and the report leads
-with the next action: stop the Gateway through its service owner, then rerun
-`openclaw update repair` with the same profile and state overrides. A standalone
+also report a warning when no data is at risk. Repair restores any service
+it stopped and leaves migrations pending. A standalone `update repair` exits
+with code **2** when Doctor maintenance is deferred; delegated finalization for
+an existing update keeps exit code **0**, so an older updater can finish with
+warnings. When Doctor could not run, the saved standalone run is `skipped` with
+reason `doctor-maintenance-pending`, and the report leads with the next action:
+stop the Gateway through its service owner (`openclaw gateway stop --force` for
+the managed service), stop other OpenClaw processes using that state, then rerun
+`openclaw update repair` with the same profile and state overrides. The stop
+command also needs the same profile and state overrides; `--force` confirms the
+intentional stop in a non-interactive shell. A standalone
 repair's generic failure is recorded as `repair-failed`; specific failure codes
 and failures belonging to an existing update keep their original reasons. Errors
 after repair writes begin, a live or unverified Gateway, unreadable state, active migration writes, unsettled

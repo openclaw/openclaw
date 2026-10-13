@@ -1,23 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { MessagePort } from "node:worker_threads";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
-import {
-  hasSqliteWorkerOutcomeUnknown,
-  readSqliteDatabaseWriteTokenForPath,
-} from "openclaw/plugin-sdk/sqlite-runtime";
-import {
-  PostgresSyncConnection,
-  runSqliteImmediateTransactionSync,
-} from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { readSqliteDatabaseWriteTokenForPath } from "openclaw/plugin-sdk/sqlite-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { Client } from "pg";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { workboardSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
+import { unwrapWorkboardSqliteResult } from "./sqlite-store-errors.js";
 import { createWorkboardDatabase } from "./sqlite-store-schema.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import { workboardTestDatabaseInput } from "./test/database-config.js";
+import { openPostgresFixture } from "./test/postgres-fixture.js";
 
 const postgresInput = workboardTestDatabaseInput();
 const postgresUrl = postgresInput?.connection;
@@ -25,7 +19,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and receipts", () => {
   const observer = new Client({ connectionString: postgresUrl });
-  const owners: Array<ReturnType<typeof createWorkboardDatabase>> = [];
+  const owners: Array<{ close: () => Promise<void> }> = [];
   const schemas = new Set<string>();
 
   beforeAll(async () => {
@@ -35,7 +29,7 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
   afterEach(async () => {
     try {
       for (const owner of owners.splice(0).toReversed()) {
-        owner.close();
+        await owner.close();
       }
     } finally {
       for (const schema of schemas) {
@@ -53,16 +47,38 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     return path.join(tempDirs.make("openclaw-workboard-postgres-"), "workboard.sqlite");
   }
 
-  function openDatabase(dbPath: string) {
+  async function openDatabase(dbPath: string) {
     const owner = createWorkboardDatabase(dbPath, undefined, postgresInput);
-    owners.push(owner);
-    const db = owner.db;
-    if (!(db instanceof PostgresSyncConnection)) {
+    if (owner.db instanceof DatabaseSync) {
+      owner.close();
       throw new Error("Experimental workboard open did not select PostgreSQL");
     }
-    schemas.add(db.schema);
-    return { db, close: owner.close };
+    const schema = owner.db.schema;
+    schemas.add(schema);
+    // The host anchor owns admission until the worker has released its connections.
+    const fixture = openPostgresFixture({ dbPath, postgresInput });
+    let closed = false;
+    async function close() {
+      if (closed) {
+        return;
+      }
+      try {
+        await fixture.close();
+      } finally {
+        owner.close();
+        closed = true;
+      }
+    }
+    owners.push({ close });
+    await fixture.state();
+    return { fixture, schema, close };
   }
+
+  const insertBoard = (id: string) => ({
+    sql: "INSERT INTO workboard_boards (id, created_at, updated_at) VALUES (?, ?, ?)",
+    method: "run" as const,
+    args: [id, 1, 2],
+  });
 
   it("resolves a host SecretRef and hands the configured connection to the worker", async () => {
     const dbPath = databasePath();
@@ -119,29 +135,36 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
 
   it("retains a real SQLite anchor and reopens the same PostgreSQL schema", async () => {
     const dbPath = databasePath();
-    const first = openDatabase(dbPath);
-    runSqliteImmediateTransactionSync(first.db, () => {
-      first.db
-        .prepare(
-          "INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-        )
-        .run("board", "Persisted remotely", 1, 2);
-    });
+    const first = await openDatabase(dbPath);
+    await first.fixture.statements(
+      [
+        {
+          sql: "INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+          method: "run",
+          args: ["board", "Persisted remotely", 1, 2],
+        },
+      ],
+      true,
+    );
     const persisted = await observer.query<{ name: string }>(
-      `SELECT name FROM ${quoteIdentifier(first.db.schema)}.workboard_boards WHERE id = $1`,
+      `SELECT name FROM ${quoteIdentifier(first.schema)}.workboard_boards WHERE id = $1`,
       ["board"],
     );
     expect(persisted.rows).toEqual([{ name: "Persisted remotely" }]);
-    const schema = first.db.schema;
-    first.close();
-
-    const reopened = openDatabase(dbPath);
-    expect(reopened.db.schema).toBe(schema);
+    const schema = first.schema;
+    await first.close();
+    const reopened = await openDatabase(dbPath);
+    expect(reopened.schema).toBe(schema);
     expect(
-      reopened.db.prepare("SELECT name FROM workboard_boards WHERE id = ?").get("board"),
-    ).toEqual({ name: "Persisted remotely" });
-    reopened.close();
-
+      await reopened.fixture.statements([
+        {
+          sql: "SELECT name FROM workboard_boards WHERE id = ?",
+          method: "get",
+          args: ["board"],
+        },
+      ]),
+    ).toEqual([{ name: "Persisted remotely" }]);
+    await reopened.close();
     using anchor = new DatabaseSync(dbPath, { readOnly: true });
     expect(anchor.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
     expect(
@@ -151,68 +174,39 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
 
   it("publishes the anchor receipt after a PostgreSQL commit but not after rollback or failure", async () => {
     const dbPath = databasePath();
-    const { db } = openDatabase(dbPath);
+    const { fixture, schema } = await openDatabase(dbPath);
     const before = readSqliteDatabaseWriteTokenForPath(dbPath);
     expect(before).toBeDefined();
-    runSqliteImmediateTransactionSync(db, () => {
-      db.prepare("INSERT INTO workboard_boards (id, created_at, updated_at) VALUES (?, ?, ?)").run(
-        "committed",
-        1,
-        2,
-      );
-    });
+    await fixture.statements([insertBoard("committed")], true);
     const committed = readSqliteDatabaseWriteTokenForPath(dbPath);
     expect(committed).toBeDefined();
     expect(committed).not.toBe(before);
     expect(
       (
-        await observer.query<{ id: string }>(
-          `SELECT id FROM ${quoteIdentifier(db.schema)}.workboard_boards ORDER BY id`,
+        await observer.query(
+          `SELECT id FROM ${quoteIdentifier(schema)}.workboard_boards ORDER BY id`,
         )
       ).rows,
     ).toEqual([{ id: "committed" }]);
-
-    const rejected = new Error("roll back this write");
-    expect(() =>
-      runSqliteImmediateTransactionSync(db, () => {
-        db.prepare(
-          "INSERT INTO workboard_boards (id, created_at, updated_at) VALUES (?, ?, ?)",
-        ).run("rolled-back", 3, 4);
-        throw rejected;
-      }),
-    ).toThrow(rejected);
+    await expect(
+      fixture.statements([insertBoard("rolled-back")], true, "roll back this write"),
+    ).rejects.toThrow("roll back this write");
     expect(readSqliteDatabaseWriteTokenForPath(dbPath)).toBe(committed);
-
-    expect(() =>
-      runSqliteImmediateTransactionSync(db, () => {
-        db.prepare(
-          "INSERT INTO workboard_boards (id, created_at, updated_at) VALUES (?, ?, ?)",
-        ).run("failed", 5, 6);
-        db.prepare(
-          "INSERT INTO workboard_boards (id, created_at, updated_at) VALUES (?, ?, ?)",
-        ).run("committed", 5, 6);
-      }),
-    ).toThrow("UNIQUE constraint failed");
+    await expect(
+      fixture.statements([insertBoard("failed"), insertBoard("committed")], true),
+    ).rejects.toThrow("UNIQUE constraint failed");
     expect(readSqliteDatabaseWriteTokenForPath(dbPath)).toBe(committed);
-    expect(() =>
-      runSqliteImmediateTransactionSync(db, () => {
-        db.prepare(
-          "INSERT INTO workboard_boards (id, created_at, updated_at) VALUES (?, ?, ?)",
-        ).run("caught", 7, 8);
-        try {
-          db.prepare(
-            "INSERT INTO workboard_boards (id, created_at, updated_at) VALUES (?, ?, ?)",
-          ).run("committed", 7, 8);
-        } catch {
-          // The server transaction stays aborted even if a caller consumes its error.
-        }
-      }),
-    ).toThrow("rolled back instead of committing");
+    await expect(
+      fixture.statements(
+        [insertBoard("caught"), { ...insertBoard("committed"), catchError: true }],
+        true,
+      ),
+    ).rejects.toThrow("rolled back instead of committing");
     expect(readSqliteDatabaseWriteTokenForPath(dbPath)).toBe(committed);
     expect(
       (
-        await observer.query<{ id: string }>(
-          `SELECT id FROM ${quoteIdentifier(db.schema)}.workboard_boards ORDER BY id`,
+        await observer.query(
+          `SELECT id FROM ${quoteIdentifier(schema)}.workboard_boards ORDER BY id`,
         )
       ).rows,
     ).toEqual([{ id: "committed" }]);
@@ -223,85 +217,88 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     ["SELECT 1", false],
   ] as const)("classifies terminated PostgreSQL sessions before %s", async (statement, unknown) => {
     const dbPath = databasePath();
-    const { db } = openDatabase(dbPath);
-    const pid = db.prepare("SELECT pg_backend_pid() AS pid").get()?.pid;
+    const { fixture, schema } = await openDatabase(dbPath);
+    const [process] = await fixture.statements([
+      { sql: "SELECT pg_backend_pid() AS pid", method: "get" },
+    ]);
+    const pid = (process as { pid: number }).pid;
     expect(typeof pid).toBe("number");
     const token = readSqliteDatabaseWriteTokenForPath(dbPath);
-    db.exec("BEGIN ISOLATION LEVEL READ COMMITTED");
-    db.prepare("INSERT INTO workboard_boards (id, created_at, updated_at) VALUES (?, ?, ?)").run(
-      "discarded",
-      1,
-      2,
-    );
-    // The timeout form joins server termination instead of polling for it.
+    await fixture.statements([
+      { sql: "BEGIN ISOLATION LEVEL READ COMMITTED" },
+      insertBoard("discarded"),
+    ]);
     const terminated = await observer.query<{ terminated: boolean }>(
       "SELECT pg_terminate_backend($1, 5000) AS terminated",
       [pid],
     );
     expect(terminated.rows).toEqual([{ terminated: true }]);
-    let failure: unknown;
-    try {
-      db.exec(statement);
-    } catch (error) {
-      failure = error;
-    }
+    const reply = await fixture.request({ kind: "statements", statements: [{ sql: statement }] });
     const message = unknown
       ? "PostgreSQL connection lost; outcome unknown"
       : "PostgreSQL connection lost; transaction rolled back";
-    expect(failure).toMatchObject({ message });
-    expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(unknown);
-    expect(db.isOpen).toBe(false);
-    using sent = vi.spyOn(MessagePort.prototype, "postMessage");
-    expect(() => db.exec("SELECT 2")).toThrow(message);
-    expect(sent).not.toHaveBeenCalled();
+    expect(() => unwrapWorkboardSqliteResult(reply.result)).toThrow(message);
+    expect(reply.outcomeUnknown).toBe(unknown);
+    expect((await fixture.state()).isOpen).toBe(false);
+    expect(await fixture.execute({ kind: "assertClosed", sql: "SELECT 2" })).toEqual({
+      sent: false,
+      failure: message,
+    });
     if (unknown) {
       expect(readSqliteDatabaseWriteTokenForPath(dbPath)).not.toBe(token);
     } else {
       expect(readSqliteDatabaseWriteTokenForPath(dbPath)).toBe(token);
     }
-    const persisted = await observer.query(
-      `SELECT id FROM ${quoteIdentifier(db.schema)}.workboard_boards`,
-    );
-    expect(persisted.rows).toEqual([]);
+    expect(
+      (await observer.query(`SELECT id FROM ${quoteIdentifier(schema)}.workboard_boards`)).rows,
+    ).toEqual([]);
   });
 
-  it("keeps the connection usable after a deferred constraint fails at COMMIT", () => {
-    const { db } = openDatabase(databasePath());
-    const pid = db.prepare("SELECT pg_backend_pid() AS pid").get()?.pid;
-    db.exec("CREATE TABLE deferred_unique (id INTEGER UNIQUE DEFERRABLE INITIALLY DEFERRED)");
-    db.exec("BEGIN");
-    db.exec("INSERT INTO deferred_unique VALUES (1), (1)");
-    let failure: unknown;
-    try {
-      db.exec("COMMIT");
-    } catch (error) {
-      failure = error;
+  it("keeps the connection usable after a deferred constraint fails at COMMIT", async () => {
+    const { fixture } = await openDatabase(databasePath());
+    const [pid] = await fixture.statements([
+      { sql: "SELECT pg_backend_pid() AS pid", method: "get" },
+    ]);
+    await fixture.statements([
+      { sql: "CREATE TABLE deferred_unique (id INTEGER UNIQUE DEFERRABLE INITIALLY DEFERRED)" },
+      { sql: "BEGIN" },
+      { sql: "INSERT INTO deferred_unique VALUES (1), (1)" },
+    ]);
+    const reply = await fixture.request({ kind: "statements", statements: [{ sql: "COMMIT" }] });
+    expect(reply.result.ok).toBe(false);
+    if (!reply.result.ok) {
+      expect(reply.result.failure).toMatchObject({
+        code: "ERR_SQLITE_ERROR",
+        errcode: 2067,
+        cause: { code: "23505" },
+      });
     }
-    expect(db.isTransaction).toBe(false);
-    expect(failure).toMatchObject({
-      code: "ERR_SQLITE_ERROR",
-      errcode: 2067,
-      cause: { code: "23505" },
-    });
-    expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(false);
-    expect(db.isOpen).toBe(true);
-    expect(db.prepare("SELECT pg_backend_pid() AS pid").get()?.pid).toBe(pid);
-    runSqliteImmediateTransactionSync(db, () => db.exec("INSERT INTO deferred_unique VALUES (2)"));
-    expect(db.prepare("SELECT id FROM deferred_unique").all()).toEqual([{ id: 2 }]);
+    expect(reply.outcomeUnknown).toBe(false);
+    expect(await fixture.state()).toMatchObject({ isTransaction: false, isOpen: true });
+    expect(
+      await fixture.statements([{ sql: "SELECT pg_backend_pid() AS pid", method: "get" }]),
+    ).toEqual([pid]);
+    await fixture.statements([{ sql: "INSERT INTO deferred_unique VALUES (2)" }], true);
+    expect(
+      await fixture.statements([{ sql: "SELECT id FROM deferred_unique", method: "all" }]),
+    ).toEqual([[{ id: 2 }]]);
   });
 
-  it("refuses a PostgreSQL anchor when the experimental URL is unset without creating SQLite data", () => {
+  it("refuses a PostgreSQL anchor when the PostgreSQL config is absent without creating SQLite data", async () => {
     const dbPath = databasePath();
-    const opened = openDatabase(dbPath);
-    const schema = opened.db.schema;
-    runSqliteImmediateTransactionSync(opened.db, () => {
-      opened.db
-        .prepare(
-          "INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-        )
-        .run("remote", "Keep remote data", 1, 2);
-    });
-    opened.close();
+    const opened = await openDatabase(dbPath);
+    const schema = opened.schema;
+    await opened.fixture.statements(
+      [
+        {
+          sql: "INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+          method: "run",
+          args: ["remote", "Keep remote data", 1, 2],
+        },
+      ],
+      true,
+    );
+    await opened.close();
     const snapshotAnchor = () => {
       using anchor = new DatabaseSync(dbPath, { readOnly: true });
       return {
@@ -316,32 +313,37 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     };
     const before = snapshotAnchor();
     expect(before.workboardTables).toEqual([]);
-    let failure: unknown;
-    try {
-      owners.push(createWorkboardDatabase(dbPath));
-    } catch (error) {
-      failure = error;
-    }
-    expect(failure).toMatchObject({ message: expect.stringContaining(schema) });
-    expect(failure).toMatchObject({
-      message: expect.stringContaining("database.engine"),
-    });
+    expect(() => createWorkboardDatabase(dbPath)).toThrow(schema);
+    expect(() => createWorkboardDatabase(dbPath)).toThrow("database.engine");
     expect(snapshotAnchor()).toEqual(before);
-    const reopened = openDatabase(dbPath);
-    expect(reopened.db.schema).toBe(schema);
+    const reopened = await openDatabase(dbPath);
+    expect(reopened.schema).toBe(schema);
     expect(
-      reopened.db.prepare("SELECT name FROM workboard_boards WHERE id = ?").get("remote"),
-    ).toEqual({ name: "Keep remote data" });
+      await reopened.fixture.statements([
+        {
+          sql: "SELECT name FROM workboard_boards WHERE id = ?",
+          method: "get",
+          args: ["remote"],
+        },
+      ]),
+    ).toEqual([{ name: "Keep remote data" }]);
   });
+
+  // External metadata changes are visible on the next physical-store admission, not warm reopen.
+  function replaceAnchorForFreshAdmission(dbPath: string) {
+    fs.copyFileSync(dbPath, `${dbPath}.replacement`);
+    fs.renameSync(`${dbPath}.replacement`, dbPath);
+  }
 
   it("refuses a PostgreSQL schema version mismatch without migrating it", async () => {
     const dbPath = databasePath();
-    const opened = openDatabase(dbPath);
-    const schema = opened.db.schema;
-    opened.close();
+    const opened = await openDatabase(dbPath);
+    const schema = opened.schema;
+    await opened.close();
     await observer.query(
       `UPDATE ${quoteIdentifier(schema)}.openclaw_schema_meta SET version = 4 WHERE store = 'workboard'`,
     );
+    replaceAnchorForFreshAdmission(dbPath);
     expect(() => createWorkboardDatabase(dbPath, undefined, postgresInput)).toThrow(/expected.*3/i);
     expect(
       (
@@ -354,9 +356,9 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
 
   it("refuses PostgreSQL metadata belonging to a different anchor", async () => {
     const dbPath = databasePath();
-    const opened = openDatabase(dbPath);
-    const schema = opened.db.schema;
-    opened.close();
+    const opened = await openDatabase(dbPath);
+    const schema = opened.schema;
+    await opened.close();
     const metadata = await observer.query<{ store_id: string }>(
       `SELECT store_id FROM ${quoteIdentifier(schema)}.openclaw_schema_meta WHERE store = 'workboard'`,
     );
@@ -367,6 +369,7 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
       `UPDATE ${quoteIdentifier(schema)}.openclaw_schema_meta SET store_id = $1 WHERE store = 'workboard'`,
       [otherId],
     );
+    replaceAnchorForFreshAdmission(dbPath);
     expect(() => createWorkboardDatabase(dbPath, undefined, postgresInput)).toThrow(
       new RegExp(`${originalId}.*${otherId}|${otherId}.*${originalId}`),
     );

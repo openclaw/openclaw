@@ -12,6 +12,7 @@ import { listProjectedSessions } from "../../gateway/session-utils-list.js";
 import { createGatewaySessionEntryReader } from "../../gateway/session-utils-store-lineage.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import {
   inspectAgentDatabaseAdmission,
   readAgentDatabaseAdmissionRefusal,
@@ -19,11 +20,13 @@ import {
 } from "../../state/agent-database-admission.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-preflight.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.js";
 import * as sessionAccessor from "./session-accessor.js";
@@ -64,7 +67,9 @@ it("lists admitted sessions across cached targets while preserving a refused dat
       ),
     ).toHaveLength(2);
     const copyPath = openOpenClawAgentDatabase({ agentId: "cleaner" }).path;
+    await closeOpenClawAgentDatabasesAsync(state.root);
     closeOpenClawAgentDatabasesForTest();
+    revokeSqliteDatabaseAdmissionsForPath(copyPath);
     const { DatabaseSync } = requireNodeSqlite();
     const copy = new DatabaseSync(copyPath);
     copy.exec(
@@ -95,6 +100,8 @@ it("lists admitted sessions across cached targets while preserving a refused dat
     expect(scoped.diagnostics?.join("\n")).toContain(refusal?.reason);
     expect(await fs.readFile(copyPath)).toEqual(before);
 
+    await closeOpenClawAgentDatabasesAsync(state.root);
+    revokeSqliteDatabaseAdmissionsForPath(copyPath);
     const repaired = new DatabaseSync(copyPath);
     repaired.exec(
       `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION}; UPDATE schema_meta SET agent_id = 'cleaner', schema_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`,
@@ -204,6 +211,7 @@ it("projects shared rows under their logical owner while retaining the physical 
       },
       session: { scope: "global", store: storePath },
     };
+    setRuntimeConfigSnapshot(cfg);
     openOpenClawAgentDatabase({ agentId: "main", path: storePath });
     for (const sessionKey of ["global", "unknown", "agent:worker:task"]) {
       replaceSessionEntrySync(
@@ -216,7 +224,7 @@ it("projects shared rows under their logical owner while retaining the physical 
       );
     }
     await persistSessionTranscriptTurn(
-      { agentId: "main", storePath, sessionKey: "global", sessionId: "session-global" },
+      { agentId: "ops", storePath, sessionKey: "global", sessionId: "session-global" },
       {
         messages: [{ message: { role: "user", content: "Shared physical global preview" } }],
         touchSessionEntry: false,

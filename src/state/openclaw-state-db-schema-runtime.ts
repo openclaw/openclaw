@@ -1,7 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
-import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
+import {
+  hasNonStrictSqliteTables,
+  migrateSqliteSchemaToStrictInTransaction,
+} from "../infra/sqlite-strict.js";
 import { getSqliteWorkerStateIntegrityAdmission } from "../infra/sqlite-worker-state-context.js";
 import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
@@ -105,10 +108,6 @@ export function ensureOpenClawStateRuntimeSchema(
           return [];
         }
         const previousVersion = readStateSchemaContentVersion(db);
-        const includeAgentDeletionJournal =
-          tableExists(db, "agent_deletion_journal") ||
-          hasPreJournalStateSchema(db) ||
-          (initialization.kind === "fresh" && isUninitializedNativeStartupDatabase(db));
         if (previousVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
           assertNoLegacyStateRuntimeRepair(db, pathname);
           assertStateDatabaseIntegrityOnce(db, pathname);
@@ -130,6 +129,10 @@ export function ensureOpenClawStateRuntimeSchema(
             : [];
         }
 
+        const includeAgentDeletionJournal =
+          tableExists(db, "agent_deletion_journal") ||
+          hasPreJournalStateSchema(db) ||
+          (initialization.kind === "fresh" && isUninitializedNativeStartupDatabase(db));
         // Older schemas still need atomic content transforms before retiring their columns.
         openClawStateMigrationAssertions.get(previousVersion)?.(db, { pathname });
         // Automatic preparation enters without the physical opener's integrity preflight.
@@ -165,7 +168,10 @@ export function ensureOpenClawStateRuntimeSchema(
           includeAgentDeletionJournal,
         });
         migrateLegacyCronRunLogsToTaskRuns(db);
-        if (previousVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {
+        if (
+          previousVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION &&
+          hasNonStrictSqliteTables(db)
+        ) {
           repairLegacyGatewayRestartHandoffsForStrictMigration(db);
           ensureFirstUseAdditiveStateColumnsForStrictMigration(db);
           const strict = migrateSqliteSchemaToStrictInTransaction(

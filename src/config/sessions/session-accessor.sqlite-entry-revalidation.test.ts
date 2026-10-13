@@ -12,6 +12,7 @@ import {
   registerOpenClawAgentDatabaseIdentity,
 } from "../../state/openclaw-agent-db-identity.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
+import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
 import { runOpenClawAgentWriteWithYieldingAdmission } from "../../state/openclaw-agent-db-transaction.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -22,6 +23,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   loadExactSessionEntry,
@@ -35,9 +37,14 @@ import { recordSessionParticipant } from "./session-accessor.sqlite-participants
 import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 import { assertSessionEntryCurrentAdmission } from "./session-entry-current-admission.js";
-import { readSessionEntryCurrentFactsInDatabase } from "./session-entry-current-admission.worker.js";
-import type { SessionEntryCurrentSource } from "./session-entry-current.types.js";
-import { readSessionEntryCurrentFacts } from "./session-entry-read.worker.js";
+import {
+  readSessionEntryCurrentFacts,
+  requestSessionEntryCurrentAdmission,
+} from "./session-entry-current-admission.worker.js";
+import type {
+  SessionEntryCurrentFacts,
+  SessionEntryCurrentSource,
+} from "./session-entry-current.types.js";
 
 const tempDirs = createTempDirTracker();
 const sessionKey = "agent:main:entry-revalidation";
@@ -46,6 +53,7 @@ afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
   tempDirs.cleanup();
 });
 
@@ -60,6 +68,7 @@ describe("SQLite session entry patch commit revalidation", () => {
       OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("session-entry-revalidation-")),
     };
     scope = { agentId: "main", env, sessionKey };
+    setRuntimeConfigSnapshot({});
     await upsertSessionEntryCore(scope, {
       label: "original",
       sessionId: "session-1",
@@ -274,6 +283,35 @@ describe("SQLite session entry patch commit revalidation", () => {
   );
 
   describe("compact session currency facts", () => {
+    function readCurrentEntryThroughAdmission(native: OpenClawAgentReadOnlyDatabase) {
+      const identity = readOpenClawAgentDatabaseIdentity(native);
+      if (typeof identity.identity !== "string") {
+        throw new Error("Expected the fixture's durable database identity");
+      }
+      const source: SessionEntryCurrentSource = {
+        agentId: native.agentId,
+        path: native.path,
+        databaseIdentity: identity.identity,
+        databaseBirthtime: identity.birthtime,
+        sessionKey,
+      };
+      let entry: SessionEntryCurrentFacts | undefined;
+      requestSessionEntryCurrentAdmission(
+        source,
+        { stage: "commit", facts: undefined },
+        { database: native },
+        (request) => {
+          assertSessionEntryCurrentAdmission(request, {
+            source,
+            assertCurrent: (facts) => {
+              entry = facts;
+            },
+          });
+        },
+      );
+      return entry;
+    }
+
     it("discards facts first observed after a write in a rolled-back native transaction", () => {
       // A fresh admitted connection has never installed the lazy revision tracker.
       const connection = openNodeSqliteDatabase(database.path);
@@ -291,7 +329,7 @@ describe("SQLite session entry patch commit revalidation", () => {
                   "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.lifecycleRunId', ?) WHERE session_key = ?",
                 )
                 .run("uncommitted-owner", sessionKey);
-              expect(readSessionEntryCurrentFactsInDatabase(native, sessionKey)).toMatchObject({
+              expect(readCurrentEntryThroughAdmission(native)).toMatchObject({
                 lifecycleRunId: "uncommitted-owner",
               });
               throw rollback;
@@ -300,7 +338,7 @@ describe("SQLite session entry patch commit revalidation", () => {
             }
           }),
         ).toThrow(rollback);
-        expect(readSessionEntryCurrentFactsInDatabase(native, sessionKey)).toMatchObject({
+        expect(readCurrentEntryThroughAdmission(native)).toMatchObject({
           sessionId: "session-1",
           lifecycleRunId: undefined,
         });
@@ -312,7 +350,7 @@ describe("SQLite session entry patch commit revalidation", () => {
     it.each(["sibling", "same-connection"] as const)(
       "refreshes a cached owner after a %s change and preserves rollback",
       (writer) => {
-        const original = readSessionEntryCurrentFactsInDatabase(database, sessionKey);
+        const original = readCurrentEntryThroughAdmission(database);
         expect(original).toEqual({
           sessionId: "session-1",
           lifecycleRevision: undefined,
@@ -337,7 +375,7 @@ describe("SQLite session entry patch commit revalidation", () => {
           update(database.db);
         }
         try {
-          expect(readSessionEntryCurrentFactsInDatabase(database, sessionKey)).toMatchObject({
+          expect(readCurrentEntryThroughAdmission(database)).toMatchObject({
             lifecycleRunId: "next-lifecycle",
             subagentRecovery: { lastRunId: "hidden-successor" },
           });
@@ -347,13 +385,13 @@ describe("SQLite session entry patch commit revalidation", () => {
           }
         }
         if (writer === "same-connection") {
-          expect(readSessionEntryCurrentFactsInDatabase(database, sessionKey)).toEqual(original);
+          expect(readCurrentEntryThroughAdmission(database)).toEqual(original);
         }
       },
     );
 
     it("preserves parser values and last duplicate owner fields through native admission", () => {
-      readSessionEntryCurrentFactsInDatabase(database, sessionKey);
+      readCurrentEntryThroughAdmission(database);
       const other = openNodeSqliteDatabase(database.path);
       try {
         other
@@ -367,7 +405,7 @@ describe("SQLite session entry patch commit revalidation", () => {
       } finally {
         other.close();
       }
-      const entry = readSessionEntryCurrentFactsInDatabase(database, sessionKey);
+      const entry = readCurrentEntryThroughAdmission(database);
       const expected = {
         sessionId: "session-1",
         lifecycleRevision: 42,
@@ -401,7 +439,7 @@ describe("SQLite session entry patch commit revalidation", () => {
     });
 
     it("refuses a captured source replaced by identical database bytes", async () => {
-      const original = readSessionEntryCurrentFactsInDatabase(database, sessionKey);
+      const original = readCurrentEntryThroughAdmission(database);
       const identity = readOpenClawAgentDatabaseIdentity(database);
       if (typeof identity.identity !== "string") {
         throw new Error("Expected the fixture's durable database identity");
@@ -430,7 +468,7 @@ describe("SQLite session entry patch commit revalidation", () => {
 
   it("commits an unchanged persisted row after evicting the host handle during preparation", async () => {
     const persisted = await patchEntry("ordinary", () => {
-      closeCachedOpenClawAgentDatabase(database, { eviction: true });
+      closeCachedOpenClawAgentDatabase(database);
       expect(database.db.isOpen).toBe(false);
       return { label: "renamed" };
     });
@@ -505,7 +543,7 @@ describe("SQLite session entry patch commit revalidation", () => {
       patchEntry("lifecycle", () => {
         setCanonicalSqliteSessionMainKey(database, "work");
         setUnrelatedParent(database.db, "agent:main:unrecorded-parent");
-        closeCachedOpenClawAgentDatabase(database, { eviction: true });
+        closeCachedOpenClawAgentDatabase(database);
         expect(database.db.isOpen).toBe(false);
         return null;
       }),

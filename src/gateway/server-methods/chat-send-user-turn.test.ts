@@ -17,6 +17,7 @@ import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-me
 import { resolveSessionResetCommand } from "../../auto-reply/reply/session-reset-command.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   listSessionParticipantsReadOnly,
   loadSessionEntryReadOnly,
@@ -119,6 +120,7 @@ describe("prepareChatSendUserTurn", () => {
     "records only accepted authenticated external input after retargeting: %s",
     async (kind) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot({});
         const profile = ensureProfileForEmail("accepted@example.test", { env: state.env });
         const creator = ensureProfileForEmail("session-creator@example.test", { env: state.env });
         const { controller } = createUserTurnInputController();
@@ -248,6 +250,7 @@ describe("prepareChatSendUserTurn", () => {
     "preserves sandbox policy for attributed chat (system actor: %s)",
     async (systemActor) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         const profile = systemActor
           ? ensureGatewayOwnerProfile("Gateway Owner")
           : ensureProfileForEmail("chat-sandbox-creator@example.com");
@@ -767,6 +770,156 @@ describe("prepareChatSendUserTurn", () => {
     } finally {
       persist.mockRestore();
     }
+  });
+
+  it("exposes an ordinary WebChat offloaded image as the media-store path for staging", async () => {
+    const persistedPath = "/state/media/inbound/photo---abc.png";
+    const mediaRef = "media://inbound/photo---abc.png";
+    const persist = vi
+      .spyOn(chatAttachments, "persistInboundImagesForTranscript")
+      .mockResolvedValueOnce({
+        entries: [
+          {
+            id: "photo---abc.png",
+            path: persistedPath,
+            sourceIndex: 0,
+            imageKind: "offloaded",
+            fact: {
+              url: mediaRef,
+              contentType: "image/png",
+              fileName: "photo.png",
+              kind: "image",
+              sizeBytes: 2_100_000,
+            },
+          },
+        ],
+        omission: "none",
+      });
+    try {
+      const { controller } = createUserTurnInputController();
+      const prepared = prepareChatSendUserTurn({
+        request: {
+          inboundMessage: "inspect",
+          clientInfo: createClientInfo({
+            id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+          }),
+          suppressCommandInterpretation: false,
+          systemInputProvenance: undefined,
+          systemProvenanceReceipt: undefined,
+        },
+        session: {
+          agentId: "main",
+          clientRunId: "run-offloaded",
+          sessionKey: "agent:main:main",
+        },
+        admission: {
+          originatingRoute: { originatingChannel: "webchat", explicitDeliverRoute: false },
+        },
+        attachments: createAttachments({
+          imageOrder: ["offloaded"],
+          offloadedRefs: [
+            {
+              mediaRef,
+              id: "photo---abc.png",
+              path: persistedPath,
+              kind: "image",
+              mimeType: "image/png",
+              label: "photo.png",
+              sizeBytes: 2_100_000,
+              sourceIndex: 0,
+            },
+          ],
+          parsedMessage: `inspect\n[media attached: ${mediaRef}]`,
+        }),
+        client: null,
+        logGateway: { warn: vi.fn() } as never,
+        userTurn: controller,
+      });
+
+      const managedMedia = await prepared.pluginBoundMediaPromise;
+      expect(managedMedia).toEqual([
+        {
+          path: persistedPath,
+          contentType: "image/png",
+          fileName: "photo.png",
+          hydrationSuppressed: true,
+        },
+      ]);
+      expect(prepared.replyOptionImages).toBeUndefined();
+      expect(prepared.replyOptionMedia).toEqual([
+        {
+          path: persistedPath,
+          url: mediaRef,
+          contentType: "image/png",
+        },
+      ]);
+      const ctx = {} as MsgContext;
+      applyChatSendManagedMedia(ctx, managedMedia, prepared.managedMediaApplyMode);
+      expect(ctx.media).toEqual(managedMedia);
+    } finally {
+      persist.mockRestore();
+    }
+  });
+
+  it("does not restage an offloaded image that pre-staging already published", async () => {
+    const { controller } = createUserTurnInputController();
+    const prepared = prepareChatSendUserTurn({
+      request: {
+        inboundMessage: "inspect",
+        clientInfo: createClientInfo({
+          id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+          mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+        }),
+        suppressCommandInterpretation: false,
+        systemInputProvenance: undefined,
+        systemProvenanceReceipt: undefined,
+      },
+      session: {
+        agentId: "main",
+        clientRunId: "run-prestaged",
+        sessionKey: "agent:main:main",
+      },
+      admission: {
+        originatingRoute: { originatingChannel: "webchat", explicitDeliverRoute: false },
+      },
+      attachments: createAttachments({
+        imageOrder: ["offloaded"],
+        mediaPathOffloads: [
+          {
+            path: "/tmp/1.png",
+            contentType: "image/png",
+            fileName: "attachment-1",
+            workspaceDir: "/tmp",
+          },
+        ],
+        offloadedRefs: [
+          {
+            mediaRef: "media://inbound/1.png",
+            id: "1.png",
+            path: "/tmp/1.png",
+            kind: "image",
+            mimeType: "image/png",
+            label: "attachment-1",
+            sizeBytes: 10,
+            sourceIndex: 0,
+          },
+        ],
+      }),
+      client: null,
+      logGateway: { warn: vi.fn() } as never,
+      userTurn: controller,
+    });
+
+    await expect(prepared.pluginBoundMediaPromise).resolves.toEqual([]);
+    expect(prepared.ctx.media).toEqual([
+      {
+        path: "/tmp/1.png",
+        contentType: "image/png",
+        fileName: "attachment-1",
+        workspaceDir: "/tmp",
+      },
+    ]);
   });
 
   it("hydrates a staged image claim-check alias as structured ownership", async () => {

@@ -7,6 +7,21 @@ read_when:
 title: "Storage changes and release preflight"
 ---
 
+Runtime changes use the [existing worker owner](/reference/database-schemas/worker-access),
+with Kysely for ordinary queries. Raw SQL is reserved for schema, migrations,
+bootstrap, or a justified primitive owned by the engine. Prepare asynchronous
+inputs before entering a write transaction; its callback must stay synchronous.
+Use SQLite autocommit for a complete single-statement operation through
+`runSqliteSingleStatementSync`; PostgreSQL writes retain the adapter's
+`runTransaction` custody. Related reads that require a consistent snapshot stay
+in one read transaction. Do not replace SQL-side projections that bound large
+payloads with full-value loading and TypeScript assembly.
+
+Cache changes require complete writer receipt coverage, scoped to the affected
+data. Load once and consume committed postimages or invalidations rather than
+adding freshness queries. [Authority publication](/reference/database-schemas/worker-access#final-authority-without-sql)
+is a separate owner contract: a data receipt alone never grants permission.
+
 ## Agent JSON predicate columns
 
 [Agent schema 26](/reference/database-schemas/agent-schema-history#json-predicate-columns)
@@ -66,58 +81,130 @@ or result delivery fails; recovery reconciles through its original owner instead
 of repeating the write. See
 [committed facts and completeness](/reference/database-schemas/worker-access#committed-facts-and-completeness).
 
-SQLite remains the supported runtime store. Preparation for PostgreSQL should
-improve the existing store owners and their tests before adding a driver or
-configuration option. The initial target is remote persistence for one Gateway;
+SQLite remains the supported default. The experimental PostgreSQL adapter
+supports remote persistence for one Gateway;
 multiple active Gateways would require a separate ownership and coordination
 design. A shared database alone does not make process-local writer queues,
 session lifecycles, or host-owned leases safe across Gateway instances.
 
-`pnpm db:postgres:gen --out /tmp/openclaw-postgres` derives PostgreSQL DDL and a
-portability report from the authoritative canonical SQLite `.sql` files. On an
-isolated Testbox with a disposable `postgres:17` container named `pgprep`, apply
-each generated `*.postgres.sql` file with
-`docker exec -i pgprep psql -U postgres -v ON_ERROR_STOP=1 < <file>`, then rerun
-the generator with `--verify-psql "docker exec -i pgprep psql -U postgres"` to
-compare catalogs. Review every reported omission; this proves DDL readiness,
-not runtime backend support or a choice of per-agent PostgreSQL topology.
+### Shared-state PostgreSQL schema generation
+
+`pnpm db:postgres:gen` regenerates the committed eager schema, named lazy
+fragments, dependency manifest, and portability reports in
+`src/state/postgres-schema.generated/`. `pnpm db:postgres:check` verifies their
+freshness and the generator's unit contracts. PostgreSQL **16 or newer** is
+required for `IS JSON`; the conformance job currently uses PostgreSQL 17.
+The detailed JSON diagnostic report stays in memory by default. An explicit
+`pnpm db:postgres:gen --out <diagnostic-directory>` exports it alongside the
+generated files; `portability-report.json` is not a tracked artifact.
+
+The canonical SQLite schema and feature-local DDL remain authoritative. The
+feature declarations in `src/state/openclaw-state-feature-schema.ts` supply both
+the SQLite ensures and the generator. Their DDL providers preserve existing
+SQLite statement bytes and first-use timing, including the profile owner's two
+installation phases. The manifest lists each fragment's tables, indexes, and
+fragment dependencies. `activation` distinguishes first-use fragments from
+version-additive fragments: a fresh bootstrap or version migration installs the
+latter, while an existing same-version store leaves them to its feature owner.
+A PostgreSQL owner installs dependencies first, then the
+fragment's tables and indexes, then its foreign keys, in the same transaction.
+In particular, `user_background_images` depends on `user_profiles`; its cascading
+foreign key is retained and installed only after both tables exist. Generating a
+fragment does not activate PostgreSQL shared-state runtime support.
+
+`state.postgres.sql` and each manifest `file` contain the single runtime form of
+their state DDL. They omit transaction wrappers and fixed schema qualification;
+the owning connection supplies the namespace and transaction. The separate
+`agent.postgres.sql` readiness artifact retains its schema and transaction
+wrappers until the agent-store cutover.
+
+For a manual state-schema check, run `psql` from the generated directory and
+supply the transaction and chosen schema explicitly:
+
+```sql
+\set ON_ERROR_STOP on
+BEGIN;
+CREATE SCHEMA review_state;
+SET LOCAL search_path = review_state;
+SET LOCAL standard_conforming_strings = on;
+\i state.postgres.sql
+-- Include each desired fragment's manifest file, dependencies first.
+\i fragment-user_profiles.postgres.sql
+\i fragment-user_background_images.postgres.sql
+COMMIT;
+```
+
+Use a disposable schema for this readiness check; it does not enable shared-state
+PostgreSQL support or migrate an existing store.
+
+Both engines use the same shared-state schema version (currently 22). Every
+future version change must supply both engines' forward migration and catalog
+equivalence proof together. JSON stays canonical: a query/index projection is
+derived once in TypeScript and committed in the same statement as its JSON.
+See the [accepted design](https://github.com/openclaw/openclaw/issues/169254).
+
+Generation refuses unsupported shared-state tables, columns, defaults, CHECKs,
+indexes, and foreign keys with their exact source and reason. Text uses C
+collation. Text length maps to `char_length`, byte length to `octet_length`, and
+null-safe SQLite `IS` comparisons to `IS [NOT] DISTINCT FROM`. Supported GLOB
+patterns use case-sensitive regular expressions with C collation; an unsupported
+pattern or LIKE expression fails generation rather than changing case rules.
+SQLite rowid aliases become identity columns: PostgreSQL adds a primary-key
+index that SQLite does not report, and sequence allocation is not a rowid
+compatibility promise. Data portability, including PostgreSQL's rejection of
+NUL text, belongs to the separate port preflight.
+
+The SQLite-only allow-list contains only these pure `instr(column, char(0)) = 0`
+subpredicates: `node_worker_launches.{launch_id,environment_id,session_id,run_id,
+result_json,error_text}` and `node_worker_turns.{turn_id,run_id,result_json,error_text}`.
+**PostgreSQL text cannot hold NUL; the guard is enforced by the type.** All
+surrounding length, JSON, and newline constraints remain CHECKs, preserving NULL
+semantics. These are ten subpredicates; six CHECKs reported `instr` as their first
+unsupported construct, while four more guards were hidden behind byte casts.
+
+Schema 22 promotes the two ACP resume index expressions to columns. The single
+metadata writer trims string identity values using the existing whitespace rules;
+missing and non-string values become NULL. Migration preserves SQLite's first
+duplicate-key behavior. Resume lookups compare the columns directly. JSON stays canonical; receipt
+publication and cohort-cache lifetime are unchanged.
+
+Approvals, cron receipts, execution decision facts, and Skill Workshop changes
+use explicit unique `cursor_id` columns. Migration preserves the original rowid
+values, including gaps; existing cursor wire formats and insertion-order ties
+remain valid. Serialized writers assign `max(cursor_id) + 1` within their existing
+transactions. The generator's `pendingPromotion` list is empty.
+
+The CI **PostgreSQL conformance** job bootstraps the generated eager schema and
+all fragments into an isolated schema on a real server, then compares every
+table's columns, types, nullability, defaults, primary/unique keys, CHECK count,
+index count, and foreign keys (including actions and deferrability) against the
+SQLite catalog. All shared-state indexes are translated. Locally run
+`pnpm db:postgres:gen --check-connection '<disposable PostgreSQL DSN>'`; the check
+removes its isolated schema afterward. This proves DDL equivalence, not runtime
+SQL/concurrency conformance or a choice of per-agent PostgreSQL topology.
 
 `pnpm check:database-dialect-ratchet` keeps mechanical, design, and engine-maintenance counts shrink-only against the Git base by scanning only differing production `.ts`/`.mts`/`.sql` files under `src/`, `extensions/`, and `packages/` (excluding tests and fixtures); `--staged` reads the index, `--full-tree` reports totals, and the `sqliteStringSet` owner subset is reported within mechanical debt.
+SQLite primitive owners listed in `SQLITE_PRIMITIVE_OWNERS` may grow engine-maintenance constructs, and consumers call them.
 The lexical gate examines `.sql` files minus comments, all static parts of templates whose tag's final identifier ends in `sql` (case-insensitive), strings and untagged templates starting after whitespace and `(` with an uppercase SQL statement keyword, and the `orReplace`/`orIgnore`/`orAbort`/`orFail`/`orRollback` method calls; construct regexes remain case-insensitive, exclude SQL double-quoted text, require `name(` for functions, and require `PRAGMA <name>` or `pragma_<name>(` for `data_version`/`schema_version`/`user_version`.
 Prose, fragments without a statement prefix, and substitutions are ignored, accepting under-counts for assembled SQL; both revisions use identical rules without type, symbol, import, or SQL token-role analysis, and runtime behavior and schemas are unchanged.
 
 ### Experimental PostgreSQL engine (workboard pilot)
 
-`database.engine: "postgres"` selects the experimental PostgreSQL engine for
-workboard only. Set `database.postgres.connection` to a PostgreSQL DSN, preferably
-through a SecretRef. The host resolves the secret before opening the worker;
-missing or unresolvable connections and unreachable servers fail without falling
-back to SQLite. SQLite remains the supported default (`database.engine: "sqlite"`),
-and updates require no configuration or migration for SQLite stores. Other stores
-continue to use SQLite. A follow-up adapter will generalize selection to every
-store and add Doctor reporting.
-
-The workboard database path holds a small SQLite anchor with a durable store
-UUID. Its first 16 hexadecimal characters select the PostgreSQL schema
-`<schemaPrefix>_workboard_<uuid-prefix>` (prefix defaults to `openclaw`); moving the anchor preserves that identity.
-Back up and restore both the anchor and its PostgreSQL schema together.
-The pilot refuses an existing SQLite workboard store containing data; it does
-not port that data to PostgreSQL. Opening an anchor with the SQLite engine
-refuses and names its PostgreSQL schema; it never creates SQLite workboard tables
-in the anchor. This check runs once per open, never per operation. The connection
-owns its `search_path`.
-Writers use `READ COMMITTED` with one transaction-scoped advisory lock derived
-from the store UUID; snapshot reads use `REPEATABLE READ READ ONLY`. Connections set
-`synchronous_commit=off` to match SQLite WAL with `synchronous=NORMAL`: an operating
-system or database crash can lose recent acknowledged commits.
+`database.engine: "postgres"` selects PostgreSQL for every store with a registered
+PostgreSQL schema; workboard is currently the only supported store. Doctor
+reports each store's engine and warns about stores that remain on SQLite.
+See [Database engines (experimental)](/reference/database-engines) for SecretRef
+configuration, isolation and durability, matched anchor/schema backups,
+limitations, and engine-boundary observation. Missing secrets, connection failures,
+and admission errors never fall back to SQLite. Existing SQLite workboard data
+refuses the switch until a port tool is available.
 
 `pnpm db:postgres:gen --target workboard` generates the workboard DDL from its
 SQLite schema; `pnpm db:postgres:check` verifies freshness. Admission installs the
 tables and records the current store version in one transaction. There are no
 PostgreSQL migrations yet: an existing version mismatch refuses to open and names
-the expected version. PostgreSQL text cannot store NUL characters, so NUL-bearing
-values fail with an engine error. This pilot does not enable multiple active
-Gateways against the same store.
+the expected version. Opening a PostgreSQL anchor with the SQLite engine also
+refuses; it never creates SQLite workboard tables in the anchor.
 
 ### Keep operations at the owning store
 
@@ -1351,8 +1438,11 @@ The host captures the database path, state environment, and current admission
 before awaited work. The shared worker owns its canonical connection and schema
 opening, with Gateway schema authority granted by its live host operation.
 Classified database errors survive transport, and canonical close joins worker
-operations and native cleanup. Cold registry restoration and runtime-configuration
-preparation still retain their existing main-thread behavior.
+operations and native cleanup. Cold subagent-registry restoration reads through
+the shared-state read-only worker before installing its resident snapshot.
+Asynchronous runtime-configuration preparation also reads Claw consent provenance
+in the shared-state worker; the synchronous configuration loader retains its
+existing compatibility path.
 
 Dynamic model resolution awaits persisted auth-profile reads. Agent-local and
 legacy shared credentials use the isolated read-only child, so reads can coexist
@@ -1433,11 +1523,9 @@ maintenance, exports, and SQLite writers keep their existing capacity. No schema
 stored format, or update migration changes are required.
 Session exports read events, statistics, and session
 classification from one read-only SQLite snapshot, then prepare text and
-provenance off the Gateway thread. The caller carries its current exact-secret
-redaction snapshot and rejects results prepared against an obsolete registry.
-Reset-recall metadata crosses the worker boundary with the prepared content.
-If secret registration invalidates both preparation attempts, the export rejects
-for retry instead of reading SQLite on the Gateway thread. Failed index rebuilds
+provenance off the Gateway thread. Conversation and tool text retain their stored
+content without secret masking. Reset-recall metadata crosses the worker boundary
+with the prepared content. Failed index rebuilds
 preserve the published index and retained retry state.
 Chunk preparation from captured session text uses the existing local workspace
 queue without a durable write lease. File and multimodal preparation retain that
@@ -1853,8 +1941,8 @@ recording before reporting completion; a recording failure remains a warning and
 does not change the backup result. Status and Doctor await freshness before
 formatting it. Outcome recording executes its insertion-and-pruning transaction
 in the shared-state worker, preserving the 200-row limit and leaving absent
-databases absent. Freshness reads still execute synchronous SQLite internally
-and remain non-creating.
+databases absent. Freshness reads use the shared-state read-only worker and remain
+non-creating; the Gateway computes the summary from the returned ledger rows.
 
 Explicit session deletion, lifecycle-artifact cleanup, and history disk-budget
 eviction prepare their plans inside the session writer queue. When the parent database handle is cold, its
@@ -2141,6 +2229,12 @@ and successive page drains run outside both archive admission and the item write
 Aggregate pruning diagnostics report the whole operation separately from actual
 writer waits.
 Archive order, retention policy, schemas, and update behavior are unchanged.
+
+History-only disk-budget eviction does not trigger the bulk session-entry planner
+statistics refresh. It removes old generations without changing session-entry
+cardinality; transcript readers keep their session-scoped index paths. Actual
+archived-entry deletions retain the existing bulk refresh threshold. This avoids
+a whole-database analysis holding the writer after a large history-only pass.
 
 Worker retirement preserves the original operation failure without reporting it
 again as a cleanup failure. A successfully retired execution owner is released for
@@ -2595,12 +2689,24 @@ version 2 packs sparse quarters into monthly compressed bodies; version 1 daily
 rows are ignored and replaced by the normal resumable refresh, without a schema
 migration. Checkpoint and partition replacement remain atomic.
 
-Committed transcript publications schedule advancement through the existing
-usage worker queue. Startup and topology changes backfill in bounded batches,
+Usage-bearing transcript publications schedule advancement through the existing
+usage worker queue, coalescing nearby publications for 100 ms. User and metadata
+rows join the next usage scan. Overview reads flush and await pending publication
+batches so a completed turn's usage is visible immediately. Startup and topology changes backfill in bounded batches,
 yielding between batches. Cache writes wait outside the agent writer FIFO until
 foreground work drains, then commit one session at a time. Report reads use their
 separate worker lane and return partial or stale totals during backfill. Restart
 rediscovers unfinished sessions from their committed checkpoints.
+Expected refresh cancellation during shutdown logs at debug level; refresh or cleanup failures still warn.
+After in-process DDL, worker admission publishes its validated schema even if a
+retained reader adopted another wrapper of the previous shared receipt while it
+was pending. The received schema and physical database proof must remain valid;
+JavaScript wrapper identity does not establish a newer schema revision.
+Append-only refreshes resume after the checkpoint sequence and decode each new
+page once. The transcript owner's existing rewrite watermark invalidates the
+checkpoint after a rewrite; branch changes rebuild from the visible ancestry.
+The Gateway serializes refreshes with a process-local reservation rather than
+durable cache-lock writes. Usage-only writes do not invalidate session facts.
 Deletion, transcript rewind or branch changes, and pricing revisions rebuild
 through the same owner. SQL and single-agent aggregation run in workers.
 Cross-agent reports fold worker summaries in global session order on the Gateway

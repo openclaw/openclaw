@@ -108,6 +108,10 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 
 - `cron.webhookToken`
 
+#### `database`
+
+- `database.postgres.connection`
+
 #### `gateway`
 
 - `gateway.auth.password`
@@ -200,6 +204,7 @@ these fields automatically. They are not targets for `secrets configure` or
 
 Notes:
 
+- `database.postgres.connection` accepts env, file and exec SecretRefs only. Store-backed refs would require opening the database whose connection is being resolved; use an env, file or exec SecretRef instead.
 - Store refs use names matching `^[A-Z][A-Z0-9_]{0,127}$` and resolve only from the Gateway-wide team scope; no other store scope exists. A typical ref is `{"source":"store","provider":"default","id":"OPENAI_API_KEY"}`.
 - Auth-profile plan targets require `agentId`; plan entries target `profiles.*.key` / `profiles.*.token` and write sibling refs (`keyRef` / `tokenRef`). Auth-profile refs are included in runtime resolution and audit coverage.
 - In `openclaw.json`, SecretRefs must use structured objects such as `{"source":"env","provider":"default","id":"DISCORD_BOT_TOKEN"}`. Legacy `secretref-env:<ENV_VAR>` marker strings are rejected on SecretRef credential paths; run `openclaw doctor --fix` to migrate valid markers.

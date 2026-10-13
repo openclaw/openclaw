@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatFailureReport, reportPrFailures } from "../../scripts/ci-pr-failure-report.mjs";
+import {
+  evaluateWorkflowExpression,
+  readCiWorkflow,
+  type WorkflowStep,
+} from "./ci-workflow.test-support.js";
 
 const repository = "openclaw/openclaw";
 const headSha = "a".repeat(40);
@@ -64,6 +69,37 @@ function fixture(rows: ReturnType<typeof job>[], currentRun = run) {
   return fetchMock;
 }
 afterEach(() => vi.unstubAllGlobals());
+
+describe("CI failure reporter bootstrap", () => {
+  it.each([
+    [repository, "c".repeat(40)],
+    ["contributor/openclaw", "main"],
+  ])(
+    "checks out trusted reporter code for %s despite a stale event base",
+    (headRepository, ref) => {
+      const checkout = readCiWorkflow().jobs["pr-failure-report"].steps.find(
+        (step: WorkflowStep) => step.name === "Checkout CI failure reporter",
+      );
+      expect(checkout).toBeDefined();
+      expect(checkout.with.repository ?? repository).toBe(repository);
+      expect(
+        evaluateWorkflowExpression(checkout.with.ref, {
+          eventName: "pull_request",
+          repository,
+          headRepository,
+          runAttempt: 1,
+          sha: "c".repeat(40),
+          githubEvent: {
+            pull_request: {
+              head: { repo: { full_name: headRepository }, sha: headSha },
+              base: { ref: "main", sha: "b".repeat(40) },
+            },
+          },
+        }),
+      ).toBe(ref);
+    },
+  );
+});
 
 describe("completed PR failure reporting", () => {
   it("reports every failure without cancellation and preserves a blocking gate result", async () => {

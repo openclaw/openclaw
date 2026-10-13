@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, vi } from "vitest";
+import { createInternalAgentTurnFacade } from "../../../gateway/agent-turn/internal-facade.js";
+import { createGatewayMethodRegistry } from "../../../gateway/methods/registry.js";
+import { createChatRunState } from "../../../gateway/server-chat-state.js";
+import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { resetCommandQueueStateForTest } from "../../../process/command-queue.test-support.js";
+import { trackAsyncWork } from "../../../shared/async-work-scope.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import * as deliveryRuntime from "./subagent-announce-delivery.runtime.js";
 import * as announceOutput from "./subagent-announce-output.js";
@@ -22,7 +27,10 @@ export function useRequesterSettleDispatchFixture() {
   beforeEach(() => {
     const requesterCurrent = vi
       .spyOn(deliveryRuntime, "captureRequesterSessionEntryCurrent")
-      .mockReturnValue(() => ({ sessionId: "requester-session" }));
+      .mockResolvedValue({
+        readCurrent: () => ({ sessionId: "requester-session" }),
+        release() {},
+      });
     restoreRequesterCurrent = () => requesterCurrent.mockRestore();
     vi.spyOn(announceOutput, "readChildCompletionFindings").mockImplementation((children) =>
       readChildCompletionFindings(children, (runId) =>
@@ -85,4 +93,29 @@ export function settledChild(): SubagentRunRecord {
       rearmGeneration: 1,
     },
   };
+}
+
+export function createRequesterSettleContext(): GatewayRequestContext {
+  const chatRunState = createChatRunState();
+  const methodRegistry = createGatewayMethodRegistry([]);
+  const context = Object.assign({} as GatewayRequestContext, {
+    trackExecution: trackAsyncWork,
+    agentRunSeq: new Map(),
+    broadcast: vi.fn(),
+    chatAbortControllers: new Map(),
+    chatRunState,
+    dedupe: new Map(),
+    getRuntimeConfig: () => ({}),
+    getGatewayMethodRegistry: () => methodRegistry,
+    logGateway: { error: vi.fn(), warn: vi.fn() },
+    nodeSendToSession: vi.fn(),
+    removeChatRun: vi.fn(() => undefined),
+  });
+  context.createAgentTurnFacade = (principal) =>
+    createInternalAgentTurnFacade({
+      ...principal,
+      getContext: () => context,
+      getMethodRegistry: () => methodRegistry,
+    });
+  return context;
 }

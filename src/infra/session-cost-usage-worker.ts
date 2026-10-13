@@ -1,20 +1,19 @@
+import type { DatabaseSync } from "node:sqlite";
 import {
   collectErrorGraphCandidates,
   toErrorObject,
 } from "@openclaw/normalization-core/error-coercion";
+import { WorkerTaskError } from "@openclaw/worker-runtime";
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
-import { readTranscriptStatsBatchReadOnlySync } from "../config/sessions/session-accessor.sqlite-read.js";
 import {
   getSessionKysely,
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { readHotSessionTranscriptSnapshot } from "../config/sessions/session-cold-storage-read.js";
-import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
-import { listSessionTranscriptInstances } from "../config/sessions/session-history.js";
+import { readTranscriptStatsBatchFromDatabase } from "../config/sessions/session-accessor.sqlite-transcript-stats.js";
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
 import { buildUsageOverview } from "../shared/usage-overview.js";
 import {
@@ -23,6 +22,7 @@ import {
 } from "../state/openclaw-agent-db-readonly.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
+import { SessionMetadataUnavailableError } from "../state/session-metadata-unavailable-error.js";
 import { iterateSqliteQuerySync } from "./kysely-sync.js";
 import {
   readSessionCostUsageRollupRowsInDatabase,
@@ -34,6 +34,7 @@ import {
   listUsageCountedTranscriptStats,
   resolveUsageCostTranscriptSources,
   resolveUsageCostTranscriptFiles,
+  resolveUsageCostTranscriptPaths,
   type UsageCostCollectionAccess,
 } from "./session-cost-usage-collection.js";
 import {
@@ -41,7 +42,10 @@ import {
   partitionUsageCostRollup,
   type UsageCostPartition,
 } from "./session-cost-usage-partitions.js";
-import { readSessionCostUsagePartitionsInDatabase } from "./session-cost-usage-partitions.worker.js";
+import {
+  readSessionCostUsagePartitionsInDatabase,
+  readSessionCostUsageRollupWithPartitionsInDatabase,
+} from "./session-cost-usage-partitions.worker.js";
 import {
   projectCostUsageSummary,
   projectSessionCostSummaries,
@@ -69,7 +73,6 @@ import {
   type UsageCostWorkerResult,
 } from "./session-cost-usage-worker.types.js";
 import { isTransientSqliteError } from "./unhandled-rejections.js";
-import { WorkerTaskError } from "./worker-task-pool.js";
 import type { WorkerTaskChannel } from "./worker-task-server.js";
 
 type ReadDatabase = <T>(
@@ -120,12 +123,20 @@ export async function executeUsageCostWorker(
     }
     return control.runNativeSection(() => readDatabase(database, read));
   };
+  const transcriptFacts = new Map<string, { generation: string | null; cold: boolean }>();
+  const transcriptKey = (marker: SqliteSessionFileMarker) => {
+    const database = target(marker.agentId, marker.storePath);
+    return JSON.stringify([database.path, database.agentId, marker.sessionId]);
+  };
   const access: UsageCostCollectionAccess = {
     env,
     materializeArchive: (sourcePath) =>
       control.runNativeSection(() => materializeSessionArchiveForRead(sourcePath)),
+    listSqliteMetadataStores: () => input.archiveStorePaths,
     readSqliteMetadata: (storePath, read) => readStore(location.agentId, storePath, read),
     listSqliteInstances: async (agentId, storePath) => {
+      const { listSessionTranscriptInstances } =
+        await import("../config/sessions/session-history.js");
       const database = target(agentId, storePath);
       return isIncognitoOpenClawAgentSqlitePath(database.path, { agentId: database.agentId, env })
         ? host("memory-instances", { agentId, storePath })
@@ -154,9 +165,35 @@ export async function executeUsageCostWorker(
               "memory-stats",
               group.map((item) => item.marker),
             )
-          : await readStore(marker.agentId, marker.storePath, () =>
-              readTranscriptStatsBatchReadOnlySync(group.map((item) => ({ ...item.marker, env }))),
-            );
+          : await readStore(marker.agentId, marker.storePath, () => {
+              try {
+                const read = withOpenClawAgentDatabaseReadOnly(
+                  (opened) =>
+                    readTranscriptStatsBatchFromDatabase(
+                      opened,
+                      group.map((item) => item.marker.sessionId),
+                      { includeGeneration: true },
+                    ),
+                  { ...database, env },
+                );
+                if (!read.found) {
+                  return [];
+                }
+                for (const [index, item] of group.entries()) {
+                  const facts = read.value[index]!;
+                  transcriptFacts.set(transcriptKey(item.marker), {
+                    generation: facts.generation ?? null,
+                    cold: facts.cold === true,
+                  });
+                }
+                return read.value;
+              } catch (error) {
+                if (!(error instanceof SessionMetadataUnavailableError)) {
+                  throw error;
+                }
+                return [];
+              }
+            });
         for (const [index, item] of group.entries()) {
           result[item.index] = stats[index] ?? undefined;
         }
@@ -205,18 +242,22 @@ export async function executeUsageCostWorker(
   }
 
   // Resolve keys before reading metadata; report bodies stay in their read snapshot.
-  const requestedPaths =
+  const selectedFiles =
+    operation.kind === "refresh" && operation.sessionFiles
+      ? await resolveUsageCostTranscriptFiles(operation.sessionFiles, access)
+      : [];
+  const sessionPaths =
     operation.kind === "sessions"
-      ? operation.sessions.map((session) => session.sessionFile)
-      : operation.kind === "refresh"
-        ? operation.sessionFiles
-        : undefined;
-  const selectedFiles = requestedPaths
-    ? await resolveUsageCostTranscriptFiles(requestedPaths, access)
-    : [];
-  const selectedPaths = requestedPaths
-    ? selectedFiles.flatMap((file) => (file ? [file.filePath] : []))
-    : undefined;
+      ? await resolveUsageCostTranscriptPaths(
+          operation.sessions.map((session) => session.sessionFile),
+          access,
+        )
+      : undefined;
+  const selectedPaths = sessionPaths
+    ? sessionPaths.filter((file) => file !== undefined)
+    : operation.kind === "refresh" && operation.sessionFiles
+      ? selectedFiles.flatMap((file) => (file ? [file.filePath] : []))
+      : undefined;
   const memoryCache = isIncognitoOpenClawAgentSqlitePath(location.databasePath, {
     agentId: location.agentId,
     env,
@@ -227,18 +268,31 @@ export async function executeUsageCostWorker(
   if (!cacheDatabase) {
     throw new Error("Usage cache database is not owned by this worker operation");
   }
-  const readMetadata = async (): Promise<SessionCostUsageRollupRow[]> => {
+  const readCache = <T>(read: (db: DatabaseSync) => T, missing: T): T => {
+    const result = withOpenClawAgentDatabaseReadOnly(({ db }) => read(db), {
+      ...cacheDatabase,
+      env,
+    });
+    return result.found ? result.value : missing;
+  };
+  const readMetadata = async (): Promise<{
+    found: boolean;
+    rows: SessionCostUsageRollupRow[];
+  }> => {
     if (memoryCache) {
       const bytes = await host("memory-cache", { filePaths: selectedPaths });
-      return bytes.map((row) => ({
-        key: row.key,
-        updatedAt: row.updatedAt,
-        valueJson: Buffer.from(
-          row.valueJson.buffer,
-          row.valueJson.byteOffset,
-          row.valueJson.byteLength,
-        ).toString("utf8"),
-      }));
+      return {
+        found: true,
+        rows: bytes.map((row) => ({
+          key: row.key,
+          updatedAt: row.updatedAt,
+          valueJson: Buffer.from(
+            row.valueJson.buffer,
+            row.valueJson.byteOffset,
+            row.valueJson.byteLength,
+          ).toString("utf8"),
+        })),
+      };
     }
     return control.runNativeSection(() =>
       readDatabase(cacheDatabase, () => {
@@ -247,12 +301,12 @@ export async function executeUsageCostWorker(
             (opened) => readSessionCostUsageRollupRowsInDatabase(opened.db, selectedPaths),
             { ...cacheDatabase, env },
           );
-          return result.found ? result.value : [];
+          return { found: result.found, rows: result.found ? result.value : [] };
         } catch (error) {
           if (!isTransientSqliteError(error)) {
             throw error;
           }
-          return [];
+          return { found: false, rows: [] };
         }
       }),
     );
@@ -261,25 +315,35 @@ export async function executeUsageCostWorker(
     memoryCache
       ? host("memory-cache-body", row)
       : control.runNativeSection(() =>
-          readDatabase(cacheDatabase, () => {
-            const result = withOpenClawAgentDatabaseReadOnly(
-              (opened) => readSessionCostUsageRollupBodyInDatabase(opened.db, row),
-              { ...cacheDatabase, env },
-            );
-            return result.found ? result.value : undefined;
-          }),
+          readDatabase(cacheDatabase, () =>
+            readCache((db) => readSessionCostUsageRollupBodyInDatabase(db, row), undefined),
+          ),
         );
   const readPartitions = (filePath: string, startMs?: number, endMs?: number) =>
     control.runNativeSection(() =>
-      readDatabase(cacheDatabase, () => {
-        const result = withOpenClawAgentDatabaseReadOnly(
-          (opened) => readSessionCostUsagePartitionsInDatabase(opened.db, filePath, startMs, endMs),
-          { ...cacheDatabase, env },
-        );
-        return result.found ? result.value : [];
-      }),
+      readDatabase(cacheDatabase, () =>
+        readCache(
+          (db) => readSessionCostUsagePartitionsInDatabase(db, filePath, startMs, endMs),
+          [],
+        ),
+      ),
+    );
+  const readPartitionedBody = (row: SessionCostUsageRollupRow) =>
+    control.runNativeSection(() =>
+      readDatabase(cacheDatabase, () =>
+        readCache((db) => readSessionCostUsageRollupWithPartitionsInDatabase(db, row), undefined),
+      ),
     );
   const resolveCosts = createUsageCostWorkerPriceResolver((pairs) => host("pricing", pairs));
+  const readGeneration = async (marker: SqliteSessionFileMarker) => {
+    const facts = transcriptFacts.get(transcriptKey(marker));
+    if (facts?.cold) {
+      await host("restore", marker);
+      // Restore may replace the projection; rebuild this derived cache from the captured bounds.
+      return undefined;
+    }
+    return facts?.generation;
+  };
   let readId = 0;
   const readRows = async (
     marker: SqliteSessionFileMarker,
@@ -312,47 +376,35 @@ export async function executeUsageCostWorker(
         }
       }
     }
-    const read = async () => {
-      const stored = await readStore(marker.agentId, marker.storePath, () => {
-        const result = withOpenClawAgentDatabaseReadOnly(
-          (opened) =>
-            readHotSessionTranscriptSnapshot(opened, marker.sessionId, "incremental", () => {
-              const query = getSessionKysely(opened.db)
-                .selectFrom("transcript_events")
-                .select(["seq", transcriptEventJsonSql(opened.db).as("event_json")])
-                .where("session_id", "=", marker.sessionId)
-                .where("seq", ">", afterSeq)
-                .where("seq", "<=", throughSeq)
-                .orderBy("seq", "asc")
-                .limit(1_024);
-              const page: Array<{ seq: number; event_json: string }> = [];
-              let bytes = 0;
-              // Stop before parsing: retain at most 8 MiB plus one lookahead event.
-              for (const row of iterateSqliteQuerySync(opened.db, query)) {
-                const size = Buffer.byteLength(row.event_json);
-                if (page.length > 0 && bytes + size > 8 * 1024 * 1024) {
-                  break;
-                }
-                page.push(row);
-                bytes += size;
-              }
-              return page;
-            }),
-          { ...database, env },
-        );
-        return result.found ? result.value : [];
-      });
-      return stored.map((row) => ({ seq: row.seq, event: JSON.parse(row.event_json) as unknown }));
-    };
-    try {
-      return await read();
-    } catch (error) {
-      if (!(error instanceof SessionTranscriptColdError) || error.sessionId !== marker.sessionId) {
-        throw error;
-      }
-      await host("restore", marker);
-      return read();
-    }
+    const stored = await readStore(marker.agentId, marker.storePath, () => {
+      const result = withOpenClawAgentDatabaseReadOnly(
+        (opened) => {
+          const query = getSessionKysely(opened.db)
+            .selectFrom("transcript_events")
+            .select(["seq", transcriptEventJsonSql(opened.db).as("event_json")])
+            .where("session_id", "=", marker.sessionId)
+            .where("seq", ">", afterSeq)
+            .where("seq", "<=", throughSeq)
+            .orderBy("seq", "asc")
+            .limit(1_024);
+          const page: Array<{ seq: number; event_json: string }> = [];
+          let bytes = 0;
+          // Stop before parsing: retain at most 8 MiB plus one lookahead event.
+          for (const row of iterateSqliteQuerySync(opened.db, query)) {
+            const size = Buffer.byteLength(row.event_json);
+            if (page.length > 0 && bytes + size > 8 * 1024 * 1024) {
+              break;
+            }
+            page.push(row);
+            bytes += size;
+          }
+          return page;
+        },
+        { ...database, env },
+      );
+      return result.found ? result.value : [];
+    });
+    return stored.map((row) => ({ seq: row.seq, event: JSON.parse(row.event_json) as unknown }));
   };
   if (operation.kind === "summary" || operation.kind === "sessions") {
     const project = async (
@@ -366,14 +418,17 @@ export async function executeUsageCostWorker(
     ): Promise<UsageCostWorkerResult> => {
       // Capture cache metadata before transcript stats: a concurrent refresh must
       // not make a valid newer checkpoint appear ahead of this report's inventory.
+      const byPath = new Map(rows.map((row) => [row.key, row]));
+      // Uncached sessions remain pending; only cached reports need transcript freshness.
       const reportFiles =
         operation.kind === "summary"
           ? await inventory()
           : await resolveUsageCostTranscriptFiles(
-              operation.sessions.map((session) => session.sessionFile),
+              operation.sessions
+                .filter((_, index) => byPath.has(sessionPaths?.[index] ?? ""))
+                .map((session) => session.sessionFile),
               access,
             );
-      const byPath = new Map(rows.map((row) => [row.key, row]));
       const filesByPath = new Map(
         reportFiles.flatMap((file) => (file ? [[file.filePath, file] as const] : [])),
       );
@@ -399,8 +454,8 @@ export async function executeUsageCostWorker(
             scan: {
               pricingFingerprint: operation.pricingFingerprint,
               resolveCosts,
+              readGeneration,
               readRows,
-              access,
             },
           }),
         onInvalidBody(key: string) {
@@ -432,7 +487,7 @@ export async function executeUsageCostWorker(
               ...(await projectSessionCostSummaries({
                 ...source,
                 ...operation,
-                files: reportFiles,
+                files: (sessionPaths ?? []).map((filePath) => filesByPath.get(filePath ?? "")),
               })),
             };
       control.throwIfCancelled();
@@ -496,7 +551,7 @@ export async function executeUsageCostWorker(
     // after streamed body reads instead of retaining a transaction across host awaits.
     const changed = new Error("usage cache snapshot changed");
     for (let attempt = 0; attempt < 3; attempt++) {
-      const rows = await readMetadata();
+      const { rows } = await readMetadata();
       try {
         const result = await project(rows, async (row) => {
           const body = await readBody(row);
@@ -505,7 +560,7 @@ export async function executeUsageCostWorker(
           }
           return body.blob;
         });
-        const current = new Map((await readMetadata()).map((row) => [row.key, row]));
+        const current = new Map((await readMetadata()).rows.map((row) => [row.key, row]));
         if (
           current.size === rows.length &&
           rows.every((row) => {
@@ -525,7 +580,7 @@ export async function executeUsageCostWorker(
     throw new WorkerTaskError("Usage cache changed while reading; retry the report", "unavailable");
   }
 
-  const rows = await readMetadata();
+  const { found: cacheFound, rows } = await readMetadata();
   const byPath = new Map(rows.map((row) => [row.key, row]));
 
   const requestedFiles = selectedFiles.filter((file) => file !== undefined);
@@ -545,7 +600,10 @@ export async function executeUsageCostWorker(
       bytes.buffer,
     ]);
   }
-  await host("prune", {});
+  // Missing stores have nothing to prune; a real rollup write owns their creation.
+  if (!operation.sessionFiles && cacheFound) {
+    await host("prune", {});
+  }
   const minMtimeMs = operation.sessionFiles ? undefined : operation.startMs;
   const rebuildByPath = new Map(operation.rebuildRows?.map((row) => [row.key, row]));
   const stale = [];
@@ -580,19 +638,25 @@ export async function executeUsageCostWorker(
     control.throwIfCancelled();
     await host("refresh-session", { sessionFile: file.filePath });
     let previous: UsageCostRollupEntry | undefined;
+    let priorPartitions: UsageCostPartition[] = [];
     if (
       !rebuild &&
       row &&
       envelope &&
       canUseUsageCostRollupForPartial({ checkpoint: envelope.checkpoint, file })
     ) {
-      const body = await readBody(row);
+      let body: { blob: Uint8Array | null } | undefined;
+      if (!memoryCache && envelope.projection) {
+        const snapshot = await readPartitionedBody(row);
+        body = snapshot;
+        priorPartitions = snapshot?.partitions ?? [];
+      } else {
+        body = await readBody(row);
+      }
       previous = body
         ? decodeUsageCostRollup(row.valueJson, operation.pricingFingerprint, body.blob)
         : undefined;
     }
-    const priorPartitions =
-      previous && envelope?.projection && !memoryCache ? await readPartitions(file.filePath) : [];
     if (previous && envelope?.projection) {
       if (memoryCache || priorPartitions.length !== envelope.projection.dates.length) {
         previous = undefined;
@@ -617,8 +681,8 @@ export async function executeUsageCostWorker(
             previous,
             pricingFingerprint: operation.pricingFingerprint,
             resolveCosts,
+            readGeneration,
             readRows,
-            access,
           });
     const { valueJson, blob, partitions } = partitionUsageCostRollup(
       entry,
@@ -636,12 +700,10 @@ export async function executeUsageCostWorker(
     const dates = new Set(partitions.map((partition) => partition.date));
     const removedDates = envelope?.projection?.dates.filter((date) => !dates.has(date)) ?? [];
     const value = new TextEncoder().encode(valueJson);
-    const previousValue = row ? new TextEncoder().encode(row.valueJson) : null;
     const written = await host(
       "write",
       {
         key: file.filePath,
-        previousValue,
         value,
         blob,
         updatedAt: entry.scannedAt,
@@ -653,12 +715,7 @@ export async function executeUsageCostWorker(
             }
           : {}),
       },
-      [
-        value.buffer,
-        blob.buffer,
-        ...changedPartitions.map((partition) => partition.blob.buffer),
-        ...(previousValue ? [previousValue.buffer] : []),
-      ],
+      [value.buffer, blob.buffer, ...changedPartitions.map((partition) => partition.blob.buffer)],
     );
     if (!written) {
       throw new Error(`usage rollup changed while refreshing: ${file.filePath}`);

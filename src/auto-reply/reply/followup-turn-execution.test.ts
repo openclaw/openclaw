@@ -192,38 +192,34 @@ describe("executeFollowupTurn", () => {
     expect(onAgentRunStart).toHaveBeenCalledWith("run-1");
   });
 
-  it("rejects progress preparation when the followup is revoked during its read", async () => {
-    const pending = Promise.withResolvers<undefined>();
-    const entered = Promise.withResolvers<void>();
-    const abort = new AbortController();
-    const turn = createTurn();
-    turn.operation = { ...turn.operation, abortSignal: abort.signal };
-    turn.session = {
-      ...turn.session,
-      kind: "session",
-      key: "main",
-      storePath: "/tmp/sessions.json",
-    };
-    state.readEntry.mockImplementation(() => {
-      entered.resolve();
-      return pending.promise;
+  it("uses turn-owned preference updates for awaited visibility", async () => {
+    let verboseLevel: "off" | "full" = "off";
+    const turn = createTurn({
+      session: {
+        kind: "session",
+        key: "main",
+        current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel }),
+        publish: () => undefined,
+        adopt: () => undefined,
+      },
     });
-    const execution = executeTestTurn({
+    const legacy = vi.fn();
+    await executeTestTurn({
       turn,
       defaults: {
         opts: {
+          onVerboseProgressVisibility: legacy,
           onVerboseProgressVisibilityAsync: async (isActive) => {
-            await isActive();
+            expect(await isActive()).toBe(false);
+            verboseLevel = "full";
+            expect(await isActive()).toBe(true);
+            turn.queued.run.verboseLevelOverride = "off";
+            expect(await isActive()).toBe(false);
           },
         },
       },
     });
-    const rejected = expect(execution).rejects.toThrow("followup revoked");
-    await entered.promise;
-    abort.abort(new Error("followup revoked"));
-    pending.resolve(undefined);
-    await rejected;
-    expect(state.execute).not.toHaveBeenCalled();
+    expect(legacy).not.toHaveBeenCalled();
   });
 
   it("freezes commentary ownership for a queued on-to-off transition", async () => {

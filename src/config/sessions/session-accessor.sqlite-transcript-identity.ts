@@ -68,7 +68,7 @@ export function readTranscriptMessageByIdentity(
 ): { messageId: string; message: unknown } | undefined {
   const actor = readSessionActorTransactionState(database, scope);
   if (actor?.transcript.payloads.has(identity.seq)) {
-    const event = actor.transcript.payloads.get(identity.seq);
+    const event = actor.transcript.payloads.get(identity.seq)?.event;
     return { messageId: identity.eventId, message: isRecord(event) ? event.message : undefined };
   }
   const db = getSessionKysely(database.db);

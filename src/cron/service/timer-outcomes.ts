@@ -1,7 +1,6 @@
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
 import { resolveAdmittedCronCompletionStatus } from "../completion-status.js";
-import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { resolvePacedNextRunAtMs } from "../pacing.js";
 import { normalizeCronRunDiagnostics, summarizeCronRunDiagnostics } from "../run-diagnostics.js";
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
@@ -24,14 +23,8 @@ import {
   resolveNextRunAtMsOrDisable,
 } from "./jobs-scheduling.js";
 import { resolveManualOneShotOccurrenceAtMs } from "./one-shot-schedule.js";
-import { recordQuietCronEvaluation } from "./run-history.js";
-import type { CronJobPolicyContext, CronServiceState, DeferredCronNotifications } from "./state.js";
-import {
-  type CronJobRunResult,
-  MIN_REFIRE_GAP_MS,
-  type TimedCronRunOutcome,
-} from "./timer-execution-timeout.js";
-import { emitCronOutcomeForJob } from "./timer-outcome-events.js";
+import type { CronJobPolicyContext, DeferredCronNotifications } from "./state.js";
+import { type CronJobRunResult, MIN_REFIRE_GAP_MS } from "./timer-execution-timeout.js";
 import {
   applyTriggerEvaluationState,
   applyTriggerRunResult,
@@ -188,14 +181,6 @@ export function applyJobResult(
     }
   };
   const alertConfig = resolveFailureAlert(state, job);
-  // A silent job's agent-reported blocked outcome stays in history, status, and backoff, but no
-  // notification owner exists for it, so it never auto-disables the job or posts that notice.
-  const silentReportedFailure =
-    result.status === "error" &&
-    result.errorClassification?.kind === "permanent" &&
-    result.errorClassification.reportedByAgent === true &&
-    alertConfig === null &&
-    resolveCronDeliveryPlan(job).mode === "none";
   if (result.status === "error") {
     job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
     job.state.consecutiveSkipped = 0;
@@ -385,7 +370,6 @@ export function applyJobResult(
     } else if (
       result.status === "error" &&
       isJobEnabled(job) &&
-      !silentReportedFailure &&
       maybeAutoDisableCronJobAfterRunFailure({
         job,
         atMs: result.endedAt,
@@ -636,48 +620,6 @@ export function applyTriggerNoFireResult(
       deferredNotifications: opts.deferredNotifications,
     });
   }
-}
-
-export async function applyOutcomeToStoredJob(
-  state: CronServiceState,
-  result: TimedCronRunOutcome,
-  opts: { deferredNotifications: DeferredCronNotifications },
-): Promise<CronJob | undefined> {
-  const store = state.store;
-  if (!store) {
-    if (result.status === "ok" && result.triggerEval?.fired === false) {
-      await recordQuietCronEvaluation(state, result);
-    }
-    return undefined;
-  }
-  const jobs = store.jobs;
-  const job = jobs.find((entry) => entry.id === result.jobId);
-  if (!job || result.activeJobMarker?.jobRemoved === true) {
-    if (result.status === "ok" && result.triggerEval?.fired === false) {
-      await recordQuietCronEvaluation(state, result);
-      return undefined;
-    }
-    // A run may finish after its job disappears; finalize the admitted job
-    // snapshot so operator history survives without reviving the stored job.
-    applyJobResult(state, result.job, result, {
-      scheduleOwnership: "stale",
-      deferredNotifications: opts.deferredNotifications,
-    });
-    await emitCronOutcomeForJob(state, result.job, result);
-    state.deps.log.info(
-      { jobId: result.jobId, status: result.status },
-      "cron: finalized run after job was removed during execution",
-    );
-    return undefined;
-  }
-
-  const shouldDelete = applyOutcomeToAuthoritativeJob(state, job, result, opts);
-  await emitCronOutcomeForJob(state, job, result);
-  if (shouldDelete) {
-    store.jobs = jobs.filter((entry) => entry.id !== job.id);
-    return job;
-  }
-  return undefined;
 }
 
 /** Applies one outcome to a row already re-read under the runtime write transaction. */

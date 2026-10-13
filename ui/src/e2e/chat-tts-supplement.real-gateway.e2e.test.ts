@@ -345,7 +345,7 @@ suite.define(() => {
               await page.locator(".chat-bubble").getByText("TTS enabled for this chat.").waitFor();
               for (const [index, text] of replies.slice(0, 2).entries()) {
                 await send(`Please give spoken answer ${index + 1}.`);
-                await answer(text).waitFor();
+                await expect.poll(() => answer(text).isVisible()).toBe(true);
                 await expect.poll(() => provider.speech.length).toBe(index + 1);
                 if (index === 1) {
                   // The first turn covers live delivery; this turn covers speech after hydration.

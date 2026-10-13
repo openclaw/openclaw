@@ -36,7 +36,10 @@ import {
 } from "./session-list-order.js";
 import { bindSessionListRowRead } from "./session-list-read-result.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
-import { prepareSessionRowPublication } from "./session-row-presentation.js";
+import {
+  prepareSessionRowPublication,
+  shareSidebarSessionRows,
+} from "./session-row-presentation.js";
 import {
   identity as rowIdentity,
   selectionRow,
@@ -161,7 +164,7 @@ function buildSessionsListResult(
         }
       : {}),
     defaults: policy ? policy.defaults(defaults) : defaults,
-    sessions,
+    ...(opts.rowMode === "sidebar" ? shareSidebarSessionRows(sessions) : { sessions }),
   };
 }
 
@@ -601,27 +604,27 @@ export async function listProjectedSessions(params: {
           projection.setArchivePageSize(selection.entries.length);
           const sessions = selection.entries.flatMap(([key], index) => {
             const target = getTarget(key);
-            const record =
-              target &&
-              projection.describe({
-                agentId: target.agentId,
-                key: target.key,
-                storePath: target.storeTarget.storePath,
-              });
-            if (!record) {
+            if (!target) {
               return [];
             }
             const includeTranscriptFields =
               index < SESSIONS_LIST_TRANSCRIPT_LIMIT + selection.ownerCount;
-            const sharedRow = presentation.present(record, {
-              includeDerivedTitles: opts.includeDerivedTitles && includeTranscriptFields,
-              includeLastMessage: opts.includeLastMessage && includeTranscriptFields,
-              includeActivitySummary: opts.includeActivitySummary === true,
-              rowMode: opts.rowMode,
-              omitSentinelChildren: opts.activeOnly && sentinel(record.key),
-              childArchiveFilter: opts.archived ?? false,
-            });
-            if (!sharedRow) {
+            const { row: sharedRow, record } = presentation.snapshot(
+              {
+                agentId: target.agentId,
+                key: target.key,
+                storePath: target.storeTarget.storePath,
+              },
+              {
+                includeDerivedTitles: opts.includeDerivedTitles && includeTranscriptFields,
+                includeLastMessage: opts.includeLastMessage && includeTranscriptFields,
+                includeActivitySummary: opts.includeActivitySummary === true,
+                rowMode: opts.rowMode,
+                omitSentinelChildren: opts.activeOnly && sentinel(target.key),
+                childArchiveFilter: opts.archived ?? false,
+              },
+            );
+            if (!sharedRow || !record) {
               return [];
             }
             if ((record.materializedSequence ?? 0) > materializedBefore) {

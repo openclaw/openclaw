@@ -1,6 +1,7 @@
 import { fstatSync, linkSync, renameSync } from "node:fs";
 import path from "node:path";
 import { constants, DatabaseSync, StatementSync } from "node:sqlite";
+import { getEnvironmentData } from "node:worker_threads";
 import { describe, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -8,6 +9,7 @@ import { readExistingAgentSchemaMeta } from "../state/openclaw-agent-db-metadata
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import {
   captureSqliteDatabaseAdmissions,
   createSqliteDatabaseAdmissionCursor,
@@ -57,11 +59,16 @@ describe("native SQLite schema snapshots and callbacks", () => {
         expect(tableExists(sibling, "added")).toBe(true);
         expect(readSqliteTextEncoding(writer)).toBe(encoding);
         sibling.close();
+        expect(readSqliteTextEncoding(writer)).toBe(encoding);
+        expect(observation.queries.filter((sql) => /PRAGMA encoding/iu.test(sql))).toEqual([
+          "PRAGMA encoding",
+        ]);
         writer.close();
         const reopened = openDatabase("", true, filename);
         reopened.exec("CREATE INDEX added_id ON added(id)");
         expect(getAdmittedSqliteSchemaFacts(reopened)?.textEncoding).toBe(encoding);
         expect(observation.queries.filter((sql) => /PRAGMA encoding/iu.test(sql))).toEqual([
+          "PRAGMA encoding",
           "PRAGMA encoding",
         ]);
       } finally {
@@ -206,6 +213,11 @@ describe("native SQLite schema snapshots and callbacks", () => {
     const secondSnapshot = before.find((record) => record.location === second.location())!;
     const key = { name: "publication-value", read: (value: unknown) => value };
 
+    const inherited = getEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY);
+    installSqliteDatabaseAdmissions([]);
+    expect(captureSqliteDatabaseAdmissions(cursor)).toEqual([]);
+    expect(getEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY)).toBe(inherited);
+
     installSqliteDatabaseAdmissions(before);
     expect(captureSqliteDatabaseAdmissions(cursor)).toEqual([]);
     expect(
@@ -219,6 +231,7 @@ describe("native SQLite schema snapshots and callbacks", () => {
     expect(changed).toHaveLength(1);
     expect(changed[0]!.identity).toBe(secondSnapshot.identity);
     expect(changed[0]!.facts.get(key.name)?.value).toBe(42);
+    expect(getSqliteDatabaseAdmission(second, key)).toBe(42);
     expect(secondSnapshot.facts.has(key.name)).toBe(false);
     expect(
       captureSqliteDatabaseAdmissions().find(
@@ -228,6 +241,8 @@ describe("native SQLite schema snapshots and callbacks", () => {
     expect(captureSqliteDatabaseAdmissions(cursor)).toEqual([]);
 
     revokeSqliteDatabaseAdmissions(second);
+    installSqliteDatabaseAdmissions([]);
+    expect(getSqliteDatabaseAdmission(second, key)).toBeUndefined();
     installSqliteDatabaseAdmissions(changed);
     expect(getSqliteDatabaseAdmission(second, key)).toBeUndefined();
     expect(captureSqliteDatabaseAdmissions(cursor)).toEqual([]);

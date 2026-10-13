@@ -1,4 +1,6 @@
 import { vi } from "vitest";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import type { GatewayClient } from "./types.js";
 
 const network = vi.hoisted(() => ({
   assertCli: vi.fn(),
@@ -83,4 +85,31 @@ export function resetPersonalGitHubNetwork() {
       stderr: Buffer.alloc(0),
     };
   });
+}
+
+export function createPersonalGitHubTestClient(
+  clients: Set<GatewayClient>,
+  email: string,
+  scopes: string[],
+): GatewayClient {
+  const profile = ensureProfileForEmail(email);
+  const client: GatewayClient = {
+    connId: `connection-${profile.id}`,
+    authenticatedUserId: email,
+    authenticatedUserProfile: {
+      profileId: profile.id,
+      displayName: profile.displayName,
+      hasAvatar: false,
+      updatedAt: profile.updatedAt,
+    },
+    connect: {
+      role: "operator",
+      scopes,
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: { id: "test", mode: "test", version: "1", platform: "test" },
+    },
+  };
+  clients.add(client);
+  return client;
 }

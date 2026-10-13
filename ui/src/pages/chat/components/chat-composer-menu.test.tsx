@@ -126,3 +126,40 @@ it("retains the focused capability row through toggles and a reordered catalog r
   expect(row.checked).toBe(false);
   expect(document.activeElement).toBe(row);
 });
+
+it("creates attachment choices on first open and retains them while closed", () => {
+  const view = mountSolid(() => (
+    <ChatComposerPlusMenu
+      menu={{
+        attachments: {},
+        disabled: false,
+        open: false,
+        view: "root",
+        toolOverrides: null,
+        rootToggles: [
+          {
+            value: "test-toggle",
+            label: "Test toggle",
+            checked: false,
+            disabled: false,
+            onChange: vi.fn(),
+          },
+        ],
+        onOpenChange: vi.fn(),
+        onViewChange: vi.fn(),
+      }}
+    />
+  ));
+  const dropdown = view.container.querySelector("wa-dropdown")!;
+  expect(dropdown.querySelector("button[slot='trigger']")).not.toBeNull();
+  expect(dropdown.querySelector("wa-dropdown-item")).toBeNull();
+  dropdown.dispatchEvent(new Event("wa-show"));
+  flush();
+  const choice = dropdown.querySelector("wa-dropdown-item");
+  expect(choice).not.toBeNull();
+  dropdown.dispatchEvent(new Event("wa-hide"));
+  flush();
+  dropdown.dispatchEvent(new Event("wa-show"));
+  flush();
+  expect(dropdown.querySelector("wa-dropdown-item")).toBe(choice);
+});

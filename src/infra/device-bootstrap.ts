@@ -7,6 +7,8 @@ import {
   type DeviceBootstrapProfile,
   type DeviceBootstrapProfileInput,
 } from "../shared/device-bootstrap-profile.js";
+import { registerOpenClawStateDatabaseLifecycleListener } from "../state/openclaw-state-db-cache.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { DeviceBootstrapOperations } from "./device-bootstrap.worker-kernel.js";
 import type {
   CloudWorkerSetupMutationAdmission,
@@ -19,6 +21,7 @@ import {
 } from "./device-pairing-worker.js";
 import type { DeviceBootstrapTokenRecord, PairedDevice } from "./device-pairing.types.js";
 import { createAsyncLock } from "./pairing-files.js";
+import { readSqliteDatabaseWriteTokenForPath } from "./sqlite-database-admission.js";
 
 const withLock = createAsyncLock();
 const log = createSubsystemLogger("device-bootstrap");
@@ -239,16 +242,45 @@ export async function verifyDeviceBootstrapToken(
   });
 }
 
+let setupExpiryObservation:
+  | {
+      path: string;
+      result: DeviceBootstrapOperations["bootstrap.prune"]["output"];
+    }
+  | undefined;
+registerOpenClawStateDatabaseLifecycleListener((event) => {
+  if (event.kind !== "opened") {
+    setupExpiryObservation = undefined;
+  }
+});
+
 /** Remove retained setup outcomes independently of status requests or later pairings. */
 export async function pruneExpiredDevicePairSetupCompletions(
   params: { nowMs?: number; baseDir?: string } = {},
 ): Promise<number> {
-  return await withLock(() =>
-    executeDevicePairingMutation(
-      { type: "bootstrap.prune", input: { nowMs: params.nowMs ?? Date.now() } },
-      { baseDir: params.baseDir },
-    ),
-  );
+  return await withLock(async () => {
+    const nowMs = params.nowMs ?? Date.now();
+    const context = captureOpenClawStateWorkerContext(
+      params.baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: params.baseDir } } : {},
+    );
+    const path = context.admission.databasePath;
+    const retained =
+      setupExpiryObservation?.path === path ? setupExpiryObservation.result : undefined;
+    const writeToken = readSqliteDatabaseWriteTokenForPath(path);
+    if (
+      writeToken &&
+      retained?.writeToken === writeToken &&
+      (retained.nextExpiryAtMs === null || nowMs < retained.nextExpiryAtMs)
+    ) {
+      return 0;
+    }
+    const result = await executeDevicePairingMutation(
+      { type: "bootstrap.prune", input: { nowMs } },
+      { context },
+    );
+    setupExpiryObservation = { path, result };
+    return result.removed;
+  });
 }
 
 /** Read already-bound context only after verifying the same credential and identity. */

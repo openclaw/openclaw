@@ -21,8 +21,6 @@ export async function skipCronJobsWithoutOwners(
     scheduleMode?: "advance" | "preserve";
     manualRun?: {
       runId?: string;
-      commitGuard?: () => void;
-      onExit?: { commitGuard: () => void };
       terminalTracker?: { emitted: boolean };
       scheduleOwnershipAtMs?: number;
     };
@@ -59,14 +57,12 @@ export async function skipCronJobsWithoutOwners(
       scheduleMode: opts?.scheduleMode,
       scheduleOwnershipAtMs: opts?.manualRun?.scheduleOwnershipAtMs,
     },
-    assertCurrent: () => (opts?.manualRun?.commitGuard ?? opts?.manualRun?.onExit?.commitGuard)?.(),
     async afterCommit(skipped, historySource) {
       applyCronRuntimeRowsToState(state, skipped.jobs);
       for (const entry of skipped.logs) {
         state.deps.log[entry.level](entry.fields, entry.message);
       }
       for (const job of skipped.jobs) {
-        historySource.assertCurrent();
         state.deps.log.warn(
           { jobId: job.id, error: CRON_AGENT_SELECTION_REQUIRED_MESSAGE },
           "cron: skipping job with unresolved owner",
@@ -76,12 +72,10 @@ export async function skipCronJobsWithoutOwners(
       // An acknowledged manual request still gets a result when its planned row was superseded.
       if (opts?.manualRun) {
         for (const job of skipped.rejected) {
-          historySource.assertCurrent();
           await emitOwnerlessFinished(state, job, nowMs, historySource, opts.manualRun);
         }
       }
       for (const notification of skipped.notifications) {
-        historySource.assertCurrent();
         await runPostPersistCronNotifications(state, [notification]);
       }
     },
@@ -111,7 +105,6 @@ async function emitOwnerlessFinished(
     deliveryError: job.state.lastDeliveryError,
   };
   await finishCronRun(state, { event, ownerlessRun: true, historySource });
-  historySource.assertCurrent();
   emit(state, event);
   if (manualRun?.terminalTracker) {
     manualRun.terminalTracker.emitted = true;

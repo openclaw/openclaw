@@ -287,9 +287,6 @@ export function kickSessionHistoryDiskBudgetMaintenance(input: SessionHistoryBud
   }
   const now = input.now ?? Date.now();
   const state = getBudgetKickState(input.storePath, maintenance);
-  if (state.checkpointBlocked) {
-    return;
-  }
   if (state.running) {
     if (input.force) {
       const env = { ...(input.env ?? process.env) };
@@ -405,19 +402,6 @@ async function enforceSessionHistoryMaintenanceSerialized(
     return null;
   }
   const initialUsage = await measureSessionPhysicalDiskUsage(params.storePath);
-  const blocked = getBudgetKickState(params.storePath, params.maintenance).checkpointBlocked;
-  if (blocked && params.mode === "enforce") {
-    return createPhysicalBudgetResult({
-      totalBytesBefore: initialUsage.totalBytes,
-      maxBytes: maxDiskBytes,
-      highWaterBytes,
-      deferred: {
-        checkpoint: blocked.checkpoint?.health,
-        walBytesBefore: initialUsage.databaseWalBytes,
-        walBytesAfter: initialUsage.databaseWalBytes,
-      },
-    });
-  }
   if (initialUsage.totalBytes <= maxDiskBytes || params.mode === "warn") {
     return createPhysicalBudgetResult({
       totalBytesBefore: initialUsage.totalBytes,
@@ -489,6 +473,7 @@ async function enforceSessionHistoryMaintenanceForDatabase(
   let pruning = await pruneArchives("initial");
   let { usage, removedFiles } = pruning;
   let removedEntries = 0;
+  let deletedSessionEntries = 0;
   const finish = () =>
     createPhysicalBudgetResult({
       totalBytesBefore: initialUsage.totalBytes,
@@ -575,7 +560,6 @@ async function enforceSessionHistoryMaintenanceForDatabase(
                 throw new Error("Session became active; history eviction was canceled");
               }
             },
-            forceInProcess: params.reclamationMode === "in-process",
             plan: reclamationPlan,
           });
           if (reclaimed.kind !== reclamationPlan.kind) {
@@ -682,6 +666,7 @@ async function enforceSessionHistoryMaintenanceForDatabase(
           continue;
         }
         removedEntries += 1;
+        deletedSessionEntries += 1;
         const pageDiagnostics: SqliteSessionArchivePruningDiagnostics = {
           trigger: "after-eviction",
         };
@@ -722,7 +707,9 @@ async function enforceSessionHistoryMaintenanceForDatabase(
     }
   }
   if (removedEntries > 0) {
-    await refreshSqliteSessionPlannerStatisticsBestEffort(resolved, removedEntries);
+    // Historical generations do not change entry cardinality. Whole-database
+    // analysis after their eviction stalls foreground writers on large stores.
+    await refreshSqliteSessionPlannerStatisticsBestEffort(resolved, deletedSessionEntries);
     usage = await measureSessionPhysicalDiskUsage(params.storePath);
   }
 

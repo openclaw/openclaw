@@ -1,4 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { readRunFailureNotice } from "../../../../src/shared/run-failure-notice.js";
 import { readSkillWorkshopChangeNotice } from "../../../../src/shared/skill-workshop-change-notice.js";
 import { t } from "../../i18n/index.ts";
 import type { ChatItem, NormalizedMessage } from "../../lib/chat/chat-types.ts";
@@ -26,6 +27,20 @@ export function projectChatSystemNotice(
       ]
     : [];
   const skillChanges = readSkillWorkshopChangeNotice(item.message);
+  const runError = readRunFailureNotice(item.message);
+  if (runError) {
+    const message = normalized ?? safeNormalizeMessage(item.message);
+    return [
+      {
+        kind: "notice",
+        key: item.key,
+        text: runError.summary,
+        timestamp: message?.timestamp ?? 0,
+        runError,
+      },
+      ...pendingItems,
+    ];
+  }
   const skillNoticeMessage = skillChanges && (normalized ?? safeNormalizeMessage(item.message));
   if (skillChanges && skillNoticeMessage) {
     const { timestamp } = skillNoticeMessage;

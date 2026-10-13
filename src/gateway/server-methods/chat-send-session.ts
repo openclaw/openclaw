@@ -19,6 +19,10 @@ import {
   parseModelRef,
 } from "../../agents/model-selection-normalize.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import {
+  prepareSessionCapabilityRead,
+  withPreparedSessionCapabilityRead,
+} from "../../agents/subagents/spawn/subagent-session-store.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { resolveTextCommand } from "../../auto-reply/commands-registry.js";
@@ -54,7 +58,7 @@ import {
   withQualifiedGatewaySessionEntry,
 } from "../session-utils-store.js";
 import {
-  loadSessionEntry,
+  loadGatewaySessionEntryReadOnlyInWorker,
   prepareDeletedAgentSessionCheck,
   resolveSessionModelRef,
 } from "../session-utils.js";
@@ -229,7 +233,12 @@ async function loadChatSendSessionContext(params: {
     "gateway.chat_send.load_session",
     () =>
       request.stopCommand
-        ? loadSessionEntry(sessionLoadKey, sessionLoadOptions, runtimeConfig)
+        ? loadGatewaySessionEntryReadOnlyInWorker({
+            excludeInternalEffects: true,
+            cfg: runtimeConfig,
+            key: sessionLoadKey,
+            ...sessionLoadOptions,
+          })
         : withGatewaySessionEntry(
             sessionLoadKey,
             sessionLoadOptions,
@@ -404,14 +413,14 @@ export type LoadedChatSendSession = Extract<
 
 export type PreparedChatSendSession = LoadedChatSendSession & {
   sessionTarget: QualifiedSessionEntryAccessTarget;
-  assertSessionTargetCurrent: () => void;
-  releaseSessionTarget: () => void;
   activeRunScopeKey: string;
   readSource?: CapturedSessionEntryReadSource;
 };
 
-export function qualifyChatSendSession(loaded: LoadedChatSendSession): PreparedChatSendSession {
-  const qualified = prepareQualifiedSessionEntryTarget(
+export async function qualifyChatSendSession(
+  loaded: LoadedChatSendSession,
+): Promise<PreparedChatSendSession> {
+  const qualified = await prepareQualifiedSessionEntryTarget(
     {
       ...loaded,
       canonicalKey: loaded.sessionKey,
@@ -423,18 +432,16 @@ export function qualifyChatSendSession(loaded: LoadedChatSendSession): PreparedC
   );
   return {
     ...loaded,
-    sessionTarget: qualified.target,
-    assertSessionTargetCurrent: qualified.assertCurrent,
-    releaseSessionTarget: qualified.release,
-    activeRunScopeKey: qualified.target.canonicalKey,
-    readSource: qualified.target.readSource,
+    sessionTarget: qualified,
+    activeRunScopeKey: qualified.canonicalKey,
+    readSource: qualified.readSource,
   };
 }
 
 /** Validate a worker-prepared admission row against the qualified session source. */
 function assertCurrentChatSendSession(
   session: PreparedChatSendSession,
-  latest: ReturnType<typeof loadSessionEntry>,
+  latest: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>,
 ) {
   if (session.sessionRoutingChanged(latest.cfg)) {
     throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
@@ -446,7 +453,6 @@ function assertCurrentChatSendSession(
   ) {
     throw new Error("Session storage changed while starting work. Retry.");
   }
-  session.assertSessionTargetCurrent();
 }
 
 export function withCurrentChatSendSession<T>(params: {
@@ -580,6 +586,7 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
       sessionKey,
       entry: selectedEntry,
       persistedEntry,
+      preparedSessionCapabilityEntry: { sessionKey, entry: selectedEntry },
       harness,
       provider: model.provider,
       modelId: model.model,
@@ -593,7 +600,9 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
       sandbox: resolveCreatorSandbox(cfg, creation),
       now: session.now,
     });
-  const restriction = restrictionFor(cfg, prospectiveEntry, resolvedSessionModel, entry);
+  const restriction = await withPreparedSessionCapabilityRead(() =>
+    restrictionFor(cfg, prospectiveEntry, resolvedSessionModel, entry),
+  );
   const details = readAgentRuntimeRestrictionErrorDetails(restriction?.details);
   if (
     entry ||
@@ -630,60 +639,70 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
     agentId,
     getRuntimeConfig: context.getRuntimeConfig,
   });
-  const committed = await commitReplySessionInitialization({
-    ...scope,
-    activeSessionKey: sessionKey,
-    expectedRevision: snapshot.revision,
-    sessionEntry: prepared.entry,
-    commitGuard: () => {
-      params.assertCurrent?.();
-      session.assertSessionTargetCurrent();
-      prepared.assertSkillSelection();
-      const currentConfig = context.getRuntimeConfig();
-      const current = loadSessionEntry(session.sessionLoadKey, session.sessionLoadOptions);
-      const currentCreation = resolveOperatorSessionCreation(client);
-      const currentModel = resolveSessionModelRef(currentConfig, undefined, agentId);
-      const creationError = authorizeGatewaySessionCreation({
-        cfg: currentConfig,
-        client,
-        agentId,
-      });
-      const currentRestriction = readAgentRuntimeRestrictionErrorDetails(
-        restrictionFor(currentConfig, prepared.entry, currentModel)?.details,
-      );
-      if (
-        creationError ||
-        !hasGatewayAdminScope(client) ||
-        current.entry ||
-        current.storePath !== session.storePath ||
-        current.canonicalKey !== sessionKey ||
-        session.sessionRoutingChanged(currentConfig) ||
-        currentCreation.actor?.id !== prepared.entry.createdActor?.id ||
-        resolveCreatorSandbox(currentConfig, currentCreation) !== prepared.entry.sandbox ||
-        currentModel.provider !== resolvedSessionModel.provider ||
-        currentModel.model !== resolvedSessionModel.model ||
-        currentRestriction?.reason !== details.reason ||
-        resolveEffectiveAgentRuntime({
-          cfg: currentConfig,
-          agentId,
-          sessionKey,
-          provider: currentModel.provider,
-          modelId: currentModel.model,
-        }) !== runtime
-      ) {
-        throw new Error(creationError?.message ?? "Native session creation changed before commit.");
-      }
-    },
+  const preparedRestriction = await prepareSessionCapabilityRead(() => {
+    const currentConfig = context.getRuntimeConfig();
+    const currentModel = resolveSessionModelRef(currentConfig, undefined, agentId);
+    return readAgentRuntimeRestrictionErrorDetails(
+      restrictionFor(currentConfig, prepared.entry, currentModel)?.details,
+    );
   });
+  let committed: Awaited<ReturnType<typeof commitReplySessionInitialization>>;
+  try {
+    committed = await commitReplySessionInitialization({
+      ...scope,
+      activeSessionKey: sessionKey,
+      expectedRevision: snapshot.revision,
+      databaseSource: snapshot.databaseSource,
+      sessionEntry: prepared.entry,
+      commitGuard: () => {
+        params.assertCurrent?.();
+        prepared.assertSkillSelection();
+        const currentConfig = context.getRuntimeConfig();
+        const currentCreation = resolveOperatorSessionCreation(client);
+        const currentModel = resolveSessionModelRef(currentConfig, undefined, agentId);
+        const creationError = authorizeGatewaySessionCreation({
+          cfg: currentConfig,
+          client,
+          agentId,
+        });
+        const currentRestriction = preparedRestriction.read();
+        if (
+          creationError ||
+          !hasGatewayAdminScope(client) ||
+          session.sessionRoutingChanged(currentConfig) ||
+          currentCreation.actor?.id !== prepared.entry.createdActor?.id ||
+          resolveCreatorSandbox(currentConfig, currentCreation) !== prepared.entry.sandbox ||
+          currentModel.provider !== resolvedSessionModel.provider ||
+          currentModel.model !== resolvedSessionModel.model ||
+          currentRestriction?.reason !== details.reason ||
+          resolveEffectiveAgentRuntime({
+            cfg: currentConfig,
+            agentId,
+            sessionKey,
+            provider: currentModel.provider,
+            modelId: currentModel.model,
+          }) !== runtime
+        ) {
+          throw new Error(
+            creationError?.message ?? "Native session creation changed before commit.",
+          );
+        }
+      },
+    });
+  } finally {
+    preparedRestriction.release();
+  }
   if (!committed.ok) {
     return sessionChanged();
   }
   await recordSessionCreated(cfg, { agentId, sessionKey, entry: committed.sessionEntry });
   emitSessionsChanged(context, { agentId, sessionKey, reason: "create" });
-  return restrictionFor(
-    context.getRuntimeConfig(),
-    committed.sessionEntry,
-    resolvedSessionModel,
-    committed.sessionEntry,
+  return withPreparedSessionCapabilityRead(() =>
+    restrictionFor(
+      context.getRuntimeConfig(),
+      committed.sessionEntry,
+      resolvedSessionModel,
+      committed.sessionEntry,
+    ),
   );
 }

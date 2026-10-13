@@ -5,8 +5,8 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
-import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
@@ -14,7 +14,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import type { NodeWorkerSupervisorIdentity } from "../worker/node-supervisor-protocol.js";
 import type {
   NodeWorkerLaunchClaim,
@@ -53,21 +53,38 @@ type LaunchTable = keyof NodeWorkerLaunchDatabase;
 type LaunchIdentity = Pick<NodeWorkerLaunchReceipt, "launchId" | "planHash">;
 
 const NODE_WORKER_LAUNCH_SCHEMA_END = "\n  WHERE completed_at_ms IS NOT NULL;";
-const initializedDatabases = new WeakSet<DatabaseSync>();
 const TERMINAL_RECEIPT_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const TERMINAL_PRUNE_BATCH_LIMIT = 256;
 
-function ensureNodeWorkerLaunchSchema(
+const launchSchemaEnsurers = new Map(
+  (
+    [
+      "node_worker_launches",
+      "node_worker_launch_boots",
+      "node_worker_launch_containers",
+      "node_worker_launch_cleanup",
+      "node_worker_launch_process_scopes",
+    ] as const
+  ).map((table) => [
+    table,
+    createSqliteSchemaEnsurer(
+      () =>
+        getOpenClawStateFeatureSchemaSql(table, {
+          endMarker: table === "node_worker_launches" ? NODE_WORKER_LAUNCH_SCHEMA_END : undefined,
+        }),
+      {
+        tables: [table],
+        indexes:
+          table === "node_worker_launches" ? ["idx_node_worker_launches_terminal_completed"] : [],
+      },
+    ),
+  ]),
+);
+
+const ensureNodeWorkerLaunchSchema = (
   database: DatabaseSync,
   table: Exclude<keyof NodeWorkerLaunchDatabase, "node_worker_turns">,
-): void {
-  // sqlite-allow-raw -- Canonical feature-local additive DDL only.
-  database.exec(
-    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table, {
-      endMarker: table === "node_worker_launches" ? NODE_WORKER_LAUNCH_SCHEMA_END : undefined,
-    }),
-  );
-}
+): void => launchSchemaEnsurers.get(table)!(database);
 
 function query(database: DatabaseSync) {
   return getNodeSqliteKysely<NodeWorkerLaunchDatabase>(database);
@@ -347,26 +364,18 @@ export class NodeWorkerLaunchKernel {
     operationLabel: string,
     operation: (database: DatabaseSync, schema: LaunchSchema, path: string) => T,
   ): T {
-    let initializedDatabase: DatabaseSync | undefined;
-    const result = runOpenClawStateWriteTransaction(
+    return runOpenClawStateWriteTransaction(
       ({ db, path }) => {
         requestSqliteWorkerOperationAdmission({
           stage: "transaction",
           facts: { kind: "node-worker-journal" },
         });
-        if (!initializedDatabases.has(db)) {
-          ensureNodeWorkerLaunchSchema(db, "node_worker_launches");
-          initializedDatabase = db;
-        }
+        ensureNodeWorkerLaunchSchema(db, "node_worker_launches");
         return operation(db, getAdmittedSqliteSchemaFacts(db), path);
       },
       this.databaseOptions,
       { operationLabel },
     );
-    if (initializedDatabase) {
-      initializedDatabases.add(initializedDatabase);
-    }
-    return result;
   }
 
   claimObservation(

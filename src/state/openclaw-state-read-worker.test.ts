@@ -283,8 +283,12 @@ it("reads externally created state after an absent read without allocating a wor
   expect(mock.closePool).not.toHaveBeenCalled();
 });
 
-it("retains read custody until release and retires failed native cleanup", async () => {
+it("retires a successful read without hydrating an error and retains custody until exit", async () => {
   const { options } = source();
+  const hydrate = vi.spyOn(
+    await import("./openclaw-state-worker-error.js"),
+    "hydrateOpenClawStateWorkerError",
+  );
   const task = queueTask();
   const stopping = createDeferredCore();
   const stopped = createDeferredCore();
@@ -317,11 +321,16 @@ it("retains read custody until release and retires failed native cleanup", async
       mock.create.mock.invocationCallOrder[0]!,
     );
     expect(settled).toBe(false);
+    expect(hydrate).not.toHaveBeenCalled();
     expect(mock.closePool).not.toHaveBeenCalled();
   } finally {
     task.result.resolve(reply);
     stopped.resolve();
-    await assertion;
+    try {
+      await assertion;
+    } finally {
+      hydrate.mockRestore();
+    }
   }
   expect(task.close).toHaveBeenCalledOnce();
 });
@@ -656,37 +665,6 @@ const captures = [
         },
       ),
   ),
-  (() => {
-    const command = {
-      type: "cron.observeRunRecovery" as const,
-      storeKey: "租户🦞",
-      proposals: [
-        { jobId: "任务雪", queuedAtMs: 1, runningAtMs: 2 },
-        { jobId: "运行🌊", runningAtMs: 3 },
-      ],
-    };
-    return captureCase(
-      command,
-      {
-        ok: true,
-        type: command.type,
-        sourceAdmitted: true,
-        observation: { kind: "observed", proposals: [] },
-      },
-      Buffer.byteLength("租户🦞任务雪运行🌊") + 24,
-      () => {
-        command.storeKey = "changed partition";
-        command.proposals[0]!.jobId = "changed before preparation";
-        command.proposals[0]!.queuedAtMs = 9;
-      },
-      {
-        prepared: true,
-        queued: () => {
-          command.proposals.splice(0);
-        },
-      },
-    );
-  })(),
 ];
 
 it.each(captures)(

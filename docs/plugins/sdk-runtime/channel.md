@@ -99,7 +99,7 @@ Channel-specific runtime helpers, available when a channel plugin is loaded. Par
   </Accordion>
 </AccordionGroup>
 
-Reply options accept `onVisibleWorkSessions(sessions)` to receive visible work sessions. For a fresh child created through the local Gateway, the host awaits this callback before the child's first turn, so plugins can persist session-scoped context first. Accepted sessions are also reported before final reply delivery, including when the settled run failed. Each descriptor carries `sessionKey`, the canonical `url`, and an optional `label`. A child can be reported at creation and again at settlement; consumers must be idempotent by session key.
+Reply options accept `onVisibleWorkSessions(sessions)` to receive visible work sessions. For a fresh child created through the local Gateway, the host awaits this callback before the child's first turn, so plugins can persist session-scoped context first. Accepted sessions are also reported before final reply delivery, including when the settled run failed. Each descriptor carries `sessionKey`, the session `url`, and an optional `label`. A child can be reported at creation and again at settlement; consumers must be idempotent by session key.
 
 ## Awaited conversation binding mutations
 
@@ -112,20 +112,19 @@ rechecks the selected adapter before committing. A failed or uncertain write
 does not authorize replay. Released synchronous selectors retain their current
 contract; bundled session listings await the internal owner.
 
-For synchronous directory ownership checks, a channel may implement
-`messaging.prepareConversationRouteOwners(inputs, inspectBindings)`. It prepares binding reads
-once and returns exactly one synchronous resolver per input, in the same order.
-Core invokes these resolvers immediately and preserves the scalar resolver's
-error and fallback handling. Existing plugins keep `resolveConversationRouteOwner`.
-Prepared facts must not survive a wait or be reused for a later authority check.
+For directory ownership checks, implement
+`messaging.prepareConversationRouteOwnersAsync(inputs, inspectBindings)`. Await
+the supplied `inspectBindings(refs)` once for the batch to prepare binding facts
+in workers. It returns a synchronous reader over those facts. Return exactly one
+synchronous resolver per input, in the same order, and call the reader inside
+each resolver so in-process write receipts invalidate ownership before an effect.
+Core preserves the resolver's error and fallback handling and releases prepared
+facts when the operation ends; do not retain the reader for later operations.
 
-Call the supplied `inspectBindings(refs)` once for the batch. It performs one
-current native selection across generic and account-owned bindings while
-preserving external adapter ownership. It is valid only during synchronous
-preparation and rejects later use. Each later check receives a fresh inspector.
-
-Slack retains its declared OpenClaw 2026.9.8 host support through its unchanged
-scalar resolver. Older hosts do not invoke the optional preparation hook.
+The released synchronous `resolveConversationRouteOwner` hook remains deprecated
+compatibility while plugins migrate. The unreleased synchronous
+`prepareConversationRouteOwners` hook has been removed. See
+[binding migration](/plugins/sdk-migration/how-to-migrate#await-plugin-state-and-conversation-bindings).
 
 Await `getSessionBindingService().touchAsync(bindingId, at, scope)` when recording
 binding activity. Adapters implement `touchAsync` to return a Promise that settles

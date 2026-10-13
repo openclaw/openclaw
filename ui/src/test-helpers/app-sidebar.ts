@@ -71,6 +71,8 @@ export type SidebarLifecycleState = HTMLElement & {
   sidebarEntries: readonly string[];
   sidebarAgentsMode: "chip" | "roster";
   navigationVisible: boolean;
+  navigationView: AppSidebarSessionNavigationElement["navigationView"];
+  navigationCollapsed: AppSidebarSessionNavigationElement["navigationCollapsed"];
   sidebarLiveActivity: boolean;
   onUpdateSidebarEntries?: (entries: string[]) => void;
   pinnedAgentIds: readonly string[];
@@ -262,6 +264,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   const groupsPut = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const groupsRename = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const groupsDelete = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
+  const groupsUpdate = vi.fn<SessionCapability["groupsUpdate"]>(async () => "completed");
   const create = vi.fn(() => Promise.resolve("agent:main:fork"));
   const patch = vi.fn((key: string, _patch: Parameters<SessionCapability["patch"]>[1]) =>
     Promise.resolve(successfulSessionPatch(key)),
@@ -374,6 +377,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     groupsPut,
     groupsRename,
     groupsDelete,
+    groupsUpdate,
     create,
     patch,
     archiveVisibility: archiveState.visibility,
@@ -507,6 +511,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     groupsPut,
     groupsRename,
     groupsDelete,
+    groupsUpdate,
     create,
     patch,
     patchMany,

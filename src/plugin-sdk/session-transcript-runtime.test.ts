@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptEvent,
   listSessionEntriesCore,
@@ -12,7 +13,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import * as sessionEntryWriter from "../config/sessions/session-entry-patch.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
-import { reconcileSessionTranscriptIndexes } from "../config/sessions/session-transcript-reconcile.js";
+import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
@@ -325,6 +326,7 @@ const read = (limit: number, cursor?: string) =>
   readSessionTranscriptCatalogPage({ ...scope, ...source, limit, cursor });
 
 async function seed(messages: unknown[]) {
+  setRuntimeConfigSnapshot({});
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
   for (const [index, message] of messages.entries()) {
     await appendTranscriptMessage(scope, {
@@ -400,7 +402,7 @@ describe("native transcript catalog SDK", () => {
     });
   });
 
-  it("redacts before clipping text and derives the same human title as local sessions", async () => {
+  it("preserves text before clipping and derives the same human title as local sessions", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await seed([
         { role: "user", content: "A useful session title" },
@@ -411,7 +413,7 @@ describe("native transcript catalog SDK", () => {
       ]);
       const page = await read(1);
       expect(page.items[0]).toMatchObject({ type: "agentMessage", truncated: true });
-      expect(page.items[0]?.text).not.toContain("synthetic-secret-token");
+      expect(page.items[0]?.text).toMatch(/^Authorization: Bearer synthetic-secret-token\n/);
       expect(page.items[0]?.text?.length).toBeLessThanOrEqual(6000);
       const entry = loadSessionEntryReadOnly(scope);
       if (!entry) {
@@ -505,8 +507,8 @@ describe("native transcript catalog SDK", () => {
         parentId: "message-3",
         targetId: "message-0",
       });
-      // The source writer owns rewind reconciliation; catalog reads cannot rebuild it.
-      await reconcileSessionTranscriptIndexes({ agentId: scope.agentId });
+      // Join the writer's scheduled rebuild before testing read-only cursor validation.
+      await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId });
       expect((await read(2)).items.map((item) => item.text)).toEqual(["one"]);
       await expect(read(2, first.nextCursor)).rejects.toThrow("no longer matches");
       for (const [eventId, parentId] of [
@@ -519,7 +521,7 @@ describe("native transcript catalog SDK", () => {
           message: { role: "user", content: eventId },
         });
       }
-      await reconcileSessionTranscriptIndexes({ agentId: scope.agentId });
+      await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId });
       // Equal-length branch replacements must not reuse the old ordinal as an anchor.
       await expect(read(2, first.nextCursor)).rejects.toThrow("no longer matches");
     });

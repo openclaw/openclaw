@@ -409,6 +409,7 @@ export type ManagedSessionList = ObservedSessionList & {
   startupRetryAttempt: number;
   /** Invalidation retires remaining pages without cancelling the correlated RPC. */
   readGeneration: number;
+  readRevision: number;
   coordinator: ReturnType<typeof createSessionEventRefreshCoordinator>;
   pending: Promise<void> | null;
   queued: ManagedSessionListRefresh | null;
@@ -487,6 +488,7 @@ export function prepareSessionRefreshOptions(
   // must inherit the UI default in both the request and its query identity.
   const prepared = {
     ...options,
+    rowMode: options.rowMode ?? "sidebar",
     source: options.source ?? "sidebar",
     excludeDock: options.excludeDock ?? true,
     includeDerivedTitles: options.includeDerivedTitles ?? true,

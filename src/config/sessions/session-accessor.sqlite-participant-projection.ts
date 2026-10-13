@@ -7,6 +7,7 @@ import {
   prepareSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import { readSqliteDatabaseWriteRevision } from "../../infra/sqlite-database-admission.js";
 import {
   getSqliteReadScopeRevision,
   runSqliteReadOperationSync,
@@ -16,6 +17,7 @@ import { SESSION_PARTICIPANTS_TABLE } from "../../state/openclaw-agent-db-contra
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { readCurrentSessionEntryCacheParticipants } from "./session-accessor.sqlite-entry-cache-state.js";
+import { readSessionActorParticipants } from "./session-actor-entry-publication.worker.js";
 import type { SessionParticipantRecord } from "./session-membership-facts.types.js";
 import { readParticipantIdentity } from "./session-participant-identity.js";
 import { readPreparedSessionParticipants } from "./session-participant-prepared-read.js";
@@ -42,7 +44,20 @@ function selectParticipantRows(database: DatabaseSync) {
     .orderBy("identity_namespace");
 }
 
-// The last exact read belongs to this connection's admitted revision, including its snapshot.
+let participantWriteSnapshot: DatabaseSync | undefined;
+
+/** The entry CAS owns an immediate transaction before borrowing its unchanged preparation. */
+export function withSessionParticipantWriteSnapshot<T>(database: DatabaseSync, read: () => T): T {
+  const previous = participantWriteSnapshot;
+  participantWriteSnapshot = database;
+  try {
+    return read();
+  } finally {
+    participantWriteSnapshot = previous;
+  }
+}
+
+// Deferred readers must execute their first SELECT to establish the native snapshot.
 const singleSessionParticipantQuery = createSqliteQueryCache((database) => {
   const query = prepareSqliteQuerySync<string, SessionParticipantRow>(database, (parameter) =>
     selectParticipantRows(database).where(
@@ -57,7 +72,17 @@ const singleSessionParticipantQuery = createSqliteQueryCache((database) => {
   return (key: string) =>
     runSqliteReadOperationSync(database, () => {
       const revision = getSqliteReadScopeRevision(database);
-      if (revision && last?.revision === revision && last.key === key) {
+      if (
+        revision &&
+        last?.key === key &&
+        (last.revision === revision ||
+          (participantWriteSnapshot === database &&
+            last.revision.snapshot === undefined &&
+            last.revision.schema === revision.schema &&
+            last.revision.mutationRevision === revision.mutationRevision &&
+            last.revision.writeRevision === readSqliteDatabaseWriteRevision(database)))
+      ) {
+        last.revision = revision;
         return last.rows;
       }
       const rows = query(key).rows;
@@ -95,10 +120,23 @@ export function participantRecordsBySessionKey(
 ): Map<string, SessionParticipantRecord[]> {
   return runSqliteReadOperationSync(database, () => {
     const records = new Map<string, SessionParticipantRecord[]>();
+    const missing = sessionKeys?.filter((sessionKey) => {
+      const participants = readSessionActorParticipants({ db: database }, sessionKey);
+      if (participants === undefined) {
+        return true;
+      }
+      if (participants.length) {
+        records.set(sessionKey, participants);
+      }
+      return false;
+    });
+    if (missing?.length === 0) {
+      return records;
+    }
     if (!tableExists(database, SESSION_PARTICIPANTS_TABLE)) {
       return records;
     }
-    for (const row of readParticipantRows(database, sessionKeys)) {
+    for (const row of readParticipantRows(database, missing)) {
       const participants = records.get(row.session_key) ?? [];
       participants.push(readParticipantRecord(row));
       records.set(row.session_key, participants);
@@ -127,6 +165,10 @@ export function withProjectedParticipants(
 }
 
 export function readSqliteSessionParticipantProjection(database: DatabaseSync, sessionKey: string) {
+  const actor = readSessionActorParticipants({ db: database }, sessionKey);
+  if (actor !== undefined) {
+    return participantProjection(actor);
+  }
   return (
     readPreparedSessionParticipants(database, sessionKey) ??
     readCurrentSessionEntryCacheParticipants(database, sessionKey) ??
@@ -141,6 +183,10 @@ export function projectSqliteSessionParticipants(
   sessionKey: string,
   entry: SessionEntry,
 ): SessionEntry {
+  const actor = readSessionActorParticipants({ db: database }, sessionKey);
+  if (actor !== undefined) {
+    return withProjectedParticipants(entry, actor);
+  }
   const prepared =
     readPreparedSessionParticipants(database, sessionKey) ??
     readCurrentSessionEntryCacheParticipants(database, sessionKey);
@@ -158,26 +204,22 @@ export function prepareSqliteSessionParticipantProjection(
   database: DatabaseSync,
   sessionKeys: readonly string[],
 ): (sessionKey: string, entry: SessionEntry) => SessionEntry {
-  let rowsByKey: Map<string, SessionParticipantRow[]> | undefined;
+  let recordsByKey: Map<string, SessionParticipantRecord[]> | undefined;
   let acquisitionFailed = false;
   return (sessionKey, entry) => {
+    const actor = readSessionActorParticipants({ db: database }, sessionKey);
+    if (actor !== undefined) {
+      return withProjectedParticipants(entry, actor);
+    }
     const prepared =
       readPreparedSessionParticipants(database, sessionKey) ??
       readCurrentSessionEntryCacheParticipants(database, sessionKey);
     if (prepared) {
       return prepared.participants ? { ...entry, ...prepared } : entry;
     }
-    if (!rowsByKey && !acquisitionFailed) {
+    if (!recordsByKey && !acquisitionFailed) {
       try {
-        const rows = tableExists(database, SESSION_PARTICIPANTS_TABLE)
-          ? readParticipantRows(database, sessionKeys)
-          : [];
-        rowsByKey = new Map();
-        for (const row of rows) {
-          const participants = rowsByKey.get(row.session_key) ?? [];
-          participants.push(row);
-          rowsByKey.set(row.session_key, participants);
-        }
+        recordsByKey = participantRecordsBySessionKey(database, sessionKeys);
       } catch {
         // A native row-conversion failure must not poison healthy siblings.
         acquisitionFailed = true;
@@ -186,10 +228,7 @@ export function prepareSqliteSessionParticipantProjection(
     if (acquisitionFailed) {
       return projectSqliteSessionParticipants(database, sessionKey, entry);
     }
-    return withProjectedParticipants(
-      entry,
-      (rowsByKey?.get(sessionKey) ?? []).map(readParticipantRecord),
-    );
+    return withProjectedParticipants(entry, recordsByKey?.get(sessionKey) ?? []);
   };
 }
 
@@ -200,6 +239,11 @@ export function projectSqliteSessionParticipantsBatch(
   const projected = new Map(entries);
   const missing: string[] = [];
   for (const [sessionKey, entry] of entries) {
+    const actor = readSessionActorParticipants({ db: database }, sessionKey);
+    if (actor !== undefined) {
+      projected.set(sessionKey, withProjectedParticipants(entry, actor));
+      continue;
+    }
     const projection =
       readPreparedSessionParticipants(database, sessionKey) ??
       readCurrentSessionEntryCacheParticipants(database, sessionKey);

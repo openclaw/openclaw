@@ -2,8 +2,13 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  getOrLoadSqliteDatabaseAdmissionForPath,
+  prepareSqliteDatabaseAdmission,
+} from "../infra/sqlite-database-admission.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
+import { schemaAdmission } from "../infra/sqlite-schema-admission.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -48,7 +53,7 @@ type Activation = {
   isCurrent: () => boolean;
   preparationReady: Promise<void>;
   openAgent: (input: PreparationInput) => Promise<void>;
-  migrateAgent: (input: PreparationInput) => Promise<void>;
+  migrateAgent: (input: PreparationInput) => Promise<void | { maintain: () => Promise<void> }>;
   publishAgent: (input: PreparationInput) => Promise<void>;
 };
 type PreparationPhase =
@@ -92,6 +97,7 @@ type PreparedSchemaHeader = Pick<
 type PreparedSchemaHeaders = {
   statePath: string;
   headers: Map<string, PreparedSchemaHeader>;
+  state?: { identity: string; schemaAdmissionId: string };
 };
 
 function matchesInspectionPath(
@@ -193,6 +199,50 @@ class AgentDatabaseStartupAdmission {
         ? header
         : undefined;
     };
+  }
+
+  recordStateSchemaPreparation(env: NodeJS.ProcessEnv): void {
+    const prepared = this.preparedSchemaHeaders;
+    if (this.stopped || prepared?.statePath !== resolveOpenClawStateSqlitePath(env)) {
+      return;
+    }
+    const schema = getOrLoadSqliteDatabaseAdmissionForPath(
+      prepared.statePath,
+      schemaAdmission,
+      () => undefined,
+    );
+    const identity = prepareSqliteDatabaseAdmission(prepared.statePath);
+    if (schema && identity) {
+      prepared.state = { identity, schemaAdmissionId: schema.admissionId };
+    }
+  }
+
+  takePreparedStateSchema(env: NodeJS.ProcessEnv): (() => void) | undefined {
+    const prepared = this.preparedSchemaHeaders;
+    const state = prepared?.state;
+    if (!prepared || !state || prepared.statePath !== resolveOpenClawStateSqlitePath(env)) {
+      return undefined;
+    }
+    const assertCurrent = () => {
+      const schema = getOrLoadSqliteDatabaseAdmissionForPath(
+        prepared.statePath,
+        schemaAdmission,
+        () => undefined,
+      );
+      if (
+        this.stopped ||
+        prepareSqliteDatabaseAdmission(prepared.statePath) !== state.identity ||
+        schema?.admissionId !== state.schemaAdmissionId
+      ) {
+        throw new Error("Prepared startup state schema changed before source inspection");
+      }
+    };
+    try {
+      assertCurrent();
+      return assertCurrent;
+    } catch {
+      return undefined;
+    }
   }
 
   /** Joins startup work already scheduled before a background consumer begins. */
@@ -346,6 +396,7 @@ class AgentDatabaseStartupAdmission {
       // Gateway-owned recovery outlives the caller's temporary discovery snapshot.
       const work = runInDetachedAsyncContext(async () => {
         const publicationComplete = createDeferredCore();
+        const preparation: { maintenance?: () => Promise<void> } = {};
         try {
           const results = await checked;
           phase("activation");
@@ -425,7 +476,8 @@ class AgentDatabaseStartupAdmission {
                 try {
                   assertCurrent();
                   phase("migration");
-                  await activation.migrateAgent(input);
+                  const migrated = await activation.migrateAgent(input);
+                  preparation.maintenance = migrated ? migrated.maintain : undefined;
                 } finally {
                   releaseMigration?.();
                 }
@@ -472,6 +524,19 @@ class AgentDatabaseStartupAdmission {
           }
           publicationComplete.resolve();
           completion.resolve();
+        }
+        // End the admission borrow and publication turn before advisory repair.
+        if (!readAgentDatabaseAdmissionRefusal(agentId, { env }) && !this.stopped) {
+          try {
+            await preparation.maintenance?.();
+          } catch (error) {
+            if (!this.stopped) {
+              log.warn("agent database background maintenance failed", {
+                agentId,
+                reason: formatErrorMessage(error),
+              });
+            }
+          }
         }
       });
       this.track(work);

@@ -30,6 +30,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { isGatewaySuspendControlAvailable } from "../../../infra/gateway-suspend-coordinator.js";
+import { resolveHostAccountName } from "../../../infra/host-account-name.js";
 import { runWithMainThreadTask } from "../../../infra/main-thread-stall.js";
 import { rawDataByteLength } from "../../../infra/ws.js";
 import { logRejectedLargePayload } from "../../../logging/diagnostic-payload.js";
@@ -41,6 +42,10 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { isWebchatClient } from "../../../utils/message-channel.js";
+import {
+  assertRemoteControlUiIngressCurrent,
+  getRemoteControlUiIngressContext,
+} from "../../ingress-attribution.js";
 import { isLocalishHost, isLoopbackAddress } from "../../net.js";
 import { resolveNodePairingClientIpSource } from "../../node-pairing-auto-approve.js";
 import {
@@ -76,6 +81,7 @@ function claimsWorkerConnectionIdentity(value: unknown): boolean {
 }
 
 export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerParams) {
+  const remoteIngress = getRemoteControlUiIngressContext(params.upgradeReq);
   let waitingForPairing = false;
   const {
     socket,
@@ -103,6 +109,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
 
   const sendFrame = async (obj: unknown): Promise<void> =>
     await new Promise<void>((resolve, reject) => {
+      assertRemoteControlUiIngressCurrent(remoteIngress);
       socket.send(JSON.stringify(obj), (err) => {
         if (err) {
           reject(err);
@@ -349,6 +356,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             origin: requestOrigin,
             isLocalClient,
             enforceOriginCheckForAnyClient,
+            remoteControlUiIngress: remoteIngress,
           }),
           browserRateLimitClientIp,
           authRateLimiter,
@@ -372,6 +380,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         if (!authenticated) {
           return;
         }
+        // Account metadata is process-stable and can resolve while device authorization runs.
+        void resolveHostAccountName();
         const deviceAuthorized = await authorizeGatewayConnectDevice(phaseContext, authenticated);
         if (!deviceAuthorized) {
           return;
@@ -544,6 +554,12 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
   }
 
   const onMessage = (data: GatewayConnectionFrame): void => {
+    try {
+      assertRemoteControlUiIngressCurrent(remoteIngress);
+    } catch {
+      close(1008, "remote Control UI ingress closed");
+      return;
+    }
     if (isClosed()) {
       return;
     }

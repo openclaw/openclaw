@@ -363,7 +363,9 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__input");
       const composerShell = page.locator(".agent-chat__composer-shell");
       const chatContent = page.locator("main.content--chat");
-      const chatMain = page.locator(".chat-workbench__main");
+      // Details reserves a column; the composer stays centered in the conversation,
+      // not across the combined conversation and rail.
+      const chatMain = page.locator(".chat-main__conversation");
       const model = composer.locator('[data-chat-model-select="true"]');
       const effort = composer.locator('[data-chat-thinking-select="true"]');
       const usage = composer.locator('[data-chat-provider-usage="true"]');
@@ -755,16 +757,14 @@ suite.define(() => {
         "idempotencyKey" in sendRequest.params
           ? String(sendRequest.params.idempotencyKey)
           : "";
-      // Pre-first-token: the thread and composer both explain the active turn.
+      // Pre-first-token: the thread explains the active turn without a duplicate composer row.
       const spark = page.locator(".chat-reading-indicator");
       await expect.poll(() => spark.isVisible()).toBe(true);
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
       await expect.poll(() => spark.isVisible()).toBe(true);
       const announcement = composer.locator(".agent-chat__run-status-announcement");
       await expect.poll(() => announcement.textContent()).toContain("Rosita is");
-      await expect
-        .poll(() => composerShell.locator(".agent-chat__composer-run-status").textContent())
-        .toContain("Working…");
+      expect(await composerShell.locator(".agent-chat__composer-run-status").count()).toBe(0);
       await gateway.emitGatewayEvent("chat", {
         deltaText: "Working on it.",
         message: {
@@ -809,6 +809,7 @@ suite.define(() => {
       expect(activeMobileSettingsBox?.height).toBeGreaterThanOrEqual(44);
       expect(activeMobileStopBox?.width).toBeCloseTo(32, 2);
       expect(activeMobileStopBox?.height).toBeCloseTo(32, 2);
+      expect(await composerShell.locator(".agent-chat__composer-run-status").count()).toBe(0);
       await captureMobileState("mobile-composer-active-stop.png");
       await textarea.press("Escape");
       const abortRequest = await gateway.waitForRequest("chat.abort");
@@ -988,7 +989,9 @@ suite.define(() => {
         );
       }
       await page.mouse.move(0, 0);
-      await expect.poll(() => page.locator("wa-tooltip[open]").count()).toBe(0);
+      await expect
+        .poll(() => page.locator(".tooltip-surface[popover]:popover-open").count())
+        .toBe(0);
       await expect
         .poll(() => microphonePickerShell.evaluate((node) => node.getBoundingClientRect().width))
         .toBe(0);

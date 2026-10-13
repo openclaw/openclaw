@@ -65,8 +65,6 @@ class SidebarAttention extends OpenClawLightDomElement {
     super.connectedCallback();
     this.mentions =
       this.context?.sidebarAttention.activate(SidebarAttentionStoreController) ?? null;
-    // Idle callbacks can run after the first click on a busy page.
-    this.preloadPanel();
     // Dismissal belongs to the connected Inbox, including while its panel imports.
     document.addEventListener("pointerdown", this.handleOutsideInteraction, true);
     document.addEventListener("keydown", this.handleOutsideInteraction, true);

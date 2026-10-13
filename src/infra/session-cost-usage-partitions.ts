@@ -82,7 +82,7 @@ export function decodeUsageCostPartition(
   }
 }
 
-const numericTotals: Array<Exclude<keyof CostUsageTotals, "missingCostByModel">> = [
+const numericTotals: Array<Exclude<keyof CostUsageTotals, "missingCostByModel" | "usageReport">> = [
   "input",
   "output",
   "cacheRead",

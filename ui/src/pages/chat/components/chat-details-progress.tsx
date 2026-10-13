@@ -1,4 +1,4 @@
-import { Show, onCleanup } from "solid-js";
+import { Show, createSignal, onCleanup } from "solid-js";
 import { renderSessionProgressCard } from "../../../components/session-progress-card.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/web-awesome.ts";
@@ -17,6 +17,7 @@ export type ChatDetailsProgress = SolidBridgeElement<Props>;
 export const ChatDetailsProgress = defineSolidBridge<Props>(
   "openclaw-chat-details-progress",
   (props) => {
+    const [opened, setOpened] = createSignal(false);
     let menu!: HTMLElement;
     const stopSummaryToggle = (event: MouseEvent) => {
       event.preventDefault();
@@ -30,6 +31,7 @@ export const ChatDetailsProgress = defineSolidBridge<Props>(
       }}
       class="chat-details-progress__menu"
       placement="bottom-end"
+      onWa-show={() => setOpened(true)}
       onWa-select={(event: CustomEvent<{ item: { value?: string } }>) => {
         if (!props.presented) {
           return;
@@ -63,18 +65,20 @@ export const ChatDetailsProgress = defineSolidBridge<Props>(
       >
         <Icon name="moreHorizontal" />
       </button>
-      <wa-dropdown-item value="hide">{t("chat.sessionDetails.hideProgress")}</wa-dropdown-item>
-      <wa-dropdown-item
-        value="collapse"
-        type="checkbox"
-        prop:checked={props.props?.collapseTaskProgress === true}
-      >
-        {t("chat.sessionDetails.collapseDefault")}
-      </wa-dropdown-item>
-      <wa-dropdown-item value="settings">{t("chat.sessionDetails.settings")}</wa-dropdown-item>
-      {props.props?.onClearSavedProgressCard && (
-        <wa-dropdown-item value="clear">{t("sessionProgressCard.clearSaved")}</wa-dropdown-item>
-      )}
+      <Show when={opened()}>
+        <wa-dropdown-item value="hide">{t("chat.sessionDetails.hideProgress")}</wa-dropdown-item>
+        <wa-dropdown-item
+          value="collapse"
+          type="checkbox"
+          prop:checked={props.props?.collapseTaskProgress === true}
+        >
+          {t("chat.sessionDetails.collapseDefault")}
+        </wa-dropdown-item>
+        <wa-dropdown-item value="settings">{t("chat.sessionDetails.settings")}</wa-dropdown-item>
+        {props.props?.onClearSavedProgressCard && (
+          <wa-dropdown-item value="clear">{t("sessionProgressCard.clearSaved")}</wa-dropdown-item>
+        )}
+      </Show>
     </wa-dropdown>;
     onCleanup(() => menu.removeEventListener("click", stopSummaryToggle));
     const card = () => {

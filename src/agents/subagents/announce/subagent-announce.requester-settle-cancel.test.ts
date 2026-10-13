@@ -3,7 +3,10 @@
 import { runSubagentStateWorkerOperation, useSubagentControlFixture } from "../registry/subagent-control.test-support.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { getRuntimeConfig } from "../../../config/config.js";
-import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  patchSessionEntryCore,
+} from "../../../config/sessions/session-accessor.js";
 import { abortControlledSubagents } from "../../../gateway/server-methods/chat-abort-descendants.js";
 import {
   createChatAbortContext,
@@ -99,6 +102,8 @@ it.each([
     await registerSubagentRun({
       runId,
       childSessionKey,
+      childAgentId: "main",
+      sessionEntry: loadSessionEntry({ agentId: "main", sessionKey: childSessionKey }),
       requesterSessionKey: requesterKey,
       requesterAgentId: "main",
       requesterDisplayKey: requesterKey,
@@ -332,6 +337,8 @@ it.each([
       await registerSubagentRun({
         runId,
         childSessionKey: sessionKey,
+        childAgentId: "main",
+        sessionEntry: loadSessionEntry({ agentId: "main", storePath, sessionKey }),
         requesterSessionKey,
         requesterAgentId: "main",
         requesterTurnRunId: runId === "nested" ? "requester" : undefined,
@@ -441,6 +448,8 @@ it.each([
       await registerSubagentRun({
         runId: "replacement",
         childSessionKey: requesterKey,
+        childAgentId: "main",
+        sessionEntry: loadSessionEntry({ agentId: "main", storePath, sessionKey: requesterKey }),
         requesterSessionKey: owner,
         requesterAgentId: "main",
         requesterDisplayKey: owner,

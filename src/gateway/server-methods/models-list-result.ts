@@ -407,6 +407,14 @@ async function prepareOwnedModelsListResult({
         });
         preparedEntry = {
           ...buildPublicModelProjection(publicEntry, { includeDetails }),
+          ...(manualSelectionAllowed
+            ? {
+                manualSelectionAllowed: manualSelectionAllowed({
+                  provider: entry.provider,
+                  model: entry.id,
+                }),
+              }
+            : {}),
           ...(configuredEntry?.tags.size ? { tags: [...configuredEntry.tags] } : {}),
           ...(agentRuntime ? { agentRuntime } : {}),
           ...thinkingProfile,
@@ -456,33 +464,24 @@ async function prepareOwnedModelsListResult({
               baseUrl: route.baseUrl,
             })
           : undefined;
-      return Object.assign(
-        {},
-        preparedEntry,
-        manualSelectionAllowed
-          ? {
-              manualSelectionAllowed: manualSelectionAllowed({
-                provider: entry.provider,
-                model: entry.id,
-              }),
-            }
-          : {},
-        supportsFastMode === undefined ? {} : { supportsFastMode },
-        speedPolicy.supportsServiceTierRecovery === true
+      return {
+        ...preparedEntry,
+        ...(supportsFastMode === undefined ? {} : { supportsFastMode }),
+        ...(speedPolicy.supportsServiceTierRecovery === true
           ? { supportsServiceTierRecovery: true }
-          : {},
-        serviceTiers === undefined ? {} : { serviceTiers },
-        serviceTierObservation ? { serviceTierObservation } : {},
-        projectedAvailability === undefined ? {} : { available: projectedAvailability },
-        projectedAvailability === false && evaluation.unavailableReason
+          : {}),
+        ...(serviceTiers === undefined ? {} : { serviceTiers }),
+        ...(serviceTierObservation ? { serviceTierObservation } : {}),
+        ...(projectedAvailability === undefined ? {} : { available: projectedAvailability }),
+        ...(projectedAvailability === false && evaluation.unavailableReason
           ? {
               unavailableReason: evaluation.unavailableReason,
               ...(evaluation.unavailableUntil !== undefined
                 ? { unavailableUntil: evaluation.unavailableUntil }
                 : {}),
             }
-          : {},
-      );
+          : {}),
+      };
     };
   };
 

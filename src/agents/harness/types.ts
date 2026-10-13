@@ -250,6 +250,8 @@ export type AgentHarnessSideQuestionParams = {
     resolvedApiKey?: string;
   };
   question: string;
+  /** Preserve tool definitions but reject all tool execution in this side question. */
+  toolCalls?: "deny";
   images?: import("../../llm/types.js").ImageContent[];
   sessionEntry: import("../../config/sessions.js").SessionEntry;
   sessionStore?: Record<string, import("../../config/sessions.js").SessionEntry>;
@@ -462,6 +464,19 @@ export type AgentHarnessModelCatalogResult =
       outcomes?: readonly import("../../plugins/provider-catalog-outcome.js").ProviderCatalogOutcome[];
     };
 
+export type AgentHarnessDescendantCancellationResult = {
+  killed: number;
+  /** Settlement failures do not erase already acknowledged sibling cancellations. */
+  errors?: readonly unknown[];
+  cancelledRequesters: Array<{
+    agentId: string;
+    sessionKey: string;
+    sessionId: string;
+    lifecycleRevision?: string;
+    requesterTurnRunId: string;
+  }>;
+};
+
 type AgentHarnessContract<
   TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
   TSideQuestionParams extends AgentHarnessSideQuestionParams = AgentHarnessSideQuestionParams,
@@ -576,6 +591,17 @@ type AgentHarnessContract<
 
   /** Throw AgentHarnessSessionCleanupError when required cleanup must block session replacement. */
   reset?(params: AgentHarnessResetParams): Promise<void> | void;
+  /** Reserve descendants before parent Stop; cancel joins native terminal and delivery custody. */
+  withDescendantCancellation?<T>(
+    this: void,
+    params: Omit<AgentHarnessSessionDeletionParams, "initialization"> & {
+      requesterTurnRunId?: string;
+      acceptsRequest: (
+        custody: import("../../infra/exec-request-context.js").ExecRequestCustody | undefined,
+      ) => boolean;
+    },
+    run: (cancel: () => Promise<AgentHarnessDescendantCancellationResult>) => Promise<T>,
+  ): Promise<T>;
   /** Invalidate native context only when a same-key history cut commits; preserve compaction. */
   withSessionContextReset?<T>(
     this: void,

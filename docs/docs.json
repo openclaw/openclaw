@@ -1854,6 +1854,7 @@
                       "plugins/cloudflare",
                       "plugins/geolocation",
                       "plugins/logbook",
+                      "plugins/mcp-relay",
                       "plugins/oc-path",
                       "plugins/session-share",
                       "plugins/workboard",
@@ -2529,6 +2530,7 @@
                         "group": "Cloud Workers",
                         "pages": [
                           "gateway/cloud-workers/warm-images",
+                          "gateway/cloud-workers/environment-file",
                           "gateway/cloud-workers/per-project-default-profiles",
                           "gateway/cloud-workers/setup-and-bundle-installation",
                           "gateway/cloud-workers/verify-the-profile",
@@ -3014,6 +3016,7 @@
                     ]
                   },
                   "plugins/sdk-subpaths",
+                  "plugins/sdk-gateway-ingress",
                   "plugins/sdk-entrypoints",
                   {
                     "group": "Plugin entry points",
@@ -3150,6 +3153,7 @@
                   },
                   "reference/transcript-hygiene",
                   "reference/memory-config",
+                  "reference/database-engines",
                   "reference/database-schemas",
                   {
                     "group": "Database schemas",
@@ -3205,6 +3209,7 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.10.2",
                   "releases/2026.10.1",
                   "releases/2026.9.9",
                   "releases/2026.9.8",

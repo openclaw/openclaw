@@ -75,6 +75,7 @@ function skipRequest(
     database: db,
     receiptSchema,
     handle,
+    pendingReceiptId: job?.state.runningAtMs === undefined ? undefined : job.state.runningReceiptId,
     status,
     finishedAtMs: nowMs,
     error,
@@ -109,9 +110,6 @@ export function requestCronRunsInWorker(
   database: OpenClawStateDatabase,
   input: CronRunQueueOperations["cron.requestRuns"]["input"],
 ): CronRunQueueOperations["cron.requestRuns"]["output"] {
-  if (ownerStartTime === null) {
-    throw new Error("cron request cannot identify its Gateway process");
-  }
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const receiptSchema = prepareCronRunReceiptWriteSchema(db);
@@ -234,7 +232,6 @@ export function drainCronQueueInWorker(
       const receiptSchema = prepareCronRunReceiptWriteSchema(db);
       const jobs = loadJobs(db, input.storeKey);
       const contexts = new Map(input.requests.map((request) => [request.receiptId, request]));
-      const locallyOwned = new Set(input.locallyOwnedReceiptIds);
       const jobOrder = new Map([...jobs.keys()].map((jobId, index) => [jobId, index]));
       const cancelled =
         input.requests.length === 0
@@ -280,10 +277,6 @@ export function drainCronQueueInWorker(
         skipped: cancelled,
       };
       for (const receipt of queued) {
-        if (!contexts.has(receipt.receiptId) && locallyOwned.has(receipt.receiptId)) {
-          // Another service in this Gateway owns the transient launch context.
-          continue;
-        }
         const handle = receiptHandle(receipt);
         const job = jobs.get(receipt.jobId)!;
         const timed = parseCronScheduledRunId(receipt.receiptId);
@@ -292,11 +285,14 @@ export function drainCronQueueInWorker(
           (timed?.storeKey === input.storeKey && timed.jobId === job.id
             ? { receiptId: receipt.receiptId, mode: "scheduled" as const }
             : undefined);
+        if (!context) {
+          // A sibling facade may hold this transient payload; startup owns lost-context recovery.
+          continue;
+        }
         const agentId = tryResolveCronJobEffectiveAgentId(job, input.defaultAgentId);
-        const error = !context
-          ? "cron: queued request lost its launch context"
-          : (!isJobEnabled(job) && context.mode !== "force" && context.mode !== "on-exit") ||
-              (context.mode === "on-exit" && !matchingExit(job, context))
+        const error =
+          (!isJobEnabled(job) && context.mode !== "force" && context.mode !== "on-exit") ||
+          (context.mode === "on-exit" && !matchingExit(job, context))
             ? "cron: queued job is no longer eligible"
             : !agentId ||
                 !hasCanonicalCronDeliveryMode(job.delivery) ||
@@ -317,13 +313,10 @@ export function drainCronQueueInWorker(
           continue;
         }
         if (
-          (input.schedulingPaused && context?.mode === "scheduled") ||
+          (input.schedulingPaused && context.mode === "scheduled") ||
           activeCount >= Math.max(1, input.maxConcurrentRuns)
         ) {
           continue;
-        }
-        if (ownerStartTime === null) {
-          throw new Error("cron request cannot identify its Gateway process");
         }
         // Payload edits take effect while queued; active runs keep this committed snapshot.
         const currentHandle = {

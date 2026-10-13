@@ -7,7 +7,7 @@ import {
   sqliteStringSet,
   sqliteStringSetEntries,
 } from "../kysely-sync.js";
-import { OpenClawPostgresDialect } from "./query-compiler.js";
+import { OpenClawPostgresDialect } from "../sql-query-compiler.js";
 
 type Tables = { items: { id: string; name: string } };
 const postgres = new Kysely<Tables>({

@@ -80,6 +80,15 @@
   opacity: 0.5;
 }
 
+.palette-session-settings__row[aria-disabled="true"],
+.palette-session-settings__row[aria-disabled="true"] .palette-session-settings__icon {
+  color: var(--warn);
+}
+
+.palette-session-settings__reason {
+  --openclaw-tooltip-max-width: min(280px, calc(100vw - 24px));
+}
+
 .palette-session-settings__icon,
 .palette-session-settings__chevron,
 .palette-session-settings__check {
