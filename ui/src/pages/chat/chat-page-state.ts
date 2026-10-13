@@ -23,6 +23,7 @@ import {
   ownedChatPaneRouteData,
   ownedChatPaneSessionKey,
   sameChatPaneRoute,
+  subscribeChatPageRouteDefaults,
 } from "./chat-page-navigation.ts";
 import {
   type ChatPageSnapshot,
@@ -141,18 +142,7 @@ export class ChatPageState extends ControllerHost {
         (submissions, notify) => submissions.subscribeCreate(notify),
       )
       .watchStore(() => this.context?.placementStartup)
-      .watch(
-        () => this.context?.gateway,
-        (gateway, notify) => {
-          let hello = gateway.snapshot.hello;
-          return gateway.subscribe((snapshot) => {
-            if (snapshot.hello !== hello) {
-              hello = snapshot.hello;
-              notify();
-            }
-          });
-        },
-      )
+      .watch(() => this.context?.gateway, subscribeChatPageRouteDefaults)
       .watchStore(() => this.context?.nativeConversation);
     this.prefetch = new SessionPrefetchController(
       this.host,

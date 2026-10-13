@@ -1,7 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import { serializeSidebarEntry } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import type { PresencePayload } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
@@ -36,13 +35,11 @@ import {
   SidebarPinnedSessions,
   personalSidebarOwnerProjection,
   personalSidebarOwnerFilterId,
+  personalSidebarVisibleRows,
   projectUnpinnedSessionRows,
+  prunePersonalSidebarSessionEntry,
 } from "./app-sidebar-personal-navigation.ts";
-import {
-  sameSidebarPresence,
-  sidebarPresenceActivityViewers,
-  type SidebarPresenceScope,
-} from "./app-sidebar-presence.ts";
+import { sameSidebarPresence, sidebarPresenceScope } from "./app-sidebar-presence.ts";
 import {
   adoptedCatalogSessionKeys,
   type SidebarSessionCatalog,
@@ -156,49 +153,10 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   );
   readonly sessionData = new SessionDataController(this);
 
-  private presenceScope(): SidebarPresenceScope {
-    const sessionsVisible = this.navigationView === "sessions" && !this.contextualSidebar;
-    // The rendered facepiles include main cards, pins, and the expanded child window.
-    // Reading their inputs avoids a second owner for sidebar membership.
-    const sessionKeys = new Set(
-      sessionsVisible
-        ? Array.from(
-            this.querySelectorAll("openclaw-viewer-facepile"),
-            (facepile) => facepile.sessionKey ?? "",
-          )
-        : [],
-    );
-    const activityProfileIds = new Set(
-      sessionsVisible
-        ? Array.from(
-            this.querySelectorAll<HTMLElement>(".sidebar-session-group-person"),
-            (person) => person.dataset.personCardKey?.slice("profile:".length) ?? "",
-          )
-        : [],
-    );
-    const profileIds = new Set(activityProfileIds);
-    for (const entry of this.reconciledSidebarZone().entries) {
-      if (entry.type === "person") {
-        profileIds.add(entry.profileId);
-      }
-    }
-    return {
-      online: this.navigationView === "online",
-      sessionKeys,
-      profileIds,
-      activityProfileIds,
-      selfUser: this.context?.gateway.snapshot.selfUser,
-      selfInstanceId: this.sessionData.presenceInstanceId,
-    };
-  }
-
   samePresence(previous: PresencePayload | undefined, next: PresencePayload | undefined): boolean {
-    return sameSidebarPresence(previous, next, this.presenceScope());
+    return sameSidebarPresence(previous, next, sidebarPresenceScope(this));
   }
 
-  presenceActivityViewers() {
-    return sidebarPresenceActivityViewers(this.sessionData.presencePayload, this.presenceScope());
-  }
   readonly navigationCatalog = new SidebarNavigationCatalog(this, () => this.context);
   readonly sessionPullRequests = new SessionPullRequestIndicatorsController(this, {
     getConnected: () => this.connected,
@@ -493,26 +451,14 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     return personalSidebarZone(this, rows);
   }
 
-  /** Explicit personal unpins remove a reference, never shared session metadata. */
   pruneSidebarSessionEntry(key: string) {
-    const serialized = serializeSidebarEntry({ type: "session", key });
-    if (!this.sidebarEntries.includes(serialized)) {
-      return;
-    }
-    this.onUpdateSidebarEntries?.(this.sidebarEntries.filter((entry) => entry !== serialized));
+    prunePersonalSidebarSessionEntry(this, key);
   }
 
   /** Rows in on-screen order; shift ranges and batch actions share this ordering. */
   protected visibleSessionRowsInOrder(): SidebarRecentSession[] {
-    const navigationState = this.getSessionNavigationState();
-    const rows = this.selectedAgentSessionRows(navigationState);
-    const { visibleRows } = this.zonedVisibleSections(rows);
-    const { entries, sessionRows } = this.reconciledSidebarZone(rows);
-    const pinnedRows = entries.flatMap((entry) => {
-      const row = entry.type === "session" ? sessionRows.get(entry.key) : undefined;
-      return row ? [row] : [];
-    });
-    return [...pinnedRows, ...visibleRows];
+    const rows = this.selectedAgentSessionRows(this.getSessionNavigationState());
+    return personalSidebarVisibleRows(this, rows, this.zonedVisibleSections(rows).visibleRows);
   }
 
   selectedVisibleSessions(): SidebarRecentSession[] {

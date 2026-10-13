@@ -417,7 +417,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     "cron.unrelated",
     ...Array<string>(2).fill("run-state.unrelated"),
   ];
-  const livePresence = presenceEntries.map((entry) => ({ ...entry }));
+  const livePresence = presenceEntries.map((entry) => Object.assign({}, entry));
   const liveEvents: TeamScaleLiveEvent[] = Array.from({ length: 125 }, (_, index) => {
     const kind = liveKinds[index % liveKinds.length]!;
     const ts = now + (index + 1) * 160;
@@ -437,7 +437,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
             ? []
             : [kind === "presence.visible" ? selectedSessionKey : sessions[240]!.key],
       };
-      payload = { presence: livePresence.map((entry) => ({ ...entry })) };
+      payload = { presence: livePresence.map((entry) => Object.assign({}, entry)) };
     } else if (kind.startsWith("sessions.changed.") || kind === "run-state.unrelated") {
       event = "sessions.changed";
       const row =
@@ -499,15 +499,18 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
         ...source.payload,
         catalog: {
           ...source.payload.catalog,
-          hosts: source.payload.catalog.hosts.map((host) => ({
-            ...host,
-            sessions: host.sessions.map((row, rowIndex) => ({
-              ...row,
-              ...(rowIndex === 0
-                ? { updatedAt: ts, name: `Synthetic live catalog ${index + 1}` }
-                : {}),
-            })),
-          })),
+          hosts: source.payload.catalog.hosts.map((host) =>
+            Object.assign({}, host, {
+              sessions: host.sessions.map((row, rowIndex) =>
+                rowIndex === 0
+                  ? Object.assign({}, row, {
+                      updatedAt: ts,
+                      name: `Synthetic live catalog ${index + 1}`,
+                    })
+                  : row,
+              ),
+            }),
+          ),
         },
       };
     } else {

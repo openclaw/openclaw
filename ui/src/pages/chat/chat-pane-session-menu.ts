@@ -24,7 +24,6 @@ import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../../lib/keyboard-shortcut-contract.ts";
-import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { resolveSessionRenamePatch, resolveSessionRenameValue } from "../../lib/session-rename.ts";
 import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
@@ -54,11 +53,7 @@ import { buildContinueInTerminalCommand } from "./continue-in-terminal-command.t
 export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   private readonly headerSessionDataMemo = new ChatPaneHeaderMemo<SessionMenuData>();
   protected resolveHeaderSessionTitle(row: GatewaySessionRow | undefined): string {
-    // The roster owns accepted titles; pane metadata fills absent cross-agent rows.
-    return (
-      (this.state ? chatSessionPresentationTitle(this.state) : undefined) ??
-      resolveSessionDisplayName(row?.key ?? this.state?.sessionKey ?? this.sessionKey, row)
-    );
+    return chatSessionPresentationTitle(this.state, row, this.sessionKey);
   }
 
   protected canArchiveHeaderSession(row: GatewaySessionRow): boolean {

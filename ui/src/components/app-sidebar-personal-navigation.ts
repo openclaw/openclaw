@@ -1,6 +1,10 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import { parseSidebarEntry, type NavigationRouteId } from "../app-navigation.ts";
+import {
+  parseSidebarEntry,
+  serializeSidebarEntry,
+  type NavigationRouteId,
+} from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
@@ -84,6 +88,32 @@ export function hidePersonalSidebarCatalog(
     onAction: () => setStoredSessionCatalogHidden(catalogId, false),
     durationMs: 12_000,
   });
+}
+
+/** Explicit personal unpins remove a reference, never shared session metadata. */
+export function prunePersonalSidebarSessionEntry(
+  host: Pick<PersonalNavigationHost, "sidebarEntries"> & {
+    onUpdateSidebarEntries?: (entries: string[]) => void;
+  },
+  key: string,
+) {
+  const serialized = serializeSidebarEntry({ type: "session", key });
+  if (host.sidebarEntries.includes(serialized)) {
+    host.onUpdateSidebarEntries?.(host.sidebarEntries.filter((entry) => entry !== serialized));
+  }
+}
+
+export function personalSidebarVisibleRows(
+  host: PersonalNavigationHost,
+  rows: SidebarRecentSession[],
+  visibleRows: SidebarRecentSession[],
+): SidebarRecentSession[] {
+  const { entries, sessionRows } = personalSidebarZone(host, rows);
+  const pinnedRows = entries.flatMap((entry) => {
+    const row = entry.type === "session" ? sessionRows.get(entry.key) : undefined;
+    return row ? [row] : [];
+  });
+  return [...pinnedRows, ...visibleRows];
 }
 
 /** Descriptor snapshots last one connection; loaded rows always supersede them. */

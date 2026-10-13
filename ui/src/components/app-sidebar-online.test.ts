@@ -214,19 +214,22 @@ describe("sidebar people workload", () => {
   it("ignores heartbeat and offscreen watching packets while retaining visible activity and viewers", async () => {
     const { sidebar, gateway } = await mountWorkload();
     const update = vi.spyOn(sidebar, "requestUpdate");
-    const heartbeat = presence().map((entry) => ({
-      ...entry,
-      ts: NOW + 1,
-      ...(entry.lastActivityAt === NOW ? { lastActivityAt: NOW + 1 } : {}),
-      watchedSessions: ["agent:main:offscreen"],
-    }));
+    const heartbeat = presence().map((entry) =>
+      Object.assign({}, entry, {
+        ts: NOW + 1,
+        lastActivityAt: entry.lastActivityAt === NOW ? NOW + 1 : entry.lastActivityAt,
+        watchedSessions: ["agent:main:offscreen"],
+      }),
+    );
     gateway.publishEvent("presence", { presence: heartbeat });
     await settle(sidebar);
     expect(update).not.toHaveBeenCalled();
     expect(person(sidebar, "ada").dataset.presenceActivity).toBe("active");
     gateway.publishEvent("presence", {
       presence: heartbeat.map((entry) =>
-        entry.user?.id === "ada" ? { ...entry, lastActivityAt: NOW - 180_000 } : entry,
+        entry.user?.id === "ada"
+          ? Object.assign({}, entry, { lastActivityAt: NOW - 180_000 })
+          : entry,
       ),
     });
     await settle(sidebar);
@@ -239,13 +242,15 @@ describe("sidebar people workload", () => {
     const visible = "agent:main:visible";
     expect(sidebar.querySelector(`[data-session-key="${visible}"]`)).not.toBeNull();
     gateway.publishEvent("presence", {
-      presence: heartbeat.map((entry) => ({ ...entry, watchedSessions: ["agent:main:other"] })),
+      presence: heartbeat.map((entry) =>
+        Object.assign({}, entry, { watchedSessions: ["agent:main:other"] }),
+      ),
     });
     await settle(sidebar);
     expect(update).not.toHaveBeenCalled();
     gateway.publishEvent("presence", {
       presence: heartbeat.map((entry) =>
-        entry.user?.id === "bea" ? { ...entry, watchedSessions: [visible] } : entry,
+        entry.user?.id === "bea" ? Object.assign({}, entry, { watchedSessions: [visible] }) : entry,
       ),
     });
     await settle(sidebar);

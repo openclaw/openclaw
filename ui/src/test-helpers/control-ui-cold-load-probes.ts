@@ -85,9 +85,9 @@ export function installColdLoadProbes(input: {
     if (prototype && !patchedRequests.has(prototype)) {
       patchedRequests.add(prototype);
       const requestUpdate = prototype.requestUpdate;
-      prototype.requestUpdate = function (...args: unknown[]) {
+      prototype.requestUpdate = function (property: PropertyKey | undefined, ...args: unknown[]) {
         const wasPending = this.isUpdatePending;
-        const result = requestUpdate.apply(this, args);
+        const result = requestUpdate.apply(this, [property, ...args]);
         if (
           liveStartedAt &&
           liveWatch.has(this.localName) &&
@@ -96,7 +96,7 @@ export function installColdLoadProbes(input: {
           this.isUpdatePending
         ) {
           const stack = new Error().stack?.split("\n").slice(2, 14).join(" <- ") ?? "";
-          const key = `${liveKind} :: ${this.localName} :: ${String(args[0] ?? "-")} :: ${stack}`;
+          const key = `${liveKind} :: ${this.localName} :: ${String(property ?? "-")} :: ${stack}`;
           if (liveStacks.has(key) || liveStacks.size < 500) {
             liveStacks.set(key, (liveStacks.get(key) ?? 0) + 1);
           }

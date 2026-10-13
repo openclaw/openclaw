@@ -11,13 +11,20 @@ import { resolveChatAgentId } from "./chat-state-route.ts";
 import { resolveChatPaneParentSession } from "./components/chat-pane-header.ts";
 
 export function chatSessionPresentationTitle(
-  state: Pick<ChatPageHost, "sessions" | "sessionKey" | "hello">,
-): string | undefined {
-  const key = resolveSessionKey(state.sessionKey, state.hello) || state.sessionKey;
-  const row = state.sessions.presentation.result?.sessions.find((candidate) =>
+  state: Pick<ChatPageHost, "sessions" | "sessionKey" | "hello"> | undefined,
+  row?: GatewaySessionRow,
+  sessionKey = "",
+): string {
+  const key = state
+    ? resolveSessionKey(state.sessionKey, state.hello) || state.sessionKey
+    : sessionKey;
+  const presentation = state?.sessions.presentation.result?.sessions.find((candidate) =>
     areUiSessionKeysEquivalent(candidate.key, key),
   );
-  return row ? resolveSessionDisplayName(key, row) : undefined;
+  // The roster owns accepted titles; pane metadata fills absent cross-agent rows.
+  return presentation
+    ? resolveSessionDisplayName(key, presentation)
+    : resolveSessionDisplayName(row?.key ?? key, row);
 }
 
 /** Capture rendered roster facts without retaining a mutable row as the previous value. */

@@ -11,7 +11,6 @@ import { childSessionListQuery } from "../lib/sessions/child-session-data.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import type { SolidController } from "../lit/solid-controller-host.ts";
-import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import {
   discardEmptyChildSessionSnapshot,
   hydrateSidebarChildSessions,
@@ -50,11 +49,10 @@ import {
   refreshSidebarSessionList,
   scheduleFilteredSidebarSessions,
   sidebarSessionListQuery,
-  subscribeSidebarAgentSessionCaches,
   subscribeFilteredSidebarSessions,
-  subscribeSessionDataGatewayEvents,
   subscribeSessionCatalogBrowserEvents,
 } from "./session-data-controller-events.ts";
+import { createSessionDataSubscriptions } from "./session-data-controller-subscriptions.ts";
 import { SessionDataScrollController } from "./session-data-scroll-controller.ts";
 import { SessionLineageController } from "./session-lineage-controller.ts";
 import { SidebarOwnerSessionCounts } from "./sidebar-owner-session-counts.ts";
@@ -92,9 +90,7 @@ export class SessionDataController implements SolidController, SessionCatalogDat
 
   sessionResultsByAgent: Record<string, SessionsListResult> = {};
 
-  private readonly subscriptions: SubscriptionsController;
-  private readonly renderSubscription: SubscriptionsController;
-  private invalidateRender: (() => void) | undefined;
+  private readonly subscriptions: ReturnType<typeof createSessionDataSubscriptions>;
   readonly sessionCatalogLive = new SessionCatalogLiveState();
   sessionScopeGeneration = 0;
   sessionCatalogAgentId: string | null = null;
@@ -132,62 +128,10 @@ export class SessionDataController implements SolidController, SessionCatalogDat
 
   constructor(private readonly host: SessionDataControllerHost) {
     host.addController(this);
-    // Subscribe before connecting catalog listeners; unsubscribe after session cleanup.
-    const subscriptionHost = {
-      addController: () => undefined,
-      removeController: () => undefined,
-      requestUpdate: () => host.requestUpdate(),
-      get updateComplete() {
-        return host.updateComplete;
-      },
-    };
-    // Every session source shares one frame; state still updates before its notification.
-    this.renderSubscription = new SubscriptionsController(subscriptionHost).watch(
-      () => this,
-      (_, notify) => {
-        this.invalidateRender = notify;
-        return () => {
-          this.invalidateRender = undefined;
-        };
-      },
-      undefined,
-      () => undefined,
-    );
-    this.subscriptions = new SubscriptionsController({
-      ...subscriptionHost,
-      requestUpdate: () => this.requestSessionDataUpdate(),
+    this.subscriptions = createSessionDataSubscriptions(host, this, {
+      gateway: (gateway) => this.synchronizeGateway(gateway),
+      sessions: (sessions) => this.synchronizeSessions(sessions),
     });
-    this.subscriptions
-      .effect(
-        () => this.context?.gateway,
-        (gateway) => {
-          this.synchronizeGateway(gateway);
-          return gateway.subscribe(() => this.synchronizeGateway(gateway));
-        },
-      )
-      .effect(
-        () => this.context?.sessions,
-        (sessions) => {
-          this.synchronizeSessions(sessions);
-          return sessions.subscribe(() => this.synchronizeSessions(sessions));
-        },
-      )
-      .effect(
-        () => this.context?.sessions,
-        (sessions) => sessions.subscribeCreated((key) => host.promoteCreatedSession(key)),
-      )
-      .effect(
-        () => this.context?.gateway,
-        (gateway) => subscribeSessionDataGatewayEvents(gateway, this),
-      )
-      .watch(
-        () => this.context?.agents,
-        (agents, notify) => subscribeSidebarAgentSessionCaches(agents, this, notify),
-      )
-      .watchStore(
-        () => this.context?.agentSelection,
-        () => this.synchronizeSessionScope(),
-      );
   }
 
   get context(): ApplicationContext | undefined {
@@ -215,7 +159,7 @@ export class SessionDataController implements SolidController, SessionCatalogDat
   sessionCatalogIdsWithoutVisibleRows = (): readonly string[] =>
     this.host.sessionCatalogIdsWithoutVisibleRows();
 
-  readonly requestSessionDataUpdate = () => this.invalidateRender?.();
+  readonly requestSessionDataUpdate = () => this.subscriptions.requestUpdate();
 
   publishPresence(payload: unknown): void {
     const presence = readPresenceEntries(payload);
@@ -231,8 +175,7 @@ export class SessionDataController implements SolidController, SessionCatalogDat
   sessionListQuery = (agentId: string) => sidebarSessionListQuery(this.host, agentId);
 
   hostConnected(): void {
-    this.renderSubscription.hostConnected();
-    this.subscriptions.hostConnected();
+    this.subscriptions.connect();
     this.stopCatalogBrowserEvents = subscribeSessionCatalogBrowserEvents(
       this.handleCatalogSessionContinued as EventListener,
       this.handleSessionCatalogPageActivation,
@@ -240,7 +183,7 @@ export class SessionDataController implements SolidController, SessionCatalogDat
   }
 
   hostUpdate(): void {
-    this.subscriptions.hostUpdate();
+    this.subscriptions.update();
     this.lineage.synchronize();
   }
 
@@ -257,24 +200,24 @@ export class SessionDataController implements SolidController, SessionCatalogDat
   }
 
   hostDisconnected(): void {
-    this.renderSubscription.hostDisconnected();
-    this.ownerCounts.dispose();
-    this.resetChildSessionState();
-    this.retireFilteredSessions();
-    this.stopCatalogBrowserEvents?.();
-    this.stopCatalogBrowserEvents = null;
-    this.host.dismissTransientMenus();
-    this.invalidateSessionMutations();
-    this.gatewaySource = null;
-    this.gatewayClient = null;
-    this.gatewayConnected = false;
-    this.gatewayAvailable = false;
-    this.agentSelectionSource = undefined;
-    this.agentSelectionIntentRevision = undefined;
-    retireSessionCatalogData(this);
-    this.scroll.dispose();
-    this.lineage.disconnect();
-    this.subscriptions.hostDisconnected();
+    this.subscriptions.disconnect(() => {
+      this.ownerCounts.dispose();
+      this.resetChildSessionState();
+      this.retireFilteredSessions();
+      this.stopCatalogBrowserEvents?.();
+      this.stopCatalogBrowserEvents = null;
+      this.host.dismissTransientMenus();
+      this.invalidateSessionMutations();
+      this.gatewaySource = null;
+      this.gatewayClient = null;
+      this.gatewayConnected = false;
+      this.gatewayAvailable = false;
+      this.agentSelectionSource = undefined;
+      this.agentSelectionIntentRevision = undefined;
+      retireSessionCatalogData(this);
+      this.scroll.dispose();
+      this.lineage.disconnect();
+    });
   }
 
   sessionCatalogGatewayClient(): GatewayBrowserClient | null {

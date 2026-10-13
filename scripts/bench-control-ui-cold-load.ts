@@ -304,8 +304,8 @@ try {
               return [
                 key,
                 {
-                  attached: !!row,
-                  inViewport: !!rect && rect.bottom > 0 && rect.top < innerHeight,
+                  attached: Boolean(row),
+                  inViewport: Boolean(rect && rect.bottom > 0 && rect.top < innerHeight),
                   text: row?.textContent?.trim() ?? null,
                   classes: row?.className ?? null,
                 },
