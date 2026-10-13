@@ -2,7 +2,7 @@ import { on, once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -45,13 +45,14 @@ import {
   TEAM_ROLES,
 } from "./remote-control-ui-ingress.integration.test-support.js";
 import { createGatewayControlUiIngressFactory } from "./remote-control-ui-ingress.js";
+import { expectMcpRelayPrincipalAuthority } from "./remote-control-ui-mcp-relay.test-support.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import { getControlUiModule } from "./server-http-modules.js";
 import { createGatewayHttpRequestHandler } from "./server-http-request.js";
 import { attachGatewayUpgradeHandler } from "./server-http-upgrades.js";
 import { createRequestGatewayMethodRegistry } from "./server-methods.js";
-import type { GatewayRequestHandlers } from "./server-methods/types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./server-methods/types.js";
 import { usersHandlers } from "./server-methods/users.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
@@ -59,6 +60,11 @@ import { attachGatewayWsConnectionHandler } from "./server/ws-connection.js";
 import { createGatewayWsTestRequestContext } from "./server/ws-connection.test-helpers.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
+
+vi.mock("openclaw/plugin-sdk/websocket-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/websocket-runtime")>()),
+  WebSocket: (await import("./remote-control-ui-mcp-relay.test-support.js")).McpRelayTestSocket,
+}));
 
 const PUBLIC_ORIGIN = "https://ui.example.test";
 const SANDBOX_ORIGIN = "https://sandbox.ui.example.test";
@@ -76,6 +82,7 @@ describe("remote Control UI ingress production composition", () => {
   let factory: GatewayControlUiIngressFactoryV2;
   let config: OpenClawConfig;
   let auth: ResolvedGatewayAuth;
+  let gatewayContext: GatewayRequestContext;
   let projection: SessionRowProjection | undefined;
   let backgroundPath: string;
   let assistantMediaPath: string;
@@ -219,6 +226,7 @@ describe("remote Control UI ingress production composition", () => {
       () => projection,
     );
     Object.assign(requestContext, { resolveGatewayContext: () => requestContext });
+    gatewayContext = requestContext as never;
     const preauthConnectionBudget = createPreauthConnectionBudget(8);
     attachGatewayWsConnectionHandler({
       wss,
@@ -246,7 +254,7 @@ describe("remote Control UI ingress production composition", () => {
       logHealth: logger,
       logWsControl: logger,
       broadcast: requestContext.broadcast,
-      buildRequestContext: () => requestContext as never,
+      buildRequestContext: () => gatewayContext,
     });
     // Keep source transformation outside the remote HTTP progress deadline.
     await getControlUiModule();
@@ -803,4 +811,18 @@ describe("remote Control UI ingress production composition", () => {
       await binding.close();
     }
   });
+
+  it("shares real principal authority across MCP relay tools, UI, and grant revocation", () =>
+    expectMcpRelayPrincipalAuthority({
+      factory,
+      state,
+      context: gatewayContext,
+      clients,
+      openOptions,
+      openRemote,
+      config,
+      sharedToken: SHARED_TOKEN,
+      ownerSessionKey: OWNER_SESSION_KEY,
+      configure,
+    }));
 });

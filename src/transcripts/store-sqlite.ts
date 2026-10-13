@@ -60,6 +60,13 @@ export function transcriptSummaryInputRevisionFromRow(
   });
 }
 
+/** Descriptor custody tolerates accepted speech, but not changed metadata. */
+export function transcriptSessionInputRevisionFromRow(
+  row: Pick<MeetingTranscriptSessionRow, "title" | "source_json" | "metadata_json" | "stopped_at">,
+): string {
+  return transcriptSummaryInputRevisionFromRow({ ...row, next_utterance_seq: 0 });
+}
+
 export function readTranscriptSummaryInputRevision(
   database: DatabaseSync,
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
