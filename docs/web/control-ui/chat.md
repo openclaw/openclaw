@@ -176,7 +176,7 @@ Side chat answers questions about the selected session and its project without e
 
 When the agent's primary model runs on a CLI runtime such as `claude-cli`, no utility model is set explicitly, and direct provider authentication is unavailable, Side chat answers through that same CLI runtime. Subscription-only installs need no provider API key. On that route each answer is a tool-free, one-shot side question that uses the bounded session snapshot and observer notes instead of the read-only session tools, and image questions are not supported. Installs with working direct provider authentication keep the direct route, including read-only tools and image support.
 
-Opening Side chat, reopening its panel, or selecting its tab focuses the question box. If you focus another input or keep typing while Side chat loads or answers, that newer input keeps focus.
+Restoring the Side chat thread checks current session visibility without waiting for unrelated session writes. Opening Side chat, reopening its panel, or selecting its tab focuses the question box. If you focus another input or keep typing while Side chat loads or answers, that newer input keeps focus.
 
 Confirming text with an input method does not send the Side chat question. Finish composition, then use your configured send shortcut or the Ask button.
 
