@@ -19,6 +19,7 @@ import { createPluginStateKeyedStore } from "../../plugin-state/plugin-state-sto
 import type {
   OpenClawPluginService,
   OpenClawPluginServiceContext,
+  OpenClawPluginServiceV2,
 } from "../../plugins/plugin-registration.types.js";
 import type { OpenClawPluginDefinition } from "../../plugins/types.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
@@ -36,6 +37,8 @@ const cfg = {
   agents: { ownership: "explicit", entries: { main: {} } },
   acp: { enabled: true, backend: "acpx", dispatch: { enabled: true } },
 } as OpenClawConfig;
+
+type RegisteredPluginService = OpenClawPluginService | OpenClawPluginServiceV2;
 
 type AcpxRuntimeService = OpenClawPluginService & {
   getRuntime: (ctx: OpenClawPluginServiceContext) => Promise<unknown>;
@@ -98,14 +101,17 @@ async function fixtureHistories(directory: string) {
   return rows;
 }
 
-function isAcpxRuntimeService(service: OpenClawPluginService): service is AcpxRuntimeService {
+function isAcpxRuntimeService(service: RegisteredPluginService): service is AcpxRuntimeService {
+  if (service.apiVersion === 2) {
+    return false;
+  }
   return "getRuntime" in service && typeof service.getRuntime === "function";
 }
 
 async function loadBackend(stateRoot: string, peerDir: string, openClawStateDir: string) {
   registryTesting.resetAcpRuntimeBackendsForTests();
   managerTesting.resetAcpSessionManagerForTests();
-  let registered: OpenClawPluginService | undefined;
+  let registered: RegisteredPluginService | undefined;
   const { default: plugin } = await loadBundledPluginFacade<{ default: OpenClawPluginDefinition }>({
     pluginId: "acpx",
     artifactBasename: "index.js",
