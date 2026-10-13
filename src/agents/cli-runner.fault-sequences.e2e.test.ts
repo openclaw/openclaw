@@ -504,6 +504,7 @@ describe("CLI runner fault sequences", () => {
 
   it("fresh-retries reused-session context overflow once and never crosses models", async () => {
     harness.contextFor = buildReusableProcessContext;
+    const fallbackErrors: string[] = [];
     supervisorSpawnMock
       .mockResolvedValueOnce(
         managedRun(makeExit({ exitCode: 1, stderr: "Prompt is too long for this context window" })),
@@ -514,12 +515,19 @@ describe("CLI runner fault sequences", () => {
 
     let error: unknown;
     try {
-      await runOuter({ fallbacks: [`claude-cli/${FALLBACK_MODEL}`] });
+      await runOuter({
+        fallbacks: [`claude-cli/${FALLBACK_MODEL}`],
+        onError: (failure) => {
+          fallbackErrors.push(
+            failure instanceof Error ? (failure.stack ?? failure.message) : String(failure),
+          );
+        },
+      });
     } catch (caught) {
       error = caught;
     }
 
-    expect(error).toMatchObject({
+    expect(error, JSON.stringify({ fallbackErrors, counts: currentCounts() })).toMatchObject({
       reason: "context_overflow",
       code: "cli_context_overflow",
     });
