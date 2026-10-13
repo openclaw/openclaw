@@ -33,6 +33,68 @@ export function installColdLoadProbes(input: {
     | { requestSessionDataUpdate: (...args: unknown[]) => unknown }
     | undefined;
   let originalLiveInvalidator: ((...args: unknown[]) => unknown) | undefined;
+  type SessionDataProbeOwner = {
+    requestSessionDataUpdate: (...args: unknown[]) => unknown;
+  };
+  type SolidSidebarProbeOwner = {
+    readonly hostElement: HTMLElement;
+    readonly isConnected: boolean;
+    sessionData: SessionDataProbeOwner;
+    requestUpdate(): void;
+    prepareRender(): void;
+    commitRender(): void;
+  };
+  type SidebarLifecycle = "requestUpdate" | "prepareRender" | "commitRender";
+  let solidSidebarOwner: SolidSidebarProbeOwner | undefined;
+  const sidebarLifecycleOriginals = new Map<SidebarLifecycle, () => void>();
+  const sidebarLifecycle = new Map<string, Map<SidebarLifecycle, { count: number; ms: number }>>();
+  const sidebarOwnerStacks = new Map<string, number>();
+  const sidebarRegistration = {
+    originalSet: WeakMap.prototype.set,
+    matches(host: unknown, owner: unknown): owner is SolidSidebarProbeOwner {
+      return (
+        host instanceof HTMLElement &&
+        host.localName === "openclaw-app-sidebar" &&
+        typeof owner === "object" &&
+        owner !== null &&
+        "hostElement" in owner &&
+        owner.hostElement === host &&
+        "isConnected" in owner &&
+        typeof owner.isConnected === "boolean" &&
+        "requestUpdate" in owner &&
+        typeof owner.requestUpdate === "function" &&
+        "prepareRender" in owner &&
+        typeof owner.prepareRender === "function" &&
+        "commitRender" in owner &&
+        typeof owner.commitRender === "function" &&
+        "sessionData" in owner &&
+        typeof owner.sessionData === "object" &&
+        owner.sessionData !== null &&
+        "requestSessionDataUpdate" in owner.sessionData &&
+        typeof owner.sessionData.requestSessionDataUpdate === "function"
+      );
+    },
+    set(this: WeakMap<WeakKey, unknown>, host: WeakKey, owner: unknown) {
+      const result: WeakMap<WeakKey, unknown> = Reflect.apply(
+        sidebarRegistration.originalSet,
+        this,
+        [host, owner],
+      );
+      if (sidebarRegistration.matches(host, owner)) {
+        solidSidebarOwner = owner;
+        sidebarRegistration.restore();
+      }
+      return result;
+    },
+    restore() {
+      if (WeakMap.prototype.set === sidebarRegistration.set) {
+        WeakMap.prototype.set = sidebarRegistration.originalSet;
+      }
+    },
+  };
+  // Tap the existing host→owner registration without exposing a production debug API.
+  WeakMap.prototype.set = sidebarRegistration.set;
+  window.addEventListener("pagehide", () => sidebarRegistration.restore(), { once: true });
   const liveEvents = new Map<string, number>();
   const liveWatch = new Set([
     "openclaw-app-sidebar",
@@ -204,7 +266,48 @@ export function installColdLoadProbes(input: {
     startLive() {
       liveStartedAt = performance.now();
       const sidebar = document.querySelector("openclaw-app-sidebar");
-      const owner = sidebar && Reflect.get(sidebar, "sessionData");
+      sidebarRegistration.restore();
+      if (
+        sidebar &&
+        !solidSidebarOwner &&
+        typeof Reflect.get(sidebar, "performUpdate") !== "function"
+      ) {
+        throw new Error("Solid sidebar owner registration was not captured");
+      }
+      if (solidSidebarOwner) {
+        const owner = solidSidebarOwner;
+        for (const method of ["requestUpdate", "prepareRender", "commitRender"] as const) {
+          const original = owner[method];
+          sidebarLifecycleOriginals.set(method, original);
+          owner[method] = function () {
+            const started = performance.now();
+            const connected = this.isConnected;
+            if (method === "requestUpdate" && connected) {
+              const stack = new Error().stack?.split("\n").slice(2, 14).join(" <- ") ?? "";
+              const key = `${liveKind} :: ${stack}`;
+              if (sidebarOwnerStacks.has(key) || sidebarOwnerStacks.size < 100) {
+                sidebarOwnerStacks.set(key, (sidebarOwnerStacks.get(key) ?? 0) + 1);
+              }
+            }
+            try {
+              return original.call(this);
+            } finally {
+              if (connected) {
+                const group = sidebarLifecycle.get(liveKind) ?? new Map();
+                const stats = group.get(method) ?? { count: 0, ms: 0 };
+                stats.count++;
+                stats.ms += performance.now() - started;
+                group.set(method, stats);
+                sidebarLifecycle.set(liveKind, group);
+                lastActivity = performance.now();
+              }
+            }
+          };
+        }
+      }
+      const owner: SessionDataProbeOwner | undefined =
+        solidSidebarOwner?.sessionData ??
+        (sidebar ? Reflect.get(sidebar, "sessionData") : undefined);
       if (owner) {
         const original = owner.requestSessionDataUpdate;
         owner.requestSessionDataUpdate = function (...args: unknown[]) {
@@ -235,6 +338,13 @@ export function installColdLoadProbes(input: {
     },
     finishLive() {
       liveFinishedAt = performance.now();
+      sidebarRegistration.restore();
+      if (solidSidebarOwner) {
+        for (const [method, original] of sidebarLifecycleOriginals) {
+          solidSidebarOwner[method] = original;
+        }
+        sidebarLifecycleOriginals.clear();
+      }
       if (liveInvalidatorOwner && originalLiveInvalidator) {
         liveInvalidatorOwner.requestSessionDataUpdate = originalLiveInvalidator;
       }
@@ -249,6 +359,15 @@ export function installColdLoadProbes(input: {
         ),
         stacks: Object.fromEntries(liveStacks),
         sidebarInvalidations: Object.fromEntries(liveOrigins),
+        solidSidebar: solidSidebarOwner
+          ? {
+              measurement: "owner-invalidations-and-projection-lifecycle-passes",
+              lifecycle: Object.fromEntries(
+                [...sidebarLifecycle].map(([kind, methods]) => [kind, Object.fromEntries(methods)]),
+              ),
+              invalidationStacks: Object.fromEntries(sidebarOwnerStacks),
+            }
+          : null,
       };
     },
     read() {

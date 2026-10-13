@@ -17,6 +17,8 @@ import {
   KEYBOARD_SHORTCUT_COMBOS,
 } from "../lib/keyboard-shortcut-contract.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { projectGateway } from "../lib/reactive/application.ts";
+import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
@@ -123,9 +125,11 @@ export function renderSidebarAgentCard(host: AppSidebarRenderHost): JSX.Element 
           menuOpen={host.sidebarMenus.agentMenuPosition !== null}
           menuUnread={menuUnread()}
           switcherAvailable={cardAgents().length > 1}
-          onToggleMenu={host.sidebarMenus.toggleAgentMenu}
-          onMenuPointerMove={host.sidebarMenus.scheduleAgentMenuHoverOpen}
-          onMenuPointerLeave={host.sidebarMenus.handleAgentMenuTriggerPointerLeave}
+          onToggleMenu={(trigger: HTMLElement) => host.sidebarMenus.toggleAgentMenu(trigger)}
+          onMenuPointerMove={(trigger: HTMLElement, event: PointerEvent) =>
+            host.sidebarMenus.scheduleAgentMenuHoverOpen(trigger, event)
+          }
+          onMenuPointerLeave={() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
           onContextMenu={(event) => {
             event.preventDefault();
             if (host.sidebarMenus.agentMenuPosition !== null) {
@@ -250,12 +254,14 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
 }
 
 export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Element {
+  const context = useApplication();
+  const profileGateway = projectGateway(context.gateway);
   const home = () => host.visibleHomeSession(host.expandedAgentId());
   const connectionStatus = () => host.connectionStatus;
-  const selfUser = () =>
-    host.sessionDataContext
-      ? gatewayPresentationScope(host.sessionDataContext.gateway).displayUser
-      : null;
+  const selfUser = createMemo(() => {
+    profileGateway.read();
+    return gatewayPresentationScope(context.gateway).displayUser;
+  });
   const displayUser = () => selfUser() ?? host.sidebarSnapshot?.footer;
   const selfLabel = () => displayUser()?.name ?? displayUser()?.email ?? t("nav.owner");
   const avatarUser = createMemo(() => ({

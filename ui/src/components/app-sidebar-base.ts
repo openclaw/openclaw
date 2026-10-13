@@ -1,5 +1,9 @@
 import type { ReactiveController } from "lit";
-import { DEFAULT_SIDEBAR_ENTRIES, parseSidebarEntry, type NavigationRouteId } from "../app-navigation.ts";
+import {
+  DEFAULT_SIDEBAR_ENTRIES,
+  parseSidebarEntry,
+  type NavigationRouteId,
+} from "../app-navigation.ts";
 import type { ApplicationRouter } from "../app-routes.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";

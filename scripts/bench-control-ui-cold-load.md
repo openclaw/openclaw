@@ -52,6 +52,16 @@ snapshots of the affected rows, chat viewers, and streaming text; `run-N.live.pn
 shows the synthetic final state. Row attachment and viewport visibility distinguish
 an absent row from a rendered row below the fold.
 
+For the Solid sidebar, `solidSidebar.lifecycle` separately counts owner
+`requestUpdate` invalidations and `prepareRender`/`commitRender` projection lifecycle
+passes. Bounded owner and session-data origin stacks identify their callers. These
+are not full Solid render counts: fine-grained bindings update independently. The
+init probe captures the existing host-to-owner WeakMap registration, restores that
+tap immediately, and restores the owner wrappers at the end of the live phase.
+A missing Solid owner fails the capture instead of reporting zero work. Lit tags
+retain their original per-tag `performUpdate` counters; zero Lit updates for a
+ported Solid tag are a measurement gap, not a performance improvement.
+
 Live updates are attributed to the most recently delivered event label. Paced
 refreshes and clock-driven presence updates may finish during a later event's
 interval; inspect their scheduling stacks before treating a per-label count as
@@ -67,7 +77,7 @@ JavaScript stacks, Lit updates per tag, source-mapped CPU self-time hotspots,
 Solid flush self/inclusive sampled time, and RPC request/response bytes. The top
 20 CPU entries retain browser/GC overhead alongside source-attributed call sites.
 A reload settles after all scheduled fixture events and outstanding RPCs complete,
-then 750 ms with no wire or Lit activity. That quiet interval is measurement padding,
+then 750 ms with no wire, Lit, or captured Solid sidebar lifecycle activity. That quiet interval is measurement padding,
 not part of a correctness test.
 
 Filmstrip frames come from Chrome tracing. Significant changes compare consecutive

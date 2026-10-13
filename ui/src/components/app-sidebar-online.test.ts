@@ -30,7 +30,7 @@ import {
 } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
-import "./app-sidebar.tsx";
+import { getAppSidebarOwner } from "./app-sidebar.tsx";
 import { SidebarOwnerSessionCounts } from "./sidebar-owner-session-counts.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
@@ -213,7 +213,7 @@ describe("sidebar people workload", () => {
 
   it("ignores heartbeat and offscreen watching packets while retaining visible activity and viewers", async () => {
     const { sidebar, gateway } = await mountWorkload();
-    const update = vi.spyOn(sidebar, "requestUpdate");
+    const update = vi.spyOn(getAppSidebarOwner(sidebar.hostElement)!, "requestUpdate");
     const heartbeat = presence().map((entry) =>
       Object.assign({}, entry, {
         ts: NOW + 1,
