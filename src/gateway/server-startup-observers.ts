@@ -89,6 +89,10 @@ export async function runGatewayStartupObservers(params: {
   if (params.signal.aborted || params.isClosing?.()) {
     return;
   }
+  await nextTurn();
+  if (params.signal.aborted || params.isClosing?.()) {
+    return;
+  }
   const recovery = runWithGatewayIndependentRootWorkAdmission(
     async () => {
       const context = params.resolveGatewayContext();
@@ -131,10 +135,6 @@ export async function runGatewayStartupObservers(params: {
     params.log.warn(`restart sentinel refresh failed: ${String(err)}`);
   });
   try {
-    await nextTurn();
-    if (params.signal.aborted || params.isClosing?.()) {
-      return;
-    }
     await sweepSessionStateWatchNotices();
     const hookRunner = await params.createHookRunner(params.registry, { logger: params.logHooks });
     if (params.isClosing?.() || !hookRunner.hasHooks("gateway_start")) {
