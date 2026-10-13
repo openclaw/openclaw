@@ -279,7 +279,7 @@ suite.define(() => {
             );
             expect(await pane.locator(".agent-chat__welcome").count()).toBe(0);
             await pollLocatorText(pane.locator(".agent-chat__composer-status-band")).toContain(
-              "The initial message is unresolved.",
+              "1 in this conversation’s outbox.",
             );
             expect(await pane.locator(".chat-topbar-notices .chat-error").count()).toBe(0);
             await captureUiProof(suite, page, "startup-disconnected.png");
@@ -325,9 +325,13 @@ suite.define(() => {
               const composerDisabled = await page
                 .locator(".agent-chat__composer-combobox textarea")
                 .isDisabled();
-              await pollLocatorText(pane.locator(".agent-chat__composer-status-band")).toContain(
-                "Finishing connection recovery.",
-              );
+              const recoveringSend = pane.getByRole("button", {
+                name: "Finishing connection recovery. Try sending again when it is ready.",
+                exact: true,
+              });
+              await recoveringSend.waitFor();
+              expect(await recoveringSend.isDisabled()).toBe(true);
+              expect(await recoveringSend.getAttribute("aria-busy")).toBe("true");
               await pane.getByRole("status", { name: "Loading chat", exact: true }).waitFor();
               expect(await pane.locator(".agent-chat__welcome").count()).toBe(0);
               expect(await pane.locator(".chat-topbar-notices .chat-error").count()).toBe(0);
