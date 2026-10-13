@@ -113,6 +113,33 @@ describe("WhatsApp poll tally store", () => {
     ]);
   });
 
+  it("retracts a PN+LID vote when the retraction arrives with the LID only", async () => {
+    await vote({ jids: [PN, LID], selected: ["Pizza"], votedAtMs: 1000 });
+    expect(await vote({ jids: [LID], selected: [], votedAtMs: 2000 })).toBe(true);
+    expect(await tally()).toEqual([]);
+    expect(await env.openStore(WHATSAPP_POLL_TALLY_STORES.sent).entries()).toEqual([]);
+  });
+
+  it("ignores a stale LID-only vote after a newer PN+LID vote, and a PN-only retraction clears all", async () => {
+    await vote({ jids: [PN, LID], selected: ["Sushi"], votedAtMs: 2000 });
+    expect(await vote({ jids: [LID], selected: ["Pizza"], votedAtMs: 1000 })).toBe(false);
+    const rows = await env.openStore(WHATSAPP_POLL_TALLY_STORES.sent).entries();
+    expect(rows.map((row) => row.key)).toEqual([`default:POLL1:${PN}`]);
+
+    expect(await vote({ jids: [PN], selected: [], votedAtMs: 3000 })).toBe(true);
+    expect(await tally()).toEqual([]);
+  });
+
+  it("replaces a PN+LID vote when the change arrives with the LID only", async () => {
+    await vote({ jids: [PN, LID], selected: ["Pizza"], votedAtMs: 1000, name: "Dana" });
+    await vote({ jids: [LID], selected: ["Salad"], votedAtMs: 2000 });
+    const rows = await env.openStore(WHATSAPP_POLL_TALLY_STORES.sent).entries();
+    expect(rows).toHaveLength(1);
+    expect(await tally()).toEqual([
+      expect.objectContaining({ name: "Dana", selected: ["Salad"], voterJids: [LID, PN] }),
+    ]);
+  });
+
   it("collapses older duplicate rows on read", async () => {
     const store = env.openStore(WHATSAPP_POLL_TALLY_STORES.sent);
     await store.register(`default:POLL1:${LID}`, {

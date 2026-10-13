@@ -26,6 +26,7 @@ import {
 import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import { resolveWhatsAppIngressLifecycle } from "../../inbound/ingress-lifecycle.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
+import { attachWhatsAppPollResultsContext } from "../../poll-results-context.js";
 import { newConnectionId } from "../../reconnect.js";
 import { formatError } from "../../session.js";
 import {
@@ -396,7 +397,8 @@ export async function processMessage(params: {
     groupHistoryLimit: params.groupHistoryLimit,
     groupMemberRoster: params.groupMemberNames.get(params.groupHistoryKey),
     groupSystemPrompt: conversationSystemPrompt,
-    msg: params.msg,
+    // Stored poll results for this chat only; a copy, so broadcast agents never stack blocks.
+    msg: await attachWhatsAppPollResultsContext(params.msg),
     rawBody: commandBody,
     route: params.route,
     buildContext: params.buildContext,

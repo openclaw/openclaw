@@ -239,6 +239,22 @@ WhatsApp approval reactions require explicit approvers in `allowFrom` (or `"*"`)
 
 For an `ask_user` prompt with one non-secret, single-select question and one to four options, WhatsApp shows `1️⃣` through `4️⃣` beside the option labels. React to the delivered prompt with the matching number to answer it. OpenClaw maps the number to the stored option through the Gateway; stale or duplicate taps are ignored. Multi-question, multi-select, and free-text prompts remain text-reply-only. Normal WhatsApp DM/group admission rules authorize the reacting sender.
 
+## Poll votes
+
+WhatsApp encrypts every poll vote. OpenClaw decrypts votes on polls it knows and keeps each voter's latest selection, so the agent can answer "what did the poll say?" accurately, including after a Gateway restart or a long group conversation.
+
+- **Which polls are known:** polls the agent sends, and polls received from an admitted sender (in a registered group or an allowed direct chat) after the account connected. Polls from before the connection or plugin install, polls from unauthorized senders, and polls in unregistered groups are not decrypted.
+- **What is stored:** per poll, the question, options, creator name, and the secret needed to decrypt votes; per voter, the WhatsApp display name, the phone number when known, and the current selection. Retracting a vote deletes the voter. No history of changes is kept. Everything expires 30 days after the poll was recorded, in the plugin state database.
+- **Groups never wake the agent:** a vote in a group is counted silently, on any poll, including the agent's own polls and groups with `requireMention: false`. Votes from members who are not allowed to address the agent are counted too, so results match what everyone sees in WhatsApp; they never trigger a reply or a pairing prompt.
+- **Direct chats:** a vote on a poll the agent sent wakes the agent as a message such as `Poll vote: Pizza` (or `Poll vote removed`) quoting the poll. A vote on a poll the other person created is counted but does not wake the agent.
+- **How the agent sees results:** whenever the agent is woken in a chat, the request carries a `WhatsApp poll results` context block with up to the 3 most recent polls of that same chat (at most 4 KB, up to 50 names per option). A question about a poll in another chat is not answered from this block.
+- **Transcripts:** the block and the agent's answer become part of the session transcript like any other message, and stay there after the 30-day poll retention ends. Models that keep inbound metadata in their history (for example Claude Opus 5.5 on the embedded runtime) carry each block forward, which adds up in a busy group without `requireMention`.
+
+Known behavior:
+
+- A direct-chat vote is routed to the chat's session, even when the poll was sent by a cron job or another agent.
+- Replying to the derived vote message shows the synthetic `Poll vote: …` text as the quoted bubble.
+
 ## Plugin hooks and privacy
 
 Inbound WhatsApp messages can carry personal content, phone numbers, group identifiers, sender names, and session correlation fields. WhatsApp does not broadcast inbound `message_received` hook payloads to plugins unless you opt in:

@@ -59,6 +59,8 @@ export async function checkInboundAccessControl(params: {
   messageTimestampMs?: number;
   connectedAtMs?: number;
   pairingGraceMs?: number;
+  /** False for messages the sender did not type (poll votes): never send a pairing prompt. */
+  pairingReplyAllowed?: boolean;
   verbose?: boolean;
   sock: {
     sendMessage: (jid: string, content: { text: string }) => Promise<unknown>;
@@ -75,9 +77,10 @@ export async function checkInboundAccessControl(params: {
       ? params.pairingGraceMs
       : PAIRING_REPLY_HISTORY_GRACE_MS;
   const suppressPairingReply =
-    typeof params.connectedAtMs === "number" &&
-    typeof params.messageTimestampMs === "number" &&
-    params.messageTimestampMs < params.connectedAtMs - pairingGraceMs;
+    params.pairingReplyAllowed === false ||
+    (typeof params.connectedAtMs === "number" &&
+      typeof params.messageTimestampMs === "number" &&
+      params.messageTimestampMs < params.connectedAtMs - pairingGraceMs);
 
   warnMissingProviderGroupPolicyFallbackOnce({
     providerMissingFallbackApplied: policy.providerMissingFallbackApplied,

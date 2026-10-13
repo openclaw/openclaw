@@ -1,5 +1,8 @@
 // Latest selection per voter for recorded WhatsApp polls; no change history is kept.
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   buildWhatsAppKeyPrefixRange,
   normalizeWhatsAppPollJids,
@@ -102,6 +105,47 @@ function isTallyValue(value: unknown): value is WhatsAppPollTallyValue {
   );
 }
 
+type TallyRow = { key: string; value: WhatsAppPollTallyValue };
+
+/**
+ * A voter's row may sit under a JID this update does not carry (PN+LID first,
+ * LID only later), so rows match on their key or any stored voter JID.
+ */
+async function findVoterRows(
+  store: PluginStateKeyedStore<WhatsAppPollTallyValue>,
+  prefix: string,
+  voterJids: readonly string[],
+): Promise<TallyRow[]> {
+  const wanted = new Set(voterJids);
+  const found = new Map<string, TallyRow>();
+  if (typeof store.entriesInKeyRange === "function") {
+    const rows = await store.entriesInKeyRange(
+      buildWhatsAppKeyPrefixRange(prefix, TALLY_READ_LIMIT),
+    );
+    for (const { key, value } of rows) {
+      const rowVoterKey = key.slice(prefix.length);
+      if (
+        !rowVoterKey.includes(":") &&
+        isTallyValue(value) &&
+        [rowVoterKey, ...value.voterJids].some((jid) => wanted.has(jid))
+      ) {
+        found.set(key, { key, value });
+      }
+    }
+  }
+  // Direct keys still resolve on polls with more voters than one range read returns.
+  for (const jid of voterJids) {
+    const key = `${prefix}${jid}`;
+    if (!found.has(key)) {
+      const value = await store.lookup(key);
+      if (isTallyValue(value)) {
+        found.set(key, { key, value });
+      }
+    }
+  }
+  return [...found.values()];
+}
+
 /**
  * Applies one decrypted vote. Callers rely on the per-chat ingress lane being
  * serial, so the read-then-write below cannot interleave with another vote on
@@ -136,13 +180,7 @@ export async function applyWhatsAppPollVote(params: {
         return false;
       }
       const prefix = tallyPrefix(accountId, pollMessageId);
-      const existing: Array<{ key: string; value: WhatsAppPollTallyValue }> = [];
-      for (const jid of voterJids) {
-        const value = await store.lookup(`${prefix}${jid}`);
-        if (isTallyValue(value)) {
-          existing.push({ key: `${prefix}${jid}`, value });
-        }
-      }
+      const existing = await findVoterRows(store, prefix, voterJids);
       if (existing.some(({ value }) => value.votedAtMs > params.votedAtMs)) {
         return false;
       }
@@ -160,7 +198,8 @@ export async function applyWhatsAppPollVote(params: {
         params.voter.name?.trim() || existing.find(({ value }) => value.name)?.value.name;
       const e164 =
         params.voter.e164?.trim() || existing.find(({ value }) => value.e164)?.value.e164;
-      const voterRowKey = `${prefix}${voterKey}`;
+      // Keep the PN key even when this update only carries the LID.
+      const voterRowKey = `${prefix}${resolveVoterKey(knownJids) ?? voterKey}`;
       await store.register(
         voterRowKey,
         {

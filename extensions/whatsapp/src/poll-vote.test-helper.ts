@@ -46,11 +46,47 @@ export function encryptWhatsAppPollVoteForTest(params: {
   return { encPayload: aesEncryptGCM(plaintext, encKey, encIv, aad), encIv };
 }
 
+/** A messages.upsert vote as Baileys delivers it: pollUpdateMessage with the encrypted selection. */
+export function buildWhatsAppPollVoteMessageForTest(params: {
+  id: string;
+  remoteJid: string;
+  participant?: string;
+  fromMe?: boolean;
+  pushName?: string;
+  pollMsgId: string;
+  pollCreatorJid: string;
+  voterJid: string;
+  secret: Uint8Array;
+  selectedOptions: string[];
+  selectedHashes?: Uint8Array[];
+  senderTimestampMs?: number;
+}) {
+  return {
+    key: {
+      id: params.id,
+      remoteJid: params.remoteJid,
+      fromMe: params.fromMe ?? false,
+      ...(params.participant ? { participant: params.participant } : {}),
+    },
+    message: {
+      pollUpdateMessage: {
+        pollCreationMessageKey: { id: params.pollMsgId, remoteJid: params.remoteJid },
+        vote: encryptWhatsAppPollVoteForTest(params),
+        senderTimestampMs: params.senderTimestampMs ?? Date.now(),
+      },
+    },
+    messageTimestamp: Math.floor((params.senderTimestampMs ?? Date.now()) / 1000),
+    ...(params.pushName ? { pushName: params.pushName } : {}),
+  };
+}
+
 export type WhatsAppPollStoreFault = {
   namespace: string;
   method: "lookup" | "register" | "registerIfAbsent" | "delete" | "entriesInKeyRange";
   /** Pass the full PLUGIN_STATE_* code, or undefined for an Error without a code. */
   code: string | undefined;
+  /** Fire on the first matching call only. */
+  once?: boolean;
 };
 
 export function createWhatsAppPollStoreFaultError(code: string | undefined): Error {
@@ -58,10 +94,10 @@ export function createWhatsAppPollStoreFaultError(code: string | undefined): Err
 }
 
 /**
- * Installs a WhatsApp runtime backed by the real plugin-state SQLite store in a
- * temp state dir. Faults wrap single methods and are the only fakes allowed.
+ * The real plugin-state SQLite store in a temp state dir. Faults wrap single
+ * methods and are the only fakes allowed.
  */
-export async function installWhatsAppPollStateRuntimeForTest() {
+export async function createWhatsAppPollStateForTest() {
   closeOpenClawStateDatabaseForTest();
   const state = await createOpenClawTestState({
     label: "whatsapp-poll-votes",
@@ -80,6 +116,9 @@ export async function installWhatsAppPollStateRuntimeForTest() {
         (entry) => entry.namespace === options.namespace && entry.method === method,
       );
       if (match) {
+        if (match.once) {
+          faults.splice(faults.indexOf(match), 1);
+        }
         throw createWhatsAppPollStoreFaultError(match.code);
       }
     };
@@ -108,17 +147,12 @@ export async function installWhatsAppPollStateRuntimeForTest() {
     };
   };
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
-  const runtime = createPluginRuntimeMock({ state: { openKeyedStore } });
-  vi.spyOn(runtime.logging, "getChildLogger").mockReturnValue(
-    logger as unknown as ReturnType<typeof runtime.logging.getChildLogger>,
-  );
-  setWhatsAppRuntime(runtime);
   return {
     env: state.env,
     faults,
     logger,
     opened,
-    runtime,
+    openKeyedStore,
     /** Direct access to one namespace of the same real store, for assertions. */
     openStore<T>(options: OpenAsyncKeyedStoreOptions) {
       return createPluginStateKeyedStoreForTests<T>("whatsapp", { ...options, env: state.env });
@@ -129,6 +163,17 @@ export async function installWhatsAppPollStateRuntimeForTest() {
       await state.cleanup();
     },
   };
+}
+
+/** Installs a WhatsApp runtime whose keyed stores are the real store above. */
+export async function installWhatsAppPollStateRuntimeForTest() {
+  const pollState = await createWhatsAppPollStateForTest();
+  const runtime = createPluginRuntimeMock({ state: { openKeyedStore: pollState.openKeyedStore } });
+  vi.spyOn(runtime.logging, "getChildLogger").mockReturnValue(
+    pollState.logger as unknown as ReturnType<typeof runtime.logging.getChildLogger>,
+  );
+  setWhatsAppRuntime(runtime);
+  return { ...pollState, runtime };
 }
 
 export type WhatsAppPollStateRuntimeForTest = Awaited<

@@ -38,6 +38,8 @@ import {
   type WhatsAppNormalizedInboundMessage,
 } from "./message-normalization.js";
 import { addWhatsAppOutboundMentionsToContent } from "./outbound-mentions.js";
+import { recordWhatsAppInboundPoll } from "./poll-creation-record.js";
+import { resolveWhatsAppPollVote } from "./poll-vote-inbound.js";
 import { normalizeWhatsAppSendResult } from "./send-result.js";
 import type { WhatsAppAttachedSocketSession } from "./socket-session.js";
 import type { WebInboundCallbackMessage } from "./types.js";
@@ -399,10 +401,10 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     admission: WhatsAppIngressAdmission,
     lifecycle: WhatsAppIngressLifecycle,
   ): Promise<"completed" | "deferred"> => {
-    const { message: msg, ...context } = admission;
-    rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
-    const remoteJid = msg.key?.remoteJid;
-    const id = msg.key?.id;
+    const { message: rawMsg, ...context } = admission;
+    rememberBaileysMessage(rawMsg.key?.remoteJid, rawMsg.key?.id, rawMsg.message);
+    const remoteJid = rawMsg.key?.remoteJid;
+    const id = rawMsg.key?.id;
     const durableId =
       remoteJid && id ? createWhatsAppDurableInboundMessageId({ remoteJid, id }) : undefined;
     const preparation = durableId ? preparedInboundByDurableId.get(durableId) : undefined;
@@ -414,10 +416,21 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     }
     // Reactions do not normalize into chat messages. Resolve them while the drain
     // owns the claim so transient failures remain replayable.
-    if (await resolveApprovalReaction(msg)) {
+    if (await resolveApprovalReaction(rawMsg)) {
       return "completed";
     }
-    const prepared = await preparation;
+    // Votes are counted here; only a direct-chat vote on our own poll continues, as a derived message.
+    const pollVote = await resolveWhatsAppPollVote(rawMsg, {
+      accountId: options.accountId,
+      selfJids: [self.jid, self.lid],
+      resolveInboundJid,
+    });
+    if (pollVote.kind === "completed") {
+      return "completed";
+    }
+    const msg = pollVote.kind === "deliver" ? pollVote.message : rawMsg;
+    // The live path prepared the raw vote (null); the derived message normalizes here.
+    const prepared = pollVote.kind === "deliver" ? undefined : await preparation;
     if (prepared === null) {
       return "completed";
     }
@@ -443,6 +456,13 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       await maybeMarkNonSelfChatReadReceipt(inbound, readReceipt);
       return "completed";
     }
+    await recordWhatsAppInboundPoll({
+      cfg: options.loadConfig?.() ?? options.cfg,
+      accountId: options.accountId,
+      msg,
+      group: inbound.group,
+      remoteJid: inbound.remoteJid,
+    });
 
     const enriched = await enrichWhatsAppInboundMessage({
       msg,

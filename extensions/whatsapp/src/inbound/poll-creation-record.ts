@@ -1,6 +1,15 @@
-// Extracts what a later vote needs from an incoming WhatsApp poll (pure; no storage).
+// Extracts what a later vote needs from an incoming WhatsApp poll, and records it.
 import { isJidGroup, type WAMessage } from "baileys";
-import { normalizeWhatsAppPollJids, truncateUtf8, utf8ByteLength } from "../poll-vote-store.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveWhatsAppInboundPolicy } from "../inbound-policy.js";
+import {
+  normalizeWhatsAppPollJids,
+  readPluginStateErrorCode,
+  recordWhatsAppPoll,
+  truncateUtf8,
+  utf8ByteLength,
+  warnWhatsAppPollState,
+} from "../poll-vote-store.js";
 import { findWhatsAppPollCreation } from "./poll-creation.js";
 
 export type WhatsAppInboundPollRecordData = {
@@ -92,4 +101,52 @@ export function extractWhatsAppInboundPollRecord(
     options,
     selectableCount: match.poll.selectableOptionsCount ?? 0,
   };
+}
+
+/**
+ * Records an incoming poll so later votes on it can be decrypted. Callers pass
+ * only messages access control already admitted; the group must also be
+ * registered. Never throws: the poll is delivered exactly as before either way.
+ */
+export async function recordWhatsAppInboundPoll(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  msg: Pick<WAMessage, "key" | "message" | "pushName">;
+  group: boolean;
+  remoteJid: string;
+  recordedAt?: number;
+}): Promise<void> {
+  try {
+    const extracted = extractWhatsAppInboundPollRecord(params.msg);
+    if (!extracted) {
+      return;
+    }
+    if ("missingSecret" in extracted) {
+      warnWhatsAppPollState("whatsapp inbound poll missing secret", {});
+      return;
+    }
+    if (params.group) {
+      const groupPolicy = resolveWhatsAppInboundPolicy({
+        cfg: params.cfg,
+        accountId: params.accountId,
+      }).resolveConversationGroupPolicy(params.remoteJid);
+      if (groupPolicy.allowlistEnabled && !groupPolicy.allowed) {
+        return;
+      }
+    }
+    await recordWhatsAppPoll(
+      {
+        accountId: params.accountId,
+        pollMessageId: params.msg.key?.id ?? "",
+        origin: "received",
+        ...extracted,
+        ...(params.recordedAt !== undefined ? { recordedAt: params.recordedAt } : {}),
+      },
+      { mode: "ifAbsent" },
+    );
+  } catch (error) {
+    warnWhatsAppPollState("whatsapp inbound poll record failed", {
+      code: readPluginStateErrorCode(error) ?? "unknown",
+    });
+  }
 }

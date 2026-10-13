@@ -1,4 +1,6 @@
 // Builds the stored poll results block for one chat, attached when the agent is woken there.
+import { requireWhatsAppInboundAdmission } from "./inbound/admission.js";
+import type { AdmittedWebInboundMessage } from "./inbound/types.js";
 import {
   listWhatsAppChatPollIds,
   normalizeWhatsAppPollJids,
@@ -172,4 +174,29 @@ export async function readWhatsAppPollResultsContext(params: {
     });
     return undefined;
   }
+}
+
+/**
+ * Returns a copy of the queued message with the results block appended, or the
+ * message itself when there is none. Broadcast agents share the original
+ * object, so it is never mutated. Direct chats also look up the PN JID derived
+ * from the conversation's E.164, since the chat may arrive under a LID.
+ */
+export async function attachWhatsAppPollResultsContext(
+  msg: AdmittedWebInboundMessage,
+): Promise<AdmittedWebInboundMessage> {
+  const admission = requireWhatsAppInboundAdmission(msg);
+  const digits = /^\+(\d+)$/.exec(admission.conversation.id)?.[1];
+  const entry = await readWhatsAppPollResultsContext({
+    accountId: admission.accountId,
+    chatJids: [
+      msg.platform.chatJid,
+      admission.conversation.kind === "direct" && digits ? `${digits}@s.whatsapp.net` : undefined,
+    ],
+  });
+  if (!entry) {
+    return msg;
+  }
+  const existing = msg.payload.channelStructuredContext ?? [];
+  return { ...msg, payload: { ...msg.payload, channelStructuredContext: [...existing, entry] } };
 }
