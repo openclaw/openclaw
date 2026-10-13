@@ -1,5 +1,6 @@
 // Hook request lifetime: pending bounded admission dies with the client,
 // accepted work and background fan-out do not.
+import type { IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -27,6 +28,9 @@ vi.mock("./hooks.js", async () => {
 });
 
 type DispatchContext = { abortSignal?: AbortSignal };
+type HookBody = { ok: true; value: { message: string } };
+
+const hookBody: HookBody = { ok: true, value: { message: "Dispatch" } };
 
 function accepted(runId: string): HookAgentDispatchResult {
   return {
@@ -44,16 +48,43 @@ function disconnectedResult(): HookAgentDispatchResult {
   };
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
+/** Resolves when the mock request emits close, after earlier close listeners. */
+function whenRequestCloses(req: IncomingMessage): Promise<void> {
+  const closed = createDeferred();
+  req.once("close", () => {
+    closed.resolve();
   });
+  return closed.promise;
+}
+
+/** Resolves when dispatch has been entered the requested number of times. */
+function createArrivalGate() {
+  let arrivals = 0;
+  const waiters: Array<{ target: number; gate: ReturnType<typeof createDeferred> }> = [];
+  return {
+    arrive() {
+      arrivals += 1;
+      for (const waiter of waiters) {
+        if (arrivals >= waiter.target) {
+          waiter.gate.resolve();
+        }
+      }
+    },
+    until(target: number): Promise<void> {
+      if (arrivals >= target) {
+        return Promise.resolve();
+      }
+      const gate = createDeferred();
+      waiters.push({ target, gate });
+      return gate.promise;
+    },
+  };
 }
 
 describe("hook request admission lifetime", () => {
   beforeEach(() => {
     readJsonBodyMock.mockReset();
-    readJsonBodyMock.mockResolvedValue({ ok: true, value: { message: "Dispatch" } });
+    readJsonBodyMock.mockResolvedValue(hookBody);
   });
 
   test("rejects a disconnected unauthenticated hook before dispatch", async () => {
@@ -73,11 +104,12 @@ describe("hook request admission lifetime", () => {
   });
 
   test("cancels pending direct admission when the client disconnects", async () => {
+    const started = createArrivalGate();
     let dispatchSignal: AbortSignal | undefined;
     const dispatchAgentHook = vi.fn(
       async (_value: HookAgentDispatchPayload, context?: DispatchContext) => {
         dispatchSignal = context?.abortSignal;
-        const aborted = await new Promise<boolean>((resolve) => {
+        const aborted = new Promise<boolean>((resolve) => {
           if (!context?.abortSignal) {
             resolve(false);
             return;
@@ -88,7 +120,8 @@ describe("hook request admission lifetime", () => {
           }
           context.abortSignal.addEventListener("abort", () => resolve(true), { once: true });
         });
-        return aborted ? disconnectedResult() : accepted("run-direct");
+        started.arrive();
+        return (await aborted) ? disconnectedResult() : accepted("run-direct");
       },
     );
     const handler = createHooksHandler({ dispatchAgentHook });
@@ -96,9 +129,11 @@ describe("hook request admission lifetime", () => {
     const { res, end } = createResponse();
 
     const handled = handler(req, res);
-    await vi.waitFor(() => expect(dispatchAgentHook).toHaveBeenCalledTimes(1));
+    await started.until(1);
+    const closed = whenRequestCloses(req);
     req.destroy();
 
+    await closed;
     await expect(handled).resolves.toBe(true);
     expect(dispatchSignal?.aborted).toBe(true);
     expect(end).toHaveBeenCalledWith(
@@ -110,6 +145,7 @@ describe("hook request admission lifetime", () => {
   });
 
   test("retries one disconnected idempotent request without a second execution", async () => {
+    const started = createArrivalGate();
     let releaseAdmission!: (admitted: boolean) => void;
     const admission = new Promise<boolean>((resolve) => {
       releaseAdmission = resolve;
@@ -117,20 +153,24 @@ describe("hook request admission lifetime", () => {
     let executions = 0;
     const dispatchAgentHook = vi.fn(
       async (_value: HookAgentDispatchPayload, context?: DispatchContext) => {
-        const admitted = await Promise.race([
-          admission,
-          new Promise<boolean>((resolve) => {
-            if (!context?.abortSignal) {
-              return;
-            }
-            if (context.abortSignal.aborted) {
-              resolve(false);
-              return;
-            }
-            context.abortSignal.addEventListener("abort", () => resolve(false), { once: true });
-          }),
-        ]);
-        if (!admitted) {
+        const admitted = new Promise<boolean>((resolve) => {
+          const finish = (value: boolean) => resolve(value);
+          const abort = () => finish(false);
+          if (!context?.abortSignal) {
+            return;
+          }
+          if (context.abortSignal.aborted) {
+            abort();
+            return;
+          }
+          context.abortSignal.addEventListener("abort", abort, { once: true });
+          void admission.then((value) => {
+            context.abortSignal?.removeEventListener("abort", abort);
+            finish(value);
+          });
+        });
+        started.arrive();
+        if (!(await admitted)) {
           return disconnectedResult();
         }
         executions += 1;
@@ -143,8 +183,10 @@ describe("hook request admission lifetime", () => {
     const { res: firstRes } = createResponse();
 
     const firstHandled = handler(firstReq, firstRes);
-    await vi.waitFor(() => expect(dispatchAgentHook).toHaveBeenCalledTimes(1));
+    await started.until(1);
+    const closed = whenRequestCloses(firstReq);
     firstReq.destroy();
+    await closed;
     await expect(firstHandled).resolves.toBe(true);
     expect(executions).toBe(0);
 
@@ -159,7 +201,9 @@ describe("hook request admission lifetime", () => {
   });
 
   test("keeps a shared pending admission alive while another caller stays connected", async () => {
-    const release = createDeferred<void>();
+    const started = createArrivalGate();
+    const release = createDeferred();
+    const secondBody = createDeferred<HookBody>();
     let runs = 0;
     const dispatchAgentHook = vi.fn(
       async (_value: HookAgentDispatchPayload, context?: DispatchContext) => {
@@ -169,6 +213,7 @@ describe("hook request admission lifetime", () => {
           }
           context.abortSignal.addEventListener("abort", () => resolve(true), { once: true });
         });
+        started.arrive();
         const aborted = await Promise.race([release.promise.then(() => false), disconnected]);
         if (aborted) {
           return disconnectedResult();
@@ -185,11 +230,14 @@ describe("hook request admission lifetime", () => {
     const secondRes = createResponse();
 
     const firstHandled = handler(firstReq, firstRes.res);
-    await vi.waitFor(() => expect(dispatchAgentHook).toHaveBeenCalledTimes(1));
+    await started.until(1);
+    readJsonBodyMock.mockImplementationOnce(() => secondBody.promise);
     const secondHandled = handler(secondReq, secondRes.res);
-    await vi.waitFor(() => expect(dispatchAgentHook).toHaveBeenCalledTimes(1));
+    secondBody.resolve(hookBody);
+    await secondBody.promise;
+    const closed = whenRequestCloses(firstReq);
     firstReq.destroy();
-    await delay(20);
+    await closed;
     expect(runs).toBe(0);
     release.resolve();
 
@@ -200,11 +248,13 @@ describe("hook request admission lifetime", () => {
   });
 
   test("does not cancel background gmail fan-out when the client disconnects", async () => {
-    const release = createDeferred<void>();
+    const started = createArrivalGate();
+    const release = createDeferred();
     let signal: AbortSignal | undefined;
     const dispatchAgentHook = vi.fn(
       async (_value: HookAgentDispatchPayload, context?: DispatchContext) => {
         signal = context?.abortSignal;
+        started.arrive();
         await release.promise;
         return accepted("run-gmail");
       },
@@ -252,9 +302,10 @@ describe("hook request admission lifetime", () => {
     const { res } = createResponse();
 
     const handled = handler(req, res);
-    await vi.waitFor(() => expect(dispatchAgentHook).toHaveBeenCalledTimes(1));
+    await started.until(1);
+    const closed = whenRequestCloses(req);
     req.destroy();
-    await delay(20);
+    await closed;
     expect(signal?.aborted).not.toBe(true);
     release.resolve();
 
