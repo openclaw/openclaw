@@ -14,11 +14,7 @@ import { WORKER_ADMISSION_DEADLINE_MS } from "../../worker/worker-connection-con
 import { StaleWorkerBuildError } from "./admission.js";
 import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import { placementTurnOwner, sameWorkerSessionTurnClaim } from "./placement-record.js";
-import type {
-  WorkerSessionPlacementRecord,
-  WorkerSessionPlacementStore,
-  WorkerSessionTurnClaim,
-} from "./placement-store.js";
+import type { WorkerSessionTurnClaim } from "./placement-store.js";
 import { ActiveTurnClaimError } from "./placement-turn-claims.js";
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
@@ -44,49 +40,15 @@ import {
   WorkerTurnExecutionError,
   WorkerWorkspaceReconciliationError,
   type ActiveWorkerPlacement,
-  type WorkerTurnEnvironmentService,
-  type WorkerTurnPartialIdentity,
 } from "./worker-turn-failure.js";
+import type { WorkerTurnLauncherOptions } from "./worker-turn-launcher.types.js";
 import { createWorkerTurnRunOwner, type ActiveWorkerTurn } from "./worker-turn-run-owner.js";
-import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 const loadWorkerTurnExecution = createLazyRuntimeModule(() => import("./worker-turn-execution.js"));
 const loadRemoteExecTurn = createLazyRuntimeModule(() => import("./workspace-result-finalize.js"));
 const loadPlacementSandbox = createLazyRuntimeModule(() => import("./placement-sandbox.js"));
 
 class WorkerRuntimeRefreshInFlightError extends Error {}
-
-type RedispatchableWorkerPlacement = Extract<
-  WorkerSessionPlacementRecord,
-  { state: "reclaimed" | "failed" }
->;
-
-type WorkerTurnLauncherOptions = {
-  environments: WorkerTurnEnvironmentService;
-  placements: WorkerSessionPlacementStore;
-  resolveWorkspace: (
-    identity: ReturnType<typeof resolvePlacementIdentity>,
-  ) => Promise<WorkerSessionWorkspace>;
-  reconcileActivePlacement: (environmentId: string) => Promise<void>;
-  isInterruptedTurn?: (placement: WorkerSessionPlacementRecord) => boolean;
-  waitForAdmissionNode: (params: {
-    placement: ActiveWorkerPlacement;
-    signal: AbortSignal;
-    assertCurrent: () => void;
-  }) => Promise<void>;
-  workspaceOperations: WorkerWorkspaceOperationCoordinator;
-  waitForInitialPlacement?: (
-    placement: WorkerSessionPlacementRecord,
-    signal?: AbortSignal,
-  ) => Promise<WorkerSessionPlacementRecord>;
-  redispatchPlacement: (
-    placement: RedispatchableWorkerPlacement,
-    options: { assertCurrent: () => void; signal?: AbortSignal },
-  ) => Promise<ActiveWorkerPlacement>;
-  prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
-  publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
-  persistAbandonedPartial?: (claim: WorkerTurnPartialIdentity) => Promise<void>;
-};
 
 export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLauncherOptions) {
   const activeWorkerTurns = new Map<string, ActiveWorkerTurn>();
