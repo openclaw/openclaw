@@ -556,7 +556,7 @@ describe("launchd bootstrap repair", () => {
       "exit",
       true,
       "",
-      { ok: true, status: "repaired" },
+      { ok: true, status: "already-loaded" },
     ],
     ...(["exit", "timeout", "signal"] as const).map(
       (
@@ -600,9 +600,9 @@ describe("launchd bootstrap repair", () => {
       },
     ],
     [
-      "failed kickstart",
-      "Service already loaded",
-      130,
+      "failed kickstart after operation already in progress",
+      "Bootstrap failed: 37: Operation already in progress",
+      37,
       "exit",
       false,
       "launchctl kickstart failed: permission denied",

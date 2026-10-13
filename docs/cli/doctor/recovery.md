@@ -62,8 +62,9 @@ An ambiguous `kickstart` error followed by a check that confirms the job is abse
 uses bootstrap recovery; successful activation then completes normally. A failure
 for a job that remains loaded stays visible. Bootstrap repair also accepts an
 operation-in-progress response when native inspection verifies that the job is
-loaded, without restarting a healthy Gateway. Persistent bootstrap I/O failures
-remain visible and require service diagnostics.
+loaded, without restarting a healthy Gateway. A stopped job is kickstarted before
+repair reports success. Persistent bootstrap I/O failures remain visible and
+require service diagnostics.
 
 Doctor rechecks update admission after acquiring both maintenance coordinators.
 If it must cancel before repair starts, it reverses its own stop while its native
