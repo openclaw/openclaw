@@ -168,8 +168,9 @@ export function retainUpdateRequesterAuthority(
 
 export async function resolveGatewayUpdateAdmission(runId: string, timeoutMs?: number) {
   await recordUpdateRunStep(runId, { step: "installation-inspection", status: "in_progress" });
-  const { root, status } = await currentUpdateCheckLifecycle().run((signal) =>
-    resolveStartupInstallStatus(false, signal),
+  const lifecycle = currentUpdateCheckLifecycle();
+  const { root, status } = await lifecycle.run((signal) =>
+    resolveStartupInstallStatus(false, signal, lifecycle.installStatus),
   );
   if (status.error?.timeoutMs) {
     throw new Error(status.error.message);

@@ -462,15 +462,19 @@ suite.define(() => {
         expect(
           await summary.evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
         ).toBe(true);
-        expect(
-          await summary.evaluate((element) => {
-            element.scrollTop = element.scrollHeight;
-            return (
+        const summaryScroll = await summary.evaluate((element) => {
+          element.scrollTop = element.scrollHeight;
+          return {
+            reachesBottom:
               element.scrollTop > 0 &&
-              element.scrollTop + element.clientHeight >= element.scrollHeight - 1
-            );
-          }),
-        ).toBe(true);
+              element.scrollTop + element.clientHeight >= element.scrollHeight - 1,
+            scrollTop: element.scrollTop,
+            scrollHeight: element.scrollHeight,
+            clientHeight: element.clientHeight,
+            clientWidth: element.clientWidth,
+          };
+        });
+        expect(summaryScroll.reachesBottom, JSON.stringify(summaryScroll)).toBe(true);
 
         const card = tray.locator(".task-suggestion:visible");
         await card.getByText("Show instructions", { exact: true }).click();

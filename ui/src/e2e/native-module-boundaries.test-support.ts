@@ -103,17 +103,15 @@ export function defineNativeModuleBoundaryTests(
         } else if (action === "Escape") {
           await page.keyboard.press("Escape");
         } else {
-          const collapse = page.locator('[data-navigation-view][aria-pressed="true"]');
-          await collapse.click();
-          await expect
-            .poll(() => page.getByRole("button", { name: "Expand sidebar" }).isVisible())
-            .toBe(true);
+          const toggle = page.locator('[data-navigation-view="sessions"]');
+          await toggle.click();
+          await expect.poll(() => page.locator(".sidebar-shell").isVisible()).toBe(false);
           // The native event does not generate an outside pointer that could
           // accidentally dismiss an Inbox resurrected by the old import.
           await page.evaluate(() => {
             window.dispatchEvent(new CustomEvent("openclaw:native-toggle-sidebar"));
           });
-          await expect.poll(() => collapse.isVisible()).toBe(true);
+          await expect.poll(() => page.locator(".sidebar-shell").isVisible()).toBe(true);
           if (action === "replacement open") {
             await inbox.click();
           }

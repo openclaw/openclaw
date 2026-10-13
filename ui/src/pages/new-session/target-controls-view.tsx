@@ -45,8 +45,8 @@ export function AgentSelect(props: { params: AgentSelectOptions }) {
         prop:menuLabel={t("newSession.agents")}
         prop:disabled={props.params.disabled}
         prop:onSelect={props.params.onSelect}
-        onWa-show={() => props.params.onOpenChange(true)}
-        onWa-hide={() => props.params.onOpenChange(false)}
+        onOverlay-show={() => props.params.onOpenChange(true)}
+        onOverlay-hide={() => props.params.onOpenChange(false)}
       />
     </span>
   );

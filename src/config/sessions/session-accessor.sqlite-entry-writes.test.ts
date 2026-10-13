@@ -8,10 +8,8 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
-import {
-  readCommittedSessionEntryCache,
-  readSessionEntryCache,
-} from "./session-accessor.sqlite-entry-cache.js";
+import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
+import { readCommittedSessionEntryCache } from "./session-accessor.sqlite-entry-cache.test-support.js";
 import { writeSessionEntryPatchInDatabase } from "./session-accessor.sqlite-entry-mutation.js";
 import {
   readSessionEntrySelectionSnapshot,

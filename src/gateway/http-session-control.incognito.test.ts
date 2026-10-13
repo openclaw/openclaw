@@ -5,16 +5,14 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vite
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  replaceSessionEntry,
-  replaceSessionEntrySync,
-} from "../config/sessions/session-accessor.sqlite-entry.js";
-import { withIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
-import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-execution-incognito.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
@@ -28,9 +26,8 @@ import { handleSessionHistoryHttpRequest } from "./sessions-history-http.js";
 import { invokeGatewayTool } from "./tools-invoke-shared.js";
 
 const runtime = vi.hoisted(() => ({
-  cfg: { agents: { entries: { main: {}, native: {} } } } as OpenClawConfig,
+  cfg: { agents: { entries: { main: {} } } } as OpenClawConfig,
   current: true,
-  beforeAdmission: undefined as (() => Promise<void>) | undefined,
   beforeAuth: undefined as (() => Promise<void>) | undefined,
   beforeMedia: undefined as (() => Promise<void>) | undefined,
   beforeHook: undefined as (() => Promise<void>) | undefined,
@@ -59,7 +56,6 @@ vi.mock("./http-utils.js", async (original) => {
   return {
     ...actual,
     authorizeScopedGatewayHttpRequestOrReply: async () => {
-      await runtime.beforeAdmission?.();
       return { cfg: runtime.cfg, requestAuth: requestAuth(), operatorScopes: ["operator.admin"] };
     },
     checkGatewayHttpRequestAuth: async () => {
@@ -113,12 +109,12 @@ vi.mock("../agents/agent-tools.before-tool-call.js", async (original) => ({
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
-const authority = { assertCurrent() {} };
-let actor: IncognitoAgentDatabaseExecution;
+const authority = { assertCurrent() {}, authorize() {} };
+const lifetime = { assertCurrent() {}, assertReadable() {} };
+let location: { agentId: string; path: string };
 let env: NodeJS.ProcessEnv;
 let baseUrl: string;
 let portClaim: TestPortClaim;
-let bound = true;
 let sequence = 0;
 let lastHandled = Promise.resolve();
 const server = createServer((req, res) => {
@@ -138,7 +134,7 @@ const server = createServer((req, res) => {
     }
     res.writeHead(404).end();
   };
-  lastHandled = (bound ? withIncognitoSessionBinding({ actor }, handle) : handle()).catch(() => {
+  lastHandled = handle().catch(() => {
     if (!res.headersSent) {
       res.writeHead(403);
     }
@@ -148,14 +144,10 @@ const server = createServer((req, res) => {
 beforeAll(async () => {
   env = { OPENCLAW_STATE_DIR: tempDirs.make("http-incognito-authority-") };
   vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
-  const opened = await captureOpenClawAgentDatabaseExecution({
-    kind: "ephemeral",
+  location = {
     agentId: "main",
-    env,
-    authority,
-  });
-  assert(opened);
-  actor = opened;
+    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
+  };
   portClaim = await acquireTestPortBlock({ offsets: [0] });
   await new Promise<void>((resolve) => {
     server.listen(portClaim.port, "127.0.0.1", resolve);
@@ -166,13 +158,8 @@ beforeAll(async () => {
 });
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
-  bound = true;
   runtime.current = true;
-  runtime.beforeAdmission =
-    runtime.beforeAuth =
-    runtime.beforeMedia =
-    runtime.beforeHook =
-      undefined;
+  runtime.beforeAuth = runtime.beforeMedia = runtime.beforeHook = undefined;
   runtime.execute.mockClear();
   runtime.kill.mockClear();
 });
@@ -184,43 +171,62 @@ afterAll(async () => {
   });
   await lastHandled;
   await portClaim?.release();
-  await actor?.close();
+  memorySessionActorOwners.closeDatabase(location);
   await closeOpenClawAgentDatabasesAsync();
   vi.unstubAllEnvs();
 });
 async function seed() {
   const id = `http-${++sequence}`;
   const sessionKey = `agent:main:dashboard:incognito-${id}`;
-  await actor.sessions.create(authority, {
-    sessionKey,
-    entry: {
-      sessionId: id,
-      updatedAt: 1,
-      incognito: true,
-      lifecycleRevision: "initial",
-      delivery: {
-        kind: "external",
-        route: { channel: "discord", target: { to: "synthetic" } },
-        context: { channel: "discord", to: "synthetic" },
-        origin: { provider: "discord", to: "synthetic", avatar: `/synthetic/${id}.png` },
-      },
-    },
-  });
-  await actor.sessions.transcript(authority, {
-    type: "session.message.append",
-    input: {
-      sessionKey,
-      sessionId: id,
-      fence: { expectedLifecycleRevision: "initial" },
-      message: { role: "assistant", content: "Private actor history", timestamp: 1 },
-    },
-  });
+  const created = await withSessionActorStorage(
+    { agentId: "main", sessionKey, storePath: location.path, env },
+    { create: true, authority, lifetime },
+    ({ actor }) =>
+      actor.storage.mutate(
+        {
+          type: "session.entry.create",
+          input: {
+            entry: {
+              sessionId: id,
+              updatedAt: 1,
+              incognito: true,
+              lifecycleRevision: "initial",
+              delivery: {
+                kind: "external",
+                route: { channel: "discord", target: { to: "synthetic" } },
+                context: { channel: "discord", to: "synthetic" },
+                origin: { provider: "discord", to: "synthetic", avatar: `/synthetic/${id}.png` },
+              },
+            },
+            transcriptEvents: [
+              { type: "session", id, version: 3, cwd: "/synthetic" },
+              {
+                type: "message",
+                id: `${id}-reply`,
+                parentId: null,
+                message: { role: "assistant", content: "Private actor history", timestamp: 1 },
+              },
+            ],
+          },
+        },
+        authority,
+      ),
+  );
+  expect(created?.kind).toBe("committed");
   return sessionKey;
+}
+
+async function replaceMemoryEntry(sessionKey: string, entry: SessionEntry) {
+  const scope = { agentId: "main", sessionKey, storePath: location.path, env };
+  const replaced = await withSessionActorStorage(scope, { authority, lifetime }, () =>
+    replaceSessionEntry(scope, entry),
+  );
+  expect(replaced).toBeTruthy();
 }
 const historyUrl = (key: string) => `${baseUrl}/sessions/${encodeURIComponent(key)}/history`;
 
 it.each(["application/json", "text/event-stream"])(
-  "serves bound %s history without host SQL and joins the stream consumer",
+  "serves unbound memory %s history without host SQL and joins the stream consumer",
   async (accept) => {
     const key = await seed();
     const host = observeHostDataSql();
@@ -269,20 +275,6 @@ it.each(["application/json", "text/event-stream"])(
   },
 );
 
-it("keeps native incognito history host-owned when no binding was supplied", async () => {
-  bound = false;
-  const key = "agent:native:dashboard:incognito-unbound";
-  replaceSessionEntrySync(
-    { agentId: "native", sessionKey: key },
-    { sessionId: "native-http", updatedAt: 1, incognito: true },
-  );
-  const before = captureOpenClawAgentDatabaseExecution.listIncognito(env);
-  const response = await fetch(historyUrl(key));
-  expect(response.status).toBe(200);
-  expect((await response.json()).sessionKey).toBe(key);
-  expect(captureOpenClawAgentDatabaseExecution.listIncognito(env)).toEqual(before);
-});
-
 it("checks the captured avatar source after its media wait", async () => {
   const key = await seed();
   const entered = createDeferredCore();
@@ -294,24 +286,19 @@ it("checks the captured avatar source after its media wait", async () => {
   const response = fetch(`${baseUrl}${buildControlUiChannelAvatarUrl("", key, "synthetic")}`);
   await awaitGateBeforeSettlement(entered.promise, response, "avatar did not enter media read");
   try {
-    await withIncognitoSessionBinding({ actor }, () =>
-      replaceSessionEntry(
-        { agentId: "main", sessionKey: key, env },
-        {
-          sessionId: "replacement",
-          updatedAt: 2,
-          incognito: true,
-          lifecycleRevision: "replacement",
-        },
-      ),
-    );
+    await replaceMemoryEntry(key, {
+      sessionId: "replacement",
+      updatedAt: 2,
+      incognito: true,
+      lifecycleRevision: "replacement",
+    });
   } finally {
     resume.resolve();
   }
   expect((await response).status).toBe(403);
 });
 
-it("uses the bound source for admin kill without host SQL", async () => {
+it("uses the unbound memory source for admin kill without host SQL", async () => {
   const key = await seed();
   const host = observeHostDataSql();
   try {
@@ -326,17 +313,15 @@ it("uses the bound source for admin kill without host SQL", async () => {
   }
 });
 
-it("revalidates tool policy after hooks while preserving bound tool execution", async () => {
+it("revalidates tool policy after hooks while preserving unbound memory tool execution", async () => {
   const key = await seed();
   const invoke = () =>
-    withIncognitoSessionBinding({ actor }, () =>
-      invokeGatewayTool({
-        cfg: runtime.cfg,
-        input: { name: "session_status", sessionKey: key },
-        toolCallIdPrefix: "http",
-        senderIsOwner: true,
-      }),
-    );
+    invokeGatewayTool({
+      cfg: runtime.cfg,
+      input: { name: "session_status", sessionKey: key },
+      toolCallIdPrefix: "http",
+      senderIsOwner: true,
+    });
   const host = observeHostDataSql();
   try {
     expect((await invoke()).ok).toBe(true);
@@ -349,13 +334,9 @@ it("revalidates tool policy after hooks while preserving bound tool execution", 
     const pending = invoke();
     await awaitGateBeforeSettlement(entered.promise, pending, "tool hook did not run");
     try {
-      const entry = (await actor.sessions.read(authority, { sessionKey: key })).entry!;
-      await withIncognitoSessionBinding({ actor }, () =>
-        replaceSessionEntry(
-          { agentId: "main", sessionKey: key, env },
-          { ...entry, permissionMode: "read-only" },
-        ),
-      );
+      const entry = memorySessionActorOwners.read(location)?.readSession(key, authority)?.entry;
+      assert(entry);
+      await replaceMemoryEntry(key, { ...entry, permissionMode: "read-only" });
     } finally {
       resume.resolve();
     }
@@ -367,7 +348,7 @@ it("revalidates tool policy after hooks while preserving bound tool execution", 
   }
 });
 
-it("carries configured-role authority into bound nested sessions_send and refuses a replaced target", async () => {
+it("carries configured-role authority into unbound memory sessions_send and refuses a replaced target", async () => {
   const sourceKey = await seed();
   const nestedKey = await seed();
   const initialConfig = runtime.cfg;
@@ -391,19 +372,17 @@ it("carries configured-role authority into bound nested sessions_send and refuse
     updatedAt: operator.updatedAt,
   };
   const invoke = () =>
-    withIncognitoSessionBinding({ actor }, () =>
-      invokeGatewayTool({
-        cfg: runtime.cfg,
-        input: {
-          name: "sessions_send",
-          sessionKey: sourceKey,
-          args: { sessionKey: nestedKey, message: "Synthetic nested request" },
-        },
-        toolCallIdPrefix: "rpc",
-        authenticatedUserProfile: profile,
-        senderIsOwner: true,
-      }),
-    );
+    invokeGatewayTool({
+      cfg: runtime.cfg,
+      input: {
+        name: "sessions_send",
+        sessionKey: sourceKey,
+        args: { sessionKey: nestedKey, message: "Synthetic nested request" },
+      },
+      toolCallIdPrefix: "rpc",
+      authenticatedUserProfile: profile,
+      senderIsOwner: true,
+    });
   runtime.execute.mockImplementationOnce(async () => {
     const inherited = readOperatorToolGatewayAuthority();
     expect(inherited?.authenticatedUserProfile?.profileId).toBe(profile.profileId);
@@ -421,12 +400,11 @@ it("carries configured-role authority into bound nested sessions_send and refuse
     const pending = invoke();
     await awaitGateBeforeSettlement(entered.promise, pending, "nested hook did not run");
     try {
-      await withIncognitoSessionBinding({ actor }, () =>
-        replaceSessionEntry(
-          { agentId: "main", sessionKey: nestedKey, env },
-          { sessionId: "nested-replacement", updatedAt: 2, incognito: true },
-        ),
-      );
+      await replaceMemoryEntry(nestedKey, {
+        sessionId: "nested-replacement",
+        updatedAt: 2,
+        incognito: true,
+      });
     } finally {
       resume.resolve();
     }
@@ -435,29 +413,4 @@ it("carries configured-role authority into bound nested sessions_send and refuse
   } finally {
     runtime.cfg = initialConfig;
   }
-});
-
-it("retains the session generation selected before HTTP authentication yields", async () => {
-  const key = await seed();
-  const entered = createDeferredCore();
-  const resume = createDeferredCore();
-  runtime.beforeAdmission = async () => {
-    entered.resolve();
-    await resume.promise;
-  };
-  const response = fetch(historyUrl(key));
-  await awaitGateBeforeSettlement(entered.promise, response, "HTTP authentication did not yield");
-  try {
-    await withIncognitoSessionBinding({ actor }, () =>
-      replaceSessionEntry(
-        { agentId: "main", sessionKey: key, env },
-        { sessionId: "auth-replacement", updatedAt: 2, incognito: true },
-      ),
-    );
-  } finally {
-    resume.resolve();
-  }
-  const denied = await response;
-  expect(denied.status).toBe(403);
-  expect(await denied.text()).not.toContain("Private actor history");
 });

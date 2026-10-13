@@ -25,7 +25,6 @@ import {
   openOpenClawAgentDatabase,
   withOpenClawAgentDatabaseAsync,
   runOpenClawAgentWriteTransaction,
-  resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
 import {
@@ -529,18 +528,6 @@ describe("asynchronous canonical admission", () => {
     expect(check).toHaveBeenCalledOnce();
     expect(database.agentId).toBe(options.agentId);
     expect(ordinaryWrite(options)).toEqual({ n: 1 });
-  });
-
-  it("keeps the incognito handle in memory without starting a disk checker", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-open-incognito-"));
-    roots.push(root);
-    const options = { agentId: "synthetic-private", env: { OPENCLAW_STATE_DIR: root } };
-    const pathname = resolveIncognitoOpenClawAgentSqlitePath(options);
-    const check = vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker");
-    const database = await openOpenClawAgentDatabaseAsync({ ...options, path: pathname });
-    expect(openOpenClawAgentDatabase({ ...options, path: pathname })).toBe(database);
-    expect(check).not.toHaveBeenCalled();
-    expect(fs.existsSync(pathname)).toBe(false);
   });
 
   it("checks an older schema before the unchanged doctor migration refusal", async () => {

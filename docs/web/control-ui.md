@@ -45,7 +45,7 @@ Reloading a previously visited chat restores the last settled sidebar while the 
 
 An authenticated same-origin reload includes shared display settings and your profile’s appearance and sidebar preferences in the document. Chat uses this display projection while connecting, without loading the full editable configuration. Preference changes from other tabs refresh through the Gateway’s existing notifications; settings pages and configuration writes still load the full snapshot.
 
-Saved pin labels remain visible while their details refresh, even when those sessions are outside the first list page. Unavailable pins disappear silently without removing their saved shortcuts. Sidebar session updates arriving within one display frame paint together.
+Saved pin labels remain visible while their details refresh, even when those sessions are outside the first list page. Unavailable pins disappear silently without removing their saved shortcuts. Sidebar session updates arriving within one display frame paint together. Sidebar refreshes reuse unchanged session rows while still receiving current counts, defaults, and filters. Reconnecting can reuse those rows when the same client retains their revision; changes to visible membership or row facts return a fresh page.
 
 Inline widgets and MCP Apps reserve their last rendered height when a cached conversation reloads, so loading their content does not move the surrounding messages. New widgets use their declared size until the content reports its height. Changed content or a different window width can still resize a widget.
 

@@ -285,7 +285,7 @@ suite.define(() => {
     expect(await gateway.getRequests("device.scopes.waitUpgrade")).toHaveLength(1);
 
     await closeInbox(page);
-    await page.getByRole("button", { name: "Expand sidebar" }).click();
+    await page.locator('[data-navigation-view="sessions"]').click();
     const sidebar = page.locator("openclaw-app-sidebar");
     const identityCard = sidebar.locator(".sidebar-identity-card");
     await identityCard.waitFor();

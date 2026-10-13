@@ -1,15 +1,19 @@
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { clearSessionActorProgressCardForReset } from "../../session-cards/session-actor-progress-card-memory.js";
+import { shouldPreserveSessionCleanupEntry } from "./cleanup-service-read.policy.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
 import { syncSessionActorMemoryConversations } from "./session-actor-memory-conversation.js";
 import type {
   SessionActorMemoryEntryCommand,
   SessionActorMemoryEntryQuery,
+  SessionActorMemoryMaintenance,
   SessionActorMemoryEntryWrites,
 } from "./session-actor-memory-entry-contract.js";
 import { validateSessionActorMemoryEntryGuards } from "./session-actor-memory-entry-guards.js";
 import { installSessionActorMemoryEntry } from "./session-actor-memory-entry-install.js";
 import { createSessionActorMemoryEvents } from "./session-actor-memory-events.js";
+import { planMemoryLifecycleArtifacts } from "./session-actor-memory-lifecycle-artifacts.js";
 import type { SessionActorMemoryStorageContext } from "./session-actor-memory-storage-context.js";
 import { projectSessionEntryPatch } from "./session-entry-patch-operation.js";
 import {
@@ -18,6 +22,9 @@ import {
 } from "./session-entry-snapshot-values.js";
 import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import { buildSessionResetBoundaryEvent } from "./session-reset-boundary-event.js";
+import { planSessionEntryMaintenance } from "./store-maintenance-plan.js";
+import { resolveSessionMaintenancePreserveKeys } from "./store-maintenance-preserve-snapshot.js";
+import { countUnarchivedSessionEntries } from "./store-maintenance.js";
 import {
   createSessionTranscriptHeader,
   resolveResetBoundaryHeaderCwd,
@@ -34,6 +41,8 @@ export function readSessionActorMemoryEntryQuery(
   query: SessionActorMemoryEntryQuery,
 ) {
   switch (query.type) {
+    case "session.lifecycle.artifacts":
+      return planMemoryLifecycleArtifacts(context, query.input);
     case "session.entry.creation":
       return {
         existingEntry: context.state.hot.entry,
@@ -134,8 +143,38 @@ export function executeSessionActorMemoryEntryCommand(
     }
     return installed;
   };
+  const maintain = (
+    maintenance: SessionActorMemoryMaintenance | undefined,
+    activeSessionKey?: string,
+  ) => {
+    if (maintenance && maintenance.config.mode !== "warn") {
+      const store: Record<string, SessionEntry> = {};
+      for (const [key, current] of context.entries()) {
+        if (current.hot.entry) {
+          store[key] = { ...current.hot.entry };
+        }
+      }
+      planSessionEntryMaintenance({
+        maintenance: maintenance.config,
+        initialUnarchivedCount: countUnarchivedSessionEntries(store),
+        readPreserveKeys: () =>
+          resolveSessionMaintenancePreserveKeys({
+            store,
+            snapshot: maintenance.preservation,
+            baseKeys: [activeSessionKey],
+          }),
+        readAgeCandidates: () => store,
+        readCapCandidates: () => ({ store, maxEntries: maintenance.config.maxEntries }),
+        onArchived: ({ key, entry: archived }) => {
+          install(key, archived);
+        },
+        onRemoved: ({ key }) => context.remove(key),
+      });
+    }
+  };
   const replace = (
     replacement: SessionActorMemoryEntryWrites["session.entry.replacements"]["input"]["replacements"][number],
+    consumePendingReset?: boolean,
   ) => {
     requireExpectedEntry(
       context.get(replacement.sessionKey)?.hot.entry,
@@ -153,7 +192,7 @@ export function executeSessionActorMemoryEntryCommand(
         ...(replacement.label === undefined ? {} : { label: replacement.label }),
         ...(replacement.owner ? { owner: replacement.owner } : {}),
       },
-      { routeContext: replacement.routeContext },
+      { routeContext: replacement.routeContext, consumePendingReset },
     );
     if (replacement.transcriptEvents) {
       const target = context.edit(replacement.sessionKey);
@@ -184,7 +223,7 @@ export function executeSessionActorMemoryEntryCommand(
           ([key, value]) => key !== sessionKey && value.hot.entry?.label === label,
         )
       ) {
-        const error = new Error(`Session label already exists: ${label}`);
+        const error = new Error(`label already in use: ${label}`);
         error.name = "SessionLabelConflictError";
         throw error;
       }
@@ -230,7 +269,9 @@ export function executeSessionActorMemoryEntryCommand(
         preserveActivity: command.input.preserveActivity,
         replaceEntry: command.input.replaceEntry,
       });
-      return next ? install(sessionKey, next, command.input) : state.hot.entry;
+      const entry = next ? install(sessionKey, next, command.input) : state.hot.entry;
+      maintain(command.input.maintenance, sessionKey);
+      return entry;
     }
     case "session.entry.replace": {
       return replace({ ...command.input, sessionKey });
@@ -239,13 +280,14 @@ export function executeSessionActorMemoryEntryCommand(
       const removedSessionKeys: string[] = [];
       const updatedSessionKeys: string[] = [];
       for (const replacement of command.input.replacements) {
-        replace(replacement);
+        replace(replacement, command.input.consumePendingReset);
         if (replacement.entry) {
           updatedSessionKeys.push(replacement.sessionKey);
         } else {
           removedSessionKeys.push(replacement.sessionKey);
         }
       }
+      maintain(command.input.maintenance, command.input.maintenance?.activeSessionKey);
       return { removedSessionKeys, updatedSessionKeys };
     }
     case "session.lifecycle.reset": {
@@ -281,6 +323,9 @@ export function executeSessionActorMemoryEntryCommand(
         observeConversation: true,
         routeContext: input.routeContext,
       });
+      for (const replacement of input.relatedReplacements ?? []) {
+        replace(replacement);
+      }
       return {
         archivedTranscripts: [],
         previousEntry,
@@ -311,14 +356,57 @@ export function executeSessionActorMemoryEntryCommand(
       };
     }
     case "session.lifecycle.reclaim": {
+      const countEntries = () =>
+        [...context.entries()].filter(([, value]) => value.hot.entry).length;
+      const beforeCount = countEntries();
       const removedSessionKeys: string[] = [];
+      const archivedSessionKeys: string[] = [];
+      const eligible =
+        command.input.artifacts &&
+        planMemoryLifecycleArtifacts(
+          context,
+          command.input.artifacts.input,
+          new Map(
+            command.input.entries.map((candidate) => [candidate.sessionKey, candidate.expected]),
+          ),
+        );
       for (const candidate of command.input.entries) {
-        if (isDeepStrictEqual(context.get(candidate.sessionKey)?.hot.entry, candidate.expected)) {
+        const current = context.get(candidate.sessionKey);
+        if (
+          candidate.requiresMissingTranscript &&
+          current?.hot.entry &&
+          (shouldPreserveSessionCleanupEntry(candidate.sessionKey, current.hot.entry) ||
+            current.events.some(({ event }) => isRecord(event) && event.type === "message"))
+        ) {
+          continue;
+        }
+        if (
+          eligible
+            ? eligible.entries.some((entry) => entry.sessionKey === candidate.sessionKey)
+            : isDeepStrictEqual(current?.hot.entry, candidate.expected)
+        ) {
           context.remove(candidate.sessionKey);
           removedSessionKeys.push(candidate.sessionKey);
         }
       }
-      return { removedSessionKeys };
+      for (const window of command.input.artifacts?.windows ?? []) {
+        if (
+          eligible?.windows.some(
+            (candidate) =>
+              candidate.sessionKey === window.sessionKey &&
+              candidate.sessionId === window.sessionId,
+          )
+        ) {
+          context.edit(window.sessionKey).historicalWindows.delete(window.sessionId);
+        }
+      }
+      for (const archive of command.input.archives ?? []) {
+        if (isDeepStrictEqual(context.get(archive.sessionKey)?.hot.entry, archive.expected)) {
+          install(archive.sessionKey, archive.entry);
+          archivedSessionKeys.push(archive.sessionKey);
+        }
+      }
+      return { removedSessionKeys, archivedSessionKeys, beforeCount, afterCount: countEntries() };
     }
   }
   throw new Error("Unknown memory entry command");

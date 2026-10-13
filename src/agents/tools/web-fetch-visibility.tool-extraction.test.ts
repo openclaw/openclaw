@@ -7,8 +7,14 @@ import { createWebFetchTool } from "./web-fetch.js";
 const MARKDOWN_CODE =
   "# Example\n\n- Read [the guide](https://example.com).\n\n```text\n# comment\n- literal\n1. literal\n[label](https://example.com)\n![alt](image.png)\n`value`\n```";
 
-const PAGES: Record<string, string> = {
+const MARKDOWN_PAGES: Record<string, string> = {
   "/markdown-code": MARKDOWN_CODE,
+  "/markdown-unclosed": "```text\n# literal\n- literal",
+  "/markdown-inline-fence-prose": "Use ``` to start a code block.\nNext paragraph.",
+};
+
+const PAGES: Record<string, string> = {
+  ...MARKDOWN_PAGES,
   "/implicit-nested-siblings":
     "<ul><li hidden><ul><li>A<li>B</li></ul>Secret</li></ul><p>Visible</p>",
   "/unmatched-container": "<p hidden>Before</div>Secret</p><p>Visible</p>",
@@ -31,7 +37,7 @@ async function startPageServer(): Promise<{ server: Server; baseUrl: string }> {
       return;
     }
     res.writeHead(200, {
-      "content-type": `${req.url === "/markdown-code" ? "text/markdown" : "text/html"}; charset=utf-8`,
+      "content-type": `${Object.hasOwn(MARKDOWN_PAGES, req.url ?? "") ? "text/markdown" : "text/html"}; charset=utf-8`,
     });
     res.end(page);
   });
@@ -120,4 +126,13 @@ describe("web_fetch visibility through the real tool execute path", () => {
       );
     },
   );
+
+  it.each([
+    ["/markdown-unclosed", "# literal\n- literal"],
+    ["/markdown-inline-fence-prose", "Use ``` to start a code block.\nNext paragraph."],
+  ])("preserves Markdown content through HTTP text extraction for %s", async (path, expected) => {
+    const result = JSON.parse(await extract(path, "text")) as { extractor: string; text: string };
+    expect(result.extractor).toBe("cf-markdown");
+    expect(result.text).toContain(expected);
+  });
 });
