@@ -1203,6 +1203,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugin-state/plugin-state-operation.test.ts",
   "src/plugin-state/plugin-state-worker.test.ts",
   "src/plugin-state/plugin-state-publication.test.ts",
+  "src/plugin-state/plugin-state-native-binding-facts.test.ts",
   "test/visitor-access-revocation.test.ts",
   "src/agents/tools/cron-tool.output-contract.test.ts",
   "src/plugins/services.control-ui-ingress.test.ts",

@@ -332,6 +332,9 @@ COMMIT, then publishes only a confirmed native receipt. FIFO ordering, durabilit
 schemas, stored formats, and update behavior are unchanged.
 
 Durable heartbeat outcome claims check the current row in their existing worker FIFO.
+Persistence and claims retain the agent executor directly, without opening a native
+database on the Gateway thread. Absent storage has no durable base session or outcome
+and remains absent. The worker owns admission and publishes committed results.
 Missing outcomes and already committed claims for the same run return without
 another write. New claims keep their atomic conditional update and live commit
 authority check; retries retain the original claim timestamp.

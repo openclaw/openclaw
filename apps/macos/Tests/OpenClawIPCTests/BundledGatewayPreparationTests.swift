@@ -1214,6 +1214,27 @@ struct BundledGatewayPreparationTests {
         }
     }
 
+    @Test func `bundled setup reuses a newer managed Node package without updating it`() async throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try await TestIsolation.withIsolatedState(
+            launchAgentHomeDirectory: home,
+            defaults: [cliInstallPolicyKey: "exact", postAppUpdateReceiptKey: nil])
+        {
+            let fixture = try Fixture(home: home)
+            defer { fixture.remove() }
+            try "2026.10.2\n".write(
+                to: fixture.root.appendingPathComponent("version"), atomically: false, encoding: .utf8)
+            let original = GatewayLaunchAgentManager.launchdConfigSnapshot()
+            let location = try await CLIInstaller.prepareBundledGateway(
+                targetVersion: "2026.10.1", statusHandler: { _ in })
+            #expect(location == fixture.cli.prefix.last)
+            #expect(GatewayLaunchAgentManager.launchdConfigSnapshot() == original)
+            #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("updates").path))
+            #expect(PostAppUpdateReceiptStore.pendingSetupRecovery(currentVersion: "2026.10.1") == nil)
+        }
+    }
+
     @Test(arguments: [false, true], [false, true])
     func `bundled setup joins the seeded service update owner before returning its package`(
         retained: Bool,

@@ -9,7 +9,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type MuseAssistant = Extract<AgentMessage, { role: "assistant" }>;
 
-export function assistantMessage(
+function assistantMessage(
   params: AgentHarnessAttemptParamsV2,
   content: MuseAssistant["content"],
   stopReason: MuseAssistant["stopReason"] = "stop",

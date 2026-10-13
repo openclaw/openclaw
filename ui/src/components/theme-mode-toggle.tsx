@@ -1,6 +1,6 @@
 import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { Icon } from "./solid/icon.tsx";
 import "./tooltip.ts";
 
@@ -49,3 +49,9 @@ defineSolidBridge<Props>(
     },
   },
 );
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-theme-mode-toggle": SolidBridgeElement<Props>;
+  }
+}

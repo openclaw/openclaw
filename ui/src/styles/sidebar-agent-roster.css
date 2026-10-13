@@ -121,7 +121,7 @@ openclaw-sidebar-agent-roster {
   min-height: 0;
 }
 
-.sidebar-new-session-menu::part(menu) {
+.sidebar-new-session-menu > .oc-menu {
   min-width: 180px;
 }
 

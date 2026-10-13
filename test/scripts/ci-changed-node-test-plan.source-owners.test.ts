@@ -673,6 +673,13 @@ describe("CI changed Node test plan", () => {
   });
 
   it.each([
+    ...[
+      "src/secrets/runtime-auth-store-admission.ts",
+      "src/agents/prepared-model-runtime.configured.ts",
+    ].map((changedPath) => ({
+      changedPath,
+      expected: ["src/gateway/server.agents.config-readiness.test.ts"],
+    })),
     {
       changedPath: "src/auto-reply/reply/abort.test.ts",
       expected: ["test/scripts/tsgo-core-test-shards.test.ts"],

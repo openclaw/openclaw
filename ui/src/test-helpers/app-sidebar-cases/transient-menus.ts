@@ -3,7 +3,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { activateSessionMenuValue } from "../app-sidebar-menu.ts";
 import { selectSidebarView } from "../app-sidebar-setup.ts";
 import { createGateway, createSessions, mountSidebar, TWO_AGENTS } from "../app-sidebar.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar transient menus", () => {
   it("keeps the session filters open after a choice and closes from the trigger", async () => {
@@ -102,7 +102,11 @@ describe("AppSidebar transient menus", () => {
     sidebar.onUpdateSidebarEntries = update;
     await sidebar.updateComplete;
     const first = await openPinMenu(sidebar, "route:usage");
-    first.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "remove" } } }));
+    first.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: first.querySelector('wa-dropdown-item[value="remove"]')! },
+      }),
+    );
     await sidebar.updateComplete;
     expect(sidebar.sidebarEntries).toEqual([]);
     expect(first.isConnected).toBe(false);
@@ -141,7 +145,9 @@ describe("AppSidebar transient menus", () => {
     await sidebar.updateComplete;
     expect(replacement.open).toBe(true);
     replacement.dispatchEvent(
-      new CustomEvent("wa-select", { detail: { item: { value: "remove" } } }),
+      new CustomEvent("wa-select", {
+        detail: { item: replacement.querySelector('wa-dropdown-item[value="remove"]')! },
+      }),
     );
     await sidebar.updateComplete;
     expect(sidebar.sidebarEntries).toEqual(["route:usage"]);

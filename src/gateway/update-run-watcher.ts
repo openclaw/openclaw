@@ -83,6 +83,9 @@ export function startUpdateRunWatcher(params: {
       }
       reconciled.push(...abandoned.filter((run) => run.runId !== watched?.runId));
       await schedulePublication();
+      if (work.isClosing) {
+        return;
+      }
       const nextActive = watched?.sentinelDeadline
         ? (await listUpdateRunsAsync({ active: true, limit: 1 }))[0]
         : undefined;

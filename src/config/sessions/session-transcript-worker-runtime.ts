@@ -57,6 +57,8 @@ function projectionTarget(input: SessionHistoryWorkerPreparedInput) {
       return input.params;
     case "session-activity-summary-source":
       return input.scope;
+    case "history-page":
+      return input.request.kind === "active-accounting" ? input.target.transcript : undefined;
     default:
       return undefined;
   }
@@ -182,18 +184,22 @@ export function retainSessionHistoryWorkerDatabase(
                     options.prepareRead?.();
                     const input = prepare();
                     const projection = projectionTarget(input);
+                    const projectionReceipt = projection?.sessionId
+                      ? readSessionActorProjectionReceipt({
+                          path: database.path,
+                          sessionKey: projection.sessionKey,
+                          sessionId: projection.sessionId,
+                        })
+                      : undefined;
                     owned.nativeSequences.set(requestLane, ++requestLane.nativeSequence);
                     return {
                       ...input,
                       database,
                       validation: validation?.validation,
-                      projectionReceipt: projection?.sessionId
-                        ? readSessionActorProjectionReceipt({
-                            path: database.path,
-                            sessionKey: projection.sessionKey,
-                            sessionId: projection.sessionId,
-                          })
-                        : undefined,
+                      projectionReceipt: projectionReceipt && {
+                        ...projectionReceipt,
+                        ...(input.kind === "history-page" ? { contextOnly: true } : {}),
+                      },
                     } satisfies SessionTranscriptWorkerRequest;
                   },
                   {

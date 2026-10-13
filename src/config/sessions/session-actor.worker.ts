@@ -24,6 +24,7 @@ import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-ope
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-snapshot.js";
 import { projectSessionActorAuthority } from "./session-actor-command.js";
+import { rewriteSessionActorContextMetadata } from "./session-actor-context-metadata.js";
 import type {
   SessionActorOperations,
   SessionActorOutcome,
@@ -356,6 +357,7 @@ export function createSessionActorWorker(
           return run();
         }
         const working = forkSessionActorStoredState(before);
+        rewriteSessionActorContextMetadata(working, rewrite.rows);
         for (const { rawSeq, event, serializedBytes } of rewrite.rows) {
           if (working.transcript.payloads.has(rawSeq)) {
             working.transcript.payloads = writableSessionActorMap(working.transcript.payloads);
