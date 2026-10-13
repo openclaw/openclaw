@@ -162,7 +162,7 @@ transport timeouts return `false`. Both entries use the same implementation.
 
 ## Defaults and reconnect behavior
 
-The Node client starts with a 30 second request timeout, a 15 second
+The Node client starts with a 30 second request timeout, a 30 second
 connect-challenge timeout, and exponential reconnect backoff from 1 second to 30
 seconds with a multiplier of 2. Reconnects use randomized delays: the first waits
 1–1.2 seconds, and sustained failures spread retries across 25–30 seconds.
