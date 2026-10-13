@@ -2,11 +2,16 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
-import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  PROTOCOL_VERSION,
+  validateUpdateStatusParams,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resetDiagnosticEventsForTest } from "../../../infra/diagnostic-events.js";
 import { tryBeginGatewaySuspendAdmission } from "../../../process/gateway-work-admission.js";
+import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
 import {
   linkEmail,
   setAvatar,
@@ -74,6 +79,7 @@ const REMOTE_BACKEND_OPTIONS = {
 } as const;
 
 const {
+  commitPresenceMock,
   buildGatewaySnapshotMock,
   getHealthCacheMock,
   getHealthVersionMock,
@@ -85,8 +91,10 @@ const {
   prepareGatewayNodeConnectMock,
   prewarmGatewaySessionHistoryMock,
   resolveConnectAuthStateMock,
+  resolveHostAccountNameMock,
   upsertPresenceMock,
 } = vi.hoisted(() => ({
+  commitPresenceMock: vi.fn(),
   buildGatewaySnapshotMock: vi.fn(() => ({
     presence: [],
     health: {},
@@ -116,6 +124,7 @@ const {
   prepareGatewayNodeConnectMock: vi.fn(),
   prewarmGatewaySessionHistoryMock: vi.fn(async () => {}),
   resolveConnectAuthStateMock: vi.fn(),
+  resolveHostAccountNameMock: vi.fn(async () => "Gateway Person"),
   upsertPresenceMock: vi.fn(),
 }));
 
@@ -139,8 +148,9 @@ vi.mock("../../../state/user-profile-writes.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../../infra/host-account-name.js", () => ({
-  resolveHostAccountName: vi.fn(async () => "Gateway Person"),
+vi.mock("../../../infra/host-account-name.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../infra/host-account-name.js")>()),
+  resolveHostAccountName: resolveHostAccountNameMock,
 }));
 
 vi.mock("../../github-user-identity.js", () => ({
@@ -171,8 +181,9 @@ vi.mock("../../../config/config.js", () => ({
 vi.mock("../../../config/io.js", () => ({
   getRuntimeConfig: loadConfigMock,
 }));
-vi.mock("../../../infra/system-presence.js", () => ({
-  commitPresence: vi.fn(),
+vi.mock("../../../infra/system-presence.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../infra/system-presence.js")>()),
+  commitPresence: commitPresenceMock,
   upsertPresence: upsertPresenceMock,
   listSystemPresence: vi.fn(() => []),
 }));
@@ -253,42 +264,49 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   it("keeps one editable owner profile across shared-secret and device-token reconnects", async () => {
     await withGatewayTestState({ label: "gateway-owner-reconnect" }, async () => {
       let profileId: string | undefined;
-      for (const authMethod of ["token", "password", "device-token", "none"] as const) {
-        resolveConnectAuthStateMock.mockResolvedValueOnce({
-          authResult: { ok: true, method: authMethod },
-          authOk: true,
-          authMethod,
-          sharedAuthOk: true,
-        });
-        const harness = attachGatewayHarness({
-          connId: `owner-${authMethod}`,
-          connectNonce: `nonce-${authMethod}`,
-        });
-        harness.sendConnect(`connect-${authMethod}`, {
-          ...TEST_CONNECT_PARAMS,
-          scopes: ["operator.read"],
-          caps: [],
-        });
-        await harness.whenAttached;
-        const resolvedProfileId = expectAuthenticatedOwnerReconnect(harness.client, {
-          authMethod,
-          previousProfileId: profileId,
-          registeredProfileId: harness.registeredProfileId,
-        });
-        if (!profileId) {
-          setDisplayName(resolvedProfileId, "Saved Owner");
-        }
-        profileId = resolvedProfileId;
-        expect(upsertPresenceMock).toHaveBeenCalledWith(
-          `owner-${authMethod}`,
-          expect.objectContaining({
-            user: expect.objectContaining({
-              id: profileId,
-              identity: { type: "profile", id: profileId },
+      let releaseCatalog = () => {};
+      try {
+        for (const authMethod of ["token", "password", "device-token", "none"] as const) {
+          resolveConnectAuthStateMock.mockResolvedValueOnce({
+            authResult: { ok: true, method: authMethod },
+            authOk: true,
+            authMethod,
+            sharedAuthOk: true,
+          });
+          const harness = attachGatewayHarness({
+            connId: `owner-${authMethod}`,
+            connectNonce: `nonce-${authMethod}`,
+          });
+          harness.sendConnect(`connect-${authMethod}`, {
+            ...TEST_CONNECT_PARAMS,
+            scopes: ["operator.read"],
+            caps: [],
+          });
+          await harness.whenAttached;
+          const resolvedProfileId = expectAuthenticatedOwnerReconnect(harness.client, {
+            authMethod,
+            previousProfileId: profileId,
+            registeredProfileId: harness.registeredProfileId,
+          });
+          expect(resolveHostAccountNameMock).toHaveBeenCalledTimes(1);
+          if (!profileId) {
+            releaseCatalog = (await prepareUserProfileCatalog()).release;
+            setDisplayName(resolvedProfileId, "Saved Owner");
+          }
+          profileId = resolvedProfileId;
+          expect(upsertPresenceMock).toHaveBeenCalledWith(
+            `owner-${authMethod}`,
+            expect.objectContaining({
+              user: expect.objectContaining({
+                id: profileId,
+                identity: { type: "profile", id: profileId },
+              }),
             }),
-          }),
-          { pending: true },
-        );
+            { pending: true },
+          );
+        }
+      } finally {
+        releaseCatalog();
       }
     });
   });
@@ -434,40 +452,218 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     }
   });
 
-  it.each(["construction", "delivery"] as const)(
-    "closes registered clients and discards pipelined frames when hello %s fails",
-    async (failure) => {
+  it("keeps an admitted socket usable after hello snapshot construction fails", async () => {
+    await withGatewayTestState({ label: "snapshot-failure-update-status" }, async () => {
+      const { createGatewayUpdateLifecycle } =
+        await import("../../../infra/update-check-lifecycle.js");
+      const { createTestGatewayScheduler } =
+        await import("../../../test-utils/gateway-scheduler-clock.js");
+      const scheduler = createTestGatewayScheduler();
+      const lifecycle = createGatewayUpdateLifecycle(scheduler);
+      try {
+        const close = createCloseMock();
+        const harness = attachGatewayHarness({
+          connId: "conn-failed-snapshot",
+          connectNonce: "nonce-failed-snapshot",
+          close,
+        });
+        buildGatewaySnapshotMock.mockImplementationOnce(() => {
+          throw new Error("Session row facts require worker reconciliation");
+        });
+        const { updateStatusHandlers } = await import("../../server-methods/update-status.js");
+        vi.mocked(handleGatewayRequest).mockImplementationOnce(async (options) => {
+          const params = options.req.params;
+          if (!validateUpdateStatusParams(params)) {
+            throw new Error("Invalid update.status fixture params");
+          }
+          await updateStatusHandlers["update.status"]!({
+            ...options,
+            params,
+            context: {
+              ...options.context,
+              getRuntimeConfig: () => ({ update: { channel: "stable" } }),
+            },
+          });
+        });
+
+        harness.sendConnect("connect", BACKEND_CONNECT_PARAMS);
+        harness.sendRequest("update-after-snapshot", "update.status");
+        await harness.runWhenIdle();
+
+        expect(close).not.toHaveBeenCalled();
+        expect(harness.send).toHaveBeenCalledWith(
+          expect.objectContaining({
+            id: "connect",
+            ok: false,
+            error: expect.objectContaining({ code: ErrorCodes.UNAVAILABLE }),
+          }),
+        );
+        expect(harness.send).toHaveBeenCalledWith(
+          expect.objectContaining({ id: "update-after-snapshot", ok: true }),
+        );
+        expect(harness.logGateway.error).toHaveBeenCalledWith(
+          expect.stringContaining("Session row facts require worker reconciliation"),
+        );
+      } finally {
+        await lifecycle.stop();
+        await scheduler.stop();
+      }
+    });
+  });
+
+  it("returns a connect preparation error and allows a fresh connect on the same socket", async () => {
+    const close = createCloseMock();
+    const harness = attachGatewayHarness({
+      connId: "conn-failed-preparation",
+      connectNonce: "nonce-failed-preparation",
+      close,
+    });
+    prepareGatewayNodeConnectMock.mockRejectedValueOnce(new Error("synthetic preparation failure"));
+    harness.sendConnect("failed-connect", BACKEND_CONNECT_PARAMS);
+    await harness.runWhenIdle();
+    expect(close).not.toHaveBeenCalled();
+    expect(harness.client).toBeNull();
+    expect(harness.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "failed-connect",
+        ok: false,
+        error: expect.objectContaining({ code: ErrorCodes.UNAVAILABLE }),
+      }),
+    );
+    harness.sendConnect("retry-connect", BACKEND_CONNECT_PARAMS);
+    await harness.runWhenIdle();
+    expect(JSON.parse(harness.socketSend.mock.calls[0]![0])).toMatchObject({
+      id: "retry-connect",
+      ok: true,
+      payload: { type: "hello-ok" },
+    });
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it("closes with an explicit transport failure when hello delivery fails", async () => {
+    const close = createCloseMock();
+    const harness = attachGatewayHarness({
+      connId: "conn-failed-hello-write",
+      connectNonce: "nonce-failed-hello-write",
+      close,
+    });
+    harness.socketSend.mockImplementationOnce((_payload, callback) =>
+      callback?.(new Error("synthetic hello delivery failure")),
+    );
+    harness.sendConnect("connect", BACKEND_CONNECT_PARAMS);
+    harness.sendRequest("queued", "update.status");
+    await harness.runWhenIdle();
+
+    expect(close).toHaveBeenCalledWith(1011, "gateway hello delivery failed");
+    expect(handleGatewayRequest).not.toHaveBeenCalled();
+  });
+
+  it("returns a handler error and serves the next operator request on the same socket", async () => {
+    const close = createCloseMock();
+    const harness = attachGatewayHarness({
+      connId: "conn-failed-handler",
+      connectNonce: "nonce-failed-handler",
+      close,
+    });
+    vi.mocked(handleGatewayRequest)
+      .mockImplementationOnce(async () => {
+        throw new Error("synthetic request failure");
+      })
+      .mockImplementationOnce(async ({ respond }) => {
+        respond(true, { available: true });
+      });
+    harness.sendConnect("connect", BACKEND_CONNECT_PARAMS);
+    await harness.runWhenIdle();
+    harness.sendRequest("failed", "sessions.list");
+    await harness.runWhenIdle();
+    harness.sendRequest("update-after-handler", "update.status");
+    await harness.runWhenIdle();
+
+    expect(close).not.toHaveBeenCalled();
+    expect(harness.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "failed",
+        ok: false,
+        error: expect.objectContaining({ code: ErrorCodes.UNAVAILABLE }),
+      }),
+    );
+    expect(harness.send).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "update-after-handler", ok: true }),
+    );
+  });
+
+  it.each(["commit", "publication", "health"] as const)(
+    "keeps hello successful after a post-connect %s failure",
+    async (step) => {
+      await withGatewayTestState({ label: `post-connect-${step}-failure` }, async () => {
+        const close = createCloseMock();
+        const failure = () => {
+          throw new Error(`synthetic ${step} failure`);
+        };
+        if (step === "commit") {
+          commitPresenceMock.mockImplementationOnce(failure);
+        }
+        resolveConnectAuthStateMock.mockResolvedValueOnce({
+          authResult: { ok: true, method: "token" },
+          authOk: true,
+          authMethod: "token",
+          sharedAuthOk: true,
+        });
+        const harness = attachGatewayHarness({
+          connId: `conn-failed-${step}`,
+          connectNonce: `nonce-failed-${step}`,
+          close,
+          ...(step === "publication" ? { publishPresence: failure } : {}),
+          ...(step === "health" ? { refreshHealthSnapshot: vi.fn(failure) } : {}),
+        });
+        harness.sendConnect("connect", TEST_CONNECT_PARAMS);
+        await harness.runWhenIdle();
+        expect(close).not.toHaveBeenCalled();
+        expect(JSON.parse(harness.socketSend.mock.calls[0]![0])).toMatchObject({
+          id: "connect",
+          ok: true,
+          payload: { type: "hello-ok" },
+        });
+        expect(
+          harness.send.mock.calls.filter(([frame]) => (frame as { id?: string }).id === "connect"),
+        ).toEqual([]);
+        expect(
+          [...harness.logGateway.error.mock.calls, ...harness.logGateway.warn.mock.calls]
+            .flat()
+            .join(" "),
+        ).toContain(`synthetic ${step} failure`);
+        vi.mocked(handleGatewayRequest).mockImplementationOnce(async ({ respond }) => {
+          respond(true, {});
+        });
+        harness.sendRequest("after-post-connect", "update.status");
+        await harness.runWhenIdle();
+        expect(harness.send).toHaveBeenCalledWith(
+          expect.objectContaining({
+            id: "after-post-connect",
+            ok: true,
+          }),
+        );
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "closes malformed JSON explicitly (authenticated=%s)",
+    async (connected) => {
       const close = createCloseMock();
       const harness = attachGatewayHarness({
-        connId: "conn-failed-hello",
-        connectNonce: "nonce-failed-hello",
+        connId: "conn-malformed-json",
+        connectNonce: "nonce-malformed-json",
         close,
       });
-      const error = new Error(`synthetic hello ${failure} failure`);
-      if (failure === "construction") {
-        buildGatewaySnapshotMock.mockImplementationOnce(() => {
-          throw error;
-        });
-      } else {
-        harness.socketSend.mockImplementationOnce((_payload, callback) => callback?.(error));
+      if (connected) {
+        harness.sendConnect("connect", BACKEND_CONNECT_PARAMS);
+        await harness.runWhenIdle();
       }
-
-      harness.sendConnect("connect-before-failed-hello", BACKEND_CONNECT_PARAMS);
-      harness.sendRequest("request-before-failed-hello", "status.summary");
+      harness.sendMessage("{");
       await harness.runWhenIdle();
-
-      expect(buildGatewaySnapshotMock).toHaveBeenCalledOnce();
-      expect({
-        registrations: harness.setClient.mock.calls.length,
-        closes: close.mock.calls.length,
-        helloWrites: harness.socketSend.mock.calls.length,
-        queuedRequests: vi.mocked(handleGatewayRequest).mock.calls.length,
-      }).toEqual({
-        registrations: 1,
-        closes: 1,
-        helloWrites: failure === "construction" ? 0 : 1,
-        queuedRequests: 0,
-      });
+      expect(close).toHaveBeenCalledWith(1007, "invalid JSON");
+      expect(harness.logGateway.error).toHaveBeenCalledWith(expect.stringContaining("parse error"));
     },
   );
 
@@ -1734,6 +1930,28 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       delete removed.gateway!.auth!.identityScopes!["alice@example.com"];
       disconnectDisallowedGatewayPolicyClients([client], removed);
       expect(client.invalidated).toBe(true);
+    });
+  });
+
+  it("keeps each identity scope grant in the info audit trail across reconnects and grant changes", async () => {
+    await withGatewayTestState({ scenario: "minimal" }, async () => {
+      for (const [connId, scopes] of [
+        ["scope-grant-first", ["operator.admin"]],
+        ["scope-grant-reconnect", ["operator.admin"]],
+        ["scope-grant-changed", ["operator.read"]],
+        ["scope-grant-removed", []],
+      ] as const) {
+        const harness = connectTrustedProxyUser(loadConfigMock, connId, {}, [...scopes]);
+        await harness.whenAttached;
+        expect(harness.client).toMatchObject({ connect: { scopes: [...scopes] } });
+        const message = `security audit: identity scope grant elevated connection identity=alice@example.com addedScopes=${scopes.join(",")} auth=trusted-proxy conn=${connId}`;
+        expect(harness.logGateway.warn).not.toHaveBeenCalled();
+        if (scopes.length > 0) {
+          expect(harness.logGateway.info).toHaveBeenCalledExactlyOnceWith(message);
+        } else {
+          expect(harness.logGateway.info).not.toHaveBeenCalled();
+        }
+      }
     });
   });
 

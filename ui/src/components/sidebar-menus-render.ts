@@ -34,6 +34,7 @@ import { canRetryGatewayStatus } from "./gateway-status.ts";
 import "../styles/sidebar-menus.css";
 import { sessionMenuReasons } from "./session-menu-access.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
+import "./session-menu.ts";
 import {
   isSidebarAttentionDismissed,
   isUpdateAttentionForced,
@@ -429,7 +430,11 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
               void host.sessionOrganizer.createSessionGroup([session]);
               break;
             case "snooze":
-              void host.sessionOrganizer.snoozeSessionWithUndo(session, action.snoozedUntil);
+              void host.sessionOrganizer.snoozeSessionWithUndo(
+                session,
+                action.snoozedUntil,
+                action.rememberCustom,
+              );
               break;
             case "wake":
               void host.sessionOrganizer.patchSession(

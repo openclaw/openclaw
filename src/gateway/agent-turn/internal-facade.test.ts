@@ -234,10 +234,16 @@ describe("createInternalAgentTurnFacade", () => {
     async (method) => {
       const reached = createDeferred();
       const release = createDeferred();
+      const releaseMutation = vi.fn();
+      const releaseAccess = vi.fn();
       authorize.mockImplementationOnce(async () => {
         reached.resolve();
         await release.promise;
-        return { error: null };
+        return {
+          error: null,
+          sessionMutationAuthorization: { release: releaseMutation },
+          sessionAccessAuthority: { release: releaseAccess },
+        };
       });
       const context = createContext();
       const entries = new GatewayRequestEntryLifetime();
@@ -264,6 +270,8 @@ describe("createInternalAgentTurnFacade", () => {
       }
       await rejected;
       await entries.waitForPendingEntries();
+      expect(releaseMutation).toHaveBeenCalledOnce();
+      expect(releaseAccess).toHaveBeenCalledOnce();
       expect(envelope).not.toHaveBeenCalled();
       expect(startTurn).not.toHaveBeenCalled();
       expect(waitForTurn).not.toHaveBeenCalled();

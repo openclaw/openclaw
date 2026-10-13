@@ -7,7 +7,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils.js";
+import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store-lookup.js";
 
 describe("sessions.patchMany orchestration", () => {
   const context = (overrides: Record<string, unknown> = {}) =>
@@ -420,9 +420,9 @@ describe("sessions.patchMany orchestration", () => {
       } as never);
 
       expect(assertCurrent).not.toHaveBeenCalled();
-      expect([
-        ...new Set(assertTargetCurrent.mock.calls.map(([target]) => target.sessionKey)),
-      ]).toEqual(targets.map(({ key }) => key));
+      expect(new Set(assertTargetCurrent.mock.calls.map(([target]) => target.sessionKey))).toEqual(
+        new Set(targets.map(({ key }) => key)),
+      );
       expect(respond).toHaveBeenCalledWith(
         true,
         {

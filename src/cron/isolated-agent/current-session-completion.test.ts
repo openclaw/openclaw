@@ -131,6 +131,7 @@ describe("current-session completion media", () => {
         );
         let available = true;
         let revoked = false;
+        let deliveryWarning = "";
         const revokeOccurrence = () => {
           revoked = true;
           if (revoke === "cancel") {
@@ -175,6 +176,8 @@ describe("current-session completion media", () => {
               { ...job, ...fixture.params.deliveryPlan },
             );
             const result = await dispatchCronDelivery(fixture.params);
+            deliveryWarning =
+              result.diagnostics?.entries.map(({ message }) => message).join("\n") ?? "";
             expect(result.delivered).toBe(stage === "commit");
             if (stage === "commit") {
               expect(result).toMatchObject({
@@ -230,10 +233,11 @@ describe("current-session completion media", () => {
           expect(sendMedia).toHaveBeenCalledTimes(stage === "commit" ? 1 : 0);
           expect(await fixture.messages()).toHaveLength(0);
           if (stage === "commit") {
-            expect(await fixture.records()).toEqual([]);
+            expect(await fixture.records(), deliveryWarning).toEqual([]);
           }
         } finally {
           cron.stop();
+          await Promise.allSettled(runIsolatedAgentJob.mock.results.map(({ value }) => value));
           admission.mockRestore();
           tts.mockRestore();
           restoreActivePluginRegistrySnapshot(registry);

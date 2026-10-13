@@ -45,8 +45,8 @@ export function AgentSelect(props: { params: AgentSelectOptions }) {
         prop:menuLabel={t("newSession.agents")}
         prop:disabled={props.params.disabled}
         prop:onSelect={props.params.onSelect}
-        onWa-show={() => props.params.onOpenChange(true)}
-        onWa-hide={() => props.params.onOpenChange(false)}
+        onOverlay-show={() => props.params.onOpenChange(true)}
+        onOverlay-hide={() => props.params.onOpenChange(false)}
       />
     </span>
   );
@@ -180,7 +180,9 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
     cloudDisabledReason: environmentCloudDisabledReason(props.params.place.modelControl),
     cloudProfileDisabledReason: (profile) =>
       environmentCloudDisabledReason(props.params.place.modelControl, profile),
-    submitting: props.params.submitting,
+    submitting: props.params.submitting || props.params.place.suggestedCloudProfile.pending,
+    suggestedProfile: props.params.gateway.suggestedProfile,
+    onAdoptSuggestedProfile: () => void props.params.place.suggestedCloudProfile.adopt(),
     pendingPlacement: props.params.pendingPlacement,
     catalogLoading: props.params.place.canWrite() && props.params.gateway.cloudProfilesPending,
     isAdmin: props.params.place.isAdmin(),

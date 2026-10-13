@@ -132,6 +132,67 @@ afterEach(() => {
 });
 
 describe("agent harness host capability", () => {
+  it.each([
+    "host close",
+    "run replacement",
+    "recorder replacement",
+    "admission release",
+    "lifecycle rotation",
+  ] as const)(
+    "rejects trajectory cleanup after %s before and during a flush",
+    async (revocation) => {
+      const flushed = createDeferred();
+      const recorder = { recordEvent: vi.fn(), flush: vi.fn(() => flushed.promise) };
+      const { attempt, admission } = await admittedAttempt("run-trajectory-cleanup", {
+        trajectoryRecorder: recorder,
+      });
+      const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+      const trajectory = host.capabilities.trajectory!;
+      try {
+        const pending = trajectory.flush();
+        expect(recorder.flush).toHaveBeenCalledOnce();
+        if (revocation === "host close") {
+          host.close();
+        } else if (revocation === "run replacement") {
+          attempt.admittedRunContext = {
+            ...attempt.admittedRunContext,
+            operationalRunInstance: createOperationalRunInstanceRef(attempt.runId),
+          };
+        } else if (revocation === "recorder replacement") {
+          attempt.trajectoryRecorder = { recordEvent: vi.fn(), flush: vi.fn(async () => {}) };
+        } else if (revocation === "admission release") {
+          admission.close();
+        } else {
+          rotateAgentRunRegistryLifecycleGeneration();
+        }
+        flushed.resolve();
+        await expect(pending).rejects.toThrow("no longer active");
+        await expect(trajectory.flush()).rejects.toThrow("no longer active");
+        expect(recorder.flush).toHaveBeenCalledOnce();
+      } finally {
+        host.close();
+      }
+    },
+  );
+
+  it("preserves trajectory flush failures", async () => {
+    const failure = new Error("trajectory storage unavailable");
+    const { attempt } = await admittedAttempt("run-trajectory-failure", {
+      trajectoryRecorder: {
+        recordEvent: vi.fn(),
+        flush: async () => {
+          throw failure;
+        },
+      },
+    });
+    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    try {
+      await expect(host.capabilities.trajectory!.flush()).rejects.toBe(failure);
+    } finally {
+      host.close();
+    }
+  });
+
   it.each(["host close", "authority release"] as const)(
     "rejects an awaited tool surface after %s during construction",
     async (revocation) => {

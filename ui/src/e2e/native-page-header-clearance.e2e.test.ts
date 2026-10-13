@@ -59,7 +59,7 @@ suite.define(() => {
 
   async function collapseNative(page: Page): Promise<Box> {
     const toolbar = page.locator(".macos-titlebar-controls");
-    await toolbar.getByRole("button", { name: "Collapse sidebar" }).click();
+    await page.locator(".sidebar-session-toolbar__collapse").click();
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--nav-collapsed");
@@ -227,6 +227,11 @@ suite.define(() => {
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--nav-collapsed");
     const controls = (await page.locator(".shell-chrome-controls").boundingBox())!;
+    expect(
+      await page
+        .locator(".shell-chrome-controls button, .shell-chrome-controls a")
+        .evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-label"))),
+    ).toEqual(["Expand sidebar", "Open command palette"]);
     expect(controls.y + controls.height).toBeGreaterThan(52);
     const header = page.locator(".content .content-header").first();
     await expectOnCenterline(header.locator(".page-title"), 25);

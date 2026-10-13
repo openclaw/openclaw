@@ -157,7 +157,7 @@ describe("AppSidebar catalog row lifecycle", () => {
     if (menuState === "open") {
       expect(popup).not.toBeNull();
       expect(popup?.trigger).toBe(adoptedMenu);
-      popup?.querySelector<HTMLElement>("wa-dropdown-item")?.focus();
+      popup?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
       await sidebar.updateComplete;
     } else {
@@ -201,12 +201,12 @@ describe("AppSidebar catalog row lifecycle", () => {
       const expectCatalogMenu = () => {
         const menu = sidebar.querySelector("openclaw-catalog-session-menu");
         expect(menu).not.toBeNull();
-        expect(menu?.querySelector('wa-dropdown-item[value="viewer"]')).not.toBeNull();
-        expect(menu?.querySelector('wa-dropdown-item[value="terminal"]')).not.toBeNull();
-        expect(
-          menu?.querySelector('wa-dropdown-item[value="terminal"]')?.hasAttribute("disabled"),
-        ).toBe(false);
-        expect(menu?.querySelector('wa-dropdown-item[value="delete"]') !== null).toBe(canDelete);
+        expect(menu?.querySelector('[data-value="viewer"]')).not.toBeNull();
+        expect(menu?.querySelector('[data-value="terminal"]')).not.toBeNull();
+        expect(menu?.querySelector('[data-value="terminal"]')?.hasAttribute("disabled")).toBe(
+          false,
+        );
+        expect(menu?.querySelector('[data-value="delete"]') !== null).toBe(canDelete);
       };
 
       for (const event of [

@@ -249,10 +249,23 @@
   padding-top: 4px;
 }
 
-html:is(.openclaw-native-desktop, .openclaw-native-macos)
+html.openclaw-native-macos,
+html.openclaw-native-desktop[data-native-platform="macos"] {
+  .shell:not(.shell--mobile-nav) .sidebar-rail {
+    padding-top: var(--openclaw-native-titlebar-height, 52px);
+  }
+}
+
+html.openclaw-native-web-chrome:not(.openclaw-native-macos):not([data-native-platform="macos"])
   .shell:not(.shell--mobile-nav)
   .sidebar-rail {
-  padding-top: var(--openclaw-native-titlebar-height, 52px);
+  padding-top: calc((var(--rail-header-height) - 36px) / 2);
+}
+
+/* Installed Mac apps inject !important padding; keep Settings' clearance, but
+   let the rail-era panel own its top row even under those older injections. */
+html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-shell {
+  padding-top: 0 !important;
 }
 
 @media (hover: none), (pointer: coarse) {
@@ -277,9 +290,15 @@ html:is(.openclaw-native-desktop, .openclaw-native-macos)
 }
 
 .shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) {
-  --shell-controls-width: 68px;
+  --shell-controls-width: var(--shell-chrome-control-size);
   --shell-nav-width: var(--shell-nav-rail-width);
   grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
+}
+
+/* Legacy Mac hosts retain the expand + search cluster. */
+html.openclaw-native-macos:not(.openclaw-native-web-chrome)
+  .shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) {
+  --shell-controls-width: 68px;
 }
 
 .shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) .shell-nav {
@@ -319,11 +338,29 @@ html:is(.openclaw-native-desktop, .openclaw-native-macos)
   flex: 0 0 30px;
 }
 
-.sidebar--rail .sidebar-session-toolbar {
+.sidebar--rail .sidebar-panel-header {
+  display: flex;
+  align-items: center;
   min-height: 44px;
   margin: 0;
   padding: 4px 8px;
   gap: 6px;
+}
+
+.sidebar-session-toolbar__collapse {
+  margin-inline-start: auto;
+}
+
+/* A growing section toggle would cover the row's empty space, which must stay
+   non-interactive so native hosts can drag the window from it. */
+.sidebar-panel-header > .sidebar-session-group-toggle {
+  flex: 0 1 auto;
+}
+
+.sidebar--rail .sidebar-online {
+  padding: 0;
+  margin: 0;
+  border: 0;
 }
 
 .sidebar-session-owner-filter {
@@ -355,4 +392,23 @@ html:is(.openclaw-native-desktop, .openclaw-native-macos)
 .sidebar--rail .sidebar-session-toolbar__button {
   width: 28px;
   height: 28px;
+}
+
+html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-panel-header {
+  min-height: var(--rail-header-height);
+  margin-inline: calc(-1 * var(--sidebar-pad-x));
+  padding-left: max(
+    16px,
+    calc(var(--shell-native-titlebar-controls-inset) - var(--shell-nav-rail-width))
+  );
+}
+
+.shell--mobile-nav .sidebar-session-toolbar__collapse {
+  display: none;
+}
+
+html.openclaw-native-macos:not(.openclaw-native-web-chrome) {
+  .sidebar-session-toolbar__collapse {
+    display: none;
+  }
 }

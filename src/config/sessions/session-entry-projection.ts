@@ -74,6 +74,7 @@ export function projectPublicSessionEntryPatch(
 
 // A completed context rewrite invalidates the previous run snapshot, not the transcript ledger.
 export const COMPACTION_RUN_USAGE_CLEAR_PATCH = {
+  usageReport: undefined,
   inputTokens: undefined,
   outputTokens: undefined,
   cacheRead: undefined,

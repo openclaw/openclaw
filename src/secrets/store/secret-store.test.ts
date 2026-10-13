@@ -5,6 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as kyselySync from "../../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import * as stateDb from "../../state/openclaw-state-db.js";
@@ -689,6 +690,7 @@ describe("secret store", () => {
     });
     before.exec("DROP TABLE secret_store_entries;");
     before.close();
+    revokeSqliteDatabaseAdmissionsForPath(database.path);
 
     expect(await listSecretStoreEntries({ scope: team, database })).toEqual([]);
     expect(

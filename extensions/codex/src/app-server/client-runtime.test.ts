@@ -1,5 +1,10 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  recordCodexThreadForkSettings,
+  recordCodexTurnForkSettings,
+  requireCodexThreadForkSettings,
+} from "./client-fork-settings.js";
 import type { CodexAppServerClient } from "./client.js";
 import { createClientHarness } from "./test-support.js";
 
@@ -58,6 +63,42 @@ describe("Codex app-server client runtime", () => {
     vi.restoreAllMocks();
     mocks.refreshAuth.mockClear();
     mocks.mergeRateLimitUpdate.mockClear();
+  });
+
+  it("keeps native creation instructions and latest turn settings only for the live parent", () => {
+    const { client } = createRuntimeHarness();
+    expect(() => requireCodexThreadForkSettings(client, "parent")).toThrow("normal message first");
+    recordCodexThreadForkSettings(client, "parent", {
+      model: "parent-model",
+      developerInstructions: "creation policy",
+      config: { web_search: "disabled", "features.computer_use": true },
+    });
+    recordCodexTurnForkSettings(client, {
+      threadId: "parent",
+      input: [],
+      effort: "high",
+      environments: [{ environmentId: "parent-env", cwd: "/workspace" }],
+    });
+    recordCodexThreadForkSettings(client, "parent", {
+      threadId: "parent",
+      developerInstructions: "ignored warm resume override",
+    });
+    recordCodexTurnForkSettings(client, {
+      threadId: "parent",
+      input: [],
+      effort: "xhigh",
+      serviceTier: "priority",
+    });
+    expect(requireCodexThreadForkSettings(client, "parent")).toMatchObject({
+      thread: {
+        model: "parent-model",
+        developerInstructions: "creation policy",
+        config: { web_search: "disabled", "features.computer_use": true },
+      },
+      turn: { effort: "xhigh", serviceTier: "priority" },
+    });
+    client.close();
+    expect(() => requireCodexThreadForkSettings(client, "parent")).toThrow("normal message first");
   });
 
   it("retains ephemeral policy and history beyond persistent idle and capacity limits", async () => {

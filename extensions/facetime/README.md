@@ -33,7 +33,7 @@ openclaw gateway restart
 - `src/helper-rpc.ts` owns bounded loopback IPC with mutual authentication,
   connection-epoch message MACs, replay sequencing, and typed native
   postcondition projection.
-- `src/helper-supervisor.ts` owns generation-bound LLDB injection and joins
+- `src/helper-supervisor.ts` owns serialized LLDB injection and joins
   in-flight work on stop.
 - `src/audio-pump.ts` owns bounded native capture, SoX playback, and child
   teardown.

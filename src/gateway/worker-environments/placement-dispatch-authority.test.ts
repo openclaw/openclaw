@@ -18,6 +18,7 @@ import {
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
@@ -29,7 +30,7 @@ import {
   identifiedClient,
   sessionSharingTestContext,
 } from "../server-methods/sessions-sharing.test-support.js";
-import { resolveSessionMutationAuthorization } from "../session-sharing.js";
+import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import { type PlacementStore, REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
@@ -60,6 +61,7 @@ describe("worker placement cancellation and reclaim authority", () => {
   });
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -432,12 +434,13 @@ describe("worker placement dispatch authority", () => {
           addedBy: owner.id,
           expectedSessionId: REQUEST.sessionId,
         });
-        const result = resolveSessionMutationAuthorization({
+        const result = await resolveSessionMutationAuthorizationAsync({
           client: identifiedClient(member.id),
           context: sessionSharingTestContext(vi.fn(), cfg),
           method: "sessions.dispatch",
           requestParams: { key: REQUEST.sessionKey, deviceId: "device-1" },
         });
+        using _ = { [Symbol.dispose]: () => result.authorization?.release?.() };
         expect(result.error).toBeNull();
         if (!result.authorization) {
           throw new Error("dispatch fixture did not admit its session member");

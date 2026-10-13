@@ -1,7 +1,9 @@
 import type { Model, StreamOptions } from "@openclaw/llm-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { createOpenAIResponsesAssistantOutput } from "./openai-responses-replay-internal.js";
 import {
+  assignTransportErrorDetails,
   copyProviderAcceptanceObserver,
   createModelStreamCooperativeScheduler,
   finalizeTerminalToolCallArguments,
@@ -16,6 +18,59 @@ import {
 const MALFORMED_TOOL_CALL_TERMINAL_ERROR_MESSAGE =
   "Provider completed tool call with malformed JSON arguments";
 const REPAIR = { repairStringLiterals: true } as const;
+
+describe("transport failure diagnostics", () => {
+  it.each(["error", "data"] as const)(
+    "logs complete raw response.%s before transcript projection, omitting generated content",
+    (bodyField) => {
+      const host = getAiTransportHost();
+      const logWarn = vi.fn();
+      const body = {
+        code: "invalid_prompt",
+        type: "invalid_request_error",
+        message: "x".repeat(6000),
+      };
+      const output = createOpenAIResponsesAssistantOutput({
+        provider: "openai",
+        id: "fixture-model",
+        api: "openai-responses",
+      } as Model);
+      configureAiTransportHost({ ...host, logWarn });
+      try {
+        assignTransportErrorDetails(
+          output,
+          Object.assign(new Error(body.message), {
+            status: 400,
+            code: body.code,
+            request_id: "req_fixture",
+            errorType: body.type,
+            response: {
+              id: "resp_fixture",
+              [bodyField]: body,
+              output: [{ text: "PRIVATE OUTPUT" }],
+            },
+          }),
+        );
+        expect(logWarn).toHaveBeenCalledWith("provider-error", "Model request failed", {
+          provider: "openai",
+          model: "fixture-model",
+          status: 400,
+          code: "invalid_prompt",
+          type: "invalid_request_error",
+          message: body.message,
+          body,
+          requestId: "req_fixture",
+          responseId: "resp_fixture",
+        });
+        expect(output.errorType).toBe("invalid_request_error");
+        expect(output.errorBody?.length).toBeLessThan(6000);
+        expect(JSON.stringify(logWarn.mock.calls)).not.toContain("PRIVATE OUTPUT");
+      } finally {
+        configureAiTransportHost(host);
+      }
+    },
+  );
+});
 
 function captureError(run: () => unknown): Error & { errorCode?: string; errorBody?: string } {
   try {

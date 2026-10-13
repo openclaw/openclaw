@@ -10,9 +10,8 @@ import {
   listSessionTranscriptArchivesReadOnly,
   listSessionTranscriptInstances,
 } from "../config/sessions/session-accessor.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { listSessionTranscriptInstancesInWorker } from "../config/sessions/session-history.js";
-import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import {
   projectSessionMetadata,
   readMemorySessionTargets,
@@ -24,6 +23,7 @@ import type {
 import { resolveMemorySessionTargetsInWorker } from "../config/sessions/session-transcript-inventory-runtime.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 
 export type {
   MemorySessionSelectors,
@@ -137,17 +137,22 @@ export async function loadMemorySessionMetadataBatchAsync(params: {
   const agentId = normalizeAgentId(params.agentId);
   const scope = { agentId, storePath: params.storePath };
   const sessionIds = [...selectors.keys()];
-  const metadata =
-    getSessionActorStorageBinding(scope) || captureIncognitoSessionSource(scope)
-      ? (await resolveMemorySessionTargetsInWorker({ ...scope, sessionIds })).filter(
-          (entry) => entry.resolution === "live",
+  const signal = getAsyncWorkSignal();
+  const assertCurrent = () => signal?.throwIfAborted();
+  const memory = captureSessionActorStorageOwner(scope, {
+    assertCurrent,
+    authorize: assertCurrent,
+  });
+  const metadata = memory
+    ? (await resolveMemorySessionTargetsInWorker({ ...scope, sessionIds })).filter(
+        (entry) => entry.resolution === "live",
+      )
+    : (
+        await listSessionTranscriptInstancesInWorker(
+          { ...scope, projection: "list" },
+          { includeAllWindows: true, sessionIds },
         )
-      : (
-          await listSessionTranscriptInstancesInWorker(
-            { ...scope, projection: "list" },
-            { includeAllWindows: true, sessionIds },
-          )
-        ).map((instance) => projectSessionMetadata(instance));
+      ).map((instance) => projectSessionMetadata(instance));
   return metadata.filter(
     (entry) =>
       entry.agentId === agentId &&

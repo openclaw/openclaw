@@ -17,6 +17,9 @@ const personalPublication = "src/gateway/github-personal-publication-store.worke
 const repositoryPublication = "src/gateway/github-repository-publication-store.worker.ts";
 const publicationLifecycle = "src/state/github-publication-session-lifecycles.worker.ts";
 const publicationDeletion = "src/state/github-personal-publication-lifecycle.ts";
+const sessionMembers = "src/config/sessions/session-sharing-store.native.ts";
+const sessionArtifacts = "src/config/sessions/session-accessor.sqlite-node-artifacts.ts";
+const sessionEntries = "src/config/sessions/session-accessor.sqlite-entry-store.ts";
 const authCells = "src/agents/auth-profiles/sqlite-json-write.ts";
 const authRelocation = "src/infra/state-migrations.shared-auth-store.ts";
 const machineState = "src/state/config-machine-state-write.ts";
@@ -39,6 +42,7 @@ const guardedTables = new Set([
   "github_personal_publication_requests",
   "github_repository_publication_requests",
   "github_publication_session_lifecycles",
+  "session_members",
 ]);
 
 // Schema owners create/rebuild tables and v18 adds a column; no publication row-DML exception.
@@ -473,6 +477,41 @@ const nativeSdkExports = new Map<string, readonly string[]>([
 // Exact edges, not worker-file exemptions: every new entry needs an owner audit.
 const callers = new Map<string, readonly string[]>([
   ...publicationWriters,
+  ...["addSessionMember", "removeSessionMember"].map((name): [string, string[]] => [
+    key(sessionMembers, name),
+    [key("src/config/sessions/session-sharing-store.worker.ts", "bindSqliteWorkerBackend/execute")],
+  ]),
+  [
+    key(sessionArtifacts, "clearSessionCollaborationForKey"),
+    [key(sessionEntries, "writeSessionEntry")],
+  ],
+  [
+    key(sessionArtifacts, "deleteSessionNodeArtifacts"),
+    [key(sessionEntries, "deleteSessionEntryRows")],
+  ],
+  // Alias moves publish both canonical entry postimages; the other callers hold offline repair ownership.
+  [
+    key(sessionArtifacts, "copySessionNodeArtifactsForRepair"),
+    [
+      key(sessionEntries, "deleteLegacySessionEntryRows"),
+      key("src/config/sessions/legacy-main-session-migration-operations.ts", "copyClaimCrossStore"),
+      key(
+        "src/config/sessions/session-accessor.sqlite-canonical-repair.ts",
+        "copySqliteSessionOwnedStateForRepair",
+      ),
+      key("src/commands/doctor-session-canonical-keys.ts", "applyCanonicalDestinationArtifacts"),
+    ],
+  ],
+  [
+    key(sessionArtifacts, "deleteSessionMembersForRepair"),
+    [
+      key(
+        "src/config/sessions/session-accessor.sqlite-canonical-repair.ts",
+        "copySqliteSessionOwnedStateForRepair",
+      ),
+      key("src/commands/doctor-session-canonical-keys.ts", "applyCanonicalDestinationArtifacts"),
+    ],
+  ],
   ...authCredentialCallers,
   ...[...recommendationCallbacks.keys()].map((id): [string, string[]] => [id, []]),
   ...nativeReadCallers,
@@ -586,6 +625,16 @@ const exclusiveMaintenanceCallers = new Map([
 
 // Counts shrink freely. An additional sink, even in an existing function, needs review.
 const sinks = new Map<string, number>([
+  ...["addSessionMember", "removeSessionMember"].map((name): [string, number] => [
+    key(sessionMembers, name),
+    1,
+  ]),
+  ...[
+    "clearSessionCollaborationForKey",
+    "copySessionNodeArtifactsForRepair",
+    "deleteSessionMembersForRepair",
+    "deleteSessionNodeArtifacts",
+  ].map((name): [string, number] => [key(sessionArtifacts, name), 1]),
   // Canonical auth sinks publish before releasing authority; state-only writes do not revoke.
   [key(authCells, "writeAuthProfileJsonCell"), 2],
   [key(authCells, "deleteAuthProfileJsonCell"), 2],
@@ -723,6 +772,16 @@ const credentialCommandOwners = new Map([
 ]);
 
 const repeatedEdges = new Map([
+  ...[
+    key(
+      "src/config/sessions/session-accessor.sqlite-canonical-repair.ts",
+      "copySqliteSessionOwnedStateForRepair",
+    ),
+    key("src/commands/doctor-session-canonical-keys.ts", "applyCanonicalDestinationArtifacts"),
+  ].map((caller): [string, number] => [
+    `${key(sessionArtifacts, "copySessionNodeArtifactsForRepair")}<-${caller}`,
+    2,
+  ]),
   [
     `${key(authUpdate, "runAuthProfileStoreUpdate")}<-${key("src/agents/auth-profiles/upsert-with-lock.ts", "persistAuthProfileBatch")}`,
     2,
@@ -1101,7 +1160,7 @@ export function inspectPersonalCredentialWriters(
       }
       if (ts.isStringLiteralLikeNode(node) || ts.isTemplateHead(node)) {
         const writes = node.text.matchAll(
-          /\b(?:insert\s+(?:or\s+\w+\s+)?into|update|delete\s+from)\s+["`[]?(secret_store_entries|auth_profile_store|config_machine_state|github_(?:(?:personal_|repository_)?publication_requests|publication_session_lifecycles))\b/gi,
+          /\b(?:insert\s+(?:or\s+\w+\s+)?into|update|delete\s+from)\s+["`[]?(session_members|secret_store_entries|auth_profile_store|config_machine_state|github_(?:(?:personal_|repository_)?publication_requests|publication_session_lifecycles))\b/gi,
         );
         for (const write of writes) {
           const id = key(file, operation(node));
@@ -1308,9 +1367,11 @@ export function inspectPersonalCredentialWriters(
           !approvedCallers.get(target)?.includes(caller) ||
           count > (repeatedEdges.get(edge) ?? 1)
         ) {
-          const owner = target.includes("publication")
-            ? "GitHub publication"
-            : "personal credential";
+          const owner = target.includes("src/config/sessions/")
+            ? "session membership"
+            : target.includes("publication")
+              ? "GitHub publication"
+              : "personal credential";
           fail(node, `unreviewed ${owner} writer reference to ${target} from ${caller}`);
         }
       }

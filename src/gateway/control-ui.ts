@@ -534,7 +534,7 @@ async function prepareControlUiBootstrapConfig(
     return { config: undefined, requestAuth };
   }
   const config = opts?.config;
-  const [assistant, pluginControlUiModules, devGitBranch] = await Promise.all([
+  const [assistant, pluginControlUiModules, devGitBranch, preferences] = await Promise.all([
     (async () => {
       const resolvedIdentity = config
         ? await resolveAssistantIdentity({ cfg: config, agentId: opts?.agentId })
@@ -558,11 +558,16 @@ async function prepareControlUiBootstrapConfig(
       ),
     ),
     resolveDevInstallGitBranch(),
+    import("./control-ui-bootstrap-preferences.js").then(
+      ({ prepareControlUiBootstrapPreferences }) =>
+        prepareControlUiBootstrapPreferences(config, requestAuth),
+    ),
   ]);
   const { identity, agentId: assistantAgentId, avatarProjection } = assistant;
   const avatarMeta = controlUiAvatarResolutionMeta(avatarProjection.resolution);
   requestAuth.assertCurrent();
   const bootstrapConfig = {
+    preferences,
     basePath,
     assistantName: identity.name,
     assistantAvatar: avatarProjection.avatar,

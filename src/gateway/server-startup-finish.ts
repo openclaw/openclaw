@@ -204,6 +204,7 @@ export async function finishGatewayStartup(params: {
       activateGatewayAgentDatabaseStartup({
         admission: databaseStartupAdmission,
         preparationReady: databasePreparationReady.promise,
+        waitForPostReadyWork: params.waitForPostReadyWork,
         getConfig: getRuntimeConfig,
         getPluginRegistry: () => pluginRuntime.registry,
         getPluginMetadataSnapshot,

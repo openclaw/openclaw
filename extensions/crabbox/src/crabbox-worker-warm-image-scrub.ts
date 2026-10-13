@@ -1,9 +1,12 @@
+import { CRABBOX_RUNTIME_NODE_PATH } from "./crabbox-worker-script.js";
+
 // Enrollment roots its identity, device token, bundles, and node-host workspaces
 // under OPENCLAW_STATE_DIR here; deleting it is the cross-session data boundary.
 // Crabbox's separate checkpoint workdir never receives session files (--no-sync).
 // SSH session workspaces must also be scrubbed; sibling bundle installs and git-seeds
 // in .openclaw-worker are machine-level caches and intentionally survive.
 export const SCRUB_WORKER_STATE = `set -eu
+${CRABBOX_RUNTIME_NODE_PATH}
 worker_root="$HOME/.openclaw/cloud-workers"
 node <<'CRABBOX_SCRUB_NODE_SCRIPT'
 const fs = require("node:fs");

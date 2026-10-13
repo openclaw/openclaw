@@ -41,6 +41,7 @@ import {
 } from "./model-registry-runtime.js";
 import {
   formatValidationPath,
+  omitInvalidModelCosts,
   validateModelsConfig,
   type ProviderAuthMode,
 } from "./model-registry-schema.js";
@@ -469,7 +470,9 @@ export class ModelRegistry {
         return emptyCustomModelsResult();
       }
 
-      if (!validateModelsConfig.Check(parsed)) {
+      const valid = validateModelsConfig.Check(parsed);
+      const invalidCosts = valid ? undefined : omitInvalidModelCosts(parsed);
+      if (!valid && !validateModelsConfig.Check(parsed)) {
         const errors =
           validateModelsConfig
             .Errors(parsed)
@@ -501,8 +504,23 @@ export class ModelRegistry {
         return emptyCustomModelsResult();
       }
 
+      const catalogWarnings: string[] = [];
       for (const [providerName, providerConfig] of Object.entries(providers)) {
         this.validateProviderModels(providerName, providerConfig, "catalog");
+        if (invalidCosts?.size && providerConfig.models) {
+          providerConfig.models = providerConfig.models.filter((model) => {
+            if (!invalidCosts.has(model)) {
+              return true;
+            }
+            const source = options.requireGeneratedCatalog
+              ? "the provider's catalog source"
+              : modelsJsonPath;
+            catalogWarnings.push(
+              `Skipped model ${providerName}/${model.id}: invalid cost. Fix or remove its cost block in ${source}, then refresh the model catalog.`,
+            );
+            return false;
+          });
+        }
       }
 
       const generated = options.requireGeneratedCatalog === true;
@@ -518,7 +536,9 @@ export class ModelRegistry {
           : captureProviderSource(providerConfig, "authored");
       }
 
-      const pluginCatalogErrors: string[] = [];
+      const pluginCatalogErrors = catalogWarnings.map(
+        (warning) => `${warning}\nFile: ${modelsJsonPath}`,
+      );
       if (options.includePluginCatalogs !== false) {
         let pluginCatalogs: readonly PersistedPluginModelCatalog[] = [];
         try {

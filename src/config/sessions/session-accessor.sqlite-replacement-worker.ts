@@ -7,7 +7,10 @@ import {
   retainSqliteWorkerErrorCode,
   SqliteWorkerError,
 } from "../../infra/sqlite-worker-contract.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import {
+  readDatabasePathIdentitySync,
+  type DatabasePathIdentity,
+} from "../../infra/sqlite-worker-identity.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerOperationAdmission,
@@ -90,6 +93,7 @@ export async function withSessionEntryWorker<T>(
   ) => boolean,
   releaseSource?: () => void | Promise<void>,
   operationMode: "write" | "prepared-read" = "write",
+  expectedCreationIdentity?: DatabasePathIdentity,
 ): Promise<T> {
   let execution: OpenClawAgentDatabaseExecution;
   let env: SessionEntryCommitContext["env"];
@@ -99,25 +103,24 @@ export async function withSessionEntryWorker<T>(
     }
     env = Object.freeze({ ...(options.env ?? process.env) });
     const targetIdentity =
-      !retainedExecution && !databaseIdentity
+      !retainedExecution && !databaseIdentity && !expectedCreationIdentity
         ? readDatabasePathIdentitySync(options.path)
         : undefined;
     execution =
       retainedExecution ??
-      captureOpenClawAgentDatabaseExecution(
-        options,
-        databaseIdentity
+      captureOpenClawAgentDatabaseExecution(options, {
+        expectedCreationIdentity: databaseIdentity
+          ? undefined
+          : (expectedCreationIdentity ??
+            (targetIdentity?.key.startsWith("path:") ? targetIdentity : undefined)),
+        expectedIdentity: databaseIdentity
           ? {
-              expectedIdentity: {
-                kind: "file",
-                physicalIdentity: databaseIdentity,
-                nativeLocation: options.path,
-              },
+              kind: "file",
+              physicalIdentity: databaseIdentity,
+              nativeLocation: options.path,
             }
-          : targetIdentity?.key.startsWith("path:")
-            ? { expectedCreationIdentity: targetIdentity }
-            : {},
-      );
+          : undefined,
+      });
   } catch (error) {
     try {
       await releaseSource?.();
@@ -453,6 +456,7 @@ export async function runSessionEntryWorkerMutation<T>(
   lifecycle: {
     identityAgentId: string;
     onResult?: (value: T | undefined) => void;
+    beforeCommit?: (publication: SessionEntryReplacementPublication) => void;
     afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
     onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
   },
@@ -586,9 +590,10 @@ export async function runSessionEntryWorkerMutation<T>(
             "Session entry mutation commit omitted its publication keys",
         );
       }
-      admitted = { admission, retained };
       // SAFETY: This command's native kernel supplies the typed publication, not external input.
       const committed = facts.publication as SessionEntryReplacementPublication;
+      lifecycle.beforeCommit?.(committed);
+      admitted = { admission, retained };
       publication.begin(
         committed.changedKeys,
         committed.membershipInvalidatedKeys,

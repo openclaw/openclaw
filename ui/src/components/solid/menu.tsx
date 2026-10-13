@@ -41,17 +41,22 @@ export type MenuProps = {
   triggerClass?: string;
   triggerAttributes?: Pick<
     JSX.HTMLAttributes<HTMLButtonElement>,
-    "title" | "style" | "tabindex" | "aria-hidden"
+    "title" | "style" | "tabindex" | "aria-hidden" | "aria-busy"
   > & {
+    /** Stable for this mount, like the menu id. */
+    id?: string;
     [name: `data-${string}`]: string | number | boolean | undefined;
   };
   placement?: OverlayPlacement;
   dir?: "ltr" | "rtl";
   open?: boolean;
   disabled?: boolean;
+  /** Override the destination when Tab exits the menu; dismissal stays owned here. */
+  tabFocusTarget?: (backward: boolean) => HTMLElement | undefined;
   onSelect?: (item: MenuItem, event: CustomEvent<MenuItem>) => void;
   onOpenChange?(open: boolean): void;
   onBeforeShow?(event: Event): void;
+  onAfterShow?(event: Event): void;
   onBeforeHide?(event: Event): void;
   ref?(handle: MenuHandle): void;
 };
@@ -79,6 +84,9 @@ export function Menu(props: BranchProps): JSX.Element {
   let anchorBinding: ReturnType<typeof createOverlayAnchor> | undefined;
   const identity = untrack(() => ({
     id: props.id,
+    triggerId: props.parent
+      ? `${props.id}:trigger`
+      : (props.triggerAttributes?.id ?? `${props.id}:trigger`),
     parent: props.parent,
     binding: props.parentBinding,
     root: props.root,
@@ -135,7 +143,9 @@ export function Menu(props: BranchProps): JSX.Element {
     }
   };
   onSettled(() => overlay.bindSurface(surface));
-  const binding = useMenuMachine(overlay, direction, activate, identity.binding?.service);
+  const binding = useMenuMachine(overlay, direction, activate, identity.binding?.service, {
+    ids: { trigger: identity.triggerId },
+  });
   const [opened, setOpened] = createSignal(false);
   let openPublication = 0;
   const syncOpen = (open: boolean) => {
@@ -211,7 +221,15 @@ export function Menu(props: BranchProps): JSX.Element {
         event.preventDefault();
         next.focus();
       } else {
-        menuRoot.request(false, "return");
+        const destination = untrack(() => props.tabFocusTarget?.(event.shiftKey));
+        if (destination) {
+          event.preventDefault();
+          if (menuRoot.request(false, "none")) {
+            destination.focus({ preventScroll: true });
+          }
+        } else {
+          menuRoot.request(false, "return");
+        }
       }
     };
     overlay.surface.addEventListener("overlay-show", beforeShow);
@@ -244,7 +262,7 @@ export function Menu(props: BranchProps): JSX.Element {
           overlay.bindTrigger(node);
         }}
         type="button"
-        id={`${identity.id}:trigger`}
+        id={identity.triggerId}
         class={[
           identity.parent ? "oc-menu-item oc-menu-item--submenu" : "oc-menu-trigger",
           props.triggerClass,
@@ -274,6 +292,11 @@ export function Menu(props: BranchProps): JSX.Element {
         role="menu"
         aria-label={props.label}
         dir={direction()}
+        onOverlay-after-show={(event: Event) => {
+          if (event.target === surface) {
+            props.onAfterShow?.(event);
+          }
+        }}
       >
         {props.children}
         <For each={props.items} keyed={(entry) => entry.id}>
@@ -335,6 +358,7 @@ export function Menu(props: BranchProps): JSX.Element {
                         parent={overlay}
                         root={menuRoot}
                         parentBinding={binding}
+                        tabFocusTarget={props.tabFocusTarget}
                         dir={direction()}
                         disabled={item().disabled}
                         triggerClass={item().class}

@@ -646,15 +646,16 @@ describe("TwitchClientManager", () => {
       });
     });
 
-    it("should include user role flags in message", async () => {
+    it("preserves message content and role flags without logging content", async () => {
       await manager.getClient(testAccount);
 
       const onMessageCallback = expectDefined(messageHandlers[0], "Twitch message handler");
+      const messageText = "private-twitch-message\n🦞";
 
       onMessageCallback(
         "#testchannel",
         "moduser",
-        "Test",
+        messageText,
         ircMessage("msg2", {
           userName: "moduser",
           displayName: "ModUser",
@@ -670,6 +671,17 @@ describe("TwitchClientManager", () => {
       expect(capturedMessage?.isVip).toBe(true);
       expect(capturedMessage?.isSub).toBe(true);
       expect(capturedMessage?.isOwner).toBe(true);
+      expect(capturedMessage?.message).toBe(messageText);
+      expect(capturedMessage?.channel).toBe("#testchannel");
+      expect(mockLogger.debug).toHaveBeenCalledWith(
+        `twitch inbound: channel=#testchannel from=twitch:moduser len=${messageText.length}`,
+      );
+      expect(
+        vi
+          .mocked(expectDefined(mockLogger.debug, "Twitch debug logger"))
+          .mock.calls.flat()
+          .join("\n"),
+      ).not.toContain("private-twitch-message");
     });
   });
 

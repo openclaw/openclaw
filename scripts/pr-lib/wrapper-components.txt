@@ -306,6 +306,7 @@ src/agents/workspace-access.ts
 src/agents/workspace-default-path.ts
 src/agents/workspace-default.ts
 src/agents/workspace-dirs.ts
+src/agents/workspace-git.ts
 src/agents/workspace-state-identity.ts
 src/agents/worktrees/allocation.ts
 src/agents/worktrees/branches.runtime.ts
@@ -365,7 +366,6 @@ src/config/sessions/session-actor-executor.ts
 src/config/sessions/session-actor-sqlite.ts
 src/config/sessions/session-actor-transaction.ts
 src/infra/sqlite-database-write-receipts.ts
-src/state/openclaw-agent-execution-incognito-session-actors.ts
 src/talk/client-voice-session-lifecycle.ts
 src/talk/client-voice-session-source.ts
 src/agents/worktrees/run-lease-owner.ts
@@ -650,22 +650,9 @@ src/acp/runtime/session-meta-entry.kernel.ts
 src/acp/runtime/session-meta-keys.ts
 src/acp/runtime/session-meta-readonly.ts
 src/acp/runtime/session-meta-read.types.ts
-src/config/sessions/session-incognito-actor.ts
-src/config/sessions/session-incognito-admission.ts
-src/config/sessions/session-incognito-authority.ts
 src/config/sessions/session-collaboration-scope.ts
-src/config/sessions/session-incognito-compute-contract.ts
-src/config/sessions/session-incognito-compute.ts
-src/config/sessions/session-incognito-facts.types.ts
-src/config/sessions/session-incognito-history-contract.ts
-src/config/sessions/session-incognito-lifecycle-contract.ts
-src/config/sessions/session-incognito-lifecycle.ts
-src/config/sessions/session-incognito-manager-contract.ts
-src/config/sessions/session-incognito-pending-input-contract.ts
 src/config/sessions/cli-session-binding.ts
-src/config/sessions/session-incognito-side-data-contract.ts
 src/config/sessions/session-row-facts.types.ts
-src/config/sessions/session-incognito-transcript-contract.ts
 src/state/artifact-preserving-state-reads.ts
 src/state/incognito-session-error.ts
 src/config/sessions/session-model-context-projection.ts
@@ -1009,6 +996,7 @@ src/infra/openclaw-exec-env.ts
 src/infra/openclaw-process-census.ts
 src/infra/openclaw-root.fs.runtime.ts
 src/infra/openclaw-root.ts
+src/infra/owned-directory-observation.ts
 src/infra/package-json.ts
 src/infra/package-update-activation-custody.ts
 src/infra/package-update-activation-immutable-recovery-schema.ts
@@ -1057,9 +1045,11 @@ src/infra/sqlite-audit-record-store.ts
 src/infra/sqlite-audit-record.kernel.ts
 src/infra/sqlite-backup.ts
 src/infra/sqlite-busy-timeout.ts
+src/infra/sqlite-clean-close-seal.ts
 src/infra/sqlite-commit-receipt.ts
 src/infra/sqlite-database-admission-key.ts
 src/infra/sqlite-database-admission-record.ts
+src/infra/sqlite-database-admission-seal.ts
 src/infra/sqlite-database-admission-turn.ts
 src/infra/sqlite-database-admission.ts
 src/infra/sqlite-error-diagnostics.ts
@@ -1278,7 +1268,9 @@ src/logging/structured-authorization-code.ts
 src/logging/subsystem.ts
 src/logging/timestamps.ts
 src/llm/types.ts
+src/media/inbound-media-uri.ts
 src/media/media-facts.ts
+src/media/parse-output.ts
 src/media/staged-inputs.ts
 src/memory-host-sdk/host/config-utils.ts
 src/memory/root-memory-files.ts
@@ -1485,6 +1477,7 @@ src/plugins/plugin-metadata-snapshot-required.ts
 src/plugins/plugin-metadata-snapshot.runtime.ts
 src/plugins/plugin-metadata-snapshot.ts
 src/plugins/plugin-metadata-state-worker.ts
+src/plugins/plugin-metadata-state.kernel.ts
 src/plugins/plugin-module-loader-cache.ts
 src/plugins/plugin-module-loader-recovery.ts
 src/plugins/plugin-native-admission-state.ts
@@ -1577,6 +1570,7 @@ src/process/exec-termination.ts
 src/process/exec.ts
 src/process/gateway-work-admission.ts
 src/process/kill-tree.ts
+src/process/linux-oom-score.ts
 src/process/output-drain.ts
 src/process/process-deadline.ts
 src/process/scoped-child-reaper.ts
@@ -1766,8 +1760,6 @@ src/state/openclaw-agent-db.wal.ts
 src/state/openclaw-agent-execution-authority.ts
 src/state/openclaw-agent-execution-cleanup.ts
 src/state/openclaw-agent-execution-contract.ts
-src/state/openclaw-agent-execution-incognito-absence.ts
-src/state/openclaw-agent-execution-incognito.ts
 src/state/openclaw-agent-execution-native.ts
 src/state/openclaw-agent-execution-owner.ts
 src/state/openclaw-agent-execution-scope.ts
@@ -1799,6 +1791,7 @@ src/state/openclaw-database-preflight-state-path.ts
 src/state/openclaw-database-preflight-targets.ts
 src/state/openclaw-database-preflight.messages.ts
 src/state/openclaw-database-preflight.ts
+src/state/openclaw-database-seal-schema.ts
 src/state/openclaw-database-verify.impl.ts
 src/state/openclaw-database-verify.ts
 src/state/openclaw-quarantine-error.ts
@@ -1878,8 +1871,10 @@ src/state/openclaw-state-maintenance-context.ts
 src/state/openclaw-state-ownership.ts
 src/state/openclaw-state-ownership-worker.ts
 src/state/openclaw-state-read-operation.ts
+src/state/openclaw-state-read-pool.ts
 src/state/openclaw-state-read-request.ts
 src/state/openclaw-state-read-scope.ts
+src/state/openclaw-state-read-snapshot.ts
 src/state/openclaw-state-read-worker.ts
 src/state/openclaw-state-schema-compatibility.ts
 src/state/openclaw-state-schema-inspection.ts
@@ -1910,8 +1905,10 @@ src/utils/absolute-deadline.ts
 src/utils/boolean.ts
 src/utils/delivery-context.read.ts
 src/utils/delivery-context.shared.ts
+src/utils/directive-tags.ts
 src/utils/fetch-timeout.ts
 src/utils/github-login.ts
+src/utils/inline-reply-tags.ts
 src/utils/message-channel-constants.ts
 src/utils/message-channel-core.ts
 src/utils/parse-json-compat.ts
@@ -2017,6 +2014,7 @@ src/config/sessions/session-accessor.sqlite-entry-read.ts
 src/config/sessions/session-accessor.sqlite-entry-select.ts
 src/config/sessions/session-accessor.sqlite-entry-revision.ts
 src/config/sessions/session-accessor.sqlite-participant-projection.ts
+src/config/sessions/session-actor-entry-publication.worker.ts
 src/config/sessions/session-participant-identity.ts
 src/config/sessions/session-participant-prepared-read.ts
 packages/agent-core/src/harness/session/session.ts
@@ -2033,7 +2031,6 @@ src/config/sessions/session-accessor.sqlite-entry-receipt.ts
 src/config/sessions/session-accessor.sqlite-entry-worker-publication.ts
 src/config/sessions/session-transcript-authority.ts
 src/config/sessions/session-transcript-context-facts.ts
-src/config/sessions/session-accessor.sqlite-incognito-sharing.ts
 src/config/sessions/session-accessor.sqlite-maintenance-age-queries.ts
 src/config/sessions/session-accessor.sqlite-maintenance-age.ts
 src/config/sessions/session-accessor.sqlite-metadata-read.ts
@@ -2072,11 +2069,8 @@ src/config/sessions/session-actor-transcript-replica.ts
 src/config/sessions/activity-summary.ts
 src/config/sessions/session-actor.ts
 src/config/sessions/session-entry-cohort-scope.ts
-src/config/sessions/session-incognito-binding.ts
-src/config/sessions/session-incognito-projection.ts
 src/config/sessions/session-transcript-index-maintenance.ts
 src/config/sessions/session-transcript-projection-writer.ts
-src/config/sessions/session-transcript-reconcile-memory.ts
 src/config/sessions/session-transcript-reconcile-pool.ts
 src/config/sessions/session-transcript-reconcile-readiness.ts
 src/config/sessions/session-transcript-reconcile.ts
@@ -2223,6 +2217,7 @@ src/boards/session-actor-board-memory.ts
 src/chat/sender-identity.ts
 src/chat/work-context.ts
 src/config/sessions/ambient-transcript-watermark-projection.ts
+src/config/sessions/cleanup-service-read.policy.ts
 src/config/sessions/conversation-authority.ts
 src/config/sessions/conversation-delivery-policy.ts
 src/config/sessions/conversation-delivery-store.types.ts
@@ -2324,6 +2319,7 @@ src/config/sessions/transcript-message-equality.ts
 src/config/sessions/transcript-replay.ts
 src/config/sessions/transcript-visible-events.ts
 src/config/sessions/work-start-error.ts
+src/gateway/chat-display-projection.helpers.ts
 src/gateway/control-reply-text.ts
 src/gateway/payload-limits.ts
 src/gateway/server-constants.ts
@@ -2364,6 +2360,16 @@ src/shared/text/text-projection.ts
 src/shared/text/xml-tag-at.ts
 src/shared/widget-theme.ts
 packages/markdown-core/package.json
+src/state/openclaw-agent-db-worker-admission.ts
+src/config/sessions/legacy-compaction-history.ts
+src/config/sessions/session-accessor.sqlite-references.ts
+src/config/sessions/session-actor-memory-conversation-owner.ts
+src/config/sessions/session-actor-memory-lifecycle-artifacts.ts
+src/config/sessions/session-actor-memory-message-rewrite.ts
+src/config/sessions/session-manual-compact-entry.ts
+src/config/sessions/session-manual-compact-selection.ts
+src/config/sessions/store-maintenance-plan.ts
+src/config/sessions/store-maintenance-preserve-snapshot.ts
 src/agents/auth-profiles/constants.ts
 src/agents/auth-profiles/credential-schema.ts
 src/agents/auth-profiles/credential-write-custody.ts

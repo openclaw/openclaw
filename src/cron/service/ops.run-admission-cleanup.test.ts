@@ -298,19 +298,14 @@ describe("cron service run admission cleanup", () => {
   );
 
   it("does not start a scheduled run when stop wins the activation write", async () => {
-    const { store, dueAt, clock, job, state, runIsolatedAgentJob, execute } =
+    const { store, dueAt, job, state, runIsolatedAgentJob, execute } =
       await activationFixture("scheduled");
-    let reservationPersisted = false;
-    const markerTransitions: Array<"queued" | "running" | "idle"> = [];
+    const markerTransitions: Array<"running" | "idle"> = [];
     const stopObserving = observeCronJobCommits(job.id, ({ queuedAtMs, runningAtMs }) => {
-      if (!reservationPersisted && queuedAtMs === dueAt) {
-        reservationPersisted = true;
-        markerTransitions.push("queued");
-        clock.now = dueAt + 1;
-      } else if (reservationPersisted && runningAtMs === dueAt + 1) {
+      if (markerTransitions.length === 0 && runningAtMs === dueAt) {
         markerTransitions.push("running");
         stop(state);
-      } else if (markerTransitions.length === 2 && !queuedAtMs && !runningAtMs) {
+      } else if (markerTransitions.length === 1 && !queuedAtMs && !runningAtMs) {
         markerTransitions.push("idle");
       }
     });
@@ -320,7 +315,7 @@ describe("cron service run admission cleanup", () => {
       stopObserving();
     }
     expect(runIsolatedAgentJob).not.toHaveBeenCalled();
-    expect(markerTransitions).toEqual(["queued", "running", "idle"]);
+    expect(markerTransitions).toEqual(["running", "idle"]);
     const persisted = (await loadCronStore(store.storePath)).jobs.find(
       (entry) => entry.id === job.id,
     );
@@ -435,9 +430,10 @@ describe("cron service run admission cleanup", () => {
     "releases $trigger ownership after $failure persistence fails",
     async ({ trigger, failure }) => {
       const terminal = failure === "cleanup-terminal";
-      const { store, dueAt, clock, job, state, runIsolatedAgentJob, execute } =
-        await activationFixture(trigger, !terminal);
-      let reservationPersisted = false;
+      const { store, dueAt, job, state, runIsolatedAgentJob, execute } = await activationFixture(
+        trigger,
+        !terminal,
+      );
       let activationPersisted = false;
       let failureInjected = false;
       const errorText = terminal ? "terminal cleanup persist failed" : "activation persist failed";
@@ -454,11 +450,8 @@ describe("cron service run admission cleanup", () => {
           SELECT RAISE(ABORT, '${errorText}');
         END;
       `);
-      const stopObserving = observeCronJobCommits(job.id, ({ queuedAtMs, runningAtMs }) => {
-        if (!reservationPersisted && queuedAtMs === dueAt) {
-          reservationPersisted = true;
-          clock.now = dueAt + 1;
-        } else if (reservationPersisted && runningAtMs === dueAt + 1 && terminal) {
+      const stopObserving = observeCronJobCommits(job.id, ({ runningAtMs }) => {
+        if (runningAtMs === dueAt && terminal) {
           activationPersisted = true;
           stop(state);
         }
@@ -483,7 +476,7 @@ describe("cron service run admission cleanup", () => {
         (entry) => entry.id === job.id,
       );
       if (terminal) {
-        expect(persisted?.state.runningAtMs).toBe(dueAt + 1);
+        expect(persisted?.state.runningAtMs).toBe(dueAt);
       } else {
         expect(persisted?.state.runningAtMs).toBeUndefined();
         expect(persisted?.state.lastError).toBe("prior failure");

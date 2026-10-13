@@ -253,6 +253,35 @@ describe.each([false, true])("CLI run rejection (cleanupFails=%s)", (cleanupFail
   });
 });
 
+it.each(["progress", "ambiguous", "final"] as const)(
+  "requires final source delivery to preserve a %s message through cleanup failure",
+  async (delivery) => {
+    const context = buildPreparedCliRunContext();
+    const error = new Error("backend release failed");
+    context.preparedBackend.cleanup = async () => {
+      throw error;
+    };
+    const result = {
+      payloads: [{ text: "output" }],
+      meta: { durationMs: 1 },
+      didSendViaMessagingTool: true,
+      ...(delivery === "ambiguous"
+        ? {}
+        : {
+            messagingToolSourceReplyPayloads: [
+              { text: "output", sourceReplyFinal: delivery === "final" },
+            ],
+          }),
+    };
+    const settled = settlePreparedCliRun({ context, run: async () => result });
+    if (delivery === "final") {
+      await expect(settled).resolves.toBe(result);
+    } else {
+      await expect(settled).rejects.toBe(error);
+    }
+  },
+);
+
 it("preserves completed result boundaries for independent final delivery", async () => {
   const context = buildPreparedCliRunContext({ provider: "claude-cli" });
   const result = buildCliRunResult({

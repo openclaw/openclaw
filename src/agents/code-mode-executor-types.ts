@@ -27,6 +27,8 @@ export type CodeModeExecutorResumeInput = Omit<
 >;
 
 export type CodeModeExecutorInlineHost = {
+  onWorkerAssigned?: (workerId: string) => void;
+  onFailure?: (error: unknown, phase: CodeModeFailurePhase, workerId?: string) => void;
   onNetworkContent?: () => void;
   onInputConsumed?: () => void;
   onBoundary: (

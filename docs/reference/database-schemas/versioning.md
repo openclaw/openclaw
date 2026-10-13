@@ -9,6 +9,13 @@ title: "Versioning contract"
 
 ## Versioning contract
 
+An admitted empty shared-state database is created directly at the current
+version in the migration owner's transaction. It does not replay historical
+row transforms or validate and repair the canonical schema it just installed.
+Database-open admission still applies. Existing and native-bootstrap databases
+retain the versioned migration and validation path; creation preserves the same
+catalog SQL and first-use table policy.
+
 Each database records its published schema in two places:
 
 - `PRAGMA user_version` is the SQLite schema version.
@@ -22,6 +29,11 @@ Read admission reports the newer published schema version even when this build
 cannot parse its catalog. A known legacy index defect must not replace that
 refusal with advice to repair the database using the older build. Doctor checks
 compatibility before stopping the Gateway service.
+
+Shared-state [schema 22](/reference/database-schemas/state-schema-history#state-schema-22)
+adds portable ACP resume columns and explicit cursor identities. Builds supporting
+only schema 21 or earlier refuse it. Existing cursor values are preserved; binary
+rollback requires the verified pre-upgrade backup and its matching build.
 
 Target-release checks distinguish the target's schema support from the running
 inspector's capabilities. When shared state is too new for the target but still

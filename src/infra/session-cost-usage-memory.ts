@@ -3,7 +3,10 @@ import {
   parseSqliteSessionFileMarker,
 } from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionActorMemoryUsageSnapshot } from "../config/sessions/session-actor-memory-usage-contract.js";
-import type { SessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import type {
+  captureSessionActorStorageOwner,
+  SessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { buildUsageOverview } from "../shared/usage-overview.js";
 import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
@@ -26,15 +29,21 @@ import type { UsageCostTranscriptFile } from "./session-cost-usage.types.js";
 
 // Computation holds no actor FIFO turn. Overlapping refreshes simply reuse the next refresh request.
 const refreshes = new Set<string>();
-function refreshKey(binding: SessionActorStorageBinding): string {
+type UsageCostOwnerLocation = Pick<SessionActorStorageBinding, "agentId" | "path">;
+type CapturedUsageCostOwner = NonNullable<ReturnType<typeof captureSessionActorStorageOwner>>;
+type UsageCostMemorySource = Omit<SessionActorStorageBinding, "actor"> & {
+  actor?: SessionActorStorageBinding["actor"];
+};
+
+function refreshKey(binding: UsageCostOwnerLocation): string {
   return JSON.stringify([binding.agentId, binding.path]);
 }
-export function isSessionActorUsageRefreshRunning(binding: SessionActorStorageBinding): boolean {
+export function isSessionActorUsageRefreshRunning(binding: UsageCostOwnerLocation): boolean {
   return refreshes.has(refreshKey(binding));
 }
 
 function transcriptFile(
-  binding: SessionActorStorageBinding,
+  binding: UsageCostOwnerLocation,
   instance: SessionActorMemoryUsageSnapshot,
 ): UsageCostTranscriptFile {
   const filePath = formatSqliteSessionFileMarker({
@@ -56,7 +65,38 @@ function transcriptFile(
 
 /** Selected memory acquisition bypasses the database worker and its host SQL requests completely. */
 export async function runSessionActorUsage(
-  binding: SessionActorStorageBinding,
+  binding: SessionActorStorageBinding | CapturedUsageCostOwner,
+  operation: UsageCostWorkerOperation,
+  resolveCost: UsageCostResolver,
+): Promise<UsageCostWorkerResult | { kind: "busy" }> {
+  if ("actor" in binding) {
+    return runCapturedSessionActorUsage(binding, operation, resolveCost);
+  }
+  const selected =
+    binding.binding?.agentId === binding.agentId && binding.binding.path === binding.path
+      ? binding.binding
+      : undefined;
+  const sessionKey =
+    selected?.actor.target.sessionKey ??
+    binding.owner?.listSessions(binding.authority)[0]?.target.sessionKey;
+  const lifetime = {
+    assertCurrent: () => binding.authority.assertCurrent(),
+    assertReadable: () => binding.authority.assertCurrent(),
+  };
+  const actor = sessionKey
+    ? binding.owner
+      ? await binding.owner.acquireExisting(sessionKey, lifetime)
+      : await selected?.actor.storage!.acquire(sessionKey, lifetime)
+    : undefined;
+  try {
+    return await runCapturedSessionActorUsage({ ...binding, actor }, operation, resolveCost);
+  } finally {
+    await actor?.release();
+  }
+}
+
+async function runCapturedSessionActorUsage(
+  binding: UsageCostMemorySource,
   operation: UsageCostWorkerOperation,
   resolveCost: UsageCostResolver,
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
@@ -86,17 +126,19 @@ export async function runSessionActorUsage(
     if (operation.kind === "refresh") {
       operation.rebuildRows?.forEach((row) => requestedSessionId(row.key));
     }
-    const instances = await binding.actor.storage!.read(
-      {
-        type: "session.usage.snapshot",
-        input: {
-          includeEvents: refresh,
-          includeRollupBodies: operation.kind === "summary" || operation.kind === "sessions",
-          ...(ids ? { sessionIds: ids } : {}),
-        },
-      },
-      binding.authority,
-    );
+    const instances = binding.actor
+      ? await binding.actor.storage!.read(
+          {
+            type: "session.usage.snapshot",
+            input: {
+              includeEvents: refresh,
+              includeRollupBodies: operation.kind === "summary" || operation.kind === "sessions",
+              ...(ids ? { sessionIds: ids } : {}),
+            },
+          },
+          binding.authority,
+        )
+      : [];
     const files = new Map(
       instances.map((instance) => {
         const file = transcriptFile(binding, instance);
@@ -175,7 +217,7 @@ export async function runSessionActorUsage(
               })),
             };
       // This is the disclosure boundary; ordinary bookkeeping uses the captured immutable snapshot.
-      binding.actor.snapshot(binding.authority);
+      binding.actor?.snapshot(binding.authority);
       if (result.kind === "sessions" && operation.kind === "sessions" && operation.overview) {
         return {
           kind: "overview",
@@ -190,6 +232,9 @@ export async function runSessionActorUsage(
         };
       }
       return { ...result, invalidRows: [...invalidRows.values()] };
+    }
+    if (!binding.actor) {
+      return { kind: "refresh", changed: false };
     }
     if (selectedFiles?.some((file) => !file)) {
       throw new Error("A requested usage transcript is unavailable");

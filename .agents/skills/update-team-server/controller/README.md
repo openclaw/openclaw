@@ -63,7 +63,10 @@ performed by the database migration itself.
 Candidate acceptance and predecessor rollback use the same verification owner.
 `OPENCLAW_TEAM_VERIFICATION_BUDGET` defaults to 600 seconds and bounds each
 started process's convergence, marker admission, dispatch reconciliation, and
-terminal observation together. Readiness waits and RPC retries never renew that
+terminal observation together. An empty loopback listener snapshot waits within
+that deadline and emits one `VERIFICATION_WAITING` diagnostic per acceptance
+attempt; an invalid or foreign listener still fails verification. Deadline expiry
+still emits `VERIFICATION_FAILED`. Readiness waits and RPC retries never renew that
 deadline. The 60-second marker RPC timeout bounds a transport exchange; it is
 not the whole startup acceptance window.
 
@@ -221,7 +224,9 @@ This cache is disposable while the deployment owner is idle.
 The fresh build overlaps the Control UI's staged build and precompression with
 runtime finalization after the compiler and plugin builders finish. Both
 writers finish before final build metadata is emitted, including when either
-fails. All build checks still run; cached compiler output never substitutes for a
+fails. Runtime compiler configs overlap in pairs only with the build owner's
+full 12 GiB heap budget; smaller budgets retain serial native allocations.
+All build checks still run; cached compiler output never substitutes for a
 validation result. The Control UI refreshes release identity and its offline
 shell even when its bundles and precompressed assets are reused.
 

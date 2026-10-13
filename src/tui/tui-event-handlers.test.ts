@@ -1551,7 +1551,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       expect(loadHistory).toHaveBeenCalledTimes(1);
     });
 
-    it("refreshes after a local final when terminal persistence arrives first", () => {
+    it("reconciles terminal persistence before a late chat final", async () => {
       const {
         chatLog,
         loadHistory,
@@ -1561,10 +1561,15 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       } = createHandlersHarness({ activeChatRunId: "run-active" });
       handleSessionMessageEvent();
       handleSessionsChangedEvent({ runId: "run-active", phase: "end" });
-      expect(loadHistory).not.toHaveBeenCalled();
-      handleChatEvent(textEvent("run-active", "keep this visible", "final"));
-      expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("keep this visible", "run-active", []);
       expect(loadHistory).toHaveBeenCalledTimes(1);
+      handleChatEvent(textEvent("run-active", "keep this visible", "final"));
+      await settleHistory();
+      expect(loadHistory).toHaveBeenCalledTimes(1);
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledExactlyOnceWith(
+        "keep this visible",
+        "run-active",
+        [],
+      );
     });
 
     it("does not reload until an optimistic submit is resolved", () => {

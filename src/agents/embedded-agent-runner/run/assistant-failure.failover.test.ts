@@ -5,6 +5,7 @@ import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.j
 import { formatBillingErrorMessage } from "../../embedded-agent-helpers.js";
 import { FailoverError } from "../../failover-error.js";
 import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../failover/user-copy.js";
+import { runWithModelFallback } from "../../model-fallback-runner.js";
 import { resolveAgentRunErrorLifecycleFields } from "../../run-termination.js";
 import {
   buildEmbeddedRunnerAssistant,
@@ -114,6 +115,53 @@ describe("assistant failure recovery", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it.each([
+    { errorMessage: "Pending input is no longer active in its admitted transcript" },
+    { errorMessage: "400 malformed input item", errorType: "invalid_request_error" },
+    { errorMessage: "Request rejected by content policy", errorType: "invalid_request_error" },
+    {
+      errorMessage: "invalid_prompt: rejected",
+      errorType: "invalid_request_error",
+      errorCode: "invalid_prompt",
+    },
+  ])("stops unchanged retries and model fallback for $errorMessage", async (fields) => {
+    const run = vi.fn(async () => {
+      const input = makeInput(fields.errorMessage);
+      const assistant = input.normalizedAttempt.attemptAssistant!;
+      Object.assign(assistant, fields, { content: [] });
+      input.normalizedAttempt.attempt.assistantTexts = [];
+      input.normalizedAttempt.terminalState = resolveEmbeddedRunAttemptTerminalState({
+        attempt: input.normalizedAttempt.attempt,
+        assistant,
+      });
+      for (;;) {
+        const outcome = await handleEmbeddedAssistantFailure(input);
+        if (outcome.action !== "retry") {
+          throw new Error("failure was not surfaced");
+        }
+        input.emptyErrorRetries = outcome.emptyErrorRetries;
+      }
+    });
+    await expect(
+      runWithModelFallback({
+        cfg: undefined,
+        provider: "anthropic",
+        model: "test-model",
+        manifestPlugins: [],
+        fallbacksOverride: ["openai/fixture-next", "groq/fixture-last"],
+        skipAuthProfileRuntime: true,
+        run,
+      }),
+    ).rejects.toThrow();
+    expect(run).toHaveBeenCalledOnce();
+    expect(log.warn).toHaveBeenCalledWith(
+      "Assistant attempt failed",
+      expect.objectContaining({
+        message: fields.errorMessage,
+      }),
+    );
   });
 
   it("selects the next profile before marking failure and retries without waiting for the mark", async () => {

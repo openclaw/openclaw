@@ -2265,7 +2265,7 @@ describe("messaging tool media URL tracking", () => {
         result: { details: { redacted: true } },
       });
       expect(ctx.state.messagingToolSentTexts).toEqual([message]);
-      expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(true);
+      expect(ctx.state.sourceReplyDeliveryState).toBe(isError ? "missing" : "delivered");
     },
   );
 

@@ -9,7 +9,10 @@ import {
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
-import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
+import {
+  beginNativeWindowDrag,
+  beginNativeWindowDragFromTopInset,
+} from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
 import {
   formatKeyboardShortcutCombo,
@@ -33,6 +36,7 @@ import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts
 import { resolveSessionIconGraphic } from "./session-icon-glyph-registry.ts";
 import { renderSessionOwnerAvatar } from "./session-owner-chip.ts";
 import { restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
+import "./sidebar-collapse-toggle.tsx";
 
 type RailPinTouchPress = {
   pointerId: number;
@@ -117,7 +121,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost, teamNewSession?: u
             title=${host.navigationView === view.id ? `${view.label} · ${t(host.navigationCollapsed ? "nav.expand" : "nav.collapse")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})` : view.label}
             data-navigation-view=${view.id}
             aria-label=${view.label}
-            aria-pressed=${String(host.navigationView === view.id)}
+            aria-pressed=${String(host.navigationVisible && !host.navigationCollapsed && host.navigationView === view.id)}
             @click=${() => {
               const active = host.navigationView === view.id;
               host.navigationView = view.id;
@@ -384,7 +388,12 @@ export function renderSidebarPages(host: AppSidebarRenderHost) {
     @dragover=${(event: DragEvent) => host.sessionOrganizer.handleSessionListDragOver(event)}
     @drop=${(event: DragEvent) => host.sessionOrganizer.handleSessionListDrop(event)}
   >
-    <div class="sidebar-pages__heading">${t("nav.pages")}</div>
+    <div class="sidebar-pages__heading sidebar-panel-header" @mousedown=${beginNativeWindowDrag}>
+      <span>${t("nav.pages")}</span>
+      <openclaw-sidebar-collapse-toggle
+        .onToggle=${() => host.onToggleSidebar?.()}
+      ></openclaw-sidebar-collapse-toggle>
+    </div>
     <openclaw-mcp-app-catalog surface="sidebar"></openclaw-mcp-app-catalog>
     ${repeat(
       entries,

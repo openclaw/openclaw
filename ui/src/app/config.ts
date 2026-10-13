@@ -18,6 +18,7 @@ import { applyControlUiOperatorSeamColor } from "./control-ui-presentation.ts";
 import { canReloadControlUiDocument } from "./document-reload-guard.ts";
 
 type ApplicationConfig = {
+  preferences?: ControlUiBootstrapConfig["preferences"];
   assistantIdentity: ReturnType<typeof normalizeAssistantIdentity>;
   serverVersion: string | null;
   serverBuildId?: string | null;
@@ -92,6 +93,7 @@ function loadControlUiPresentation(
 
 function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): ApplicationConfig {
   return {
+    preferences: parsed.preferences,
     assistantIdentity: normalizeAssistantIdentity({
       agentId: parsed.assistantAgentId,
       name: parsed.assistantName,
@@ -177,6 +179,7 @@ export function createApplicationConfigCapability(params: {
   let authVersion = 0;
   let refreshVersion = 0;
   let publishedVersion = 0;
+  let preferenceAuthCandidates: string[] = [];
   const environmentAttribute = document.documentElement.getAttribute(
     CONTROL_UI_ENVIRONMENT_ATTRIBUTE,
   );
@@ -215,6 +218,18 @@ export function createApplicationConfigCapability(params: {
   return {
     get current() {
       return current;
+    },
+    get preferences() {
+      const auth = params.getAuth?.() ?? {};
+      const candidates = resolveControlUiAuthCandidates({
+        settings: auth.settings,
+        password: auth.password,
+      });
+      return sameOrigin &&
+        candidates.length === preferenceAuthCandidates.length &&
+        candidates.every((candidate, index) => candidate === preferenceAuthCandidates[index])
+        ? current.preferences
+        : undefined;
     },
     async refresh(options?: { ifNeeded?: boolean; signal?: AbortSignal }) {
       // Queued bootstrap work cannot own credentials: plugin activation may
@@ -278,6 +293,11 @@ export function createApplicationConfigCapability(params: {
           return next;
         }
         current = next;
+        const auth = params.getAuth?.() ?? {};
+        preferenceAuthCandidates = resolveControlUiAuthCandidates({
+          settings: auth.settings,
+          password: auth.password,
+        });
         loadedAt = Date.now();
         for (const listener of listeners) {
           listener(current);

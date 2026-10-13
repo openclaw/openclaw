@@ -461,9 +461,9 @@ openclaw-appearance-background .settings-background-preview .session-background_
   color: var(--accent);
 }
 
-.settings-section__help-popover::part(body) {
-  max-width: 280px;
-  padding: var(--space-3) var(--space-4);
+.settings-section__help-popover {
+  --oc-overlay-max-width: 280px;
+  --oc-popover-padding: var(--space-3) var(--space-4);
 }
 
 .settings-section__help-panel {
@@ -1144,7 +1144,7 @@ textarea.settings-input {
     min-height: 44px;
   }
 
-  :is(input, select, textarea, wa-select),
+  :is(input, select, textarea),
   .settings-select .picker-select__trigger {
     font-size: max(16px, var(--control-ui-touch-input-size, 1em));
   }
@@ -1174,7 +1174,7 @@ textarea.settings-input {
       min-height: 44px;
     }
 
-    :is(input, select, textarea, wa-select),
+    :is(input, select, textarea),
     .settings-select .picker-select__trigger {
       font-size: max(16px, var(--control-ui-touch-input-size, 1em));
     }

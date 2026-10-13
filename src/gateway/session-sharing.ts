@@ -100,7 +100,6 @@ export {
 export {
   allowedSessionVisibilities,
   authorizeIncognitoSessionTarget,
-  authorizeResolvedSessionMutation,
   authorizeResolvedSessionMutationAsync,
   authorizeSessionSharingTarget,
   canManageSessionSharing,
@@ -730,7 +729,6 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
             : authorization.withPreparedCurrent,
         },
         () => consuming.sharing!,
-        authorizedTargets,
       );
       return authorization;
     })(),

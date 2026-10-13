@@ -1,5 +1,6 @@
 /** Runtime auth reads compose worker-prepared facts through the store's captured host scope. */
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
@@ -15,6 +16,7 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import type { ExternalCliOverlayOptions } from "./external-auth.js";
+import { readAuthProfileDatabaseIdentity } from "./file-state.js";
 import {
   assertAuthProfileMigrationCandidates,
   assertAuthProfileMigrationStateAtDatabasePath,
@@ -38,6 +40,7 @@ import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import {
   loadPersistedAuthProfileStoreFromRows,
   prepareAgentAuthProfileRowsRead,
+  readAuthProfileRowsAtPath,
   readSharedAuthProfileRows,
   readUserModelAuthProfileAsync,
 } from "./sqlite-read.js";
@@ -178,8 +181,8 @@ export function createAuthProfileStoreRuntimeReader({
       getScopedAuthProfileEnv() ?? suppliedEnv ?? process.env,
     );
     env.OPENCLAW_STATE_DIR = resolveStateDir(env);
-    const reusePersistedRows =
-      !scope.isolated &&
+    const trackPersistedRows =
+      isMainThread &&
       !isArtifactPreservingStateRead() &&
       !getOpenClawDatabaseMaintenanceScope() &&
       !getActiveOpenClawStateDatabaseReadSnapshot({ env });
@@ -312,9 +315,19 @@ export function createAuthProfileStoreRuntimeReader({
         requestOptions.deferScopedMigrationRefusals,
       );
       const candidates = resolveLegacyAuthProfileSourceCandidates({ agentDir: ownerAgentDir, env });
+      if (trackPersistedRows) {
+        readAuthProfileDatabaseIdentity(databasePath);
+      }
       const preparedReader =
         rowReaders.get(databasePath) ??
-        (reusePersistedRows ? runtimeAuthProfileRowsCache.prepare(databasePath, reader) : reader);
+        (trackPersistedRows
+          ? runtimeAuthProfileRowsCache.prepare(
+              databasePath,
+              reader,
+              () => readAuthProfileRowsAtPath(databasePath, env),
+              !scope.isolated,
+            )
+          : reader);
       rowReaders.set(databasePath, preparedReader);
       const capturedAuthority = credentialAuthorities.get(databasePath);
       if (capturedAuthority && !capturedAuthority.ok) {
