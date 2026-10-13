@@ -344,9 +344,11 @@ export async function resolveEmbeddedRunTerminal(input: {
     !terminalAssistantError &&
     !input.replayState.hadPotentialSideEffects,
   );
-  // Replay safety does not make a normal empty completion a model-capability failure.
+  // Replay safety alone is not a model-capability failure; explicit harness failures retain fallback.
   const incompleteTurnFallbackSafe =
-    incompleteTurnReplaySafe && input.attemptAssistant?.stopReason !== "stop";
+    incompleteTurnReplaySafe &&
+    (input.attemptAssistant?.stopReason !== "stop" ||
+      attempt.agentHarnessResultClassification !== undefined);
   const terminalToolPresentation = incompleteTurnReplaySafe
     ? availableTerminalToolPresentation
     : undefined;
