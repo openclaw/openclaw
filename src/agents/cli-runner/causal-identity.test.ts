@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { runBeforeAgentReplyForTurn } from "../../plugins/before-agent-reply.js";
 import {
+  getGlobalHookRunner,
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
@@ -10,6 +11,8 @@ import { createPluginRecord } from "../../plugins/loader-records.js";
 import { getPluginInstance } from "../../plugins/plugin-instance-scope.js";
 import { createTestPluginRegistry } from "../../plugins/registry-runtime.test-helpers.js";
 import { buildEmbeddedAgentHookContext } from "../embedded-agent-runner/run/agent-hook-context.js";
+import { projectEmbeddedMessageContext } from "../embedded-agent-runner/run/shared-run-context.js";
+import { runBeforeAgentRunGate } from "../harness/before-agent-run.js";
 import { buildAgentHookContext } from "../harness/hook-context.js";
 import { runCliBeforeAgentReply } from "./before-agent-reply.js";
 
@@ -30,9 +33,13 @@ describe("registered plugin causal hook metadata", () => {
       builder.registry.plugins.push(record);
       const api = builder.createApi(record, { config: {} });
       const observed: Array<Pick<PluginHookAgentContext, "messageId" | "senderIsOwner">> = [];
+      const observedRun: Array<Pick<PluginHookAgentContext, "messageId" | "senderIsOwner">> = [];
       api.on("before_agent_reply", (_event, context) => {
         observed.push({ messageId: context.messageId, senderIsOwner: context.senderIsOwner });
         return { handled: true, reply: { text: "registered hook received the source" } };
+      });
+      api.on("before_agent_run", (_event, context) => {
+        observedRun.push({ messageId: context.messageId, senderIsOwner: context.senderIsOwner });
       });
       initializeGlobalHookRunner(builder.registry);
       const base = {
@@ -54,8 +61,25 @@ describe("registered plugin causal hook metadata", () => {
           timeoutMs: 1000,
         });
         expect(cli?.payloads).toEqual([{ text: "registered hook received the source" }]);
-        const embeddedRun = { ...base, runId: randomUUID() };
+        const embeddedRun = {
+          runId: randomUUID(),
+          sessionId: base.sessionId,
+          sessionKey: base.sessionKey,
+          workspaceDir: base.workspaceDir,
+          trigger: base.trigger,
+          // Match the message projection used by the real embedded attempt producer.
+          ...projectEmbeddedMessageContext(base),
+        };
+        expect(embeddedRun.currentMessageId).toBe(base.currentMessageId);
         const embedded = buildEmbeddedAgentHookContext(embeddedRun, "main", undefined);
+        expect(
+          await runBeforeAgentRunGate(
+            getGlobalHookRunner(),
+            { prompt: "synthetic input", messages: [] },
+            buildAgentHookContext(embedded),
+          ),
+        ).toBeUndefined();
+        expect(observedRun).toEqual([{ messageId: base.causalMessageId, senderIsOwner }]);
         await runBeforeAgentReplyForTurn({
           runId: embeddedRun.runId,
           trigger: "user",

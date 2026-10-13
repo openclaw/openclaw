@@ -187,7 +187,7 @@ it.each([
   },
 ])("projects causal identity at the reply producer for $name", async ({ batch, causal }) => {
   const context = {
-    ...makeContext(baseRoute),
+    ...makeContext({ ...baseRoute, routeSessionKey: baseRoute.sessionKey }),
     ...batch,
   };
   await invoke("getReply", context);
