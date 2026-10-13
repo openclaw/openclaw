@@ -102,7 +102,18 @@ new evidence. Invalid or mismatched assets remain blocking.
    publishing again to repair a receipt.
    Push runs are never cancelled by later `main` pushes; verification serializes
    per resolved stable tag.
-7. A macOS build pulled from Sparkle on purpose (for example a crashing
+7. Verify the public website through its existing read-only
+   `companion-downloads-deployed.yml` workflow on `openclaw/openclaw.ai` main.
+   Require success for that exact run: stable download routes resolve current
+   assets at request time, and the verifier follows every homepage/install button
+   to its current stable artifact. New app releases need no website rebuild or
+   source change. The website cache expires within five minutes of resolution;
+   a check during propagation can fail and be resumed after expiry.
+   The orchestrator performs this gate even when immutable closeout assets
+   already exist; those assets are not evidence of current website downloads.
+   Record failed runs and permit a fresh verification on resume. Permit
+   cross-repository Actions dispatch/read with `OPENCLAW_GH_TOKEN` in core.
+8. A macOS build pulled from Sparkle on purpose (for example a crashing
    in-app update) is a third appcast state, not a contract failure. Withdraw
    it with a `main` commit whose subject is exactly
    `chore(release): withdraw the <version> macOS build from the Sparkle feed`

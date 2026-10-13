@@ -396,6 +396,64 @@ async function closeoutAssetsPresent(ctx: ReleaseContext): Promise<boolean> {
   return expected.every((name) => assets.includes(name));
 }
 
+async function verifyWebsite(ctx: ReleaseContext): Promise<void> {
+  const repo = "openclaw/openclaw.ai";
+  const workflow = "companion-downloads-deployed.yml";
+  // A phase restart retains prior receipts. A completed verification is history,
+  // not proof of the current download service; retain IDs only while unfinished.
+  if (ctx.state.closeout.verifiedAt) {
+    delete ctx.state.closeout.websiteRunId;
+    delete ctx.state.closeout.verifiedAt;
+    ctx.save();
+  }
+  if (!ctx.state.closeout.websiteRunId) {
+    // Verification only reads production. Repeating
+    // an unacknowledged dispatch is safe; the website serializes its verification job.
+    const result = await ctx.run(
+      "gh",
+      [
+        "api",
+        "--method",
+        "POST",
+        "-H",
+        "X-GitHub-Api-Version: 2022-11-28",
+        `repos/${repo}/actions/workflows/${workflow}/dispatches`,
+        "-f",
+        "ref=main",
+        "-F",
+        "return_run_details=true",
+        "-f",
+        "inputs[site_url]=https://openclaw.ai/",
+        "--jq",
+        ".workflow_run_id",
+      ],
+      { dryRunStdout: "503" },
+    );
+    const runId = result.stdout.trim();
+    if (!/^[1-9][0-9]*$/.test(runId)) {
+      throw new Error("Website dispatch did not return a run ID.");
+    }
+    ctx.state.closeout.websiteRunId = runId;
+    ctx.save();
+  }
+  const runId = ctx.state.closeout.websiteRunId;
+  const run = await waitForRun(ctx, repo, runId, "closeout", 30 * MINUTE);
+  if (run.conclusion !== "success") {
+    ctx.state.history.push({
+      at: new Date().toISOString(),
+      phase: "closeout",
+      event: "website-verification-failed",
+      detail: JSON.stringify({ runId, conclusion: run.conclusion }),
+    });
+    delete ctx.state.closeout.websiteRunId;
+    ctx.save();
+    throw new ReleaseRefusal(`Website verification ${runId} concluded ${String(run.conclusion)}.`, [
+      shellCommand("gh", ["run", "view", runId, "--repo", repo, "--log-failed"]),
+      ctx.resume("closeout"),
+    ]);
+  }
+}
+
 export async function closeout(ctx: ReleaseContext): Promise<void> {
   const { state } = ctx;
   ctx.log("closeout", "waiting for the publish parent and checking the shipped state on main");
@@ -441,6 +499,7 @@ export async function closeout(ctx: ReleaseContext): Promise<void> {
     );
   }
   if (await closeoutAssetsPresent(ctx)) {
+    await verifyWebsite(ctx);
     state.closeout.verifiedAt = new Date().toISOString();
     ctx.save();
     return;
@@ -477,6 +536,7 @@ export async function closeout(ctx: ReleaseContext): Promise<void> {
       ],
     );
   }
+  await verifyWebsite(ctx);
   state.closeout.verifiedAt = new Date().toISOString();
   ctx.save();
 }
