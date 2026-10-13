@@ -146,14 +146,17 @@ describe("native subagent Gateway transport ownership", () => {
     let capturedChildAssertion: (() => void) | undefined;
     spawnTesting.setDepsForTest({
       hasInProcessGatewayContext: () => true,
-      dispatchGatewayMethodInProcess: async () => {
+      dispatchGatewayMethodInProcess: async <T>(
+        _method: string,
+        _params: Record<string, unknown>,
+      ) => {
         await Promise.resolve();
         const assertOwned = captureOwnedTranscriptWriteAssertion(childTarget);
         capturedChildAssertion = () => {
           assertOwned();
         };
         assertOwned();
-        return { runId: "child-run", status: "accepted" };
+        return { runId: "child-run", status: "accepted" } as T;
       },
     });
 
