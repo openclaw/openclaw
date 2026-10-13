@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -51,6 +52,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           sessionKey,
           operatorScopes: ["operator.sessions.read"],
+          featureMethods: [...defaultControlUiFeatureMethods, ...operatorMethods],
           historyMessages: [
             { role: "assistant", content: [{ type: "text", text: "Shared discussion" }] },
           ],
@@ -72,7 +74,7 @@ suite.define(() => {
         }
         const requests = await gateway.getRequests();
         expect(requests.filter((request) => operatorMethods.includes(request.method))).toEqual([]);
-        expect(requests.some((request) => request.method === "chat.history")).toBe(true);
+        expect(requests.some((request) => request.method === "chat.startup")).toBe(true);
         await page.goto(`${suite.server.baseUrl}cron`);
         await page
           .getByText(
