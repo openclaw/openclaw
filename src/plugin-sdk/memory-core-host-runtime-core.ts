@@ -23,7 +23,8 @@ export {
 } from "../agents/memory-search.js";
 export { resolveMemoryDreamingPluginConfig } from "../memory-host-sdk/dreaming.js";
 export { parseNonNegativeByteSize } from "../config/byte-size.js";
-export { getRuntimeConfig, resolveRuntimeConfigCacheKey } from "../config/config.js";
+export { resolveRuntimeConfigCacheKey } from "../config/config.js";
+export { getRuntimeConfig } from "./runtime-config-legacy.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { resolveStateDir } from "../config/paths.js";
 export { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";

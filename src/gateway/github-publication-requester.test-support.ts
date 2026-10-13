@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { expect, vi, type Mock } from "vitest";
+import { expect, onTestFinished, vi, type Mock } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -11,7 +11,7 @@ import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import type { OpenClawPluginToolContext } from "../plugins/types.js";
 import { decodeGitHubPublicationRequester } from "../state/github-publication-requester.js";
-import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
+import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.worker.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -23,19 +23,18 @@ import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileRole,
 } from "../state/user-profile-writes.js";
-import { readGitHubPublicationRequest } from "./github-publication-store.js";
+import { currentGitHubPublicationConfig } from "./github-publication-availability.js";
+import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
+import { readRepositoryGitHubPublicationFixture as readRepositoryGitHubPublication } from "./github-publication-store.test-support.js";
+import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
 import {
-  createGitHubPublicationRequesterFixture,
   createRealPublicationWorkspace,
   createTestGitHubPublicationCoordinator,
   githubPublicationTestMocks,
   persistPublicationTestSession,
   root,
 } from "./github-publication.test-support.js";
-import {
-  readRepositoryGitHubPublication,
-  repositoryGitHubPublicationDigest,
-} from "./github-repository-publication-store.js";
+import { repositoryGitHubPublicationDigest } from "./github-repository-publication-store.js";
 import { createRepositoryPublicationFixture } from "./github-repository-publication.test-support.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { SESSION_READ_SCOPE, SESSION_WRITE_SCOPE } from "./operator-scopes.js";
@@ -50,8 +49,41 @@ const mocks = githubPublicationTestMocks();
 
 type Backend = "local" | "repository";
 type Coordinator = ReturnType<typeof createTestGitHubPublicationCoordinator>;
-type Requester = NonNullable<Parameters<Coordinator["requestForSession"]>[0]["requester"]>;
+type Requester = NonNullable<Parameters<Coordinator["requestForSessionV2"]>[0]["requester"]>;
 export const guestScopes = [SESSION_READ_SCOPE, SESSION_WRITE_SCOPE];
+
+export async function createGitHubPublicationRequesterFixture(params: {
+  profileId: string;
+  scopes: readonly string[];
+  sessionKey: string;
+  agentId: string;
+  getCommittedRuntimeConfig?: () => OpenClawConfig;
+}) {
+  const [{ createOperatorWsClient }, { prepareGatewayConnectOperatorAccess }] = await Promise.all([
+    import("./server/ws-connection/authenticated-request-dispatch.test-support.js"),
+    import("./server/ws-connection/connect-operator-access.js"),
+  ]);
+  const client = createOperatorWsClient({
+    connId: params.profileId,
+    scopes: [...params.scopes],
+  });
+  client.authenticatedUserProfile = {
+    profileId: params.profileId,
+    displayName: null,
+    avatarRevision: "fixture",
+    hasAvatar: false,
+    updatedAt: 1,
+  };
+  prepareGatewayConnectOperatorAccess(client);
+  const context = {
+    getRuntimeConfig: currentGitHubPublicationConfig,
+    getCommittedRuntimeConfig: params.getCommittedRuntimeConfig ?? currentGitHubPublicationConfig,
+  };
+  const session = { sessionKey: params.sessionKey, agentId: params.agentId };
+  const captured = await prepareGitHubPublicationRequesterV2({ client, context }, session);
+  onTestFinished(captured.release);
+  return { ...captured, client, context, session };
+}
 
 async function createRequesterPolicySources(
   session: { sessionId: string; sessionKey: string },
@@ -194,8 +226,10 @@ export async function createRequesterPublicationFixture(
       return decodeGitHubPublicationRequester(
         backend === "repository"
           ? readRepositoryGitHubPublication(requestId)?.requester_authority_json
-          : readGitHubPublicationSessionLifecycle({ publicationKind: "shared", requestId })
-              ?.requester_authority_json,
+          : readGitHubPublicationSessionLifecycle(
+              { publicationKind: "shared", requestId },
+              openOpenClawStateDatabase().db,
+            )?.requester_authority_json,
       );
     },
     removeRequesterSnapshot(requestId: string) {
@@ -392,6 +426,7 @@ export async function prepareVisitorPublicationFixture(f: {
         // Service node setup reads this host facet even when Visitor never invokes nodes.
         subagent: {
           complete: unexpectedSubagent,
+          forkSession: unexpectedSubagent,
           run: unexpectedSubagent,
           waitForRun: unexpectedSubagent,
           getSessionMessages: unexpectedSubagent,

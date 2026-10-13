@@ -9,7 +9,8 @@ import type { DetectSetupInferenceDeps, SetupInferenceDetection } from "./setup-
 import { detectSetupInference } from "./setup-inference-detect.js";
 
 const fixture = vi.hoisted(() => ({
-  loadAuthProfileStore: vi.fn<() => AuthProfileStore>(),
+  config: {} as OpenClawConfig,
+  loadAuthProfileStore: vi.fn<() => AuthProfileStore | Promise<AuthProfileStore>>(),
   withSetupProviderAuthMethod: vi.fn(),
 }));
 
@@ -19,18 +20,13 @@ vi.mock("../config/config.js", async (importOriginal) => ({
     snapshot: {
       exists: true,
       valid: true,
-      config: {
-        agents: {
-          entries: { main: {} },
-          defaults: { workspace: "/fixture/workspace" },
-        },
-      },
+      config: fixture.config,
     },
   }),
 }));
 vi.mock("../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/auth-profiles/store-runtime.js")>()),
-  loadAuthProfileStoreWithoutExternalProfiles: fixture.loadAuthProfileStore,
+  loadAuthProfileStoreWithoutExternalProfilesAsync: async () => fixture.loadAuthProfileStore(),
 }));
 vi.mock("./setup-provider-method.js", () => ({
   withSetupProviderAuthMethod: fixture.withSetupProviderAuthMethod,
@@ -65,7 +61,9 @@ const choice: ProviderAuthChoiceMetadata = {
 
 function detectWithProvider(
   detect: NonNullable<ProviderPlugin["auth"][number]["appGuidedSetup"]>["detect"],
-  nativeCandidates: InferenceBackendCandidate[] = [],
+  nativeCandidates:
+    | InferenceBackendCandidate[]
+    | NonNullable<DetectSetupInferenceDeps["detectInferenceBackends"]> = [],
   options: Pick<DetectSetupInferenceDeps, "onPartial" | "enablePluginInConfig"> & {
     choices?: ProviderAuthChoiceMetadata[];
   } = {},
@@ -89,7 +87,8 @@ function detectWithProvider(
       ...options,
       resolveManifestProviderAuthChoices: () => options.choices ?? [choice],
       resolvePluginProviders: () => [provider],
-      detectInferenceBackends: async () => nativeCandidates,
+      detectInferenceBackends:
+        typeof nativeCandidates === "function" ? nativeCandidates : async () => nativeCandidates,
     },
     "main",
   );
@@ -97,6 +96,9 @@ function detectWithProvider(
 
 beforeEach(() => {
   vi.useFakeTimers();
+  fixture.config = {
+    agents: { entries: { main: {} }, defaults: { workspace: "/fixture/workspace" } },
+  };
   fixture.loadAuthProfileStore.mockReturnValue({
     version: 1,
     profiles: {
@@ -122,7 +124,199 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+const environmentCandidate: InferenceBackendCandidate = {
+  kind: "openai-api-key",
+  modelRef: "fixture/environment-model",
+  label: "Environment sign-in",
+  detail: "Available from the environment",
+  credentials: true,
+};
+
+describe("setup inference discovery concurrency", () => {
+  it("probes provider services during CLI detection and publishes local results first", async () => {
+    const cliStarted = createDeferred();
+    const cliResult = createDeferred<InferenceBackendCandidate[]>();
+    const hookStarted = createDeferred();
+    const hookResult = createDeferred<ProviderAppGuidedSetupCandidate | null>();
+    const localPublished = createDeferred<SetupInferenceDetection>();
+    const detection = detectWithProvider(
+      () => {
+        hookStarted.resolve();
+        return hookResult.promise;
+      },
+      () => {
+        cliStarted.resolve();
+        return cliResult.promise;
+      },
+      {
+        onPartial: (partial) => {
+          if (
+            partial.candidates.some(({ modelRef }) => modelRef === environmentCandidate.modelRef)
+          ) {
+            localPublished.resolve(partial);
+          }
+        },
+      },
+    );
+    // Serial discovery cannot start the provider probe while CLI detection is pending.
+    await Promise.all([cliStarted.promise, hookStarted.promise]);
+    cliResult.resolve([environmentCandidate]);
+    expect((await localPublished.promise).candidates.map(({ modelRef }) => modelRef)).toEqual([
+      "fixture/environment-model",
+      "fixture/saved-model",
+    ]);
+    hookResult.resolve({ modelRef: "fixture/local-model" });
+    expect((await detection).candidates.map(({ modelRef }) => modelRef)).toEqual([
+      "fixture/environment-model",
+      "fixture/saved-model",
+      "fixture/local-model",
+    ]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("reports a provider discovery failure without waiting for CLI detection", async () => {
+    const detection = detectSetupInference(
+      {
+        resolveManifestProviderAuthChoices: () => [choice],
+        resolvePluginProviders: () => {
+          throw new Error("synthetic provider load failure");
+        },
+        detectInferenceBackends: () => new Promise(() => {}),
+      },
+      "main",
+    );
+    await expect(detection).rejects.toThrow("synthetic provider load failure");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("aborts pending provider probes when local detection fails", async () => {
+    const hookStarted = createDeferred<AbortSignal | undefined>();
+    const detection = detectWithProvider(
+      ({ signal }) => {
+        hookStarted.resolve(signal);
+        return new Promise(() => {});
+      },
+      async () => {
+        await hookStarted.promise;
+        throw new Error("synthetic CLI detection failure");
+      },
+    );
+    await expect(detection).rejects.toThrow("synthetic CLI detection failure");
+    expect((await hookStarted.promise)?.aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
 describe("setup inference discovery deadline", () => {
+  it.each([false, true])(
+    "offers registered saved credentials with retry metadata: %s",
+    async (retry) => {
+      fixture.config.auth = {
+        profiles: { "fixture:saved": { provider: "fixture", mode: "api_key" } },
+      };
+      fixture.loadAuthProfileStore.mockReturnValue({
+        version: 1,
+        profiles: {
+          "fixture:saved": {
+            type: "api_key",
+            provider: "fixture",
+            key: "fixture-key",
+            ...(retry
+              ? { setup: { replacement: true, modelRef: "fixture/saved-model", configJson: "{}" } }
+              : {}),
+          },
+        },
+      });
+      fixture.withSetupProviderAuthMethod.mockImplementation(async (_params, consume) =>
+        consume({ method: { starterModel: "fixture/saved-model" } }),
+      );
+      const result = await detectWithProvider(async () => null);
+      expect(result.candidates).toMatchObject([
+        {
+          kind: "saved-auth:fixture%3Asaved",
+          modelRef: "fixture/saved-model",
+          credentials: true,
+          recommended: true,
+        },
+      ]);
+    },
+  );
+
+  it("recomputes the recommendation for partial and final detection without changing older results", async () => {
+    const partials: SetupInferenceDetection[] = [];
+    const result = await detectWithProvider(
+      async () => ({ modelRef: "fixture/local" }),
+      [
+        {
+          kind: "existing-model",
+          modelRef: "fixture/configured",
+          label: "Current model",
+          detail: "configured",
+          credentials: true,
+        },
+        {
+          kind: "codex-cli",
+          modelRef: "openai/model",
+          label: "Codex",
+          detail: "installed; login status unverified",
+          credentials: false,
+        },
+      ],
+      { onPartial: (partial) => partials.push(partial) },
+    );
+
+    expect(partials[0]?.candidates.filter(({ recommended }) => recommended)).toMatchObject([
+      { kind: "saved-auth:fixture%3Asaved" },
+    ]);
+    for (const detection of [...partials.slice(1), result]) {
+      expect(detection.candidates.filter(({ recommended }) => recommended)).toMatchObject([
+        { kind: "existing-model" },
+      ]);
+      expect(detection.candidates).toContainEqual(
+        expect.objectContaining({ kind: "codex-cli", recommended: false }),
+      );
+    }
+    expect(result.candidates).toContainEqual(
+      expect.objectContaining({ kind: "provider-auto:fixture-local", recommended: false }),
+    );
+  });
+
+  it("waits for the worker's saved credentials before publishing candidates", async () => {
+    const requested = createDeferred();
+    const loaded = createDeferred<AuthProfileStore>();
+    fixture.loadAuthProfileStore.mockImplementationOnce(() => {
+      requested.resolve();
+      return loaded.promise;
+    });
+    const onPartial = vi.fn();
+    const detection = detectWithProvider(async () => null, [], { onPartial });
+    await requested.promise;
+    expect(onPartial).not.toHaveBeenCalled();
+    loaded.resolve({
+      version: 1,
+      profiles: {
+        "fixture:worker": {
+          type: "api_key",
+          provider: "fixture",
+          key: "fixture-worker-key",
+          setup: {
+            replacement: true,
+            modelRef: "fixture/worker-model",
+            configJson: "{}",
+            authChoice: choice.choiceId,
+            pluginId: choice.pluginId,
+          },
+        },
+      },
+    });
+    const result = await detection;
+    expect(result.candidates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ modelRef: "fixture/worker-model", credentials: true }),
+      ]),
+    );
+  });
+
   it.each<{
     name: string;
     modelRef?: string;
@@ -216,15 +410,7 @@ describe("setup inference discovery deadline", () => {
         hookStarted.resolve(signal);
         return hookResult.promise;
       },
-      [
-        {
-          kind: "openai-api-key",
-          modelRef: "fixture/environment-model",
-          label: "Environment sign-in",
-          detail: "Available from the environment",
-          credentials: true,
-        },
-      ],
+      [environmentCandidate],
     );
     const discoverySignal = await hookStarted.promise;
     await vi.advanceTimersByTimeAsync(30_000);

@@ -1,4 +1,5 @@
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
+import { warnPluginSdkDeprecation } from "../../../plugins/sdk-deprecation.js";
 import {
   createNativeSessionBindingAuthority,
   combineNativeSessionBindingAuthority,
@@ -11,17 +12,67 @@ import type {
   NativeSessionGenerationAdoptionResult,
 } from "./binding-generation.js";
 
-/** Resolve host lineage before selecting a native queue, catalog, or connection. */
+/**
+ * @deprecated Use resolveNativeSessionBindingWithAuthorityV2; removed in the next Plugin SDK major.
+ */
 export async function resolveNativeSessionBindingWithAuthority<TBinding>(
-  params: Omit<NativeSessionGenerationParams, "target"> & {
-    target?: NativeSessionGenerationParams["target"];
+  params: NativeSessionBindingResolveOptions<TBinding> & {
     readBinding: (sessionId?: string) => TBinding | undefined;
-    generation?: NativeSessionGenerationOperationsV2;
-    reclaimStale?: boolean;
-    signal?: AbortSignal;
-    assertBinding?: (binding: TBinding | undefined) => void;
-    authority?: NativeSessionBindingAuthority;
   },
+) {
+  warnPluginSdkDeprecation({
+    family: "native-session-binding",
+    method: "resolveNativeSessionBindingWithAuthority",
+    replacement: "resolveNativeSessionBindingWithAuthorityV2",
+    compatibility: "The legacy binding callback retains its synchronous authority frame.",
+  });
+  return resolveNativeSessionBindingOwner(params, (authority, previousSessionId) =>
+    authority.withCurrent(() => {
+      const current = params.readBinding();
+      params.assertBinding?.(
+        current ?? (previousSessionId ? params.readBinding(previousSessionId) : undefined),
+      );
+      return current;
+    }),
+  );
+}
+
+/** Prepare plugin-owned binding reads before admitting the exact host lineage. */
+export async function resolveNativeSessionBindingWithAuthorityV2<TBinding>(
+  params: NativeSessionBindingResolveOptions<TBinding> & {
+    readBinding: (sessionId?: string) => Promise<TBinding | undefined>;
+  },
+) {
+  return resolveNativeSessionBindingOwner(params, async (authority, previousSessionId) => {
+    authority.assertCurrent();
+    const current = await params.readBinding();
+    const ownership =
+      current ?? (previousSessionId ? await params.readBinding(previousSessionId) : undefined);
+    return authority.withCurrent(() => {
+      params.assertBinding?.(ownership);
+      return current;
+    });
+  });
+}
+
+type NativeSessionBindingResolveOptions<TBinding> = Omit<
+  NativeSessionGenerationParams,
+  "target"
+> & {
+  target?: NativeSessionGenerationParams["target"];
+  generation?: NativeSessionGenerationOperationsV2;
+  reclaimStale?: boolean;
+  signal?: AbortSignal;
+  assertBinding?: (binding: TBinding | undefined) => void;
+  authority?: NativeSessionBindingAuthority;
+};
+
+async function resolveNativeSessionBindingOwner<TBinding>(
+  params: NativeSessionBindingResolveOptions<TBinding>,
+  readBinding: (
+    authority: NativeSessionBindingAuthority,
+    previousSessionId?: string,
+  ) => Promise<TBinding | undefined>,
 ): Promise<{
   binding: TBinding | undefined;
   authority: NativeSessionBindingAuthority;
@@ -42,14 +93,7 @@ export async function resolveNativeSessionBindingWithAuthority<TBinding>(
     params.authority,
     captured?.authority ?? createNativeSessionBindingAuthority([], assertAdmissionCurrent),
   );
-  let binding = await authority.withCurrent(() => {
-    const current = params.readBinding();
-    params.assertBinding?.(
-      current ??
-        (captured?.previousSessionId ? params.readBinding(captured.previousSessionId) : undefined),
-    );
-    return current;
-  });
+  let binding = await readBinding(authority, captured?.previousSessionId);
   if (!binding && captured && params.target && params.generation) {
     if (
       !(await reclaimPreparedGeneration(
@@ -61,11 +105,7 @@ export async function resolveNativeSessionBindingWithAuthority<TBinding>(
     ) {
       throw params.createSupersededError(params.target.sessionId);
     }
-    binding = await authority.withCurrent(() => {
-      const current = params.readBinding();
-      params.assertBinding?.(current);
-      return current;
-    });
+    binding = await readBinding(authority);
   } else if (!binding) {
     params.assertBinding?.(binding);
   }

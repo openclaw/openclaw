@@ -23,18 +23,19 @@ This comparison also applies when `OPENCLAW_HOME` relocates the CLI's default st
 
 `--section <section>`: repeatable section filter. Available sections:
 
-`workspace`, `model`, `web`, `gateway`, `daemon`, `channels`, `plugins`, `skills`, `health`
+`workspace`, `model`, `memory`, `web`, `gateway`, `daemon`, `channels`, `plugins`, `skills`, `health`
 
 ```bash
 openclaw configure
 openclaw configure --section web
+openclaw configure --section memory
 openclaw configure --section model --section channels
 openclaw configure --section gateway --section daemon
 ```
 
 Selecting `gateway`, `daemon`, or `health` (or running the full wizard with no `--section`) prompts where the Gateway runs and updates `gateway.mode`. Section filters that skip all three go straight to the requested setup with no gateway-mode prompt. Picking remote gateway mode writes the remote config and exits immediately. It does not run local-only steps like plugin installs.
 
-Gateway, daemon, health, and web settings do not require an agent owner. Workspace, model, plugin, skill, and channel setup use the configured System Agent in an explicit fleet. If none is configured, the wizard asks which existing agent to use. That selection applies to the remaining agent-scoped sections without changing the System Agent setting. Channel setup uses the selected workspace for plugin discovery. Removing channel configuration does not require an agent selection.
+Gateway, daemon, health, and web settings do not require an agent owner. Workspace, model, memory, plugin, skill, and channel setup use the configured System Agent in an explicit fleet. If none is configured, the wizard asks which existing agent to use. That selection applies to the remaining agent-scoped sections without changing the System Agent setting. Channel setup uses the selected workspace for plugin discovery. Removing channel configuration does not require an agent selection.
 
 <Note>
 `openclaw configure` requires an interactive terminal (both stdin and stdout must be TTYs). Without one it prints the equivalent non-interactive `openclaw config get|set|patch|validate` commands and exits with an error instead of partially running.
@@ -68,6 +69,29 @@ Re-running provider auth from configure preserves an existing `agents.defaults.m
 </Note>
 
 When configure starts from a provider auth choice, the default-model and model-policy pickers prefer that provider automatically. For paired providers such as Volcengine and BytePlus, the same preference also matches their coding-plan variants (`volcengine-plan/*`, `byteplus-plan/*`). If the preferred-provider filter would produce an empty list, configure falls back to the unfiltered catalog instead of showing a blank picker.
+
+## Memory section
+
+`openclaw configure --section memory` offers optional semantic memory search setup.
+Choose an available embedding provider and its default or an explicit model,
+then use existing credentials, enter a masked API key, or select a SecretRef.
+For local servers, choose **lmstudio** or **ollama** (including configured provider
+aliases). Start the server and download the embedding model first. Ollama supports
+models such as `bge-m3` and `nomic-embed-text`; LM Studio defaults to
+`text-embedding-nomic-embed-text-v1.5`. Choose **Use existing credentials / no key**
+when the server needs no authentication. The check allows time to load an
+already-downloaded model. Managed llama.cpp setup remains available through the
+[llama.cpp provider setup](/plugins/llama-cpp).
+Stored OAuth credentials are not a guarantee of embedding access: the selected
+account and model must pass a small synthetic embedding request before saving.
+Shell-only environment variables may not be available to the Gateway service.
+
+Skipping, a failed check, or declining to save leaves the memory section unsaved.
+The flow does not download local models, create an index, or re-index memories.
+Existing per-agent overrides remain unchanged. A provider change drops the old
+memory endpoint, headers, and key so they cannot be sent to the new destination.
+An embedding identity change can require an explicit index rebuild afterward;
+see [Memory configuration](/reference/memory-config).
 
 ## Web section
 

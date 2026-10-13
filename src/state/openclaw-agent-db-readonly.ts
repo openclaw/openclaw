@@ -134,15 +134,11 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
   if (behavior.snapshot) {
     return readOpenClawAgentDatabaseSnapshot(processOpened, operation);
   }
-  // The handle's admission owner refreshes these facts after DDL or a foreign commit.
-  return runSqliteReadOperationSync(
-    processOpened.db,
-    () => {
-      const userVersion = assertSupportedAgentSchemaVersion(processOpened.db, pathname);
-      assertCanonicalAgentPersistenceVersion(processOpened.db, pathname, userVersion);
-      assertCanonicalSessionValidationSchema(processOpened.db);
-      return readOpenClawAgentDatabase(processOpened, operation);
-    },
-    "fresh",
-  );
+  // The migration owner publishes changes to the handle's shared schema admission.
+  return runSqliteReadOperationSync(processOpened.db, () => {
+    const userVersion = assertSupportedAgentSchemaVersion(processOpened.db, pathname);
+    assertCanonicalAgentPersistenceVersion(processOpened.db, pathname, userVersion);
+    assertCanonicalSessionValidationSchema(processOpened.db);
+    return readOpenClawAgentDatabase(processOpened, operation);
+  });
 }

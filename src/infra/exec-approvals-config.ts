@@ -389,22 +389,21 @@ function normalizeAllowlistMetadata(
   return changed ? next : allowlist;
 }
 
+function sanitizePolicyEnum<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+): T | undefined {
+  const normalized = readStringValue(value)?.trim();
+  return allowed.find((entry) => entry === normalized);
+}
+
 function sanitizeExecApprovalPolicy(
   policy: ExecApprovalsDefaults | ExecApprovalsAgent | undefined,
 ): ExecApprovalsDefaults {
-  const security = readStringValue(policy?.security)?.trim();
-  const ask = readStringValue(policy?.ask)?.trim();
-  const askFallback = readStringValue(policy?.askFallback)?.trim();
-  return {
-    security:
-      security === "deny" || security === "allowlist" || security === "full" ? security : undefined,
-    ask: ask === "off" || ask === "on-miss" || ask === "always" ? ask : undefined,
-    askFallback:
-      askFallback === "deny" || askFallback === "allowlist" || askFallback === "full"
-        ? askFallback
-        : undefined,
-    autoAllowSkills: policy?.autoAllowSkills,
-  };
+  const security = sanitizePolicyEnum(policy?.security, execSecuritySchema.options);
+  const ask = sanitizePolicyEnum(policy?.ask, execAskSchema.options);
+  const askFallback = sanitizePolicyEnum(policy?.askFallback, execSecuritySchema.options);
+  return { security, ask, askFallback, autoAllowSkills: policy?.autoAllowSkills };
 }
 
 export function normalizeExecApprovalsInternal(file: ExecApprovalsFile): ExecApprovalsFile {

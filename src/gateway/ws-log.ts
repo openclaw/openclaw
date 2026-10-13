@@ -57,7 +57,7 @@ export function summarizeSessionListForWsLog(input: unknown): Record<string, unk
   const params = isRecord(input) ? input : {};
   return {
     source: SESSION_LIST_SOURCES.find((source) => source === params.source) ?? "unspecified",
-    rowMode: params.rowMode === "compact" ? "compact" : "full",
+    rowMode: ["compact", "dashboard", "sidebar"].find((mode) => mode === params.rowMode) ?? "full",
     limit:
       typeof params.limit === "number" && Number.isSafeInteger(params.limit) && params.limit > 0
         ? params.limit
@@ -238,8 +238,8 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
 
   if (stream === "assistant") {
     const text = readStringValue(data.text);
-    if (text?.trimStart()) {
-      extra.text = compactPreview(text);
+    if (text !== undefined) {
+      extra.textChars = text.length;
     }
     const mediaCount = resolveSendableOutboundReplyParts({
       mediaUrls: Array.isArray(data.mediaUrls) ? data.mediaUrls : undefined,
@@ -261,8 +261,8 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
       extra.call = shortId(toolCallId);
     }
     const meta = readStringValue(data.meta);
-    if (meta?.trim()) {
-      extra.meta = meta;
+    if (meta !== undefined) {
+      extra.metaChars = meta.length;
     }
     if (typeof data.isError === "boolean") {
       extra.err = data.isError;

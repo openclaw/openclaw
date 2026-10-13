@@ -8,7 +8,6 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { resolveExecDetail, type ToolDetailMode } from "./tool-display-exec.js";
@@ -63,11 +62,10 @@ function coerceDisplayValue(
     if (!trimmed) {
       return undefined;
     }
-    const rawLine = normalizeOptionalString(trimmed.split(/\r?\n/, 1)[0]) ?? "";
-    if (!rawLine) {
+    const firstLine = normalizeOptionalString(trimmed.split(/\r?\n/, 1)[0]) ?? "";
+    if (!firstLine) {
       return undefined;
     }
-    const firstLine = redactToolPayloadText(rawLine);
     if (firstLine.length > 160) {
       return `${sliceUtf16Safe(firstLine, 0, 79)}…${sliceUtf16Safe(firstLine, -80)}`;
     }
@@ -145,12 +143,7 @@ function resolvePathArg(record: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
-function resolveReadDetail(args: unknown): string | undefined {
-  const record = asRecord(args);
-  if (!record) {
-    return undefined;
-  }
-
+function resolveReadDetail(record: Record<string, unknown>): string | undefined {
   const path = resolvePathArg(record);
   if (!path) {
     return undefined;
@@ -173,12 +166,7 @@ function resolveReadDetail(args: unknown): string | undefined {
   return `from ${path}`;
 }
 
-function resolveWriteDetail(toolKey: string, args: unknown): string | undefined {
-  const record = asRecord(args);
-  if (!record) {
-    return undefined;
-  }
-
+function resolveWriteDetail(toolKey: string, record: Record<string, unknown>): string | undefined {
   const path = resolvePathArg(record) ?? normalizeOptionalString(record.url);
   if (!path) {
     return undefined;
@@ -205,12 +193,7 @@ function resolveWriteDetail(toolKey: string, args: unknown): string | undefined 
   return `${destinationPrefix} ${path}`;
 }
 
-function resolveWebSearchDetail(args: unknown): string | undefined {
-  const record = asRecord(args);
-  if (!record) {
-    return undefined;
-  }
-
+function resolveWebSearchDetail(record: Record<string, unknown>): string | undefined {
   const queries = collectWebSearchQueries(record);
   const count =
     asPositiveFiniteNumber(record.count) ??
@@ -274,12 +257,7 @@ function collectWebSearchQueries(record: Record<string, unknown>): string[] {
   return [...queries];
 }
 
-function resolveWebFetchDetail(args: unknown): string | undefined {
-  const record = asRecord(args);
-  if (!record) {
-    return undefined;
-  }
-
+function resolveWebFetchDetail(record: Record<string, unknown>): string | undefined {
   const url = normalizeOptionalString(record.url);
   if (!url) {
     return undefined;
@@ -373,17 +351,17 @@ export function resolveToolVerbAndDetailForArgs(params: {
   if (toolKey === "exec" || toolKey === "bash" || toolKey === "shell") {
     detail = resolveExecDetail(args, { detailMode: toolDetailMode });
   }
-  if (!detail && toolKey === "read") {
-    detail = resolveReadDetail(args);
-  }
-  if (!detail && (toolKey === "write" || toolKey === "edit" || toolKey === "attach")) {
-    detail = resolveWriteDetail(toolKey, args);
-  }
-  if (!detail && toolKey === "web_search") {
-    detail = resolveWebSearchDetail(args);
-  }
-  if (!detail && toolKey === "web_fetch") {
-    detail = resolveWebFetchDetail(args);
+  const record = asRecord(args);
+  if (record && !detail) {
+    if (toolKey === "read") {
+      detail = resolveReadDetail(record);
+    } else if (toolKey === "write" || toolKey === "edit" || toolKey === "attach") {
+      detail = resolveWriteDetail(toolKey, record);
+    } else if (toolKey === "web_search") {
+      detail = resolveWebSearchDetail(record);
+    } else if (toolKey === "web_fetch") {
+      detail = resolveWebFetchDetail(record);
+    }
   }
 
   const detailKeys = actionSpec?.detailKeys ?? spec?.detailKeys ?? fallbackDetailKeys ?? [];

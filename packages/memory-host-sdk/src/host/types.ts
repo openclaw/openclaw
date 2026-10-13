@@ -1,5 +1,6 @@
 // Public memory host contracts shared by runtime, builtin search, and package consumers.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import type { OpenClawConfig } from "./openclaw-runtime-config.js";
 import type { MemorySearchDeadlineControlOptions } from "./search-deadline-control.js";
 export type MemorySource = "memory" | "sessions";
 
@@ -35,6 +36,29 @@ export type MemorySearchResult = {
   citation?: string;
   provenance?: MemoryEntryProvenance;
 };
+
+/** CLI search contract shared by the Gateway adapter and the owning memory plugin. */
+export type MemoryCliSearchParams = {
+  manager: MemorySearchManager;
+  cfg: OpenClawConfig;
+  agentId: string;
+  query: string;
+  maxResults?: number;
+  minScore?: number;
+  assertCurrent?: () => void;
+};
+
+export type MemoryCliSearchResult = {
+  results: MemorySearchResult[];
+  stale?: true;
+  warning?: string;
+  action?: string;
+};
+
+export type MemoryCliSearchOutcome =
+  | MemoryCliSearchResult
+  | { agentId: string; status: "disabled" }
+  | { agentId: string; status: "failed"; error: string };
 
 /** Automatic prompt injection is reserved for content with authoritative trusted provenance. */
 export function isMemoryOriginEligibleForAutomaticInjection(
@@ -198,7 +222,7 @@ export type MemoryIndexIdentityState =
     }
   | ({ status: "mismatched"; reason: string } & (
       | {
-          code: "provenance_version" | "chunking_version";
+          code: "provenance_version" | "chunking_version" | "embedding_input_format";
           owner: "openclaw";
           // Older-chunking corpus marker: set only when every configuration-owned
           // constraint (sources, scope hash, chunk settings, FTS tokenizer) still
@@ -208,6 +232,8 @@ export type MemoryIndexIdentityState =
           // retrieval availability; consumers must still check usable FTS before
           // treating the index as servable.
           chunkingVersionOnly?: boolean;
+          /** Older embedding format with the same corpus; requires usable FTS for retrieval. */
+          lexicalCompatible?: boolean;
         }
       | {
           code:
@@ -256,7 +282,9 @@ export function resolveMemoryIndexIdentityDiagnostic(
   }
   if (
     identity.owner === "openclaw" &&
-    (identity.code === "provenance_version" || identity.code === "chunking_version")
+    (identity.code === "provenance_version" ||
+      identity.code === "chunking_version" ||
+      identity.code === "embedding_input_format")
   ) {
     return {
       status: "mismatched",
@@ -267,6 +295,11 @@ export function resolveMemoryIndexIdentityDiagnostic(
       identity.chunkingVersionOnly === true &&
       identity.versionOrder !== "newer"
         ? { chunkingVersionOnly: true }
+        : {}),
+      ...(identity.code === "embedding_input_format" &&
+      identity.lexicalCompatible === true &&
+      identity.versionOrder !== "newer"
+        ? { lexicalCompatible: true }
         : {}),
     };
   }

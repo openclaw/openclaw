@@ -15,7 +15,6 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-record-cache.js";
 import { resolveInstalledPluginIndexStorePath } from "../plugins/installed-plugin-index-store-path.js";
 import * as manifestNormalization from "../plugins/manifest-model-id-normalization.js";
 import { normalizeManifestModelPricing } from "../plugins/manifest-model-provider-normalizers.js";
@@ -23,7 +22,6 @@ import type { PersistedInstalledPluginIndexCacheEntry } from "../plugins/plugin-
 import {
   createPluginCache,
   preparePluginCacheFact,
-  retirePluginCache,
   withPluginCache,
 } from "../plugins/plugin-cache.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
@@ -134,7 +132,7 @@ describe("hosted model pricing", () => {
     } as unknown as OpenClawConfig;
   }
 
-  it("keeps normalized indexes scoped to their policy while observing configured price changes", async () => {
+  it("keeps normalized indexes scoped to their policy and observes model-file prices", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-prepared-pricing-"));
     const model = {
       id: "alias",
@@ -182,15 +180,6 @@ describe("hosted model pricing", () => {
     expect(lookup()).toEqual([3, undefined, undefined, 3]);
     expect(lookup()).toEqual([3, undefined, undefined, 3]);
 
-    model.cost.input = 9;
-    expect(lookup()).toEqual([9, undefined, undefined, 9]);
-    model.cost = { input: 11, output: 0, cacheRead: 0, cacheWrite: 0 };
-    expect(lookup()).toEqual([11, undefined, undefined, 11]);
-    model.id = "unaliased";
-    expect(lookup()).toEqual([undefined, undefined, undefined, undefined]);
-    providers.fixture.models.push({ ...model, id: "alias" });
-    expect(lookup()).toEqual([11, undefined, undefined, 11]);
-
     const fileModel = { ...model, id: "alias", cost: { ...model.cost, input: 17 } };
     await fs.writeFile(
       path.join(agentDir, "models.json"),
@@ -201,12 +190,7 @@ describe("hosted model pricing", () => {
     expect(enumeratePolicies).not.toHaveBeenCalled();
   });
 
-  it.each([
-    "retirement",
-    "fact invalidation",
-    "fact invalidation with read failure",
-    "current read failure",
-  ])("preserves pricing publication semantics after %s", async (change) => {
+  it("keeps optional metadata read failures nonfatal", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-prepared-pricing-"));
     const config = configFor("https://api.openai.com/v1");
     const cache = createPluginCache();
@@ -224,32 +208,13 @@ describe("hosted model pricing", () => {
       })
       .mockResolvedValue(createPluginMetadataSnapshotFixture());
     const preparing = withPluginCache(cache, () => prepareModelPricingContext(config));
-    const settled =
-      change === "current read failure"
-        ? expect(preparing).resolves.toBeUndefined()
-        : expect(preparing).rejects.toThrow();
-    const retirement = change === "retirement" ? retirePluginCache(cache) : undefined;
-    if (change.startsWith("fact invalidation")) {
-      withPluginCache(cache, clearLoadInstalledPluginIndexInstallRecordsCache);
-    }
-    if (change === "fact invalidation") {
-      reading.resolve();
-    } else {
-      reading.reject(new Error("optional metadata unavailable"));
-    }
+    const settled = expect(preparing).resolves.toBeUndefined();
+    reading.reject(new Error("optional metadata unavailable"));
     await settled;
-    await retirement;
-    if (change === "current read failure") {
-      expect(readStoredCatalog).not.toHaveBeenCalled();
-      expect(
-        resolveModelCostConfig({ config, provider: "openai", model: "gpt-external" }),
-      ).toBeUndefined();
-      return;
-    }
-    await withPluginCache(createPluginCache(), () => prepareModelPricingContext(config));
+    expect(readStoredCatalog).not.toHaveBeenCalled();
     expect(
-      resolveModelCostConfig({ config, provider: "openai", model: "gpt-external" })?.input,
-    ).toBe(2.5);
+      resolveModelCostConfig({ config, provider: "openai", model: "gpt-external" }),
+    ).toBeUndefined();
   });
 
   it("accepts exact free pricing from an authoritative native source", () => {

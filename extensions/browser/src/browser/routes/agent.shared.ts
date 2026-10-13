@@ -99,7 +99,7 @@ export async function requirePwAi(
   return null;
 }
 
-type RouteTabContext = {
+export type RouteTabContext = {
   profileCtx: ProfileContext;
   tab: Awaited<ReturnType<ProfileContext["ensureTabAvailable"]>>;
   cdpUrl: string;

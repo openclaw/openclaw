@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isMissingPathError } from "../../infra/errors.js";
 import { withContentGitSlot } from "../../infra/git-content-budget.js";
-import { enqueueGitRefMutation } from "../../infra/git-exec.js";
+import { enqueueGitRefMutation, requireGitCommandOutput } from "../../infra/git-exec.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -10,7 +10,7 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandBuffersWithTimeout } from "../../process/exec-runner.js";
-import { requireGit, resolveGitMetadataPath } from "./git.js";
+import { listGitWorktrees, requireGit, resolveGitMetadataPath, runGit } from "./git.js";
 import { readRegistryWorktrees } from "./registry-read.js";
 
 const log = createSubsystemLogger("agents/worktrees");
@@ -19,6 +19,9 @@ const PACK_BATCH_BYTES = 512 * 1024 * 1024;
 const PACK_BATCH_COUNT = 1024;
 const PACK_BATCH_TIMEOUT_MS = 5 * 60 * 1000;
 const TEMP_PACK_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const OBJECT_REPAIR_TIMEOUT_MS = 5 * 60 * 1000;
+const OBJECT_REPAIR_BATCH_SIZE = 256;
+const OBJECT_REPAIR_MAX_OBJECTS = 4096;
 
 type MaintenanceParams = {
   signal?: AbortSignal;
@@ -26,6 +29,130 @@ type MaintenanceParams = {
   retryDeferred?: boolean;
   shouldDeferRepository?: (repoRoot: string) => string | undefined;
 };
+
+async function repairWorktreeObjects(
+  repoRoot: string,
+  params: Pick<MaintenanceParams, "signal" | "commitGuard">,
+): Promise<void> {
+  const started = performance.now();
+  const options = () => {
+    params.signal?.throwIfAborted();
+    params.commitGuard?.();
+    const remaining = OBJECT_REPAIR_TIMEOUT_MS - (performance.now() - started);
+    if (remaining <= 0) {
+      throw new Error("Worktree object repair exceeded its five-minute budget");
+    }
+    return {
+      signal: params.signal,
+      beforeRun: () => {
+        params.signal?.throwIfAborted();
+        params.commitGuard?.();
+      },
+      timeoutMs: Math.ceil(remaining),
+      maxOutputBytes: 32 * 1024 * 1024,
+      killProcessTree: true,
+      lowerPriority: true,
+      env: { GIT_NO_LAZY_FETCH: "1" },
+    };
+  };
+  const config = await runGit(
+    repoRoot,
+    ["config", "--bool", "--get-regexp", "^remote\\..*\\.promisor$"],
+    options(),
+  );
+  if (config.termination === "exit" && config.code === 1) {
+    return;
+  }
+  const remote = /^remote\.(.+)\.promisor true$/m.exec(
+    requireGitCommandOutput("git config promisor", config),
+  )?.[1];
+  if (!remote) {
+    return;
+  }
+  const heads = [
+    ...new Set(
+      (await listGitWorktrees(repoRoot, options())).flatMap((worktree) =>
+        worktree.head && !/^0+$/.test(worktree.head) ? [worktree.head] : [],
+      ),
+    ),
+  ];
+  const fetched = new Set<string>();
+  for (;;) {
+    // Git includes every linked index (including resolve-undo), while no-walk
+    // visits only the live HEAD trees, not intentionally unhydrated history.
+    const inventory = await requireGit(
+      repoRoot,
+      [
+        "rev-list",
+        "--objects",
+        "--indexed-objects",
+        "--no-walk=unsorted",
+        "--missing=print",
+        "--no-object-names",
+        "--stdin",
+      ],
+      { ...options(), input: `${heads.join("\n")}\n` },
+    );
+    const missing = inventory
+      .split("\n")
+      .filter((line) => line.startsWith("?"))
+      .map((line) => line.slice(1));
+    if (missing.length === 0) {
+      if (fetched.size > 0) {
+        log.info(`Repaired ${fetched.size} missing live worktree objects in ${repoRoot}.`);
+      }
+      return;
+    }
+    if (missing.some((oid) => fetched.has(oid))) {
+      throw new Error("Worktree object repair incomplete; inspect the promisor remote and retry");
+    }
+    if (fetched.size >= OBJECT_REPAIR_MAX_OBJECTS) {
+      throw new Error(
+        `Worktree object repair reached its ${OBJECT_REPAIR_MAX_OBJECTS}-object limit; retry to recover the remaining objects`,
+      );
+    }
+    for (
+      let offset = 0;
+      offset < missing.length && fetched.size < OBJECT_REPAIR_MAX_OBJECTS;
+      offset += OBJECT_REPAIR_BATCH_SIZE
+    ) {
+      const batch = missing.slice(
+        offset,
+        offset + Math.min(OBJECT_REPAIR_BATCH_SIZE, OBJECT_REPAIR_MAX_OBJECTS - fetched.size),
+      );
+      try {
+        await requireGit(
+          repoRoot,
+          [
+            "fetch",
+            "--refetch",
+            "--no-auto-maintenance",
+            "--no-tags",
+            "--no-prune",
+            "--no-write-fetch-head",
+            "--recurse-submodules=no",
+            "--stdin",
+            "--",
+            remote,
+          ],
+          {
+            ...options(),
+            input: `${batch.join("\n")}\n`,
+          },
+        );
+      } catch {
+        options();
+        // Remote diagnostics may include credentials; report the recovery action.
+        throw new Error(
+          `Could not fetch ${batch.length} missing worktree objects; check promisor remote access and retry`,
+        );
+      }
+      for (const oid of batch) {
+        fetched.add(oid);
+      }
+    }
+  }
+}
 
 async function maintainWorktreePacks(
   repoRoot: string,
@@ -58,14 +185,6 @@ async function maintainWorktreePacks(
           throw error;
         });
         assertCurrent();
-        const indexes = packs.filter((name) => /^pack-[a-f0-9]+\.idx$/.test(name));
-        if (indexes.length > 0) {
-          // Reusing a stale MIDX fails before discovery when it names a removed pack.
-          await requireGit(repoRoot, ["multi-pack-index", "write", "--stdin-packs"], {
-            ...options,
-            input: `${indexes.join("\n")}\n`,
-          });
-        }
         await cleanTemporaryPacks(packDirectory, packs, params.signal, assertCurrent);
         await consolidatePacks(repoRoot, packDirectory, packs, options);
       }, params.signal),
@@ -130,9 +249,6 @@ async function consolidatePacks(
   options: NonNullable<Parameters<typeof requireGit>[2]>,
 ) {
   const present = new Set(names);
-  if (names.filter((name) => /^pack-[a-f0-9]+\.pack$/.test(name)).length < 16) {
-    return;
-  }
   const packs = [];
   for (const name of names) {
     if (!/^pack-[a-f0-9]+\.pack$/.test(name)) {
@@ -151,9 +267,28 @@ async function consolidatePacks(
     packs.push({ name, size: stat.size, promisor: present.has(`${stem}.promisor`) });
   }
   packs.sort((a, b) => a.size - b.size || a.name.localeCompare(b.name));
-  let consolidated = false;
   for (const promisor of [true, false]) {
-    const candidates = packs.filter((pack) => pack.promisor === promisor);
+    let candidates = packs.filter((pack) => pack.promisor === promisor);
+    if (candidates.length > 1) {
+      // Retire duplicate transfers before applying the rewrite budget. Never let
+      // ordinary copies displace promises, or a large redundant pack block convergence.
+      await requireGit(
+        repoRoot,
+        [
+          "multi-pack-index",
+          "write",
+          "--stdin-packs",
+          `--preferred-pack=${candidates.at(-1)!.name}`,
+        ],
+        {
+          ...options,
+          input: `${candidates.map((pack) => pack.name.replace(/\.pack$/, ".idx")).join("\n")}\n`,
+        },
+      );
+      await requireGit(repoRoot, ["multi-pack-index", "expire"], options);
+      const remaining = new Set(await fs.readdir(directory));
+      candidates = candidates.filter((pack) => remaining.has(pack.name));
+    }
     if (candidates.length < 16) {
       continue;
     }
@@ -198,10 +333,6 @@ async function consolidatePacks(
       },
     );
     await requireGit(repoRoot, ["multi-pack-index", "expire"], options);
-    consolidated = true;
-  }
-  if (!consolidated) {
-    return;
   }
   const remaining = (await fs.readdir(directory)).filter((name) =>
     /^pack-[a-f0-9]+\.idx$/.test(name),
@@ -216,7 +347,7 @@ async function consolidatePacks(
 
 export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
   // Suspend failed tasks without letting graph failures stop bounded pack convergence.
-  const failed = new Map<string, "packs" | "maintenance">();
+  const failed = new Map<string, "objects" | "packs" | "maintenance">();
   return async (params: MaintenanceParams): Promise<void> => {
     const assertCurrent = () => {
       params.signal?.throwIfAborted();
@@ -236,9 +367,17 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
       if (failed.get(repoRoot) === "packs" || params.shouldDeferRepository?.(repoRoot)) {
         continue;
       }
-      let stage: "packs" | "maintenance" = "packs";
+      let stage: "objects" | "packs" | "maintenance" = "packs";
       try {
+        // Repair lookup before traversing objects: interrupted writers can leave
+        // the MIDX referring to pack files that no longer exist.
         await maintainWorktreePacks(repoRoot, params);
+        stage = "objects";
+        // Only an explicit repair pass may fetch. Successful batches remain in
+        // Git if interrupted; the next retry inventories only what is missing.
+        if (params.retryDeferred) {
+          await withContentGitSlot(() => repairWorktreeObjects(repoRoot, params), params.signal);
+        }
         stage = "maintenance";
         if (failed.has(repoRoot)) {
           continue;
@@ -263,8 +402,12 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
       } catch (error) {
         assertCurrent();
         failed.set(repoRoot, stage);
+        const recovery =
+          stage === "objects"
+            ? "Check the promisor remote, then run openclaw worktrees gc --retry-deferred to resume object repair."
+            : "Repair the repository, then run openclaw worktrees gc --retry-deferred or restart the Gateway to retry.";
         log.warn(
-          `worktree Git maintenance suspended (${stage}) for ${repoRoot}: ${String(error)}\nRepair the repository, then run openclaw worktrees gc --retry-deferred or restart the Gateway to retry.`,
+          `worktree Git maintenance suspended (${stage}) for ${repoRoot}: ${String(error)}\n${recovery}`,
         );
       }
     }

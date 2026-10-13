@@ -6,6 +6,7 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import * as sessionEntryReads from "../../config/sessions/session-entry-read-runtime.js";
 import { projectionLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { releaseAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
@@ -39,6 +40,15 @@ import {
 import type { GatewayClient } from "./types.js";
 
 installQuestionTestHooks();
+
+function invalidateQuestionReadFacts() {
+  sessionChanges.invalidate({
+    agentId: "main",
+    sessionKey: requestParams.sessionKey,
+    storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+    factsInvalidated: true,
+  });
+}
 
 const sourceReleases = new Set<() => void>();
 afterEach(() => {
@@ -523,6 +533,7 @@ it.each([
       owner.send.mockClear();
       const entered = createDeferredCore();
       const release = createDeferredCore();
+      invalidateQuestionReadFacts();
       const run = projectionLane.pool.run.bind(projectionLane.pool);
       let held = false;
       const spy = vi
@@ -651,13 +662,15 @@ it.each([
       }
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const run = projectionLane.pool.run.bind(projectionLane.pool);
-      const spy = vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
-        const result = await run(...args);
-        entered.resolve();
-        await release.promise;
-        return result;
-      });
+      invalidateQuestionReadFacts();
+      const read = sessionEntryReads.withSessionEntriesFromStoresInWorker;
+      const spy = vi
+        .spyOn(sessionEntryReads, "withSessionEntriesFromStoresInWorker")
+        .mockImplementation(async (...args) => {
+          entered.resolve();
+          await release.promise;
+          return read(...args);
+        });
       let current = true;
       const observer = new AsyncWorkScope();
       broadcast.mockClear();
@@ -732,8 +745,11 @@ it.each(["admin", "narrow"] as const)(
           canReceiveSessionEvent: fallback,
         }).broadcast,
       );
-      const spy = vi.spyOn(projectionLane.pool, "run").mockRejectedValue(failure);
+      const spy = vi
+        .spyOn(sessionEntryReads, "withSessionEntriesFromStoresInWorker")
+        .mockRejectedValue(failure);
       try {
+        invalidateQuestionReadFacts();
         const client = kind === "narrow" ? f.producer : adminRequestClient;
         const request = f.call(
           "question.request",

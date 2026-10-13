@@ -7,7 +7,7 @@ read_when:
 title: "Plugin bundles"
 ---
 
-OpenClaw can install plugins from four external ecosystems: the vendor-neutral
+OpenClaw can install plugins from four external formats: the vendor-neutral
 [**Agent Plugins**](https://agent-plugins.org) standard, plus **Codex**,
 **Claude**, and **Cursor**. These are called **bundles** - content and metadata
 packs that OpenClaw maps into native features like skills, hooks, and MCP tools.
@@ -151,7 +151,7 @@ These are recognized and shown in diagnostics, but OpenClaw does not run them:
   default; use `tools.deny: ["bundle-mcp"]` to opt out for an agent or gateway.
 - Project-local embedded agent settings still apply after bundle defaults, so
   workspace settings can override bundle MCP entries when needed.
-- Bundle MCP tool catalogs are sorted deterministically before registration, so
+- Bundle MCP tool catalogs are sorted in a fixed order before registration, so
   upstream `listTools()` order changes do not thrash prompt-cache tool blocks.
 
 ### Transports
@@ -220,7 +220,7 @@ OpenClaw registers bundle MCP tools with provider-safe names in the form
 - Full tool names are capped at 64 characters.
 - Empty server names fall back to `mcp`.
 - Colliding sanitized names are disambiguated with numeric suffixes.
-- Final exposed tool order is deterministic by safe name, keeping repeated
+- Final exposed tool order is sorted by safe name, keeping repeated
   embedded-agent turns cache-stable.
 - Profile filtering treats every tool from one bundle MCP server as
   plugin-owned by `bundle-mcp`, so profile allow/deny lists can reference

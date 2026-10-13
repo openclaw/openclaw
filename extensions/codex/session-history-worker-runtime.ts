@@ -11,6 +11,7 @@ import {
   WorkerTaskPool,
 } from "openclaw/plugin-sdk/process-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
+import { codexHistoryWorkerEntrypoint } from "./session-history-worker-entrypoint.js";
 import {
   runCodexHistoryWorkerInput,
   type CodexHistoryWorkerInput,
@@ -28,16 +29,6 @@ import {
 } from "./src/app-server/session-history.js";
 import type { SettledTurnMessages } from "./src/app-server/settled-turn-evidence.js";
 import { projectVerifiedSettledCodexMessages } from "./src/app-server/settled-turn-evidence.js";
-
-const codexHistoryWorkerEntrypoint = {
-  currentModuleUrl: import.meta.url,
-  sourceWorkerName: "session-history.worker",
-  distWorkerPath: "extensions/codex/session-history.worker.js",
-  package: {
-    name: "@openclaw/codex",
-    distWorkerPath: "session-history.worker.js",
-  },
-} as const;
 
 const sourceWorkerUrl = resolveRuntimeWorkerUrl(codexHistoryWorkerEntrypoint);
 const sourceNeedsBuiltFallback =
@@ -64,13 +55,10 @@ export async function projectCodexSettledHistoryInWorker(
   contextReader?: CodexSessionContextReader,
 ): Promise<CodexHistoryReadResult<JsonValue[]>> {
   signal?.throwIfAborted();
-  if (contextReader && !target.sessionTarget) {
-    throw new Error("Actor history requires a captured sessionTarget");
-  }
-  const resolved = resolveCodexHistoryTarget(target);
+  const resolved = await resolveCodexHistoryTarget(target);
   const reader =
     contextReader ??
-    (target.sessionTarget && resolved.kind === "sqlite"
+    (resolved.kind === "sqlite"
       ? captureCodexSessionContextReader({ ...target.sessionTarget, ...resolved.target }, signal)
       : undefined);
   if (reader) {

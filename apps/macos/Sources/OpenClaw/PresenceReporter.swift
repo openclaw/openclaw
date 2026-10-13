@@ -14,6 +14,13 @@ final class PresenceReporter {
     private static let clearLastInputTag = "system-presence-clear-last-input"
     private static let legacyClearedLastInputSeconds = 30 * 24 * 60 * 60
 
+    static let activityPrivacyParameters: [String: AnyHashable] = [
+        // Older Gateways overwrite exact recency with the sentinel; current ones
+        // let the tag win and delete the field.
+        "lastInputSeconds": AnyHashable(legacyClearedLastInputSeconds),
+        "tags": AnyHashable([clearLastInputTag]),
+    ]
+
     func start() {
         guard self.task == nil else { return }
         self.task = Task.detached { [weak self] in
@@ -38,7 +45,8 @@ final class PresenceReporter {
         let version = Self.appVersionString()
         let platform = Self.platformString()
         let text = Self.composePresenceSummary(mode: mode, reason: reason)
-        var params: [String: AnyHashable] = [
+        var params = Self.activityPrivacyParameters
+        params.merge([
             "instanceId": AnyHashable(self.instanceId),
             "host": AnyHashable(host),
             "ip": AnyHashable(ip),
@@ -46,12 +54,8 @@ final class PresenceReporter {
             "version": AnyHashable(version),
             "platform": AnyHashable(platform),
             "deviceFamily": AnyHashable("Mac"),
-            // Older Gateways ignore the tag but overwrite exact recency with this
-            // fixed sentinel. Current Gateways let the tag win and delete the field.
-            "lastInputSeconds": AnyHashable(Self.legacyClearedLastInputSeconds),
-            "tags": AnyHashable([Self.clearLastInputTag]),
             "reason": AnyHashable(reason),
-        ]
+        ]) { _, value in value }
         if let model = InstanceIdentity.modelIdentifier { params["modelIdentifier"] = AnyHashable(model) }
         do {
             try await ControlChannel.shared.sendSystemEvent(text, params: params)
@@ -65,7 +69,7 @@ final class PresenceReporter {
         Task { await self.push(reason: reason) }
     }
 
-    private static func composePresenceSummary(mode: String, reason: String) -> String {
+    static func composePresenceSummary(mode: String, reason: String) -> String {
         let host = InstanceIdentity.displayName
         let ip = NetworkInterfaces.primaryIPv4Address() ?? "ip-unknown"
         let version = Self.appVersionString()
@@ -88,18 +92,3 @@ final class PresenceReporter {
         return "macos \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
     }
 }
-
-#if DEBUG
-extension PresenceReporter {
-    static func _testComposePresenceSummary(mode: String, reason: String) -> String {
-        self.composePresenceSummary(mode: mode, reason: reason)
-    }
-
-    static func _testActivityPrivacyParameters() -> [String: AnyHashable] {
-        [
-            "lastInputSeconds": AnyHashable(self.legacyClearedLastInputSeconds),
-            "tags": AnyHashable([self.clearLastInputTag]),
-        ]
-    }
-}
-#endif

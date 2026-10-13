@@ -1,4 +1,4 @@
-import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
+import type { WorkerPlacementMoveIntent } from "./placement-move-intent.types.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type { WorkerSessionPlacementRetirement } from "./placement-retirement.js";
 import type { WorkerEnvironmentNativePatch } from "./store-projection.js";

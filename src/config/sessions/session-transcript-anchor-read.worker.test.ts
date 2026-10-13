@@ -6,11 +6,13 @@ import {
   observeHostDataSql,
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -22,7 +24,8 @@ import {
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
 import { readActiveTranscriptEntryAnchorFromProjection } from "./session-accessor.sqlite-transcript-anchor.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import {
   readActiveTranscriptEntryAnchorAsync,
   readSessionTranscriptAnchorsAsync,
@@ -30,6 +33,7 @@ import {
 import * as anchorKernel from "./session-transcript-anchor-read.kernel.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import * as targetWorker from "./session-transcript-read-worker-runtime.js";
+import { historyLane } from "./session-transcript-worker-resources.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 
 const events = [
@@ -112,6 +116,49 @@ it("keeps replay tails metadata-only unless message payloads are selected", asyn
       anchor: { entryId: "tagged" },
       message: { role: "assistant", content: "selected answer" },
     });
+  });
+});
+
+it("settles callback-owned tail reads while independent history waits on the writer", async () => {
+  await withOpenClawTestState({ label: "writer-owned-transcript-tail" }, async (state) => {
+    const scope = transcriptScope(state);
+    await replaceTranscriptEvents(scope, events);
+    openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
+    const independentRead = createDeferred();
+    const blockedHistory = createDeferred<never>();
+    void blockedHistory.promise.catch(() => {});
+    const spy = vi.spyOn(historyLane.pool, "run").mockImplementation(() => {
+      independentRead.resolve();
+      return blockedHistory.promise;
+    });
+    let accepted = false;
+    const reading = readSessionTranscriptAnchorsAsync(
+      scope,
+      { entryIds: ["question"], afterSeq: 1, includeMessagesForRunId: "answer-run" },
+      undefined,
+      (facts) => {
+        expect(facts.anchors).toEqual(
+          expect.arrayContaining([expect.objectContaining({ entryId: "question" })]),
+        );
+        expect(facts.tail?.entries).toContainEqual(
+          expect.objectContaining({ entryId: "answer", runId: "answer-run" }),
+        );
+        accepted = true;
+      },
+    );
+    try {
+      await Promise.race([
+        reading,
+        independentRead.promise.then(() => {
+          throw new Error("Tail acceptance waited on independent history custody");
+        }),
+      ]);
+      expect(accepted).toBe(true);
+    } finally {
+      blockedHistory.reject(new Error("Synthetic history custody released"));
+      await reading.catch(() => {});
+      spy.mockRestore();
+    }
   });
 });
 
@@ -272,20 +319,143 @@ it.each([
         reason: "rebuilding",
       });
       const hydrate = prepareSessionTranscriptHydration(scope, { maxBytes: 4096, maxEvents: 10 });
-      await expect(
-        hydrate.readCohort!({ sessionKey: scope.sessionKey, entryIds: ["question"] }, () => {
-          throw new Error("Stale hydration must not publish anchors");
-        }),
-      ).rejects.toMatchObject({
-        name: "SessionTranscriptProjectionUnavailableError",
-        sessionId: scope.sessionId,
-        reason: "rebuilding",
+      const retirementEntered = createDeferred();
+      const releaseRetirement = createDeferred();
+      let following: Promise<void> | undefined;
+      const retirement = vi.spyOn(historyLane.pool, "rotate").mockImplementation(() => {
+        following ??= runOpenClawAgentWriteAdmission(
+          { agentId: scope.agentId, env: scope.env, path: scope.storePath },
+          () => {},
+        );
+        retirementEntered.resolve();
+        return Promise.race([following, releaseRetirement.promise]);
       });
+      const reading = hydrate.readCohort!(
+        { sessionKey: scope.sessionKey, entryIds: ["question"] },
+        () => {
+          throw new Error("Stale hydration must not publish anchors");
+        },
+      );
+      try {
+        await expect(
+          Promise.race([
+            reading,
+            retirementEntered.promise.then(() => {
+              throw new Error("Hydration cleanup waits on the writer queued behind its cohort");
+            }),
+          ]),
+        ).rejects.toMatchObject({
+          name: "SessionTranscriptProjectionUnavailableError",
+          sessionId: scope.sessionId,
+          reason: "rebuilding",
+        });
+      } finally {
+        releaseRetirement.resolve();
+        await Promise.allSettled([reading, following]);
+        retirement.mockRestore();
+      }
       expect(hostSql.queries).toEqual([]);
     } finally {
       hostSql.restore();
     }
     expect(version.get()).toEqual(before);
+  });
+});
+
+it("returns a reply tail and its current watermark from one projection snapshot", async () => {
+  await withOpenClawTestState({ label: "transcript-anchor-watermark" }, async (state) => {
+    const scope = transcriptScope(state);
+    await replaceTranscriptEvents(scope, events);
+    const database = openOpenClawAgentDatabase({
+      agentId: scope.agentId,
+      env: scope.env,
+      path: scope.storePath,
+    });
+    const resolved = { ...scope, path: database.path };
+    const selection = {
+      entryIds: ["question"],
+      afterSeq: 1,
+      includeMessagesForRunId: "answer-run",
+      includeWatermark: true,
+    };
+    const readMessage = await anchorKernel.prepareSessionTranscriptAnchorMessageReader(selection);
+    const statements = trackSqliteStatementExecutions(
+      database.db,
+      ["projection", "watermark"],
+      (sql) =>
+        sql.includes('"session_transcript_index_state"')
+          ? "projection"
+          : sql.includes('as "max_seq"')
+            ? "watermark"
+            : null,
+    );
+    const read = () =>
+      anchorKernel.readSessionTranscriptAnchorFactsInDatabase(
+        database,
+        resolved,
+        selection,
+        readMessage,
+      );
+    try {
+      const initial = read();
+      expect(initial.watermark?.maxSeq).toBe(4);
+      expect(initial.tail?.entries).toContainEqual(
+        expect.objectContaining({
+          entryId: "answer",
+          message: expect.objectContaining({ content: "answer" }),
+        }),
+      );
+      expect(statements.counts).toEqual({ projection: 1, watermark: 0 });
+
+      runSqliteImmediateTransactionSync(database.db, () =>
+        appendTranscriptEventsInTransaction(database, resolved, [
+          {
+            type: "message",
+            id: "new-answer",
+            parentId: "answer",
+            message: {
+              role: "assistant",
+              content: "new answer",
+              __openclaw: { runId: "answer-run" },
+            },
+          },
+        ]),
+      );
+      const before = { ...statements.counts };
+      const updated = read();
+      expect(updated.watermark).toEqual({ ...initial.watermark, maxSeq: 5 });
+      expect(updated.tail?.entries).toContainEqual(
+        expect.objectContaining({
+          entryId: "new-answer",
+          message: expect.objectContaining({ content: "new answer" }),
+        }),
+      );
+      expect(statements.counts.projection - before.projection).toBe(1);
+      expect(statements.counts.watermark - before.watermark).toBe(0);
+
+      runSqliteImmediateTransactionSync(database.db, () => {
+        database.db
+          .prepare(
+            `INSERT INTO session_transcript_cold_archives
+             (session_id, generation, archive_name, archive_sha256, event_count,
+              raw_bytes, archive_bytes, last_seq, archived_at, storage)
+             VALUES (?, 'archive-generation', 'synthetic', ?, 6, 0, 0, 5, 1, 'file')`,
+          )
+          .run(scope.sessionId, "0".repeat(64));
+      });
+      expect(read).toThrow("is in cold storage");
+      runSqliteImmediateTransactionSync(database.db, () => {
+        database.db
+          .prepare("DELETE FROM session_transcript_cold_archives WHERE session_id = ?")
+          .run(scope.sessionId);
+      });
+      const beforeRestoredRead = { ...statements.counts };
+      expect(read().watermark).toEqual(updated.watermark);
+      expect(statements.counts.projection - beforeRestoredRead.projection).toBe(1);
+      expect(statements.counts.watermark - beforeRestoredRead.watermark).toBe(0);
+    } finally {
+      statements.restore();
+    }
   });
 });
 
@@ -299,20 +469,35 @@ it("borrows one ready projection for anchors and payloads without extending its 
       path: scope.storePath,
     });
     const resolved = { ...scope, path: database.path };
+    database.db
+      .prepare("UPDATE session_windows SET transcript_updated_at = 41 WHERE session_id = ?")
+      .run(scope.sessionId);
     const selection = {
       entryIds: ["question", "answer"],
       afterSeq: 1,
       includeMessagesForRunId: "answer-run",
+      includeWatermark: true,
     };
     const readMessage = await anchorKernel.prepareSessionTranscriptAnchorMessageReader(selection);
     const peer = new DatabaseSync(database.path);
-    const statements = trackSqliteStatementExecutions(database.db, ["readiness"], (sql) =>
-      sql.includes('"session_transcript_index_state"') ? "readiness" : null,
+    const statements = trackSqliteStatementExecutions(
+      database.db,
+      ["readiness", "watermark"],
+      (sql) =>
+        sql.includes('"session_transcript_index_state"')
+          ? "readiness"
+          : sql.includes('as "max_seq"')
+            ? "watermark"
+            : null,
     );
     let borrowed: CurrentTranscriptProjection | undefined;
     try {
       const result = readCurrentProjectionSnapshot(database, resolved, (projection) => {
         borrowed = projection;
+        expect(projection.version).toMatchObject({ rawSeq: 4, updatedAt: 41 });
+        peer
+          .prepare("UPDATE session_windows SET transcript_updated_at = 42 WHERE session_id = ?")
+          .run(scope.sessionId);
         peer
           .prepare(
             "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
@@ -353,6 +538,7 @@ it("borrows one ready projection for anchors and payloads without extending its 
       expect(result).toMatchObject({
         kind: "value",
         value: {
+          watermark: { generation: borrowed?.version.generation, maxSeq: 4 },
           anchors: [
             { entryId: "question", rawSeq: 1 },
             { entryId: "answer", rawSeq: 2 },
@@ -370,6 +556,7 @@ it("borrows one ready projection for anchors and payloads without extending its 
         },
       });
       expect(statements.counts.readiness).toBe(1);
+      expect(statements.counts.watermark).toBe(0);
       expect(borrowed).toBeDefined();
       expect(() => readActiveTranscriptEntryAnchorFromProjection(borrowed!, "question")).toThrow(
         "requires its selected session snapshot",

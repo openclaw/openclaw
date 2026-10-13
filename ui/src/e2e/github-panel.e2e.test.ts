@@ -9,6 +9,7 @@ import type {
   ControlUiLinkReaderDocument,
   ControlUiLinkReaderDescriptor,
 } from "../../../src/shared/control-ui-link-reader.js";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   installMockGateway,
@@ -384,7 +385,7 @@ describe("GitHub side panel", () => {
       await panel.getByRole("heading", { name: commit.title, exact: true }).waitFor();
       await panelHeader.locator(".tabstrip-tab__close").last().click();
       await expect.poll(() => panelHeader.getByRole("tab").count()).toBe(2);
-      await panelHeader.locator(".side-panel__minimize").click();
+      await selectChatLayoutAction(page, "Minimize side panel");
       await expect.poll(() => panel.locator(".link-reader-panel").isVisible()).toBe(false);
       expect(
         await page.evaluate(() =>
@@ -400,7 +401,7 @@ describe("GitHub side panel", () => {
       expect(mobileBox!.x + mobileBox!.width).toBeLessThanOrEqual(391);
       expect(mobileBox!.width).toBeGreaterThanOrEqual(300);
       await capture(page, "github-issue-mobile", artifacts);
-      await panelHeader.locator(".side-panel__minimize").click();
+      await selectChatLayoutAction(page, "Minimize side panel");
       await expect.poll(() => panel.locator(".link-reader-panel").isVisible()).toBe(false);
     } finally {
       await context.close();

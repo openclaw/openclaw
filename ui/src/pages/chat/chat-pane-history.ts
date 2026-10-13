@@ -100,22 +100,17 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     }
     const cacheKey = resolveChatSnapshotKey(state, { sessionKey });
     const requests = chatHistoryRequests(state);
-    let startedBeforeReady = this.context.gateway.snapshot.phase !== "connected";
-    let readyAt: number | undefined;
-    const reading = store.read(cacheKey, (prewarmReadyAt) => {
-      startedBeforeReady = true;
-      readyAt = prewarmReadyAt;
-    });
+    const reading = store.read(cacheKey);
     const hydration: InitialChatSnapshotHydration = {
       sessionKey,
-      startedBeforeReady,
-      readyAt,
+      connected: this.context.gateway.snapshot.phase === "connected",
       promise: reading
         .then((storedSnapshot) => {
           if (
             requests.initialSnapshotHydration !== hydration ||
             requests.acceptedHistory ||
             this.state !== state ||
+            !this.ownsChatSnapshot({ sessionKey }) ||
             !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
             resolveChatSnapshotKey(state, { sessionKey }) !== cacheKey
           ) {
@@ -131,7 +126,13 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
           applyChatCacheSnapshot(state, snapshot);
           const mergedSnapshot = { ...snapshot, messages: state.chatMessages };
           cacheChatSessionSnapshot(cache, state, { sessionKey }, mergedSnapshot);
-          // Release startup with the adopted cursor before Lit queues the snapshot render.
+          if (snapshot.progressCard !== undefined) {
+            const target = this.resolveChatReadTarget();
+            if (target) {
+              this.progressCard.hydrate(target, snapshot.progressCard);
+            }
+          }
+          // Release the history response before Lit queues the cached transcript render.
           hydration.complete?.();
           state.requestUpdate?.();
         })

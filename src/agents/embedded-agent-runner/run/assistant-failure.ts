@@ -18,7 +18,11 @@ import {
   pickFallbackThinkingLevel,
 } from "../../embedded-agent-helpers.js";
 import { buildAssistantFailoverSignal } from "../../embedded-agent-helpers/assistant-message-failures.js";
-import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
+import {
+  FailoverError,
+  recordModelFallbackStop,
+  resolveFailoverStatus,
+} from "../../failover-error.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import {
   classifyRateLimitWindow,
@@ -38,7 +42,7 @@ import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./failover
 import type { EmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
 import { shouldRetrySilentErrorAssistantTurn } from "./incomplete-turn-recovery.js";
 import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
-import { isEmbeddedRunTerminalInterrupted } from "./terminal-outcome.js";
+import { isEmbeddedRunTerminalInterrupted, isEmbeddedRunTimeoutFinal } from "./terminal-outcome.js";
 
 const MAX_EMPTY_ERROR_RETRIES = 3;
 
@@ -105,6 +109,18 @@ export async function handleEmbeddedAssistantFailure(input: {
   // may drive retries, profile health, or failure copy.
   const failedAssistant = attemptAssistant?.stopReason === "error" ? attemptAssistant : undefined;
   const transcriptError = failedAssistant?.errorMessage;
+  if (failedAssistant) {
+    log.warn("Assistant attempt failed", {
+      provider: failedAssistant.provider,
+      model: failedAssistant.model,
+      runId: runInput.runParams.runId,
+      responseId: failedAssistant.responseId,
+      code: failedAssistant.errorCode,
+      type: failedAssistant.errorType,
+      message: transcriptError,
+      body: failedAssistant.errorBody,
+    });
+  }
   if (isSessionTranscriptTurnMismatchErrorMessage(transcriptError)) {
     throw new Error(transcriptError);
   }
@@ -146,7 +162,11 @@ export async function handleEmbeddedAssistantFailure(input: {
     },
   );
   const terminalAssistantError = isTerminalAssistantError(attemptAssistant);
-  if (terminalAssistantError || !isCurrentAttemptReplaySafe(attempt)) {
+  if (
+    terminalAssistantError ||
+    isEmbeddedRunTimeoutFinal(attempt) ||
+    !isCurrentAttemptReplaySafe(attempt)
+  ) {
     return buildOutcome(input, {
       action: "proceed",
       assistantProfileFailureReason: terminalAssistantError ? null : assistantProfileFailureReason,
@@ -319,6 +339,11 @@ export async function handleEmbeddedAssistantFailure(input: {
     });
   };
   const throwFailure = (error: FailoverError): never => {
+    if (decision.action === "surface_error" && error.reason === "format") {
+      // A different model cannot repair a rejected request. Context overflow
+      // remains owned by the earlier compaction recovery path.
+      recordModelFallbackStop(error);
+    }
     recordTrace(
       initialDecision.action === "fallback_model" ? "fallback_model" : "error",
       error.status,

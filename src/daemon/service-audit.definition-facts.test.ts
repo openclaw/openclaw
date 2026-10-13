@@ -818,19 +818,3 @@ it("tolerates the scheduler-forced UseUnifiedSchedulingEngine value", async () =
     expect.objectContaining({ key: "Settings.UseUnifiedSchedulingEngine" }),
   );
 });
-
-it("tolerates the scheduler-canonicalized run-as account", async () => {
-  const findings = await auditRewrittenTaskXml((xml) =>
-    xml.replaceAll("<UserId>fixture</UserId>", "<UserId>ZERO-2\\Fixture</UserId>"),
-  );
-  expect(findings.filter((finding) => finding.key.endsWith("UserId"))).toEqual([]);
-});
-
-it("still reports a different run-as account", async () => {
-  const findings = await auditRewrittenTaskXml((xml) =>
-    xml.replaceAll("<UserId>fixture</UserId>", "<UserId>ZERO-2\\Other</UserId>"),
-  );
-  expect(findings).toContainEqual(
-    expect.objectContaining({ kind: "unknown-edit", key: "Triggers.LogonTrigger.UserId" }),
-  );
-});

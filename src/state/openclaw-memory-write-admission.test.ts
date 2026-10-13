@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   OpenKeyedStoreOptions,
@@ -19,10 +23,8 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
-import {
-  runOpenClawAgentWriteAdmission,
-  SQLITE_SESSION_WRITER_QUEUES,
-} from "./openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "./openclaw-agent-write-admission-state.js";
+import { runOpenClawAgentWriteAdmission } from "./openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db-cache.js";
 
 const { configureMemoryCoreDreamingState, createMemoryRuntime } = await vi.importActual<{
@@ -64,6 +66,7 @@ describe("memory manager state owner capture", () => {
       agents: { defaults: { workspace }, entries: { main: {} } },
       memory: { search: { provider: "none", store: { vector: { enabled: false } } } },
     };
+    setRuntimeConfigSnapshot(config);
     openOpenClawAgentDatabase({ agentId: "main", env: originalEnv });
     // Warm the supported runtime entry before the test controls queue admission.
     const warm = await getMemorySearchManager({ cfg: config, agentId: "main", purpose: "status" });
@@ -81,6 +84,7 @@ describe("memory manager state owner capture", () => {
     closeOpenClawAgentDatabasesForTest();
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
+    clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     configureMemoryCoreDreamingState(() => {

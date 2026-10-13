@@ -162,6 +162,21 @@ otherwise they log at `debug`. Persistent Gateway degradation can warn even when
 no tracked work is active. Other idle liveness samples remain diagnostic events
 without escalating to a warning.
 
+The Gateway also emits an always-on `main-thread stall` warning after a synchronous
+callback blocks for more than one second. Each line names the longest-running
+known task segment from scheduled jobs, diagnostic phases, timeline spans, or
+worker message handling, with elapsed and task milliseconds. Time awaiting I/O
+does not count as task execution. A task label expires when its callback returns
+or its returned promise settles; detached work does not retain a completed startup
+phase's label. Unknown callbacks use `task=unattributed`;
+process suspension can also produce an unattributed delay. Reporting is bounded
+to eight pending stalls, with an omitted count if that limit is exceeded. This
+requires neither an inspector connection nor a sampling profiler.
+
+Detailed attribution of asynchronous continuations requires Node's `async_hooks`
+callback boundaries. Bun currently reports explicit synchronous task scopes and
+otherwise retains unattributed delay warnings.
+
 Startup phases emit `diagnostic.phase.completed` events with wall-clock and
 whole-process CPU timing, including worker and native threads. Phase CPU can
 include concurrent work outside that phase; it is not exclusive attribution.
@@ -209,10 +224,16 @@ Managed worktree preparation emits one info-level `managed worktree preparation`
 record on return or failure. `kind=managed` covers checkout creation;
 `kind=sandbox` covers a managed guest projection through backend readiness,
 including workspace/skill layout and container provisioning. `durationMs` measures
-the whole operation. `phaseDurationsMs` attributes allocation admission, checkout,
-setup execution, template preparation and application, snapshot capture, synchronization in each
-direction, workspace layout, and container startup. Phases include nested work
-and asynchronous waits, so do not add them to the total. Unentered phases are
+the whole operation. `phaseDurationsMs` separates repository and source preparation,
+allocation and checkout-lease waits and release, slot reservation, base resolution, checkout
+registration, disk admission, ignored-file provisioning, source-custody release, and registry publication.
+Base resolution distinguishes the shared remote refresh, object hydration, local
+fast-forward, and each caller's wait for that preparation. Template preparation
+and application, index refresh, setup execution, snapshot capture, synchronization
+in each direction, workspace layout, and container startup have their own phases.
+Phases include nested work and asynchronous waits, so do not add them to the
+total. `unattributedMs` measures elapsed time outside all recorded phases without
+double-counting overlaps. Unentered phases are
 absent. `template` is `warm`, `cold`, `unavailable`, or `reused` for an existing
 projection; records contain no repository paths, session keys, or setup output.
 With diagnostics enabled, the same observation feeds the
@@ -307,16 +328,36 @@ response limit does not bound the runtime's internal allocation during that dela
 samples describe this isolate, not all process threads, and are not exact
 per-function CPU accounting.
 
-On Node, starting a CPU profile synchronously scans V8's heap to build its code map. On a
-large Gateway this can block the main event loop for seconds on every capture
-(about 3.5 seconds has been observed with a 3 GB heap),
-before regular sampling begins. Keeping the inspector domain enabled or sending
-the request from a Worker does not avoid that main-isolate work.
+On Node, CPU captures share the native profiler with the Gateway's stall flight
+recorder. While that recorder is active on Node 26, starting an operator capture
+reuses its code map without scanning the heap again. If no native profile is
+already active, starting a CPU profile synchronously scans V8's heap to build
+the code map. On a large Gateway this can block the main event loop for seconds
+(about 3.5 seconds has been observed with a 3 GB heap). Bun uses its inspector
+profiler. Keeping an inspector domain enabled or sending a request from a Worker
+does not avoid V8's main-isolate scan.
 `startBlockedMs` measures the synchronous start call with a monotonic clock,
 excluding promise waits, setup, sampling time, and stop/cleanup. Use it to
 attribute capture-induced stalls when analyzing an individual capture; it cannot
 be subtracted from aggregate event-loop maxima or percentiles. The measurement
 reports the cost; it does not prevent or interrupt the native stall.
+
+From a source checkout, attribute native self samples to their nearest JavaScript
+parent with:
+
+```bash
+node scripts/diagnostic-cpu-native-parents.mts cpu-1.json cpu-2.json
+```
+
+The script accepts saved RPC results or raw V8 profiles and prints the top 20
+parents for each capture. Add `--json` for all parent rows. Percentages use elapsed
+profile time, including idle and garbage collection, rather than active CPU time.
+Signed sample deltas remain intact. For RPC results, it separately reports a first
+native sample under the diagnostic profiler's inspector start call and shows
+workload percentages with that sample and its duration excluded. This prevents a
+large profiler-start sample from being mistaken for steady application work;
+it does not remove the actual stall or alter the saved profile. Raw profiles lack
+the `startBlockedMs` metadata and retain every sample in workload percentages.
 
 The RPC refuses a known active inspector listener, profiling flags, coverage
 collection, or any active Node tracing, including non-CPU categories. Stop tracing

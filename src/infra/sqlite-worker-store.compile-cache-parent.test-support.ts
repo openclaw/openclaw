@@ -36,9 +36,10 @@ fs.mkdirSync(installRoot);
 fs.writeFileSync(path.join(installRoot, "package.json"), '{"version":"2026.9.6"}');
 assert.equal(getCompileCacheDir(), undefined, "fixture must start without a native cache");
 const initialEnv = { ...process.env };
-if (testCase.owner === "source") {
-  fs.writeFileSync(path.join(installRoot, ".git"), "gitdir: fixture");
-}
+const currentFile = path.join(
+  installRoot,
+  testCase.owner === "source" ? "src/entry.ts" : "dist/entry.js",
+);
 if (testCase.owner === "foreign") {
   // Negative control: a direct Node enable is NOT OpenClaw ownership.
   const enabled = enableCompileCache(path.join(root, "foreign"));
@@ -47,10 +48,11 @@ if (testCase.owner === "foreign") {
 if (testCase.owner === "failed") {
   const blocked = path.join(root, "not-a-directory");
   fs.writeFileSync(blocked, "fixture");
-  enableOpenClawCompileCache({ installRoot, env: { NODE_COMPILE_CACHE: blocked } });
+  enableOpenClawCompileCache({ currentFile, installRoot, env: { NODE_COMPILE_CACHE: blocked } });
 } else {
   // Positive control goes through the real OpenClaw entry enable owner.
   enableOpenClawCompileCache({
+    currentFile,
     installRoot,
     env: { ...process.env, NODE_COMPILE_CACHE: path.join(root, "native-cache") },
   });
@@ -72,7 +74,10 @@ if (owned) {
   // A later enable attempt must not replace the first owner's input.
   const otherRoot = path.join(root, "other-install");
   fs.mkdirSync(otherRoot);
-  enableOpenClawCompileCache({ installRoot: otherRoot });
+  enableOpenClawCompileCache({
+    currentFile: path.join(otherRoot, "dist", "entry.js"),
+    installRoot: otherRoot,
+  });
   assert.equal(resolveNodeCompileCacheEnv({}).NODE_COMPILE_CACHE, handoff.NODE_COMPILE_CACHE);
   assert.equal(getCompileCacheDir(), parentDirectory);
 } else {

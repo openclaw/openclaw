@@ -10,8 +10,7 @@ import type { applySessionEntryExactReplacements } from "../../../config/session
 import type { prepareSessionGenerationFacts } from "../../../config/sessions/session-delivery-generation.js";
 import type { captureSessionEntryCurrentRead } from "../../../config/sessions/session-entry-current-runtime.js";
 import type { SessionEntryCurrentFacts } from "../../../config/sessions/session-entry-current.types.js";
-import type { SessionEntryReadWorkerOwner } from "../../../config/sessions/session-entry-read-runtime.js";
-import type { SessionEntryReadSourcePreparation } from "../../../config/sessions/session-entry-read-runtime.types.js";
+import type { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
@@ -215,13 +214,7 @@ export function createSubagentRegistryMockState() {
       };
     },
     withSessionEntryReadOnlyInWorker: async <T>(
-      scope: SessionEntryReadScope,
-      assertCurrent: () => void,
-      consume: (
-        read: Result<SessionEntry | undefined, unknown>,
-        owner: SessionEntryReadWorkerOwner,
-      ) => Promise<T>,
-      _prepareSource?: SessionEntryReadSourcePreparation,
+      ...[scope, assertCurrent, consume]: Parameters<typeof withSessionEntryReadOnlyInWorker<T>>
     ): Promise<T> => {
       assertCurrent();
       let read: Result<SessionEntry | undefined, unknown>;

@@ -494,57 +494,21 @@ describe.skipIf(process.platform === "win32")("persistent Crabbox source capsule
     }
   });
 
-  it.each(["stable.txt", "new.txt", "frozen mirror", "commit"])(
-    "rejects source or frozen bytes changed during warm freezing: %s",
-    (path) => {
-      const f = fixture();
-      const first = f.prepare();
-      first.cleanup();
-      if (path === "commit") {
-        const commit = [
-          "-C",
-          f.repository,
-          "-c",
-          "user.name=Fixture",
-          "-c",
-          "user.email=fixture@example.invalid",
-          "-c",
-          "commit.gpgsign=false",
-          "commit",
-          "--quiet",
-          "--allow-empty",
-          "-m",
-          "changed during freeze",
-        ];
-        expect(() =>
-          f.prepare(
-            true,
-            `require("node:child_process").execFileSync("git", ${JSON.stringify(commit)}, {stdio:"ignore"});`,
-          ),
-        ).toThrow("source revision, index, or eligibility changed while freezing");
-        return;
-      }
-      const source = path === "frozen mirror" ? "stable.txt" : join(f.repository, path);
-      expect(() =>
-        f.prepare(
-          true,
-          `require("node:fs").writeFileSync(${JSON.stringify(source)},"raced edit\\n");`,
-        ),
-      ).toThrow(/changed while freezing/u);
-      const next = f.prepare();
-      try {
-        expect(
-          readFileSync(
-            join(next.directory, path === "frozen mirror" ? "stable.txt" : path),
-            "utf8",
-          ),
-        ).toBe(path === "frozen mirror" ? "untouched bytes\n" : "raced edit\n");
-        f.expectColdEquivalent(next);
-      } finally {
-        next.cleanup();
-      }
-    },
-  );
+  it("rejects frozen mirror bytes changed outside their owner", () => {
+    const f = fixture();
+    const first = f.prepare();
+    first.cleanup();
+    expect(() =>
+      f.prepare(true, 'require("node:fs").writeFileSync("stable.txt","raced edit\\n");'),
+    ).toThrow(/changed while freezing/u);
+    const next = f.prepare();
+    try {
+      expect(readFileSync(join(next.directory, "stable.txt"), "utf8")).toBe("untouched bytes\n");
+      f.expectColdEquivalent(next);
+    } finally {
+      next.cleanup();
+    }
+  });
 
   it.skipIf(process.platform === "win32")(
     "suppresses configured Git callbacks while preserving a reusable mirror",

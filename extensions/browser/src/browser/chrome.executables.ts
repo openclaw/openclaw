@@ -328,20 +328,13 @@ function extractExecutableFromExecLine(execLine: string): string | null {
 function splitExecLine(line: string): string[] {
   const tokens: string[] = [];
   let current = "";
-  let inQuotes = false;
   let quoteChar = "";
   for (const ch of line) {
-    if ((ch === '"' || ch === "'") && (!inQuotes || ch === quoteChar)) {
-      if (inQuotes) {
-        inQuotes = false;
-        quoteChar = "";
-      } else {
-        inQuotes = true;
-        quoteChar = ch;
-      }
+    if ((ch === '"' || ch === "'") && (!quoteChar || ch === quoteChar)) {
+      quoteChar = quoteChar ? "" : ch;
       continue;
     }
-    if (!inQuotes && /\s/.test(ch)) {
+    if (!quoteChar && /\s/.test(ch)) {
       if (current) {
         tokens.push(current);
         current = "";

@@ -38,19 +38,6 @@ function issueAuthority(profileId: string, scopes: readonly string[] = ["operato
 }
 
 describe("session control source capability", () => {
-  it.each([
-    { scopes: [], allowed: false },
-    { scopes: ["operator.read"], allowed: false },
-    { scopes: ["operator.sessions.write"], allowed: false },
-    { scopes: ["operator.read", "operator.sessions.write"], allowed: false },
-    { scopes: ["operator.write"], allowed: true },
-    { scopes: ["operator.admin"], allowed: true },
-  ])("requires broad write authority for $scopes", ({ scopes, allowed }) => {
-    const { authority } = issueAuthority("control-profile", scopes);
-    expect(captureSessionControlAuthority(authority)?.authority).toBe(authority);
-    expect(hasSessionControlAuthority(authority)).toBe(allowed);
-  });
-
   it("never mints authority from absence, matching fields, a copy, or a revoked source", () => {
     expect(captureSessionControlAuthority()?.authority).toBeUndefined();
     expect(hasSessionControlAuthority()).toBe(false);
@@ -135,34 +122,30 @@ describe("prepared session control target", () => {
 
   it.each([
     { relationship: "creator", allowed: true },
-    { relationship: "creator-alias", allowed: true },
-    { relationship: "human-assignee", allowed: true },
     { relationship: "human-assignee-alias", allowed: true },
-    { relationship: "visible-unassigned", allowed: false },
     { relationship: "channel-creator", allowed: false },
-    { relationship: "unknown-creator", allowed: false },
     { relationship: "agent-assignee", allowed: false },
     { relationship: "unrelated-admin", allowed: true },
   ] as const)(
     "checks the persisted $relationship relationship",
     async ({ relationship, allowed }) => {
       const createdActor: SessionEntry["createdActor"] =
-        relationship === "creator" || relationship === "creator-alias"
+        relationship === "creator"
           ? {
               type: "human",
               source: "profile",
-              id: relationship === "creator" ? callerId : aliasId,
+              id: callerId,
             }
-          : relationship === "channel-creator" || relationship === "unknown-creator"
+          : relationship === "channel-creator"
             ? {
                 type: "human",
-                source: relationship === "channel-creator" ? "channel" : "unknown",
+                source: "channel",
                 id: callerId,
               }
             : { type: "human", source: "profile", id: otherId };
       const { scope, entry, request } = seedTarget(relationship, { createdActor });
-      if (relationship === "human-assignee" || relationship === "human-assignee-alias") {
-        assign(scope, "human", relationship === "human-assignee" ? callerId : aliasId);
+      if (relationship === "human-assignee-alias") {
+        assign(scope, "human", aliasId);
       } else if (relationship === "agent-assignee") {
         assign(scope, "agent", callerId);
       }

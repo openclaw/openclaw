@@ -20,6 +20,10 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendUnauthorized } from "./http-common.js";
 import { sendGatewayHttpAuthFailure } from "./http-operator-access.js";
 import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+} from "./ingress-attribution.js";
+import {
   GatewayOperatorAccessDeniedError,
   hasCurrentGatewayOperatorAccess,
 } from "./operator-access-policy.js";
@@ -27,19 +31,30 @@ import { readOperatorRolePolicyRevision } from "./operator-role-policy.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
+export type GatewayHttpRequestLifetime = Pick<
+  GatewayRequestContext,
+  "trackExecution" | "requestEntryLifetime"
+>;
+
 /** Replaces startup custody with the live Gateway and one disconnect-aware request scope. */
 export function runGatewayHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  context: GatewayRequestContext | undefined,
+  context: GatewayHttpRequestLifetime | undefined,
   handle: () => Promise<"failed" | undefined>,
 ): Promise<void> {
   const run = async () => {
+    const ingress = getRemoteControlUiIngressContext(req);
+    assertRemoteControlUiIngressCurrent(ingress);
     const work = new AsyncWorkScope();
     const requestContext = work.run(() => AsyncLocalStorage.snapshot());
     const client = createHttpRequestAbortSignal(req, res);
     const shutdown = context?.requestEntryLifetime?.signal;
-    const signal = shutdown ? AbortSignal.any([client.signal, shutdown]) : client.signal;
+    const signal = AbortSignal.any([
+      client.signal,
+      ...(shutdown ? [shutdown] : []),
+      ...(ingress ? [ingress.signal] : []),
+    ]);
     let cancelledBy: "client" | "shutdown" | undefined;
     const cancel = () =>
       requestContext(() => {
@@ -145,7 +160,15 @@ export function captureHttpRequestAuthority(
   );
   const roleRevision = cfg.gateway?.roles ? readOperatorRolePolicyRevision() : undefined;
   const aliasRevision = readUserProfileAliasRevision();
+  const ingress = getRemoteControlUiIngressContext(params.req);
   return () => {
+    if (ingress) {
+      try {
+        assertRemoteControlUiIngressCurrent(ingress);
+      } catch {
+        return false;
+      }
+    }
     const current = params.getRuntimeConfig?.() ?? getRuntimeConfig();
     return (
       !params.req.socket?.destroyed &&

@@ -15,7 +15,7 @@ export type AttachmentPayload = {
 export const payloads = new Map<string, AttachmentPayload>();
 
 export function revokeObjectUrl(url: string | undefined): void {
-  if (!url || typeof URL === "undefined" || typeof URL.revokeObjectURL !== "function") {
+  if (!url) {
     return;
   }
   URL.revokeObjectURL(url);

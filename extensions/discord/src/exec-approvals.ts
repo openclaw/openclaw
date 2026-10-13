@@ -48,11 +48,9 @@ export function getDiscordExecApprovalApprovers(params: {
   });
 }
 
-export function isDiscordExecApprovalClientEnabled(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  configOverride?: DiscordExecApprovalConfig | null;
-}): boolean {
+export function isDiscordExecApprovalClientEnabled(
+  params: Parameters<typeof getDiscordExecApprovalApprovers>[0],
+): boolean {
   const config = params.configOverride ?? resolveDiscordAccount(params).config.execApprovals;
   return isChannelExecApprovalClientEnabledFromConfig({
     enabled: config?.enabled,
@@ -60,12 +58,9 @@ export function isDiscordExecApprovalClientEnabled(params: {
   });
 }
 
-export function isDiscordExecApprovalApprover(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  senderId?: string | null;
-  configOverride?: DiscordExecApprovalConfig | null;
-}): boolean {
+export function isDiscordExecApprovalApprover(
+  params: Parameters<typeof getDiscordExecApprovalApprovers>[0] & { senderId?: string | null },
+): boolean {
   const senderId = params.senderId?.trim();
   if (!senderId) {
     return false;

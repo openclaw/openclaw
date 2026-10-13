@@ -13,6 +13,7 @@ import {
   findOversizedTsgoCoreTestShards,
   findTsgoCoreTestShardViolations,
   selectChangedTsgoCoreTestShards,
+  orderChangedTsgoCoreTestShards,
   TSGO_CORE_GRAPHS,
   TSGO_CI_ADDITIONAL_GRAPHS,
   selectTsgoCoreTestShards,
@@ -74,6 +75,9 @@ describe("tsgo core test shards", () => {
       ["ui/src/pages/chat/chat-send-submit.test.ts", "ui-chat"],
       ["ui/src/pages/config/config-page.test.ts", "ui-pages"],
       ["ui/src/components/agent-avatar-face.test.ts", "ui-components"],
+      ["ui/src/e2e/chat-send-ack-ownership.e2e.test.ts", "ui-e2e-chat"],
+      ["ui/src/e2e/about.e2e.test.ts", "ui-e2e"],
+      ["ui/src/test-helpers/control-ui-e2e.test.ts", "ui-e2e"],
       ["src/gateway/server-methods/update-owner.test.ts", "gateway-methods"],
       ["src/gateway/talk/client-authority.test.ts", "gateway-other"],
       ["src/gateway/worker-environments/service.plugin-create.test.ts", "gateway-other"],
@@ -90,7 +94,7 @@ describe("tsgo core test shards", () => {
       ["src/cli/cron-cli.test.ts", "services-cron"],
       ["src/cli/cron-output.process.test.ts", "services-cron"],
       ["src/cli/cron-cli/register.cron-edit.test.ts", "services-cron"],
-      ["src/cron/service/run-recovery.observation.test.ts", "services-cron"],
+      ["src/cron/service/run-receipt-observation.test.ts", "services-cron"],
       ["src/cli/program/command-registry.test.ts", "commands"],
       ["src/cli/update-cli.test.ts", "cli-update"],
       ["src/cli/update-cli/update-command-config-fence.test.ts", "cli-update"],
@@ -273,6 +277,28 @@ describe("changed core test graph selection", () => {
       roots: graph.name === "core-test-agents-other" ? [leaf] : [],
       files: graph.name === "core-test-agents-other" ? [leaf] : [],
     }));
+
+  it("prioritizes root owners stably within the selected shards", () => {
+    const graphs = inventory();
+    const gateway = "src/gateway/gateway.test.ts";
+    graphs.find((graph) => graph.name === "core-test-gateway-root")!.roots.push(gateway);
+    graphs.find((graph) => graph.name === "core-test-agents-root")!.files.push(leaf);
+    const selected = TSGO_CORE_TEST_SHARDS.slice(0, 4);
+    const names = (paths: string[], shards = selected) =>
+      orderChangedTsgoCoreTestShards(shards, paths, graphs).map((shard) => shard.name);
+    expect(names([gateway, leaf])).toEqual([
+      "agents-other",
+      "gateway-root",
+      "agents-root",
+      "agents-tools",
+    ]);
+    expect(names([gateway, leaf], selected.slice(0, 3))).toEqual([
+      "agents-other",
+      "agents-root",
+      "agents-tools",
+    ]);
+    expect(names(["test/helpers/shared.ts"])).toEqual(selected.map((shard) => shard.name));
+  });
 
   it.each([leaf, "test/helpers/shared.ts"])(
     "selects every consuming test graph for %s",
@@ -597,14 +623,18 @@ import { checkCoreTsgoGraphBoundary } from "./check-tsgo-core-boundary.mts";
 if (process.argv[2] === "boundary") {
   await checkCoreTsgoGraphBoundary();
 } else {
-  const plan = await createChangedCiTypeCheckPlan([process.argv[2] === "core-plan" ? ${JSON.stringify(helper)} : ${JSON.stringify(extension)}], {
+  const plan = await createChangedCiTypeCheckPlan([process.argv[2] === "core-plan" ? ${JSON.stringify(helper)} : ${JSON.stringify(extension)}, ...JSON.parse(process.argv[3])], {
     cwd: process.cwd(), coreBoundaryOwner: "additional-checks",
   });
   console.log(JSON.stringify({ mode: plan.mode, names: plan.graphs.map(({ name }) => name) }));
 }
 `,
       );
-      const inspectExtension = async (mode: "plan" | "core-plan" | "boundary", serial = "") => {
+      const inspectExtension = async (
+        mode: "plan" | "core-plan" | "boundary",
+        serial = "",
+        extraPaths: string[] = [],
+      ) => {
         write("compiler-events.tsv", "");
         return await lifetime.track(
           runNodeScript(
@@ -613,6 +643,7 @@ if (process.argv[2] === "boundary") {
               pathToFileURL(path.join(sourceRoot, "scripts/tsx.mjs")).href,
               plannerDriver,
               mode,
+              JSON.stringify(extraPaths),
             ],
             { ...env, OPENCLAW_CI_TYPE_PLAN_SERIAL: serial },
             undefined,
@@ -620,8 +651,9 @@ if (process.argv[2] === "boundary") {
           ),
         );
       };
+      const deletedNonCompilerPaths = ["docs/removed.md", "docs/removed.mdx", "ui/src/removed.css"];
       for (const serial of ["", "1"]) {
-        const extensionPlan = await inspectExtension("plan", serial);
+        const extensionPlan = await inspectExtension("plan", serial, deletedNonCompilerPaths);
         expect(extensionPlan.status, extensionPlan.stderr).toBe(0);
         expect(JSON.parse(extensionPlan.stdout.trim())).toEqual({
           mode: "changed",
@@ -632,13 +664,19 @@ if (process.argv[2] === "boundary") {
         expect(discovery.every((args) => args.includes(serial ? "--listFilesOnly" : "--api"))).toBe(
           true,
         );
-        const corePlan = await inspectExtension("core-plan", serial);
+        const corePlan = await inspectExtension("core-plan", serial, deletedNonCompilerPaths);
         expect(corePlan.status, corePlan.stderr).toBe(0);
         expect(JSON.parse(corePlan.stdout.trim())).toEqual({
           mode: "changed",
           names: ["core-test-agents-other"],
         });
       }
+      const deletedCompilerPlan = await inspectExtension("plan", "", [
+        "extensions/example/removed.ts",
+      ]);
+      expect(deletedCompilerPlan.status, deletedCompilerPlan.stderr).toBe(0);
+      expect(JSON.parse(deletedCompilerPlan.stdout.trim()).mode).toBe("full");
+      expect(compilerEvents()).toEqual([]);
       // Its parallel owner must still reject a type-only edge into an extension.
       write(
         consumer,
@@ -658,9 +696,12 @@ if (process.argv[2] === "boundary") {
         consumer,
         "import type {Value} from '../nested/leaf.test.js';\nconst value: Value = 1;\n",
       );
-      const validConsumer = await check([helper], "2/5");
+      const validConsumer = await check([consumer, helper], "2-3/5");
       expect(validConsumer.result.status, validConsumer.result.stderr).toBe(0);
-      expect(validConsumer.builds).toEqual(["test/tsconfig/tsconfig.core.test.agents-other.json"]);
+      expect(validConsumer.builds).toEqual([
+        "test/tsconfig/tsconfig.core.test.agents-tools.json",
+        "test/tsconfig/tsconfig.core.test.agents-other.json",
+      ]);
       const invalidStripe = await check([helper], "0/5", 0);
       expect(invalidStripe.result.status).not.toBe(0);
       expect(invalidStripe.result.stderr).toContain("Invalid core test stripe");
@@ -675,10 +716,6 @@ if (process.argv[2] === "boundary") {
       const brokenConsumer = await check([helper], "3/5");
       expect(brokenConsumer.result.status).not.toBe(0);
       expect(brokenConsumer.builds).toEqual(["test/tsconfig/tsconfig.core.test.agents-tools.json"]);
-      expect([...validConsumer.builds, ...brokenConsumer.builds]).toEqual([
-        "test/tsconfig/tsconfig.core.test.agents-other.json",
-        "test/tsconfig/tsconfig.core.test.agents-tools.json",
-      ]);
       expect(brokenConsumer.result.stdout + brokenConsumer.result.stderr).toContain(
         "consumer.test.ts(2,7): error TS2322",
       );

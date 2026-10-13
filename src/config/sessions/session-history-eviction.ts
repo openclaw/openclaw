@@ -287,9 +287,6 @@ export function kickSessionHistoryDiskBudgetMaintenance(input: SessionHistoryBud
   }
   const now = input.now ?? Date.now();
   const state = getBudgetKickState(input.storePath, maintenance);
-  if (state.checkpointBlocked) {
-    return;
-  }
   if (state.running) {
     if (input.force) {
       const env = { ...(input.env ?? process.env) };
@@ -405,19 +402,6 @@ async function enforceSessionHistoryMaintenanceSerialized(
     return null;
   }
   const initialUsage = await measureSessionPhysicalDiskUsage(params.storePath);
-  const blocked = getBudgetKickState(params.storePath, params.maintenance).checkpointBlocked;
-  if (blocked && params.mode === "enforce") {
-    return createPhysicalBudgetResult({
-      totalBytesBefore: initialUsage.totalBytes,
-      maxBytes: maxDiskBytes,
-      highWaterBytes,
-      deferred: {
-        checkpoint: blocked.checkpoint?.health,
-        walBytesBefore: initialUsage.databaseWalBytes,
-        walBytesAfter: initialUsage.databaseWalBytes,
-      },
-    });
-  }
   if (initialUsage.totalBytes <= maxDiskBytes || params.mode === "warn") {
     return createPhysicalBudgetResult({
       totalBytesBefore: initialUsage.totalBytes,
@@ -575,7 +559,6 @@ async function enforceSessionHistoryMaintenanceForDatabase(
                 throw new Error("Session became active; history eviction was canceled");
               }
             },
-            forceInProcess: params.reclamationMode === "in-process",
             plan: reclamationPlan,
           });
           if (reclaimed.kind !== reclamationPlan.kind) {
@@ -604,7 +587,6 @@ async function enforceSessionHistoryMaintenanceForDatabase(
     const publishedArchives = await publishSessionStateArchives(
       resolved,
       eviction.archivedTranscripts,
-      undefined,
       () => assertDatabasePathIdentity(databasePath, expectedIdentity),
     );
     removedEntries += 1;

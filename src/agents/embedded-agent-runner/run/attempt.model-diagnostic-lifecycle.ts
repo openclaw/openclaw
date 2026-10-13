@@ -49,7 +49,9 @@ export type ModelCallDiagnosticContext = Omit<PluginHookModelCallStartedEvent, "
   contentCapture?: DiagnosticModelContentCapturePolicy;
   nextCallId: () => string;
   ownerGeneration?: CoreModelRequestOwnerGeneration;
-  onStarted?: () => void;
+  onStarted?: (callId: string) => void;
+  /** Request observation ended; cleanup settlement and replay admission remain separately owned. */
+  onFinished?: (callId: string) => void;
   /** Each streamed non-empty text, thinking or tool-call delta; keepalives never count. */
   onOutputDelta?: () => void;
   onTerminal?: () => void;
@@ -174,7 +176,7 @@ function withDiagnosticRequestContext(
   trace: DiagnosticTraceContext,
   observer: ModelCallObserver,
   callId: string,
-): ModelCallStreamOptions {
+): NonNullable<ModelCallStreamOptions> {
   const traceparent = formatPropagatedDiagnosticTraceparent(trace);
   const originalOnPayload = options?.onPayload;
   const originalOnResponse = options?.onResponse;
@@ -260,7 +262,6 @@ export function createModelLifecycle(params: {
   if (params.ctx.suppressPluginHooks !== true) {
     dispatchModelCallHook(eventBase);
   }
-  params.ctx.onStarted?.();
   const startedAt = Date.now();
   emitDiagnosticsTimelineEvent(
     {
@@ -281,6 +282,14 @@ export function createModelLifecycle(params: {
     observer.state.terminalEventEmitted = true;
     const terminalAtMs = Date.now();
     const durationMs = terminalAtMs - startedAt;
+    const providerTimingFields: Record<string, number> =
+      observer.state.providerProcessingMs === undefined
+        ? {}
+        : {
+            providerProcessingMs: observer.state.providerProcessingMs,
+            // Includes queueing, loading, transport, and terminal settlement overhead.
+            providerWaitEstimateMs: Math.max(0, durationMs - observer.state.providerProcessingMs),
+          };
     const sizeTimingFields = observer.sizeTimingFields();
     const fields = failure ? modelCallErrorFields(failure.error) : undefined;
     const terminal = fields
@@ -317,6 +326,7 @@ export function createModelLifecycle(params: {
           ...(api ? { api } : {}),
           ...(transport ? { transport } : {}),
           terminalAtMs,
+          ...providerTimingFields,
           ...(observer.state.lastProviderActivityAtMs !== undefined
             ? { lastProviderActivityAtMs: observer.state.lastProviderActivityAtMs }
             : {}),
@@ -332,6 +342,7 @@ export function createModelLifecycle(params: {
         ...terminal,
         ...eventBase,
         durationMs,
+        ...providerTimingFields,
         ...sizeTimingFields,
         ...observer.usageField(),
       },
@@ -348,6 +359,19 @@ export function createModelLifecycle(params: {
     }
   }
   let terminalNotified = false;
+  let finishedNotified = false;
+  const notifyFinished = () => {
+    if (!finishedNotified) {
+      finishedNotified = true;
+      params.ctx.onFinished?.(callId);
+    }
+  };
+  try {
+    params.ctx.onStarted?.(callId);
+  } catch (error) {
+    notifyFinished();
+    throw error;
+  }
   return {
     eventBase,
     observer,
@@ -361,20 +385,31 @@ export function createModelLifecycle(params: {
       }
     },
     emitCompleted() {
-      // Iterator exhaustion can emit diagnostics before result() supplies the terminal response.
-      if (!terminalNotified && (observer.state.terminalSucceeded || observer.state.terminalError)) {
-        terminalNotified = true;
-        params.ctx.onTerminal?.();
-        if (observer.state.terminalSucceeded && !observer.state.terminalError) {
-          params.ctx.onSucceeded?.(startedAt);
+      try {
+        // Iterator exhaustion can emit diagnostics before result() supplies the terminal response.
+        if (
+          !terminalNotified &&
+          (observer.state.terminalSucceeded || observer.state.terminalError)
+        ) {
+          terminalNotified = true;
+          params.ctx.onTerminal?.();
+          if (observer.state.terminalSucceeded && !observer.state.terminalError) {
+            params.ctx.onSucceeded?.(startedAt);
+          }
         }
+        emitModelCallEnded(
+          observer.state.terminalError ? { error: observer.state.terminalError } : undefined,
+        );
+      } finally {
+        notifyFinished();
       }
-      emitModelCallEnded(
-        observer.state.terminalError ? { error: observer.state.terminalError } : undefined,
-      );
     },
     emitError(err: unknown) {
-      emitModelCallEnded({ error: err });
+      try {
+        emitModelCallEnded({ error: err });
+      } finally {
+        notifyFinished();
+      }
     },
   };
 }

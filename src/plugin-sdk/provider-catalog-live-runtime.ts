@@ -1,10 +1,13 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
 import type {
   ProviderCatalogContext,
+  ProviderCatalogOutcome,
   ProviderCatalogResult,
   ProviderPlugin,
 } from "../plugins/types.js";
 import {
+  buildDefaultLiveModelCatalogHeaders,
   fetchLiveProviderModelIds,
   getCachedLiveProviderModelRows,
   getCachedUpstreamProviderCatalog,
@@ -12,11 +15,14 @@ import {
   type FetchLiveProviderModelIdsParams,
   type FetchLiveProviderModelRowsParams,
   type LiveModelCatalogFetchGuard,
+  type LiveModelCatalogHeaderContext,
   type LiveModelRowProjection,
 } from "./provider-catalog-live-acquisition.internal.js";
 import {
   buildOpenAICompatibleLiveModels,
   readLiveModelCatalogId,
+  readOpenAICompatibleLiveModelId,
+  type ProjectedUpstreamProviderCatalogModel,
 } from "./provider-catalog-live-normalize.internal.js";
 import {
   LiveModelCatalogHttpError,
@@ -54,6 +60,7 @@ export type {
 } from "./provider-catalog-live-acquisition.internal.js";
 export { clearLiveCatalogCacheForTests } from "./provider-catalog-shared.js";
 export {
+  buildOpenAICompatibleLiveModels,
   readLiveModelCatalogBooleanField,
   readLiveModelCatalogPositiveSafeIntegerField,
   readLiveModelCatalogStringField,
@@ -250,8 +257,26 @@ export function createUpstreamProviderCatalog(params: {
   starterModelAuditContext: string;
   isStaticEntryActive: (entry: ReturnType<ProviderCatalogSnapshot["get"]>) => boolean;
   decorateModel?: Parameters<typeof projectUpstreamProviderCatalogSnapshot>[0]["decorateModel"];
+  /** Selects listed models from account rows. Defaults to active entries in the snapshot. */
+  projectRows?: (
+    rows: readonly unknown[],
+    snapshot: ProviderCatalogSnapshot,
+  ) => ProjectedUpstreamProviderCatalogModel[];
 }) {
   let snapshot = params.seed;
+  const projectRows = params.projectRows ?? projectProviderCatalogSnapshotRows;
+  // Discovery identifies the client the same way inference does; the attribution
+  // owner decides which providers and endpoints receive those headers.
+  const buildRequestHeaders = (ctx: LiveModelCatalogHeaderContext): HeadersInit => ({
+    ...resolveProviderRequestHeaders({
+      provider: params.providerId,
+      api: params.providerConfig.api,
+      baseUrl: params.providerConfig.baseUrl,
+      capability: "llm",
+      transport: "http",
+    }),
+    ...buildDefaultLiveModelCatalogHeaders(ctx),
+  });
   const buildStaticProvider = (apiKey?: string): ModelProviderConfig => ({
     ...params.providerConfig,
     ...(apiKey ? { apiKey } : {}),
@@ -300,6 +325,7 @@ export function createUpstreamProviderCatalog(params: {
         signal: request.signal,
         timeoutMs: params.timeoutMs,
         auditContext: params.starterModelAuditContext,
+        buildRequestHeaders,
       });
       const preferredModelId = request.preferredModelRef.replace(`${params.providerId}/`, "");
       return liveModelIds.includes(preferredModelId) ? request.preferredModelRef : undefined;
@@ -331,7 +357,8 @@ export function createUpstreamProviderCatalog(params: {
         timeoutMs: params.timeoutMs,
         ttlMs: params.ttlMs,
         auditContext: params.auditContext,
-        projectRows: (rows) => projectProviderCatalogSnapshotRows(rows, snapshot),
+        buildRequestHeaders,
+        projectRows: (rows) => projectRows(rows, snapshot),
       });
     },
   };
@@ -390,7 +417,7 @@ function prepareOpenAICompatibleLiveModelDiscovery(
           discoveryApiKey: params.discoveryApiKey,
           profileId: params.profileId,
         };
-  const request: BuildLiveModelProviderConfigParams<ModelDefinitionConfig> = {
+  const request = {
     discoveryMode: params.discoveryMode,
     providerId: params.providerId,
     endpoint,
@@ -409,7 +436,7 @@ function prepareOpenAICompatibleLiveModelDiscovery(
       params.modelDiscovery?.projectRows ??
       ((rows, fallbackProvider) =>
         buildOpenAICompatibleLiveModels(rows, fallbackProvider, acceptUnknownModel)),
-  };
+  } satisfies BuildLiveModelProviderConfigParams<ModelDefinitionConfig>;
   return { kind: "live" as const, request, profileId: auth.profileId };
 }
 
@@ -429,9 +456,35 @@ export async function buildOpenAICompatibleLiveProviderCatalog(
   if (discovery.kind === "static") {
     return { provider: discovery.provider };
   }
-  const run = async () => ({
-    provider: await buildLiveModelProviderConfig(discovery.request),
-  });
+  const run = async () => {
+    let modelIdCatalog: ProviderCatalogOutcome["modelIdCatalog"];
+    const projectRows = discovery.request.projectRows;
+    const provider = await buildLiveModelProviderConfig({
+      ...discovery.request,
+      projectRows: (rows, fallback) => {
+        modelIdCatalog = {
+          baseUrl: fallback.baseUrl,
+          modelIds: rows.map(readOpenAICompatibleLiveModelId).filter((id) => id !== undefined),
+        };
+        return projectRows(rows, fallback);
+      },
+    });
+    return {
+      provider,
+      ...(modelIdCatalog
+        ? {
+            outcomes: [
+              {
+                provider: params.providerId,
+                profileId: discovery.profileId,
+                status: "ready" as const,
+                modelIdCatalog,
+              },
+            ],
+          }
+        : {}),
+    };
+  };
   return params.discoveryMode === "strict"
     ? await runLiveProviderCatalog({
         providerId: params.providerId,

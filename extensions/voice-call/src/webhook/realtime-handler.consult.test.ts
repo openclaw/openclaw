@@ -133,7 +133,6 @@ describe("native realtime consult request identity", () => {
     { phase: "working response", final: true },
     { phase: "completed ASR", final: true },
     { phase: "same completed ASR", final: true },
-    { phase: "transcript settling", final: false },
     { phase: "transcript persistence", final: false },
   ])("isolates rejected speech during $phase (final=$final)", async ({ phase, final }) => {
     const { consult, provider, processEvent } = await createConsultFixture();

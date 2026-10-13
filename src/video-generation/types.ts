@@ -163,7 +163,9 @@ export type VideoGenerationProvider = {
   models?: string[];
   capabilities: VideoGenerationProviderCapabilities;
   catalogByModel?: Readonly<Record<string, VideoGenerationCatalogModelEntry>>;
+  /** @deprecated Use isConfiguredAsync so credential reads run in the database worker. */
   isConfigured?: (ctx: VideoGenerationProviderConfiguredContext) => boolean;
+  isConfiguredAsync?: (ctx: VideoGenerationProviderConfiguredContext) => Promise<boolean>;
   resolveModelCapabilities?: (
     ctx: VideoGenerationModelCapabilitiesContext,
   ) =>

@@ -6,6 +6,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import { resolveContextEngine } from "../../context-engine/registry.js";
@@ -15,7 +16,7 @@ import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
-import { createOpenClawTools } from "../openclaw-tools.js";
+import { createOpenClawToolsAsync } from "../openclaw-tools.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../runtime-plugins.js";
 import { configureMockSubagentRegistryPersistence } from "../subagent-test-fixtures.test-helpers.js";
 import {
@@ -93,6 +94,7 @@ describe("swarm tools integration", () => {
     swarmSchedulerTesting.reset();
     await closeOpenClawAgentDatabasesAsync();
     await closeOpenClawStateDatabaseAsync();
+    clearRuntimeConfigSnapshot();
     tempDirs.cleanup();
     vi.unstubAllEnvs();
     vi.resetAllMocks();
@@ -103,6 +105,7 @@ describe("swarm tools integration", () => {
     const waitsStarted = createDeferred();
     const stateDir = tempDirs.make("openclaw-swarm-tools-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    setRuntimeConfigSnapshot(config);
     const publicToGateway = new Map<string, string>();
     const resultTextBySession = new Map<string, string>();
     const modelStructuredCalls: number[] = [];
@@ -128,16 +131,18 @@ describe("swarm tools integration", () => {
       const gatewayRunId = `gateway-${index}`;
       collectorRunIds.add(publicRunId);
       collectorRunIds.add(gatewayRunId);
-      const structuredOutput = createOpenClawTools({
-        agentSessionKey: childSessionKey,
-        runId: publicRunId,
-        config,
-        disableMessageTool: true,
-        disablePluginTools: true,
-        wrapBeforeToolCallHook: false,
-        swarmCollector: true,
-        swarmOutputSchema: outputSchema,
-      }).find((tool) => tool.name === "structured_output");
+      const structuredOutput = (
+        await createOpenClawToolsAsync({
+          agentSessionKey: childSessionKey,
+          runId: publicRunId,
+          config,
+          disableMessageTool: true,
+          disablePluginTools: true,
+          wrapBeforeToolCallHook: false,
+          swarmCollector: true,
+          swarmOutputSchema: outputSchema,
+        })
+      ).find((tool) => tool.name === "structured_output");
       if (outputSchema) {
         expect(structuredOutput).toBeDefined();
         await structuredOutput?.execute("mock-model-output", { result: { index } });

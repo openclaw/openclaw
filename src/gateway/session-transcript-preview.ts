@@ -20,7 +20,10 @@ import {
 import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
-import { captureSessionTranscriptTargetBinding } from "../config/sessions/transcript-target-binding.js";
+import {
+  captureSessionTranscriptTargetBinding,
+  type CapturedSessionTranscriptTargetBinding,
+} from "../config/sessions/transcript-target-binding.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
@@ -157,7 +160,7 @@ export async function readSessionPreviewItemsFromTranscriptAsync(
 }
 
 function readSessionModelPreviewItems(
-  target: ReturnType<typeof captureSessionTranscriptTargetBinding>,
+  target: CapturedSessionTranscriptTargetBinding,
   maxItems: number,
   maxChars: number,
 ): Promise<SessionPreviewItem[]> {

@@ -7,6 +7,7 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as brokerReply from "../../infra/sqlite-worker-broker-reply.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
@@ -190,17 +191,13 @@ describe("worker placement workspace journal", () => {
     const journal = await store.loadWorkspaceReconciliation(owner);
     assert(journal, "expected journal");
     await store.abortWorkspaceReconciliation(owner);
-    const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
     let revoked = false;
-    vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "commit") {
-            revoked = true;
-          }
-          admit(request, grant);
-        }, attachment),
-    );
+    probe.admission(operationAdmission, (request, grant, admit) => {
+      if (request.stage === "commit") {
+        revoked = true;
+      }
+      admit(request, grant);
+    });
     await expect(
       store.beginWorkspaceReconciliation(owner, journal, () => {
         if (revoked) {
@@ -246,6 +243,9 @@ describe("worker placement workspace journal", () => {
       await store.abortWorkspaceReconciliation(owner);
     }
     if (scenario.outcome === "unknown") {
+      vi.spyOn(operationAdmission, "observeSqliteWorkerCommittedFacts").mockImplementationOnce(
+        () => {},
+      );
       const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
       vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
         (admit, attachment) => {
@@ -347,6 +347,14 @@ describe("worker placement workspace journal", () => {
         workspaceAcceptedAtMs: scenario.outcome === "rollback" ? null : 1_000,
       },
     ]);
-    expect(store.validateTurnClaim(claim)).toBe(true);
+    expect(store.validateTurnClaim(claim)).toBe(scenario.outcome !== "unknown");
+    if (scenario.outcome === "unknown") {
+      // An uncertain receipt must be reloaded before the durable claim can authorize work.
+      expect((await store.getAsync(claim.sessionId))?.turnClaim).toMatchObject({
+        claimId: claim.claimId,
+        runId: claim.runId,
+      });
+      expect(store.validateTurnClaim(claim)).toBe(true);
+    }
   });
 });

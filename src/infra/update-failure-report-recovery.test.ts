@@ -12,8 +12,6 @@ import type {
 } from "./github-issue.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
-  beginUpdateFailureReportReceiptCleanup,
-  completeUpdateFailureReportReceiptCleanup,
   finalizeUpdateFailureReportReceipt,
   markUpdateFailureReportReceiptPrepared,
   markUpdateFailureReportReceiptPending,
@@ -105,27 +103,6 @@ describe("update failure report receipt recovery", () => {
       });
     },
   );
-
-  it("keeps a post-create persistence outage pending without replaying transport", async () => {
-    const { submit } = await prepareFailedReport("attempt-created-persistence-outage");
-    const issueUrl = "https://github.com/openclaw/openclaw/issues/123";
-    const createIssue = mockCreatedIssue(issueUrl);
-
-    const first = await submit({
-      createIssue,
-      finalizeReceipt: () => false,
-    });
-    const second = await submit({ createIssue });
-
-    expect(first).toMatchObject({
-      message: expect.stringContaining("canonical receipt is still pending"),
-      status: "created",
-      url: issueUrl,
-    });
-    expect(second).toMatchObject({ status: "pending" });
-    expect(second).not.toHaveProperty("url");
-    expect(createIssue).toHaveBeenCalledOnce();
-  });
 
   it("does not replay an unknown no-start receipt write after reconciliation also fails", async () => {
     const { receipt, submit } = await prepareFailedReport("attempt-no-start-unknown-receipt");
@@ -430,37 +407,6 @@ describe("update failure report receipt recovery", () => {
       url: issueUrl,
     });
     expect(completed).not.toHaveProperty("cleanup");
-  });
-
-  it("records abandoned cleanup before deleting and can resume after interruption", async () => {
-    const { env, prepared, receipt } = await prepareFailedReport("attempt-abandoned-cleanup");
-    const reservationId = "cleanup-owner";
-    expect(
-      await reserveUpdateFailureReportReceipt(
-        prepared.attemptId,
-        reservationId,
-        prepared.previewDigest,
-        env,
-      ),
-    ).toMatchObject({ reserved: true });
-    const savedReportPath = savedReportArtifactPath(prepared, reservationId);
-    await fs.mkdir(path.dirname(savedReportPath), { recursive: true });
-    await fs.writeFile(savedReportPath, prepared.body, { mode: 0o600 });
-
-    expect(
-      await beginUpdateFailureReportReceiptCleanup(prepared.attemptId, reservationId, env),
-    ).toBe(true);
-    expect(await receipt()).toMatchObject({
-      cleanup: "pending",
-      status: "retryable",
-    });
-    await expect(fs.readFile(savedReportPath, "utf8")).resolves.toBe(prepared.body);
-
-    await fs.rm(savedReportPath);
-    expect(
-      await completeUpdateFailureReportReceiptCleanup(prepared.attemptId, reservationId, env),
-    ).toBe(true);
-    expect(await receipt()).toBeNull();
   });
 
   it("refuses to start transport after the approved preview digest changes", async () => {

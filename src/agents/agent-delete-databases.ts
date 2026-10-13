@@ -9,10 +9,7 @@ import {
 import { normalizeAgentId } from "../routing/session-key.js";
 import { assertNoAgentDatabaseLeasesAsync } from "../state/agent-deletion-journal.js";
 import type { OpenClawRegisteredAgentDatabase } from "../state/openclaw-agent-db-contract.js";
-import {
-  invalidateRegisteredAgentDatabasesMemo,
-  prepareOpenClawAgentDatabaseRegistrySnapshotRead,
-} from "../state/openclaw-agent-db-registry-listing.js";
+import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../state/openclaw-agent-db-registry-listing.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   resolveIncognitoOpenClawAgentSqlitePath,
@@ -49,8 +46,43 @@ export type AgentDeleteDatabasePlan = {
   relocatedFileGroups: string[][];
 };
 
+function resolveAgentDeleteDatabasePaths(
+  agentId: string,
+  agentDir: string,
+  registeredPaths: readonly string[],
+  env?: NodeJS.ProcessEnv,
+): Set<string> {
+  return new Set([
+    resolveOpenClawAgentSqlitePath({ agentId, env }),
+    resolveOpenClawAgentSqlitePath({
+      agentId,
+      env,
+      path: path.join(agentDir, "openclaw-agent.sqlite"),
+    }),
+    ...registeredPaths,
+  ]);
+}
+
+/** Settle admitted usage cleanup before the journal retires native execution owners. */
+export async function drainAgentDeleteDatabaseWork(
+  deletion: AgentDeletionOperation,
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<void> {
+  const { retireSessionHistoryWorkerDatabases } =
+    await import("../config/sessions/session-transcript-worker-resources.js");
+  const { agentId, agentDir, databasePaths } = deletion.entry;
+  await deletion.assertCurrentAsync();
+  await retireSessionHistoryWorkerDatabases({
+    agentId,
+    paths: [
+      ...resolveAgentDeleteDatabasePaths(agentId, agentDir, databasePaths, options.env),
+      resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: options.env }),
+    ],
+  });
+  await deletion.assertCurrentAsync();
+}
+
 export async function retireAgentDeleteRuntime(
-  cfg: OpenClawConfig,
   deletion: AgentDeletionOperation,
   agentDirs: readonly string[],
 ): Promise<void> {
@@ -58,9 +90,6 @@ export async function retireAgentDeleteRuntime(
   const { retirePreparedModelRuntimeAgent } = await import("./prepared-model-runtime.js");
   await deletion.assertCurrentAsync();
   await retirePreparedModelRuntimeAgent({ agentId, agentDirs });
-  const { closeActiveMemorySearchManagerCore } = await import("../plugins/memory-runtime.js");
-  await deletion.assertCurrentAsync();
-  await closeActiveMemorySearchManagerCore({ cfg, agentId });
   await deletion.assertCurrentAsync();
 }
 
@@ -82,10 +111,10 @@ export async function finishAgentDeleteDatabases(params: {
 
 /** Destructive planning includes every registered owner, regardless of runtime schema readiness. */
 export async function readAgentDeleteDatabaseRegistry(options: OpenClawStateDatabaseOptions = {}) {
-  invalidateRegisteredAgentDatabasesMemo(options);
   const read = await prepareOpenClawAgentDatabaseRegistrySnapshotRead({
     ...options,
     includeIncompatibleSchemaVersions: true,
+    fresh: true,
   }).read();
   read.assertCurrent();
   if (read.result.status !== "available") {
@@ -210,16 +239,14 @@ export async function prepareAgentDeleteDatabases(
     agentId,
     options.env,
   );
-  const registeredDatabasePaths = new Set([
-    resolveOpenClawAgentSqlitePath({
-      agentId,
-      env: options.env,
-      path: path.join(agentDir, "openclaw-agent.sqlite"),
-    }),
-    ...registeredDatabases
+  const registeredDatabasePaths = resolveAgentDeleteDatabasePaths(
+    agentId,
+    agentDir,
+    registeredDatabases
       .filter((entry) => normalizeAgentId(entry.agentId) === agentId)
       .map((entry) => entry.path),
-  ]);
+    options.env,
+  );
   // A surviving directory retains files, not the deleted agent's connection. Check the
   // actual cached owner so stale registration cannot close a surviving agent's handle.
   for (const databasePath of registeredDatabasePaths) {

@@ -12,6 +12,7 @@ import {
   projectChatDisplayMessagesWithState,
   type ChatDisplayProjectionOptions,
   createChatHistoryRecoveryProjection,
+  isChatHistoryRecoveryUserBoundary,
 } from "./chat-display-projection.core.js";
 import {
   dropPreSessionStartAnnouncePairs,
@@ -254,7 +255,7 @@ export async function readChatHistoryRecoveryContext(params: {
         continue;
       }
       context.push(message);
-      if (asOptionalRecord(message)?.role === "user") {
+      if (isChatHistoryRecoveryUserBoundary(message)) {
         boundaryReached = true;
         break;
       }
@@ -277,6 +278,7 @@ async function readIncrementalChatHistoryTailAttempt(params: {
   readScope: SessionTranscriptReadScope;
   readers: SessionTranscriptPageReader;
   effectiveMaxChars: number;
+  toolResultMaxChars?: number;
   max: number;
   maxBytes: number;
   offset?: number;
@@ -389,6 +391,7 @@ async function readIncrementalChatHistoryTailAttempt(params: {
         subagentCoordination: params.readers.subagentCoordination,
         includeCommentaryFallbacks: true,
         maxChars: params.effectiveMaxChars,
+        toolResultMaxChars: params.toolResultMaxChars,
         resolveCronJobName: params.resolveCronJobName,
         ...(resolveProfileDisplay && !params.deferProfileDisplay
           ? { resolveCurrentUserProfileDisplay }

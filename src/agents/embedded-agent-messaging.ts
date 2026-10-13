@@ -78,15 +78,8 @@ export function isMessagingToolSendAction(
   args: Record<string, unknown>,
 ): boolean {
   const action = normalizeOptionalString(args.action) ?? "";
-  if (
-    toolName === "sessions_send" ||
-    toolName === "conversations_send" ||
-    toolName === "conversations_turn"
-  ) {
-    return true;
-  }
-  if (toolName === "message") {
-    return isMessageToolSendActionName(action);
+  if (CORE_MESSAGING_TOOLS.has(toolName)) {
+    return toolName !== "message" || isMessageToolSendActionName(action);
   }
   const providerId = normalizeChannelId(toolName);
   return Boolean(

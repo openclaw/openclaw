@@ -1,4 +1,4 @@
-import { ensureAuthProfileStore, type AuthProfileStore } from "../agents/auth-profiles.js";
+import { ensureAuthProfileStoreAsync, type AuthProfileStore } from "../agents/auth-profiles.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import {
   listProviderUsagePluginDescriptors,
@@ -76,9 +76,10 @@ export async function loadProviderUsageSummary(
   if (!fetchFn) {
     throw new Error("fetch is not available");
   }
-  let authStore = opts.authStore;
+  let authStore: Promise<AuthProfileStore> | undefined;
   const getAuthStore = () =>
-    (authStore ??= ensureAuthProfileStore(opts.agentDir, { allowKeychainPrompt: false }));
+    opts.authStore ??
+    (authStore ??= ensureAuthProfileStoreAsync(opts.agentDir, { allowKeychainPrompt: false }));
   const tasks = descriptors.map(({ provider }) => {
     return raceUsageTimeout(
       (signal) =>

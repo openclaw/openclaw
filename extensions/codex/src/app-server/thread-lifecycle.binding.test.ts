@@ -3,8 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resumeThread } from "../command-handler-bindings.js";
 import { resolveCodexCommandDeps } from "../command-handler-deps.js";
 import {
@@ -15,8 +19,10 @@ import {
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import { CodexAppServerClient, CodexAppServerRpcError } from "./client.js";
-import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
-import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
+import {
+  createFakeCodexAppServerClient,
+  disabledMcpServerStatus,
+} from "./codex-app-server.test-fixtures.js";
 import { resolveCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import type {
   CodexDynamicToolFunctionSpec,
@@ -43,7 +49,6 @@ import { retireCodexAppServerSessionGeneration } from "./session-retirement.js";
 import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
-  resolveCodexNativeConfigFenceKey,
   retainSharedCodexAppServerClientIfCurrent,
   retireSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
@@ -162,17 +167,6 @@ function retainThread(
     undefined,
     binding.liveThreadConfigFingerprint,
   );
-}
-
-function disabledMcpServerStatus(name: string) {
-  return {
-    name,
-    serverInfo: null,
-    tools: {},
-    resources: [],
-    resourceTemplates: [],
-    authStatus: "unsupported",
-  };
 }
 
 function createThreadLifecycleAppServerOptions(): LifecycleInput["appServer"] {
@@ -454,7 +448,6 @@ async function createManualResumeFixture(
       initialize: async () => undefined,
       // This fake closes and exits together; notify the pool's physical-client registry too.
       addTransportExitHandler: client.addCloseHandler.bind(client),
-      setThreadSessionRequestGuard: () => undefined,
       close: () => harness.close(),
     });
   }
@@ -549,7 +542,9 @@ async function createManualResumeFixture(
   };
 }
 
+afterEach(() => clearRuntimeConfigSnapshot());
 setupRunAttemptTestHooks({ isolateNativeSkillHome: true });
+beforeEach(() => setRuntimeConfigSnapshot({}));
 
 async function createLeasedLifecycleWireClient(
   agentDir: string,
@@ -619,31 +614,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
     createThreadLifecycleAppServerOptions,
     startOrResumeThread,
   });
-  it("inherits the effective native project-document budget", async () => {
-    const { sessionFile, workspaceDir } = createPaths();
-    const fixture = await createSequentialLifecycleHarness(
-      () => threadStartResult("thread-1"),
-      {
-        project_doc_max_bytes: 200_000,
-      },
-      {
-        project_doc_max_bytes: {
-          name: { type: "user", file: "/codex/config.toml", profile: null },
-          version: "sha256:authored-budget",
-        },
-      },
-    );
-
-    await startOrResumeThread({
-      client: fixture.client,
-      params: createParams(sessionFile, workspaceDir),
-    });
-
-    expect(
-      fixture.request.mock.calls.find(([method]) => method === "thread/start")?.[1],
-    ).toMatchObject({ config: { project_doc_max_bytes: 200_000 } });
-  });
-
   it("rejects a host-only rotation after recovering the predecessor before the lifecycle lease", async () => {
     const workspaceDir = path.join(tempDir, "recovered-workspace");
     const params = createParams(path.join(tempDir, "recovered.jsonl"), workspaceDir);
@@ -1229,66 +1199,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
     },
   );
 
-  it.each(["reader", "retired"] as const)(
-    "checks physical ownership after a %s interleaves behind the native config fence",
-    async (interleaving) => {
-      const fixture = await createManualResumeFixture({ wireClient: true });
-      const before = await readCodexAppServerBinding(fixture.sessionFile);
-      const fenceKey = resolveCodexNativeConfigFenceKey({ client: fixture.client });
-      expect(fenceKey).toBeTypeOf("string");
-      const releaseFence = await acquireCodexNativeConfigFence(fenceKey!);
-      const guardEntered = createDeferred<void>();
-      const abort = new AbortController();
-      fixture.client.setThreadSessionRequestGuard(async (options) => {
-        guardEntered.resolve();
-        return await acquireCodexNativeConfigFence(fenceKey!, options);
-      });
-      const starting = fixture.start({ signal: abort.signal });
-      const settled = starting.then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-      try {
-        await Promise.race([
-          guardEntered.promise,
-          settled.then(() => {
-            throw new Error("manual resume settled before reaching its native config fence");
-          }),
-        ]);
-        const releaseSibling = retainSharedCodexAppServerClientIfCurrent(fixture.client);
-        expect(releaseSibling).toBeTypeOf("function");
-        releaseSibling?.();
-        if (interleaving === "retired") {
-          retireSharedCodexAppServerClientIfCurrent(fixture.client);
-        }
-        releaseFence();
-
-        if (interleaving === "retired") {
-          await expect(starting).rejects.toThrow("connection changed");
-          expect(await readCodexAppServerBinding(fixture.sessionFile)).toEqual(before);
-        } else {
-          await expect(starting).resolves.toMatchObject({ threadId: fixture.threadId });
-          expect(
-            (await readCodexAppServerBinding(fixture.sessionFile))?.pendingResumeConfiguration,
-          ).toBeUndefined();
-        }
-        expect(fixture.client.getCloseError()).toBeUndefined();
-        expect(
-          fixture
-            .wire!.writes.map((message) => (JSON.parse(message) as RpcRequest).method)
-            .filter((method) => method === "thread/resume"),
-        ).toEqual(
-          interleaving === "retired" ? ["thread/resume"] : ["thread/resume", "thread/resume"],
-        );
-      } finally {
-        abort.abort();
-        releaseFence();
-        await settled;
-        fixture.close();
-      }
-    },
-  );
-
   it.each(["attach", "release", "reset"] as const)(
     "queues same-thread %s behind ordinary preparation without blocking siblings",
     async (operation) => {
@@ -1297,10 +1207,13 @@ describe("Codex app-server thread lifecycle bindings", () => {
       fixture.wire!.writes.length = 0;
       const entered = createDeferred<void>();
       const proceed = createDeferred<void>();
-      fixture.client.setThreadSessionRequestGuard(async () => {
-        entered.resolve();
-        await proceed.promise;
-        return () => {};
+      const respond = fixture.request.getMockImplementation()!;
+      fixture.request.mockImplementation(async (method) => {
+        if (method === "thread/resume") {
+          entered.resolve();
+          await proceed.promise;
+        }
+        return respond(method);
       });
       const starting = fixture.start();
       const settledStart = Promise.allSettled([starting]);
@@ -1309,7 +1222,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
         await Promise.race([
           entered.promise,
           settledStart.then(() => {
-            throw new Error("resume failed before its write fence");
+            throw new Error("resume failed before its response was held");
           }),
         ]);
         mutation =
@@ -1396,11 +1309,13 @@ describe("Codex app-server thread lifecycle bindings", () => {
         await release.promise;
       });
       await entered.promise;
-      const readBinding = testCodexAppServerBindingStore.read.bind(testCodexAppServerBindingStore);
-      const read = vi.spyOn(testCodexAppServerBindingStore, "read");
+      const readBinding = testCodexAppServerBindingStore.readAsync.bind(
+        testCodexAppServerBindingStore,
+      );
+      const read = vi.spyOn(testCodexAppServerBindingStore, "readAsync");
       const pendingRead = createDeferred<void>();
-      read.mockImplementationOnce((identity) => {
-        const binding = readBinding(identity);
+      read.mockImplementationOnce(async (identity) => {
+        const binding = await readBinding(identity);
         pendingRead.resolve();
         return binding;
       });
@@ -1967,7 +1882,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe("thread-parent");
     const threadRequests = request.mock.calls.filter(([method]) => method === "thread/start");
     expect(threadRequests).toHaveLength(2);
-    const resumeRequest = buildThreadResumeParams(params, {
+    const resumeRequest = await buildThreadResumeParams(params, {
       threadId: first.threadId,
       appServer: common.appServer,
       dynamicTools: common.dynamicTools,

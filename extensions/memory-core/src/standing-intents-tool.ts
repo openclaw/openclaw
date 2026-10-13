@@ -110,11 +110,9 @@ export function createStandingIntentExecutor(options: {
       const provider = options.provider?.trim();
       const senderId = options.senderId?.trim();
       if (!provider || !senderId) {
-        const missingIdentity = !provider
-          ? senderId
-            ? "channel"
-            : "channel and sender"
-          : "sender";
+        const missingIdentity = [provider ? null : "channel", senderId ? null : "sender"]
+          .filter(Boolean)
+          .join(" and ");
         throw new Error(
           `authenticated ${missingIdentity} identity is unavailable for this turn; retry from an authenticated channel conversation`,
         );

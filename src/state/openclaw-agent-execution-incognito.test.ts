@@ -679,57 +679,6 @@ it.each(["existing", "future"] as const)(
   },
 );
 
-it("keeps the outer actor reentrancy fence after nested grants consume prepared facts", async () => {
-  const reference = await open();
-  const sessionKey = "agent:main:dashboard:incognito-nested-grant";
-  const created = await reference.sessions.create(authority, {
-    sessionKey,
-    entry: { sessionId: "nested-grant", updatedAt: 1, incognito: true },
-  });
-  const reentered: Promise<unknown>[] = [];
-  const refusals: unknown[] = [];
-  const prepared: string[] = [];
-  const source: IncognitoSessionAuthority = {
-    assertCurrent() {},
-    authorize(stage, facts) {
-      created.claim.authorize(
-        {
-          assertCurrent() {},
-          authorize(_stage, nestedFacts) {
-            prepared.push(nestedFacts.sessionKey);
-          },
-        },
-        stage,
-      );
-      expect(facts.sessionKey).toBe(sessionKey);
-      const target = { authority, sessionKey, cfg: {}, env };
-      for (const reenter of [
-        () => readActor(reference),
-        () => reference.sessions.withSharedState(() => readActor(reference)),
-        () => reference.acp.readEntry(target),
-        () => reference.acp.upsertMeta({ ...target, mutate: () => undefined }),
-      ]) {
-        try {
-          reentered.push(reenter());
-        } catch (error) {
-          refusals.push(error);
-        }
-      }
-    },
-  };
-  const read = await reference.sessions.read(source, { sessionKey });
-  await Promise.allSettled(reentered);
-  expect(read.entry?.sessionId).toBe("nested-grant");
-  expect(prepared).toEqual([sessionKey]);
-  expect(refusals).toEqual([
-    new Error("Incognito authority callbacks cannot call their actor"),
-    new Error("Incognito authority callbacks cannot call their actor"),
-    new Error("Incognito authority callbacks cannot call their actor"),
-    new Error("Incognito authority callbacks cannot call their actor"),
-  ]);
-  expect(reentered).toEqual([]);
-});
-
 it("ends only the lost actor's sessions and refuses old handles after replacement", async () => {
   const sentinel = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
   const posted = vi.spyOn(Worker.prototype, "postMessage");

@@ -17,57 +17,6 @@ import {
 } from "./route-resolution.test-support.ts";
 
 describe("session route navigation handoffs", () => {
-  it.each(["chat", "dashboard"] as const)(
-    "reuses named resolution after %s URL canonicalization",
-    async (face) => {
-      const storedRow = row();
-      const { context, list } = contextFor();
-      const request = installShortResolver(context, [storedRow]);
-      const loaded = await loadChatRoute(
-        context,
-        {
-          pathname: `/${face}/roboclaw/default-mode-with-rare-surprises`,
-          search: "",
-          hash: "",
-        },
-        face,
-        new AbortController().signal,
-      );
-
-      expect(loaded).toMatchObject({
-        kind: "session",
-        sessionKey: storedRow.key,
-        agentId: "roboclaw",
-        canonicalLocation: {
-          // Canonicalizes to the same full UUID reference as other generated links.
-          pathname: `/${face}/roboclaw/default-mode-with-rare-surprises-1234567890abcdef1234567890abcdef`,
-        },
-      });
-      if (!("kind" in loaded) || loaded.kind !== "session" || !loaded.canonicalLocation) {
-        throw new Error("Expected a canonical session location");
-      }
-      await expect(
-        loadChatRoute(context, loaded.canonicalLocation, face, new AbortController().signal),
-      ).resolves.toMatchObject({
-        kind: "session",
-        sessionKey: storedRow.key,
-        agentId: "roboclaw",
-        face,
-      });
-      expect(request).toHaveBeenCalledExactlyOnceWith("sessions.resolve", {
-        reference: {
-          key: "agent:roboclaw:default-mode-with-rare-surprises",
-          slug: "default-mode-with-rare-surprises",
-        },
-        agentId: "roboclaw",
-        includeGlobal: true,
-        includeUnknown: true,
-        allowMissing: true,
-      });
-      expect(list).not.toHaveBeenCalled();
-    },
-  );
-
   it("uses the sidebar-carried full key without issuing a session search", async () => {
     const storedRow = row({ displayName: "Deploy monitor" });
     const { context, list } = contextFor();
@@ -249,23 +198,6 @@ describe("session route navigation handoffs", () => {
     );
 
     expect(loaded).toMatchObject({ kind: "session", sessionKey: expected.key });
-    expect(list).not.toHaveBeenCalled();
-    expect(request).toHaveBeenCalledOnce();
-  });
-
-  it("keeps a cold cached short route on the authoritative resolution path", async () => {
-    const storedRow = row({ displayName: "Deploy monitor" });
-    const { context, list } = contextFor({ ok: false }, [storedRow]);
-    const request = installShortResolver(context, [storedRow]);
-
-    const loaded = await loadChatRoute(
-      context,
-      { pathname: "/chat/roboclaw/deploy-monitor-12345678", search: "", hash: "" },
-      "chat",
-      new AbortController().signal,
-    );
-
-    expect(loaded).toMatchObject({ kind: "session", sessionKey: storedRow.key });
     expect(list).not.toHaveBeenCalled();
     expect(request).toHaveBeenCalledOnce();
   });

@@ -1,16 +1,18 @@
-import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { buildControlUiPublicSessionCardPath } from "@openclaw/session-url-contract/public-share";
 import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import { resolveSessionPublicShare } from "../config/sessions/session-public-share.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ControlUiPublicSessionRequestGate } from "./control-ui-public-session-admission.js";
+import { buildPublicSessionMediaBaseUrl } from "./control-ui-public-session-attachments.js";
 import { isSecurePublicSessionIngress } from "./control-ui-public-session-ingress.js";
 import {
-  PUBLIC_SESSION_ENTRY_SCRIPT,
+  PUBLIC_SESSION_CONTENT_SECURITY_POLICY,
   renderPublicSessionDocument,
 } from "./control-ui-public-session-render.js";
 import { servePublicSessionRepresentation } from "./control-ui-public-session-response.js";
+import { mintExistingPublicSessionShareToken } from "./control-ui-public-session-token.js";
 import {
   buildControlUiSessionEntryUrl,
   parseControlUiSessionReturnPath,
@@ -20,8 +22,6 @@ import { resolveControlUiShareOrigin } from "./control-ui-share.js";
 import type { GatewayAttributedIngress } from "./ingress-attribution.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
-
-const PROBE_HASH = createHash("sha256").update(PUBLIC_SESSION_ENTRY_SCRIPT).digest("base64");
 
 export async function serveControlUiPublicChat(params: {
   req: IncomingMessage;
@@ -44,10 +44,7 @@ export async function serveControlUiPublicChat(params: {
   const origin = resolveControlUiShareOrigin(req, publicOrigin);
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("X-Robots-Tag", "noindex, nofollow");
-  res.setHeader(
-    "Content-Security-Policy",
-    `default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'sha256-${PROBE_HASH}'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'`,
-  );
+  res.setHeader("Content-Security-Policy", PUBLIC_SESSION_CONTENT_SECURITY_POLICY);
   const end = (status: number, body: string) => {
     res.statusCode = status;
     res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -97,6 +94,7 @@ export async function serveControlUiPublicChat(params: {
         latestUrl: url.pathname,
         entryUrl,
         clientAuthBasePath,
+        assetBasePath: basePath,
         cardUrl: `${origin}${basePath}/share/card.png`,
         unavailable: true,
       }),
@@ -141,6 +139,7 @@ export async function serveControlUiPublicChat(params: {
       shareId: share.id,
     };
     const offset = Number(offsetText);
+    const token = await mintExistingPublicSessionShareToken(locator);
     return await servePublicSessionRepresentation({
       ...params,
       locator,
@@ -157,10 +156,14 @@ export async function serveControlUiPublicChat(params: {
       ]),
       document: {
         latestUrl: url.pathname,
+        ...(token ? { mediaBaseUrl: buildPublicSessionMediaBaseUrl(basePath, token) } : {}),
         entryUrl,
         clientAuthBasePath,
+        assetBasePath: basePath,
         canonicalUrl: `${origin}${url.pathname}`,
-        cardUrl: `${origin}${basePath}/share/card.png`,
+        cardUrl: token
+          ? `${origin}${buildControlUiPublicSessionCardPath({ basePath, token })}`
+          : `${origin}${basePath}/share/card.png`,
       },
       olderUrl: (olderOffset) => `${url.pathname}?offset=${olderOffset}`,
       unavailable,

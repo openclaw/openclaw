@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as workerReplies from "../../infra/sqlite-worker-broker-reply.js";
 import type { SqliteWorkerRequest } from "../../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createTestIngressQueue, withTempState } from "./ingress-drain.test-helpers.js";
 import { createChannelIngressQueue } from "./ingress-queue.js";
 
@@ -29,17 +30,12 @@ describe("channel ingress claim ownership", () => {
           { laneKey: "chat:456:topic:9", receivedAt: 2 },
         );
         let policyChanged = false;
-        const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-        const admission = vi
-          .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-          .mockImplementation((admit, attachment) =>
-            createAdmission((request, grant) => {
-              if (request.stage === stage) {
-                policyChanged = true;
-              }
-              admit(request, grant);
-            }, attachment),
-          );
+        const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+          if (request.stage === stage) {
+            policyChanged = true;
+          }
+          admit(request, grant);
+        });
         try {
           const claimed = await queue.claimNext({
             ownerId: "worker",
@@ -86,18 +82,13 @@ describe("channel ingress claim ownership", () => {
         let committing = false;
         let failed = false;
         let transactions = 0;
-        const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-        const admission = vi
-          .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-          .mockImplementation((admit, attachment) =>
-            createAdmission((request, grant) => {
-              if (request.stage === "transaction") {
-                transactions++;
-              }
-              committing = request.stage === "commit";
-              admit(request, grant);
-            }, attachment),
-          );
+        const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+          if (request.stage === "transaction") {
+            transactions++;
+          }
+          committing = request.stage === "commit";
+          admit(request, grant);
+        });
         try {
           await expect(
             queue.claimNext({
@@ -168,17 +159,12 @@ describe("channel ingress claim ownership", () => {
           }
           receiveReply(slot, reply, owner);
         });
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-      const admission = vi
-        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === "commit" && claimRequest !== undefined) {
-              policyChanged = true;
-            }
-            admit(request, grant);
-          }, attachment),
-        );
+      const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+        if (request.stage === "commit" && claimRequest !== undefined) {
+          policyChanged = true;
+        }
+        admit(request, grant);
+      });
       try {
         await queue.enqueue("event-1", { text: "lane" });
         await expect(
@@ -211,19 +197,14 @@ describe("channel ingress claim ownership", () => {
         let clock = 10;
         const queue = createTestIngressQueue(stateDir, { now: () => clock });
         await queue.enqueue("event-1", { text: "queued" });
-        const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
         let admitted = false;
-        const admission = vi
-          .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-          .mockImplementation((admit, attachment) =>
-            createAdmission((request, grant) => {
-              if (request.stage === "transaction") {
-                admitted = true;
-                clock = 1_000;
-              }
-              admit(request, grant);
-            }, attachment),
-          );
+        const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+          if (request.stage === "transaction") {
+            admitted = true;
+            clock = 1_000;
+          }
+          admit(request, grant);
+        });
         try {
           const claim = method === "claim" ? await queue.claim("event-1") : await queue.claimNext();
           expect(admitted).toBe(true);

@@ -144,105 +144,54 @@ describe("config snapshot plugin metadata", () => {
     }
   });
 
-  it.each([
-    { useInclude: false, invalid: true },
-    { useInclude: true, invalid: false },
-  ])(
-    "pairs authored references with their resolved read (include: $useInclude, invalid: $invalid)",
-    async ({ useInclude, invalid }) => {
-      const root = tempDirs.make("openclaw-config-authored-snapshot-");
-      const context = createContext(root);
-      context.deps.env.PLUGIN_TOKEN = "read-time-token";
-      const plugins = {
-        enabled: false,
-        entries: { retired: { config: { token: "${PLUGIN_TOKEN}" } } },
-      };
-      fs.writeFileSync(path.join(root, "plugins.json"), JSON.stringify(plugins));
-      fs.writeFileSync(
-        context.configPath,
-        JSON.stringify({
-          gateway: { auth: { token: "${PLUGIN_TOKEN}" } },
-          plugins: useInclude ? { $include: "plugins.json" } : plugins,
-          ...(invalid ? { nodeHost: { browserProxy: { enabled: "invalid" } } } : {}),
-        }),
-      );
+  it("leaves legacy roster repair to Doctor during full validation", async () => {
+    const root = tempDirs.make("openclaw-config-roster-metadata-");
+    const context = createContext(root);
+    context.options.pluginValidation = "full";
+    const agents = { list: [{ id: "primary", default: true }, { id: "secondary" }] };
+    fs.writeFileSync(
+      context.configPath,
+      JSON.stringify({
+        agents,
+        channels: { discord: { enabled: false } },
+      }),
+    );
+    const discovery = vi.spyOn(channelPresence, "listChannelIdsForOwnershipMigration");
+    const snapshot = await readConfigFileSnapshotFromContext(context);
+    expect(snapshot.valid).toBe(false);
+    expect(snapshot.sourceConfig.agents).toEqual(agents);
+    expect(snapshot.issues).toContainEqual(
+      expect.objectContaining({
+        path: "agents.list",
+        message: expect.stringContaining("doctor --fix"),
+      }),
+    );
+    expect(discovery).not.toHaveBeenCalled();
+  });
 
-      const snapshot = await readConfigFileSnapshotFromContext(context);
-      const hash = snapshot.hash;
-      context.deps.env.PLUGIN_TOKEN = "later-token";
-      fs.writeFileSync(path.join(root, "plugins.json"), "{}");
-
-      expect(snapshot.valid).toBe(!invalid);
-      expect(snapshot.authoredConfig?.plugins).toEqual(plugins);
-      expect(snapshot.authoredConfig?.gateway?.auth?.token).toBe("${PLUGIN_TOKEN}");
-      expect(snapshot.sourceConfigBeforeMigrations?.gateway?.auth?.token).toBe("read-time-token");
-      expect(snapshot.sourceConfigBeforeMigrations?.plugins?.entries?.retired?.config).toEqual({
-        token: "read-time-token",
-      });
-      expect(snapshot.parsed).toMatchObject({
-        plugins: useInclude ? { $include: "plugins.json" } : plugins,
-      });
-      expect(snapshot.hash).toBe(hash);
-      expect(snapshot.path).toBe(context.configPath);
-    },
-  );
-
-  it.each(["full", "core-only"] as const)(
-    "leaves legacy roster repair to Doctor during %s validation",
-    async (pluginValidation) => {
-      const root = tempDirs.make("openclaw-config-roster-metadata-");
-      const context = createContext(root);
-      context.options.pluginValidation = pluginValidation;
-      const agents = { list: [{ id: "primary", default: true }, { id: "secondary" }] };
-      fs.writeFileSync(
-        context.configPath,
-        JSON.stringify({
-          agents,
-          channels: { discord: { enabled: false } },
-        }),
-      );
-      const discovery = vi.spyOn(channelPresence, "listChannelIdsForOwnershipMigration");
-      const snapshot = await readConfigFileSnapshotFromContext(context);
-      expect(snapshot.valid).toBe(false);
-      expect(snapshot.sourceConfig.agents).toEqual(agents);
-      expect(snapshot.issues).toContainEqual(
-        expect.objectContaining({
-          path: "agents.list",
-          message: expect.stringContaining("doctor --fix"),
-        }),
-      );
-      expect(discovery).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["full", "core-only"] as const)(
-    "keeps invalid snapshot Doctor contracts owned by %s validation",
-    async (pluginValidation) => {
-      const root = tempDirs.make("openclaw-config-invalid-metadata-");
-      const context = createContext(root);
-      context.options.pluginValidation = pluginValidation;
-      fs.writeFileSync(
-        context.configPath,
-        JSON.stringify({
-          nodeHost: { browserProxy: { enabled: "invalid" } },
-          channels: { discord: {} },
-          session: { typingMode: "thinking" },
-        }),
-      );
-      const doctor = vi.spyOn(doctorLegacy, "findDoctorLegacyConfigIssues");
-      const snapshot = await readConfigFileSnapshotFromContext(context);
-      expect(snapshot.valid).toBe(false);
-      expect(snapshot.issues).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ path: "nodeHost.browserProxy.enabled" }),
-        ]),
-      );
-      expect(snapshot.legacyIssues).toEqual(
-        expect.arrayContaining([expect.objectContaining({ path: "session.typingMode" })]),
-      );
-      expect(doctor.mock.calls.length > 0).toBe(pluginValidation === "full");
-    },
-  );
+  it("keeps invalid snapshot Doctor contracts owned by core-only validation", async () => {
+    const root = tempDirs.make("openclaw-config-invalid-metadata-");
+    const context = createContext(root);
+    context.options.pluginValidation = "core-only";
+    fs.writeFileSync(
+      context.configPath,
+      JSON.stringify({
+        nodeHost: { browserProxy: { enabled: "invalid" } },
+        channels: { discord: {} },
+        session: { typingMode: "thinking" },
+      }),
+    );
+    const doctor = vi.spyOn(doctorLegacy, "findDoctorLegacyConfigIssues");
+    const snapshot = await readConfigFileSnapshotFromContext(context);
+    expect(snapshot.valid).toBe(false);
+    expect(snapshot.issues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "nodeHost.browserProxy.enabled" })]),
+    );
+    expect(snapshot.legacyIssues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "session.typingMode" })]),
+    );
+    expect(doctor).not.toHaveBeenCalled();
+  });
 
   it("keeps best-effort core-only materialization independent of plugin metadata", async () => {
     const root = tempDirs.make("openclaw-config-best-effort-metadata-");

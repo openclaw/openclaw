@@ -1,18 +1,18 @@
 import "./doctor-health.test-support.js";
 import fs from "node:fs";
 import path from "node:path";
-import * as fsSafeAdvanced from "@openclaw/fs-safe/advanced";
-import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { afterEach, expect, it, vi } from "vitest";
 import { doctorCommand } from "../commands/doctor.js";
+import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadPluginRegistryHandle } from "../plugins/loader.js";
+import * as pluginSourceFiles from "../plugins/plugin-source-file.js";
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 const { mocks } = await import("./doctor-health.test-support.js");
 
-vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@openclaw/fs-safe/advanced")>()),
+vi.mock("../plugins/plugin-source-file.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-source-file.js")>()),
 }));
 
 afterEach(() => {
@@ -62,23 +62,14 @@ it.each([
       mocks.config.mockReturnValue(cfg);
       let failedWrite = false;
       if (failure === "ENOSPC") {
-        const createBatch = fsSafeAdvanced.createRootFileCopyBatchSync;
-        vi.spyOn(fsSafeAdvanced, "createRootFileCopyBatchSync").mockImplementation(() => {
-          const batch = createBatch();
-          return {
-            ...batch,
-            copyFile(options) {
-              if (options.source.absolutePath === source) {
-                failedWrite = true;
-                throw new FsSafeError("helper-failed", "guarded synchronous file copy failed", {
-                  cause: Object.assign(new Error("fixture capture write failed"), {
-                    code: "ENOSPC",
-                  }),
-                });
-              }
-              return batch.copyFile(options);
-            },
-          };
+        // Copy-owner tests cover fs-safe translation; Doctor consumes this capture boundary.
+        const copy = pluginSourceFiles.copyPluginSourceFile;
+        vi.spyOn(pluginSourceFiles, "copyPluginSourceFile").mockImplementation((...args) => {
+          if (args[0] === source) {
+            failedWrite = true;
+            throw Object.assign(new Error("fixture capture write failed"), { code: "ENOSPC" });
+          }
+          return copy(...args);
         });
       }
       mocks.runContributions.mockImplementation(async () => {
@@ -136,3 +127,49 @@ it.each([
     });
   },
 );
+
+it("prepares runtime config before Doctor contributions register plugins", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+    mocks.packageRoot.mockReturnValue(undefined);
+    const id = "doctor-runtime-config";
+    const root = state.path("plugin");
+    fs.mkdirSync(root);
+    fs.writeFileSync(
+      path.join(root, "index.cjs"),
+      `module.exports = { id: "${id}", register(api) {
+        if (api.runtime.config.current().plugins.entries["${id}"].enabled !== true) {
+          throw new Error("Doctor did not publish the inspected config");
+        }
+      } };`,
+    );
+    fs.writeFileSync(
+      path.join(root, "openclaw.plugin.json"),
+      JSON.stringify({ id, configSchema: { type: "object", properties: {} } }),
+    );
+    const cfg = {
+      plugins: {
+        allow: [id],
+        load: { paths: [root] },
+        entries: { [id]: { enabled: true } },
+        slots: { memory: "none" },
+      },
+    };
+    mocks.config.mockReturnValue(cfg);
+    mocks.runContributions.mockImplementation(async (ctx) => {
+      const registry = loadPluginRegistryHandle({ config: ctx.cfg, cache: false });
+      try {
+        expect(registry.plugins.find((plugin) => plugin.id === id)).toMatchObject({
+          status: "loaded",
+        });
+      } finally {
+        await disposePluginRegistryInstances(registry);
+      }
+    });
+    clearRuntimeConfigSnapshot();
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    await doctorCommand(runtime, { nonInteractive: true });
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+});

@@ -56,7 +56,7 @@ export async function runAdmittedUpdate(
     initializedFence = fence;
     assertInitializationCurrent = () => {
       fence.assertCurrent();
-      assertUpdatePackageActivationAdmission(root, { serviceRoot });
+      assertUpdatePackageActivationAdmission(root, { serviceRoot, dryRun: inputOpts.dryRun });
     };
   }
   const run = await admitUpdateCommandRun({

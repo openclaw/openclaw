@@ -315,11 +315,10 @@ export function createReplyMediaSourcePreparer(
         )
       : null;
     const media = mapping?.hostPath ?? source;
-    if (!media) {
-      return { mediaUrl: media, trustedLocalMedia: false };
+    if (media) {
+      assertMediaNotDataUrl(media);
     }
-    assertMediaNotDataUrl(media);
-    if (isPassThroughRemoteMediaSource(media)) {
+    if (!media || isPassThroughRemoteMediaSource(media)) {
       return { mediaUrl: media, trustedLocalMedia: false };
     }
     const sandboxWorkspace = await resolveSandboxWorkspace();

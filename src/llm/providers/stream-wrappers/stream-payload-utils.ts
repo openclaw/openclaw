@@ -1,4 +1,5 @@
 import type { StreamFn } from "@openclaw/llm-core";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 
 /** Wraps a stream function and lets callers mutate outgoing provider payload objects. */
 export function streamWithPayloadPatch(
@@ -16,7 +17,24 @@ export function streamWithPayloadPatch(
       if (payload && typeof payload === "object") {
         patchPayload(payload as Record<string, unknown>);
       }
-      return originalOnPayload?.(payload, model);
+      const result = originalOnPayload?.(payload, model);
+      // An onPayload hook may replace the request body instead of mutating the
+      // received object. The sender uses that replacement, so keep the patch
+      // applied to whichever object actually goes out.
+      if (isPromiseLike(result)) {
+        return Promise.resolve(result).then((resolved) => {
+          if (resolved && typeof resolved === "object" && resolved !== payload) {
+            // SAFETY: the typeof check above narrows the resolved replacement to an object.
+            patchPayload(resolved as Record<string, unknown>);
+          }
+          return resolved;
+        });
+      }
+      if (result && typeof result === "object" && result !== payload) {
+        // SAFETY: the typeof check above narrows the replacement to an object.
+        patchPayload(result as Record<string, unknown>);
+      }
+      return result;
     },
   });
 }

@@ -8,6 +8,7 @@ import {
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import { resolveCodexAppServerLocalHomeDir } from "./auth-start-options.js";
+import { recordCodexThreadForkSettings } from "./client-fork-settings.js";
 import { hasCodexAppServerSiblingThreadWork } from "./client-runtime.js";
 import { createCodexEphemeralThreadPolicy } from "./client-thread-owner.js";
 import {
@@ -180,7 +181,7 @@ export async function resumeExistingCodexThread(
       pluginThreadConfig?.configPatch,
       finalConfigPatch.configPatch,
     );
-    const resumeParams = lifecycleTiming.measureSync("thread-resume-params", () =>
+    const resumeParams = await lifecycleTiming.measure("thread-resume-params", () =>
       context.buildResumeParams(resumeBinding, authProfileId, resumeConfig),
     );
     const requestModelProvider =
@@ -213,6 +214,7 @@ export async function resumeExistingCodexThread(
       }),
     );
     acceptedConfiguration = configuration;
+    recordCodexThreadForkSettings(params.client, resumeBinding.threadId, resumeParams);
     assertCodexThreadAcceptsDirectInput(response.thread);
     configuration.assertConfigured();
     if (requestModelProvider && response.modelProvider !== requestModelProvider) {
@@ -273,7 +275,7 @@ export async function resumeExistingCodexThread(
       // Loaded native threads can ignore resume overrides; keep the prepared model for turn/start.
       model: resumeParams.model ?? response.model ?? params.params.modelId,
       preserveNativeModel: resumeBinding.preserveNativeModel === true ? true : undefined,
-      modelProvider: normalizeBindingModelProvider(
+      modelProvider: await normalizeBindingModelProvider(
         authProfileId,
         response.modelProvider ?? requestModelProvider ?? startModelProvider,
       ),
@@ -456,15 +458,17 @@ export async function startFreshCodexThread(
       finalConfigPatch.configPatch,
     ),
   );
-  const startParams = lifecycleTiming.measureSync("thread-start-params", () =>
-    buildThreadStartParams(params.params, {
-      ...params,
-      config,
-      model: startModelSelection.model,
-      modelProvider: startModelProvider,
-      hostSystemAgentActive,
-      restrictedToolSurfaceInheritedMcpServerNames,
-    }),
+  const startParams = await lifecycleTiming.measure(
+    "thread-start-params",
+    async () =>
+      await buildThreadStartParams(params.params, {
+        ...params,
+        config,
+        model: startModelSelection.model,
+        modelProvider: startModelProvider,
+        hostSystemAgentActive,
+        restrictedToolSurfaceInheritedMcpServerNames,
+      }),
   );
   const requestModelProvider =
     typeof startParams.modelProvider === "string" && startParams.modelProvider.trim()
@@ -495,6 +499,7 @@ export async function startFreshCodexThread(
     }
   });
   const response = assertCodexThreadStartResponse(threadStartResponse);
+  recordCodexThreadForkSettings(params.client, response.thread.id, startParams);
   const provisionalAppIds = pluginThreadConfig?.provisionalAppIds;
   const rejectUncommittedThread = async (cause: unknown): Promise<never> => {
     const cleanupConfirmed = await discardUnattestedCodexPluginThread({
@@ -529,7 +534,7 @@ export async function startFreshCodexThread(
     return await rejectUncommittedThread(error);
   }
   const rolloutPath = resolveCodexThreadRolloutPath(response.thread);
-  const modelProvider = resolveCodexAppServerModelProvider({
+  const modelProvider = await resolveCodexAppServerModelProvider({
     homeScope: params.appServer.start.homeScope,
     provider: params.params.provider,
     authProfileId: params.params.authProfileId,
@@ -537,7 +542,7 @@ export async function startFreshCodexThread(
     agentDir: params.params.agentDir,
     config: params.params.config,
   });
-  const bindingModelProvider = normalizeBindingModelProvider(
+  const bindingModelProvider = await normalizeBindingModelProvider(
     params.params.authProfileId,
     response.modelProvider ?? requestModelProvider ?? startModelProvider ?? modelProvider,
   );

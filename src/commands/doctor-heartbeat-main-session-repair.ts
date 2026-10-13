@@ -30,16 +30,6 @@ type TranscriptHeartbeatSummary = {
   nonHeartbeatUserMessages: number;
 };
 
-type HeartbeatMainSessionRepairCandidate = {
-  reason: "metadata" | "transcript";
-  summary?: TranscriptHeartbeatSummary;
-};
-
-type HeartbeatMainSessionRepairDeclined = {
-  declineReason: "record-too-large";
-  reason?: undefined;
-};
-
 function accumulateTranscriptHeartbeatMessage(
   summary: TranscriptHeartbeatSummary,
   line: string,
@@ -111,7 +101,7 @@ function scanTranscriptHeartbeatMessages(
 function resolveHeartbeatMainSessionRepairCandidate(params: {
   entry: SessionEntry | undefined;
   transcriptPath?: string;
-}): HeartbeatMainSessionRepairCandidate | HeartbeatMainSessionRepairDeclined | null {
+}): { reason: string } | "record-too-large" | null {
   const { entry, transcriptPath } = params;
   if (!entry || entry.lastInteractionAt !== undefined) {
     return null;
@@ -120,18 +110,22 @@ function resolveHeartbeatMainSessionRepairCandidate(params: {
     typeof entry.heartbeatIsolatedBaseSessionKey === "string" &&
     entry.heartbeatIsolatedBaseSessionKey.trim().length > 0;
   if (!transcriptPath) {
-    return hasSyntheticHeartbeatOwnership ? { reason: "metadata" } : null;
+    return hasSyntheticHeartbeatOwnership ? { reason: "heartbeat metadata" } : null;
   }
   const summary = scanTranscriptHeartbeatMessages(transcriptPath);
   if (summary === "record-too-large") {
-    return { declineReason: "record-too-large" };
+    return summary;
   }
   if (!summary) {
     return null;
   }
   if (summary.heartbeatUserMessages > 0 && summary.nonHeartbeatUserMessages === 0) {
     // A human message must block repair; moving a real conversation would break resume semantics.
-    return { reason: hasSyntheticHeartbeatOwnership ? "metadata" : "transcript", summary };
+    return {
+      reason: hasSyntheticHeartbeatOwnership
+        ? "heartbeat metadata"
+        : `${summary.heartbeatUserMessages} heartbeat-only user message(s)`,
+    };
   }
   return null;
 }
@@ -193,7 +187,7 @@ export async function repairHeartbeatPoisonedMainSession(params: {
   if (!candidate) {
     return false;
   }
-  if ("declineReason" in candidate) {
+  if (candidate === "record-too-large") {
     params.warnings.push(
       `- Skipped heartbeat main-session recovery for ${mainKey}: the transcript contains a JSONL record larger than ${TRANSCRIPT_RECORD_MAX_CHARS} characters, so doctor left it unchanged.`,
     );
@@ -209,13 +203,9 @@ export async function repairHeartbeatPoisonedMainSession(params: {
     );
     return false;
   }
-  const reason =
-    candidate.reason === "metadata"
-      ? "heartbeat metadata"
-      : `${candidate.summary?.heartbeatUserMessages ?? 0} heartbeat-only user message(s)`;
   params.warnings.push(
     [
-      `- Main session ${mainKey} appears to be a heartbeat-owned session (${reason}).`,
+      `- Main session ${mainKey} appears to be a heartbeat-owned session (${candidate.reason}).`,
       `  Doctor can move it to ${recoveredKey} and let the next interactive launch create a fresh main session.`,
     ].join("\n"),
   );
@@ -251,7 +241,7 @@ export async function repairHeartbeatPoisonedMainSession(params: {
         entry: currentEntry,
         transcriptPath,
       });
-      if (!currentCandidate || "declineReason" in currentCandidate) {
+      if (!currentCandidate || currentCandidate === "record-too-large") {
         return;
       }
       if (currentEntry && !currentStore[recoveredKey]) {

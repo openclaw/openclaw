@@ -53,7 +53,11 @@ export async function previewUpdateCommand(params: {
   target: NonNullable<Awaited<ReturnType<typeof resolveUpdateCommandTarget>>>;
   prepared: Pick<
     Awaited<ReturnType<typeof prepareUpdateCommand>>,
-    "shouldRestart" | "installKind" | "requestedChannel" | "controlPlaneUpdateSentinelMeta"
+    | "shouldRestart"
+    | "installKind"
+    | "requestedChannel"
+    | "controlPlaneUpdateSentinelMeta"
+    | "packageActivationNotes"
   >;
   opts: UpdateCommandOptions;
   runId: string;
@@ -75,6 +79,7 @@ export async function previewUpdateCommand(params: {
         prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" || undefined,
     }));
   if (preflight) {
+    preflight.preflightNotes.push(...(prepared.packageActivationNotes ?? []));
     if (target.inspectionWarning) {
       preflight.preflightNotes.push(target.inspectionWarning);
     }

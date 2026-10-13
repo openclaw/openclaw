@@ -22,7 +22,7 @@ import type { WorkerPlacementAuthorization } from "./placement-authorization.js"
 import type {
   WorkerPlacementMoveSource,
   WorkerPlacementMoveTarget,
-} from "./placement-move-intent.js";
+} from "./placement-move-intent.types.js";
 import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
 import type {
   WorkerSessionPlacementDispatchIdentity,

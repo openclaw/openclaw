@@ -1,17 +1,11 @@
 // Shared camera, photo, and file entry points for chat and New Session.
 import { html, nothing } from "lit";
-import { icons } from "../../../components/icons.ts";
 import "../../../components/web-awesome.ts";
-import { t } from "../../../i18n/index.ts";
 import { uploadsEnabled } from "../../../lib/uploads.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
-import { useSingleAttachmentPicker } from "./chat-attachment-picker-policy.ts";
 import { appendChatAttachmentFiles } from "./chat-attachments.ts";
-import "./chat-camera-capture.ts";
+import "./chat-camera-capture.tsx";
 
-const CHAT_ATTACHMENT_ACCEPT =
-  "image/*,audio/*,video/*,application/pdf,text/*,.csv,.json,.md,.txt,.zip," +
-  ".doc,.docx,.xls,.xlsx,.ppt,.pptx";
 function clickComposerInput(target: HTMLElement, selector: string) {
   target.closest("details")?.removeAttribute("open");
   target
@@ -55,7 +49,7 @@ export function renderChatAttachmentInputs(props: ChatAttachmentControlsProps) {
       (kind) => html`
         <input
           type="file"
-          accept=${kind === "file" ? CHAT_ATTACHMENT_ACCEPT : "image/*"}
+          accept=${kind === "file" ? nothing : "image/*"}
           ?multiple=${kind !== "camera"}
           capture=${kind === "camera" ? "environment" : nothing}
           class=${`agent-chat__${kind}-input`}
@@ -90,43 +84,4 @@ export function handleChatAttachmentMenuSelection(
     }
   }
   return true;
-}
-
-export function renderChatAttachmentMenuTrigger(
-  disabled: boolean | undefined,
-  hasOverrides = false,
-) {
-  return html`
-    <button
-      slot="trigger"
-      type="button"
-      class="agent-chat__input-btn agent-chat__input-btn--attach ${
-        hasOverrides ? "agent-chat__input-btn--has-overrides" : ""
-      }"
-      aria-label=${t("chat.composer.addAttachment")}
-      ?disabled=${disabled}
-      title=${t("chat.composer.addAttachment")}
-    >
-      ${icons.plus}
-    </button>
-  `;
-}
-
-export function renderChatAttachmentMenuOptions() {
-  // The single native picker already offers capture; keep its attachment entry exclusive.
-  const options = useSingleAttachmentPicker()
-    ? [{ value: "file", icon: icons.paperclip, label: t("chat.composer.attach") }]
-    : [
-        { value: "camera", icon: icons.camera, label: t("chat.composer.takePhoto") },
-        { value: "photo", icon: icons.image, label: t("chat.composer.attachPhoto") },
-        { value: "file", icon: icons.paperclip, label: t("chat.composer.attachFileOption") },
-      ];
-  return options.map(
-    ({ value, icon, label }) => html`
-      <wa-dropdown-item class="agent-chat__attach-menu-option" value=${value}>
-        <span slot="icon" aria-hidden="true">${icon}</span>
-        <span>${label}</span>
-      </wa-dropdown-item>
-    `,
-  );
 }

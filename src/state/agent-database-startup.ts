@@ -1,12 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { statSync } from "node:fs";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import {
-  sameFileMutationFingerprint,
-  type FileMutationFingerprint,
-} from "../infra/file-descriptor.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -22,6 +17,7 @@ import {
   readAgentDatabaseAdmissionRefusal,
   type AgentDatabaseAdmissionRefusal,
 } from "./agent-database-admission.js";
+import { withAgentDatabasePreparationContext } from "./agent-database-preparation-context.js";
 import { readAgentDeletionJournalStatusInWorker } from "./agent-deletion-journal.read.js";
 import {
   AGENT_DATABASE_PREFLIGHT_CONCURRENCY,
@@ -52,7 +48,7 @@ type Activation = {
   isCurrent: () => boolean;
   preparationReady: Promise<void>;
   openAgent: (input: PreparationInput) => Promise<void>;
-  migrateAgent: (input: PreparationInput) => Promise<void>;
+  migrateAgent: (input: PreparationInput) => Promise<void | { maintain: () => Promise<void> }>;
   publishAgent: (input: PreparationInput) => Promise<void>;
 };
 type PreparationPhase =
@@ -89,39 +85,14 @@ function recoveryTiming(recovery: PendingRecovery, now = performance.now()) {
     },
   };
 }
-type SchemaSourceWitness = Array<FileMutationFingerprint | undefined>;
 type PreparedSchemaHeader = Pick<
   AgentSchemaInspection,
   "version" | "writerAppVersion" | "agentSchemaMeta"
 >;
 type PreparedSchemaHeaders = {
   statePath: string;
-  headers: Map<string, { inspection: PreparedSchemaHeader; witness: SchemaSourceWitness }>;
+  headers: Map<string, PreparedSchemaHeader>;
 };
-
-function readSchemaSourceWitness(pathname: string): SchemaSourceWitness | undefined {
-  try {
-    const files = ["", "-wal", "-journal"].map((suffix) =>
-      statSync(`${pathname}${suffix}`, { bigint: true, throwIfNoEntry: false }),
-    );
-    return files[0] && files.every((file) => !file || file.isFile()) ? files : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function matchesSchemaSourceWitness(
-  before: SchemaSourceWitness,
-  after: SchemaSourceWitness | undefined,
-): boolean {
-  return Boolean(
-    after &&
-    before.every((file, index) => {
-      const current = after[index];
-      return file ? current && sameFileMutationFingerprint(file, current) : !current;
-    }),
-  );
-}
 
 function matchesInspectionPath(
   paths: readonly string[],
@@ -191,7 +162,7 @@ class AgentDatabaseStartupAdmission {
     this.progressTimer = undefined;
   }
 
-  /** Full readiness stays fresh; only unchanged compatibility headers cross into bootstrap. */
+  /** Bootstrap reuses this startup's compatibility headers; writable opens retain admission. */
   prepareSchemaHeaders(env: NodeJS.ProcessEnv) {
     const prepared: PreparedSchemaHeaders = {
       statePath: resolveOpenClawStateSqlitePath(env),
@@ -199,19 +170,13 @@ class AgentDatabaseStartupAdmission {
     };
     this.preparedSchemaHeaders = prepared;
     return (pathname: string) => {
-      const before = readSchemaSourceWitness(pathname);
       return ({ version, writerAppVersion, agentSchemaMeta }: PreparedSchemaHeader) => {
         if (
           !this.stopped &&
           this.preparedSchemaHeaders === prepared &&
-          before &&
-          version === OPENCLAW_AGENT_SCHEMA_VERSION &&
-          matchesSchemaSourceWitness(before, readSchemaSourceWitness(pathname))
+          version === OPENCLAW_AGENT_SCHEMA_VERSION
         ) {
-          prepared.headers.set(pathname, {
-            inspection: { version, writerAppVersion, agentSchemaMeta },
-            witness: before,
-          });
+          prepared.headers.set(pathname, { version, writerAppVersion, agentSchemaMeta });
         }
       };
     };
@@ -224,9 +189,8 @@ class AgentDatabaseStartupAdmission {
       const header = prepared?.headers.get(pathname);
       return !this.stopped &&
         prepared?.statePath === resolveOpenClawStateSqlitePath(env) &&
-        header?.inspection.version === supportedVersion &&
-        matchesSchemaSourceWitness(header.witness, readSchemaSourceWitness(pathname))
-        ? header.inspection
+        header?.version === supportedVersion
+        ? header
         : undefined;
     };
   }
@@ -382,6 +346,7 @@ class AgentDatabaseStartupAdmission {
       // Gateway-owned recovery outlives the caller's temporary discovery snapshot.
       const work = runInDetachedAsyncContext(async () => {
         const publicationComplete = createDeferredCore();
+        const preparation: { maintenance?: () => Promise<void> } = {};
         try {
           const results = await checked;
           phase("activation");
@@ -461,7 +426,8 @@ class AgentDatabaseStartupAdmission {
                 try {
                   assertCurrent();
                   phase("migration");
-                  await activation.migrateAgent(input);
+                  const migrated = await activation.migrateAgent(input);
+                  preparation.maintenance = migrated ? migrated.maintain : undefined;
                 } finally {
                   releaseMigration?.();
                 }
@@ -508,6 +474,19 @@ class AgentDatabaseStartupAdmission {
           }
           publicationComplete.resolve();
           completion.resolve();
+        }
+        // End the admission borrow and publication turn before advisory repair.
+        if (!readAgentDatabaseAdmissionRefusal(agentId, { env }) && !this.stopped) {
+          try {
+            await preparation.maintenance?.();
+          } catch (error) {
+            if (!this.stopped) {
+              log.warn("agent database background maintenance failed", {
+                agentId,
+                reason: formatErrorMessage(error),
+              });
+            }
+          }
         }
       });
       this.track(work);
@@ -565,7 +544,12 @@ export async function withAgentDatabaseStartupAdmission<T>(
     getAgentDatabaseStartupAdmission() ??
     new AgentDatabaseStartupAdmission(options.deferInspections);
   try {
-    return await startupAdmission.run(admission, () => run(admission));
+    return await startupAdmission.run(admission, () =>
+      withAgentDatabasePreparationContext(
+        () => admission,
+        () => run(admission),
+      ),
+    );
   } finally {
     await admission.releaseStartup();
   }

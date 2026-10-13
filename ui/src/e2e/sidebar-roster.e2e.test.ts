@@ -9,9 +9,15 @@ import type {
 } from "../api/types.ts";
 import type { AppSidebarSessionNavigationElement } from "../components/app-sidebar-session-navigation.ts";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
-import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  installMockGateway,
+  pauseVirtualClock,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { waitForMobileSidebarDrawerOpen } from "./session-management.test-support.ts";
 import { captureSidebarUiProof } from "./sidebar-customization.test-support.ts";
 import {
   chooseSidebarOwner,
@@ -26,6 +32,11 @@ suite.define(() => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 800, width: 1280 } },
       async ({ page }) => {
+        await page.addInitScript(() => {
+          // Exercise the full refresh collection window deterministically.
+          Math.random = () => 0;
+        });
+        await page.clock.install();
         const agentsList: AgentsListResult = {
           defaultId: "main",
           mainKey: "main",
@@ -69,7 +80,6 @@ suite.define(() => {
                   label: `${agent.name} ${suffix}`,
                   updatedAt: now - (index + 1) * 60_000 - sessionIndex * 1_000,
                   agentId: agent.id,
-                  pinned: sessionIndex === 0,
                   owner: { actor: sessionIndex === 0 ? owners[0] : owners[1] },
                   hasActiveRun: agent.id === "forge" && sessionIndex === 0,
                   status: agent.id === "forge" && sessionIndex === 0 ? "running" : "done",
@@ -112,6 +122,18 @@ suite.define(() => {
             JSON.stringify({ dismissedAtMs: Date.now() }),
           );
         });
+        await page.addInitScript(
+          ({ key, entries }) => {
+            const stored = JSON.parse(localStorage.getItem(key) ?? "{}");
+            if (!Array.isArray(stored.railShortcuts)) {
+              localStorage.setItem(key, JSON.stringify({ ...stored, railShortcuts: entries }));
+            }
+          },
+          {
+            key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+            entries: agentsList.agents.map((agent) => `session:agent:${agent.id}:project`),
+          },
+        );
         const gateway = await installMockGateway(page, {
           sessions: sessions.sessions,
           methodResponses: {
@@ -157,7 +179,7 @@ suite.define(() => {
         const sessionRows = sidebar.locator(".sidebar-recent-session");
         await expect.poll(() => chip.isVisible()).toBe(true);
         await expect.poll(() => sessionRows.count()).toBe(2);
-        expect(await sidebar.getByRole("link", { name: "Home", exact: true }).count()).toBe(1);
+        expect(await sidebar.locator(".sidebar-footer-bar__home").count()).toBe(1);
         expect(await sidebar.locator('[data-session-key="agent:forge:notes"]').count()).toBe(0);
         await captureSidebarUiProof(suite, page, "sidebar-roster-before.png");
         await chip.click();
@@ -174,27 +196,40 @@ suite.define(() => {
 
         const headers = sidebar.locator(".sidebar-agent-roster__row");
         await expect.poll(() => headers.count()).toBe(4);
+        expect(await sidebar.locator(".sidebar-agent-roster__menu wa-dropdown-item").count()).toBe(
+          0,
+        );
+        expect(await sidebar.locator(".sidebar-new-session-menu wa-dropdown-item").count()).toBe(0);
+        const rosterMenu = sidebar.locator('[data-agent-group="main"] .sidebar-agent-roster__menu');
+        await rosterMenu.getByRole("button", { name: "Options for Harbor", exact: true }).focus();
+        await page.keyboard.press("Enter");
+        await rosterMenu.locator('wa-dropdown-item[value="main"]').waitFor({ state: "visible" });
+        expect(await rosterMenu.locator("wa-dropdown-item").count()).toBe(3);
+        await page.keyboard.press("Escape");
+        expect(await rosterMenu.locator("wa-dropdown-item").count()).toBe(3);
         await expect
           .poll(() =>
             headers.evaluateAll((rows) => rows.map((row) => row.getAttribute("data-agent-id"))),
           )
           .toEqual(["main", "forge", "scout", "bloom"]);
         await expect.poll(() => sessionRows.count()).toBe(8);
-        expect(await sidebar.getByRole("link", { name: "Home", exact: true }).count()).toBe(0);
+        expect(await sidebar.locator(".sidebar-footer-bar__home").count()).toBe(1);
         await expectWorkspace();
-        expect(await sidebar.locator(".sidebar-session-toolbar").count()).toBe(0);
-        expect(await sidebar.locator(".sidebar-brand__actions .sidebar-session-sort").count()).toBe(
-          1,
-        );
+        expect(await sidebar.locator(".sidebar-session-toolbar").count()).toBe(1);
+        expect(
+          await sidebar.locator(".sidebar-session-toolbar .sidebar-session-sort").count(),
+        ).toBe(1);
         for (const agent of agentsList.agents) {
           const group = sidebar.locator(`[data-agent-group="${agent.id}"]`);
           const pin = sidebar.locator(
-            `.sidebar-nav [data-session-key="agent:${agent.id}:project"]`,
+            `.sidebar-rail [data-sidebar-entry="session:agent:${agent.id}:project"]`,
           );
           expect(await pin.count()).toBe(1);
-          expect(await pin.textContent()).toContain(`${agent.name} project`);
-          expect(await pin.locator(".identity-avatar--agent").count()).toBe(1);
+          const pinLink = pin.getByRole("link", { name: `${agent.name} project`, exact: true });
+          expect(await pinLink.getAttribute("href")).toBe(`/chat/${agent.id}/project`);
+          expect(await pin.locator(".sidebar-recent-session").count()).toBe(0);
           expect(await group.locator(".sidebar-recent-session").allTextContents()).toEqual([
+            expect.stringContaining(`${agent.name} project`),
             expect.stringContaining(`${agent.name} notes`),
           ]);
           expect(
@@ -215,8 +250,8 @@ suite.define(() => {
           (await headers.first().locator(".sidebar-agent-roster__copy").textContent())?.trim(),
         ).toBe("Harbor");
         expect(await headers.first().getAttribute("aria-current")).toBe("page");
-        // Showing all agents re-inserts the Pages pins, which replay the scaled
-        // zone-entry entrance; measure the settled layout.
+        // Agent-scope changes update both the rail shortcuts and ordinary rows;
+        // measure their settled layout.
         await sidebar.evaluate(finishElementAnimations);
         for (const row of await sessionRows.all()) {
           const lead = await row.locator(".sidebar-session-indicator .session-glyph").boundingBox();
@@ -236,23 +271,38 @@ suite.define(() => {
         };
         const activityReads = () => gateway.getRequests("sessions.list", activityQuery);
         const initialReads = (await activityReads()).length;
+        await gateway.setMethodResponse("sessions.list", {
+          ...sessions,
+          sessions: sessions.sessions.map((row) =>
+            row.key === "agent:main:project"
+              ? Object.assign({}, row, { label: "Harbor project refreshed" })
+              : row,
+          ),
+        });
+        await pauseVirtualClock(page);
         await gateway.deferNext("sessions.list", activityQuery);
         await gateway.emitGatewayEvent("sessions.changed", {
           agentId: "main",
           key: "agent:main:main",
         });
+        // Deliver nested mock response timers so background-read admission can drain.
+        await page.clock.runFor(5_001);
         await expect.poll(async () => (await activityReads()).length).toBe(initialReads + 1);
         for (let index = 0; index < 3; index += 1) {
           await gateway.emitGatewayEvent("sessions.changed", {
             agentId: "main",
             key: "agent:main:main",
           });
-          // Exercise separate debounce windows while the original server read stays held.
-          await page.waitForTimeout(250);
+          // Cross full collection windows while the original server read stays held.
+          await page.clock.runFor(5_001);
           expect(await activityReads()).toHaveLength(initialReads + 1);
         }
         await gateway.resolveDeferred("sessions.list");
-        await expect.poll(async () => (await activityReads()).length).toBe(initialReads + 2);
+        // A held read reaches the maximum cooldown before its one trailing refresh.
+        await page.clock.runFor(15_001);
+        await sidebar.getByText("Harbor project refreshed", { exact: true }).waitFor();
+        expect(await activityReads()).toHaveLength(initialReads + 2);
+        await page.clock.resume();
         await expect.poll(() => sessionRows.count()).toBe(8);
 
         const workspaceMenu = sidebar.locator(".sidebar-agent-menu");
@@ -303,9 +353,12 @@ suite.define(() => {
         await expect.poll(() => workspaceMenu.count()).toBe(0);
         await expectFocused(workspace);
 
-        await sidebar.locator(".sidebar-brand__new-thread").click();
-        const newMenu = sidebar.locator(".sidebar-brand .sidebar-new-session-menu");
+        await sidebar.locator(".sidebar-rail .sidebar-new-session").click();
+        const newMenu = sidebar.locator(".sidebar-new-session-menu");
         await expect.poll(() => newMenu.locator("wa-dropdown-item").first().isVisible()).toBe(true);
+        await page.keyboard.press("Escape");
+        expect(await newMenu.locator("wa-dropdown-item").count()).toBe(4);
+        await sidebar.locator(".sidebar-rail .sidebar-new-session").click();
         expect(
           await newMenu
             .locator("wa-dropdown-item a")
@@ -320,7 +373,11 @@ suite.define(() => {
           .poll(() => sidebar.locator('[data-agent-id="forge"]').getAttribute("aria-current"))
           .toBe("page");
         expect(await sidebar.locator('[data-session-key="agent:forge:main"]').count()).toBe(0);
-        await sidebar.getByRole("link", { name: "Automations", exact: true }).click();
+        await sidebar.locator('[data-navigation-view="pages"]').click();
+        await sidebar
+          .locator(".sidebar-pages")
+          .getByRole("link", { name: "Automations", exact: true })
+          .click();
         await waitForControlUiRoute(page, { routeId: "cron" });
         await expect.poll(() => page.locator(".cron-table__row").count()).toBe(2);
         expect(
@@ -331,6 +388,7 @@ suite.define(() => {
         );
         await captureSidebarUiProof(suite, page, "sidebar-team-automations.png");
 
+        await sidebar.locator('[data-navigation-view="sessions"]').click();
         await sidebar
           .locator('[data-session-key="agent:forge:notes"] .sidebar-recent-session__link')
           .click();
@@ -368,7 +426,7 @@ suite.define(() => {
         await expect.poll(() => sessionRows.count()).toBe(8);
 
         await sidebar.locator('[data-agent-collapse="bloom"]').click();
-        await expect.poll(() => sessionRows.count()).toBe(7);
+        await expect.poll(() => sessionRows.count()).toBe(6);
         expect(new URL(page.url()).pathname).toBe("/chat/forge/notes");
         await page.reload();
         await expect.poll(() => headers.count()).toBe(4);
@@ -377,7 +435,7 @@ suite.define(() => {
             sidebar.locator('[data-agent-collapse="bloom"]').getAttribute("aria-expanded"),
           )
           .toBe("false");
-        await expect.poll(() => sessionRows.count()).toBe(7);
+        await expect.poll(() => sessionRows.count()).toBe(6);
         await expectWorkspace();
         const forgeGroup = sidebar.locator('[data-agent-group="forge"]');
         const actions = forgeGroup.locator(".sidebar-agent-roster__actions");
@@ -437,7 +495,7 @@ suite.define(() => {
         await workspace.click();
         await workspaceMenu.locator('[value="agent:forge"]').press("Enter");
         await expect.poll(() => headers.count()).toBe(0);
-        expect(await sidebar.getByRole("link", { name: "Home", exact: true }).count()).toBe(1);
+        expect(await sidebar.locator(".sidebar-footer-bar__home").count()).toBe(1);
         expect(await chip.isVisible()).toBe(true);
         expect(await workspace.count()).toBe(0);
         await chip.click();
@@ -449,11 +507,15 @@ suite.define(() => {
         await expectFocused(activeAgentTile);
         await page.keyboard.press("Escape");
         await expect.poll(() => workspaceMenu.count()).toBe(0);
+        // Keep pending hover hints out of the keyboard-only mobile flow.
+        await page.mouse.move(-1, -1);
         await page.setViewportSize({ width: 390, height: 844 });
         const drawerToggle = page
           .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
           .first();
-        await drawerToggle.click();
+        // Keep keyboard navigation free of hover tooltips while the drawer slides in.
+        await drawerToggle.press("Enter");
+        await waitForMobileSidebarDrawerOpen(page);
         for (const trigger of [chip, workspace]) {
           if (trigger === workspace) {
             await chip.press("Enter");
@@ -602,9 +664,10 @@ suite.define(() => {
               boxes.signals.bottom <= boxes.actions.top ||
               boxes.actions.bottom <= boxes.signals.top,
           ).toBe(true);
+          // The agent avatar is the header identity; Home's creator never renders beside it.
+          expect(boxes.badges.map((badge) => badge.label)).not.toContain("Created by Riley");
           expect(boxes.badges.map((badge) => badge.label)).toEqual(
             expect.arrayContaining([
-              "Created by Riley",
               "#103 · Open",
               "2 messages need attention",
               touch ? "Incognito session" : "Unsent draft",

@@ -635,73 +635,65 @@ it("invalidates saved completeness when an admitted deletion fails during shutdo
   }
 });
 
-it.each(["before", "during"])(
-  "persists archives received %s saved snapshot restoration",
-  async (phase) => {
-    const startOptions = localStartOptions(`codex-catalog-archive-${phase}-restore-`);
-    const homeId = await codexCatalogResidentHomeKey({ startOptions });
-    const archived = idleThread({ id: "archived-during-restore", source: "cli" });
-    const current = idleThread({ id: "still-current", source: "cli" });
-    const { native, openState, readNative, createIndex } = createSnapshotFixture(
-      `archive-${phase}-snapshot-restore`,
-      [archived, current],
-      homeId,
-    );
-    const original = createIndex();
-    try {
-      await original.initialize();
-      expect((await original.list({})).sessions).toHaveLength(2);
-    } finally {
-      await original.close();
-    }
-    await closeOpenClawStateDatabaseAsync();
+it("persists archives received before saved snapshot restoration", async () => {
+  const startOptions = localStartOptions("codex-catalog-archive-before-restore-");
+  const homeId = await codexCatalogResidentHomeKey({ startOptions });
+  const archived = idleThread({ id: "archived-during-restore", source: "cli" });
+  const current = idleThread({ id: "still-current", source: "cli" });
+  const { native, openState, readNative, createIndex } = createSnapshotFixture(
+    "archive-before-snapshot-restore",
+    [archived, current],
+    homeId,
+  );
+  const original = createIndex();
+  try {
+    await original.initialize();
+    expect((await original.list({})).sessions).toHaveLength(2);
+  } finally {
+    await original.close();
+  }
+  await closeOpenClawStateDatabaseAsync();
 
-    const captured = createDeferred<void>();
-    const release = createDeferred<void>();
-    const state = openState();
-    const realEntries = state.entries;
-    vi.spyOn(state, "entries").mockImplementation(async () => {
-      const entries = await realEntries();
-      captured.resolve();
-      await release.promise;
-      return entries;
-    });
-    const restoring = createIndex(state);
-    const harness = createClientHarness();
-    let listed: ReturnType<CodexCatalogIndex["list"]> | undefined;
-    try {
-      await observeCodexCatalogClient(harness.client, { startOptions });
-      const archive = () => {
-        native.rows = [current];
-        harness.send({ method: "thread/archived", params: { threadId: archived.id } });
-      };
-      if (phase === "before") {
-        archive();
-      }
-      listed = restoring.list({});
-      void listed.catch(() => undefined);
-      await captured.promise;
-      if (phase === "during") {
-        archive();
-      }
-      release.resolve();
-      expect((await listed).sessions.map((row) => row.threadId)).toEqual([current.id]);
-      await restoring.initialize();
-    } finally {
-      release.resolve();
-      await listed?.catch(() => undefined);
-      await restoring.close();
-      await harness.client.closeAndWait();
-    }
-    await closeOpenClawStateDatabaseAsync();
+  const captured = createDeferred<void>();
+  const release = createDeferred<void>();
+  const state = openState();
+  const realEntries = state.entries;
+  vi.spyOn(state, "entries").mockImplementation(async () => {
+    const entries = await realEntries();
+    captured.resolve();
+    await release.promise;
+    return entries;
+  });
+  const restoring = createIndex(state);
+  const harness = createClientHarness();
+  let listed: ReturnType<CodexCatalogIndex["list"]> | undefined;
+  try {
+    await observeCodexCatalogClient(harness.client, { startOptions });
+    const archive = () => {
+      native.rows = [current];
+      harness.send({ method: "thread/archived", params: { threadId: archived.id } });
+    };
+    archive();
+    listed = restoring.list({});
+    void listed.catch(() => undefined);
+    await captured.promise;
+    release.resolve();
+    expect((await listed).sessions.map((row) => row.threadId)).toEqual([current.id]);
+    await restoring.initialize();
+  } finally {
+    release.resolve();
+    await listed?.catch(() => undefined);
+    await restoring.close();
+    await harness.client.closeAndWait();
+  }
+  await closeOpenClawStateDatabaseAsync();
 
-    readNative.mockClear();
-    const recovered = createIndex();
-    try {
-      expect((await recovered.list({})).sessions.map((row) => row.threadId)).toEqual([current.id]);
-      expect(readNative).not.toHaveBeenCalled();
-    } finally {
-      await recovered.close();
-    }
-  },
-);
+  readNative.mockClear();
+  const recovered = createIndex();
+  try {
+    expect((await recovered.list({})).sessions.map((row) => row.threadId)).toEqual([current.id]);
+    expect(readNative).not.toHaveBeenCalled();
+  } finally {
+    await recovered.close();
+  }
+});

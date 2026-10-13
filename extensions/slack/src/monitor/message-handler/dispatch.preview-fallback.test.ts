@@ -2346,13 +2346,13 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it.each([
-    { humanReply: false, messageToolReply: false, delayedReceipt: false, silent: false },
-    { humanReply: true, messageToolReply: false, delayedReceipt: false, silent: false },
-    { humanReply: true, messageToolReply: true, delayedReceipt: true, silent: false },
-    { humanReply: true, messageToolReply: false, delayedReceipt: false, silent: true },
+    { humanReply: false, messageToolReply: false, silent: false },
+    { humanReply: true, messageToolReply: false, silent: false },
+    { humanReply: true, messageToolReply: true, silent: false },
+    { humanReply: true, messageToolReply: false, silent: true },
   ])(
-    "settles interrupted previews without losing human context (human=$humanReply, message tool=$messageToolReply, delayed receipt=$delayedReceipt, silent=$silent)",
-    async ({ humanReply, messageToolReply, delayedReceipt, silent }) => {
+    "settles interrupted previews without losing human context (human=$humanReply, message tool=$messageToolReply, silent=$silent)",
+    async ({ humanReply, messageToolReply, silent }) => {
       mockedSlackStreamingMode = "partial";
       mockedDispatchSequence =
         messageToolReply || silent ? [] : [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
@@ -2365,12 +2365,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       let nextMessageId = 100;
       let draftStream: ReturnType<typeof createSlackDraftStream> | undefined;
       let noteHumanReply = () => {};
-      let releaseReceipt!: () => void;
-      const receipt = new Promise<void>((resolve) => {
-        releaseReceipt = resolve;
-      });
-      let closeoutStarted = false;
-      let pendingFlush: Promise<void> | undefined;
       createSlackDraftStreamMock.mockImplementationOnce(
         (params: Parameters<typeof createSlackDraftStream>[0]) => {
           draftStream = createSlackDraftStream({
@@ -2378,9 +2372,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
             send: async (_target, text) => {
               const messageId = String(nextMessageId++);
               visibleMessages.set(messageId, text);
-              if (delayedReceipt) {
-                await receipt;
-              }
               return {
                 channelId: "C123",
                 messageId,
@@ -2397,11 +2388,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
               visibleMessages.delete(messageId);
             },
           });
-          const discardPending = draftStream.discardPending;
-          draftStream.discardPending = () => {
-            closeoutStarted = true;
-            return discardPending();
-          };
           noteHumanReply = () =>
             noteSlackDraftConversationMessage({
               accountId: params.accountId,
@@ -2421,14 +2407,9 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       mockedReplyOptionEvents = [
         { kind: "partial", text: "I will inspect the files." },
         checkpoint(async () => {
-          pendingFlush = draftStream?.flush();
-          if (delayedReceipt) {
-            await vi.waitFor(() => expect(visibleMessages.size).toBe(1));
-          } else {
-            await pendingFlush;
-          }
+          await draftStream?.flush();
           expect([...visibleMessages.values()]).toEqual(["I will inspect the files."]);
-          if (humanReply && !delayedReceipt) {
+          if (humanReply) {
             noteHumanReply();
           }
           if (messageToolReply) {
@@ -2441,16 +2422,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
           : [{ kind: "partial" as const, text: FINAL_REPLY_TEXT }]),
       ];
 
-      const dispatching = dispatch();
-      if (delayedReceipt) {
-        await vi.waitFor(() => expect(closeoutStarted).toBe(true));
-        if (humanReply) {
-          noteHumanReply();
-        }
-        releaseReceipt();
-      }
-      await dispatching;
-      await pendingFlush;
+      await dispatch();
       draftStream?.update("Late preview after final delivery");
       await draftStream?.flush();
 

@@ -187,7 +187,7 @@ it.each([
     expect(recoveryCalls).toEqual([
       [
         "chat.history",
-        { sessionKey: successor.key, inputRunIds: [runId], limit: 1000 },
+        { sessionKey: successor.key, inputRunIds: [runId], limit: 1000, toolResultMaxChars: 2_000 },
         { timeoutMs: 30_000 },
       ],
     ]);

@@ -36,7 +36,7 @@ import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { resetChatThreadState } from "./chat-thread.ts";
-import { listStoredChatOutboxes, loadChatComposerSnapshot } from "./composer-persistence.ts";
+import { listStoredChatOutboxes, loadChatComposerState } from "./composer-persistence.ts";
 import {
   admitChatSubmission,
   reduceChatSessionProjection,
@@ -837,7 +837,7 @@ describe("server-owned pending input display", () => {
         ),
       ).toBe(true);
       expect(
-        loadChatComposerSnapshot(host, sessionKey)?.queue[0]?.attachments?.[0]?.dataUrl,
+        loadChatComposerState(host, sessionKey).snapshot?.queue[0]?.attachments?.[0]?.dataUrl,
       ).toBeUndefined();
       await loadChatHistory(host);
       expect(readChatQueueForScope(host, sessionKey)).toHaveLength(1);

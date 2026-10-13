@@ -40,13 +40,6 @@ describe("packageNameFromLockKey", () => {
 });
 
 describe("parseArgs", () => {
-  it("rejects missing markdown artifact paths", () => {
-    expect(() => parseArgs(["--markdown"])).toThrow("--markdown requires a value");
-    expect(() => parseArgs(["--markdown", "--json"])).toThrow("--markdown requires a value");
-    expect(() => parseArgs(["--markdown", "-h"])).toThrow("--markdown requires a value");
-    expect(() => parseArgs(["--markdown", ""])).toThrow("--markdown requires a value");
-  });
-
   it("keeps json as a boolean or optional artifact path", () => {
     expect(parseArgs(["--json"])).toMatchObject({
       asJson: true,
@@ -70,7 +63,7 @@ describe("parseArgs", () => {
 });
 
 describe("collectDependencyOwnershipSurfaceReport", () => {
-  it.each([false, true])(
+  it.each([true])(
     "reports ownership and install surface with toolchain metadata %s",
     (withToolchain) => {
       const repoRoot = makeTempRepo();

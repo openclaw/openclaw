@@ -118,6 +118,15 @@ unadmitted data. Losing the task channel is a transport
 failure, never an execution or cleanup receipt. Ordinary SDK workers keep their
 parent-port transport.
 
+Workers whose task failure leaves native state uncertain opt into
+`retireOnError`. The server revokes task admission without publishing a reusable
+failed-task response, rejects queued resource-close receipts, and joins those
+receipts outside the execution promise they depend on. It then joins the host
+`onRetire` hook, records a failing exit status, and closes both the task port and
+parent port (once when they are the same port). The host hook releases
+application-owned diagnostics; native exit remains the execution receipt.
+Ordinary task failures keep their existing reusable response.
+
 Private served transports declare `requiresReady` on the host and acknowledge
 readiness only after the task server installs its message listener. A native
 failure before that acknowledgment stops further worker construction for the

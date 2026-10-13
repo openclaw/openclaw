@@ -337,11 +337,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     font-size: 12px;
   }
 
-  .pill {
-    padding: 4px 10px;
-    font-size: 12px;
-  }
-
   .chat-thread {
     margin-top: 0;
     /* Horizontal inset lives on .chat-thread-inner (see layout.css): padding
@@ -456,7 +451,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
 
   .btn {
     padding: 6px 10px;
-    font-size: 12px;
   }
 }
 
@@ -547,11 +541,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     overflow-wrap: normal;
     word-break: normal;
   }
-
-  .filters {
-    flex-wrap: wrap;
-    gap: 8px;
-  }
 }
 
 /* ≤560px: also hide Kind (col 3) and Updated (col 5); keep live status visible */
@@ -588,7 +577,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   .data-table th,
   .data-table td {
     padding: 6px 4px;
-    font-size: 12px;
   }
 
   .session-key-cell {

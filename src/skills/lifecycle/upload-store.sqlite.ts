@@ -197,8 +197,16 @@ export function requireUploadMetadata(
   options: OpenClawStateDatabaseOptions,
 ): SkillUploadMetadataRow {
   const { database, kysely } = openSkillUploadDatabase(options);
+  return requireUploadMetadataInDatabase(database.db, kysely, uploadId);
+}
+
+export function requireUploadMetadataInDatabase(
+  db: DatabaseSync,
+  kysely: Kysely<SkillUploadDatabase>,
+  uploadId: string,
+): SkillUploadMetadataRow {
   const row = executeSqliteQueryTakeFirstSync(
-    database.db,
+    db,
     selectSkillUploadMetadata(kysely).where("upload_id", "=", uploadId),
   );
   if (!row) {

@@ -70,49 +70,21 @@ describe("memory-lancedb doctor migration", () => {
     }
   }
 
-  test.each(["tableNames", "openTable"] as const)(
-    "closes the connection when %s fails before migration starts",
-    async (operation) => {
-      await createLegacyTable();
-      const connection = await lancedb.connect(getDbPath());
-      const failure = new Error(`${operation} failed`);
-      const failedOperation = vi.spyOn(connection, operation).mockRejectedValueOnce(failure);
-      const connect = vi.spyOn(lancedb, "connect").mockResolvedValueOnce(connection);
-      try {
-        const migration = expectDefined(stateMigrations[0], "memory-lancedb state migration");
-        await expect(migration.migrateLegacyState(migrationParams())).rejects.toBe(failure);
-        expect(connection.isOpen()).toBe(false);
-      } finally {
-        connect.mockRestore();
-        failedOperation.mockRestore();
-        connection.close();
-      }
-    },
-  );
-
-  test("assigns legacy shared rows to the configured default agent once", async () => {
+  test("closes the connection when opening a table fails before migration starts", async () => {
     await createLegacyTable();
-
-    const params = migrationParams({
-      list: [{ id: "Owner Agent", default: true }, { id: "other" }],
-    });
-    const migration = expectDefined(stateMigrations[0], "memory-lancedb state migration");
-
-    await expect(migration.detectLegacyState(params)).resolves.toMatchObject({
-      preview: [expect.stringContaining("assign 1 legacy row")],
-    });
-    await expect(migration.migrateLegacyState(params)).resolves.toEqual({
-      changes: ["Assigned 1 legacy Memory LanceDB row to default agent owner-agent"],
-      warnings: [],
-    });
-    await expect(migration.detectLegacyState(params)).resolves.toBeNull();
-
-    const migratedConnection = await lancedb.connect(getDbPath());
-    const migratedTable = await migratedConnection.openTable("memories");
-    await expect(migratedTable.countRows("agentId = 'owner-agent'")).resolves.toBe(1);
-    await expect(migratedTable.countRows("agentId = 'other'")).resolves.toBe(0);
-    migratedTable.close();
-    migratedConnection.close();
+    const connection = await lancedb.connect(getDbPath());
+    const failure = new Error("openTable failed");
+    const failedOperation = vi.spyOn(connection, "openTable").mockRejectedValueOnce(failure);
+    const connect = vi.spyOn(lancedb, "connect").mockResolvedValueOnce(connection);
+    try {
+      const migration = expectDefined(stateMigrations[0], "memory-lancedb state migration");
+      await expect(migration.migrateLegacyState(migrationParams())).rejects.toBe(failure);
+      expect(connection.isOpen()).toBe(false);
+    } finally {
+      connect.mockRestore();
+      failedOperation.mockRestore();
+      connection.close();
+    }
   });
 
   test("assigns explicit-roster legacy rows to the configured system agent", async () => {
@@ -138,6 +110,23 @@ describe("memory-lancedb doctor migration", () => {
     await expect(migratedTable.countRows("agentId = 'main-agent'")).resolves.toBe(1);
     migratedTable.close();
     migratedConnection.close();
+  });
+
+  test("uses the migration state directory for an unconfigured database", async () => {
+    const params = migrationParams();
+    params.config = {};
+    params.stateDir = path.join(getTmpDir(), "state");
+    const dbPath = path.join(params.stateDir, "memory", "lancedb");
+    await createLegacyTable(dbPath);
+    const migration = expectDefined(stateMigrations[0], "memory-lancedb state migration");
+
+    await expect(migration.detectLegacyState(params)).resolves.toMatchObject({
+      preview: [expect.stringContaining(dbPath)],
+    });
+    await expect(migration.migrateLegacyState(params)).resolves.toMatchObject({
+      changes: [expect.stringContaining("Assigned 1 legacy Memory LanceDB row")],
+    });
+    await expect(migration.detectLegacyState(params)).resolves.toBeNull();
   });
 
   test("keeps literal $ patterns in home when expanding a tilde dbPath", async () => {
@@ -268,7 +257,10 @@ describe("memory-lancedb doctor migration", () => {
     const absoluteDbPath = path.join(pluginRoot, relativeDbPath);
     await createLegacyTable(absoluteDbPath);
 
-    const params = migrationParams(undefined, relativeDbPath);
+    const params = migrationParams(
+      { list: [{ id: "Owner Agent", default: true }, { id: "other" }] },
+      relativeDbPath,
+    );
     const migration = expectDefined(
       createMemoryLanceDbStateMigrations(pluginRoot)[0],
       "memory-lancedb state migration",
@@ -281,9 +273,12 @@ describe("memory-lancedb doctor migration", () => {
       changes: [expect.stringContaining("Assigned 1 legacy Memory LanceDB row")],
     });
 
+    await expect(migration.detectLegacyState(params)).resolves.toBeNull();
+
     const migratedConnection = await lancedb.connect(absoluteDbPath);
     const migratedTable = await migratedConnection.openTable("memories");
-    await expect(migratedTable.countRows("agentId = 'main'")).resolves.toBe(1);
+    await expect(migratedTable.countRows("agentId = 'owner-agent'")).resolves.toBe(1);
+    await expect(migratedTable.countRows("agentId = 'other'")).resolves.toBe(0);
     migratedTable.close();
     migratedConnection.close();
   });

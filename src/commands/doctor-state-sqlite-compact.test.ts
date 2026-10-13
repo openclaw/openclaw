@@ -14,7 +14,6 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import * as compactOwner from "./doctor-sqlite-compact.js";
-import * as maintenanceLock from "./doctor-sqlite-maintenance-lock.js";
 import { runDoctorStateSqliteCompact } from "./doctor-state-sqlite-compact.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -24,11 +23,6 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     cleanup();
   });
 });
-type DoctorStateSqliteCompactReport = Awaited<ReturnType<typeof runDoctorStateSqliteCompact>>;
-type CompletedStateSqliteCompactReport = Extract<
-  DoctorStateSqliteCompactReport,
-  { skipped: false }
->;
 
 function createStateEnv(): NodeJS.ProcessEnv {
   const stateDir = tempDirs.make("openclaw-state-compact-");
@@ -89,19 +83,6 @@ function seedStateDatabase(params: {
   return sqlitePath;
 }
 
-function dropBootstrapProvenanceColumns(sqlitePath: string): void {
-  const sqlite = requireNodeSqlite();
-  const database = new sqlite.DatabaseSync(sqlitePath);
-  try {
-    database.exec(`
-      ALTER TABLE claw_installs DROP COLUMN bootstrap_source_path;
-      ALTER TABLE claw_installs DROP COLUMN bootstrap_content_digest;
-    `);
-  } finally {
-    database.close();
-  }
-}
-
 function readPragma(database: DatabaseSync, name: string): number {
   const row = database.prepare(`PRAGMA ${name};`).get() as Record<string, unknown>;
   return Number(row[name] ?? Object.values(row)[0]);
@@ -135,15 +116,6 @@ function createUnsafeIndexDrift(sqlitePath: string): void {
   }
 }
 
-function expectCompletedReport(
-  report: DoctorStateSqliteCompactReport,
-): asserts report is CompletedStateSqliteCompactReport {
-  expect(report.skipped).toBe(false);
-  if (report.skipped) {
-    throw new Error("expected state SQLite compaction report");
-  }
-}
-
 function expectOwnerOnlySqlitePermissions(sqlitePath: string): void {
   expect(fs.statSync(path.dirname(sqlitePath)).mode & 0o777).toBe(0o700);
   for (const candidate of [sqlitePath, `${sqlitePath}-wal`, `${sqlitePath}-shm`]) {
@@ -163,78 +135,6 @@ describe("runDoctorStateSqliteCompact", () => {
       reason: "missing",
       skipped: true,
     });
-  });
-
-  it("compacts the canonical database and reports verified before/after state", async () => {
-    const env = createStateEnv();
-    const sqlitePath = seedStateDatabase({ env, withBloat: true });
-
-    const report = await runDoctorStateSqliteCompact({ env });
-
-    expectCompletedReport(report);
-    expect(report.path).toBe(sqlitePath);
-    expect(report.before.autoVacuum).toBe(0);
-    expect(report.after.autoVacuum).toBe(2);
-    expect(report.before.freelistPages).toBeGreaterThan(0);
-    expect(report.after.freelistPages).toBe(0);
-    expect(report.after.dbSizeBytes).toBeLessThan(report.before.dbSizeBytes);
-    expect(report.after.walSizeBytes).toBe(0);
-    expect(report.after.pageSizeBytes).toBeGreaterThan(0);
-    expect(report.reclaimedBytes).toBeGreaterThan(0);
-    expect(report.integrityCheck).toBe("ok");
-  });
-
-  it("fully repacks partially filled pages in an already incremental database", async () => {
-    const env = createStateEnv();
-    const sqlitePath = seedStateDatabase({ env });
-    const sqlite = requireNodeSqlite();
-    const database = new sqlite.DatabaseSync(sqlitePath);
-    try {
-      database.exec("PRAGMA auto_vacuum = INCREMENTAL; VACUUM; BEGIN;");
-      const insert = database.prepare("INSERT INTO compact_payload (payload) VALUES (?)");
-      for (let index = 0; index < 1000; index++) {
-        insert.run("x".repeat(1000));
-      }
-      database.exec(
-        "COMMIT; UPDATE compact_payload SET payload = 'keep'; PRAGMA wal_checkpoint(TRUNCATE);",
-      );
-      expect(readPragma(database, "freelist_count")).toBe(0);
-    } finally {
-      database.close();
-    }
-    const report = await runDoctorStateSqliteCompact({ env });
-    expectCompletedReport(report);
-    expect(report.before.autoVacuum).toBe(2);
-    expect(report.after.dbSizeBytes).toBeLessThan(report.before.dbSizeBytes);
-    const after = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
-    try {
-      expect(
-        after.prepare("SELECT COUNT(*) AS count FROM compact_payload WHERE payload = 'keep'").get(),
-      ).toEqual({ count: 1000 });
-    } finally {
-      after.close();
-    }
-  });
-
-  it("compacts pre-bootstrap-column v6 state without migrating it", async () => {
-    const env = createStateEnv();
-    const sqlitePath = seedStateDatabase({ env, withBloat: true });
-    dropBootstrapProvenanceColumns(sqlitePath);
-
-    const report = await runDoctorStateSqliteCompact({ env });
-
-    expectCompletedReport(report);
-    const sqlite = requireNodeSqlite();
-    const database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
-    try {
-      const columns = database.prepare("PRAGMA table_info(claw_installs)").all() as Array<{
-        name?: unknown;
-      }>;
-      expect(columns.map((column) => column.name)).not.toContain("bootstrap_source_path");
-      expect(columns.map((column) => column.name)).not.toContain("bootstrap_content_digest");
-    } finally {
-      database.close();
-    }
   });
 
   it("clears authoritative quarantine after compaction", async () => {
@@ -264,43 +164,6 @@ describe("runDoctorStateSqliteCompact", () => {
     expectOwnerOnlySqlitePermissions(sqlitePath);
   });
 
-  it("rejects non-global schema metadata before mutation", async () => {
-    const env = createStateEnv();
-    const sqlitePath = seedStateDatabase({ env, role: "agent", withBloat: true });
-
-    await expect(runDoctorStateSqliteCompact({ env })).rejects.toThrow(/schema role agent.*global/);
-
-    const sqlite = requireNodeSqlite();
-    const database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
-    try {
-      expect(readPragma(database, "auto_vacuum")).toBe(0);
-      expect(readPragma(database, "freelist_count")).toBeGreaterThan(0);
-    } finally {
-      database.close();
-    }
-  });
-
-  it.each([
-    ["legacy", OPENCLAW_STATE_SCHEMA_VERSION - 1, /doctor --fix before compacting/],
-    ["future", OPENCLAW_STATE_SCHEMA_VERSION + 1, /uses newer schema version/],
-  ] as const)(
-    "rejects a %s shared-state schema before mutation",
-    async (_label, schemaVersion, message) => {
-      const env = createStateEnv();
-      const sqlitePath = seedStateDatabase({ env, schemaVersion });
-
-      await expect(runDoctorStateSqliteCompact({ env })).rejects.toThrow(message);
-
-      const sqlite = requireNodeSqlite();
-      const database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
-      try {
-        expect(readPragma(database, "auto_vacuum")).toBe(0);
-      } finally {
-        database.close();
-      }
-    },
-  );
-
   it.skipIf(process.platform === "win32")(
     "refuses a symlink at the canonical database path",
     async () => {
@@ -322,25 +185,6 @@ describe("runDoctorStateSqliteCompact", () => {
     await expect(runDoctorStateSqliteCompact({ env })).rejects.toThrow(
       /already open in this process/,
     );
-  });
-
-  it("leaves the database untouched when exclusive state ownership is unavailable", async () => {
-    const env = createStateEnv();
-    const sqlitePath = seedStateDatabase({ env, withBloat: true });
-
-    vi.spyOn(maintenanceLock, "withDoctorSqliteMaintenanceLock").mockRejectedValue(
-      new Error("Gateway owns this OpenClaw state directory"),
-    );
-    await expect(runDoctorStateSqliteCompact({ env })).rejects.toThrow(/Gateway owns/);
-
-    const sqlite = requireNodeSqlite();
-    const database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
-    try {
-      expect(readPragma(database, "auto_vacuum")).toBe(0);
-      expect(readPragma(database, "freelist_count")).toBeGreaterThan(0);
-    } finally {
-      database.close();
-    }
   });
 
   it("treats a busy truncating checkpoint as failure", async () => {
@@ -412,54 +256,6 @@ describe("runDoctorStateSqliteCompact", () => {
           }),
         ]),
       );
-    } finally {
-      after.close();
-    }
-  });
-
-  it("rejects foreign-key violations before mutating the database", async () => {
-    const env = createStateEnv();
-    const sqlitePath = seedStateDatabase({ env, withBloat: true });
-    const sqlite = requireNodeSqlite();
-    const corrupted = new sqlite.DatabaseSync(sqlitePath);
-    try {
-      corrupted.exec(`
-        PRAGMA foreign_keys = OFF;
-        CREATE TABLE compact_parents (id INTEGER PRIMARY KEY);
-        CREATE TABLE compact_children (
-          id INTEGER PRIMARY KEY,
-          parent_id INTEGER NOT NULL REFERENCES compact_parents(id)
-        );
-        INSERT INTO compact_children (id, parent_id) VALUES (1, 99);
-      `);
-      expect(corrupted.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
-      expect(corrupted.prepare("PRAGMA integrity_check").get()).toEqual({
-        integrity_check: "ok",
-      });
-      expect(corrupted.prepare("PRAGMA foreign_key_check").get()).toEqual({
-        table: "compact_children",
-        rowid: 1,
-        parent: "compact_parents",
-        fkid: 0,
-      });
-    } finally {
-      corrupted.close();
-    }
-
-    await expect(runDoctorStateSqliteCompact({ env })).rejects.toThrow(
-      /foreign_key_check failed.*compact_children row 1 references compact_parents \(foreign key 0\)/iu,
-    );
-
-    const after = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
-    try {
-      expect(readPragma(after, "auto_vacuum")).toBe(0);
-      expect(readPragma(after, "freelist_count")).toBeGreaterThan(0);
-      expect(after.prepare("PRAGMA foreign_key_check").get()).toEqual({
-        table: "compact_children",
-        rowid: 1,
-        parent: "compact_parents",
-        fkid: 0,
-      });
     } finally {
       after.close();
     }

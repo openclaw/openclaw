@@ -154,14 +154,9 @@ export async function monitorIrcProvider(
       buildIrcConnectOptions(account, {
         channels: account.config.channels,
         abortSignal,
-        onLine: (line) => {
-          if (core.logging.shouldLogVerbose()) {
-            logger.debug?.(`[${account.accountId}] << ${line}`);
-          }
-        },
         onNotice: (text, target) => {
           if (core.logging.shouldLogVerbose()) {
-            logger.debug?.(`[${account.accountId}] notice ${target ?? ""}: ${text}`);
+            logger.debug?.(`[${account.accountId}] notice ${target ?? ""} len=${text.length}`);
           }
         },
         onError: (error) => {

@@ -280,23 +280,19 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
           error(`signal-cli stop error: ${String(err)}`);
         }
       }
-      stopPromise = new Promise<void>((resolve) => {
-        const timeout = setTimeout(() => {
-          if (!exited) {
-            try {
-              child.kill("SIGKILL");
-            } catch (err) {
-              error(`signal-cli force-stop error: ${String(err)}`);
-            }
+      const timeout = setTimeout(() => {
+        if (!exited) {
+          try {
+            child.kill("SIGKILL");
+          } catch (err) {
+            error(`signal-cli force-stop error: ${String(err)}`);
           }
-        }, SIGNAL_DAEMON_STOP_KILL_TIMEOUT_MS);
-        timeout.unref?.();
-        // Do not resolve merely because SIGKILL was sent: monitor lifetime prevents the gateway
-        // from starting a replacement before the old daemon releases its port and config lock.
-        void exitedPromise.then(() => {
-          clearTimeout(timeout);
-          resolve();
-        });
+        }
+      }, SIGNAL_DAEMON_STOP_KILL_TIMEOUT_MS);
+      timeout.unref?.();
+      // Wait for actual exit before a replacement can use the port and config lock.
+      stopPromise = exitedPromise.then(() => {
+        clearTimeout(timeout);
       });
       return stopPromise;
     },

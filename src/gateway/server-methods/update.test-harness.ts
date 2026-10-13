@@ -4,6 +4,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { validateUpdateRunResult } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
@@ -21,12 +25,14 @@ let ledgerHome: TempHomeEnv | undefined;
 let lifecycle: UpdateCheckLifecycle;
 beforeEach(async () => {
   ledgerHome = await createTempHomeEnv("openclaw-update-rpc-");
+  setRuntimeConfigSnapshot({ update: {} });
   lifecycle = createGatewayUpdateLifecycle(createTestGatewayScheduler());
 });
 afterEach(async () => {
   await lifecycle.stop();
   await ledgerHome?.restore();
   ledgerHome = undefined;
+  clearRuntimeConfigSnapshot();
 });
 
 export const sentinelState: {
@@ -239,8 +245,10 @@ export const scheduleGatewayRestartMock = vi.fn(
   }),
 );
 
-export const readGatewayOwnerLeaseMock =
-  vi.fn<typeof import("../../infra/gateway-owner-lease.js").readGatewayOwnerLease>();
+const readGatewayOwnerLeaseMock = vi.hoisted(() =>
+  vi.fn<typeof import("../../infra/gateway-owner-lease.js").readGatewayOwnerLease>(),
+);
+export { readGatewayOwnerLeaseMock };
 
 export type UpdateRunPayload = {
   runId: string;
@@ -520,6 +528,7 @@ export async function invokeUpdateRun(
     "sessionMutationCommitGuard" | "hasCurrentClientAuthority"
   > = {},
 ) {
+  setRuntimeConfigSnapshot(runtimeConfig);
   const { updateHandlers } = await import("./update.js");
   const onRespond = respond ?? (() => {});
   await expectDefined(

@@ -30,12 +30,15 @@ function openReader(
       unavailable: options.unavailable !== false,
       latestUrl: "/control/chat/main/private",
       cardUrl: "https://gateway.test/control/share/card.png",
+      assetBasePath: basePath,
       entryUrl: `${basePath}/__openclaw__/session-entry?path=${encodeURIComponent(`${basePath}/chat/main/private`)}`,
       ...(options.clientAuth !== false ? { clientAuthBasePath: basePath } : {}),
     }),
     { url: options.url ?? "https://gateway.test/control/chat/main/private" },
   );
   const { document, localStorage, sessionStorage, location } = dom.window;
+  // The script runs below; match a browser with JavaScript enabled.
+  document.querySelectorAll("noscript").forEach((node) => node.remove());
   const scope =
     options.storedScope ??
     `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}${basePath}`;
@@ -68,7 +71,9 @@ function openReader(
     clearTimeout: vi.fn(),
   });
   readers.push(dom);
-  return { replace, fetch, document };
+  const loginVisibility = () =>
+    dom.window.getComputedStyle(document.getElementById("session-login")!).visibility;
+  return { replace, fetch, document, loginVisibility };
 }
 
 const device = JSON.stringify({
@@ -95,6 +100,7 @@ describe("public reader operator handoff", () => {
       const main = f.document.querySelector("main")!;
       expect(main.hasAttribute("data-entry-pending")).toBe(true);
       expect(f.document.title).not.toContain("unavailable");
+      expect(f.loginVisibility()).toBe("hidden");
       expect(f.replace).not.toHaveBeenCalled();
       probe.resolve({ status });
       await probe.promise;
@@ -114,6 +120,7 @@ describe("public reader operator handoff", () => {
       await probe.promise;
       expect(main.hasAttribute("data-entry-pending")).toBe(false);
       expect(f.document.title).toBe("Conversation unavailable · OpenClaw");
+      expect(f.loginVisibility()).toBe("visible");
       expect(f.replace).not.toHaveBeenCalled();
     },
   );
@@ -136,6 +143,7 @@ describe("public reader operator handoff", () => {
       );
       expect(f.document.querySelector(".entry-status")?.textContent).toContain("reload or log in");
       expect(f.document.title).not.toContain("unavailable");
+      expect(f.loginVisibility()).toBe("visible");
       expect(f.replace).not.toHaveBeenCalled();
     },
   );

@@ -12,7 +12,7 @@ import type {
   SessionRetirementReadOperation,
   SessionRetirementReadResult,
 } from "./session-retirement-read.types.js";
-import { maintenanceLane } from "./session-transcript-worker-resources.js";
+import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
@@ -77,7 +77,8 @@ export function captureSessionRetirementReader(
         assertCurrent();
         return result;
       },
-      maintenanceLane,
+      // Ordered scans retain writer admission through reader failure and eviction cleanup.
+      targetDiscoveryLane,
     );
   };
   return { database, assertCurrent, read };

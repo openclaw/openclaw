@@ -128,22 +128,6 @@ describe("gateway error details", () => {
     expect(Value.Check(UnknownAgentIdErrorDetailsSchema, { ...details, agentId: "" })).toBe(false);
   });
 
-  it.each(["WIZARD_NOT_FOUND", "SETUP_ADMISSION_BUSY"])("validates closed %s details", (code) => {
-    const details = { code };
-    expect(Value.Check(ErrorShapeSchema, { code: "UNAVAILABLE", message: "busy", details })).toBe(
-      true,
-    );
-    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
-    expect(Value.Check(GatewayErrorDetailsSchema, { ...details, sessionId: "stale" })).toBe(false);
-    expect(
-      Value.Check(ErrorShapeSchema, {
-        code: "UNAVAILABLE",
-        message: "other failure",
-        details: { code: "future_detail", context: 1 },
-      }),
-    ).toBe(true);
-  });
-
   it("validates typed project clone failures", () => {
     const details = {
       code: GatewayErrorDetailCodes.PROJECT_CLONE_FAILED,

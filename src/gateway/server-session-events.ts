@@ -15,6 +15,7 @@ import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { prepareForwardedMessageCronJobNameResolver } from "./chat-display-projection.history.js";
@@ -526,6 +527,11 @@ async function handleTranscriptUpdateBroadcast(
               ...(update.runId ? { runId: update.runId } : {}),
               sessionSnapshot,
             });
+      // Do not invalidate history for a recoverable attempt: a refetch could
+      // publish its durable error row before the owning run settles.
+      if (projected?.deferredAssistantError) {
+        return;
+      }
       const historyReset = message === undefined || projected?.requiresHistoryReset;
       if (!historyReset && projected?.payload) {
         params.broadcastToConnIds("session.message", projected.payload, connIds, broadcastOptions);
@@ -631,55 +637,58 @@ export function createLifecycleEventBroadcastHandler(params: {
         : undefined;
     const observation = !captured ? projection?.observeGeneration(query) : undefined;
     try {
-      await withPreparedEventRow(projection, query, (read) => {
-        const current = captured ?? projection?.capture(query);
-        if (
-          params.getSessionRowProjection?.() !== projection ||
-          (projection && (!current || !projection.isCurrent(current))) ||
-          (observation && (!current || !observation.isCurrent(current)))
-        ) {
-          return;
-        }
-        const record = read?.describe(query);
-        const sessionRow = record && read?.present(record);
-        const activeRunState = capacityState ?? (sessionRow ? readActiveState(sessionRow) : null);
-        params.broadcastToConnIds(
-          "sessions.changed",
-          {
-            sessionKey: event.sessionKey,
-            ...(eventAgentId ? { agentId: eventAgentId } : {}),
-            reason: event.reason,
-            ...(event.catalogChanged ? { catalogChanged: true } : {}),
-            parentSessionKey: event.parentSessionKey,
-            label: event.label,
-            displayName: event.displayName,
-            ts: Date.now(),
-            ...buildGatewaySessionSnapshot({
-              sessionRow,
-              includeSession: true,
-              agentId: eventAgentId,
+      // Committed lifecycle publications settle with the Gateway, not their producer's scope.
+      await runOutsideAsyncWorkScope(() =>
+        withPreparedEventRow(projection, query, (read) => {
+          const current = captured ?? projection?.capture(query);
+          if (
+            params.getSessionRowProjection?.() !== projection ||
+            (projection && (!current || !projection.isCurrent(current))) ||
+            (observation && (!current || !observation.isCurrent(current)))
+          ) {
+            return;
+          }
+          const record = read?.describe(query);
+          const sessionRow = record && read?.present(record);
+          const activeRunState = capacityState ?? (sessionRow ? readActiveState(sessionRow) : null);
+          params.broadcastToConnIds(
+            "sessions.changed",
+            {
+              sessionKey: event.sessionKey,
+              ...(eventAgentId ? { agentId: eventAgentId } : {}),
+              reason: event.reason,
+              ...(event.catalogChanged ? { catalogChanged: true } : {}),
+              parentSessionKey: event.parentSessionKey,
               label: event.label,
               displayName: event.displayName,
-              parentSessionKey: event.parentSessionKey,
-              activeRunState,
-            }),
-            ...(event.swarmGroupId
-              ? {
-                  swarmGroupId: event.swarmGroupId,
-                  kind: event.kind,
-                  text: event.text,
-                }
-              : {}),
-          },
-          connIds,
-          {
-            dropIfSlow: true,
-            ...(read && projection
-              ? { prepareSessionProjection: prepareSessionEventProjection(projection, read) }
-              : {}),
-          },
-        );
-      });
+              ts: Date.now(),
+              ...buildGatewaySessionSnapshot({
+                sessionRow,
+                includeSession: true,
+                agentId: eventAgentId,
+                label: event.label,
+                displayName: event.displayName,
+                parentSessionKey: event.parentSessionKey,
+                activeRunState,
+              }),
+              ...(event.swarmGroupId
+                ? {
+                    swarmGroupId: event.swarmGroupId,
+                    kind: event.kind,
+                    text: event.text,
+                  }
+                : {}),
+            },
+            connIds,
+            {
+              dropIfSlow: true,
+              ...(read && projection
+                ? { prepareSessionProjection: prepareSessionEventProjection(projection, read) }
+                : {}),
+            },
+          );
+        }),
+      );
     } finally {
       observation?.dispose();
     }

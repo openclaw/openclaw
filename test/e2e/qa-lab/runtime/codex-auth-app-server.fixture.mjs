@@ -15,6 +15,11 @@ if (!appServerVersion) {
   throw new Error("missing OPENCLAW_QA_CODEX_APP_SERVER_VERSION");
 }
 
+// Account-listed models; route proofs list ids the static OpenAI route lists do not name.
+const listedModels = (process.env.OPENCLAW_QA_CODEX_AUTH_APP_SERVER_MODELS ?? "gpt-5.6-luna").split(
+  ",",
+);
+
 // The config-only fixture contract can run standalone without receipt observation.
 const receipts = process.argv[2] ? await import(process.argv[2]) : undefined;
 
@@ -45,13 +50,13 @@ runFakeCodexAppServer({
     },
     "model/list": ({ sendResult }) =>
       sendResult({
-        data: ["gpt-5.6-luna"].map((model) => ({
+        data: listedModels.map((model, index) => ({
           id: model,
           model,
           displayName: model,
           description: "Synthetic auth product proof model",
           hidden: false,
-          isDefault: true,
+          isDefault: index === 0,
           defaultReasoningEffort: "low",
           supportedReasoningEfforts: [{ reasoningEffort: "low", description: "Low" }],
           multiAgentVersion: "v2",

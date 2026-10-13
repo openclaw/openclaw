@@ -20,6 +20,7 @@ import {
   registerApnsRegistration,
 } from "./push-apns.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
 const tempDirs = createTrackedTempDirs();
 const APNS_DEVICE_FIELD = "token";
@@ -307,20 +308,15 @@ describe("push APNs registration store", () => {
     async (stage) => {
       const baseDir = await makeTempDir();
       const previous = await registerDirectApnsRegistration({ nodeId: "ios-lease", baseDir });
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
       let connectionCurrent = true;
       let reachedStage = false;
-      const admission = vi
-        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === stage) {
-              reachedStage = true;
-              connectionCurrent = false;
-            }
-            admit(request, grant);
-          }, attachment),
-        );
+      const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+        if (request.stage === stage) {
+          reachedStage = true;
+          connectionCurrent = false;
+        }
+        admit(request, grant);
+      });
       try {
         await expect(
           registerApnsRegistration({

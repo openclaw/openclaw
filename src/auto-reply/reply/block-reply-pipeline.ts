@@ -110,21 +110,13 @@ export function createBlockReplyPipeline(params: {
   let sendChain: Promise<void> = Promise.resolve();
   let aborted = false;
   let didStream = false;
-  let didLogTimeout = false;
 
   const hasSeenOrQueuedPayloadKey = (payloadKey: string) =>
     seenKeys.has(payloadKey) || sentKeys.has(payloadKey) || pendingKeys.has(payloadKey);
   const resolveDedupeIdentity = (payload: ReplyPayload, payloadKey: string) => {
     const sourceText = getReplyPayloadMetadata(payload)?.blockSourceText;
     const occurrence = readReplyPayloadSourceOccurrence(payload);
-    const occurrenceKey = occurrence
-      ? JSON.stringify([
-          occurrence.assistantMessageIndex,
-          occurrence.sourceRange[0],
-          occurrence.sourceRange[1],
-          occurrence.sourceText,
-        ])
-      : undefined;
+    const occurrenceKey = occurrence ? JSON.stringify(occurrence) : undefined;
     return {
       sourceText,
       occurrenceKey,
@@ -227,12 +219,9 @@ export function createBlockReplyPipeline(params: {
       .catch((err: unknown) => {
         if (timeoutSignal?.aborted) {
           aborted = true;
-          if (!didLogTimeout) {
-            didLogTimeout = true;
-            logVerbose(
-              `block reply delivery timed out after ${timeoutMs}ms; skipping remaining block replies to preserve ordering`,
-            );
-          }
+          logVerbose(
+            `block reply delivery timed out after ${timeoutMs}ms; skipping remaining block replies to preserve ordering`,
+          );
           return;
         }
         attempt.outcome = resolveReplyDispatchErrorOutcome(err);
@@ -342,21 +331,22 @@ export function createBlockReplyPipeline(params: {
   // A final payload joins every text item of its physical assistant message, and each item
   // streamed under its own index (hidden commentary items take indexes without blocks), so
   // also match item runs back to the message start.
-  const matchingAttempts = (payload: ReplyPayload) => {
+  const matchingTerminalAttempts = function* (payload: ReplyPayload) {
     const index = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
     if (index === undefined) {
-      return blockAttemptsByMessage.values();
+      for (const attempts of blockAttemptsByMessage.values()) {
+        yield attempts.filter((attempt) => attempt.terminal);
+      }
+      return;
     }
     const start = blockAttemptsByMessage.get(index)?.[0]?.messageStart ?? index;
-    const runs: BlockAttempt[][] = [];
     for (let item = index, run: BlockAttempt[] = []; item >= start; item--) {
       const attempts = blockAttemptsByMessage.get(item);
       if (attempts?.length) {
-        run = [...attempts, ...run];
-        runs.push(run);
+        run = [...attempts.filter((attempt) => attempt.terminal), ...run];
+        yield run;
       }
     }
-    return runs;
   };
   const normalizeSource = (text: string) => text.replace(/\s+/g, "");
   const combinedSource = (attempts: BlockAttempt[]) =>
@@ -393,8 +383,7 @@ export function createBlockReplyPipeline(params: {
       sentContentKeys.has(createIndexedBlockReplyContentKey(payload)),
     getSourceRecovery: (payload) => {
       const text = normalizeSource(resolveSendableOutboundReplyParts(payload).trimmedText);
-      for (const group of matchingAttempts(payload)) {
-        const attempts = group.filter((attempt) => attempt.terminal);
+      for (const attempts of matchingTerminalAttempts(payload)) {
         if (
           text &&
           combinedSource(attempts) === text &&
@@ -410,8 +399,7 @@ export function createBlockReplyPipeline(params: {
       const reply = resolveSendableOutboundReplyParts(payload);
       const text = normalizeSource(reply.trimmedText);
       const textOnly = !hasOutboundReplyContent({ ...payload, text: undefined });
-      for (const group of matchingAttempts(payload)) {
-        const attempts = group.filter((attempt) => attempt.terminal);
+      for (const attempts of matchingTerminalAttempts(payload)) {
         const blocked = attempts.filter(hasBlockReplyDeliveryCustody);
         const sourcePrefix = combinedSource(attempts);
         if (
@@ -439,10 +427,9 @@ export function createBlockReplyPipeline(params: {
         return false;
       }
       const sourceText = normalizeSource(reply.trimmedText);
-      for (const group of matchingAttempts(payload)) {
+      for (const group of matchingTerminalAttempts(payload)) {
         const attempts = group.filter(
           (attempt) =>
-            attempt.terminal &&
             attempt.outcome === "delivered" &&
             !attempt.pending &&
             attempt.source?.complete !== false,

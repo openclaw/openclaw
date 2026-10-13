@@ -5,7 +5,8 @@ import type { PluginRuntime } from "./types.js";
 export const subscribeRuntimeSessionChanges: PluginRuntime["gateway"]["subscribeSessionChanges"] = (
   listener,
 ) =>
-  sessionChanges.subscribeFacts((change) => {
+  // Plugin callbacks may authorize effects, so every private fact must already be installed.
+  sessionChanges.subscribeProjection((change) => {
     if (!("sessionKey" in change)) {
       return;
     }

@@ -254,6 +254,7 @@ const WorkerEnvironmentProfileSummarySchema = closedObject({
 
 /** Profile-only requests leave environments empty without reading inventory. */
 export const EnvironmentsListResultSchema = closedObject({
+  requiredProfile: Type.Optional(NonEmptyString),
   environments: Type.Array(EnvironmentSummarySchema),
   profiles: Type.Optional(Type.Array(WorkerEnvironmentProfileSummarySchema)),
   preparedPool: Type.Optional(

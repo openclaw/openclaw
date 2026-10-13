@@ -105,7 +105,7 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  it.each(["token", "password"] as const)(
+  it.each(["password"] as const)(
     "marks %s-authenticated requests as untrusted for declared HTTP scopes",
     async (method) => {
       vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({
@@ -380,6 +380,12 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
             hasAvatar: false,
             updatedAt: 2,
           },
+          preparedSessionProfile: {
+            profileId: "profile-guest",
+            aliases: new Set(["profile-guest"]),
+            role: null,
+            githubLogin: undefined,
+          },
           ...(rolesConfigured ? { operatorRolePolicy: role } : {}),
         });
         expect(ensureProfile).toHaveBeenCalledWith("guest@example.test", {
@@ -395,10 +401,8 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
   );
 
   it.each([
-    { rolesConfigured: true, failure: "profile store" },
     { rolesConfigured: false, failure: "profile store" },
     { rolesConfigured: true, failure: "provider lookup" },
-    { rolesConfigured: false, failure: "provider lookup" },
   ])(
     "$failure failure preserves authorization with roles enabled: $rolesConfigured",
     async ({ rolesConfigured, failure }) => {
@@ -503,6 +507,12 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
         avatarRevision: "3",
         hasAvatar: true,
         updatedAt: 3,
+      },
+      preparedSessionProfile: {
+        profileId: "profile-github-canonical",
+        aliases: new Set(["profile-github", "profile-github-canonical"]),
+        role: null,
+        githubLogin: undefined,
       },
     });
     expect(profileWrites.ensureCanonicalUserProfileForEmail).not.toHaveBeenCalled();

@@ -423,7 +423,18 @@ export function registerConfigCli(program: Command) {
     .option("--batch-json <json>", "Batch mode: JSON array of set operations")
     .option("--batch-file <path>", "Batch mode: read JSON array of set operations from file")
     .action(async (path: string | undefined, value: string | undefined, opts: ConfigSetOptions) => {
-      await runConfigSet({ path, value, cliOptions: opts });
+      const runLocal = () => runConfigSet({ path, value, cliOptions: opts });
+      if (opts.dryRun) {
+        return runLocal();
+      }
+      const { runWithLocalStateOwner } = await import("./local-state-owner.js");
+      await runWithLocalStateOwner({
+        method: "config set",
+        params: {},
+        target: path ?? "config",
+        onForeignOwner: "refuse",
+        runLocal,
+      });
     });
 
   cmd
@@ -449,7 +460,18 @@ export function registerConfigCli(program: Command) {
       [] as string[],
     )
     .action(async (opts: ConfigPatchOptions) => {
-      await runConfigPatch({ cliOptions: opts });
+      const runLocal = () => runConfigPatch({ cliOptions: opts });
+      if (opts.dryRun) {
+        return runLocal();
+      }
+      const { runWithLocalStateOwner } = await import("./local-state-owner.js");
+      await runWithLocalStateOwner({
+        method: "config patch",
+        params: {},
+        target: "config",
+        onForeignOwner: "refuse",
+        runLocal,
+      });
     });
 
   cmd
@@ -460,7 +482,18 @@ export function registerConfigCli(program: Command) {
     .option("--allow-exec", "allow exec SecretRef providers during --dry-run")
     .option("--json", "print dry-run result as JSON")
     .action(async (path: string, options: ConfigUnsetOptions) => {
-      await runConfigUnset({ path, cliOptions: options });
+      const runLocal = () => runConfigUnset({ path, cliOptions: options });
+      if (options.dryRun) {
+        return runLocal();
+      }
+      const { runWithLocalStateOwner } = await import("./local-state-owner.js");
+      await runWithLocalStateOwner({
+        method: "config unset",
+        params: {},
+        target: path,
+        onForeignOwner: "refuse",
+        runLocal,
+      });
     });
 
   cmd

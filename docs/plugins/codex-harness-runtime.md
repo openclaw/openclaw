@@ -24,6 +24,24 @@ cache writes, and every completed model call in the side thread's native tool
 loop; replayed response IDs are counted once. The visible reply still contains
 only the last answer, and the main session's usage and context snapshot stay unchanged.
 
+Read-only session forks reuse the parent's prepared thread and turn settings.
+On managed inference routes, they replay the last model request's exact
+instructions, tool schemas, and input prefix, followed by the side question.
+These request snapshots stay in process memory after parent settlement, within
+a shared 32 MiB least-recently-used budget. An evicted or oversized snapshot,
+or a WebSocket continuation that references prior server-side context, falls
+back to native thread reconstruction without guaranteed prompt-cache reuse.
+When declarations remain in the snapshot budget, native reconstruction retains
+the parent's exact tool schemas, including the code-mode catalog. Tool choice
+remains `none` and native hosted search stays disabled.
+The separately retained OpenClaw instruction text is limited to 256 KiB per
+thread and 256 threads per route. Thread retirement or client shutdown removes
+the retained context. None of these snapshots extends the parent's authority:
+each fork uses the current side request's authorization and cancellation lifetime.
+Native tools are denied through the required PreToolUse relay. Hosted web search
+is disabled in Codex, and replayed requests use `tool_choice: "none"` so retaining
+the parent's exact tool schemas cannot enable hosted execution.
+
 For native connected apps, Codex also owns the final per-thread app and tool
 policy. OpenClaw caches a runtime-and-workspace-scoped `plugin/installed`
 snapshot, reads exact configured plugin details, provisionally admits only

@@ -220,7 +220,38 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSinglePayloadText(payloads, "Current room event reply.");
   });
 
-  it.each(["Second answer.", "NO_REPLY"])(
+  it.each([
+    { stopReason: "stop", thinking: false, keepAnswer: false },
+    { stopReason: "length", thinking: true, keepAnswer: false },
+    { stopReason: "stop", thinking: false, keepAnswer: true },
+  ] as const)(
+    "does not use pre-tool text for an empty $stopReason answer (thinking=$thinking, kept=$keepAnswer)",
+    ({ stopReason, thinking, keepAnswer }) => {
+      const lastAssistant = makeAgentAssistantMessage({
+        api: "ollama",
+        provider: "ollama",
+        stopReason,
+        content: thinking ? [{ type: "thinking", thinking: "Still considering the result." }] : [],
+      });
+      const payloads = buildPayloads({
+        assistantTexts: ["I will read the file.", "Checking the next file."],
+        lastAssistant,
+        keptAnswer: keepAnswer
+          ? {
+              assistant: makeAgentAssistantMessage({
+                content: [{ type: "text", text: "Completed answer." }],
+              }),
+              messageIndex: 1,
+            }
+          : undefined,
+      });
+      expect(payloads.map((payload) => payload.text)).toEqual(
+        keepAnswer ? ["Completed answer."] : [],
+      );
+    },
+  );
+
+  it.each(["Second answer.", "NO_REPLY", ""])(
     "buildEmbeddedRunPayloads selects each sealed and open segment's answer with middle answer %s",
     (middleAnswer) => {
       const answers = ["First answer.", middleAnswer, "Third answer."];
@@ -240,14 +271,14 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
         assistantMessageIndex: 6,
       });
       expect(payloads.map((payload) => payload.text)).toEqual(
-        answers.filter((text) => text !== "NO_REPLY"),
+        answers.filter((text) => text && text !== "NO_REPLY"),
       );
       expect(
         payloads.map((payload) => getReplyPayloadMetadata(payload)?.assistantMessageIndex),
-      ).toEqual(middleAnswer === "NO_REPLY" ? [2, 6] : [2, 4, 6]);
+      ).toEqual(middleAnswer === "Second answer." ? [2, 4, 6] : [2, 6]);
       expect(
         payloads.map((payload) => getReplyPayloadMetadata(payload)?.precedingInputAnswer),
-      ).toEqual(middleAnswer === "NO_REPLY" ? [true, undefined] : [true, true, undefined]);
+      ).toEqual(middleAnswer === "Second answer." ? [true, true, undefined] : [true, undefined]);
     },
   );
 
@@ -287,27 +318,62 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("keeps progress delivery from publishing the private terminal assistant text", () => {
+  it.each([true, false])(
+    "suppresses automatic final text only after confirmed source completion (delivered=%s)",
+    (delivered) => {
+      const payloads = buildPayloads({
+        assistantTexts: ["A second answer must not follow a final reaction or send."],
+        didDeliverSourceReplyViaMessageTool: delivered,
+        sourceReplyDeliveryMode: "automatic",
+      });
+
+      expect(payloads.map((payload) => payload.text)).toEqual(
+        delivered ? [] : ["A second answer must not follow a final reaction or send."],
+      );
+    },
+  );
+
+  it("does not append a presentation failure after confirmed automatic source completion", () => {
     const payloads = buildPayloads({
-      assistantTexts: ["ordinary final should stay private"],
-      didSendViaMessagingTool: true,
+      lastAssistant: makeAgentAssistantMessage({
+        stopReason: "error",
+        errorMessage: "presentation failed after delivery",
+        content: [],
+      }),
+      lastToolError: { toolName: "message", error: "presentation failed after delivery" },
       didDeliverSourceReplyViaMessageTool: true,
-      messagingToolSentTargets: [
-        {
-          tool: "message",
-          provider: "discord",
-          to: "channel:C1",
-          sourceReplyFinal: false,
-        },
-      ],
-      sourceReplyDeliveryMode: "message_tool_only",
-      sessionKey: "agent:main",
-      agentId: "main",
-      runId: "run-1",
+      sourceReplyDeliveryMode: "automatic",
     });
 
     expect(payloads).toEqual([]);
   });
+
+  it.each(["automatic", "message_tool_only"] as const)(
+    "preserves delivery-mode behavior after explicit source progress (%s)",
+    (sourceReplyDeliveryMode) => {
+      const payloads = buildPayloads({
+        assistantTexts: ["Completed answer after progress."],
+        didSendViaMessagingTool: true,
+        didDeliverSourceReplyViaMessageTool: true,
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "discord",
+            to: "channel:C1",
+            sourceReplyFinal: false,
+          },
+        ],
+        sourceReplyDeliveryMode,
+        sessionKey: "agent:main",
+        agentId: "main",
+        runId: "run-1",
+      });
+
+      expect(payloads.map((payload) => payload.text)).toEqual(
+        sourceReplyDeliveryMode === "automatic" ? ["Completed answer after progress."] : [],
+      );
+    },
+  );
 
   it("preserves rich-only internal message-tool source replies", () => {
     const presentation = {

@@ -25,10 +25,15 @@ openclaw gateway restart
   Runtime startup, helper dispatch, and shutdown await the required publications.
   Pending outbound calls reserve admission while persistence waits, preserving the
   same incoming-call policy before and after durable publication.
+  The declared `openclaw.install.minHostVersion` remains `>=2026.9.4`: startup
+  selects `openKeyedStore` only when `openKeyedStoreV2` is absent, and those older
+  hosts use atomic `deleteIf` when comparisons are unavailable. Selection happens
+  before store operations; worker failures never retry through the legacy API.
+  Remove this compatibility path when the declared host floor requires V2.
 - `src/helper-rpc.ts` owns bounded loopback IPC with mutual authentication,
   connection-epoch message MACs, replay sequencing, and typed native
   postcondition projection.
-- `src/helper-supervisor.ts` owns generation-bound LLDB injection and joins
+- `src/helper-supervisor.ts` owns serialized LLDB injection and joins
   in-flight work on stop.
 - `src/audio-pump.ts` owns bounded native capture, SoX playback, and child
   teardown.
@@ -74,7 +79,7 @@ tools, or modify TCC during automated validation.
 The privileged driver script pins BlackHole v0.7.1 and its SHA-256, builds the
 renamed `OpenClawBridge.driver` in a root-only temporary directory, and accepts
 no caller-built artifact, digest, or compiler path. Before compilation it
-requires the canonical Xcode bundle and its selected build tools to be
+requires the Xcode bundle at its actual filesystem path and its selected build tools to be
 Apple-signed, root-owned, and not group/world writable, then performs a
 transactional swap. Generated BlackHole/driver artifacts are GPL-3.0 and are
 excluded from the package. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

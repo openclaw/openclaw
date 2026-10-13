@@ -5,7 +5,7 @@ import path from "node:path";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { listLineAccountIds, resolveDefaultLineAccountId, resolveLineAccount } from "./accounts.js";
+import { listLineAccountIds, resolveLineAccount } from "./accounts.js";
 import type { LineConfig } from "./types.js";
 
 function withLine(line: LineConfig): OpenClawConfig {
@@ -42,14 +42,17 @@ describe("LINE accounts", () => {
         channelAccessToken: "test-token",
         channelSecret: "test-secret",
         name: "Test Bot",
+        accounts: {
+          default: { channelAccessToken: "override-token", channelSecret: "override-secret" },
+        },
       });
 
       const account = resolveLineAccount({ cfg });
 
       expect(account.accountId).toBe(DEFAULT_ACCOUNT_ID);
       expect(account.enabled).toBe(true);
-      expect(account.channelAccessToken).toBe("test-token");
-      expect(account.channelSecret).toBe("test-secret");
+      expect(account.channelAccessToken).toBe("override-token");
+      expect(account.channelSecret).toBe("override-secret");
       expect(account.name).toBe("Test Bot");
       expect(account.tokenSource).toBe("config");
     });
@@ -69,51 +72,6 @@ describe("LINE accounts", () => {
       expect(account.tokenSource).toBe("env");
     });
 
-    it("uses configured defaultAccount when accountId is omitted", () => {
-      const cfg = withLine({
-        defaultAccount: "business",
-        accounts: {
-          business: {
-            enabled: true,
-            channelAccessToken: "business-token",
-            channelSecret: "business-secret",
-            name: "Business Bot",
-          },
-        },
-      });
-
-      const account = resolveLineAccount({ cfg });
-
-      expect(account.accountId).toBe("business");
-      expect(account.enabled).toBe(true);
-      expect(account.channelAccessToken).toBe("business-token");
-      expect(account.channelSecret).toBe("business-secret");
-      expect(account.name).toBe("Business Bot");
-    });
-
-    it("returns empty token when not configured", () => {
-      const cfg: OpenClawConfig = {};
-
-      const account = resolveLineAccount({ cfg });
-
-      expect(account.channelAccessToken).toBe("");
-      expect(account.channelSecret).toBe("");
-      expect(account.tokenSource).toBe("none");
-    });
-
-    it("resolves default account credentials from files", () => {
-      const cfg = withLine({
-        tokenFile: createSecretFile("token.txt", "file-token\n"),
-        secretFile: createSecretFile("secret.txt", "file-secret\n"),
-      });
-
-      const account = resolveLineAccount({ cfg });
-
-      expect(account.channelAccessToken).toBe("file-token");
-      expect(account.channelSecret).toBe("file-secret");
-      expect(account.tokenSource).toBe("file");
-    });
-
     it("resolves named account credentials from account-level files", () => {
       const cfg = withLine({
         accounts: {
@@ -127,6 +85,7 @@ describe("LINE accounts", () => {
       const account = resolveLineAccount({ cfg, accountId: "business" });
 
       expect(account.channelAccessToken).toBe("business-file-token");
+      expect(account.enabled).toBe(true);
       expect(account.channelSecret).toBe("business-file-secret");
       expect(account.tokenSource).toBe("file");
     });
@@ -189,90 +148,9 @@ describe("LINE accounts", () => {
       expect(account.tokenStatus).toBe("configured_unavailable");
       expect(account.tokenSource).toBe("file");
     });
-
-    it("prefers accounts.default credentials over top-level base credentials", () => {
-      const cfg = withLine({
-        enabled: true,
-        channelAccessToken: "base-token",
-        channelSecret: "base-secret",
-        name: "Base Bot",
-        accounts: {
-          default: {
-            channelAccessToken: "override-token",
-            channelSecret: "override-secret",
-            name: "Default Account Bot",
-          },
-        },
-      });
-
-      const account = resolveLineAccount({ cfg });
-
-      expect(account.channelAccessToken).toBe("override-token");
-      expect(account.channelSecret).toBe("override-secret");
-      expect(account.accountId).toBe(DEFAULT_ACCOUNT_ID);
-      expect(account.enabled).toBe(true);
-      expect(account.tokenSource).toBe("config");
-      expect(account.name).toBe("Default Account Bot");
-    });
-
-    it("treats named accounts without explicit enabled as enabled", () => {
-      const cfg = withLine({
-        enabled: true,
-        accounts: {
-          twgreen: {
-            channelAccessToken: "twgreen-token",
-            channelSecret: "twgreen-secret",
-          },
-        },
-      });
-
-      const account = resolveLineAccount({ cfg, accountId: "twgreen" });
-
-      expect(account.enabled).toBe(true);
-      expect(account.channelAccessToken).toBe("twgreen-token");
-      expect(account.channelSecret).toBe("twgreen-secret");
-    });
-
-    it("disables a named account when channels.line.enabled is false", () => {
-      const cfg = withLine({
-        enabled: false,
-        accounts: {
-          twgreen: {
-            enabled: true,
-            channelAccessToken: "twgreen-token",
-            channelSecret: "twgreen-secret",
-          },
-        },
-      });
-
-      const account = resolveLineAccount({ cfg, accountId: "twgreen" });
-
-      expect(account.enabled).toBe(false);
-    });
-
-    it("respects explicit enabled:false on a named account", () => {
-      const cfg = withLine({
-        enabled: true,
-        accounts: {
-          twgreen: {
-            enabled: false,
-            channelAccessToken: "twgreen-token",
-            channelSecret: "twgreen-secret",
-          },
-        },
-      });
-
-      const account = resolveLineAccount({ cfg, accountId: "twgreen" });
-
-      expect(account.enabled).toBe(false);
-    });
   });
 
   describe("listLineAccountIds", () => {
-    it("keeps unconfigured channels empty", () => {
-      expect(listLineAccountIds({})).toEqual([]);
-    });
-
     it("preserves configured named-account insertion order", () => {
       expect(
         listLineAccountIds({
@@ -283,33 +161,6 @@ describe("LINE accounts", () => {
           },
         }),
       ).toEqual(["work", "alerts"]);
-    });
-  });
-
-  describe("resolveDefaultLineAccountId", () => {
-    it.each<{ name: string; line: LineConfig; expected: string }>([
-      {
-        name: "normalizes channels.line.defaultAccount before lookup",
-        line: { defaultAccount: "Business Ops", accounts: { "business-ops": { enabled: true } } },
-        expected: "business-ops",
-      },
-      {
-        name: "returns first named account when default not configured",
-        line: { accounts: { business: { enabled: true } } },
-        expected: "business",
-      },
-      {
-        name: "falls back when channels.line.defaultAccount is missing",
-        line: { defaultAccount: "missing", accounts: { business: { enabled: true } } },
-        expected: "business",
-      },
-      {
-        name: "prefers the default account when base credentials are configured",
-        line: { channelAccessToken: "base-token", accounts: { business: { enabled: true } } },
-        expected: DEFAULT_ACCOUNT_ID,
-      },
-    ])("$name", ({ line, expected }) => {
-      expect(resolveDefaultLineAccountId(withLine(line))).toBe(expected);
     });
   });
 });

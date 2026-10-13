@@ -4,6 +4,8 @@ import type { MessagePort } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runQueuedStoreWrite } from "../shared/store-writer-queue.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission-state.js";
 import { closeWorkerTaskPoolResources } from "./worker-task-pool-registry.js";
 import { createOwnedWorkerTaskPool } from "./worker-task-pool.js";
 import {
@@ -135,6 +137,27 @@ it("keeps the remaining worker's original idle deadline while the first worker s
     await cancellation;
     vi.useRealTimers();
   }
+});
+
+it("guards process-wide reader cleanup before dispatching to registered pools", async () => {
+  createPool();
+  await runQueuedStoreWrite({
+    queues: SQLITE_SESSION_WRITER_QUEUES,
+    storePath: "synthetic-reader-store",
+    label: "reader cleanup guard",
+    fn: async () => {
+      expect(() => closeWorkerTaskPoolResources("synthetic-reader-store")).toThrow(
+        "while holding a store writer",
+      );
+    },
+  });
+  await expect(closeWorkerTaskPoolResources("synthetic-reader-store")).resolves.toBeUndefined();
+  await runQueuedStoreWrite({
+    queues: new Map(),
+    storePath: "synthetic-reader-store",
+    label: "logical lifecycle owner",
+    fn: () => closeWorkerTaskPoolResources("synthetic-reader-store"),
+  });
 });
 
 it("retires only idle slots on critical pressure, after result and resource custody settle", async () => {

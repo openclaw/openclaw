@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionEntryTargetPatchScope } from "../../config/sessions/session-accessor.types.js";
-import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import {
+  readSessionEntryInWorker,
+  readSessionEntryReadOnlyInWorker,
+} from "../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
@@ -18,7 +22,8 @@ import {
   clearPendingFinalDeliveryAfterSuccess,
   suppressPendingFinalDelivery,
 } from "./dispatch-from-config.pending-final.js";
-import { retireTerminalRestartRecoverySourceClaim } from "./restart-recovery-claim.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
+import { retireTerminalRestartRecoverySourceClaim } from "./restart-recovery-source.js";
 
 // Fixture writes must not schedule retention work into the cleanup request census.
 // mock-isolation: Fixture seed writes must not schedule retention requests into this census.
@@ -73,19 +78,40 @@ describe("pending final delivery restart proof", () => {
     return payload;
   }
 
-  it("clears hook provenance after its exact intent succeeds without changing user activity", async () => {
-    await writePendingFinal("handled-reply", "delivered", 1);
-    const identity = getReplyPayloadMetadata(pendingFinalPayload())?.pendingFinalDeliveryCompletion;
+  it("settles hook delivery and clears its provenance without changing user activity", async () => {
+    await writePendingFinal("handled-reply", "prepared", 1);
+    const payload = setReplyPayloadMetadata(pendingFinalPayload(), {
+      pendingFinalDeliveryCleanup: { preserveActivity: true },
+    });
+    const entered = createDeferred();
+    const delivered = createDeferred();
+    const dispatcher = createReplyDispatcher({
+      beforeDeliver: (reply) => ({ ...reply, replyToId: "message-1" }),
+      async deliver() {
+        entered.resolve();
+        await delivered.promise;
+      },
+    });
 
     const sql = observeHostDataSql();
     try {
-      await clearPendingFinalDeliveryAfterSuccess(identity, { preserveActivity: true });
+      expect(dispatcher.sendFinalReply(payload)).toBe(true);
+      dispatcher.markComplete();
+      await entered.promise;
+      const sending = await readSessionEntryReadOnlyInWorker({ sessionKey, storePath });
+      expect(sending?.pendingFinalDelivery?.deliveries).toEqual([
+        { id: "delivery-1", state: "queued" },
+      ]);
+      delivered.resolve();
+      await dispatcher.waitForIdle();
       expect(
         sql.queries.filter((query) =>
           /session_nodes|session_entry_snapshots|\b(?:BEGIN|COMMIT|ROLLBACK)\b/i.test(query),
         ),
       ).toEqual([]);
     } finally {
+      delivered.resolve();
+      await dispatcher.waitForIdle();
       sql.restore();
     }
 

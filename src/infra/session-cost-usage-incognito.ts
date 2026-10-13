@@ -239,6 +239,7 @@ export function createIncognitoUsageCostAdapter(
   };
   const startedAt = Date.now();
   const lockJson = JSON.stringify({ pid: process.pid, startedAt, ownerNonce: randomUUID() });
+  const usageScope = target ? "usage" : "store";
   return {
     owns: (agentId: string, storePath: string) =>
       agentId === marker.agentId && storePath === marker.storePath,
@@ -246,51 +247,39 @@ export function createIncognitoUsageCostAdapter(
     assertCurrent: compute.assertCurrent,
     lock: {
       async acquire() {
-        const previousRaw = await compute.execute(
-          target
-            ? {
-                type: "session.compute.usage.refreshLock",
-                input: { ...target, request: {} },
-              }
-            : { type: "session.compute.store.refreshLock", input: { request: {} } },
-        );
+        const previousRaw = await compute.execute({
+          type: `session.compute.${usageScope}.refreshLock`,
+          input: { ...target, request: {} },
+        });
         const request = {
           previousRaw,
           previousOwnerIsRunning: previousRaw !== null,
           lockJson,
           startedAt,
         };
-        return compute.execute(
-          target
-            ? {
-                type: "session.compute.usage.acquireLock",
-                input: { ...target, request },
-              }
-            : { type: "session.compute.store.acquireLock", input: { request } },
-        );
+        return compute.execute({
+          type: `session.compute.${usageScope}.acquireLock`,
+          input: { ...target, request },
+        });
       },
       writeRollup(
         request: IncognitoComputeOperations["session.compute.usage.writeRollup"]["input"]["request"],
         signal?: AbortSignal,
       ) {
         return compute.execute(
-          target
-            ? {
-                type: "session.compute.usage.writeRollup",
-                input: { ...target, request },
-              }
-            : { type: "session.compute.store.writeRollup", input: { request } },
+          {
+            type: `session.compute.${usageScope}.writeRollup`,
+            input: { ...target, request },
+          },
           signal,
         );
       },
       pruneRows(request: readonly SessionCostUsageRollupSnapshot[], signal?: AbortSignal) {
         return compute.execute(
-          target
-            ? {
-                type: "session.compute.usage.prune",
-                input: { ...target, request },
-              }
-            : { type: "session.compute.store.prune", input: { request } },
+          {
+            type: `session.compute.${usageScope}.prune`,
+            input: { ...target, request },
+          },
           signal,
         );
       },
@@ -324,28 +313,18 @@ export function createIncognitoUsageCostAdapter(
           );
         case "memory-cache":
           return compute.execute(
-            target
-              ? {
-                  type: "session.compute.usage.cache",
-                  input: {
-                    ...target,
-                    request: { filePaths: request.input.filePaths ?? filePaths },
-                  },
-                }
-              : {
-                  type: "session.compute.store.cache",
-                  input: { request: { filePaths: request.input.filePaths ?? filePaths } },
-                },
+            {
+              type: `session.compute.${usageScope}.cache`,
+              input: { ...target, request: { filePaths: request.input.filePaths ?? filePaths } },
+            },
             signal,
           );
         case "memory-cache-body":
           return compute.execute(
-            target
-              ? {
-                  type: "session.compute.usage.cacheBody",
-                  input: { ...target, request: request.input },
-                }
-              : { type: "session.compute.store.cacheBody", input: { request: request.input } },
+            {
+              type: `session.compute.${usageScope}.cacheBody`,
+              input: { ...target, request: request.input },
+            },
             signal,
           );
         case "memory-transcript": {

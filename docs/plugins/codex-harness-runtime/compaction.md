@@ -17,7 +17,7 @@ transcript mirror. When `agents.defaults.compaction.maxActiveTranscriptBytes`
 is set to a positive value, OpenClaw checks that mirror before ordinary and
 heartbeat turns. When the byte guard trips, OpenClaw attempts semantic
 compaction through its selected host context engine before admitting the turn.
-This host compaction does not itself replace or rewrite Codex's canonical
+This host compaction does not itself replace or rewrite Codex's
 native thread.
 
 If the context engine declines host compaction or leaves history oversized,
@@ -78,8 +78,8 @@ oversized summaries or older context can be truncated. This handoff does not
 change native Codex compaction ownership.
 
 When a context engine requests Codex thread-bootstrap projection, OpenClaw
-projects tool-call names and ids, input shapes, and redacted tool-result
-content into the fresh Codex thread. It does not copy raw tool-call argument
+projects tool-call names and ids, input shapes, and tool-result content
+without secret masking into the fresh Codex thread. It does not copy raw tool-call argument
 values into that projection.
 
 The mirror includes the user prompt, final assistant text, and lightweight
@@ -93,6 +93,6 @@ entries Codex kept after compaction.
 Repeated completion notifications for the same compaction item count once and
 do not repeat completion hooks or active-plan restoration.
 
-Because Codex owns the canonical native thread, `tool_result_persist` does
+Because Codex owns the native thread, `tool_result_persist` does
 not rewrite Codex-native tool result records. It only applies when OpenClaw
 writes an OpenClaw-owned session transcript tool result.

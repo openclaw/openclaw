@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { getSqliteDatabaseAdmissionIdentityForPath } from "../infra/sqlite-database-admission.js";
 import {
   normalizeDatabasePath,
   readDatabasePathIdentitySync,
+  resolveDatabasePathKey,
   type DatabaseFileIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -22,14 +24,23 @@ const identities = resolveGlobalSingleton(
         incarnation: string;
         filename: string;
         canonicalPath: string;
+        ownerDatabasePath?: string;
       }
     >(),
 );
 
 /** Prepare physical and connection identity once at open; cached aliases are not resolved again. */
-export function registerOpenClawAgentDatabaseIdentity(db: DatabaseSync): void {
+export function registerOpenClawAgentDatabaseIdentity(
+  db: DatabaseSync,
+  ownerDatabasePath?: string,
+): void {
   const filename = normalizeDatabasePath(db.location() ?? "");
-  const file = filename ? readDatabasePathIdentitySync(filename) : undefined;
+  const admitted = filename ? getSqliteDatabaseAdmissionIdentityForPath(filename) : undefined;
+  const file = admitted
+    ? { ...admitted, canonicalPath: resolveDatabasePathKey(filename) }
+    : filename
+      ? readDatabasePathIdentitySync(filename)
+      : undefined;
   if (file && !file.key.startsWith("file:")) {
     throw new Error("OpenClaw agent database disappeared before identity registration");
   }
@@ -40,6 +51,7 @@ export function registerOpenClawAgentDatabaseIdentity(db: DatabaseSync): void {
     incarnation: randomUUID(),
     filename,
     canonicalPath: file?.canonicalPath ?? filename,
+    ownerDatabasePath: ownerDatabasePath ? resolveDatabasePathKey(ownerDatabasePath) : undefined,
   });
 }
 

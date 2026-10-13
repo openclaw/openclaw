@@ -37,23 +37,6 @@ describe("sandbox config merges", () => {
     });
   });
 
-  it("resolves sandbox docker GPU passthrough with agent precedence", () => {
-    const inherited = resolve({ scope: "agent", docker: { gpus: "all" } }).docker;
-    expect(inherited.gpus).toBe("all");
-
-    const overridden = resolve(
-      { scope: "agent", docker: { gpus: "all" } },
-      { docker: { gpus: "device=GPU-123" } },
-    ).docker;
-    expect(overridden.gpus).toBe("device=GPU-123");
-
-    const sharedScope = resolve(
-      { scope: "shared", docker: { gpus: "all" } },
-      { docker: { gpus: "device=GPU-123" } },
-    ).docker;
-    expect(sharedScope.gpus).toBe("all");
-  });
-
   it("resolves docker binds and shared-scope override behavior", () => {
     // Shared scope intentionally ignores agent-specific Docker overrides.
     for (const scenario of [

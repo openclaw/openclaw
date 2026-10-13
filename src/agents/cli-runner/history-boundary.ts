@@ -7,13 +7,15 @@ import {
   type CliHistoryWriter,
 } from "../../config/sessions/cli-history-boundary.js";
 import {
-  loadSessionEntryReadOnly,
   patchSessionEntryCore,
-  readSessionTranscriptWatermark,
   resolveSessionTranscriptDatabasePath,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
+import {
+  captureIncognitoSessionHistoryBinding,
+  withIncognitoSessionActor,
+} from "../../config/sessions/session-incognito-binding.js";
 import {
   sessionEntryCommitGuardOptions,
   composeSessionSourceAssertion,
@@ -81,28 +83,48 @@ async function prepareCliHistoryBoundaryOnce(
   const capturedAdmission = admission && structuredClone(admission);
   const assertRunCurrent = createCliRunCurrentAssertion(params);
   const assertOwned = captureOwnedTranscriptWriteAssertion(requested);
+  const incognito = captureIncognitoSessionHistoryBinding(requested);
   let assertPhysicalSource = () => {};
-  const plan = await withSessionTranscriptReadSource(
-    requested,
-    () => planCliHistoryBoundary(params, identity, requested, capturedAdmission, assertRunCurrent),
-    ({ scope, expectedIdentity, assertCurrent: assertReaderCurrent }) => {
-      const target = { ...requested, storePath: scope.storePath };
-      assertPhysicalSource = () => {
-        if (expectedIdentity) {
-          assertExistingDatabaseIdentity(
-            target.storePath,
-            expectedIdentity.key,
-            expectedIdentity.birthtime,
+  const plan = incognito
+    ? await withIncognitoSessionActor(
+        incognito.actor,
+        () => {
+          assertPhysicalSource = incognito.authority.assertCurrent;
+          return planCliHistoryBoundary(
+            params,
+            identity,
+            { ...requested, storePath: incognito.actor.path },
+            capturedAdmission,
+            () => {
+              assertRunCurrent();
+              incognito.authority.assertCurrent();
+            },
           );
-        }
-      };
-      return planCliHistoryBoundary(params, identity, target, capturedAdmission, () => {
-        assertReaderCurrent();
-        assertRunCurrent();
-      });
-    },
-    params.abortSignal,
-  );
+        },
+        params.abortSignal,
+      )
+    : await withSessionTranscriptReadSource(
+        requested,
+        () =>
+          planCliHistoryBoundary(params, identity, requested, capturedAdmission, assertRunCurrent),
+        ({ scope, expectedIdentity, assertCurrent: assertReaderCurrent }) => {
+          const target = { ...requested, storePath: scope.storePath };
+          assertPhysicalSource = () => {
+            if (expectedIdentity) {
+              assertExistingDatabaseIdentity(
+                target.storePath,
+                expectedIdentity.key,
+                expectedIdentity.birthtime,
+              );
+            }
+          };
+          return planCliHistoryBoundary(params, identity, target, capturedAdmission, () => {
+            assertReaderCurrent();
+            assertRunCurrent();
+          });
+        },
+        params.abortSignal,
+      );
   if (!plan) {
     return undefined;
   }
@@ -181,14 +203,25 @@ async function prepareCliHistoryBoundaryOnce(
     authFingerprint: boundary.authFingerprint,
     lifecycleRevision: snapshot.lifecycleRevision,
     assertCurrent: assertWriterCurrent,
-    assertReadable: () => {
+    assertReadable: async () => {
       assertWriterCurrent();
-      // Execution requires synchronous authority immediately before its effect.
-      // SDK sync writers bypass the FIFO; the connection-local witness misses
-      // foreign commits. Retain this fence until the next SDK major retires them.
-      const current: InternalSessionEntry | undefined = loadSessionEntryReadOnly(target);
-      const proof = current?.cliHistoryBoundary;
-      const tip = readSessionTranscriptWatermark(target);
+      assertPhysicalSource();
+      const authority = incognito
+        ? undefined
+        : (
+            await readSessionTranscriptAnchorsAsync(
+              target,
+              { entryIds: [], contextAuthority: true },
+              params.abortSignal,
+            )
+          ).contextAuthority;
+      assertWriterCurrent();
+      assertPhysicalSource();
+      const stored = authority?.entry;
+      const current = incognito ? incognito.actor.sessions.readSteering(target.sessionKey) : stored;
+      const history = incognito?.actor.sessions.readCliHistory(target.sessionKey);
+      const proof = incognito ? history?.boundary : stored?.cliHistoryBoundary;
+      const tip = incognito ? history?.watermark : authority?.watermark;
       if (
         !current ||
         current.sessionId !== target.sessionId ||
@@ -198,6 +231,7 @@ async function prepareCliHistoryBoundaryOnce(
         proof.sessionId !== target.sessionId ||
         proof.writerRunId !== writerRunId ||
         proof.authFingerprint !== boundary.authFingerprint ||
+        !tip ||
         proof.generation !== tip.generation ||
         proof.maxSeq !== tip.maxSeq
       ) {

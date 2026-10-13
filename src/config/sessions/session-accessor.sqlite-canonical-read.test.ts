@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
@@ -14,6 +14,7 @@ import {
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   assignSessionOwner,
   listSessionEntriesReadOnly,
@@ -28,6 +29,7 @@ import { recordSessionParticipant } from "./session-accessor.sqlite-participants
 import { resolveSqliteTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -36,8 +38,11 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     closeOpenClawAgentDatabasesForTest();
     await closeStateDatabaseForTest();
     cleanup();
+    clearRuntimeConfigSnapshot();
   }),
 );
+
+beforeEach(() => setRuntimeConfigSnapshot({}));
 
 describe("canonical SQLite metadata reads", () => {
   it("omits saved prompts from metadata reads and transcript batches", async () => {
@@ -128,6 +133,7 @@ describe("canonical SQLite metadata reads", () => {
     }
     loadSessionEntryReadOnly(scope);
     const database = openOpenClawAgentDatabase(scope);
+    markCanonicalSessionValidationPending(database, [sibling]);
     database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
       JSON.stringify({
         sessionId: sibling,
@@ -233,6 +239,7 @@ describe("current session ID entry reads", () => {
 
 it("preserves delivery JSON semantics, retained windows, and invalid-row failures", async () => {
   await withOpenClawTestState({ label: "narrow-delivery" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const scope = { agentId: "main", env: state.env };
     const delivery = normalizeSessionDeliveryState({
       context: {

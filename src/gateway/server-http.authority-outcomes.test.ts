@@ -53,6 +53,7 @@ beforeAll(async () => {
           resolvedAuth: { mode: "none", allowTailscale: false },
           getRuntimeConfig: () => ({}),
           getGatewayRequestContext: () => context,
+          httpRequestLifetime: context,
           handleHooksRequest: (req, res) =>
             req.url === "/authority/core" ? route(req, res) : Promise.resolve(false),
           handlePluginRequest: createGatewayPluginRequestHandler({ registry, log }),

@@ -45,7 +45,9 @@ Separately, the **`node:sqlite` TEXT decoder** in Node 22.23.x, 24.15.0, 25.9.0,
 
 ## V8 compiler settings
 
-On Node 24 and 26, `process.exit()` can hang forever after a command has printed its output: Node joins V8's background threads while a Maglev or concurrent Sparkplug compile job waits for a garbage collection the exiting main thread never runs ([nodejs/node#64274](https://github.com/nodejs/node/issues/64274)). OpenClaw's CLI, Gateway, hook relay, and macOS node worker therefore start with Maglev and concurrent Sparkplug turned off, the tiering Node 22 used; TurboFan still optimizes hot code. Passing `--maglev` or `--concurrent-sparkplug` to `node` keeps that compiler enabled.
+OpenClaw keeps Node's default V8 compiler settings, including Maglev and concurrent Sparkplug. Its executable entrypoints close their owned resources, await accepted work, and record `process.exitCode` before returning. They do not force normal termination with `process.exit()`.
+
+On affected Node 24 and 26 releases, forced exit can join a compiler worker that is waiting for main-thread garbage collection, deadlocking after output has already appeared ([nodejs/node#64274](https://github.com/nodejs/node/issues/64274)). Natural shutdown lets Node tear down the isolate before joining the platform workers. The runtime boundary linter rejects `process.exit()` and `process.reallyExit()` so new entrypoints retain this lifecycle. This does not fix unrelated native shutdown stalls, including macOS system-certificate enumeration; system certificate trust remains enabled.
 
 ## Platform consequences
 

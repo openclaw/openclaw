@@ -512,7 +512,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
   },
   probedMigration(
     "runtime.config-tranche",
-    "Presentation-only preferences and duplicate tuning options moved to canonical defaults.",
+    "Presentation-only preferences and duplicate tuning options moved to current defaults.",
     migrateConfigTranche,
   ),
   {

@@ -33,6 +33,7 @@ import { createSessionArchiveState } from "../lib/sessions/session-archive-state
 import type { SessionRequestClient } from "../lib/sessions/session-capability.ts";
 import { createSessionRowProvenance } from "../lib/sessions/session-row-provenance.ts";
 import { createSidebarContextLifecycle } from "./app-sidebar-context-lifecycle.ts";
+import { seedSidebarEveryonePreference } from "./app-sidebar-setup.ts";
 import {
   createApplicationContextProvider,
   hiddenScopeUpgradeCapability,
@@ -70,6 +71,8 @@ export type SidebarLifecycleState = HTMLElement & {
   sidebarEntries: readonly string[];
   sidebarAgentsMode: "chip" | "roster";
   navigationVisible: boolean;
+  navigationView: AppSidebarSessionNavigationElement["navigationView"];
+  navigationCollapsed: AppSidebarSessionNavigationElement["navigationCollapsed"];
   sidebarLiveActivity: boolean;
   onUpdateSidebarEntries?: (entries: string[]) => void;
   pinnedAgentIds: readonly string[];
@@ -261,6 +264,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   const groupsPut = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const groupsRename = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const groupsDelete = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
+  const groupsUpdate = vi.fn<SessionCapability["groupsUpdate"]>(async () => "completed");
   const create = vi.fn(() => Promise.resolve("agent:main:fork"));
   const patch = vi.fn((key: string, _patch: Parameters<SessionCapability["patch"]>[1]) =>
     Promise.resolve(successfulSessionPatch(key)),
@@ -335,6 +339,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     get revision() {
       return revision;
     },
+    captureBootRoster: () => null,
     get state() {
       return state;
     },
@@ -367,12 +372,12 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       notify();
     },
     groupsLoad: () => Promise.resolve(),
-    groupsGeneration: () => 0,
     groupsStatus: () => "ready",
     groupsInvalidate: () => undefined,
     groupsPut,
     groupsRename,
     groupsDelete,
+    groupsUpdate,
     create,
     patch,
     archiveVisibility: archiveState.visibility,
@@ -506,6 +511,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     groupsPut,
     groupsRename,
     groupsDelete,
+    groupsUpdate,
     create,
     patch,
     patchMany,
@@ -532,13 +538,11 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   };
 }
 
-export function createGateway(client: GatewayBrowserClient): ApplicationGateway {
-  return createGatewayHarness(client).gateway;
-}
+export const createGateway = (client: GatewayBrowserClient): ApplicationGateway =>
+  createGatewayHarness(client).gateway;
 
-export function createSessions(agentId: string, keys: string[]): SessionCapability {
-  return createSessionsHarness(agentId, keys).sessions;
-}
+export const createSessions = (agentId: string, keys: string[]): SessionCapability =>
+  createSessionsHarness(agentId, keys).sessions;
 
 export function createContext(
   gateway: ApplicationGateway,
@@ -610,7 +614,8 @@ export async function mountSidebarContext(
   const sidebar = document.createElement(
     "openclaw-app-sidebar",
   ) as unknown as SidebarLifecycleState;
-  sidebar.variant = variant;
+  seedSidebarEveryonePreference(context.gateway);
+  Object.assign(sidebar, { variant });
   if (activeRouteId) {
     sidebar.activeRouteId = activeRouteId;
   }
@@ -662,13 +667,7 @@ export const TWO_AGENTS = {
   agents: [{ id: "main", identity: { name: "Molty" } }, { id: "research" }],
 } as AgentsListResult;
 
-export const manyAgents = (count: number) =>
-  ({
-    defaultId: "agent-1",
-    mainKey: "main",
-    scope: "per-sender",
-    agents: Array.from({ length: count }, (_, index) => ({ id: `agent-${index + 1}` })),
-  }) as AgentsListResult;
+export { manyAgents } from "./app-sidebar-setup.ts";
 
 export const catalogPage = (
   sessions: Array<{ threadId: string; name: string; sessionKey?: string; color?: string }>,

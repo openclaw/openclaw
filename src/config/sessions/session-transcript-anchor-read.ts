@@ -10,6 +10,11 @@ import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import {
+  readSessionActorTranscriptAnchorsFromReplica,
+  readSessionActorTranscriptReplica,
+} from "./session-actor-replica.js";
+import { readSessionActorTranscriptAnchors } from "./session-actor-transcript-anchors.js";
 import { captureIncognitoSessionHistoryBinding } from "./session-incognito-binding.js";
 import {
   prepareIncognitoSessionHistoryRead,
@@ -26,8 +31,13 @@ import {
   withSessionTranscriptReadSource,
   type SessionTranscriptWorkerReadSource,
 } from "./session-transcript-read-source.js";
+import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
-import { getOwnedSessionTranscriptReader } from "./transcript-write-context.js";
+import {
+  getOwnedSessionTranscriptReader,
+  readOwnedSessionTranscriptEntry,
+  readOwnedSessionTranscriptState,
+} from "./transcript-write-context.js";
 
 type AnchorScope = SessionTranscriptReadScope & { sessionKey: string };
 
@@ -63,6 +73,31 @@ export async function readSessionTranscriptAnchorsAsync(
     authority.assertCurrent();
     return facts;
   }
+  signal?.throwIfAborted();
+  const hot = readOwnedSessionTranscriptState(scope);
+  if (scope.storePath) {
+    const target = {
+      agentId: scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey),
+      path: scope.storePath,
+      sessionId: scope.sessionId,
+    };
+    const facts =
+      (hot &&
+        readSessionActorTranscriptAnchors(
+          hot,
+          target,
+          selection,
+          readSessionActorTranscriptReplica(hot)?.tail,
+        )) ??
+      readSessionActorTranscriptAnchorsFromReplica(
+        { ...target, sessionKey: scope.sessionKey },
+        selection,
+      );
+    if (facts) {
+      consume(structuredClone(facts));
+      return structuredClone(facts);
+    }
+  }
   const selected =
     selection.afterSeq === undefined &&
     selection.includeMessagesForRunId === undefined &&
@@ -95,18 +130,23 @@ export async function readSessionTranscriptAnchorsAsync(
   };
   const request = {
     entryIds: [...selection.entryIds],
+    activePathEntryId: selection.activePathEntryId,
     afterSeq: selection.afterSeq,
     includeMessagesForRunId: selection.includeMessagesForRunId,
     includeSession: selection.includeSession,
     includeHeader: selection.includeHeader,
     includeWatermark: selection.includeWatermark,
     includeMessagePresence: selection.includeMessagePresence,
+    includeMetadata: selection.includeMetadata,
     contextValidation: selection.contextValidation && structuredClone(selection.contextValidation),
     contextAuthority: selection.contextAuthority && structuredClone(selection.contextAuthority),
     replayValidation: selection.replayValidation && { ...selection.replayValidation },
   };
   const empty: SessionTranscriptAnchorFacts = {
     anchors: [],
+    ...(request.includeMetadata
+      ? { metadata: { present: false, observedAt: null, updatedAt: null } }
+      : {}),
     ...(request.replayValidation?.allowInitial ? { replayValidated: "initial" } : {}),
   };
   signal?.throwIfAborted();
@@ -153,6 +193,8 @@ export async function readSessionTranscriptAnchorsAsync(
       );
     },
     signal,
+    // Callback acceptance retains writer admission through reader failure and cleanup.
+    onRead ? targetDiscoveryLane : undefined,
   );
 }
 
@@ -188,6 +230,7 @@ export async function readSessionTranscriptAnchorsFromSource(
         resolved: { ...resolved, sessionKey: resolved.sessionKey ?? source.scope.sessionKey },
         selection,
         expectedIdentity,
+        preparedEntry: onRead ? readOwnedSessionTranscriptEntry(source.scope) : undefined,
       },
       signal,
     );

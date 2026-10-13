@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFailed, vi } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/index.js";
 import {
@@ -25,6 +25,7 @@ import {
   WORKER_PERMISSION_PROMPT,
   WORKER_PERMISSION_REPLY,
   startMidturnProvider,
+  waitFor,
 } from "./cloud-worker-midturn-loss-fixture.js";
 import {
   closeWireServer,
@@ -82,10 +83,8 @@ describe("node worker launch wire", () => {
     "transfers and reconciles a gateway-push workspace through a device runner",
     { timeout: TEST_TIMEOUT_MS },
     async () => {
-      const root = tempDirs.make("openclaw-node-worker-launch-wire-");
-      const provider = await startMidturnProvider();
-      const published = await createPublishedWireWorkspace(root);
-      const gatewayOwner = createQaGatewayChild();
+      const testStartedAt = performance.now();
+      let provider: Awaited<ReturnType<typeof startMidturnProvider>> | undefined = undefined;
       let gateway: WireGateway | undefined;
       let operator: GatewayClient | undefined;
       let workerNode: PairedNodeWorkerHost | undefined;
@@ -100,7 +99,32 @@ describe("node worker launch wire", () => {
       let workerAuditBeforeRestart: string | undefined;
       let testFailure: { error: unknown } | undefined;
       let cleanupFailures: unknown[];
+      let phase = "provider startup";
+      onTestFailed(() => {
+        process.stderr.write(
+          redactSensitiveText(
+            JSON.stringify({
+              phase,
+              elapsedMs: Math.round(performance.now() - testStartedAt),
+              providerRequestCount: provider?.requestCount,
+              nodeCommands: workerNode?.commands.slice(-20),
+              nodeErrors: workerNode?.invokeErrors.map(String),
+              legacyNodeCommands: legacyWorkerNode?.commands.slice(-20),
+              legacyNodeErrors: legacyWorkerNode?.invokeErrors.map(String),
+            }),
+          ).slice(0, 5_000) + "\n",
+        );
+        if (gateway) {
+          process.stderr.write(redactSensitiveText(gateway.logs()).slice(-12_000) + "\n");
+        }
+      });
 
+      const root = tempDirs.make("openclaw-node-worker-launch-wire-");
+      provider = await startMidturnProvider();
+      phase = "workspace publication";
+      const published = await createPublishedWireWorkspace(root);
+      const gatewayOwner = createQaGatewayChild();
+      phase = "gateway startup";
       try {
         gateway = await startPairedNodeWorkerGateway({
           owner: gatewayOwner,
@@ -108,7 +132,9 @@ describe("node worker launch wire", () => {
           executionIdentity: true,
           useRepoCli: false,
         });
+        phase = "operator connection";
         operator = await connectWireClient({ gateway, role: "operator", identity: null });
+        phase = "node connection";
         workerNode = await createPairedNodeWorkerHost({
           gateway,
           operator,
@@ -150,6 +176,7 @@ describe("node worker launch wire", () => {
         });
         expect(workerNode.client).toBeTruthy();
 
+        phase = "baseline workspace creation";
         await operator.request("sessions.create", {
           key: SESSION_KEY,
           agentId: "qa",
@@ -182,6 +209,7 @@ describe("node worker launch wire", () => {
             ),
           );
         }
+        phase = "baseline dispatch";
         const dispatched = await gateway.call(
           "sessions.dispatch",
           { key: SESSION_KEY, deviceId: workerNode.identity.deviceId },
@@ -218,6 +246,7 @@ describe("node worker launch wire", () => {
         ).resolves.toBe("workspace inventory fixture\n");
         await fs.writeFile(path.join(remoteWorkspaceDir, "node-result.txt"), "device result\n");
 
+        phase = "baseline turn";
         const runId = `node-worker-launch-wire-${Date.now()}`;
         const started = await operator.request<{ runId?: string; status?: string }>("chat.send", {
           sessionKey: SESSION_KEY,
@@ -236,6 +265,7 @@ describe("node worker launch wire", () => {
             `node worker turn failed: ${JSON.stringify(completed)}\n${gateway.logs().slice(-12_000)}`,
           );
         }
+        phase = "baseline node invocations";
         await workerNode.waitForInvokes();
         expect(workerNode.invokeErrors).toEqual([]);
         expect(reconnected).toBe(true);
@@ -249,6 +279,7 @@ describe("node worker launch wire", () => {
           state: "completed",
         });
 
+        phase = "baseline audit";
         workerAuditBeforeRestart = await gateway.runCli([
           "audit",
           "--run",
@@ -274,9 +305,22 @@ describe("node worker launch wire", () => {
               wireMessageText(message).includes(BASELINE_REPLY),
           ),
         ).toHaveLength(1);
-        const described = (await gateway.call("sessions.describe", { key: SESSION_KEY })) as {
-          session?: { execCwd?: string; spawnedCwd?: string; placement?: Record<string, unknown> };
-        };
+        phase = "baseline workspace reconciliation";
+        const currentGateway = gateway;
+        const described = await waitFor("reconciled worker workspace", async () => {
+          const current = (await currentGateway.call("sessions.describe", {
+            key: SESSION_KEY,
+          })) as {
+            session?: {
+              execCwd?: string;
+              spawnedCwd?: string;
+              placement?: Record<string, unknown>;
+            };
+          };
+          return current.session?.placement?.workspaceBaseManifestRef !== baseManifestRef
+            ? current
+            : undefined;
+        });
         expect(described.session?.placement).toMatchObject({
           state: "active",
           remoteWorkspaceDir,
@@ -301,6 +345,7 @@ describe("node worker launch wire", () => {
             code: "ENOENT",
           });
         }
+        phase = "permission turn";
         const permissionRunId = `node-worker-permission-${Date.now()}`;
         await expect(
           operator.request<{ runId?: string; status?: string }>("chat.send", {
@@ -310,13 +355,31 @@ describe("node worker launch wire", () => {
             idempotencyKey: permissionRunId,
           }),
         ).resolves.toMatchObject({ runId: permissionRunId, status: "started" });
-        await expect(
-          operator.request<{ status?: string }>(
+        const permissionOperator = operator;
+        const permissionDeadline = Date.now() + PROOF_TIMEOUT_MS;
+        const permissionCompleted = await waitFor("permission worker turn completion", async () => {
+          const remainingMs = Math.max(0, permissionDeadline - Date.now());
+          const observation = await permissionOperator.request<{ status?: string }>(
             "agent.wait",
-            { runId: permissionRunId, timeoutMs: PROOF_TIMEOUT_MS },
-            { timeoutMs: PROOF_TIMEOUT_MS + 5_000 },
-          ),
-        ).resolves.toMatchObject({ status: "ok" });
+            { runId: permissionRunId, timeoutMs: remainingMs },
+            { timeoutMs: remainingMs + 5_000 },
+          );
+          // Queued turns return immediately while the prior worker finishes settlement.
+          return observation.status === "pending" ? undefined : observation;
+        });
+        expect(
+          permissionCompleted,
+          redactSensitiveText(
+            JSON.stringify({
+              completed: permissionCompleted,
+              providerRequestCount: provider.requestCount,
+              outsideWriteOutput: provider.outsideWriteOutput,
+              execOutput: provider.execOutput,
+              nodeCommands: workerNode.commands.slice(-20),
+              invokeErrors: workerNode.invokeErrors.map(String),
+            }),
+          ).slice(0, 8_000),
+        ).toMatchObject({ status: "ok" });
         await workerNode.waitForInvokes();
         expect(workerNode.invokeErrors).toEqual([]);
 
@@ -345,9 +408,28 @@ describe("node worker launch wire", () => {
         );
         expect(permissionReplies).toHaveLength(1);
         expect(wireMessageText(permissionReplies?.[0])).toContain(provider.execOutput);
-        const permissionDescribed = (await gateway.call("sessions.describe", {
-          key: SESSION_KEY,
-        })) as { session?: { execCwd?: string; spawnedCwd?: string } };
+        // The reply is committed before its workspace result finishes settling.
+        phase = "permission workspace reconciliation";
+        const permissionGateway = gateway;
+        const permissionDescribed = await vi.waitFor(
+          async () => {
+            const current = (await permissionGateway.call("sessions.describe", {
+              key: SESSION_KEY,
+            })) as {
+              session?: {
+                execCwd?: string;
+                spawnedCwd?: string;
+                placement?: { workspaceBaseManifestRef?: string };
+              };
+            };
+            expect(current.session?.placement?.workspaceBaseManifestRef).toBeTruthy();
+            expect(current.session?.placement?.workspaceBaseManifestRef).not.toBe(
+              described.session?.placement?.workspaceBaseManifestRef,
+            );
+            return current;
+          },
+          { timeout: Math.max(1, permissionDeadline - Date.now()), interval: 100 },
+        );
         const permissionLocalDir =
           permissionDescribed.session?.execCwd ?? permissionDescribed.session?.spawnedCwd;
         expect(permissionLocalDir).toBeTruthy();
@@ -357,6 +439,7 @@ describe("node worker launch wire", () => {
 
         // Simulate the old capability declaration with the current supervisor over real wire.
         // This proves negotiation and same-identity reconnect, not an older binary upgrade.
+        phase = "legacy node connection";
         legacyWorkerNode = await createPairedNodeWorkerHost({
           gateway,
           operator,
@@ -370,6 +453,7 @@ describe("node worker launch wire", () => {
             }
           },
         });
+        phase = "legacy workspace dispatch";
         const legacySessionKey = `${SESSION_KEY}-legacy-node`;
         await operator.request("sessions.create", {
           key: legacySessionKey,
@@ -384,6 +468,7 @@ describe("node worker launch wire", () => {
           { key: legacySessionKey, deviceId: legacyWorkerNode.identity.deviceId },
           { timeoutMs: PROOF_TIMEOUT_MS },
         );
+        phase = "legacy unsupported turn";
         const unsupportedRunId = `node-worker-lifetime-unsupported-${Date.now()}`;
         await expect(
           operator.request("chat.send", {
@@ -411,6 +496,7 @@ describe("node worker launch wire", () => {
           gateway.call("sessions.describe", { key: legacySessionKey }),
         ).resolves.toMatchObject({ session: { placement: { state: "active" } } });
 
+        phase = "legacy reconnect and supported turn";
         await legacyWorkerNode.disconnect();
         await legacyWorkerNode.connect({ environmentSession: true });
         const legacyRunId = `node-worker-launch-wire-legacy-${Date.now()}`;
@@ -446,6 +532,7 @@ describe("node worker launch wire", () => {
 
         const loadSessions: string[] = [];
         for (let index = 0; index < FINALIZATION_LOAD_CONCURRENCY; index += 1) {
+          phase = `load workspace dispatch ${index + 1}/${FINALIZATION_LOAD_CONCURRENCY}`;
           const sessionKey = `${SESSION_KEY}-load-${index}`;
           await operator.request("sessions.create", {
             key: sessionKey,
@@ -491,6 +578,7 @@ describe("node worker launch wire", () => {
         const freshConnectionSamples: number[] = [];
         try {
           for (let wave = 0; wave < FINALIZATION_LOAD_WAVES; wave += 1) {
+            phase = `load wave ${wave + 1}/${FINALIZATION_LOAD_WAVES} admission`;
             const waveFinalizationStarted = new Promise<number>((resolve) => {
               resolveWaveFinalizationStarted = resolve;
             });
@@ -511,19 +599,26 @@ describe("node worker launch wire", () => {
               }),
             );
             const waveGateway = gateway;
+            const waveOperator = operator;
+            const waveDeadline = Date.now() + PROOF_TIMEOUT_MS;
             const waits = Promise.all(
               loadRunIds.map(async (loadRunId) => {
-                const completedLoad = await operator!.request<{ status?: string }>(
-                  "agent.wait",
-                  { runId: loadRunId, timeoutMs: PROOF_TIMEOUT_MS },
-                  { timeoutMs: PROOF_TIMEOUT_MS + 5_000 },
-                );
+                const completedLoad = await waitFor("load worker turn completion", async () => {
+                  const remainingMs = Math.max(0, waveDeadline - Date.now());
+                  const observation = await waveOperator.request<{ status?: string }>(
+                    "agent.wait",
+                    { runId: loadRunId, timeoutMs: remainingMs },
+                    { timeoutMs: remainingMs + 5_000 },
+                  );
+                  return observation.status === "pending" ? undefined : observation;
+                });
                 expect(
                   completedLoad,
                   `load run ${loadRunId} failed\n${redactSensitiveText(JSON.stringify(completedLoad)).slice(0, 4000)}\n${waveGateway.logs().slice(-12_000)}`,
                 ).toMatchObject({ status: "ok" });
               }),
             );
+            phase = `load wave ${wave + 1}/${FINALIZATION_LOAD_WAVES} finalization`;
             // Failed turns may never upload; observe their failure while waiting for finalization.
             await Promise.race([
               waveFinalizationStarted,
@@ -531,6 +626,7 @@ describe("node worker launch wire", () => {
                 throw new Error("load wave completed without workspace finalization");
               }),
             ]);
+            phase = `load wave ${wave + 1}/${FINALIZATION_LOAD_WAVES} control connection`;
             const freshConnectionStartedAt = performance.now();
             const freshClient = await connectWireClient({
               gateway,
@@ -540,6 +636,7 @@ describe("node worker launch wire", () => {
             });
             freshConnectionSamples.push(performance.now() - freshConnectionStartedAt);
             await freshClient.stopAndWait({ timeoutMs: 2_000 });
+            phase = `load wave ${wave + 1}/${FINALIZATION_LOAD_WAVES} completion`;
             await waits;
           }
         } finally {
@@ -557,13 +654,16 @@ describe("node worker launch wire", () => {
         expect(Math.max(...freshConnectionSamples)).toBeLessThan(CONTROL_PROBE_MAX_MS);
         expect(freshConnectionSamples).toHaveLength(FINALIZATION_LOAD_WAVES);
 
+        phase = "node shutdown";
         await workerNode.stop();
         workerNode = undefined;
         await legacyWorkerNode.stop();
         legacyWorkerNode = undefined;
         await operator.stopAndWait({ timeoutMs: 2_000 });
         operator = undefined;
+        phase = "gateway restart";
         await gateway.restartAfterStateMutation(async () => {});
+        phase = "audit after restart";
         const workerAuditAfterRestart = await gateway.runCli([
           "audit",
           "--run",
@@ -578,6 +678,9 @@ describe("node worker launch wire", () => {
       } catch (error) {
         testFailure = { error };
       } finally {
+        if (!testFailure) {
+          phase = "fixture cleanup";
+        }
         const cleanup = await Promise.allSettled([
           workerNode?.stop() ?? Promise.resolve(),
           legacyWorkerNode?.stop() ?? Promise.resolve(),
