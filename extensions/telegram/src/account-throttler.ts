@@ -231,12 +231,18 @@ class GroupRequestScheduler {
   private actionTail = Promise.resolve();
   private nextActionAtMs = 0;
   private retiredReason: Error | null = null;
-  // Actions enqueued but not yet dispatching (queued behind a running
-  // predecessor or pacing): retirement rejects their callers immediately.
+  // Actions from enqueue until their request reaches the final network
+  // dispatch (queued behind a running predecessor, pacing, or authorization
+  // backoff): retirement rejects their callers immediately. A pacing or
+  // backoff wait still sleeping then finishes into the final dispatch guard,
+  // which throws instead of sending; that bounded one-shot timer (≤ 5 min) is
+  // the accepted leftover of not reaching into the caller's signal. An action
+  // whose transport I/O has already begun leaves this set so its request
+  // finishes.
   private readonly pendingActions = new Set<{ reject: (err: unknown) => void }>();
 
   enqueueAction<T>(
-    run: () => Promise<T>,
+    run: (markDispatched: () => void) => Promise<T>,
     signal: Parameters<ApiThrottlerTransformer>[3],
   ): Promise<T> {
     const { controller, detach } = bridgeTelegramAbortSignal(signal);
@@ -259,9 +265,8 @@ class GroupRequestScheduler {
       }
       // Retirement can land during pacing; never dispatch afterwards.
       this.assertNotRetired();
-      this.pendingActions.delete(entry);
       try {
-        return await run();
+        return await run(() => this.pendingActions.delete(entry));
       } finally {
         // The final API guard can back off after this queue's wait.
         this.nextActionAtMs = Date.now() + 1_000;
@@ -447,6 +452,19 @@ function createTelegramAccountThrottler(
     }
   };
   const floodGate = new TelegramFloodGate();
+  // The shared final dispatch boundary: retirement lands during limiter queue
+  // waits, pacing, or the chat-action authorization backoff, so every request
+  // re-checks before its transport I/O begins. Requests whose I/O already
+  // started are untouched.
+  const finalDispatch =
+    (networkPrev: TelegramApiCall, onDispatch?: () => void): TelegramApiCall =>
+    (queuedMethod, queuedPayload, queuedSignal) => {
+      if (retired) {
+        throw telegramThrottlerReleasedError;
+      }
+      onDispatch?.();
+      return networkPrev(queuedMethod, queuedPayload, queuedSignal);
+    };
   const getScheduler = (groupChatKey: string) => {
     let scheduler = schedulersByChat.get(groupChatKey);
     if (!scheduler) {
@@ -463,7 +481,12 @@ function createTelegramAccountThrottler(
       if (!apiPayload || !groupChatKey) {
         return baseThrottler(
           (queuedMethod, queuedPayload, queuedSignal) =>
-            chatActions.apiTransformer(prev, queuedMethod, queuedPayload, queuedSignal),
+            chatActions.apiTransformer(
+              finalDispatch(prev),
+              queuedMethod,
+              queuedPayload,
+              queuedSignal,
+            ),
           method,
           payload,
           signal,
@@ -474,16 +497,9 @@ function createTelegramAccountThrottler(
       if (method === "sendChatAction") {
         // Ephemeral actions must not spend message reservoirs; the shared guard honors flood waits.
         return scheduler.enqueueAction(
-          () =>
+          (markDispatched) =>
             chatActions.apiTransformer(
-              (queuedMethod, queuedPayload, queuedSignal) => {
-                // Retirement can land during the handler's authorization backoff;
-                // final dispatch must never reach the Bot API for a retired token.
-                if (retired) {
-                  throw telegramThrottlerReleasedError;
-                }
-                return prev(queuedMethod, queuedPayload, queuedSignal);
-              },
+              finalDispatch(prev, markDispatched),
               method,
               payload,
               signal,

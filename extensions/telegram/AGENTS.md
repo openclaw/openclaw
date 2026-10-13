@@ -83,10 +83,12 @@
   instances for disposal). Retirement runs in the Gateway process: the
   account lifecycle hooks (config change, removal, `stopAccount`) release the
   throttler once its token is no longer configured, settling queued group
-  sends and not-yet-dispatched chat actions before disconnecting limiters
-  while in-flight requests finish; a token still configured (unchanged
-  reloads, manual stops) keeps its limiter. The CLI lifecycle hooks release
-  in the mutating process as well.
+  sends and chat actions that have not started transport I/O — including
+  pacing and authorization-backoff waits — before disconnecting limiters
+  while in-flight requests finish; the final dispatch boundary re-checks
+  retirement for DM and group actions alike. A token still configured
+  (unchanged reloads, manual stops) keeps its limiter. The CLI lifecycle
+  hooks release in the mutating process as well.
 - Do not silently retry failed topic sends without topic metadata. A
   wrong-surface success is worse than a loud Telegram error.
 - DM topics and forum topics are distinct. `direct_messages_topic_id` and

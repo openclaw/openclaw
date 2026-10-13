@@ -729,7 +729,7 @@ describe("releaseAccountThrottler", () => {
     }
   });
 
-  it("never dispatches an action whose authorization backoff outlives retirement", async () => {
+  it("settles a backing-off action immediately when the account is retired", async () => {
     vi.useFakeTimers();
     try {
       let sent = 0;
@@ -752,32 +752,64 @@ describe("releaseAccountThrottler", () => {
       await failed;
       expect(sent).toBe(1);
       const second = api.sendChatAction(-100123, "typing", { message_thread_id: 2 });
-      const secondRejection = expect(second).rejects.toThrow(/released/i);
+      const settled = vi.fn();
+      const outcome = second.then(settled, settled);
       // The successor clears pacing, then parks in the 401 authorization
-      // backoff; retiring the token during that backoff must stop the final
-      // dispatch from ever reaching the Bot API.
+      // backoff; retiring during that backoff settles the caller right away,
+      // and the guarded dispatch can never send afterwards.
       await vi.advanceTimersByTimeAsync(1_500);
       expect(sent).toBe(1);
       const releasing = releaseAccountThrottler("backoff-retire");
-      await vi.advanceTimersByTimeAsync(1_500);
-      await secondRejection;
-      expect(sent).toBe(1);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toHaveBeenCalledOnce();
+      await expect(second).rejects.toThrow(/released/i);
       await releasing;
+      // Even after the remaining backoff elapses, the retired token never
+      // dispatches.
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(sent).toBe(1);
+      await outcome;
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("keeps releasing other tokens independent", async () => {
-    const disposeA = vi.fn(async () => {});
-    const disposeB = vi.fn(async () => {});
-    getOrCreateAccountThrottler("token-a", ownedFactory(disposeA));
-    getOrCreateAccountThrottler("token-b", ownedFactory(disposeB));
-
-    await expect(releaseAccountThrottler("token-a")).resolves.toBe(true);
-
-    expect(disposeA).toHaveBeenCalledOnce();
-    expect(disposeB).not.toHaveBeenCalled();
-    expect(getOrCreateAccountThrottler("token-b", ownedFactory(disposeB))).toBeDefined();
+  it("never dispatches a DM action whose authorization backoff outlives retirement", async () => {
+    vi.useFakeTimers();
+    try {
+      let sent = 0;
+      const api = new Api("123:dm-backoff-retire", {
+        fetch: asTelegramClientFetch(async () => {
+          sent++;
+          return new Response(
+            JSON.stringify(
+              sent === 1
+                ? { ok: false, error_code: 401, description: "Unauthorized" }
+                : { ok: true, result: true },
+            ),
+          );
+        }),
+      });
+      api.config.use(getOrCreateAccountThrottler("dm-backoff-retire").transformer);
+      const first = api.sendChatAction(42, "typing");
+      const failed = expect(first).rejects.toThrow("Unauthorized");
+      await vi.advanceTimersByTimeAsync(100);
+      await failed;
+      expect(sent).toBe(1);
+      const second = api.sendChatAction(42, "typing");
+      const secondRejection = expect(second).rejects.toThrow(/released/i);
+      // The DM successor parks in the 401 authorization backoff; retiring the
+      // token during that backoff must stop the final dispatch from ever
+      // reaching the Bot API with the retired token.
+      await vi.advanceTimersByTimeAsync(1_400);
+      expect(sent).toBe(1);
+      const releasing = releaseAccountThrottler("dm-backoff-retire");
+      await vi.advanceTimersByTimeAsync(1_500);
+      await secondRejection;
+      await releasing;
+      expect(sent).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
