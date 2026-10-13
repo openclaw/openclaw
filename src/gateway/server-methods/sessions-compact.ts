@@ -349,7 +349,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             );
             if (result.ok && result.compacted) {
               const persistedEntry = await applySessionEntryOperation(
-                { ...transcriptScope, sessionId: expectedEntry.sessionId },
+                transcriptScope,
                 {
                   kind: "compaction-accounting",
                   expected: {
