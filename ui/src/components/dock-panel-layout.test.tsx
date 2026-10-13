@@ -1,16 +1,19 @@
 /* @vitest-environment jsdom */
 
-import type { ReactiveController } from "lit";
-import { render } from "lit";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SolidController } from "../lit/solid-controller-host.ts";
+import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { DockLayoutController } from "./dock-layout-controller.ts";
+import { DockResizer } from "./dock-layout-solid.tsx";
 import { createDockPanelLayout, type DockPanelPlacement } from "./dock-panel-layout.ts";
 
 function createControllerHost() {
   return {
-    addController: vi.fn((_controller: ReactiveController) => undefined),
-    removeController: vi.fn((_controller: ReactiveController) => undefined),
+    addController: vi.fn((_controller: SolidController) => undefined),
+    removeController: vi.fn((_controller: SolidController) => undefined),
     requestUpdate: vi.fn(),
     updateComplete: Promise.resolve(true),
     isConnected: true,
@@ -19,8 +22,8 @@ function createControllerHost() {
 
 function createEmbeddedControllerHost() {
   const host = Object.assign(document.createElement("div"), {
-    addController: vi.fn((_controller: ReactiveController) => undefined),
-    removeController: vi.fn((_controller: ReactiveController) => undefined),
+    addController: vi.fn((_controller: SolidController) => undefined),
+    removeController: vi.fn((_controller: SolidController) => undefined),
     requestUpdate: vi.fn(),
     updateComplete: Promise.resolve(true),
   });
@@ -40,11 +43,25 @@ function createLayout(defaultDock: Exclude<DockPanelPlacement, "main">) {
   });
 }
 
+function mountResizer<TDock extends DockPanelPlacement>(
+  host: ReturnType<typeof createControllerHost>,
+  controller: DockLayoutController<TDock>,
+) {
+  return mountSolid(() => {
+    const [revision, setRevision] = createSignal(0);
+    host.requestUpdate.mockImplementation(() => setRevision((value) => value + 1));
+    return (
+      <DockResizer controller={(revision(), controller)} classPrefix="test" label="Resize panel" />
+    );
+  });
+}
+
 beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
 });
 
 afterEach(() => {
+  cleanupSolid();
   localStorage.clear();
   vi.unstubAllGlobals();
 });
@@ -196,9 +213,8 @@ describe("DockLayoutController inline columns", () => {
     });
 
     controller.hostConnected();
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(controller.renderResizer("test", "Resize panel"), container);
+    const { container, unmount } = mountResizer(host, controller);
+    flush();
     const separator = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
       "resizable-divider",
     )!;
@@ -228,7 +244,7 @@ describe("DockLayoutController inline columns", () => {
     expect(restored.width).toBe(380);
     restored.hostDisconnected();
     controller.hostDisconnected();
-    container.remove();
+    unmount();
     document.documentElement.style.removeProperty(reservation);
   });
 
@@ -240,11 +256,10 @@ describe("DockLayoutController inline columns", () => {
       reservationPrefix: "test-keyboard",
       isAvailable: () => true,
     });
-    const container = document.createElement("div");
-    document.body.append(container);
     controller.hostConnected();
 
-    render(controller.renderResizer("test", "Resize panel"), container);
+    const { container, unmount } = mountResizer(host, controller);
+    flush();
     let separator = container.querySelector("resizable-divider")!;
     await separator.updateComplete;
     expect(separator.getAttribute("role")).toBe("separator");
@@ -257,7 +272,7 @@ describe("DockLayoutController inline columns", () => {
     expect(controller.width).toBeLessThan(520);
 
     controller.setDock("bottom", false);
-    render(controller.renderResizer("test", "Resize panel"), container);
+    flush();
     separator = container.querySelector("resizable-divider")!;
     await separator.updateComplete;
     expect(separator.getAttribute("aria-orientation")).toBe("horizontal");
@@ -268,6 +283,6 @@ describe("DockLayoutController inline columns", () => {
     expect(controller.height).toBeGreaterThan(320);
 
     controller.hostDisconnected();
-    container.remove();
+    unmount();
   });
 });

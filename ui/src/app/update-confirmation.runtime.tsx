@@ -7,21 +7,22 @@
 // as a confirmation, becomes a progress report on confirm, and reports a
 // failure in place. It is mounted on `document.body`, outside the shell, so the
 // Gateway restart that tears down the connection cannot unmount it.
-import { html, nothing, render } from "lit";
+import { render } from "@solidjs/web";
+import { createSignal, Show } from "solid-js";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import { isReportableUpdateRun } from "../../../src/shared/update-outcome.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
-import { renderUpdateGitRevisions } from "../components/update-git-revisions.ts";
-import { t } from "../i18n/index.ts";
+import { UpdateGitRevisions } from "../components/solid/update-git-revisions.tsx";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import "../components/modal-dialog.ts";
 import "../components/update-run-view.ts";
-import { formatUiError } from "../lib/format-error.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { hasNativeUpdateBridge, postNativeUpdate } from "./native-link-routing.ts";
 import type { ConfirmAndStartUpdateParams, UpdateProgress } from "./update-confirmation.ts";
 import { formatUpdateTargetLabel } from "./update-schedule-projection.ts";
 
-registerUpdateActionsEnglish();
+registerEnglishCatalog(registerUpdateActionsEnglish);
 
 /** Bounds the wait for the request to be accepted before calling it a no-start. */
 const UPDATE_ACCEPT_GRACE_MS = 4_000;
@@ -92,6 +93,8 @@ export async function confirmAndStartUpdateRuntime(
     let sawBusy = false;
     let latestProgress: UpdateProgress | undefined;
     let statusCheck: "idle" | "pending" | "success" | { error: string } = "idle";
+    let dispose: (() => void) | undefined;
+    let updateView: ((view: ReturnType<typeof readView>) => void) | undefined;
 
     const close = () => {
       if (settled) {
@@ -102,7 +105,7 @@ export async function confirmAndStartUpdateRuntime(
       if (acceptTimer !== undefined) {
         globalThis.clearTimeout(acceptTimer);
       }
-      render(nothing, host);
+      dispose?.();
       host.remove();
       document.body.classList.remove(UPDATE_DIALOG_OPEN_CLASS);
       updateDialogOpen = false;
@@ -146,10 +149,7 @@ export async function confirmAndStartUpdateRuntime(
     };
     updateDialogOpen = true;
 
-    const draw = () => {
-      if (settled) {
-        return;
-      }
+    function readView() {
       const current = phase;
       const route = viaNativeApp
         ? {
@@ -182,120 +182,167 @@ export async function confirmAndStartUpdateRuntime(
             : current.kind === "working"
               ? workingMessage(!disconnected)
               : `${route.message} ${t("updates.confirm.impact")}`;
-      render(
-        html`
-          <openclaw-modal-dialog label=${route.title} description=${body} @modal-cancel=${finish}>
+      return {
+        route,
+        details,
+        run,
+        working,
+        finished,
+        failed,
+        checkingStatus,
+        statusCheckError,
+        showRecovery,
+        disconnected,
+        body,
+        confirmed: current.kind === "confirm",
+        statusRefreshed: statusCheck === "success" && !readError,
+        updateAvailable,
+        updateSchedule,
+      };
+    }
+
+    const draw = () => {
+      if (settled) {
+        return;
+      }
+      const snapshot = readView();
+      if (updateView) {
+        updateView(snapshot);
+        return;
+      }
+      dispose = render(() => {
+        const [view, setView] = createSignal(snapshot);
+        updateView = setView;
+        return (
+          <openclaw-modal-dialog
+            label={view().route.title}
+            description={view().body}
+            onModal-cancel={finish}
+          >
             <div class="exec-approval-card update-run-dialog">
               <div class="exec-approval-header">
                 <div>
-                  <div class="exec-approval-title">${route.title}</div>
-                  <div class="exec-approval-sub" style="white-space: pre-line">${body}</div>
+                  <div class="exec-approval-title">{view().route.title}</div>
+                  <div class="exec-approval-sub" style="white-space: pre-line">
+                    {view().body}
+                  </div>
                 </div>
               </div>
               <div role="status" aria-live="polite" class="exec-approval-sub">
-                ${
-                  disconnected && showRecovery
-                    ? t("updates.dialog.checkStatusDisconnected")
-                    : statusCheck === "success" && !readError
-                      ? t("updates.dialog.statusRefreshed")
-                      : nothing
-                }
+                {view().disconnected && view().showRecovery
+                  ? t("updates.dialog.checkStatusDisconnected")
+                  : view().statusRefreshed
+                    ? t("updates.dialog.statusRefreshed")
+                    : null}
               </div>
-              ${statusCheckError ? html`<div role="alert" class="exec-approval-sub">${statusCheckError}</div>` : nothing}
-              ${
-                details && current.kind === "confirm" && !checkingStatus && !statusCheckError
-                  ? html`<div class="exec-approval-command mono update-confirmation-details">
-                      <div>${details}</div>
-                      ${renderUpdateGitRevisions(updateSchedule, updateAvailable)}
-                    </div>`
-                  : nothing
-              }
-              ${
-                current.kind === "run"
-                  ? html`<openclaw-update-run-view
-                      .run=${current.run}
-                      .connected=${!disconnected}
-                    ></openclaw-update-run-view>`
-                  : nothing
-              }
-              <div class="exec-approval-actions">
-                ${
-                  finished || showRecovery
-                    ? html` ${
-                          showRecovery && params.onCheckStatus
-                            ? html`<button
-                                type="button"
-                                class="btn ${checkingStatus ? "btn--busy" : ""}"
-                                ?disabled=${checkingStatus || disconnected}
-                                @click=${checkStatus}
-                              >
-                                ${
-                                  checkingStatus
-                                    ? html`<span class="btn__spinner" aria-hidden="true"></span>${t(
-                                          "updates.dialog.checkingStatus",
-                                        )}`
-                                    : t("updates.dialog.checkStatus")
-                                }
-                              </button>`
-                            : nothing
-                        }
-                        ${
-                          failed
-                            ? html`<button
-                                type="button"
-                                class="btn primary"
-                                ?disabled=${checkingStatus || disconnected}
-                                @click=${retry}
-                              >
-                                ${t("updates.dialog.retryUpdate")}
-                              </button>`
-                            : nothing
-                        }
-                        ${
-                          failed && params.onReviewUpdate
-                            ? html`<button
-                                type="button"
-                                class="btn"
-                                @click=${() => {
-                                  finish();
-                                  params.onReviewUpdate?.();
-                                }}
-                              >
-                                ${t("updates.reviewUpdate")}
-                              </button>`
-                            : nothing
-                        }
-                        <button type="button" class="btn" autofocus @click=${finish}>
-                          ${t("common.close")}
-                        </button>`
-                    : html`
-                        <button
-                          type="button"
-                          class="btn danger ${working || checkingStatus ? "btn--busy" : ""}"
-                          ?disabled=${working || checkingStatus}
-                          @click=${confirm}
-                        >
-                          ${
-                            checkingStatus
-                              ? t("updates.dialog.checkingStatus")
-                              : working
-                                ? html`<span class="btn__spinner" aria-hidden="true"></span>${t(
-                                      "chat.updating",
-                                    )}`
-                                : route.confirmLabel
-                          }
-                        </button>
-                        <button type="button" class="btn" autofocus @click=${finish}>
-                          ${working ? t("common.close") : t("common.cancel")}
-                        </button>
-                      `
+              <Show when={view().statusCheckError}>
+                <div role="alert" class="exec-approval-sub">
+                  {view().statusCheckError}
+                </div>
+              </Show>
+              <Show
+                when={
+                  view().details &&
+                  view().confirmed &&
+                  !view().checkingStatus &&
+                  !view().statusCheckError
                 }
+              >
+                <div class="exec-approval-command mono update-confirmation-details">
+                  <div>{view().details}</div>
+                  <UpdateGitRevisions
+                    schedule={view().updateSchedule}
+                    updateAvailable={view().updateAvailable}
+                  />
+                </div>
+              </Show>
+              <Show when={view().run}>
+                {(run) => (
+                  <openclaw-update-run-view
+                    prop:run={run()}
+                    prop:connected={!view().disconnected}
+                  />
+                )}
+              </Show>
+              <div class="exec-approval-actions">
+                <Show
+                  when={view().finished || view().showRecovery}
+                  fallback={
+                    <>
+                      <button
+                        type="button"
+                        class={[
+                          "btn danger",
+                          { "btn--busy": view().working || view().checkingStatus },
+                        ]}
+                        disabled={view().working || view().checkingStatus}
+                        onClick={() => void confirm()}
+                      >
+                        {view().checkingStatus ? (
+                          t("updates.dialog.checkingStatus")
+                        ) : view().working ? (
+                          <>
+                            <span class="btn__spinner" aria-hidden="true" />
+                            {t("chat.updating")}
+                          </>
+                        ) : (
+                          view().route.confirmLabel
+                        )}
+                      </button>
+                      <button type="button" class="btn" autofocus onClick={finish}>
+                        {view().working ? t("common.close") : t("common.cancel")}
+                      </button>
+                    </>
+                  }
+                >
+                  <Show when={view().showRecovery && params.onCheckStatus}>
+                    <button
+                      type="button"
+                      class={["btn", { "btn--busy": view().checkingStatus }]}
+                      disabled={view().checkingStatus || view().disconnected}
+                      onClick={() => void checkStatus()}
+                    >
+                      {view().checkingStatus ? (
+                        <>
+                          <span class="btn__spinner" aria-hidden="true" />
+                          {t("updates.dialog.checkingStatus")}
+                        </>
+                      ) : (
+                        t("updates.dialog.checkStatus")
+                      )}
+                    </button>
+                  </Show>
+                  <Show when={view().failed}>
+                    <button
+                      type="button"
+                      class="btn primary"
+                      disabled={view().checkingStatus || view().disconnected}
+                      onClick={() => void retry()}
+                    >
+                      {t("updates.dialog.retryUpdate")}
+                    </button>
+                  </Show>
+                  <Show when={view().failed && params.onReviewUpdate}>
+                    <button
+                      type="button"
+                      class="btn"
+                      onClick={() => {
+                        finish();
+                        params.onReviewUpdate?.();
+                      }}
+                    >
+                      {t("updates.reviewUpdate")}
+                    </button>
+                  </Show>
+                  <button type="button" class="btn" autofocus onClick={finish}>
+                    {t("common.close")}
+                  </button>
+                </Show>
               </div>
             </div>
           </openclaw-modal-dialog>
-        `,
-        host,
-      );
+        );
+      }, host);
     };
 
     async function refreshTarget(

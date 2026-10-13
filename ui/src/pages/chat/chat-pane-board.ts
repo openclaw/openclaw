@@ -16,6 +16,7 @@ import {
   type BoardViewCallbacks,
 } from "../../lib/board/provider.ts";
 import { updateBoardSessionView } from "../../lib/board/settings.ts";
+import { currentDisplayConfig } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
   isGatewayCapabilityAdvertised,
@@ -481,7 +482,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           return;
         }
         const swarmEnabled = isSwarmEnabledInConfig(
-          context.runtimeConfig?.state.configSnapshot?.config,
+          context.runtimeConfig ? currentDisplayConfig(context.runtimeConfig.state) : null,
           agentId,
         );
         if (this.swarmEnabled !== swarmEnabled) {

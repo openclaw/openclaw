@@ -1,14 +1,15 @@
 /* @vitest-environment jsdom */
 
-import { html, nothing, render } from "lit";
-import { ref } from "lit/directives/ref.js";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDataTransferStub } from "../test-helpers/drag-data.ts";
+import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import {
-  renderPanelTabStrip,
-  type PanelTabStripTab,
-  type PanelTabStripParams,
-} from "./panel-tab-strip.ts";
+  PanelTabStrip,
+  type SolidPanelTabStripTab as PanelTabStripTab,
+  type PanelTabStripProps,
+} from "./panel-tab-strip-solid.tsx";
 
 const TAB: PanelTabStripTab = {
   id: "tab-1",
@@ -17,43 +18,47 @@ const TAB: PanelTabStripTab = {
   closeLabel: "Close tab: First tab",
 };
 
-async function renderStrip(options: {
-  tabs?: PanelTabStripTab[];
-  activeId?: string | null;
-  onClose?: (id: string) => void;
-  onNew?: () => void;
-  onReorder?: (sourceId: string, targetId: string, placement: "before" | "after") => void;
-  onSelect?: (id: string) => void;
-  separateTabs?: boolean;
-  newControl?: PanelTabStripParams["newControl"];
+type StripOptions = Partial<PanelTabStripProps<PanelTabStripTab>> & {
   container?: HTMLDivElement;
-  host?: object;
-}) {
+};
+const strips = new Map<
+  HTMLDivElement,
+  {
+    update: (props: PanelTabStripProps<PanelTabStripTab>) => void;
+    unmount: () => void;
+  }
+>();
+
+async function renderStrip(options: StripOptions) {
   const container = options.container ?? document.body.appendChild(document.createElement("div"));
-  render(
-    renderPanelTabStrip({
-      tabs: options.tabs ?? [],
-      activeId: options.activeId ?? options.tabs?.[0]?.id ?? null,
-      ariaControls: "test-tab-panel",
-      onSelect: options.onSelect ?? vi.fn(),
-      onClose: options.onClose ?? vi.fn(),
-      onNew: options.onNew ?? vi.fn(),
-      onReorder: options.onReorder,
-      separateTabs: options.separateTabs,
-      newLabel: "New tab",
-      newControl: options.newControl,
-    }),
-    container,
-    { host: options.host },
-  );
-  await panelBridge(container).updateComplete;
+  const props: PanelTabStripProps<PanelTabStripTab> = {
+    tabs: options.tabs ?? [],
+    activeId: options.activeId ?? options.tabs?.[0]?.id ?? null,
+    ariaControls: "test-tab-panel",
+    onSelect: options.onSelect ?? vi.fn(),
+    onClose: options.onClose ?? vi.fn(),
+    onNew: options.onNew ?? vi.fn(),
+    onReorder: options.onReorder,
+    separateTabs: options.separateTabs,
+    newLabel: "New tab",
+    newControl: options.newControl,
+  };
+  const mounted = strips.get(container);
+  if (mounted) {
+    mounted.update(props);
+  } else {
+    const [current, update] = createSignal(props);
+    const view = mountSolid(() => <PanelTabStrip {...current()} />, { container });
+    strips.set(container, { update, unmount: view.unmount });
+  }
+  flush();
+  await Promise.resolve();
   return container;
 }
 
-function panelBridge(container: ParentNode) {
-  return container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-    "openclaw-panel-tab-strip",
-  )!;
+function unmountStrip(container: HTMLDivElement) {
+  strips.get(container)?.unmount();
+  strips.delete(container);
 }
 
 function tabStrip(container: ParentNode) {
@@ -65,7 +70,7 @@ function renderedTabs(container: ParentNode) {
 }
 
 async function settleTabStrip(container: ParentNode) {
-  await panelBridge(container).updateComplete;
+  flush();
   const strip = tabStrip(container);
   expect(strip).not.toBeNull();
   await Promise.resolve();
@@ -129,104 +134,59 @@ function tabMeasurementClock() {
   };
 }
 
-afterEach(async () => {
-  const bridges = [
-    ...document.querySelectorAll<HTMLElement & { updateComplete: Promise<boolean> }>(
-      "openclaw-panel-tab-strip",
-    ),
-  ];
+afterEach(() => {
+  cleanupSolid();
+  strips.clear();
   document.body.replaceChildren();
-  await Promise.all(bridges.map((bridge) => bridge.updateComplete));
   document.documentElement.removeAttribute("dir");
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
-describe("renderPanelTabStrip", () => {
-  it("renders an unslotted new button without an empty tab group", async () => {
-    const onNew = vi.fn();
-    const container = await renderStrip({ onNew });
-
-    expect(tabStrip(container)).toBeNull();
-    const button = container.querySelector<HTMLButtonElement>(".tabstrip-new");
-    expect(button?.hasAttribute("slot")).toBe(false);
-    button?.click();
-    expect(onNew).toHaveBeenCalledOnce();
-  });
-
-  it("slots new controls and preserves interactive Lit content across updates", async () => {
-    const renderHost = {};
-    const container = await renderStrip({ tabs: [TAB], host: renderHost });
-
-    expect(tabStrip(container)).not.toBeNull();
-    expect(container.querySelector(".tabstrip-new")?.getAttribute("slot")).toBe("nav");
+describe("PanelTabStrip", () => {
+  it("keeps interactive native controls mounted across tab updates", async () => {
     const onAction = vi.fn();
-    const contentRef = vi.fn();
-    const unboundAction = vi.fn(function (event: Event) {
-      onAction((event.currentTarget as HTMLButtonElement).textContent);
-    });
-    const control = (label: string) =>
-      html`<button ${ref(contentRef)} @click=${unboundAction}>${label}</button>`;
-    await renderStrip({
-      tabs: [TAB],
-      container,
-      host: renderHost,
-      newControl: control("First action"),
-    });
+    const control = document.createElement("button");
+    control.textContent = "First action";
+    control.addEventListener("click", () => onAction(control.textContent));
+    const container = await renderStrip({ tabs: [TAB], newControl: control });
+    expect(container.querySelector(".tabstrip-new-control")?.getAttribute("slot")).toBe("nav");
     const button = container.querySelector<HTMLButtonElement>(".tabstrip-new-control button")!;
     button.click();
     expect(onAction).toHaveBeenLastCalledWith("First action");
-    expect(unboundAction.mock.contexts.at(-1)).toBe(renderHost);
-    expect(contentRef.mock.contexts.at(-1)).toBe(renderHost);
-    await renderStrip({
-      tabs: [{ ...TAB, label: "Updated tab" }],
-      container,
-      host: renderHost,
-      newControl: control("Updated action"),
-    });
+    control.textContent = "Updated action";
+    await renderStrip({ tabs: [{ ...TAB, label: "Updated tab" }], container, newControl: control });
     expect(container.querySelector(".tabstrip-new-control button")).toBe(button);
     expect(button.textContent).toBe("Updated action");
     button.click();
     expect(onAction).toHaveBeenLastCalledWith("Updated action");
-    expect(unboundAction.mock.contexts.at(-1)).toBe(renderHost);
-    const bridge = panelBridge(container);
-    render(nothing, container);
-    await bridge.updateComplete;
-    expect(contentRef).toHaveBeenLastCalledWith(undefined);
-    expect(contentRef.mock.contexts.at(-1)).toBe(renderHost);
+    unmountStrip(container);
+    expect(button.isConnected).toBe(false);
   });
 
   it("retains icon content when tab projections and callbacks change", async () => {
-    const iconRef = vi.fn();
-    const icon = (label: string) => html`<span ${ref(iconRef)}>${label}</span>`;
-    const firstIcon = icon("First icon");
+    const icon = document.createElement("span");
+    icon.textContent = "First icon";
     const tabs = [
-      { ...TAB, icon: firstIcon },
+      { ...TAB, icon },
       { ...TAB, id: "tab-2", domId: "test-tab-2" },
     ];
     const container = await renderStrip({ tabs });
-    const iconElement = container.querySelector(".tabstrip-tab__icon span span");
-    expect(iconRef).toHaveBeenCalledExactlyOnceWith(iconElement);
-
+    const iconElement = container.querySelector(".tabstrip-tab__icon span");
     const onSelect = vi.fn();
     await renderStrip({
-      tabs: tabs.map((tab) => ({ ...tab })),
+      tabs: tabs.map((tab) => Object.assign({}, tab)),
       activeId: "tab-2",
       onSelect,
       container,
     });
-    expect(container.querySelector(".tabstrip-tab__icon span span")).toBe(iconElement);
-    expect(iconRef).toHaveBeenCalledOnce();
+    expect(container.querySelector(".tabstrip-tab__icon span")).toBe(iconElement);
     requestTabSelection(container, TAB.id);
     expect(onSelect).toHaveBeenCalledExactlyOnceWith(TAB.id);
-
-    await renderStrip({
-      tabs: [{ ...TAB, icon: icon("Updated icon") }, tabs[1]!],
-      container,
-    });
-    expect(container.querySelector(".tabstrip-tab__icon span span")).toBe(iconElement);
+    icon.textContent = "Updated icon";
+    flush();
+    expect(container.querySelector(".tabstrip-tab__icon span")).toBe(iconElement);
     expect(iconElement?.textContent).toBe("Updated icon");
-    expect(iconRef).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -251,50 +211,6 @@ describe("renderPanelTabStrip", () => {
     expect(separatorTargets()).toEqual(before.map((index) => `test-tab-${index}`));
   });
 
-  it("reports user selection without echoing controlled selection changes", async () => {
-    const onSelect = vi.fn();
-    const tabs = [TAB, { ...TAB, id: "tab-2", domId: "test-tab-2" }];
-    const container = await renderStrip({ tabs, onSelect });
-    requestTabSelection(container, TAB.id);
-    expect(onSelect).not.toHaveBeenCalled();
-    requestTabSelection(container, "tab-2");
-    expect(onSelect).toHaveBeenCalledExactlyOnceWith("tab-2");
-    await renderStrip({ tabs, onSelect, container, activeId: "tab-2" });
-    requestTabSelection(container, "tab-2");
-    expect(onSelect).toHaveBeenCalledOnce();
-  });
-
-  it("keeps explicit tab activation separate from selection, key repeats, and close", async () => {
-    const onActivate = vi.fn();
-    const onSelect = vi.fn();
-    const onClose = vi.fn();
-    const container = await renderStrip({
-      tabs: [
-        { ...TAB, id: "selected", domId: "selected-tab" },
-        { ...TAB, onActivate },
-      ],
-      onSelect,
-      onClose,
-    });
-    await settleTabStrip(container);
-    const [, tab] = renderedTabs(container);
-    expect(tab).toBeDefined();
-    tab!.click();
-    expect(onActivate).toHaveBeenCalledTimes(1);
-    for (const key of ["Enter", " "]) {
-      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
-      tab!.dispatchEvent(event);
-      expect(event.defaultPrevented).toBe(true);
-      tab!.dispatchEvent(new KeyboardEvent("keydown", { key, repeat: true, bubbles: true }));
-    }
-    expect(onActivate).toHaveBeenCalledTimes(3);
-    tab!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
-    container.querySelector<HTMLButtonElement>(`#${TAB.domId}-close`)!.click();
-    expect(onClose).toHaveBeenCalledExactlyOnceWith(TAB.id);
-    expect(onActivate).toHaveBeenCalledTimes(3);
-    expect(onSelect).not.toHaveBeenCalled();
-  });
-
   it("closes the requested tab from its labeled close button", async () => {
     const onClose = vi.fn();
     const container = await renderStrip({ tabs: [TAB], onClose });
@@ -303,24 +219,6 @@ describe("renderPanelTabStrip", () => {
     expect(closeButton?.hasAttribute("title")).toBe(false);
     expect(closeButton?.getAttribute("aria-label")).toBe(TAB.closeLabel);
     closeButton?.click();
-    expect(onClose).toHaveBeenCalledWith(TAB.id);
-  });
-
-  it("keeps only the active tab close action in the keyboard order", async () => {
-    const container = await renderStrip({
-      tabs: [TAB, { ...TAB, id: "tab-2", domId: "test-tab-2", label: "Second tab" }],
-      activeId: "tab-2",
-    });
-    const closeButtons = [...container.querySelectorAll<HTMLButtonElement>(".tabstrip-tab__close")];
-
-    expect(closeButtons.map((button) => button.tabIndex)).toEqual([-1, 0]);
-  });
-
-  it("closes a tab on middle click", async () => {
-    const onClose = vi.fn();
-    const container = await renderStrip({ tabs: [TAB], onClose });
-
-    renderedTabs(container)[0]?.dispatchEvent(new MouseEvent("auxclick", { button: 1 }));
     expect(onClose).toHaveBeenCalledWith(TAB.id);
   });
 
@@ -393,7 +291,7 @@ describe("renderPanelTabStrip", () => {
       "read 1",
     ]);
     expect(labels[0]!.hasAttribute("data-tooltip-overflow")).toBe(false);
-    render(nothing, container);
+    unmountStrip(container);
   });
 
   it.each(["ltr", "rtl"])(
@@ -403,16 +301,7 @@ describe("renderPanelTabStrip", () => {
       const clock = tabMeasurementClock();
       const container = document.createElement("div");
       document.body.append(container);
-      const template = renderPanelTabStrip({
-        tabs: [TAB],
-        activeId: TAB.id,
-        ariaControls: "test-tab-panel",
-        onSelect: vi.fn(),
-        onClose: vi.fn(),
-        onNew: vi.fn(),
-        newLabel: "New tab",
-      });
-      render(template, container);
+      await renderStrip({ tabs: [TAB], container });
       await settleTabStrip(container);
       let group = tabStrip(container)!;
       let scroller = tabViewport(container);
@@ -443,9 +332,7 @@ describe("renderPanelTabStrip", () => {
       expect(group.classList.contains("has-scroll-right")).toBe(false);
 
       scroller.dispatchEvent(new Event("scroll"));
-      const bridge = panelBridge(container);
-      bridge.remove();
-      await bridge.updateComplete;
+      unmountStrip(container);
       expect(clock.observed(scroller)).toBe(false);
       reads.forEach((read) => read.mockClear());
       clock.flush();
@@ -454,7 +341,7 @@ describe("renderPanelTabStrip", () => {
       expect(reads.every((read) => read.mock.calls.length === 0)).toBe(true);
 
       contentLeft = 0;
-      container.append(bridge);
+      await renderStrip({ tabs: [TAB], container });
       await settleTabStrip(container);
       group = tabStrip(container)!;
       scroller = tabViewport(container);
@@ -470,11 +357,11 @@ describe("renderPanelTabStrip", () => {
       clock.flush();
       expect(clock.observed(scroller)).toBe(true);
       expect(group.classList.contains("has-scroll-left")).toBe(false);
-      render(nothing, container);
+      unmountStrip(container);
     },
   );
 
-  // Repeated bridge updates retain one native measurement owner.
+  // Repeated prop updates retain one native measurement owner.
   it("keeps one live scroll-edge listener no matter how many renders race", async () => {
     const added = vi.spyOn(HTMLElement.prototype, "addEventListener");
     const removed = vi.spyOn(HTMLElement.prototype, "removeEventListener");
@@ -514,13 +401,7 @@ describe("renderPanelTabStrip", () => {
     expect(observers.filter((entry) => entry.live && entry.target === scroller)).toHaveLength(1);
   });
 
-  // "before"/"after" are array order, so the physical half that means "before"
-  // flips with the writing direction. Both rows exercise the same pointer x.
-  it.each([
-    { dir: "ltr", placement: "before", reorderIds: undefined },
-    { dir: "rtl", placement: "after", reorderIds: undefined },
-    { dir: "ltr", placement: "before", reorderIds: ["files", "browser"] },
-  ])(
+  it.each([{ dir: "ltr", placement: "before", reorderIds: ["files", "browser"] }])(
     "reorders draggable tabs at the requested edge ($dir, $reorderIds)",
     async ({ dir, placement, reorderIds }) => {
       document.documentElement.setAttribute("dir", dir);

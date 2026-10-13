@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../infra/errors.js";
 import { NODE_FS_LIST_DIR_COMMAND } from "../infra/node-commands.js";
+import { logCodeModeFailure } from "../logging/code-mode-diagnostic.js";
 import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { parseNodeList } from "../shared/node-list-parse.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
@@ -206,6 +207,8 @@ export async function runBridgeRequest(params: {
   namespaceRuntime: CodeModeNamespaceRuntime;
   parentToolCallId: string;
   codeModeRunId: string;
+  activeRunId?: string;
+  workerId?: string;
   reply: CodeModeReplyLease;
   results: CodeModeResultsAccess;
   sessionStore?: CodeModeSessionStoreAccess;
@@ -493,6 +496,18 @@ export async function runBridgeRequest(params: {
     }
     params.reply.settle(true, value);
   } catch (error) {
+    logCodeModeFailure(error, {
+      sessionId: params.ctx.sessionId,
+      sessionKey: params.ctx.sessionKey,
+      runId: params.ctx.runId,
+      toolCallId: params.parentToolCallId,
+      codeModeRunId: params.activeRunId,
+      workerId: params.workerId,
+      failurePhase: "bridge",
+      bridgeDispatchStarted: true,
+      bridgeRequestId: params.request.id,
+      bridgeMethod: params.request.method,
+    });
     const classified =
       getBeforeToolCallFailureDisposition(error) !== undefined && error instanceof Error
         ? (error.cause ?? error)

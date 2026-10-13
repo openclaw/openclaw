@@ -426,6 +426,7 @@ export async function prepareVisitorPublicationFixture(f: {
         // Service node setup reads this host facet even when Visitor never invokes nodes.
         subagent: {
           complete: unexpectedSubagent,
+          forkSession: unexpectedSubagent,
           run: unexpectedSubagent,
           waitForRun: unexpectedSubagent,
           getSessionMessages: unexpectedSubagent,

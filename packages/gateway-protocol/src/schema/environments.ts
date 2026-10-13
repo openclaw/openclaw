@@ -113,11 +113,40 @@ export const RequiredNodeCommandSchema = closedObject({
 });
 
 /** Worker-only lifecycle metadata layered onto the existing environment projection. */
+export const WorkerEnvironmentStartStatusSchema = Type.Union([
+  closedObject({
+    mode: Type.Literal("snapshot"),
+    phase: Type.Optional(Type.Literal("saving")),
+  }),
+  closedObject({
+    mode: Type.Literal("cold"),
+    reason: Type.Union([
+      Type.Literal("no-snapshot-yet"),
+      Type.Literal("setup-changed"),
+      Type.Literal("snapshot-retiring"),
+      Type.Literal("snapshot-unavailable"),
+      Type.Literal("os-unsupported"),
+      Type.Literal("warm-images-off"),
+      Type.Literal("capture-paused"),
+      Type.Literal("backend-cannot-snapshot"),
+      Type.Literal("class-unknown"),
+    ]),
+    phase: Type.Union([
+      Type.Literal("provisioning"),
+      Type.Literal("preparing"),
+      Type.Literal("saving"),
+    ]),
+  }),
+]);
+
+export type WorkerEnvironmentStartStatus = Static<typeof WorkerEnvironmentStartStatusSchema>;
+
 export const WorkerEnvironmentMetadataSchema = closedObject({
   profileId: Type.Optional(NonEmptyString),
   providerId: NonEmptyString,
   leaseId: Type.Optional(NonEmptyString),
   state: WorkerEnvironmentStateSchema,
+  startStatus: Type.Optional(WorkerEnvironmentStartStatusSchema),
   ageMs: Type.Integer({ minimum: 0 }),
   idleMs: Type.Optional(Type.Integer({ minimum: 0 })),
   destroyRequestedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),

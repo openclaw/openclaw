@@ -103,14 +103,17 @@ export function buildEmbeddedRunPayloads(params: {
   didSendDeterministicApprovalPrompt?: boolean;
   heartbeatToolResponse?: HeartbeatToolResponse;
 }): ReplyPayload[] {
+  const sourceReplyPending = params.sourceReplyDeliveryState === "pending";
+  const heartbeatToolResponse = sourceReplyPending ? undefined : params.heartbeatToolResponse;
   const heartbeatTerminalToolFailure =
+    !sourceReplyPending &&
     params.isHeartbeatTrigger === true &&
     params.lastToolError &&
     params.lastToolError.mutatingAction === true
       ? { toolName: params.lastToolError.toolName }
       : undefined;
-  if (params.heartbeatToolResponse && !heartbeatTerminalToolFailure) {
-    return [createHeartbeatToolResponsePayload(params.heartbeatToolResponse)];
+  if (heartbeatToolResponse && !heartbeatTerminalToolFailure) {
+    return [createHeartbeatToolResponsePayload(heartbeatToolResponse)];
   }
   // Internal source replies always need transcript/UI mirrors. A committed
   // tool-authored batch replaces the model answer in either delivery mode.
@@ -126,8 +129,8 @@ export function buildEmbeddedRunPayloads(params: {
   );
   const replyItems = ordinarySourceReplies.replyItems;
   const pendingAuthoredReplies = new Set(sourceReplies.filter((payload) => payload.toolAuthored));
-  if (params.heartbeatToolResponse) {
-    const heartbeatPayload = createHeartbeatToolResponsePayload(params.heartbeatToolResponse);
+  if (heartbeatToolResponse) {
+    const heartbeatPayload = createHeartbeatToolResponsePayload(heartbeatToolResponse);
     replyItems.push({
       text: heartbeatPayload.text ?? "",
       ...(heartbeatPayload.channelData ? { channelData: heartbeatPayload.channelData } : {}),
@@ -163,7 +166,7 @@ export function buildEmbeddedRunPayloads(params: {
         ? completedSourceReplyViaMessageTool
         : ordinarySourceReplies.deliveredSourceReplyViaMessageTool;
     const suppressAssistantArtifacts =
-      params.heartbeatToolResponse !== undefined ||
+      heartbeatToolResponse !== undefined ||
       params.didSendDeterministicApprovalPrompt === true ||
       (params.sourceReplyDeliveryMode === "message_tool_only" &&
         ordinarySourceReplies.hasSourceReplyPayload) ||
@@ -176,7 +179,7 @@ export function buildEmbeddedRunPayloads(params: {
     // hide a later input that actually failed without producing an answer.
     hasIntentionalSilentFinal = false;
     hasUserFacingReply =
-      completedSourceReplyViaMessageTool || params.heartbeatToolResponse?.notify === true;
+      completedSourceReplyViaMessageTool || heartbeatToolResponse?.notify === true;
     const authoredReplies = [...pendingAuthoredReplies].filter((payload) =>
       isToolAuthoredSourceReplyForAssistant(payload, currentAssistant ?? lastAssistant),
     );
@@ -186,6 +189,10 @@ export function buildEmbeddedRunPayloads(params: {
       }
       replyItems.push(...sourceReplyStateFor(authoredReplies).replyItems);
       hasUserFacingReply = true;
+      return;
+    }
+    // Unresolved delivery retains custody; it cannot authorize a replacement answer or error.
+    if (sourceReplyDeliveryState === "pending") {
       return;
     }
     const nonEmptyAssistantTexts = assistantTexts
@@ -403,7 +410,7 @@ export function buildEmbeddedRunPayloads(params: {
         hasCompletedMessagingToolDeliveryEvidence(params))) &&
     !params.isHeartbeatTrigger &&
     !params.runAborted;
-  if (params.lastToolError && !respectIntentionalSilence) {
+  if (params.lastToolError && !respectIntentionalSilence && !sourceReplyPending) {
     // A restart intentionally aborts the active tool while the Gateway takes over.
     // Report the lifecycle status instead of a tool failure.
     const isRestartStatus = params.runStopReason === "restart";

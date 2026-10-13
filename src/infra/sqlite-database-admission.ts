@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { getEnvironmentData, threadId } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { hasErrnoCode } from "./errno.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import {
@@ -54,6 +55,7 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.sqliteDatabaseAdmissio
   rolledBack: new WeakSet<DatabaseSync>(),
   dataWriters: new WeakMap<DatabaseSync, Admission | undefined>(),
   localWriteRevisions: new WeakMap<DatabaseSync, number>(),
+  writeListeners: new WeakMap<Admission, Set<() => void>>(),
   ddlRevisions: new WeakMap<DatabaseSync, number>(),
   schemaDirty: new WeakSet<DatabaseSync>(),
   localSchemaRevisions: new Map<string, number>(),
@@ -437,6 +439,23 @@ export function beginSqliteDatabaseWrite(database: DatabaseSync, unscoped = fals
   state.dataWriters.set(database, admission(database));
 }
 
+/** Local sibling writers notify maintenance after publishing their shared write revision. */
+export function onSqliteDatabaseWriteSettled(
+  database: DatabaseSync,
+  listener: () => void,
+): (() => void) | undefined {
+  const record = admission(database);
+  if (!record) {
+    return undefined;
+  }
+  let listeners = state.writeListeners.get(record);
+  if (!listeners) {
+    listeners = new Set();
+    state.writeListeners.set(record, listeners);
+  }
+  return registerListener(listeners, listener);
+}
+
 /** Native settlement invalidates row caches, including failed or rolled-back writes. */
 export function finishSqliteDatabaseWrite(database: DatabaseSync): void {
   if (!state.dataWriters.has(database)) {
@@ -448,6 +467,10 @@ export function finishSqliteDatabaseWrite(database: DatabaseSync): void {
   scopedWrites.finish(database, record);
   if (record) {
     advanceSqliteDatabaseGeneration(record, "writeRevision");
+    const listeners = state.writeListeners.get(record);
+    if (listeners) {
+      notifyListeners(listeners, undefined);
+    }
   }
 }
 

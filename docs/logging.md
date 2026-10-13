@@ -264,6 +264,19 @@ file log levels.
 
 ### Provider request failures
 
+Model transport failures emit `Model request failed` at warning level with the
+provider, model, available status, code, type, message, error body, and request
+and response IDs. File logs preserve these error fields before transcript
+redaction and clipping; generated response content and request payloads are not
+included. Treat these local logs as sensitive. Log exports retain their existing
+redaction policy.
+
+Embedded attempts also log `Assistant attempt failed`, including the saved error
+fields, before choosing recovery. Request validation and content-policy failures
+stop unchanged model retries and fallback. Context limits use the existing
+compaction recovery. Retired transcript input is terminal: changing models cannot
+restore its admission, and the original rejection remains visible in diagnostics.
+
 Anthropic-compatible HTTP failures preserve the HTTP status separately from a
 bounded, redacted response body. JSON error bodies are parsed before diagnostic
 redaction and preview truncation, so a long proxy error does not lose its status

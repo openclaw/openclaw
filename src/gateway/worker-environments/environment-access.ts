@@ -1,3 +1,4 @@
+import type { WorkerEnvironmentStartStatus } from "../../../packages/gateway-protocol/src/schema/environments.js";
 import { normalizeCloudRepo } from "../../config/cloud-worker-project-profiles.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
@@ -67,6 +68,7 @@ export function createWorkerEnvironmentTransportLifecycle(options: {
 }
 
 type WorkerEnvironmentAccessOptions = {
+  readStartStatus: (record: WorkerEnvironmentRecord) => WorkerEnvironmentStartStatus | undefined;
   store: WorkerEnvironmentStore;
   getCleanupError: (record: WorkerEnvironmentRecord) => string | undefined;
   getConfig: () => OpenClawConfig;
@@ -175,8 +177,10 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
         ? normalizeCloudRepo(preparedProject.source.url)
         : preparedProject.label
       : undefined;
+    const startStatus = options.readStartStatus(record);
     return {
       ...record,
+      ...(startStatus ? { startStatus } : {}),
       ...workerInferenceMetadata(record),
       ...(record.preparation && preparedProject
         ? {

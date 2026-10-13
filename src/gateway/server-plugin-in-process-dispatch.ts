@@ -189,7 +189,8 @@ export type { GatewayMethodDispatchResponse } from "./server-in-process-dispatch
 
 export function withInProcessGatewayRead<T>(
   params: {
-    method: "sessions.list" | "users.list";
+    method: "sessions.list" | "users.list" | "sessions.get";
+    requestParams?: { key: string };
     scope: PluginRuntimeGatewayRequestScope | undefined;
     resolveGatewayContext?: DispatchGatewayMethodInProcessOptions["resolveGatewayContext"];
     callerAuthorityError: string;
@@ -199,7 +200,7 @@ export function withInProcessGatewayRead<T>(
   const { method, scope } = params;
   return withInProcessGatewayDispatch(
     method,
-    {},
+    params.requestParams ?? {},
     {
       forceSyntheticClient: true,
       pluginRuntimeOwnerId: scope?.pluginId,
@@ -224,7 +225,7 @@ export function withInProcessGatewayRead<T>(
       assertLifetime();
       const authorization = await authorizeGatewayRequestPreDispatch({
         method,
-        requestParams: {},
+        requestParams: params.requestParams ?? {},
         client: resolved.client,
         context: resolved.context,
         methodRegistry:
@@ -242,7 +243,14 @@ export function withInProcessGatewayRead<T>(
           authorization.sessionMutationAuthorization?.assertCurrent();
         };
         assertCurrent();
-        return await run(resolved, assertCurrent);
+        const assertReadCurrent =
+          method === "sessions.get" && params.requestParams
+            ? await (
+                await import("./server-plugin-in-process-session-read.js")
+              ).prepareInProcessSessionRead(resolved, params.requestParams.key, assertCurrent)
+            : assertCurrent;
+        assertReadCurrent();
+        return await run(resolved, assertReadCurrent);
       } finally {
         authorization.sessionMutationAuthorization?.release?.();
         authorization.sessionAccessAuthority?.release();

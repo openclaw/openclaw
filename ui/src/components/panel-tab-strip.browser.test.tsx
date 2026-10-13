@@ -1,16 +1,24 @@
-import { render } from "lit";
+import { render } from "@solidjs/web";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { flush } from "../test-helpers/solid-settle.ts";
 import {
-  panelTabStripStyles,
-  renderPanelTabStrip,
-  type PanelTabStripTab,
-} from "./panel-tab-strip.ts";
+  PanelTabStrip,
+  type SolidPanelTabStripTab as PanelTabStripTab,
+  type PanelTabStripProps,
+} from "./panel-tab-strip-solid.tsx";
+import { panelTabStripCss } from "./panel-tab-strip-styles.ts";
 
 type RenderedTab = HTMLButtonElement;
 
-type PanelBridge = HTMLElement & { updateComplete: Promise<boolean> };
-const mountedBridges = new Set<PanelBridge>();
+const mountedStrips = new Map<
+  HTMLElement | DocumentFragment,
+  {
+    update: (props: PanelTabStripProps<PanelTabStripTab>) => void;
+    dispose: () => void;
+  }
+>();
 
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
 
@@ -31,21 +39,25 @@ async function renderControlledStrip(params: {
   onSelect: (id: string) => void;
   onClose?: (id: string) => void | Promise<void>;
 }) {
-  render(
-    renderPanelTabStrip({
-      tabs: params.tabs,
-      activeId: params.activeId,
-      ariaControls: params.ariaControls ?? "browser-test-panel",
-      onSelect: params.onSelect,
-      onClose: params.onClose ?? vi.fn(),
-      onNew: vi.fn(),
-      newLabel: "New tab",
-    }),
-    params.container,
-  );
-  const bridge = params.container.querySelector<PanelBridge>("openclaw-panel-tab-strip")!;
-  mountedBridges.add(bridge);
-  await bridge.updateComplete;
+  const props: PanelTabStripProps<PanelTabStripTab> = {
+    tabs: params.tabs,
+    activeId: params.activeId,
+    ariaControls: params.ariaControls ?? "browser-test-panel",
+    onSelect: params.onSelect,
+    onClose: params.onClose ?? vi.fn(),
+    onNew: vi.fn(),
+    newLabel: "New tab",
+  };
+  const mounted = mountedStrips.get(params.container);
+  if (mounted) {
+    mounted.update(props);
+  } else {
+    const [current, update] = createSignal(props);
+    const dispose = render(() => <PanelTabStrip {...current()} />, params.container);
+    mountedStrips.set(params.container, { update, dispose });
+  }
+  flush();
+  await Promise.resolve();
 }
 
 function renderedTabs(container: ParentNode): RenderedTab[] {
@@ -56,13 +68,13 @@ function tabWithId(container: ParentNode, id: string): RenderedTab | undefined {
   return renderedTabs(container).find((candidate) => candidate.dataset.tabValue === id);
 }
 
-async function settleTabLayout(container: ParentNode) {
-  await container.querySelector<PanelBridge>("openclaw-panel-tab-strip")?.updateComplete;
+async function settleTabLayout() {
+  flush();
   await new Promise(requestAnimationFrame);
 }
 
 async function expectOverflowTabVisible(container: ParentNode, selectedTab: HTMLElement) {
-  await settleTabLayout(container);
+  await settleTabLayout();
   const viewport = container.querySelector<HTMLElement>(".tabstrip");
   if (!viewport) {
     throw new Error("expected rendered tab strip viewport");
@@ -78,7 +90,7 @@ async function expectControlledSelection(
   container: ParentNode,
   activeId: string,
 ): Promise<RenderedTab> {
-  await container.querySelector<PanelBridge>("openclaw-panel-tab-strip")?.updateComplete;
+  flush();
   let active: RenderedTab | undefined;
   await vi.waitFor(() => {
     const tabs = renderedTabs(container);
@@ -98,10 +110,12 @@ async function expectControlledSelection(
   return active!;
 }
 
-afterEach(async () => {
+afterEach(() => {
+  for (const mounted of mountedStrips.values()) {
+    mounted.dispose();
+  }
+  mountedStrips.clear();
   document.body.replaceChildren();
-  await Promise.all([...mountedBridges].map((bridge) => bridge.updateComplete));
-  mountedBridges.clear();
   document.querySelector("#panel-tab-strip-browser-test-styles")?.remove();
 });
 
@@ -117,14 +131,12 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
     expect(document.activeElement).toBe(host);
     expect(container.activeElement).toBe(initialActive);
 
-    const reordered = renderControlledStrip({
+    await renderControlledStrip({
       container,
       tabs: [tabs[2]!, { ...tabs[1]!, label: "Tab B navigated" }, tabs[0]!],
       activeId: "b",
       onSelect: vi.fn(),
     });
-    queueMicrotask(() => initialActive.blur());
-    await reordered;
     const reorderedActive = await expectControlledSelection(container, "b");
 
     expect(reorderedActive).toBe(initialActive);
@@ -151,14 +163,14 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
       onSelect: vi.fn(),
     });
     expect(await expectControlledSelection(container, "b")).toBe(initialActive);
-    await settleTabLayout(container);
+    await settleTabLayout();
     expect(document.activeElement).toBe(unrelated);
   });
 
   it("keeps arrow and mouse activation controlled and the selected overflow tab visible", async () => {
     const style = document.createElement("style");
     style.id = "panel-tab-strip-browser-test-styles";
-    style.textContent = panelTabStripStyles.cssText;
+    style.textContent = panelTabStripCss;
     document.head.append(style);
     const container = document.createElement("div");
     container.style.width = "220px";
@@ -222,6 +234,8 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
           tabs = tabs.filter((entry) => entry.id !== closedId);
           activeId = tabs[0]?.id ?? "";
           const replacement = document.createElement("div");
+          mountedStrips.get(container)?.dispose();
+          mountedStrips.delete(container);
           container.replaceWith(replacement);
           container = replacement;
           await renderControlledStrip({
@@ -252,7 +266,7 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
       await close.promise;
 
       const fallback = await expectControlledSelection(container, activeId);
-      await settleTabLayout(container);
+      await settleTabLayout();
       expect(document.activeElement).toBe(fallback);
     },
   );

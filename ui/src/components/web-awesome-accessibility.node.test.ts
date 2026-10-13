@@ -159,10 +159,10 @@ describe.runIf(canRunPlaywrightChromium(executablePath))("Web Awesome accessibil
   it("keeps panel actions outside the tablist in the accessibility tree", async () => {
     await withAccessibility(
       `
-        const { render } = await import(${JSON.stringify(new URL(`/@fs${new URL(import.meta.resolve("lit")).pathname}`, server.baseUrl).href)});
-        const { renderPanelTabStrip } = await import(${JSON.stringify(new URL("src/components/panel-tab-strip.ts", server.baseUrl).href)});
+        const { render, createComponent } = await import(${JSON.stringify(new URL(`/@fs${new URL("./web.js", import.meta.resolve("@solidjs/web")).pathname}`, server.baseUrl).href)});
+        const { PanelTabStrip } = await import(${JSON.stringify(new URL("src/components/panel-tab-strip-solid.tsx", server.baseUrl).href)});
         render(
-          renderPanelTabStrip({
+          () => createComponent(PanelTabStrip, {
             tabs: ["first", "second"].map((id) => ({
               id,
               domId: id + "-tab",
@@ -178,7 +178,6 @@ describe.runIf(canRunPlaywrightChromium(executablePath))("Web Awesome accessibil
           }),
           root,
         );
-        await root.querySelector("openclaw-panel-tab-strip").updateComplete;
       `,
       async (_page, accessibility) => {
         const { nodes } = await accessibility.send("Accessibility.getFullAXTree");

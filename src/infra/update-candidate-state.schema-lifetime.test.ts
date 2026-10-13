@@ -379,6 +379,42 @@ it.each(["", "-wal"])("keeps an unknown size when %s metadata cannot be read", a
   ).resolves.toEqual([{ path: file, sizeBytes: undefined }]);
 });
 
+it.each(["EAGAIN", "EWOULDBLOCK", "EIO", "EBADF", "EPIPE"])(
+  "preserves metadata inventory semantics when progress encounters %s",
+  async (code) => {
+    const root = dirs.make("openclaw-metadata-progress-");
+    const file = path.join(root, "database.sqlite");
+    fs.writeFileSync(file, Buffer.alloc(4096));
+    fs.writeFileSync(`${file}-wal`, Buffer.alloc(512));
+    const preload = path.join(root, "progress-fault.cjs");
+    fs.writeFileSync(
+      preload,
+      `
+      const fs = require("node:fs");
+      const write = fs.writeSync;
+      let failed = false;
+      fs.writeSync = function(fd, value, ...args) {
+        if (fd === 2 && !failed && typeof value === "string" && value.startsWith("State schema progress: ")) {
+          failed = true;
+          throw Object.assign(new Error("synthetic progress write failed"), { code: ${JSON.stringify(code)} });
+        }
+        return write.call(this, fd, value, ...args);
+      };
+      `,
+    );
+    const inventory = readUpdateStateDatabaseSizes([file, path.join(root, "missing.sqlite")], {
+      nodeRunner: process.execPath,
+      sourceEnv: { ...process.env, ...sqliteWorkerPreloadEnv(preload) },
+      stagingRoot: root,
+    });
+    if (code === "EAGAIN" || code === "EWOULDBLOCK") {
+      await expect(inventory).resolves.toEqual([{ path: file, sizeBytes: 4608n }]);
+    } else {
+      await expect(inventory).rejects.toThrow("synthetic progress write failed");
+    }
+  },
+);
+
 it("cancels blocked sidecar metadata before candidate discovery and removes staging after child exit", async ({
   signal,
 }) => {

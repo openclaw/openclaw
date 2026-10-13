@@ -390,36 +390,53 @@ describe("buildEmbeddedRunPayloads", () => {
     },
   );
 
-  it("keeps a sealed input's completion separate from the current input's failure", () => {
-    const earlier = makeAgentAssistantMessage({
-      content: [{ type: "text", text: "Do not repeat the completed answer." }],
-    });
-    const payloads = buildPayloads({
-      sourceReplyDeliveryMode: "automatic",
-      sourceReplyDeliveryState: "missing",
-      didDeliverSourceReplyViaMessageTool: false,
-      assistantTexts: ["Do not repeat the completed answer."],
-      answerSegments: [
-        {
-          textEnd: 1,
-          messageEnd: 1,
-          finalMessageStart: 1,
-          lastAssistant: earlier,
-          sourceReplyDeliveryState: "delivered",
-        },
-      ],
-      messagingToolSourceReplyPayloads: [{ text: "Completed answer.", sourceReplyFinal: true }],
-      lastAssistant: makeAssistant({
-        stopReason: "error",
-        content: [],
-        errorMessage: "Current input failed.",
-      }),
-    });
-    expect(payloads).toEqual([
-      expect.objectContaining({ text: "Completed answer." }),
-      expect.objectContaining({ text: REDACTED_TEST_MODEL_FAILURE_TEXT, isError: true }),
-    ]);
-  });
+  it.each(
+    (["pending", "delivered"] as const).flatMap((earlierDelivery) =>
+      (["pending", "missing"] as const).map((currentDelivery) => ({
+        earlierDelivery,
+        currentDelivery,
+      })),
+    ),
+  )(
+    "scopes error recovery to current custody ($earlierDelivery then $currentDelivery)",
+    ({ earlierDelivery, currentDelivery }) => {
+      const earlier = makeAgentAssistantMessage({
+        content: [{ type: "text", text: "Do not repeat the completed answer." }],
+      });
+      const payloads = buildPayloads({
+        sourceReplyDeliveryMode: "automatic",
+        sourceReplyDeliveryState: currentDelivery,
+        didDeliverSourceReplyViaMessageTool: false,
+        assistantTexts: ["Do not repeat the completed answer."],
+        answerSegments: [
+          {
+            textEnd: 1,
+            messageEnd: 1,
+            finalMessageStart: 1,
+            lastAssistant: earlier,
+            sourceReplyDeliveryState: earlierDelivery,
+          },
+        ],
+        messagingToolSourceReplyPayloads:
+          earlierDelivery === "delivered"
+            ? [{ text: "Completed answer.", sourceReplyFinal: true }]
+            : [],
+        lastAssistant: makeAssistant({
+          stopReason: "error",
+          content: [],
+          errorMessage: "Current input failed.",
+        }),
+      });
+      expect(payloads).toEqual([
+        ...(earlierDelivery === "delivered"
+          ? [expect.objectContaining({ text: "Completed answer." })]
+          : []),
+        ...(currentDelivery === "missing"
+          ? [expect.objectContaining({ text: REDACTED_TEST_MODEL_FAILURE_TEXT, isError: true })]
+          : []),
+      ]);
+    },
+  );
 
   it("preserves the rejection message without the response envelope", () => {
     const rawError =

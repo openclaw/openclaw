@@ -271,7 +271,7 @@ export function createCrabboxWorkerProvider(
         ? CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS +
           resolveCrabboxWarmImageCaptureTimeoutMs(parsed.provider)
         : 0);
-    const context = { binary, provider: parsed.provider };
+    const context = warmImages.startContext(binary, parsed.provider, options, Boolean(project));
     const leaseId = allocation.leaseId;
     if (parsed.desktop && parsed.provider === "hetzner") {
       await assertHetznerDesktopHasManagedCoordinator({ binary, runCommand, signal });
