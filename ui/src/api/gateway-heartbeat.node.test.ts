@@ -85,9 +85,11 @@ describe("GatewayBrowserClient heartbeat recovery", () => {
         const ws = await startConnect(client, advertisedTickIntervalMs);
         await vi.advanceTimersByTimeAsync(0);
 
-        await vi.advanceTimersByTimeAsync(5_000);
+        await vi.advanceTimersByTimeAsync(4_294_967_293);
         expect(ws.lastClose).toBeNull();
         expect(client.needsWakeReconnect).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(client.needsWakeReconnect).toBe(true);
       } finally {
         client.stop();
       }
