@@ -85,11 +85,11 @@ it("retires a completed job before its successor can reuse the same request ID",
   const current = currentJob(custody);
   const slot: Pick<Slot, "current"> & {
     actors: Set<Pick<Actor, "id" | "closeReceipt">>;
-    worker: { postMessage: ReturnType<typeof vi.fn> };
+    worker: Pick<Slot["worker"], "postMessage">;
   } = {
     current,
     actors: new Set<Pick<Actor, "id" | "closeReceipt">>(),
-    worker: { postMessage: vi.fn() },
+    worker: { postMessage() {} },
   };
   const finish = vi.fn(() => {
     expect(readSqliteWorkerRequestCustody(current.custody.descriptor)).toBe(false);

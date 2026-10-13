@@ -1,15 +1,14 @@
-import { SqliteWorkerError } from "./sqlite-worker-contract.js";
+import {
+  SqliteWorkerError,
+  type SqliteWorkerRequestCustodyDescriptor,
+} from "./sqlite-worker-contract.js";
+export type { SqliteWorkerRequestCustodyDescriptor } from "./sqlite-worker-contract.js";
 
 const ACTIVE = 1;
 const DISPATCHED = 2;
 const POST_ATTEMPTED = 4;
 const CANCELED = 8;
 const RETIRED = 16;
-
-export type SqliteWorkerRequestCustodyDescriptor = {
-  slot: Int32Array<SharedArrayBuffer>;
-  request: Int32Array<SharedArrayBuffer>;
-};
 
 function active(state: number): boolean {
   return (state & ACTIVE) !== 0 && (state & (CANCELED | RETIRED)) === 0;

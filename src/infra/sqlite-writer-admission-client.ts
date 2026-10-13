@@ -2,9 +2,12 @@ import { MessagePort, type Transferable } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
 import { currentSqliteOperationTiming } from "./sqlite-reader-lifecycle.js";
-import { SqliteWorkerAdmissionTimeoutError, SqliteWorkerError } from "./sqlite-worker-contract.js";
+import {
+  SqliteWorkerAdmissionTimeoutError,
+  SqliteWorkerError,
+  type SqliteWorkerAdmissionRequest,
+} from "./sqlite-worker-contract.js";
 import { SQLITE_COLD_ADMISSION_PENDING } from "./sqlite-worker-database-admission-relay.js";
-import type { SqliteWorkerAdmissionRequest } from "./sqlite-worker-operation-admission.js";
 import {
   currentSqliteWorkerOperationAdmission as currentAdmission,
   type SqliteWorkerOperationContext,

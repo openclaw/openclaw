@@ -1154,6 +1154,8 @@ src/infra/sqlite-worker-identity.ts
 src/infra/sqlite-worker-operation-admission.ts
 src/infra/sqlite-worker-operation-settlement.ts
 src/infra/sqlite-worker-request-class.ts
+src/infra/sqlite-worker-request-custody.ts
+src/infra/sqlite-writer-admission-client.ts
 src/infra/sqlite-worker-state-context.ts
 src/infra/sqlite-worker-store.ts
 src/infra/sqlite-worker-transfer.ts

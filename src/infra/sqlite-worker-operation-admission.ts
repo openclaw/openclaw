@@ -14,7 +14,7 @@ import {
   retainSqliteDatabaseAdmissionLocation,
   withSqliteDatabaseAdmissionExchange,
 } from "./sqlite-database-admission.js";
-import { SqliteWorkerError } from "./sqlite-worker-contract.js";
+import { SqliteWorkerError, type SqliteWorkerAdmissionRequest } from "./sqlite-worker-contract.js";
 import {
   SQLITE_COLD_ADMISSION_PENDING,
   exchangeDatabaseAdmissions,
@@ -34,19 +34,13 @@ import {
 } from "./sqlite-worker-operation-settlement.js";
 import { requestSqliteWorkerOperationAdmission } from "./sqlite-writer-admission-client.js";
 
+export type { SqliteWorkerAdmissionRequest } from "./sqlite-worker-contract.js";
 export { requestSqliteWorkerOperationAdmission } from "./sqlite-writer-admission-client.js";
 
 const REQUESTED = 0;
 const GRANTED = 1;
 const REFUSED = 2;
 const TIMED_OUT = 3;
-
-export type SqliteWorkerAdmissionRequest = {
-  stage: "open" | "prepare" | "transaction" | "commit";
-  facts: unknown;
-  /** Opt-in wait budget in milliseconds; omission retains the live-owner wait. */
-  deadlineMs?: number;
-};
 
 type AdmissionFailureSource = "authority" | "domain" | "protocol";
 type DatabaseAuthority = {
