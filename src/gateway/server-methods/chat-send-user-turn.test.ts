@@ -846,7 +846,6 @@ describe("prepareChatSendUserTurn", () => {
           hydrationSuppressed: true,
         },
       ]);
-      expect(managedMedia.map((fact) => fact.path)).not.toContain("image_0");
       expect(prepared.replyOptionImages).toBeUndefined();
       expect(prepared.replyOptionMedia).toEqual([
         {

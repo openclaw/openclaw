@@ -35,7 +35,10 @@ export function isOpenClawCliImageCachePath(filePath: string): boolean {
 }
 
 export function resolveMediaFactLocalRef(fact: MediaFact): MediaFileRef | undefined {
-  const mediaUri = [fact.url, fact.path].find((value) => value?.startsWith("media://inbound/"));
+  const mediaUri =
+    fact.staged && fact.path
+      ? undefined
+      : [fact.url, fact.path].find((value) => value?.startsWith("media://inbound/"));
   const identity = mediaUri ?? fact.path ?? fact.url;
   if (!identity) {
     return undefined;
@@ -79,20 +82,6 @@ export function mediaFactToImageRef(fact: MediaFact, factIndex: number): MediaIm
     factIndex,
     hydrate: Boolean(usableRef) && fact.hydrationSuppressed !== true,
     ...(fact.workspaceDir ? { workspaceDir: fact.workspaceDir } : {}),
-  };
-}
-
-/** Sandbox staging publishes one workspace copy; the media URI is only an alias. */
-export function preferStagedSandboxImagePath(fact: MediaFact, ref: MediaImageRef): MediaImageRef {
-  if (fact.staged !== true || !fact.path || fact.path.startsWith("media://")) {
-    return ref;
-  }
-  return {
-    ...ref,
-    raw: fact.path,
-    type: "path",
-    resolved: fact.path,
-    aliases: [...new Set([fact.path, ...ref.aliases])],
   };
 }
 

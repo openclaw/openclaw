@@ -46,8 +46,6 @@ function resolveChatSendManagedMedia(
     path: entry.path,
     contentType: entry.fact.contentType ?? "application/octet-stream",
     ...(entry.fact.fileName ? { fileName: entry.fact.fileName } : {}),
-    // The live turn already owns one vision input. This copy exists so staging
-    // can publish the media-store file without loading the image a second time.
     ...(suppressPromptHydration && (entry.imageKind === "inline" || entry.imageKind === "offloaded")
       ? { hydrationSuppressed: true }
       : {}),
@@ -152,27 +150,18 @@ export function prepareChatSendUserTurn(params: {
       };
     }),
   );
-  // Vision-capable offloads skip pre-staging, so an all-offloaded WebChat
-  // image never reaches the workspace staging owner. Hand that media-store
-  // path over without replacing the single prompt image. Text-only turns
-  // already publish the image through mediaPathOffloads.
-  const stageVisionOffloadedImages =
-    !attachments.explicitOriginTargetsPlugin &&
-    attachments.mediaPathOffloads.every((fact) => !fact.contentType?.startsWith("image/")) &&
-    attachments.offloadedRefs.some((ref) => ref.mimeType.startsWith("image/"));
-  const pluginBoundMediaPromise =
-    attachments.parsedImages.length > 0 || stageVisionOffloadedImages
-      ? persistedMediaForTranscriptPromise.then((result) => {
-          const entries = attachments.explicitOriginTargetsPlugin
-            ? result.entries
-            : result.entries.filter(
-                (entry) =>
-                  entry.imageKind === "inline" ||
-                  (stageVisionOffloadedImages && entry.imageKind === "offloaded"),
-              );
-          return resolveChatSendManagedMedia(entries, !attachments.explicitOriginTargetsPlugin);
-        })
-      : Promise.resolve([]);
+  const pluginBoundMediaPromise = persistedMediaForTranscriptPromise.then((result) =>
+    resolveChatSendManagedMedia(
+      result.entries.filter(
+        (entry) =>
+          attachments.explicitOriginTargetsPlugin ||
+          entry.imageKind === "inline" ||
+          (entry.imageKind === "offloaded" &&
+            !attachments.mediaPathOffloads.some((fact) => fact.contentType?.startsWith("image/"))),
+      ),
+      !attachments.explicitOriginTargetsPlugin,
+    ),
+  );
   void pluginBoundMediaPromise.catch(() => undefined);
   // Generated media hints belong to the prompt and reset payload, not command arguments.
   const commandBody = request.inboundMessage;

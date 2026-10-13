@@ -39,10 +39,10 @@ import { getAgentWorkspaceAccess } from "../../workspace-access.js";
 import { log } from "../logger.js";
 import {
   mediaFactToImageRef,
-  preferStagedSandboxImagePath,
   isOpenClawCliImageCachePath,
   resolveMediaFactLocalRef,
   type MediaFileRef,
+  type MediaImageRef,
 } from "./images.media-refs.js";
 import {
   type ImageFactIndex,
@@ -287,15 +287,7 @@ export async function detectAndLoadPromptImages(
   const imageFactIndexes = media.flatMap((fact, factIndex) =>
     isImageMediaFact(fact) && !suppressed.has(factIndex) ? [factIndex] : [],
   );
-  const refs = media.flatMap((fact, factIndex) => {
-    const ref = mediaFactToImageRef(fact, factIndex);
-    if (!ref) {
-      return [];
-    }
-    // The managed media:// URI is not a file inside the sandbox. The staged
-    // workspace path is the one vision input the bridge can read.
-    return [params.sandbox ? preferStagedSandboxImagePath(fact, ref) : ref];
-  });
+  const refs = media.map(mediaFactToImageRef).filter((ref): ref is MediaImageRef => Boolean(ref));
   const refsByFact = new Map(refs.map((ref) => [ref.factIndex, ref]));
   const inferredSlots = (() => {
     if (params.imageOrder?.length === imageFactIndexes.length) {
