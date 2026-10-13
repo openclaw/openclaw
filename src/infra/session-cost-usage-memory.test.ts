@@ -8,6 +8,7 @@ import {
 } from "../config/sessions/session-actor-storage-binding.js";
 import { resolveMemorySessionTargetsInWorker } from "../config/sessions/session-transcript-inventory-runtime.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { runSessionActorUsage } from "./session-cost-usage-memory.js";
 import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
@@ -121,6 +122,40 @@ async function fixture(
 }
 
 describe("actor memory usage", () => {
+  it("reports publication failure while keeping the refreshed usage rollup", async () => {
+    const { binding, append, sessionFile } = await fixture();
+    await append(5);
+    const refresh = () =>
+      runSessionActorUsage(
+        binding,
+        { kind: "refresh", pricingFingerprint: "fixture" },
+        () => undefined,
+      );
+    const stop = sessionChanges.subscribeProjection((change) => {
+      if ("sessionKey" in change && change.sessionKey === sessionKey) {
+        throw new Error("projection unavailable");
+      }
+    });
+    try {
+      await expect(refresh()).rejects.toMatchObject({ name: "SessionActorStorageCommittedError" });
+    } finally {
+      stop();
+    }
+    expect(await refresh()).toEqual({ kind: "refresh", changed: false });
+    expect(
+      await runSessionActorUsage(
+        binding,
+        {
+          kind: "sessions",
+          pricingFingerprint: "fixture",
+          sessions: [{ sessionFile }],
+          dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+        },
+        () => undefined,
+      ),
+    ).toMatchObject({ kind: "sessions", summaries: [{ input: 5, output: 2 }] });
+  });
+
   it("uses production memory acquisition and refreshes a stale report after an in-process append", async () => {
     const { binding, append, sessionFile } = await fixture();
     await append(5);

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionActorAuthority } from "../config/sessions/session-actor-contract.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { acquireSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { BoardValidationError } from "./board-layout.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
@@ -71,6 +72,26 @@ const app = (serverName = "server") => ({
 });
 
 describe("session actor BoardStore", () => {
+  it("reports publication failure after retaining the committed widget", () =>
+    withStore(async (store) => {
+      const stop = sessionChanges.subscribeProjection((change) => {
+        if ("sessionKey" in change && change.sessionKey === sessionKey) {
+          throw new Error("projection unavailable");
+        }
+      });
+      try {
+        await expect(store.putWidget(html("saved"))).rejects.toMatchObject({
+          name: "SessionActorStorageCommittedError",
+        });
+      } finally {
+        stop();
+      }
+      expect(await store.getSnapshot(target)).toMatchObject({
+        revision: 1,
+        widgets: [{ name: "saved" }],
+      });
+    }));
+
   it("reads absent sessions without creating them and rejects writes", async () => {
     const store = storeForSession();
     expect(await store.getSnapshot(target)).toEqual({

@@ -12,6 +12,7 @@ import {
   withSessionActorStorage,
   type SessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { withOpenClawAgentDatabaseRuntime } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -180,10 +181,7 @@ async function runHeartbeatOutcomeOperation(
                 { type: "session.heartbeat.claim", input: command.input },
                 selectedAuthority,
               );
-        if (result.kind === "rolled-back") {
-          throw new Error(result.error.message);
-        }
-        return result.value;
+        return readSessionActorStorageResult(result);
       },
     );
   }

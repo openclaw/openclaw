@@ -7,6 +7,7 @@ import {
   persistHeartbeatOutcome,
 } from "../../infra/heartbeat-outcome-store.js";
 import { recordMessageToolRunOutcome } from "../../infra/message-tool-run-outcome-store.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { createSqliteTrajectoryRuntimeSink } from "../../trajectory/runtime-store-writer.js";
 import {
@@ -142,6 +143,129 @@ function trajectory(sessionId: string, text: string, seq: number): TrajectoryEve
 }
 
 describe("memory session side-data consumers", () => {
+  it("reports committed heartbeat publication failures without releasing the claim", async () => {
+    const { scope } = await fixture();
+    const fail = () =>
+      sessionChanges.subscribeProjection((change) => {
+        if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+          throw new Error("projection unavailable");
+        }
+      });
+    const stopPersist = fail();
+    try {
+      await expect(
+        persistHeartbeatOutcome({
+          ...scope,
+          runSessionKey: scope.sessionKey,
+          occurredAt: 1,
+          response: { outcome: "progress", notify: false, summary: "saved" },
+        }),
+      ).rejects.toMatchObject({ name: "SessionActorStorageCommittedError" });
+    } finally {
+      stopPersist();
+    }
+    const stopClaim = fail();
+    try {
+      await expect(claimHeartbeatOutcomeForRun({ ...scope, runId: "first" })).rejects.toMatchObject(
+        {
+          name: "SessionActorStorageCommittedError",
+        },
+      );
+    } finally {
+      stopClaim();
+    }
+    expect(await claimHeartbeatOutcomeForRun({ ...scope, runId: "other" })).toBeUndefined();
+    expect(await claimHeartbeatOutcomeForRun({ ...scope, runId: "first" })).toMatchObject({
+      summary: "saved",
+    });
+  });
+
+  it("reports a committed message-tool outcome publication failure after one write", async () => {
+    const { scope, actor } = await fixture();
+    const sequence = actor.snapshot(authority)!.version.sequence;
+    const stop = sessionChanges.subscribeProjection((change) => {
+      if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+        throw new Error("projection unavailable");
+      }
+    });
+    try {
+      await expect(
+        recordMessageToolRunOutcome({
+          ...scope,
+          runId: "run",
+          provider: "test",
+          model: "test",
+          outcome: "mute",
+          runStatus: "completed",
+          occurredAt: 1,
+        }),
+      ).rejects.toMatchObject({ name: "SessionActorStorageCommittedError" });
+    } finally {
+      stop();
+    }
+    expect(actor.snapshot(authority)!.version.sequence).toBe(sequence + 1);
+  });
+
+  it("reports an outbox publication failure while preserving the accepted turn", async () => {
+    const { scope, binding, turn } = await fixture();
+    const boundary = await turn("accepted");
+    const store = openContextEngineTurnOutboxWorkerStore({
+      ...location,
+      sessionKey: scope.sessionKey,
+      sessionId: scope.sessionId,
+      sessionActor: binding,
+    });
+    const filter = { engineId: "test", isHeartbeat: false };
+    const stop = sessionChanges.subscribeProjection((change) => {
+      if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+        throw new Error("projection unavailable");
+      }
+    });
+    try {
+      await expect(store.acceptIntent({ ...filter, boundary })).rejects.toMatchObject({
+        name: "SessionActorStorageCommittedError",
+      });
+    } finally {
+      stop();
+    }
+    await store.publishClosedTurn({ ...filter, boundary, maxEvents: 10, maxBytes: 10_000 });
+    expect(await store.readNextPending({ ...filter, sessionId: scope.sessionId })).toMatchObject({
+      advancement_key: "accepted",
+    });
+  });
+
+  it("does not append a committed trajectory batch again after publication fails", async () => {
+    const { scope, binding } = await fixture();
+    const sink = await createSqliteTrajectoryRuntimeSink({
+      env: scope.env,
+      sessionId: scope.sessionId,
+      sessionKey: scope.sessionKey,
+      sessionTarget: scope,
+      sessionActor: binding,
+      maxRuntimeFileBytes: 1000,
+    });
+    if (!sink) {
+      throw new Error("Expected memory trajectory sink");
+    }
+    const event = trajectory(scope.sessionId, "saved", 1);
+    sink.write(event, JSON.stringify(event));
+    const stop = sessionChanges.subscribeProjection((change) => {
+      if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+        throw new Error("projection unavailable");
+      }
+    });
+    try {
+      await expect(sink.flush()).rejects.toMatchObject({
+        name: "SessionActorStorageCommittedError",
+      });
+    } finally {
+      stop();
+    }
+    expect(await loadSqliteTrajectoryRuntimeEvents(scope)).toEqual([event]);
+    await sink.flush();
+    expect(await loadSqliteTrajectoryRuntimeEvents(scope)).toEqual([event]);
+  });
+
   it("routes unbound production side data through the current memory owner without recreating closed sessions", async () => {
     const target = {
       agentId: "main",

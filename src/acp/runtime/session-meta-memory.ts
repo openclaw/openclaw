@@ -4,6 +4,7 @@ import {
   type SessionActorStorageBinding,
 } from "../../config/sessions/session-actor-storage-binding.js";
 import type { SessionActorStorageAuthority } from "../../config/sessions/session-actor-storage-contract.js";
+import { readSessionActorStorageResult } from "../../config/sessions/session-actor-storage-result.js";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions/types.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -193,6 +194,7 @@ async function upsertBoundMemoryAcpSessionMeta(
   }
   const changed = outcome.value;
   if (decision.kind === "set" && !changed) {
+    readSessionActorStorageResult(outcome);
     return null;
   }
   // The shared writer invalidates its old metadata before admission. Settle this
@@ -219,6 +221,7 @@ async function upsertBoundMemoryAcpSessionMeta(
         }
       : undefined,
   );
+  readSessionActorStorageResult(outcome);
   return decision.kind === "clear"
     ? (changed ?? null)
     : mergeSessionEntry(changed, { acp: decision.meta });

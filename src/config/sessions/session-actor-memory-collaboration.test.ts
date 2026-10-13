@@ -335,7 +335,18 @@ describe("memory collaboration through the public adapters", () => {
       emoji: "👍",
       identityId: "viewer",
     };
-    expect((await setSessionReactionAsync(scope, reaction)).changed).toBe(true);
+    const stop = sessionChanges.subscribeProjection((change) => {
+      if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+        throw new Error("projection unavailable");
+      }
+    });
+    try {
+      await expect(setSessionReactionAsync(scope, reaction)).rejects.toMatchObject({
+        name: "SessionActorStorageCommittedError",
+      });
+    } finally {
+      stop();
+    }
     expect((await setSessionReactionAsync(scope, reaction)).changed).toBe(false);
     const history = await storage.read({ type: "session.history.hydrate", input: {} }, authority);
     if (history.kind !== "full") {

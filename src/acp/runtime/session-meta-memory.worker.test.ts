@@ -6,6 +6,7 @@ import { memorySessionActorOwners } from "../../config/sessions/session-actor-me
 import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -17,6 +18,41 @@ import { readAcpSessionEntry } from "./session-meta.js";
 afterEach(async () => {
   memorySessionActorOwners.reset();
   await closeOpenClawStateDatabaseAsync();
+});
+
+it("settles shared ACP metadata before reporting the committed entry publication failure", async () => {
+  await withOpenClawTestState({ label: "acp-memory-publication" }, async (state) => {
+    const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
+    const sessionKey = "agent:main:dashboard:incognito-acp-publication";
+    const scope = { cfg, env: state.env, agentId: "main", sessionKey };
+    await replaceSessionEntry(scope, {
+      sessionId: "session",
+      lifecycleRevision: "lifecycle",
+      updatedAt: 100,
+      incognito: true,
+    });
+    const meta: SessionAcpMeta = {
+      backend: "fixture",
+      agent: "fixture",
+      runtimeSessionName: "saved-runtime",
+      mode: "persistent",
+      state: "idle",
+      lastActivityAt: 100,
+    };
+    const stop = sessionChanges.subscribeProjection((change) => {
+      if ("sessionKey" in change && change.sessionKey === sessionKey && change.scope !== "acp") {
+        throw new Error("entry projection unavailable");
+      }
+    });
+    try {
+      await expect(upsertAcpSessionMeta({ ...scope, mutate: () => meta })).rejects.toMatchObject({
+        name: "SessionActorStorageCommittedError",
+      });
+    } finally {
+      stop();
+    }
+    expect((await readAcpSessionEntryAsync(scope))?.acp).toEqual(meta);
+  });
 });
 
 it("acquires unbound actor entries and joins shared ACP receipts at the control effect without host SQL", async () => {
