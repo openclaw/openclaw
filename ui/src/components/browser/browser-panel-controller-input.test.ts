@@ -905,8 +905,12 @@ describe("BrowserPanelController capture and input ownership", () => {
     const hitTest = vi.fn(() => null);
     const { client, request } = createBrowserClient(async (envelope) => {
       if (envelope.path === "/act") {
+        const fn = envelope.body?.fn;
+        if (typeof fn !== "string") {
+          throw new Error("Expected a browser evaluate script");
+        }
         return {
-          result: runInNewContext(`(${envelope.body?.fn})()`, {
+          result: runInNewContext(`(${fn})()`, {
             document: { elementFromPoint: hitTest },
             window: { scrollBy: scroll },
           }),

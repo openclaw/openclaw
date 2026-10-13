@@ -367,8 +367,12 @@ describe("browser wheel script", () => {
     });
     const windowScroll = vi.spyOn(window, "scrollBy").mockImplementation(() => {});
     const { client } = createBrowserClient(async (envelope) => {
+      const fn = envelope.body?.fn;
+      if (typeof fn !== "string") {
+        throw new Error("Expected a browser evaluate script");
+      }
       return {
-        result: runInNewContext(`(${envelope.body?.fn})()`, {
+        result: runInNewContext(`(${fn})()`, {
           document,
           window,
           getComputedStyle,
