@@ -72,7 +72,10 @@ import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
 import type { SkillSnapshot } from "../../skills/types.js";
-import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
+import {
+  closeOpenClawStateDatabaseByPath,
+  closeOpenClawStateDatabaseByPathAsync,
+} from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { connectUserModelAccount } from "../../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -332,6 +335,7 @@ type CliContextBudgetTestCase = {
 
 describe("prepareCliRunContext", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cli-prepare-");
+  const retainedStateDirs: string[] = [];
   let fixture: ReturnType<typeof createCliRunnerPrepareFixture>;
 
   async function withAuthenticatedHistory(
@@ -655,10 +659,19 @@ describe("prepareCliRunContext", () => {
     ensureSandboxWorkspaceForSessionMock.mockReset();
     ensureSandboxWorkspaceForSessionMock.mockResolvedValue(null);
     // Discovery cases explicitly opt out of the prepared empty catalog.
-    fixture = createCliRunnerPrepareFixture((params) => {
-      setRuntimeConfigSnapshot(params.config ?? {});
-      return prepareCliRunContext({ skillsSnapshot: { prompt: "", skills: [] }, ...params });
-    }, sessionDirs);
+    fixture = createCliRunnerPrepareFixture(
+      (params) => {
+        setRuntimeConfigSnapshot(params.config ?? {});
+        return prepareCliRunContext({ skillsSnapshot: { prompt: "", skills: [] }, ...params });
+      },
+      {
+        make() {
+          const dir = sessionDirs.make();
+          retainedStateDirs.push(dir);
+          return dir;
+        },
+      },
+    );
   });
 
   afterEach(async () => {
@@ -676,6 +689,12 @@ describe("prepareCliRunContext", () => {
     setActiveDegradedSecretOwners([]);
     vi.unstubAllEnvs();
     await fixture.cleanup();
+    // One retained case keeps workers warm without exhausting their store capacity.
+    for (const dir of retainedStateDirs.splice(0, retainedStateDirs.length - 1)) {
+      await closeOpenClawStateDatabaseByPathAsync(
+        resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: dir }),
+      );
+    }
     clearRuntimeConfigSnapshot();
   });
 
