@@ -5,6 +5,7 @@ import {
   captureOpenClawStateWorkerContext,
 } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import { observeSecretStoreMutation } from "./secret-store-changes.js";
 import {
   assertHiddenGitHubSecretRecordName,
   hiddenGitHubStoreKindFromPrefix,
@@ -22,16 +23,20 @@ export async function writeHiddenGitHubSecretRecord(params: {
   assertHiddenGitHubSecretRecordName(params.name);
   assertSecretStoreValueLength(params.value, "secret");
   const context = captureOpenClawStateWorkerContext(params.database);
-  await runOpenClawStateWorkerOperation(context, (scope) =>
-    scope.execute({
-      type: "githubSecrets.write",
-      input: {
-        name: params.name,
-        value: params.value,
-        updatedBy: params.updatedBy,
-        now: Date.now(),
-      },
-    }),
+  await observeSecretStoreMutation(
+    runOpenClawStateWorkerOperation(context, (scope) =>
+      scope.execute({
+        type: "githubSecrets.write",
+        input: {
+          name: params.name,
+          value: params.value,
+          updatedBy: params.updatedBy,
+          now: Date.now(),
+        },
+      }),
+    ),
+    context.admission.databasePath,
+    [params.name],
   );
   registerSecretValueForRedaction(params.value);
 }
@@ -95,10 +100,14 @@ export async function deleteHiddenGitHubSecretRecord(params: {
 }): Promise<void> {
   assertHiddenGitHubSecretRecordName(params.name);
   const context = captureOpenClawStateWorkerContext(params.database);
-  await runOpenClawStateWorkerOperation(context, (scope) =>
-    scope.execute({
-      type: "githubSecrets.delete",
-      input: { name: params.name },
-    }),
+  await observeSecretStoreMutation(
+    runOpenClawStateWorkerOperation(context, (scope) =>
+      scope.execute({
+        type: "githubSecrets.delete",
+        input: { name: params.name },
+      }),
+    ),
+    context.admission.databasePath,
+    [params.name],
   );
 }
