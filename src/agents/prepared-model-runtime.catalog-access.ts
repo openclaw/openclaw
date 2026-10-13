@@ -42,10 +42,8 @@ import {
 } from "./prepared-model-runtime.catalog-source.js";
 import * as retry from "./prepared-model-runtime.discovery-retry.js";
 import { assertPreparedModelRuntimeInputCurrent } from "./prepared-model-runtime.errors.js";
-import {
-  fingerprintPreparedRuntimeFacts,
-  preparedModelInventoryKey,
-} from "./prepared-model-runtime.facts.js";
+import { preparedModelInventoryKey } from "./prepared-model-runtime.facts.js";
+import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.fingerprint.js";
 import {
   isPreparedModelCatalogFull,
   markPreparedModelCatalogFull,

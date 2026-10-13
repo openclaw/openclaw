@@ -335,6 +335,7 @@ export async function createTelegramBotCore(
   };
   const processMessage = createTelegramMessageProcessor({
     ...messageContext,
+    telegramTransport,
     account,
     sendChatActionHandler,
     buildContext: opts.buildContext,

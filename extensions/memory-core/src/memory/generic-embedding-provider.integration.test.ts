@@ -277,7 +277,6 @@ async function createMemoryEmbeddingOwnerForServer(baseUrl: string, database: Da
     provider,
     runtime: created.runtime,
     database: indexDatabase,
-    databaseRevision: 0,
     cacheWritesInvalidated: false,
     providerKey: "integration-proof",
     identities: [],

@@ -190,7 +190,6 @@ async function proveLegacyAuthority<
   }
   let nativeRevoked = false;
   const nativeGuard = vi.fn(() => {
-    getOperatorApproval({ id: record.id, databaseOptions });
     if (nativeRevoked) {
       throw new Error("synthetic SDK guard revoked");
     }

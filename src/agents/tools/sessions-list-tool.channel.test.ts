@@ -31,7 +31,8 @@ describe("sessions_list channel visibility", () => {
         request: Parameters<typeof gatewayCall>[0],
       ): Promise<T> => {
         if (request.method === "sessions.describe") {
-          return { session: rows[0] } as T;
+          const key = (request.params as { key?: string }).key;
+          return { session: rows.find((candidate) => candidate.key === key) ?? null } as T;
         }
         return { sessions: rows, hasMore: false } as T;
       },
@@ -46,5 +47,71 @@ describe("sessions_list channel visibility", () => {
       ],
     });
     expect(JSON.stringify(result.details)).not.toContain("OTHER CUSTOMER SECRET");
+  });
+
+  it("drops a sibling whose channel route changes before result emission", async () => {
+    const requester = "agent:main:slack:channel:c111:thread:2.001";
+    const sibling = "agent:main:slack:channel:c111:thread:2.002";
+    const row = (key: string, to: string, label: string) => ({
+      key,
+      sessionId: key,
+      agentId: "main",
+      classification: "thread" as const,
+      peerKind: "channel" as const,
+      chatType: "channel" as const,
+      space: "t111",
+      label,
+      origin: { provider: "slack", chatType: "channel" },
+      deliveryContext: { channel: "slack", accountId: "default", to },
+    });
+    const requesterRow = row(requester, "channel:c111", "requester");
+    const siblingRow = row(sibling, "channel:c111", "SIBLING SECRET");
+    let siblingDescriptions = 0;
+    let historyCalls = 0;
+    const tool = createSessionsListTool({
+      agentSessionKey: requester,
+      config: { tools: { sessions: { visibility: "channel" } } },
+      callGateway: async <T = Record<string, unknown>>(
+        request: Parameters<typeof gatewayCall>[0],
+      ): Promise<T> => {
+        if (request.method === "sessions.describe") {
+          const key = (request.params as { key?: string }).key;
+          if (key === sibling) {
+            siblingDescriptions += 1;
+            return {
+              session:
+                siblingDescriptions === 1
+                  ? siblingRow
+                  : row(sibling, "channel:c222", "SIBLING SECRET"),
+            } as T;
+          }
+          return { session: key === requester ? requesterRow : null } as T;
+        }
+        if (request.method === "chat.history") {
+          historyCalls += 1;
+          const key = (request.params as { sessionKey?: string }).sessionKey;
+          return {
+            messages: [
+              {
+                role: "user",
+                content: key === sibling ? "SIBLING TRANSCRIPT SECRET" : "requester message",
+              },
+            ],
+          } as T;
+        }
+        return { sessions: [requesterRow, siblingRow], hasMore: false } as T;
+      },
+    });
+
+    const result = await tool.execute("channel-list-revalidation", { messageLimit: 1 });
+
+    expect(result.details).toMatchObject({
+      count: 1,
+      sessions: [expect.objectContaining({ key: requester })],
+    });
+    expect(JSON.stringify(result.details)).not.toContain("SIBLING SECRET");
+    expect(JSON.stringify(result.details)).not.toContain("SIBLING TRANSCRIPT SECRET");
+    expect(siblingDescriptions).toBe(2);
+    expect(historyCalls).toBe(1);
   });
 });

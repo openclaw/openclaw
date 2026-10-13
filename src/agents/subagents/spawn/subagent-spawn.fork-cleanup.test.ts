@@ -256,6 +256,48 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     }
   });
 
+  it("refuses an oversized fork when its created child disappears before preparation", async () => {
+    await sessions.upsertSessionEntryCore(
+      { agentId: "main", sessionKey: parentKey, storePath },
+      { totalTokens: 150_000, totalTokensFresh: true, totalTokensVersion: 1 },
+    );
+    let childSessionKey: string | undefined;
+    fork.mockImplementationOnce(async (input: unknown) => {
+      const params = input as Parameters<ForkSession>[0];
+      childSessionKey = params.sessionKey;
+      const child = expectDefined(
+        sessions.loadSessionEntry({ agentId: "main", sessionKey: childSessionKey, storePath }),
+        "created child before fork preparation",
+      );
+      const deleted = await sessions.deleteSessionEntryLifecycle({
+        agentId: "main",
+        storePath,
+        target: { canonicalKey: childSessionKey, storeKeys: [childSessionKey] },
+        expectedSessionId: child.sessionId,
+        expectedLifecycleRevision: child.lifecycleRevision,
+        archiveTranscript: false,
+      });
+      expect(deleted.deleted).toBe(true);
+      return await forkSession(params);
+    });
+
+    const result = await spawnSubagentDirect(
+      { task: "inspect parent history", context: "fork" },
+      { agentSessionKey: parentKey },
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("could not fork the requester transcript"),
+      childSessionKey: expectDefined(childSessionKey, "deleted child key"),
+    });
+    expect(registerSubagentRun).not.toHaveBeenCalled();
+    expect(dispatch.mock.calls.some(([method]) => method === "agent")).toBe(false);
+    expect(sessions.listSessionEntriesCore({ agentId: "main", storePath })).toEqual([
+      expect.objectContaining({ sessionKey: parentKey }),
+    ]);
+  });
+
   it.each(["fork", "isolated"] as const)(
     "protects locked parent transcript ownership with context=%s",
     async (context) => {

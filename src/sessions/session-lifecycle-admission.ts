@@ -608,7 +608,7 @@ export async function beginSessionWorkAdmission(params: {
           async () => {
             writerBarrierStarted = true;
             signal.throwIfAborted();
-            await assertAgentIngressOpen();
+            assertIngressOpen();
             await lease.run(async () => {
               if (params.revalidateAllowed) {
                 await params.revalidateAllowed();

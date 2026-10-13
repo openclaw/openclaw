@@ -18,7 +18,6 @@ import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { presentedContent } from "../../../lit/presentation-binding.ts";
 import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
-import "../../../plugins/control-ui-view.solid.tsx";
 import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import { renderAsyncQuestionSummary } from "./chat-async-question.ts";
 import "../../../components/person-reference.ts";
@@ -43,6 +42,7 @@ import { MarkdownText, MessageJson, MessageMarkdown } from "./chat-message-text-
 import { renderReplyLine } from "./chat-reply-attribution.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import {
+  renderPluginToolResult,
   renderToolApprovalReviews,
   renderToolCard,
   renderToolIcon,
@@ -53,7 +53,6 @@ import {
   renderRawOutputToggle,
   renderToolOutcome,
 } from "./chat-tool-content.ts";
-import { toolResultSurfaceProps } from "./chat-tool-render-model.ts";
 import { renderWorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.ts";
 import { renderToolPreview } from "./widget-card.ts";
 
@@ -72,22 +71,6 @@ type ContentProps = {
   options: GroupedMessageOptions;
   onOpenSidebar?: (content: SidebarContent) => void;
 };
-
-export function renderSolidGroupedMessage(
-  preparation: ChatMessageRenderPreparation,
-  messageKey: string,
-  options: GroupedMessageOptions,
-  onOpenSidebar?: (content: SidebarContent) => void,
-) {
-  return (
-    <GroupedMessage
-      preparation={preparation}
-      messageKey={messageKey}
-      options={options}
-      onOpenSidebar={onOpenSidebar}
-    />
-  );
-}
 
 /** Message identity owns text/media DOM; option refreshes only publish new facts. */
 export function GroupedMessage(props: GroupedMessageProps) {
@@ -277,6 +260,7 @@ function AssistantViews(props: ContentProps) {
                 rawText: block().rawText ?? null,
                 canvasPluginSurfaceUrl: props.options.canvasPluginSurfaceUrl,
                 boardProvider: props.options.boardProvider,
+                widgetLayout: props.options.widgetLayout,
                 embedSandboxMode: props.options.embedSandboxMode ?? "scripts",
                 allowExternalEmbedUrls: props.options.allowExternalEmbedUrls,
                 sessionKey: props.options.sessionKey,
@@ -581,18 +565,15 @@ function ToolMessage(props: ContentProps) {
     },
   });
   return (
-    <Show when={props.state().singleToolCard} fallback={<LitContent value={fallback} />}>
-      {(card) => (
-        <openclaw-plugin-view
-          prop:surface="tool-result"
-          prop:props={toolResultSurfaceProps(card(), {
-            ...props.state().toolRenderOptions,
-            expanded: props.state().toolMessageExpanded,
-          })}
-          prop:defaultView={fallback}
-          prop:presented={props.options.presented ?? true}
-        />
+    <LitContent
+      value={renderPluginToolResult(
+        props.state().singleToolCard,
+        {
+          ...props.state().toolRenderOptions,
+          expanded: props.state().toolMessageExpanded,
+        },
+        fallback,
       )}
-    </Show>
+    />
   );
 }

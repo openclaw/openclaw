@@ -25,22 +25,6 @@ export type { AssistantMessageDisclosure } from "./chat-message-text-preparation
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
-export function renderSolidMessageJson(
-  json: MarkdownJson,
-  messageKey: string,
-  options: MessageTextOptions,
-  markdownOptions: MarkdownRenderOptions,
-) {
-  return (
-    <MessageJson
-      json={json}
-      messageKey={messageKey}
-      options={options}
-      markdownOptions={markdownOptions}
-    />
-  );
-}
-
 export function MessageJson(props: {
   json: MarkdownJson;
   messageKey: string;
@@ -68,26 +52,6 @@ export type MessageMarkdownProps = {
   duplicateSuffix?: DuplicateSuffix;
   media?: MarkdownMedia;
 };
-
-export function renderSolidMessageMarkdown(
-  markdown: string,
-  messageKey: string,
-  options: MessageTextOptions,
-  markdownOptions: MarkdownRenderOptions,
-  duplicateSuffix?: DuplicateSuffix,
-  media?: MarkdownMedia,
-) {
-  return (
-    <MessageMarkdown
-      markdown={markdown}
-      messageKey={messageKey}
-      options={options}
-      markdownOptions={markdownOptions}
-      duplicateSuffix={duplicateSuffix}
-      media={media}
-    />
-  );
-}
 
 export function MessageMarkdown(props: MessageMarkdownProps) {
   const presentation = createMemo(() =>
@@ -218,8 +182,6 @@ function DisclosureContent(props: {
     </div>
   );
 }
-
-export type { MarkdownContentValue } from "../../../components/markdown-dom-ref.ts";
 
 type MarkdownContentProps = {
   content: MarkdownContentValue;

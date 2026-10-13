@@ -1,14 +1,13 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { html, nothing } from "lit";
+import { nothing } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot, GatewaySessionRow, ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
-import { renderMcpServerForm, type McpServerForm } from "../../components/mcp-server-form.ts";
-import "../../components/modal-dialog.ts";
-import { renderSettingsSegmented } from "../../components/settings-ui.ts";
+import type { McpServerForm } from "../../components/mcp-server-form.ts";
 import { t } from "../../i18n/index.ts";
 import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
+import "../../components/modal-dialog.ts";
 import {
   buildToolsEffectiveRequestKey,
   loadToolsEffective,
@@ -34,7 +33,9 @@ import { renderLibraryPinRead } from "../skills/library-detail.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import type { ChatComposerCapabilityMenuProps } from "./components/chat-composer-plus-menu.ts";
+import { ComposerAddServerDialog } from "./components/chat-composer-add-server-dialog.tsx";
+import { solidTemplate } from "./components/chat-composer-controls.ts";
+import type { ChatComposerCapabilityMenuProps } from "./components/chat-composer-plus-menu.tsx";
 import {
   ComposerSkillCatalog,
   composerWebSearchBaseEnabled,
@@ -376,70 +377,21 @@ export class ChatComposerCapabilityHost {
     if (!this.addDialogOpen) {
       return nothing;
     }
-    const scopeBlockedReason = this.addServerBlockedReason(context, state, session, "everywhere");
-    const submitBlockedReason = this.addServerBlockedReason(context, state, session, this.addScope);
-    const title = t("chat.composer.menu.addMcpServerTitle");
-    const description = t("chat.composer.menu.addMcpServerDescription");
-    const scopeHint = t(
-      this.addScope === "session"
-        ? "chat.composer.menu.scopeSessionHint"
-        : "chat.composer.menu.scopeEverywhereHint",
-    );
-    return html`
-      <openclaw-modal-dialog
-        label=${title}
-        description=${description}
-        @modal-cancel=${(event: Event) => {
-          if (this.addBusy) {
-            event.preventDefault();
-            return;
-          }
-          this.closeAddDialog();
-        }}
-      >
-        <div class="exec-approval-card mcp-server-dialog">
-          <div class="exec-approval-header">
-            <div>
-              <div class="exec-approval-title">${title}</div>
-              <div class="exec-approval-sub">${description}</div>
-            </div>
-          </div>
-          <div class="mcp-server-dialog__scope">
-            <span>${t("chat.composer.menu.scopeLabel")}</span>
-            ${renderSettingsSegmented({
-              value: this.addScope,
-              options: [
-                { value: "session", label: t("chat.composer.menu.scopeSession") },
-                { value: "everywhere", label: t("chat.composer.menu.scopeEverywhere") },
-              ],
-              ariaLabel: t("chat.composer.menu.scopeLabel"),
-              disabled: this.addBusy || scopeBlockedReason !== null,
-              onChange: (scope) => {
-                this.addScope = scope;
-                this.addError = null;
-                this.notify();
-              },
-            })}
-            <span class="mcp-server-dialog__scope-hint">${scopeHint}</span>
-          </div>
-          ${renderMcpServerForm({
-            busy: this.addBusy,
-            disabled: submitBlockedReason !== null,
-            blockedReason: submitBlockedReason,
-            autofocus: true,
-            onSubmit: (form) => void this.submitAddServer(context, state, session, form),
-            onCancel: () => this.closeAddDialog(),
-          })}
-          ${
-            this.addError
-              ? html`<div class="mcp-server-message mcp-server-message--error" role="alert">
-                  ${this.addError}
-                </div>`
-              : nothing
-          }
-        </div>
-      </openclaw-modal-dialog>
-    `;
+    return solidTemplate(ComposerAddServerDialog, {
+      open: this.addDialogOpen,
+      busy: this.addBusy,
+      scope: this.addScope,
+      scopeBlockedReason: this.addServerBlockedReason(context, state, session, "everywhere"),
+      submitBlockedReason: this.addServerBlockedReason(context, state, session, this.addScope),
+      error: this.addError,
+      onScopeChange: (scope) => {
+        this.addScope = scope;
+        this.addError = null;
+        this.notify();
+      },
+      onCancel: () => this.closeAddDialog(),
+      onSubmit: (form) => void this.submitAddServer(context, state, session, form),
+    });
   }
 
   props(

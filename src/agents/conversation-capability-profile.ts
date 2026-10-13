@@ -27,6 +27,7 @@ import type {
   PreparedSessionCapabilityEntry,
   SessionCapabilityStore,
 } from "./subagents/spawn/subagent-capabilities.js";
+import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import {
   collectExplicitAllowlist,
   collectExplicitDenylist,
@@ -97,6 +98,11 @@ export type ConversationCapabilityProfileParams = {
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
 };
+
+/** Prepare standalone worker reads before running the shared synchronous policy. */
+export function prepareConversationCapabilityProfile(params: ConversationCapabilityProfileParams) {
+  return withPreparedSessionCapabilityRead(() => resolveConversationCapabilityProfile(params));
+}
 
 export function resolveConversationCapabilityProfile(params: ConversationCapabilityProfileParams) {
   const messageProvider = params.messageProvider;

@@ -132,6 +132,7 @@ describe("worker chat.abort settlement", () => {
       registration.markExecutionStarted();
       const ownerInput = {
         placements: harness.placementStore,
+        isReplyDelivered: () => false,
         claim: claim!,
         sessionKey: SESSION_KEY,
         turn: {
@@ -196,7 +197,6 @@ describe("worker chat.abort settlement", () => {
         );
       };
       owner.signal.addEventListener("abort", cancelWorker, { once: true });
-      setRuntimeConfigSnapshot(harness.cfg);
       const startedAt = performance.now();
       let phase = "command-start";
       let commandOutcome = "pending";

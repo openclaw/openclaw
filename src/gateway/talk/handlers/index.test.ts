@@ -14,6 +14,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../../config/types.secrets.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { setActiveDegradedSecretOwners } from "../../../secrets/runtime-degraded-state.js";
+import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import { resolveRealtimeVoiceAgentConsultToolsAllow } from "../../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../talk/describe-view-tool.js";
@@ -52,8 +53,6 @@ const mocks = vi.hoisted(() => ({
   canonicalizeSpeechProviderId: vi.fn((providerId: string | undefined) => providerId),
   getSpeechProvider: vi.fn(),
   listSpeechProviders: vi.fn(() => []),
-  getResolvedSpeechProviderConfig: vi.fn(() => ({})),
-  resolveTtsConfig: vi.fn(() => ({ timeoutMs: 30_000 })),
   synthesizeSpeech: vi.fn(),
   canonicalizeRealtimeVoiceProviderId: vi.fn((providerId: string | undefined) =>
     providerId === "gemini-live" ? "google" : providerId?.trim().toLowerCase(),
@@ -164,15 +163,18 @@ vi.mock("../../../state/user-preferences.js", async (importOriginal) => ({
   getCanonicalUserPreferences: mocks.getCanonicalUserPreferences,
 }));
 
-vi.mock("../../../tts/provider-registry.js", () => ({
+vi.mock("../../../tts/provider-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../tts/provider-registry.js")>()),
   canonicalizeSpeechProviderId: mocks.canonicalizeSpeechProviderId,
   getSpeechProvider: mocks.getSpeechProvider,
   listSpeechProviders: mocks.listSpeechProviders,
 }));
 
-vi.mock("../../../tts/tts.js", () => ({
-  getResolvedSpeechProviderConfig: mocks.getResolvedSpeechProviderConfig,
-  resolveTtsConfig: mocks.resolveTtsConfig,
+// mock-isolation: Keep synthesis stubbed while using real settings/readiness without barrel initialization.
+vi.mock("../../../tts/tts.js", async () => ({
+  isTtsProviderConfiguredAsync: (await import("../../../tts/tts-provider-resolution.js"))
+    .isTtsProviderConfiguredAsync,
+  resolveTtsConfig: (await import("../../../tts/tts-settings.js")).resolveTtsConfig,
   synthesizeSpeech: mocks.synthesizeSpeech,
 }));
 
@@ -388,8 +390,6 @@ describe("talk.catalog handler", () => {
     mocks.listSpeechProviders.mockReturnValue([]);
     mocks.listRealtimeTranscriptionProviders.mockReturnValue([]);
     mocks.listRealtimeVoiceProviders.mockReturnValue([]);
-    mocks.getResolvedSpeechProviderConfig.mockReturnValue({});
-    mocks.resolveTtsConfig.mockReturnValue({ timeoutMs: 30_000 });
   });
 
   it("rejects an ambiguous owner before discovering catalog providers", async () => {
@@ -460,7 +460,6 @@ describe("talk.catalog handler", () => {
           isConfigured: vi.fn(() => true),
         } as never,
       ]);
-      mocks.getResolvedSpeechProviderConfig.mockReturnValue({ apiKey: "speech-key" });
       mocks.listRealtimeTranscriptionProviders.mockReturnValue([
         {
           id: "openai",
@@ -2043,9 +2042,24 @@ describe("talk.session unified handlers", () => {
       sessionKey: "agent:main:main",
     });
 
+    for (const [sessionId, connId, message] of [
+      [" \nunknown-session\t ", "conn-1", "Error: Unknown Talk session"],
+      ["relay-unified-1", "conn-other", "Error: Talk session is not owned by this connection"],
+    ] as const) {
+      const rejectedClose = vi.fn();
+      await callTalkHandler("talk.session.close", {
+        params: { sessionId },
+        client: { connId },
+        respond: rejectedClose,
+        context: {},
+      });
+      expectRespondError(rejectedClose, { code: ErrorCodes.UNAVAILABLE, message });
+    }
+    expect(mocks.stopTalkRealtimeRelaySession).not.toHaveBeenCalled();
+
     const closeRespond = vi.fn();
     await callTalkHandler("talk.session.close", {
-      params: { sessionId: "relay-unified-1" },
+      params: { sessionId: " \nrelay-unified-1\t " },
       id: "6",
       respond: closeRespond,
       context: {},
@@ -2055,6 +2069,16 @@ describe("talk.session unified handlers", () => {
       connId: "conn-1",
     });
     expect(closeRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    const closedSession = vi.fn();
+    await callTalkHandler("talk.session.close", {
+      params: { sessionId: "relay-unified-1" },
+      respond: closedSession,
+      context: {},
+    });
+    expectRespondError(closedSession, {
+      code: ErrorCodes.UNAVAILABLE,
+      message: "Error: Unknown Talk session",
+    });
   });
 
   it("uses talk.agentId and projects an opaque model from a bare realtime session", async () => {
@@ -3966,6 +3990,7 @@ describe("role-required Talk session creation", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       vi.clearAllMocks();
       const profile = ensureProfileForEmail("talk-required@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
         provider: {
           id: "openai",

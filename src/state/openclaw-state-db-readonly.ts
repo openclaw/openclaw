@@ -4,13 +4,13 @@ import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { sleepWithAbort } from "@openclaw/retry";
 import { acquireWithWait } from "../infra/acquire-with-wait.js";
-import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { StateDatabaseAdmissionPendingError } from "../infra/gateway-state-owner-record.js";
 import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
 import {
   retainSnapshotTempDirectory,
   retainSnapshotWork,
+  deferSqliteSnapshotCleanupAfterRead,
   SqliteSnapshotCleanupError,
 } from "../infra/sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocationSyncInProcess } from "../infra/sqlite-readonly-location.js";
@@ -20,7 +20,6 @@ import {
   prepareSqliteReadOnlyLocationSync,
 } from "../infra/sqlite-snapshot-source.js";
 import { isUpdateRehearsalPrivateDatabase } from "../infra/update-rehearsal-paths.js";
-import { getChildLogger } from "../logging/logger.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -172,18 +171,7 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
             return;
           }
         } catch (error) {
-          if (
-            readSucceeded &&
-            !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources &&
-            error instanceof SqliteSnapshotCleanupError &&
-            hasErrnoCode(error.cause, "EBUSY")
-          ) {
-            // Logical close can precede native release on Bun Windows. The
-            // snapshot registry keeps these private bytes for later cleanup.
-            getChildLogger({ subsystem: "infra/sqlite-snapshot" }).warn(
-              { path: prepared.cleanupRoot, errorCode: "EBUSY" },
-              "Discovery snapshot cleanup deferred until native SQLite resources are released.",
-            );
+          if (readSucceeded && deferSqliteSnapshotCleanupAfterRead(error, prepared.cleanupRoot)) {
             return;
           }
           cause = error;
@@ -444,12 +432,25 @@ export function withExistingOpenClawStateDatabaseReadOnly<T>(
     : withFreshOpenClawStateDatabaseReadOnly(operation, options, existingPath);
 }
 
+type StateReadReply<Type extends OpenClawStateReadCommand["type"]> = Extract<
+  OpenClawStateReadReply,
+  { ok: true }
+> & { type: Type };
+
+function isStateReadReply<Type extends OpenClawStateReadCommand["type"]>(
+  reply: OpenClawStateReadReply,
+  type: Type,
+): reply is StateReadReply<Type> {
+  return reply.ok && reply.type === type;
+}
+
 /** Fixed reads observe committed state unless their owner explicitly selected a snapshot. */
-export function executeExistingOpenClawStateRead(
+export function executeExistingOpenClawStateRead<Command extends OpenClawStateReadCommand>(
   options: OpenClawStateDatabaseOptions,
-  command: OpenClawStateReadCommand,
+  command: Command,
   readOptions: OpenClawStateReadOptions = {},
-): Promise<OpenClawStateReadReply | undefined> {
+): Promise<StateReadReply<Command["type"]> | undefined> {
+  const type = command.type;
   const { context, current, live, mapError } = readOptions;
   const receipt: OpenClawStateReadReceipt = { phase: "before-read" };
   let completion: OpenClawStateReadCompletion;
@@ -469,7 +470,13 @@ export function executeExistingOpenClawStateRead(
   } catch (error) {
     throw mapError ? mapError(error, receipt.phase) : error;
   }
-  return completion.kind === "retained" ? completion.operation.result : completion.result;
+  const result = completion.kind === "retained" ? completion.operation.result : completion.result;
+  return result.then((reply) => {
+    if (!reply || isStateReadReply(reply, type)) {
+      return reply;
+    }
+    throw new Error(`Unexpected shared-state read reply for ${type}`);
+  });
 }
 
 function startRetainedOpenClawStateRead(

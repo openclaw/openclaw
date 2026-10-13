@@ -149,7 +149,10 @@ const option=(name)=>{
   return args[index+1];
 };
 try {
-if(args[0]==="config"&&args[1]==="validate") {
+if(args[0]==="update") {
+  event("gateway update "+args[1]);
+  reject("synthetic native update refused");
+} else if(args[0]==="config"&&args[1]==="validate") {
   event("gateway config validate");
   const config=loadConfig();
   if(typeof setup(config)!=="string"||!config.meta?.migrations?.modelPolicyAllowlist)

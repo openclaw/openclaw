@@ -38,6 +38,11 @@ export async function isCurrentProcessInsideLaunchdService(label: string): Promi
     if (membership === "inside") {
       return true;
     }
+    // Native containment can prove an external terminal even when macOS denies
+    // inspection of one of its ancestors. Only absent containment needs the walk.
+    if (membership === "outside") {
+      return false;
+    }
     if (membership === "unknown") {
       throw new ServiceInspectionError("service-membership-unverified");
     }

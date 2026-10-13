@@ -47,6 +47,14 @@ export const captureOpenClawAgentDatabaseExecution = createAgentDatabaseExecutio
   captureFileAgentDatabaseExecution,
 );
 
+/** Explicit preparation joins the file owner's already-captured creation target. */
+export function captureOpenClawAgentDatabasePreparationExecution(
+  options: OpenClawAgentDatabaseOptions,
+  expectedIdentity?: AgentDatabaseExecutionCaptureConstraints["expectedIdentity"],
+): OpenClawAgentDatabaseExecution {
+  return captureFileAgentDatabaseExecution(options, { expectedIdentity }, true);
+}
+
 /** Only the deleted agent's store needs a fresh, exclusive cleanup owner. */
 export async function captureAgentDeletionDatabaseExecution(
   options: OpenClawAgentDatabaseOptions,
@@ -122,6 +130,7 @@ export function captureExistingOpenClawAgentDatabaseExecution(
 function captureFileAgentDatabaseExecution(
   options: OpenClawAgentDatabaseOptions,
   constraints: AgentDatabaseExecutionCaptureConstraints = {},
+  inheritCreationIdentity = false,
 ): OpenClawAgentDatabaseExecution {
   assertAgentSessionWriteAdmission(options);
   assertAgentDeletionCleanupAliases(options, isSameOpenClawAgentDatabasePath);
@@ -143,7 +152,7 @@ function captureFileAgentDatabaseExecution(
         pathname,
         expectedCreationIdentity,
         expectedCreationIdentity.key.startsWith("path:") && existing?.kind === "file"
-          ? existing.creationIdentity
+          ? (existing.creationIdentity ?? identity)
           : identity,
         constraints.expectedIdentity,
       );
@@ -176,7 +185,7 @@ function captureFileAgentDatabaseExecution(
   return existing.borrow(
     pathname,
     constraints.expectedIdentity,
-    expectedCreationIdentity,
+    expectedCreationIdentity ?? (inheritCreationIdentity ? existing.creationIdentity : undefined),
     constraints.requestedPath,
   );
 }

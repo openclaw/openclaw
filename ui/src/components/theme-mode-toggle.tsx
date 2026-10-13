@@ -7,7 +7,7 @@ import "./tooltip.ts";
 export type ThemeModeChangeDetail = { mode: ThemeMode; element: HTMLElement };
 type Props = { mode: ThemeMode; menuItem: boolean };
 
-export const ThemeModeToggle = defineSolidBridge<Props>(
+defineSolidBridge<Props>(
   "openclaw-theme-mode-toggle",
   (props, host) => {
     host.style.display = "contents";

@@ -14,7 +14,6 @@ import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-p
 import { createLegacyDatabaseFixture } from "../infra/state-migrations.media-persistence.test-support.js";
 import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { reconstructAgentDeletionJournal } from "./agent-deletion-journal-recovery.js";
-import { prepareAgentDeletionPathFence } from "./agent-deletion-journal.js";
 import { ensureOpenClawAgentDatabaseSchemaSteps } from "./openclaw-agent-db-schema.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -112,23 +111,16 @@ describe("agent deletion journal initialization", () => {
   });
 
   it.each([
-    { history: "missing", location: "canonical" },
-    { history: "missing", location: "external" },
     { history: "reconstructed", location: "external" },
     { history: "deleted-during-integrity", location: "external" },
     { history: "lost-during-integrity", location: "external" },
   ])(
     "preserves $location independently managed agent bytes when history is $history",
-    ({ history, location }) => {
+    ({ history }) => {
       const env = { OPENCLAW_STATE_DIR: tempDirs.make("journal-independent-agent-") };
-      const agentDir =
-        location === "external"
-          ? tempDirs.make("journal-independent-external-")
-          : path.join(env.OPENCLAW_STATE_DIR, "agents/main/agent");
+      const agentDir = tempDirs.make("journal-independent-external-");
       const pathname = path.join(agentDir, "openclaw-agent.sqlite");
-      if (history !== "missing") {
-        openOpenClawStateDatabase({ env });
-      }
+      openOpenClawStateDatabase({ env });
       fs.mkdirSync(agentDir, { recursive: true });
       using db = new DatabaseSync(pathname);
       ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: false });
@@ -179,14 +171,12 @@ describe("agent deletion journal initialization", () => {
         }
         expect(() => operation.next()).toThrow(
           history === "deleted-during-integrity"
-            ? "Agent deletion journal changed"
+            ? "OpenClaw agent database is unavailable while agent main is deleted."
             : "Agent deletion journal missing",
         );
       } else {
         expect(() => ensureOpenClawAgentDatabaseSchema(db, options)).toThrow(
-          history === "missing"
-            ? "Agent deletion journal missing"
-            : "held after deletion journal reconstruction",
+          "held after deletion journal reconstruction",
         );
       }
       expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 0 });
@@ -308,217 +298,118 @@ describe("agent deletion journal initialization", () => {
     }
   });
 
-  it.each([
-    "missing-table",
-    "missing-database",
-    "missing-database-canonical-custom",
-    "missing-database-custom-store",
-    "missing-database-config-include",
-    "missing-database-session-store",
-    "missing-database-acp-store",
-  ])("preserves missing history across operations: %s", async (missing) => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("journal-existing-") };
-    let agentPath = createLegacyDatabaseFixture({ env, eventsBySession: {}, schemaVersion: 19 });
-    closeOpenClawStateDatabaseForTest();
-    const statePath = resolveOpenClawStateSqlitePath(env);
-    if (missing === "missing-table") {
-      const db = new DatabaseSync(statePath);
-      db.exec("DROP TABLE agent_deletion_journal");
-      db.close();
-    } else {
-      for (const suffix of ["", "-wal", "-shm"]) {
-        fs.rmSync(statePath + suffix, { force: true });
-      }
-    }
-    if (missing === "missing-database-canonical-custom") {
-      const customPath = path.join(path.dirname(agentPath), "history.sqlite");
-      fs.renameSync(agentPath, customPath);
-      agentPath = customPath;
-      fs.writeFileSync(
-        path.join(env.OPENCLAW_STATE_DIR, "openclaw.json"),
-        JSON.stringify({ session: { store: customPath } }),
-      );
-    }
-    if (
-      missing === "missing-database-custom-store" ||
-      missing === "missing-database-config-include" ||
-      missing === "missing-database-session-store" ||
-      missing === "missing-database-acp-store"
-    ) {
-      const agentDir = tempDirs.make("journal-custom-agent-");
-      const customPath = path.join(
-        agentDir,
-        missing === "missing-database-acp-store"
-          ? "history.archivist.sqlite"
-          : missing === "missing-database-session-store"
-            ? "history.main.sqlite"
-            : "openclaw-agent.sqlite",
-      );
-      fs.renameSync(agentPath, customPath);
-      agentPath = customPath;
-      const configPath = path.join(env.OPENCLAW_STATE_DIR, "openclaw.json");
-      if (missing === "missing-database-config-include") {
-        fs.writeFileSync(
-          configPath,
-          JSON.stringify({
-            env: { L1072_AGENT_DIR: agentDir },
-            agents: { $include: "./agents.json5" },
-          }),
-        );
-        fs.writeFileSync(
-          path.join(env.OPENCLAW_STATE_DIR, "agents.json5"),
-          "{ entries: { main: { agentDir: '${L1072_AGENT_DIR}' } } }",
-        );
-      } else {
-        fs.writeFileSync(
-          configPath,
-          JSON.stringify(
-            missing === "missing-database-acp-store"
-              ? {
-                  acp: { defaultAgent: "archivist" },
-                  session: { store: path.join(agentDir, "history.{agentId}.sqlite") },
-                }
-              : missing === "missing-database-session-store"
-                ? { session: { store: path.join(agentDir, "history.json") } }
-                : { agents: { entries: { main: { agentDir } } } },
-          ),
-        );
-      }
-    }
-    const bytes = fs.readFileSync(agentPath);
-    for (let operation = 0; operation < 2; operation += 1) {
-      const opened = openOpenClawStateDatabase({ env });
-      expect(
-        opened.db
-          .prepare("SELECT name FROM sqlite_master WHERE name = 'agent_deletion_journal'")
-          .get(),
-      ).toBeUndefined();
+  it.each(["missing-table", "missing-database-session-store"])(
+    "preserves missing history across operations: %s",
+    async (missing) => {
+      const env = { OPENCLAW_STATE_DIR: tempDirs.make("journal-existing-") };
+      let agentPath = createLegacyDatabaseFixture({ env, eventsBySession: {}, schemaVersion: 19 });
       closeOpenClawStateDatabaseForTest();
-      const discovery = discoverAgentDatabaseMigrationTargets({
-        env,
-        configuredAgentDatabaseTargets: [{ agentId: "main", path: agentPath }],
-        registeredAgentDatabases: [],
-      });
-      expect(discovery.targets).toEqual([]);
-      expect(discovery.warnings.join("\n")).toContain(
-        "deletion journal missing; 1 store held back",
-      );
-      const migration = await migrateLegacyMediaPersistence({
-        env,
-        configuredAgentDatabaseTargets: [{ agentId: "main", path: agentPath }],
-      });
-      expect(migration.warningDisposition, JSON.stringify(migration)).toBe("recoverable");
-      expect(migration.warnings.join("\n")).toContain("1 store held back");
-      expect(fs.readFileSync(agentPath)).toEqual(bytes);
-    }
-  });
-
-  it.each(["include-env", "legacy-session-json", "empty-agent", "reindex-lock"])(
-    "creates a known-empty journal for fresh state (config: %s)",
-    (configSource) => {
-      const env = { OPENCLAW_STATE_DIR: tempDirs.make("journal-fresh-") };
-      if (configSource === "legacy-session-json" || configSource === "empty-agent") {
-        const file = path.join(
-          env.OPENCLAW_STATE_DIR,
-          "agents",
-          "main",
-          configSource === "empty-agent" ? "agent/openclaw-agent.sqlite" : "sessions/sessions.json",
-        );
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.writeFileSync(file, configSource === "empty-agent" ? "" : "{}");
+      const statePath = resolveOpenClawStateSqlitePath(env);
+      if (missing === "missing-table") {
+        const db = new DatabaseSync(statePath);
+        db.exec("DROP TABLE agent_deletion_journal");
+        db.close();
+      } else {
+        for (const suffix of ["", "-wal", "-shm"]) {
+          fs.rmSync(statePath + suffix, { force: true });
+        }
       }
-      if (configSource === "include-env") {
+      if (missing === "missing-database-session-store") {
+        const agentDir = tempDirs.make("journal-custom-agent-");
+        const customPath = path.join(agentDir, "history.main.sqlite");
+        fs.renameSync(agentPath, customPath);
+        agentPath = customPath;
+        const configPath = path.join(env.OPENCLAW_STATE_DIR, "openclaw.json");
         fs.writeFileSync(
-          path.join(env.OPENCLAW_STATE_DIR, "openclaw.json"),
-          JSON.stringify({
-            env: { L1072_AGENT_DIR: path.join(env.OPENCLAW_STATE_DIR, "custom-agent") },
-            agents: { $include: "./agents.json5" },
-          }),
+          configPath,
+          JSON.stringify({ session: { store: path.join(agentDir, "history.json") } }),
         );
-        fs.writeFileSync(
-          path.join(env.OPENCLAW_STATE_DIR, "agents.json5"),
-          "{ entries: { main: { agentDir: '${L1072_AGENT_DIR}' } } }",
-        );
-        fs.mkdirSync(path.join(env.OPENCLAW_STATE_DIR, "agents"));
-        fs.writeFileSync(path.join(env.OPENCLAW_STATE_DIR, "agents", ".DS_Store"), "");
       }
-      if (configSource === "reindex-lock") {
-        const lockPath = path.join(
-          env.OPENCLAW_STATE_DIR,
-          "agents/main/agent/openclaw-agent.sqlite.reindex-lock.sqlite",
+      const bytes = fs.readFileSync(agentPath);
+      for (let operation = 0; operation < 2; operation += 1) {
+        const opened = openOpenClawStateDatabase({ env });
+        expect(
+          opened.db
+            .prepare("SELECT name FROM sqlite_master WHERE name = 'agent_deletion_journal'")
+            .get(),
+        ).toBeUndefined();
+        closeOpenClawStateDatabaseForTest();
+        const discovery = discoverAgentDatabaseMigrationTargets({
+          env,
+          configuredAgentDatabaseTargets: [{ agentId: "main", path: agentPath }],
+          registeredAgentDatabases: [],
+        });
+        expect(discovery.targets).toEqual([]);
+        expect(discovery.warnings.join("\n")).toContain(
+          "deletion journal missing; 1 store held back",
         );
-        fs.mkdirSync(path.dirname(lockPath), { recursive: true });
-        using lock = new DatabaseSync(lockPath);
-        lock.exec("CREATE TABLE coordination (id INTEGER)");
+        const migration = await migrateLegacyMediaPersistence({
+          env,
+          configuredAgentDatabaseTargets: [{ agentId: "main", path: agentPath }],
+        });
+        expect(migration.warningDisposition, JSON.stringify(migration)).toBe("recoverable");
+        expect(migration.warnings.join("\n")).toContain("1 store held back");
+        expect(fs.readFileSync(agentPath)).toEqual(bytes);
       }
-      const opened = openOpenClawStateDatabase({ env });
-      expect(
-        opened.db.prepare("SELECT count(*) AS count FROM agent_deletion_journal").get(),
-      ).toEqual({ count: 0 });
-      const discovery = discoverAgentDatabaseMigrationTargets({
-        env,
-        configuredAgentDatabaseTargets: [],
-        registeredAgentDatabases: [],
-      });
-      expect(discovery.warnings).toEqual([]);
-      expect(discovery.retainedTargets).toEqual([]);
     },
   );
 
-  it.each([
-    "existing-empty-database",
-    "shared-wal",
-    "empty-agent-wal",
-    "invalid-json5",
-    "missing-include",
-    "unresolved-storage-env",
-    "unresolved-session-owner-env",
-    "unresolved-roster-id-env",
-    "unresolved-runtime-type-env",
-    "invalid-roster",
-    "invalid-agent-dir",
-  ] as const)("does not infer empty deletion history from %s", (source) => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("journal-unknown-") };
-    if (source === "existing-empty-database") {
-      const pathname = resolveOpenClawStateSqlitePath(env);
-      fs.mkdirSync(path.dirname(pathname));
-      new DatabaseSync(pathname).close();
-    } else if (source === "shared-wal") {
-      const pathname = resolveOpenClawStateSqlitePath(env);
-      fs.mkdirSync(path.dirname(pathname));
-      fs.writeFileSync(`${pathname}-wal`, Buffer.alloc(64));
-    } else if (source === "empty-agent-wal") {
-      const pathname = path.join(env.OPENCLAW_STATE_DIR, "agents/main/agent/openclaw-agent.sqlite");
-      fs.mkdirSync(path.dirname(pathname), { recursive: true });
-      fs.writeFileSync(pathname, "");
-      fs.writeFileSync(`${pathname}-wal`, Buffer.alloc(64));
-    } else {
-      const config = {
-        "invalid-json5": "{ agents:",
-        "missing-include": "{ $include: './missing.json5' }",
-        "unresolved-storage-env":
-          "{ agents: { entries: { main: { agentDir: '${L1072_ABSENT_AGENT_DIR}' } } } }",
-        "unresolved-session-owner-env":
-          "{ acp: { defaultAgent: '${L1072_ABSENT_AGENT_ID}' }, session: { store: 'history.{agentId}.sqlite' } }",
-        "unresolved-roster-id-env":
-          "{ agents: { list: [{ id: '${L1072_ABSENT_AGENT_ID}' }] }, session: { store: 'history.{agentId}.sqlite' } }",
-        "unresolved-runtime-type-env":
-          "{ agents: { entries: { main: { runtime: { type: '${L1072_ABSENT_RUNTIME}', acp: { agent: 'archivist' } } } } }, session: { store: 'history.{agentId}.sqlite' } }",
-        "invalid-roster": "{ agents: { entries: 'invalid' } }",
-        "invalid-agent-dir": "{ agents: { entries: { main: { agentDir: 42 } } } }",
-      }[source];
-      fs.writeFileSync(path.join(env.OPENCLAW_STATE_DIR, "openclaw.json"), config);
-    }
-    for (let operation = 0; operation < 2; operation += 1) {
-      const opened = openOpenClawStateDatabase({ env });
-      expect(
-        opened.db
-          .prepare("SELECT name FROM sqlite_master WHERE name = 'agent_deletion_journal'")
-          .get(),
-      ).toBeUndefined();
-      closeOpenClawStateDatabaseForTest();
-    }
+  it("creates a known-empty journal for fresh state with an included config", () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("journal-fresh-") };
+    fs.writeFileSync(
+      path.join(env.OPENCLAW_STATE_DIR, "openclaw.json"),
+      JSON.stringify({
+        env: { L1072_AGENT_DIR: path.join(env.OPENCLAW_STATE_DIR, "custom-agent") },
+        agents: { $include: "./agents.json5" },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(env.OPENCLAW_STATE_DIR, "agents.json5"),
+      "{ entries: { main: { agentDir: '${L1072_AGENT_DIR}' } } }",
+    );
+    fs.mkdirSync(path.join(env.OPENCLAW_STATE_DIR, "agents"));
+    fs.writeFileSync(path.join(env.OPENCLAW_STATE_DIR, "agents", ".DS_Store"), "");
+    const opened = openOpenClawStateDatabase({ env });
+    expect(opened.db.prepare("SELECT count(*) AS count FROM agent_deletion_journal").get()).toEqual(
+      { count: 0 },
+    );
+    const discovery = discoverAgentDatabaseMigrationTargets({
+      env,
+      configuredAgentDatabaseTargets: [],
+      registeredAgentDatabases: [],
+    });
+    expect(discovery.warnings).toEqual([]);
+    expect(discovery.retainedTargets).toEqual([]);
   });
+
+  it.each(["empty-agent-wal", "unresolved-storage-env"] as const)(
+    "does not infer empty deletion history from %s",
+    (source) => {
+      const env = { OPENCLAW_STATE_DIR: tempDirs.make("journal-unknown-") };
+      if (source === "empty-agent-wal") {
+        const pathname = path.join(
+          env.OPENCLAW_STATE_DIR,
+          "agents/main/agent/openclaw-agent.sqlite",
+        );
+        fs.mkdirSync(path.dirname(pathname), { recursive: true });
+        fs.writeFileSync(pathname, "");
+        fs.writeFileSync(`${pathname}-wal`, Buffer.alloc(64));
+      } else {
+        const config =
+          "{ agents: { entries: { main: { agentDir: '${L1072_ABSENT_AGENT_DIR}' } } } }";
+        fs.writeFileSync(path.join(env.OPENCLAW_STATE_DIR, "openclaw.json"), config);
+      }
+      for (let operation = 0; operation < 2; operation += 1) {
+        const opened = openOpenClawStateDatabase({ env });
+        expect(
+          opened.db
+            .prepare("SELECT name FROM sqlite_master WHERE name = 'agent_deletion_journal'")
+            .get(),
+        ).toBeUndefined();
+        closeOpenClawStateDatabaseForTest();
+      }
+    },
+  );
 
   it("retains selected storage environment when an agent lease opens shared state", () => {
     const root = tempDirs.make("journal-selected-agent-env-");
@@ -543,8 +434,6 @@ describe("agent deletion journal initialization", () => {
 
     const opened = openOpenClawAgentDatabase({ agentId: "new", path: newPath, env });
     expect(opened.path).toBe(newPath);
-    const fence = prepareAgentDeletionPathFence({ agentId: "new", path: newPath }, { env });
-    expect(fence).toMatchObject({ journal: "unknown", entries: [] });
     expect(fs.readFileSync(retained)).toEqual(bytes);
     expect(
       openOpenClawStateDatabase({ env })

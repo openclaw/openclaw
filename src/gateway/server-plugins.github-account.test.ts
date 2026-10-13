@@ -39,23 +39,25 @@ it.each(["in-process", "bound"] as const)(
         let retireGateway: (() => void) | undefined;
         if (mode === "bound") {
           const loader = vi
-            .spyOn(pluginLoader, "loadOpenClawPlugins")
-            .mockImplementation((options = {}) => {
+            .spyOn(pluginLoader, "loadOpenClawPluginsAsync")
+            .mockImplementation(async (options = {}) => {
               runtime = createPluginRuntime(options.runtimeOptions);
               return createEmptyPluginRegistry();
             });
           try {
-            retireGateway = loadGatewayPlugins({
-              cfg,
-              autoEnabledReasons: {},
-              baseMethods: [],
-              loadIntent: "startup",
-              pluginIds: ["visitor-access"],
-              pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
-                plugins: [{ id: "visitor-access" }],
-              }),
-              resolveGatewayContext: () => fixture.context,
-            }).retireGatewayRuntimeBindings;
+            retireGateway = (
+              await loadGatewayPlugins({
+                cfg,
+                autoEnabledReasons: {},
+                baseMethods: [],
+                loadIntent: "startup",
+                pluginIds: ["visitor-access"],
+                pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
+                  plugins: [{ id: "visitor-access" }],
+                }),
+                resolveGatewayContext: () => fixture.context,
+              })
+            ).retireGatewayRuntimeBindings;
           } finally {
             loader.mockRestore();
           }

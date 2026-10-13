@@ -4,8 +4,6 @@ on:
   workflow_run: # zizmor: ignore[dangerous-triggers] main-only docs repair after trusted CI; job gates repository, event, branch, actor, conclusion, exact current main SHA, and hourly cadence before using write token
     workflows:
       - CI
-    branches:
-      - main
     types:
       - completed
   workflow_dispatch:

@@ -36,15 +36,6 @@ const reject = (result: Promise<unknown>) =>
 const withConfig = (raw: string, visit: Parameters<typeof withFile>[2]) =>
   withFile("config-cli-", raw, visit);
 
-function installRuntimeSchemaReadHook(hook: () => void | Promise<void>): void {
-  const readSchema = runtimeSchema.readBestEffortRuntimeConfigSchema;
-  vi.spyOn(runtimeSchema, "readBestEffortRuntimeConfigSchema").mockImplementation(async () => {
-    const result = await readSchema();
-    await hook();
-    return result;
-  });
-}
-
 describe("config cli integration", () => {
   it("protects pending plugin inputs while admitting explicit plugin entry removal", async () => {
     const pluginPath = "plugins.entries.sample.config";
@@ -630,9 +621,6 @@ describe("config cli integration", () => {
         const concurrentRaw = '{ port: 19002, bind: "loopback" }\n';
         fs.writeFileSync(includePath, "{ port: 18789 }\n", "utf8");
         clearConfigCache();
-        installRuntimeSchemaReadHook(() => {
-          fs.writeFileSync(includePath, concurrentRaw, "utf8");
-        });
         const output = createTestRuntime();
 
         await expect(
@@ -641,6 +629,9 @@ describe("config cli integration", () => {
             value: "19001",
             cliOptions: { strictJson: true },
             runtime: output.runtime,
+            beforePersistentApply: () => {
+              fs.writeFileSync(includePath, concurrentRaw, "utf8");
+            },
           }),
         ).rejects.toThrow("__exit__:1");
 

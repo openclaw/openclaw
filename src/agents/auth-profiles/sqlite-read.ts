@@ -111,7 +111,11 @@ export function prepareAgentAuthProfileRowsRead(options: {
     }
     captured.value.admission.assertCurrent();
     captured.value.maintenanceScope?.assertAdmission();
-    if (identity && inspectDatabasePathIdentitySync(databasePath)?.key !== identity.key) {
+    // Captured absence stays empty; a first session may create the file without replacing a read source.
+    if (
+      identity?.key.startsWith("file:") &&
+      inspectDatabasePathIdentitySync(databasePath)?.key !== identity.key
+    ) {
       throw new Error("Auth profile database file identity changed during its read");
     }
     // Cached rows still borrow this read's revocable authority through host composition.
@@ -300,9 +304,6 @@ export async function readPersonalCatalogProfiles(
     { context, current: true, preferIndependentWarmRead: true },
   );
   context.admission.assertCurrent();
-  if (reply && (!reply.ok || reply.type !== "userModelAccounts.catalog")) {
-    throw new Error(reply.ok ? "Unexpected personal model catalog reply" : reply.message);
-  }
   const result = reply?.catalog;
   for (const profile of Object.values(result?.profiles ?? {})) {
     registerUserModelAuthProfileSecrets(profile.credential);

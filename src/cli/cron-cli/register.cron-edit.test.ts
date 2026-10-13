@@ -113,6 +113,7 @@ describe("cron edit", () => {
     [["--on-exit-cwd", "/repo"], "--on-exit-cwd requires --on-exit"],
     [["--on-exit", "./watch.sh", "--every", "5m"], "Choose at most one schedule change"],
     [["--pacing-min", "30m", "--thread-id", "topic-42"], "--thread-id must be a positive integer"],
+    [["--cron", "9am standup with the team today"], "Invalid cron expression"],
   ] as const)("rejects %j before Gateway access", async (args, message) => {
     await reject(["edit", "job-1", ...args], message);
   });
@@ -417,6 +418,22 @@ describe("automation mutation options", () => {
       "--timeout-seconds is not supported for systemEvent jobs.",
     );
   });
+
+  it.each([
+    [
+      ["9am standup with the team today"],
+      'Invalid cron expression "9am standup with the team today". Use 5 fields like "0 9 * * *" or 6 fields like "0 0 9 * * *".',
+    ],
+    [
+      ["--cron", "9am standup"],
+      'Invalid cron expression "9am standup". Use 5 fields like "0 9 * * *" or 6 fields like "0 0 9 * * *".',
+    ],
+  ] as const)(
+    "rejects an unparseable cron schedule %j on creation before RPC",
+    async (args, expected) => {
+      await reject([...addArgs, ...args, "--message", "run"], expected);
+    },
+  );
 
   const cwdCases = [
     { flag: "--command-cwd", args: ["--every", "1m", "--command", "pwd"], target: "payload" },

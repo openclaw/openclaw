@@ -24,7 +24,10 @@ import {
   isSubagentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
-import { parseSessionDeliveryRoute } from "../sessions/session-key-utils.js";
+import {
+  normalizeSessionPeerId,
+  parseSessionDeliveryRoute,
+} from "../sessions/session-key-utils.js";
 
 type GatewayCaller = typeof defaultCallGateway;
 
@@ -81,12 +84,36 @@ function channelScopeMatchesSessionKey(
   key: string,
 ): boolean {
   const route = parseSessionDeliveryRoute(key);
+  const destinationCandidates = scope
+    ? [
+        scope.to,
+        scope.to.toLowerCase().startsWith(scope.provider + ":")
+          ? scope.to.slice(scope.provider.length + 1)
+          : scope.to,
+        scope.to.toLowerCase().startsWith(scope.kind + ":")
+          ? scope.to.slice(scope.kind.length + 1)
+          : scope.to,
+      ]
+    : [];
   return Boolean(
     scope &&
     route &&
     (route.peerKind === "channel" || route.peerKind === "group") &&
     route.channel === scope.provider &&
-    route.peerKind === scope.kind,
+    route.peerKind === scope.kind &&
+    destinationCandidates.some(
+      (candidate) =>
+        normalizeSessionPeerId({
+          channel: route.channel,
+          peerKind: route.peerKind,
+          peerId: candidate,
+        }) ===
+        normalizeSessionPeerId({
+          channel: route.channel,
+          peerKind: route.peerKind,
+          peerId: route.peerId,
+        }),
+    ),
   );
 }
 

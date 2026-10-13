@@ -4,6 +4,7 @@ import type {
   WorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   hasSqliteWorkerOutcomeUnknown,
@@ -16,8 +17,8 @@ import {
   createChatAbortContext,
   invokeChatAbortHandler,
 } from "../server-methods/chat.abort.test-helpers.js";
+import type { WorkerInferenceExecutor } from "./connection-identity.js";
 import { registerWorkerInferenceSessionControl } from "./inference-control-internal.js";
-import type { WorkerInferenceExecutor } from "./inference.js";
 import {
   accept,
   CANCEL,
@@ -164,6 +165,7 @@ describe("worker inference manager", () => {
     "Gateway Stop retains original worker registration and authority (explicit=%s)",
     async (explicit) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         for (const change of ["none", "replacement", "revocation"] as const) {
           const key = "agent:main:main";
           await upsertSessionEntryCore(

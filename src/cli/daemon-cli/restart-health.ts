@@ -154,16 +154,13 @@ export async function waitForGatewayHealthyRestart(
   // A longer update budget must not make an old heartbeat count as fresh progress.
   const progressWindowMs = attempts * delayMs;
   const standardDeadlineMs = timeoutMs ?? progressWindowMs;
-  const probeTimeoutMs = () => {
-    const remaining = params.deadline
+  // Native inspection shares the readiness deadline, not a network request's cap.
+  const inspectionTimeoutMs = () =>
+    params.deadline
       ? Math.max(1, params.deadline.remainingMs())
       : timeoutMs === undefined
         ? undefined
         : Math.max(1, timeoutMs + settleDurationMs - (performance.now() - startedAtMs));
-    return params.probeTimeoutMs === undefined
-      ? remaining
-      : Math.min(params.probeTimeoutMs, remaining ?? Infinity);
-  };
   const updateInProgress = (params.env ?? process.env).OPENCLAW_UPDATE_IN_PROGRESS === "1";
 
   let snapshot: GatewayRestartSnapshot = {
@@ -267,7 +264,8 @@ export async function waitForGatewayHealthyRestart(
         probeContext,
         configuredProbe,
         probeHosts,
-        timeoutMs: probeTimeoutMs(),
+        timeoutMs: inspectionTimeoutMs(),
+        probeTimeoutMs: params.probeTimeoutMs,
         deadline: params.deadline,
         phase: params.phase ?? "health-wait",
         ...(signal ? { signal } : {}),
@@ -377,7 +375,7 @@ export async function waitForGatewayHealthyRestart(
             readActiveGatewayLockIdentity({
               env: params.env,
               requireInspection: true,
-              timeoutMs: params.deadline?.remainingMs() ?? probeTimeoutMs(),
+              timeoutMs: params.deadline?.remainingMs() ?? inspectionTimeoutMs(),
               signal,
             }),
           );

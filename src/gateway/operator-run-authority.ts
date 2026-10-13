@@ -292,8 +292,6 @@ export async function captureGatewayOperatorRunAuthority(input: {
   const resolveGatewayContext = params.context.resolveGatewayContext;
   const gatewayContext = resolveGatewayContext?.();
   const getConfig = params.context.getCommittedRuntimeConfig ?? params.context.getRuntimeConfig;
-  const initialModelConfig = getConfig();
-  const initialModelMetadata = getProcessGatewayPluginMetadataSnapshot();
   const isGatewayCurrent = () =>
     !resolveGatewayContext ||
     (gatewayContext !== undefined && resolveGatewayContext() === gatewayContext);
@@ -411,24 +409,14 @@ export async function captureGatewayOperatorRunAuthority(input: {
   };
   const release = releaseHold();
   try {
-    const initialRoleConfig = {
-      gateway: { roles: structuredClone(initialModelConfig.gateway?.roles) },
+    let assertCapturedRoleCurrent = () => {
+      // Capture current policy after preparation; reverted changes need no replay.
     };
-    const preparationConfigs = [initialRoleConfig];
-    let onConfigChange = () => {
-      preparationConfigs.push({ gateway: { roles: structuredClone(getConfig().gateway?.roles) } });
-    };
-    let profileChangedDuringPreparation = false;
-    let onProfileChange = () => {
-      profileChangedDuringPreparation = true;
-    };
-    // The assignment arrives asynchronously. Keep committed policy changes until
-    // it can be resolved, so revocation cannot disappear behind a later restore.
     subscriptions.push(
       onGatewayDeviceSourceRevoked(params.hasCurrentClientAuthority, () =>
         revoke(new Error("operator source authority is no longer active")),
       ),
-      onUserProfilesChanged(() => onProfileChange()),
+      onUserProfilesChanged(() => recheck(assertCapturedRoleCurrent)),
       onOperatorRolePolicyChanged((change) => {
         if (change.kind === "assignment" && change.profileId === profileId) {
           revoke(new Error("Your operator role changed; reconnect before continuing."));
@@ -436,7 +424,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
           change.kind === "config" &&
           change.context === (gatewayContext ?? params.context)
         ) {
-          onConfigChange();
+          recheck(assertCapturedRoleCurrent);
         }
       }),
     );
@@ -469,30 +457,19 @@ export async function captureGatewayOperatorRunAuthority(input: {
     ) {
       throw new Error("Gateway caller authority is no longer active.");
     }
+    const capturedConfig = getConfig();
     const capturedProfile = assertProfileCurrent();
     const capturedAssignedRole = capturedProfile.assignedRole;
-    const capturedGithubLogin = capturedProfile.githubLogin ?? null;
-    const capturedRole = structuredClone(resolveCurrentRole());
+    const capturedRole = structuredClone(
+      resolveOperatorRolePolicyForAssignment(
+        profileId,
+        capturedAssignedRole,
+        capturedConfig,
+        capturedProfile.githubLogin ?? null,
+      ),
+    );
     const capturedSourcePolicy = sourceRolePolicy(capturedRole);
-    if (
-      preparationConfigs.some(
-        (config) =>
-          !isDeepStrictEqual(
-            capturedSourcePolicy,
-            sourceRolePolicy(
-              resolveOperatorRolePolicyForAssignment(
-                profileId,
-                capturedAssignedRole,
-                config,
-                capturedGithubLogin,
-              ),
-            ),
-          ),
-      )
-    ) {
-      revoke(new Error("Your operator role changed; reconnect before continuing."));
-    }
-    const assertCapturedRoleCurrent = () => {
+    assertCapturedRoleCurrent = () => {
       const current = assertProfileCurrent();
       const policy = resolveOperatorRolePolicyForAssignment(
         profileId,
@@ -507,25 +484,13 @@ export async function captureGatewayOperatorRunAuthority(input: {
         throw new Error("Your operator role changed; reconnect before continuing.");
       }
     };
-    onConfigChange = () => recheck(assertCapturedRoleCurrent);
-    onProfileChange = () => recheck(assertCapturedRoleCurrent);
-    if (profileChangedDuringPreparation) {
-      onProfileChange();
-    }
-    assertCurrent();
     const modelPolicy = prepareRunModelPolicy({
-      cfg: initialModelConfig,
-      metadata: initialModelMetadata,
-      initialPolicy: resolveOperatorRolePolicyForAssignment(
-        profileId,
-        capturedAssignedRole,
-        initialRoleConfig,
-        capturedGithubLogin,
-      )?.modelPolicy,
+      cfg: capturedConfig,
+      metadata: getProcessGatewayPluginMetadataSnapshot(),
+      initialPolicy: capturedRole?.modelPolicy,
       getConfig,
       resolvePolicy: (cfg) => resolveCurrentRole(cfg)?.modelPolicy,
     });
-    preparationConfigs.length = 0;
     const source = retainOperatorSource(
       client,
       sourceOwners,

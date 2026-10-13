@@ -780,7 +780,7 @@ const enSettings = {
       test: "Test connection",
       testing: "Testing…",
       unavailable: "Connection testing requires a newer gateway.",
-      latency: "{ms} ms",
+      latency: "Request round-trip: {ms} ms",
       status: {
         ok: "Connected",
         auth: "Authentication failed",

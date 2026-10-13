@@ -201,17 +201,22 @@ describe("dashboard tool", () => {
         ),
     );
 
-    expect(admitted.requests).toEqual([
-      expect.objectContaining({
-        type: "req",
-        id: expect.stringMatching(/^plugin-subagent-/u),
-        method: "board.get",
-        params: expect.objectContaining({ sessionKey: "agent:main:main" }),
-      }),
-      expect.objectContaining({
-        method: "sessions.describe",
-        params: expect.objectContaining({ key: "agent:main:main" }),
-      }),
+    expect(admitted.requests).toHaveLength(3);
+    expect(admitted.requests.slice(0, 2)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "req",
+          id: expect.stringMatching(/^plugin-subagent-/u),
+          method: "board.get",
+          params: expect.objectContaining({ sessionKey: "agent:main:main" }),
+        }),
+        expect.objectContaining({
+          method: "sessions.describe",
+          params: expect.objectContaining({ key: "agent:main:main" }),
+        }),
+      ]),
+    );
+    expect(admitted.requests[2]).toEqual(
       expect.objectContaining({
         method: "sessions.patch",
         params: {
@@ -220,7 +225,7 @@ describe("dashboard tool", () => {
           boardPresentation: "expanded",
         },
       }),
-    ]);
+    );
     expect(replacement.requests).toEqual([]);
     expect(admitted.broadcastToConnIds).toHaveBeenCalledOnce();
     expect(replacement.broadcastToConnIds).not.toHaveBeenCalled();

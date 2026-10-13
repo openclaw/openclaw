@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { constants, type BigIntStats } from "node:fs";
+import { constants, lstatSync, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -29,6 +29,25 @@ export type PackageDirectoryIdentity = Pick<PackageIntegrityFingerprint, "identi
 type EntryObservation = { fields: Map<string, string>; retained: string; reusable: boolean };
 // Observations live only as long as their in-process fingerprint; journals stay compact.
 const observations = new WeakMap<PackageIntegrityFingerprint, Map<string, EntryObservation>>();
+const settlementObservations = new WeakMap<
+  PackageIntegrityFingerprint,
+  Array<{ file: string; stat: BigIntStats }>
+>();
+
+/** Revalidate the remount proof at the synchronous durable-settlement boundary. */
+export function assertPackageIntegritySettlementUnchanged(
+  fingerprint: PackageIntegrityFingerprint,
+) {
+  const entries = settlementObservations.get(fingerprint);
+  if (!entries) {
+    throw new Error("Package settlement tree observations are unavailable.");
+  }
+  for (const { file, stat } of entries) {
+    if (!packageStatUnchanged(stat, lstatSync(file, { bigint: true }))) {
+      throw new Error("Package settlement tree changed after verification.");
+    }
+  }
+}
 
 export class PackageIntegrityMismatchError extends Error {
   constructor(
@@ -326,7 +345,20 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
     originalRoot = root,
     reuse?: PackageIntegrityFingerprint,
     legacy = false,
+    historicalDevices?: ReadonlyMap<string, string>,
   ): Promise<PackageIntegrityFingerprint> {
+    // Projection affects digest encoding only. Hashing, reuse and stability checks
+    // always use the actual current stat identity, never historical device values.
+    const digestIdentity = (stat: BigIntStats) => {
+      if (!historicalDevices) {
+        return identity(stat);
+      }
+      const device = historicalDevices.get(String(stat.dev));
+      if (device === undefined) {
+        throw new Error("Package settlement tree has an unqualified device.");
+      }
+      return `${device}:${stat.ino}`;
+    };
     const prior = reuse ? observations.get(reuse) : undefined;
     const digest = createHash("sha256");
     const observed: Array<{ file: string; stat: BigIntStats }> = [];
@@ -429,7 +461,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       // npm bin repair chmods files; external hardlink removal changes nlink/ctime.
       // Keep inode, permissions and hashes strict; directory clocks/size also
       // change when npm replaces its hidden cache. Within-read checks stay strict.
-      const retained = [info["dev:ino"], info.mode, info.uid, info.gid];
+      const retained = [digestIdentity(stat), info.mode, info.uid, info.gid];
       if (!stat.isDirectory()) {
         retained.push(info.size, info.mtimeNs);
       }
@@ -550,7 +582,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
         for (const { file, stat } of observed) {
           const relative = path.relative(root, file).split(path.sep).join("/");
           const fields = entriesObserved.get(relative)!.fields;
-          const info = Object.values(metadata(stat));
+          const info = Object.values({ ...metadata(stat), "dev:ino": digestIdentity(stat) });
           if (!relative) {
             info.pop();
           }
@@ -572,6 +604,9 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       }
       const fingerprint = { digest: digest.digest("hex"), identity: rootIdentity, version };
       observations.set(fingerprint, entriesObserved);
+      if (historicalDevices) {
+        settlementObservations.set(fingerprint, observed);
+      }
       return fingerprint;
     } finally {
       hasher.close();

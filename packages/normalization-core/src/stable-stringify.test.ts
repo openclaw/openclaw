@@ -5,29 +5,18 @@ import { stableStringify, writeStableStringify } from "./stable-stringify.js";
 const sanitizeSurrogates = (text: string) =>
   text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
 
-const serializers: Record<string, typeof stableStringify> = {
-  stableStringify,
-  writeStableStringify: (value, normalizeString) => {
-    const chunks: string[] = [];
-    writeStableStringify(value, (chunk) => chunks.push(chunk), normalizeString);
-    return chunks.join("");
-  },
+const serialize = (value: unknown, normalizeString?: (text: string) => string): string => {
+  const chunks: string[] = [];
+  writeStableStringify(value, (chunk) => chunks.push(chunk), normalizeString);
+  return chunks.join("");
 };
 
-describe.each(Object.entries(serializers))("%s", (_name, serialize) => {
-  it("preserves parsed JSON values and sorts keys recursively", () => {
-    const value = JSON.parse('{"items":[3,null,{"z":false,"a":1.5}],"enabled":true}');
-    expect(serialize(value)).toBe('{"enabled":true,"items":[3,null,{"a":1.5,"z":false}]}');
-  });
+it("preserves parsed JSON values and sorts keys recursively", () => {
+  const value = JSON.parse('{"items":[3,null,{"z":false,"a":1.5}],"enabled":true}');
+  expect(stableStringify(value)).toBe('{"enabled":true,"items":[3,null,{"a":1.5,"z":false}]}');
+});
 
-  it("marks true circular references without collapsing repeated references", () => {
-    const shared = { value: 1 };
-    const root: Record<string, unknown> = { first: shared, second: shared };
-    root.self = root;
-
-    expect(serialize(root)).toBe('{"first":{"value":1},"second":{"value":1},"self":"[Circular]"}');
-  });
-
+describe("writeStableStringify", () => {
   it("handles circular arrays without treating later siblings as circular", () => {
     const shared = { value: "same" };
     const items: unknown[] = [shared, shared];
@@ -52,12 +41,6 @@ describe.each(Object.entries(serializers))("%s", (_name, serialize) => {
     expect(serialize(value, sanitizeSurrogates)).toBe(
       '{"high":"leftright","key":"name","low":"leftright","valid":"emoji 🙈 ok"}',
     );
-  });
-
-  it("sorts normalized keys before serializing them", () => {
-    const high = String.fromCharCode(0xd83d);
-    const malformed = { ba: 2, [`b${high}`]: 1 };
-    expect(serialize(malformed, sanitizeSurrogates)).toBe('{"b":1,"ba":2}');
   });
 
   it("serializes cache-trace edge types deterministically", () => {

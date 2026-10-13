@@ -1,5 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { listSessionEntriesCore } from "../config/sessions/session-accessor.entry.js";
 import {
   loadSessionEntryReadOnly,
@@ -58,7 +62,10 @@ vi.mock("../infra/node-sqlite.js", async (importOriginal) => {
 });
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-schema-budget-");
-afterAll(() => vi.restoreAllMocks());
+afterAll(() => {
+  clearRuntimeConfigSnapshot();
+  vi.restoreAllMocks();
+});
 const counts: Array<{
   owner: string;
   userVersion: number;
@@ -67,6 +74,7 @@ const counts: Array<{
 }> = [];
 
 beforeAll(async () => {
+  setRuntimeConfigSnapshot({});
   const scope = {
     agentId: "main",
     env: { ...process.env, OPENCLAW_STATE_DIR: sessionDirs.make() },

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import type { TalkBrain, TalkEventType, TalkMode, TalkTransport } from "../talk/talk-events.js";
 import {
@@ -970,59 +971,32 @@ const PRIORITY_ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["ty
   "harness.run.error",
 ]);
 
-function isDiagnosticEventsState(value: unknown): value is DiagnosticEventsGlobalState {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as Partial<DiagnosticEventsGlobalState>;
-  return (
-    candidate.marker === DIAGNOSTIC_EVENTS_STATE_KEY &&
-    typeof candidate.enabled === "boolean" &&
-    typeof candidate.seq === "number" &&
-    candidate.listeners instanceof Map &&
-    candidate.trustedListeners instanceof Map &&
-    (candidate.toolExecutionListeners === undefined ||
-      candidate.toolExecutionListeners instanceof Set) &&
-    typeof candidate.dispatchDepth === "number" &&
-    Array.isArray(candidate.asyncQueue) &&
-    typeof candidate.asyncDrainScheduled === "boolean"
-  );
-}
-
 function getDiagnosticEventsState(): DiagnosticEventsGlobalState {
-  const globalRecord = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalRecord[DIAGNOSTIC_EVENTS_STATE_KEY];
-  if (isDiagnosticEventsState(existing)) {
-    existing.asyncDroppedEvents ??= 0;
-    existing.asyncDroppedTrustedEvents ??= 0;
-    existing.asyncDroppedUntrustedEvents ??= 0;
-    existing.asyncDroppedPriorityEvents ??= 0;
-    existing.toolExecutionListeners ??= new Set<TrustedToolExecutionEventListener>();
-    existing.toolExecutionSeq ??= 0;
-    return existing;
-  }
-  const state: DiagnosticEventsGlobalState = {
-    marker: DIAGNOSTIC_EVENTS_STATE_KEY,
-    enabled: true,
-    seq: 0,
-    listeners: new Map(),
-    trustedListeners: new Map(),
-    toolExecutionListeners: new Set<TrustedToolExecutionEventListener>(),
-    toolExecutionSeq: 0,
-    dispatchDepth: 0,
-    asyncQueue: [],
-    asyncDrainScheduled: false,
-    asyncDroppedEvents: 0,
-    asyncDroppedTrustedEvents: 0,
-    asyncDroppedUntrustedEvents: 0,
-    asyncDroppedPriorityEvents: 0,
-  };
-  Object.defineProperty(globalThis, DIAGNOSTIC_EVENTS_STATE_KEY, {
-    configurable: true,
-    enumerable: false,
-    value: state,
-    writable: false,
-  });
+  const state = resolveGlobalSingleton<DiagnosticEventsGlobalState>(
+    DIAGNOSTIC_EVENTS_STATE_KEY,
+    () => ({
+      marker: DIAGNOSTIC_EVENTS_STATE_KEY,
+      enabled: true,
+      seq: 0,
+      listeners: new Map(),
+      trustedListeners: new Map(),
+      toolExecutionListeners: new Set<TrustedToolExecutionEventListener>(),
+      toolExecutionSeq: 0,
+      dispatchDepth: 0,
+      asyncQueue: [],
+      asyncDrainScheduled: false,
+      asyncDroppedEvents: 0,
+      asyncDroppedTrustedEvents: 0,
+      asyncDroppedUntrustedEvents: 0,
+      asyncDroppedPriorityEvents: 0,
+    }),
+  );
+  state.asyncDroppedEvents ??= 0;
+  state.asyncDroppedTrustedEvents ??= 0;
+  state.asyncDroppedUntrustedEvents ??= 0;
+  state.asyncDroppedPriorityEvents ??= 0;
+  state.toolExecutionListeners ??= new Set<TrustedToolExecutionEventListener>();
+  state.toolExecutionSeq ??= 0;
   return state;
 }
 

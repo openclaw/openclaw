@@ -23,7 +23,7 @@ import type { IncomingMessage } from "node:http";
 import { createConnection, Socket } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
 
 describe("inference relay capacity", () => {
@@ -695,7 +695,7 @@ describe("inference relay capacity", () => {
     },
   );
 
-  it.each(["timer", "clock"])(
+  it.each(["timer", "elapsed clock"])(
     "expires admission during DNS by %s without leaking the permit",
     async (expiry) => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
@@ -712,7 +712,8 @@ describe("inference relay capacity", () => {
         await vi.advanceTimersByTimeAsync(10_000);
       } else {
         // DNS can settle after the deadline before the queued timer callback runs.
-        vi.setSystemTime(Date.now() + 10_000);
+        const clock = vi.spyOn(performance, "now").mockReturnValue(performance.now() + 10_000);
+        onTestFinished(() => clock.mockRestore());
         dns.resolve({ lookup: undefined });
       }
       const [, response] = await rejected;
@@ -754,7 +755,7 @@ describe("inference relay capacity", () => {
   it.each([
     { phase: "upgrade", expiry: "timer" },
     { phase: "error body", expiry: "timer" },
-    { phase: "error body", expiry: "clock" },
+    { phase: "error body", expiry: "elapsed clock" },
   ])(
     "expires a stalled upstream $phase by $expiry and reclaims admission",
     async ({ phase, expiry }) => {
@@ -784,7 +785,8 @@ describe("inference relay capacity", () => {
       if (expiry === "timer") {
         await vi.advanceTimersByTimeAsync(10_000);
       } else {
-        vi.setSystemTime(Date.now() + 10_000);
+        const clock = vi.spyOn(performance, "now").mockReturnValue(performance.now() + 10_000);
+        onTestFinished(() => clock.mockRestore());
         finishBody();
       }
       const [, response] = await rejected;

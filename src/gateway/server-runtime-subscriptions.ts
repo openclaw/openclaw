@@ -38,10 +38,7 @@ import {
   onSessionIdentityMutation,
   onSessionLifecycleEvent,
 } from "../sessions/session-lifecycle-events.js";
-import {
-  onInternalSessionTranscriptUpdate,
-  type InternalSessionTranscriptUpdate,
-} from "../sessions/transcript-events.js";
+import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -151,6 +148,7 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
   });
   const sessionObserver = createSessionObserver({
     getConfig: getRuntimeConfig,
+    getSessionRowProjection: params.getSessionRowProjection,
     subscribers: params.sessionMessageSubscribers,
     sessionEventSubscribers: params.sessionEventSubscribers,
     broadcastToConnIds: params.broadcastToConnIds,
@@ -660,16 +658,16 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
     const agentHandler = agentEventHandlerLoader.peek();
     const publication = createDeferredCore();
     const dispatch = runOutsideAsyncWorkScope(() =>
-      dispatchEventHandler<InternalSessionTranscriptUpdate>({
-        loadHandler: agentHandler
-          ? () =>
-              agentHandler
-                .then(
-                  (handler) => handler.retireTranscript(evt, publication.promise),
-                  () => undefined,
-                )
-                .then(getTranscriptUpdateHandler)
-          : getTranscriptUpdateHandler,
+      dispatchEventHandler({
+        loadHandler: async () => {
+          if (agentHandler) {
+            await agentHandler.then(
+              (handler) => handler.retireTranscript(evt, publication.promise),
+              () => undefined,
+            );
+          }
+          return getTranscriptUpdateHandler();
+        },
         event: evt,
         log: params.log,
         failureMessage: "Transcript update dispatch failed",

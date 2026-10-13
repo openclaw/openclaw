@@ -680,6 +680,42 @@ describe("Control UI performance budgets", () => {
     expect(result.stderr).not.toContain("::warning");
   });
 
+  it.each(["chat", "new"])("enforces the %s boot request limit in Actions", (route) => {
+    const { rootDir, scriptPath, distDir } = createCliFixture();
+    const links = Array.from({ length: 35 }, (_, index) => {
+      const file = `route-${index}.js`;
+      for (const suffix of ["", ".gz", ".br"]) {
+        fs.writeFileSync(path.join(distDir, "assets", `${file}${suffix}`), "x");
+      }
+      return `<link rel="modulepreload" href="./assets/${file}">`;
+    });
+    const indexPath = path.join(distDir, "index.html");
+    const initial = fs.readFileSync(indexPath, "utf8");
+    const writeRoute = (count: number) =>
+      fs.writeFileSync(
+        indexPath,
+        `${initial}<template data-openclaw-route-preloads="${route}">${links.slice(0, count).join("")}</template>`,
+      );
+    writeRoute(35);
+    const actions = { GITHUB_ACTIONS: "true" };
+    const over = runControlUiPerformanceCli(scriptPath, ["--json"], rootDir, actions);
+    expect(JSON.parse(over.stdout).violations).toEqual([
+      expect.objectContaining({ metric: `${route} boot JS requests`, actual: 36, limit: 35 }),
+    ]);
+    expect(over.status, over.stderr).toBe(1);
+    const reported = runControlUiPerformanceCli(
+      scriptPath,
+      ["--json", "--report-only"],
+      rootDir,
+      actions,
+    );
+    expect(reported.status, reported.stderr).toBe(0);
+    writeRoute(34);
+    const atLimit = runControlUiPerformanceCli(scriptPath, ["--json"], rootDir, actions);
+    expect(atLimit.status, atLimit.stderr).toBe(0);
+    expect(JSON.parse(atLimit.stdout).violations).toEqual([]);
+  });
+
   it.each(["missing baseline", "malformed baseline", "missing sidecar", "missing base dist"])(
     "still rejects a %s in report-only mode",
     (invalid) => {

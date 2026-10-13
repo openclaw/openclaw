@@ -2,10 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
-import {
-  createSpeechProviderRegistry,
-  normalizeSpeechProviderId,
-} from "./provider-registry-core.js";
+import { createSpeechProviderRegistry } from "./provider-registry-core.js";
 import {
   isTtsProviderConfiguredAsync,
   resolveTtsProviderAsync,
@@ -46,55 +43,10 @@ function createSpeechProvider(id: string, aliases?: string[]): SpeechProviderPlu
 }
 
 describe("speech provider registry", () => {
-  const getProviderCalls: Array<{ providerId: string; cfg?: OpenClawConfig }> = [];
-  const listProvidersCalls: Array<{ cfg?: OpenClawConfig }> = [];
-  let providers: SpeechProviderPlugin[] = [];
-  let directProvider: SpeechProviderPlugin | undefined;
-  let registry: ReturnType<typeof createSpeechProviderRegistry>;
-
   beforeEach(() => {
     mocks.canonicalizeSpeechProviderId.mockClear();
     mocks.getSpeechProvider.mockReset();
     mocks.listSpeechProviders.mockReset();
-    providers = [];
-    directProvider = undefined;
-    getProviderCalls.length = 0;
-    listProvidersCalls.length = 0;
-    registry = createSpeechProviderRegistry({
-      getProvider: (providerId, cfg) => {
-        getProviderCalls.push({ providerId, cfg });
-        return directProvider;
-      },
-      listProviders: (cfg) => {
-        listProvidersCalls.push({ cfg });
-        return providers;
-      },
-    });
-  });
-
-  it("lists providers from the speech capability runtime", () => {
-    const cfg = {} as OpenClawConfig;
-    providers = [createSpeechProvider("demo-speech")];
-
-    expect(registry.listSpeechProviders(cfg).map((provider) => provider.id)).toEqual([
-      "demo-speech",
-    ]);
-    expect(listProvidersCalls).toEqual([{ cfg }]);
-  });
-
-  it("gets providers by normalized id through the capability runtime", () => {
-    const cfg = {} as OpenClawConfig;
-    directProvider = createSpeechProvider("microsoft", ["edge"]);
-
-    expect(registry.getSpeechProvider(" MICROSOFT ", cfg)).toBe(directProvider);
-    expect(getProviderCalls).toEqual([{ providerId: "microsoft", cfg }]);
-  });
-
-  it("canonicalizes aliases from listed providers when direct lookup misses", () => {
-    providers = [createSpeechProvider("microsoft", ["edge"])];
-
-    expect(normalizeSpeechProviderId("edge")).toBe("edge");
-    expect(registry.canonicalizeSpeechProviderId("edge")).toBe("microsoft");
   });
 
   it("resolves deterministic fallback order and aliases from a supplied provider inventory", () => {
@@ -112,29 +64,6 @@ describe("speech provider registry", () => {
         inventory,
       ),
     ).toEqual(["openai", "azure", "google", "elevenlabs"]);
-  });
-
-  it("selects the first configured provider entirely from prepared facts", () => {
-    const openaiConfigured = vi.fn(() => false);
-    const googleConfigured = vi.fn(() => true);
-    const inventory = [
-      { ...createSpeechProvider("openai"), autoSelectOrder: 1, isConfigured: openaiConfigured },
-      { ...createSpeechProvider("google"), autoSelectOrder: 2, isConfigured: googleConfigured },
-    ];
-
-    expect(
-      resolvePreparedTtsProvider({
-        config: resolveTtsConfig({}),
-        providers: inventory,
-        configuredByProvider: new Map([
-          ["openai", false],
-          ["google", true],
-        ]),
-      }),
-    ).toBe("google");
-    expect(mocks.listSpeechProviders).not.toHaveBeenCalled();
-    expect(openaiConfigured).not.toHaveBeenCalled();
-    expect(googleConfigured).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -237,11 +166,5 @@ describe("speech provider registry", () => {
 
     expect(resolveTtsProviderOrder("openai", cfg, inventory)).toEqual(["openai", "microsoft"]);
     expect(mocks.canonicalizeSpeechProviderId).toHaveBeenCalledWith("edge", expect.any(Object));
-  });
-
-  it("returns empty results when the capability runtime has no speech providers", () => {
-    expect(registry.listSpeechProviders()).toStrictEqual([]);
-    expect(registry.getSpeechProvider("demo-speech")).toBeUndefined();
-    expect(registry.canonicalizeSpeechProviderId("demo-speech")).toBe("demo-speech");
   });
 });

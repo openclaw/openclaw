@@ -6,8 +6,12 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
-import { createConfigIO, resetConfigRuntimeState } from "../config/config.js";
-import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/io.js";
+import {
+  captureRuntimeConfigAsyncReader,
+  createConfigIO,
+  resetConfigRuntimeState,
+} from "../config/config.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type {
   EmbeddingInput,
   EmbeddingProviderCallOptions,
@@ -689,7 +693,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
           },
         };
       });
-      const cfg = getRuntimeConfig();
+      const cfg = await captureRuntimeConfigAsyncReader()();
       const pending = postEmbeddings({ model: "openclaw/default", input: "hello" });
       try {
         await operationStarted.promise;

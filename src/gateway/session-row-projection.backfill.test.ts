@@ -84,9 +84,10 @@ async function withStreamingProjection(
   });
 }
 
-it("coalesces streaming transcript refreshes without rereading metadata or refreshing relatives", async () => {
+it("refreshes streaming previews without rematerializing unchanged rows", async () => {
   await withStreamingProjection(async ({ projection, query, append, release }) => {
     const reads: string[] = [];
+    const backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
     const readDatabases = history.withSessionHistoryWorkerDatabases;
     vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
       (targets, consume, lane) =>
@@ -107,32 +108,32 @@ it("coalesces streaming transcript refreshes without rereading metadata or refre
     );
     const before = projection.materializedCount;
     await append("Update 1");
-    expect(projection.materializedCount - before).toBe(1);
+    expect(projection.materializedCount - before).toBe(0);
     for (let index = 2; index <= 10; index++) {
       await append(`Update ${index}`);
     }
-    expect(projection.materializedCount - before).toBe(1);
+    expect(projection.materializedCount - before).toBe(0);
     await vi.advanceTimersByTimeAsync(999);
     await projection.ensureMaterialized();
-    expect(projection.materializedCount - before).toBe(1);
+    expect(projection.materializedCount - before).toBe(0);
     await vi.advanceTimersByTimeAsync(1);
     await projection.ensureMaterialized();
-    expect(projection.materializedCount - before).toBe(2);
+    expect(projection.materializedCount - before).toBe(0);
     await append("Update 11");
-    expect(projection.materializedCount - before).toBe(2);
+    expect(projection.materializedCount - before).toBe(0);
     await vi.advanceTimersByTimeAsync(1_000);
     await projection.ensureMaterialized();
-    expect(projection.materializedCount - before).toBe(3);
+    expect(projection.materializedCount - before).toBe(0);
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(projection.materializedCount - before).toBe(3);
+    expect(projection.materializedCount - before).toBe(0);
     expect(reads).toEqual([]);
-    const backfilled = observeSessionRowBackfill([query.key], projection);
-    release();
-    vi.useRealTimers();
-    await backfilled;
     expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
       lastMessagePreview: "Update 11",
     });
+    release();
+    vi.useRealTimers();
+    await nextTurn();
+    expect(backfill.mock.calls.filter(([params]) => params.sessionKey === query.key)).toEqual([]);
   });
 });
 
@@ -212,7 +213,7 @@ it("refreshes committed metadata and lifecycle marks during a transcript window"
 it.each(["disposal", "replacement"] as const)(
   "cancels a pending trailing transcript refresh on %s",
   async (change) => {
-    await withStreamingProjection(async ({ projection, target, query, append }) => {
+    await withStreamingProjection(async ({ projection, target, query, append, release }) => {
       await append("Leading update");
       const before = projection.materializedCount;
       await append("Pending update");
@@ -239,12 +240,20 @@ it.each(["disposal", "replacement"] as const)(
         expect(settled).toBe(before);
         expect(projection.selectEntries()).toEqual([]);
       } else {
+        const backfilled = observeSessionRowBackfill([query.key], projection);
         await persistSessionTranscriptTurn(
           { ...target, sessionId: "replacement" },
           { messages: [{ message: { role: "assistant", content: "New session" } }] },
         );
         await projection.ensureMaterialized();
-        expect(projection.materializedCount - settled).toBe(1);
+        expect(projection.materializedCount - settled).toBe(0);
+        release();
+        vi.useRealTimers();
+        await backfilled;
+        expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
+          sessionId: "replacement",
+          lastMessagePreview: "New session",
+        });
       }
     });
   },
@@ -361,6 +370,7 @@ it.each([false, true])(
   async (modelFactsChanged) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
       const query = { agentId: "main", key: "agent:main:catalog" };
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: query.key },
@@ -429,6 +439,7 @@ it.each([false, true])(
 it("updates one agent's catalog without rematerializing another agent's session", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {}, other: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const queries = [
       { agentId: "main", key: "agent:main:catalog-owner" },
       { agentId: "other", key: "agent:other:catalog-owner" },
@@ -489,6 +500,7 @@ it("updates one agent's catalog without rematerializing another agent's session"
 it("waits for the first catalog before admitting session reads", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const catalog = createDeferredCore<[]>();
     const admitted = vi.fn();
     const startup = createSessionRowProjection({ cfg, getModelCatalog: () => catalog.promise });
@@ -509,6 +521,7 @@ it("waits for the first catalog before admitting session reads", async () => {
 it("does not adopt a background catalog after disposal", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const initial: [] = [];
     const current = createDeferredCore<[]>();
     const getModelCatalog = vi
@@ -614,6 +627,7 @@ it("backfills terminal fallback models and clears previews when the newest messa
 }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const target = { agentId: "main", sessionKey: "agent:main:fallback", sessionId: "fallback" };
     replaceSessionEntrySync(target, {
       sessionId: target.sessionId,

@@ -13,14 +13,9 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
-import { ApprovalPage } from "./approval-page.ts";
+import "./approval-page-registration.ts";
 
-const TEST_ELEMENT_SUFFIX = crypto.randomUUID();
-const APPROVAL_PAGE_ELEMENT_NAME = `test-openclaw-approval-page-${TEST_ELEMENT_SUFFIX}`;
-
-// The non-isolated UI runner resets modules but not customElements. Register
-// the current page graph so context and locale state stay paired.
-customElements.define(APPROVAL_PAGE_ELEMENT_NAME, class extends ApprovalPage {});
+const APPROVAL_PAGE_ELEMENT_NAME = "openclaw-approval-page";
 
 type TestApprovalPage = HTMLElement & {
   approvalId: string;

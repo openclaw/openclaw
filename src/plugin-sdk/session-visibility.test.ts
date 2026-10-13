@@ -433,7 +433,7 @@ describe("channel-scoped session visibility", () => {
     ...overrides,
   });
 
-  it("derives a channel scope from stored facts without using the opaque key peer", () => {
+  it("derives a channel scope only when stored facts match the normalized key peer", () => {
     expect(resolveSessionChannelScope(storedRow())).toEqual(scope);
     expect(
       resolveSessionChannelScope(
@@ -449,6 +449,18 @@ describe("channel-scoped session visibility", () => {
         }),
       ),
     ).toEqual({ ...scope, provider: "matrix", to: "!opaque:thread:room" });
+    const reassignedScope = resolveSessionChannelScope(
+      storedRow({
+        deliveryContext: { channel: "slack", accountId: "default", to: "channel:C2" },
+      }),
+    );
+    expect(reassignedScope).toEqual({ ...scope, to: "channel:C2" });
+    expect(
+      createSessionVisibilityRowChecker(params).check({
+        key: sibling,
+        channelScope: reassignedScope,
+      }).allowed,
+    ).toBe(false);
   });
 
   it.each([

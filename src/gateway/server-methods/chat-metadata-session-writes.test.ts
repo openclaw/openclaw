@@ -12,12 +12,9 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { recordSessionParticipant } from "../../config/sessions/session-accessor.sqlite-participants.native.js";
 import { appendTranscriptEventSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import {
-  projectionLane,
-  rotateDatabaseWorkers,
-} from "../../config/sessions/session-transcript-worker-resources.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -25,12 +22,13 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { publishUserProfileAliasChange } from "../../state/user-profile-events.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { rolePolicyConfig, sharingPolicyClient } from "../session-sharing.test-utils.js";
-import { chatHistoryHandlers } from "./chat-history-handler.js";
+import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
 import {
   connectChatMetadataAccount,
   createChatMetadataHarness,
@@ -103,14 +101,14 @@ it.each(
     const writeTarget = write.includes("new sibling")
       ? { ...sibling, sessionKey: "agent:main:new-sibling" }
       : sibling;
-    await upsertSessionEntryCore(selected, {
+    replaceSessionEntrySync(selected, {
       sessionId: "selected",
       lifecycleRevision: "selected-original",
       sessionStartedAt: 1,
       label: "selected",
       updatedAt: 1,
     });
-    await upsertSessionEntryCore(sibling, {
+    replaceSessionEntrySync(sibling, {
       sessionId: "sibling",
       label: "sibling",
       updatedAt: 1,
@@ -380,7 +378,7 @@ it.each(
       return refresh ? await refresh : metadata;
     });
     const respond = vi.fn<RespondFn>();
-    const handler = chatHistoryHandlers["chat.metadata"]!;
+    const handler = handleChatMetadataRequest;
     const outcome = await Promise.resolve()
       .then(() =>
         handler({
@@ -527,10 +525,11 @@ it.each([
       setRuntimeConfigSnapshot(config);
       const owner = ensureProfileForEmail("metadata-session-owner@example.test");
       const viewer = ensureProfileForEmail("metadata-session-viewer@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const authProfileId = connectChatMetadataAccount(owner.id);
       const client = sharingPolicyClient({ user: viewer.id });
       const selected = { agentId: "main", sessionKey: "agent:main:metadata-read-marker" };
-      await upsertSessionEntryCore(selected, {
+      replaceSessionEntrySync(selected, {
         sessionId: "read-marker-session",
         lifecycleRevision: "read-marker-lifecycle",
         sessionStartedAt: 1,
@@ -569,7 +568,7 @@ it.each([
         getRuntimeConfig: () => config,
         readChatMetadata: harness.runtime.read,
       });
-      const handler = expectDefined(chatHistoryHandlers["chat.metadata"], "metadata handler");
+      const handler = handleChatMetadataRequest;
       const invoke = (respond: RespondFn) =>
         Promise.resolve(
           handler({
@@ -606,8 +605,6 @@ it.each([
             await patchSessionEntryCore(selected, () => ({ lastReadAt: 2 }), {
               preserveActivity: true,
               skipMaintenance: true,
-              // Native fixture writes isolate request-reader lifetimes; worker writes have owner coverage.
-              assertCommitAllowed: () => {},
             });
           } else if (changeEntry && scenario.committed) {
             runOpenClawAgentWriteTransaction((current) => {
@@ -675,8 +672,7 @@ it.each([
             message: "Session changed while preparing its metadata. Retry the request.",
           });
           expect(changed.respond).not.toHaveBeenCalled();
-          // Retire cached readers without releasing request-owned registrations.
-          await rotateDatabaseWorkers(projectionLane);
+          await closeOpenClawAgentDatabasesAsync(state.root);
           expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
           return;
         }
@@ -686,7 +682,7 @@ it.each([
         expect(fresh.mock.calls).toEqual(control.respond.mock.calls);
         expect(changed.error).toBeUndefined();
         expect(changed.respond.mock.calls).toEqual(control.respond.mock.calls);
-        await rotateDatabaseWorkers(projectionLane);
+        await closeOpenClawAgentDatabasesAsync(state.root);
         expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
       } finally {
         release?.();

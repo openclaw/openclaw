@@ -217,6 +217,7 @@ export function coordinateWorkerPlacementDispatch(
         waitForInitialPlacement: coordinator.waitForInitialPlacement,
         startDispatch: async (request, onTransition, authorize, signal) => {
           const started = createDeferredCore<WorkerDispatchPlacement>();
+          const releaseAuthority = params.retainDispatch?.();
           const operation = coordinator.dispatch(
             request,
             (placement) => {
@@ -226,6 +227,10 @@ export function coordinateWorkerPlacementDispatch(
             authorize,
             signal,
           );
+          // The requested acknowledgment can precede the final provider effect.
+          if (releaseAuthority) {
+            void operation.then(releaseAuthority, releaseAuthority);
+          }
           void operation.catch((error: unknown) => {
             try {
               sessionPreparation.warn("Worker setup failed: " + String(error));
@@ -468,6 +473,7 @@ export function coordinateWorkerPlacementDispatch(
     getEnvironmentAttachedSessionIds: (environmentId) =>
       service.getEnvironmentAttachedSessionIds(environmentId),
     readEnvironmentSessionIds: (environmentId) => service.readEnvironmentSessionIds(environmentId),
+    isInterruptedTurn: service.isInterruptedTurn,
     reconcile: (mode) => runReconciliation(() => service.reconcile(mode, tryRecovery)),
     reconcileActive: (environmentId) =>
       environmentId === undefined

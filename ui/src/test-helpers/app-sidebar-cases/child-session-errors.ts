@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { createGateway, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 
@@ -54,7 +55,7 @@ describe("AppSidebar child-session load errors", () => {
           ...(interveningRun ? [run] : []),
         ]),
       });
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
       const toggle = () =>
         sidebar.querySelector<HTMLButtonElement>(`[data-child-session-toggle="${parentKey}"]`)!;
       toggle().click();
@@ -108,7 +109,7 @@ describe("AppSidebar child-session load errors", () => {
         );
       const { sidebar } = await mountSidebar(gateway, harness.sessions);
       harness.publishList({ result: sessionResult([parentSession(parentKey, childKey)]) });
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
       sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
 
       await waitForFast(() => {
@@ -120,7 +121,7 @@ describe("AppSidebar child-session load errors", () => {
       harness.publishList({
         result: sessionResult([{ ...parentSession(parentKey, childKey), updatedAt: 2 }]),
       });
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
       expect(harness.list).toHaveBeenCalledOnce();
       expect(sidebar.querySelector(`[data-child-session-error="${parentKey}"]`)).toBe(mountedAlert);
       if (failure !== visibleError) {
@@ -162,7 +163,7 @@ describe("AppSidebar child-session load errors", () => {
         ),
       ),
     });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     for (const parentKey of [firstParent, secondParent]) {
       sidebar
         .querySelector<HTMLButtonElement>(`[data-child-session-toggle="${parentKey}"]`)

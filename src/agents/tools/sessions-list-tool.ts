@@ -41,8 +41,6 @@ import {
 } from "./in-process-gateway.js";
 import { resolveSessionToolTargetAgentId } from "./scoped-session-access.js";
 import {
-  createSessionVisibilityRowChecker,
-  resolveSessionToolChannelScope,
   classifySessionListKind,
   deriveChannel,
   resolveDisplaySessionKey,
@@ -53,6 +51,10 @@ import {
   type GatewaySessionListRow,
   type SessionListRow,
 } from "./sessions-helpers.js";
+import {
+  createSessionsListVisibleReference,
+  prepareSessionsListChannelAccess,
+} from "./sessions-list-channel-access.js";
 
 const SessionsListToolSchema = Type.Object({
   user: requesterProfileSchema(),
@@ -219,41 +221,17 @@ export function createSessionsListTool(opts?: {
         Boolean(gatewayContext) ||
         hasGatewayToolRoutingContext();
       const hydrateTranscriptFieldsAfterFiltering = includeDerivedTitles || includeLastMessage;
-      const requesterChannelScope = await resolveSessionToolChannelScope({
+      const { visibleReference, visibilityGuard } = await createSessionsListVisibleReference({
+        cfg,
         visibility,
-        sessionKey: effectiveRequesterKey,
-        agentId: requesterAgentId,
-        callGateway: gatewayCall,
-      });
-      const visibilityGuard = createSessionVisibilityRowChecker({
-        requesterChannelScope,
-        action: "list",
-        defaultAgentId: requesterAgentId,
+        requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
         mainSessionKey,
-        visibility,
+        alias,
+        mainKey,
         a2aPolicy,
+        callGateway: gatewayCall,
       });
-      const visibleReference = (key: string, parentSessionKey?: string) => {
-        if (isIncognitoSessionKey(key)) {
-          return undefined;
-        }
-        try {
-          const referenceAgentId = resolveSessionToolTargetAgentId({
-            cfg,
-            targetSessionKey: key,
-            requesterAgentId,
-          });
-          if (
-            !visibilityGuard.check({ key, agentId: referenceAgentId, parentSessionKey }).allowed
-          ) {
-            return undefined;
-          }
-          return resolveDisplaySessionKey({ key, alias, mainKey });
-        } catch {
-          return undefined;
-        }
-      };
       const sessions: Array<{ entry: GatewaySessionListRow; agentId: string; offset: number }> = [];
       const seenSessions = new Set<string>();
       const outputLimit = Math.min(limit ?? 100, 200);
@@ -385,6 +363,20 @@ export function createSessionsListTool(opts?: {
         offset = pageNextOffset;
       }
 
+      const channelAccess = await prepareSessionsListChannelAccess({
+        cfg,
+        visibility,
+        sessions,
+        requesterAgentId,
+        requesterSessionKey: effectiveRequesterKey,
+        mainSessionKey,
+        a2aPolicy,
+        callGateway: gatewayCall,
+        ...(signal ? { signal } : {}),
+      });
+      sessions.splice(0, sessions.length, ...channelAccess.sessions);
+      const runWithCurrentChannelAccess = channelAccess.runWithCurrentAccess;
+
       const stateVersions = await getSessionStateVersions(
         sessions.map(({ entry, agentId: stateAgentId }) => ({
           sessionKey: entry.key,
@@ -392,7 +384,11 @@ export function createSessionsListTool(opts?: {
         })),
       );
       const rows: SessionListRow[] = [];
-      const historyTargets: Array<{ row: SessionListRow; resolvedKey: string }> = [];
+      const historyTargets: Array<{
+        source: GatewaySessionListRow;
+        row: SessionListRow;
+        resolvedKey: string;
+      }> = [];
       const titleTargets: Array<{
         source: GatewaySessionListRow;
         row: SessionListRow;
@@ -524,7 +520,7 @@ export function createSessionsListTool(opts?: {
         }
         if (messageLimit > 0) {
           const resolvedKey = resolveInternalSessionKey({ key, alias });
-          historyTargets.push({ row, resolvedKey });
+          historyTargets.push({ source: entry, row, resolvedKey });
         }
         rows.push(row);
       }
@@ -541,28 +537,40 @@ export function createSessionsListTool(opts?: {
           if (!titleRead) {
             return;
           }
-          const fields = titleRead.needsTranscript
-            ? await (
-                await import("../../gateway/session-list-read-result.js")
-              ).readSessionListRowTitleFields(target.source, requireSessionReadOwner)
-            : undefined;
+          const currentRead = await runWithCurrentChannelAccess(
+            target.source,
+            target.row.agentId,
+            async () => {
+              const fields = titleRead.needsTranscript
+                ? await (
+                    await import("../../gateway/session-list-read-result.js")
+                  ).readSessionListRowTitleFields(target.source, requireSessionReadOwner)
+                : undefined;
+              const described =
+                titleRead.needsTranscript && fields === undefined
+                  ? await gatewayCall<{ session: GatewaySessionListRow | null }>({
+                      method: "sessions.describe",
+                      ...(signal ? { signal } : {}),
+                      params: {
+                        key: target.sessionKey,
+                        agentId: target.row.agentId,
+                        includeDerivedTitles,
+                        includeLastMessage,
+                      },
+                    })
+                  : undefined;
+              return { fields, described };
+            },
+          ).catch(() => undefined);
+          if (!currentRead) {
+            unavailableRows.add(target.row);
+            return;
+          }
+          const { fields, described } = currentRead;
           if (fields === null) {
             unavailableRows.add(target.row);
             return;
           }
-          const described =
-            titleRead.needsTranscript && fields === undefined
-              ? await gatewayCall<{ session: GatewaySessionListRow | null }>({
-                  method: "sessions.describe",
-                  ...(signal ? { signal } : {}),
-                  params: {
-                    key: target.sessionKey,
-                    agentId: target.row.agentId,
-                    includeDerivedTitles,
-                    includeLastMessage,
-                  },
-                })
-              : undefined;
           if (described && described.session?.sessionId !== target.titleEntry.sessionId) {
             unavailableRows.add(target.row);
             return;
@@ -586,15 +594,23 @@ export function createSessionsListTool(opts?: {
         await pMap(
           historyTargets.filter((target) => !unavailableRows.has(target.row)),
           async (target) => {
-            const history = await gatewayCall<{ messages: Array<unknown> }>({
-              method: "chat.history",
-              ...(signal ? { signal } : {}),
-              params: {
-                sessionKey: target.resolvedKey,
-                agentId: target.row.agentId,
-                limit: messageLimit,
-              },
-            });
+            let history: { messages: Array<unknown> };
+            try {
+              history = await runWithCurrentChannelAccess(target.source, target.row.agentId, () =>
+                gatewayCall<{ messages: Array<unknown> }>({
+                  method: "chat.history",
+                  ...(signal ? { signal } : {}),
+                  params: {
+                    sessionKey: target.resolvedKey,
+                    agentId: target.row.agentId,
+                    limit: messageLimit,
+                  },
+                }),
+              );
+            } catch {
+              unavailableRows.add(target.row);
+              return;
+            }
             const rawMessages = Array.isArray(history?.messages) ? history.messages : [];
             const filtered = stripToolMessages(rawMessages);
             target.row.messages =
@@ -684,19 +700,29 @@ export function createSessionsListTool(opts?: {
         }
         return jsonResult(resultFor(count));
       };
+      let ownerVisible: readonly boolean[];
       if (
         !requireSessionReadOwner &&
         !hydrateTranscriptFieldsAfterFiltering &&
         messageLimit === 0
       ) {
-        return finalize(rows.map(() => true));
+        ownerVisible = rows.map(() => true);
+      } else {
+        const { withCurrentSessionListRows } =
+          await import("../../gateway/session-list-read-result.js");
+        ownerVisible = await withCurrentSessionListRows(
+          sessions.map(({ entry }) => entry),
+          (visible) => [...visible],
+          requireSessionReadOwner,
+        );
       }
-      const { withCurrentSessionListRows } =
-        await import("../../gateway/session-list-read-result.js");
-      return await withCurrentSessionListRows(
-        sessions.map(({ entry }) => entry),
-        finalize,
-        requireSessionReadOwner,
+      const channelVisible = await pMap(
+        sessions,
+        ({ entry }) => channelAccess.revalidateCurrent(entry),
+        { concurrency: 4, stopOnError: true },
+      );
+      return finalize(
+        ownerVisible.map((visible, index) => visible && channelVisible[index] === true),
       );
     }),
   };
