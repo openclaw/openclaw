@@ -562,11 +562,17 @@ export function registerLogsCli(program: Command) {
             // Discard the stale cursor before retrying so a failed reread stays cursorless.
             gatewayCursor = undefined;
             gatewayPollStartedAt = new Date().toISOString();
-            payload = await fetchGatewayLogs(opts, gatewayCursor, false, {
-              limit,
-              maxBytes,
-              signal,
-            });
+            payload = opts.localConfigUnavailable
+              ? {
+                  ...(await readConfiguredLogTail({ limit, maxBytes })),
+                  sourceKind: "file",
+                  localFallback: true,
+                }
+              : await fetchGatewayLogs(opts, gatewayCursor, false, {
+                  limit,
+                  maxBytes,
+                  signal,
+                });
           }
         } catch (err) {
           signal?.throwIfAborted();

@@ -1,10 +1,3 @@
-// Regression coverage for `--follow` across Gateway log-file changes.
-//
-// A Gateway byte cursor only addresses one file. When the Gateway rotates to a
-// different log path, `--follow` must reread the new file without the stale
-// cursor instead of replaying the old cursor against the new file (see
-// docs/cli/logs.md). These cases cover the plain/JSON rendering paths, the
-// systemd-journal bridge, and a failed cursorless reread.
 import { describe, expect, it, vi } from "vitest";
 import {
   callGatewayFromCli,
@@ -12,10 +5,20 @@ import {
   captureStdoutWrites,
   createGatewayCloseError,
   execFileUtf8Tail,
+  readConfiguredLogTail,
   readSystemdServiceRuntime,
   runLogsCli,
   useLogsCliTestHarness,
 } from "./logs-cli.test-harness.js";
+
+const mocks = vi.hoisted(() => ({
+  delay: vi.fn(async () => {}),
+  readConfig: vi.fn(() => ({})),
+}));
+vi.mock("node:timers/promises", () => ({ setTimeout: mocks.delay }));
+vi.mock("../config/gateway-dispatch-config.js", () => ({
+  readGatewayDispatchConfig: mocks.readConfig,
+}));
 
 describe("logs cli follow across Gateway log-file changes", () => {
   useLogsCliTestHarness();
@@ -25,15 +28,23 @@ describe("logs cli follow across Gateway log-file changes", () => {
     { mode: "json", bridge: false, failReread: false },
     { mode: "json", bridge: true, failReread: false },
     { mode: "plain", bridge: false, failReread: true },
+    { mode: "plain", bridge: false, failReread: false, local: true },
   ])(
     "reads the complete new file in $mode mode (journal: $bridge, failed reread: $failReread)",
-    async ({ mode, bridge, failReread }) => {
+    async ({ mode, bridge, failReread, local = false }) => {
       const closeError = createGatewayCloseError({
         code: 1006,
         reason: "abnormal closure",
         message: "gateway closed (1006 abnormal closure): abnormal closure",
       });
-      callGatewayFromCli.mockResolvedValueOnce({
+      const readLogs = local ? readConfiguredLogTail : callGatewayFromCli;
+      if (local) {
+        mocks.readConfig.mockImplementationOnce(() => {
+          throw new SyntaxError("Invalid JSON5");
+        });
+        callGatewayFromCli.mockRejectedValue(new Error("unauthorized"));
+      }
+      readLogs.mockResolvedValueOnce({
         file: "/tmp/old.log",
         cursor: 10,
         lines: ["old file line"],
@@ -50,33 +61,38 @@ describe("logs cli follow across Gateway log-file changes", () => {
         });
       }
       let failedReread = false;
-      callGatewayFromCli.mockImplementation(
-        async (_method, _options, { cursor }: { cursor?: number }) => {
-          if (cursor === 50) {
-            throw new Error("stop after appended line");
-          }
-          if (cursor === undefined && failReread && !failedReread) {
-            failedReread = true;
-            throw closeError;
-          }
-          return {
-            file: "/tmp/new.log",
-            cursor: cursor === 40 ? 50 : 40,
-            lines:
-              cursor === 40
-                ? ["appended line"]
-                : cursor === undefined
-                  ? ["new first line", "new last line"]
-                  : ["new last line"],
-          };
-        },
-      );
+      const nextFile = async ({ cursor }: { cursor?: number }) => {
+        if (cursor === 50) {
+          throw new Error("stop after appended line");
+        }
+        if (cursor === undefined && failReread && !failedReread) {
+          failedReread = true;
+          throw closeError;
+        }
+        return {
+          file: "/tmp/new.log",
+          cursor: cursor === 40 ? 50 : 40,
+          lines:
+            cursor === 40
+              ? ["appended line"]
+              : cursor === undefined
+                ? ["new first line", "new last line"]
+                : ["new last line"],
+        };
+      };
+      if (local) {
+        readConfiguredLogTail.mockImplementation(nextFile);
+      } else {
+        callGatewayFromCli.mockImplementation(
+          async (_method, _options, params: { cursor?: number }) => nextFile(params),
+        );
+      }
       const stdoutWrites = captureStdoutWrites();
       captureStderrWrites();
       vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
 
       try {
-        await runLogsCli(["logs", "--follow", `--${mode}`, "--interval", "1"]);
+        await runLogsCli(["logs", "--follow", `--${mode}`]);
         const lines = stdoutWrites.join("").trim().split("\n");
         const messages =
           mode === "json"
@@ -93,8 +109,12 @@ describe("logs cli follow across Gateway log-file changes", () => {
           "appended line",
         ]);
         expect(failedReread).toBe(failReread);
+        if (local) {
+          expect(callGatewayFromCli).not.toHaveBeenCalled();
+        }
       } finally {
         callGatewayFromCli.mockReset();
+        readConfiguredLogTail.mockReset();
       }
     },
   );
