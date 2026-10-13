@@ -60,6 +60,8 @@ type PublicationWorker = {
   busyTimeoutMs: number;
 };
 
+type CachePruneInput = MemoryPublicationOperations["cache.prune"]["input"];
+
 export class MemoryIndexDatabase {
   private readonly privateQueues = new Map<string, StoreWriterQueue>();
   private nativeWriterActive = false;
@@ -556,14 +558,13 @@ export class MemoryIndexDatabase {
     return this.read({ type: "source.state", input: query }, assertCurrent);
   }
 
-  async pruneEmbeddingCache(maxEntries: number, assertCurrent: () => void): Promise<boolean> {
+  async pruneEmbeddingCache(input: CachePruneInput, assertCurrent: () => void): Promise<boolean> {
     assertCurrent();
     // Each failed BEGIN releases admission before retry; successful batches yield at the caller.
-    return (
-      (await this.retryPublication(() =>
-        this.executePublication({ type: "cache.prune", input: { maxEntries } }, assertCurrent),
-      )) ?? false
+    const pruned = await this.retryPublication(() =>
+      this.executePublication({ type: "cache.prune", input }, assertCurrent),
     );
+    return pruned ?? false;
   }
 
   async mutateEmbeddingCache(

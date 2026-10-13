@@ -418,6 +418,131 @@ describe("memory embedding cache", () => {
     }
   });
 
+  it("evicts unreferenced rows of the preferred identities older than every published chunk first, never beyond the cap", () => {
+    const db = createDb();
+    const identity = { provider: "openai", model: "m", providerKey: "k" };
+    const vector = encodeMemoryEmbedding([0.1, 0.2]);
+    const insert = db.prepare(
+      "INSERT INTO memory_embedding_cache (provider, model, provider_key, hash, embedding, dims, updated_at) VALUES (?, ?, ?, ?, ?, 2, ?)",
+    );
+    // Live rows are the oldest, so plain oldest-first eviction would take them first.
+    insert.run("openai", "m", "k", "live", vector, 1);
+    insert.run("openai", "m", "k", "live-session", vector, 1);
+    insert.run("openai", "m", "k", "orphan-newer", vector, 50);
+    insert.run("openai", "m", "k", "orphan-older", vector, 40);
+    insert.run("openai", "m", "other-key", "orphan-other-key", vector, 2);
+    insert.run("local", "m", "k", "orphan-other-provider", vector, 3);
+    // Not older than the oldest published chunk: possibly a retry's or another
+    // sync's unpublished work.
+    insert.run("openai", "m", "k", "pending-at-fence", vector, 100);
+    const chunk = db.prepare(
+      "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, 1, 1, ?, 'm', 't', ?, ?)",
+    );
+    chunk.run("c", "a.md", "memory", "live", vector, 100);
+    chunk.run("s", "session.jsonl", "sessions", "live-session", vector, 150);
+    const remaining = () =>
+      (
+        db.prepare("SELECT hash FROM memory_embedding_cache ORDER BY hash").all() as Array<{
+          hash: string;
+        }>
+      ).map((row) => row.hash);
+    const preference = { identities: [identity] };
+
+    // Seven rows against a cap of six: one eviction, the oldest preferred row.
+    pruneMemoryEmbeddingCache(db, 6, preference);
+    expect(remaining()).not.toContain("orphan-older");
+    expect(remaining()).toHaveLength(6);
+
+    // Two more evictions: one preferred row remains, then plain oldest-first.
+    pruneMemoryEmbeddingCache(db, 4, preference);
+    expect(remaining()).toEqual([
+      "live-session",
+      "orphan-other-key",
+      "orphan-other-provider",
+      "pending-at-fence",
+    ]);
+
+    // Within the cap nothing is removed, preferred or not.
+    insert.run("openai", "m", "k", "orphan-late", vector, 60);
+    pruneMemoryEmbeddingCache(db, 5, preference);
+    expect(remaining()).toHaveLength(5);
+  });
+
+  it("reserves insertion capacity from preferred unreferenced rows before the oldest rows", () => {
+    const vector = encodeMemoryEmbedding([0.1, 0.2]);
+    const run = (unreferencedFirst?: { identities: typeof identities }) => {
+      const db = createDb();
+      const insert = db.prepare(
+        "INSERT INTO memory_embedding_cache (provider, model, provider_key, hash, embedding, dims, updated_at) VALUES ('openai', 'm', 'k', ?, ?, 2, ?)",
+      );
+      insert.run("live", vector, 1);
+      insert.run("orphan", vector, 5);
+      insert.run("pending", vector, 10);
+      db.prepare(
+        "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES ('c', 'a.md', 'memory', 1, 1, 'live', 'm', 't', ?, 10)",
+      ).run(vector);
+      upsertMemoryEmbeddingCache({
+        db,
+        provider: { id: "openai", model: "m" },
+        providerKey: "k",
+        entries: () => [{ hash: "new", embedding: [0.3, 0.4] }],
+        maxEntries: 3,
+        unreferencedFirst,
+        now: 20,
+      });
+      return (
+        db.prepare("SELECT hash FROM memory_embedding_cache ORDER BY hash").all() as Array<{
+          hash: string;
+        }>
+      ).map((row) => row.hash);
+    };
+    const identities = [{ provider: "openai", model: "m", providerKey: "k" }];
+
+    expect(run()).toEqual(["new", "orphan", "pending"]);
+    // One eviction either way; the preferred one spares the live row and the
+    // row no older than the published chunk.
+    expect(run({ identities })).toEqual(["live", "new", "pending"]);
+  });
+
+  it("falls back to plain oldest-first order without preferred identities or a published index, and prefers every listed identity", () => {
+    const vector = encodeMemoryEmbedding([0.1, 0.2]);
+    const run = (
+      identities: Array<{ provider: string; model: string; providerKey: string }>,
+      published: boolean,
+      maxEntries = 3,
+    ) => {
+      const db = createDb();
+      const insert = db.prepare(
+        "INSERT INTO memory_embedding_cache (provider, model, provider_key, hash, embedding, dims, updated_at) VALUES (?, 'm', ?, ?, ?, 2, ?)",
+      );
+      insert.run("openai", "k", "live", vector, 1);
+      insert.run("openai", "k", "orphan-a", vector, 5);
+      insert.run("local", "k2", "orphan-b", vector, 6);
+      insert.run("openai", "k", "pending", vector, 20);
+      if (published) {
+        db.prepare(
+          "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES ('c', 'a.md', 'memory', 1, 1, 'live', 'm', 't', ?, 10)",
+        ).run(vector);
+      }
+      pruneMemoryEmbeddingCache(db, maxEntries, { identities });
+      return (
+        db.prepare("SELECT hash FROM memory_embedding_cache ORDER BY hash").all() as Array<{
+          hash: string;
+        }>
+      ).map((row) => row.hash);
+    };
+    const a = { provider: "openai", model: "m", providerKey: "k" };
+    const b = { provider: "local", model: "m", providerKey: "k2" };
+
+    // One eviction: plain oldest-first takes the live row unless a preferred row exists.
+    expect(run([], true)).toEqual(["orphan-a", "orphan-b", "pending"]);
+    expect(run([a, b], false)).toEqual(["orphan-a", "orphan-b", "pending"]);
+    expect(run([a], true)).toEqual(["live", "orphan-b", "pending"]);
+    expect(run([b], true)).toEqual(["live", "orphan-a", "pending"]);
+    // Two evictions: both listed identities are preferred before the live row.
+    expect(run([a, b], true, 2)).toEqual(["live", "pending"]);
+  });
+
   it("prunes at most 100 oldest rows per transaction", () => {
     const db = createDb();
     try {

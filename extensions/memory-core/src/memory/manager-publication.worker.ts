@@ -435,7 +435,7 @@ function createPublicationBackend(
           return { ok: true, value: false };
         }
         return write(() => {
-          pruneMemoryEmbeddingCache(db, command.input.maxEntries);
+          pruneMemoryEmbeddingCache(db, command.input.maxEntries, command.input.unreferencedFirst);
           return true;
         });
       }

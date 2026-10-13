@@ -24,6 +24,19 @@ type MemoryEmbeddingCacheRow = {
 
 type EmbeddingCacheDatabase = {
   memory_embedding_cache: MemoryEmbeddingCacheRow & { rowid: Generated<number> };
+  memory_index_chunks: { hash: string; updated_at: number };
+};
+
+/**
+ * Capacity eviction takes rows of these identities first when no published chunk
+ * carries their hash and they were last written before the oldest published
+ * chunk. A full reindex rewrites every chunk, so such a row predates the index
+ * that dropped it; newer unreferenced rows, such as a retry's or another sync's
+ * unpublished vectors, keep plain oldest-first order. The eviction count is
+ * unchanged.
+ */
+export type MemoryEmbeddingCacheEvictionPreference = {
+  identities: MemoryIndexProviderIdentity[];
 };
 
 /** Require a finite, nonempty vector compatible with the active embedding dimensions. */
@@ -99,12 +112,30 @@ export function countMemoryEmbeddingCache(database: DatabaseSync): number {
 }
 
 /** The caller holds the write transaction; another purge may have reduced the cache. */
-export function pruneMemoryEmbeddingCache(database: DatabaseSync, maxEntries: number): void {
+export function pruneMemoryEmbeddingCache(
+  database: DatabaseSync,
+  maxEntries: number,
+  unreferencedFirst?: MemoryEmbeddingCacheEvictionPreference,
+): void {
   const excess = countMemoryEmbeddingCache(database) - maxEntries;
   if (excess <= 0) {
     return;
   }
-  deleteOldestMemoryEmbeddingCacheRows(database, Math.min(excess, 100));
+  evictMemoryEmbeddingCacheRows(database, Math.min(excess, 100), unreferencedFirst);
+}
+
+/** Remove exactly `limit` rows (fewer only if the cache is smaller): preferred rows first, then the oldest. */
+function evictMemoryEmbeddingCacheRows(
+  database: DatabaseSync,
+  limit: number,
+  unreferencedFirst?: MemoryEmbeddingCacheEvictionPreference,
+): void {
+  const evicted = unreferencedFirst
+    ? deleteOldestUnreferencedMemoryEmbeddingCacheRows(database, unreferencedFirst, limit)
+    : 0;
+  if (evicted < limit) {
+    deleteOldestMemoryEmbeddingCacheRows(database, limit - evicted);
+  }
 }
 
 function deleteOldestMemoryEmbeddingCacheRows(database: DatabaseSync, limit: number): void {
@@ -125,6 +156,59 @@ function deleteOldestMemoryEmbeddingCacheRows(database: DatabaseSync, limit: num
           .limit(limit),
       ),
   );
+}
+
+function deleteOldestUnreferencedMemoryEmbeddingCacheRows(
+  database: DatabaseSync,
+  preference: MemoryEmbeddingCacheEvictionPreference,
+  limit: number,
+): number {
+  if (preference.identities.length === 0) {
+    return 0;
+  }
+  const db = getNodeSqliteKysely<EmbeddingCacheDatabase>(database);
+  // Both uncorrelated subqueries are evaluated once per statement, so the
+  // unindexed chunk columns are scanned once rather than once per cache row.
+  // An empty index has no oldest chunk, so nothing is preferred.
+  const result = executeSqliteQuerySync(
+    database,
+    db.deleteFrom("memory_embedding_cache").where(
+      "rowid",
+      "in",
+      db
+        .selectFrom("memory_embedding_cache")
+        .select("rowid")
+        // Casting the TEXT key columns is a no-op that keeps SQLite from answering the
+        // identity filter through the primary key and then sorting every row by
+        // updated_at, which sits after the vector; the updated_at index walk stops
+        // at the limit instead.
+        .where((eb) =>
+          eb.or(
+            preference.identities.map((identity) =>
+              eb.and([
+                eb(eb.cast("provider", "text"), "=", identity.provider),
+                eb(eb.cast("model", "text"), "=", identity.model),
+                eb(eb.cast("provider_key", "text"), "=", identity.providerKey),
+              ]),
+            ),
+          ),
+        )
+        .where((eb) =>
+          eb(
+            "updated_at",
+            "<",
+            eb
+              .selectFrom("memory_index_chunks")
+              .select((chunks) => chunks.fn.min<number>("updated_at").as("oldest")),
+          ),
+        )
+        .where("hash", "not in", db.selectFrom("memory_index_chunks").select("hash"))
+        .orderBy("updated_at", "asc")
+        .orderBy("rowid", "asc")
+        .limit(limit),
+    ),
+  );
+  return Number(result.numAffectedRows ?? 0);
 }
 
 /** Discard ambiguous vector spaces without removing unrelated provider caches or index rows. */
@@ -152,6 +236,7 @@ export function upsertMemoryEmbeddingCache(params: {
   /** Stable replayable rows let staged writes retain hashes without a second vector batch. */
   entries: () => Iterable<{ hash: string; embedding: number[] }>;
   maxEntries?: number;
+  unreferencedFirst?: MemoryEmbeddingCacheEvictionPreference;
   now?: number;
 }): void {
   const provider = params.provider;
@@ -188,7 +273,7 @@ export function upsertMemoryEmbeddingCache(params: {
     }
     const excess = countMemoryEmbeddingCache(params.db) - (maxEntries - hashes.length);
     if (excess > 0) {
-      deleteOldestMemoryEmbeddingCacheRows(params.db, excess);
+      evictMemoryEmbeddingCacheRows(params.db, excess, params.unreferencedFirst);
     }
   }
   const now = params.now ?? Date.now();
