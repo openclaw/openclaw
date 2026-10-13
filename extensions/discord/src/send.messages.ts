@@ -7,6 +7,7 @@ import {
   editChannelMessage,
   getChannel,
   getChannelMessage,
+  isUnknownDiscordMessageError,
   pinChannelMessage,
   unpinChannelMessage,
 } from "./internal/discord.js";
@@ -159,27 +160,52 @@ export async function editMessageDiscord(
   payload: DiscordMessageEdit,
   opts: DiscordReactOpts,
 ): Promise<APIMessage> {
-  const rest = resolveDiscordRest(opts);
-  return await editChannelMessage(rest, channelId, messageId, {
-    body: {
-      content: payload.content,
-      ...(payload.flags !== undefined ? { flags: payload.flags } : {}),
-      ...(payload.allowedMentions ? { allowed_mentions: payload.allowedMentions } : {}),
-    },
-  });
+  const { rest, request } = createDiscordClient(opts);
+  return await request(
+    () =>
+      editChannelMessage(rest, channelId, messageId, {
+        body: {
+          content: payload.content,
+          ...(payload.flags !== undefined ? { flags: payload.flags } : {}),
+          ...(payload.allowedMentions ? { allowed_mentions: payload.allowedMentions } : {}),
+        },
+      }),
+    "message-edit",
+  );
 }
 
-function messageMutation(operation: typeof deleteChannelMessage) {
+function messageMutation(operation: typeof deleteChannelMessage, label: string) {
   return async (channelId: string, messageId: string, opts: DiscordReactOpts) => {
-    const rest = resolveDiscordRest(opts);
-    await operation(rest, channelId, messageId);
+    const { rest, request } = createDiscordClient(opts);
+    await request(() => operation(rest, channelId, messageId), label);
     return { ok: true };
   };
 }
 
-export const deleteMessageDiscord = messageMutation(deleteChannelMessage);
-export const pinMessageDiscord = messageMutation(pinChannelMessage);
-export const unpinMessageDiscord = messageMutation(unpinChannelMessage);
+export const pinMessageDiscord = messageMutation(pinChannelMessage, "message-pin");
+export const unpinMessageDiscord = messageMutation(unpinChannelMessage, "message-unpin");
+
+export async function deleteMessageDiscord(
+  channelId: string,
+  messageId: string,
+  opts: DiscordReactOpts,
+): Promise<{ ok: boolean }> {
+  const { rest, request } = createDiscordClient(opts);
+  let mayHaveApplied = false;
+  await request(async () => {
+    try {
+      await deleteChannelMessage(rest, channelId, messageId);
+    } catch (err) {
+      // A lost response can hide an applied delete; the replay then reports Unknown Message.
+      if (mayHaveApplied && isUnknownDiscordMessageError(err)) {
+        return;
+      }
+      mayHaveApplied ||= classifyDiscordDeliveryFailure(err) === "ambiguous";
+      throw err;
+    }
+  }, "message-delete");
+  return { ok: true };
+}
 
 export async function listPinsDiscord(
   channelId: string,

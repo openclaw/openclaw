@@ -12,10 +12,10 @@ import "../styles/chat/composer-status.css";
 import { Icon } from "./solid/icon.tsx";
 
 type Props = { sessionKey: string; agentId: string; workContext: ChatWorkContext };
-export type OpenClawHomeSession = SolidBridgeElement<Props>;
+type OpenClawHomeSession = SolidBridgeElement<Props>;
 
 /** The real Home conversation; its surrounding dock owns placement and focus. */
-export const HomeSession = defineSolidBridge<Props>(
+defineSolidBridge<Props>(
   "openclaw-home-session",
   (props, host) => {
     const app = useApplication();

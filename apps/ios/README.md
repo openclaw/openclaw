@@ -315,6 +315,7 @@ gateway can only send pushes for iOS devices that paired with that gateway.
 - Pairing via QR or setup code flow (`/pair qr` or `/pair`, then `/pair approve` in Telegram).
 - Gateway connection via discovery or manual host/port with TLS fingerprint trust prompt.
 - One Chat surface for text, realtime voice, dictation, and voice notes through the operator gateway session.
+- Chat availability follows its operator connection independently of the device/node connection. Transient node failures remain available in Settings while chat is connected. Dismissed connection banners stay dismissed through identical retry failures; a changed problem or recovery resets dismissal. Authentication and pairing warnings remain visible.
 - Two distinct Watch voice paths: iPhone-relayed **Talk to Claw**, and opt-in **Talk on Watch** with native UDP media and Gateway-owned agent/tool control. Physical-Watch voice and endurance validation remain separate from simulator coverage.
 - iOS node commands in foreground: camera snap/clip, screen record, location, contacts, calendar, reminders, photos, motion, local notifications.
 - Authenticated background `node.presence.alive` beacons that update gateway last-seen metadata when the app moves between foreground and background, without treating suspended sockets as connected.

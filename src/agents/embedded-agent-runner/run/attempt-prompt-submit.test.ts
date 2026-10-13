@@ -6,11 +6,15 @@ import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
+import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import type { Context, ImageContent, Model } from "../../../llm/types.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import {
+  prepareSystemAgentRunAdmission,
+  resolveAdmittedRunActiveAssertion,
+} from "../../admitted-run-context.js";
 import { readBtwTranscriptMessages } from "../../btw-transcript.js";
 import { RUNTIME_EVENT_USER_PROMPT } from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -67,6 +71,71 @@ afterEach(() => {
 });
 
 describe("submitEmbeddedAttemptPrompt", () => {
+  it("refreshes review source authority before continuing a model request and refuses revocation", async () => {
+    const { activeSession } = createSession();
+    let revision = 0;
+    let validatedRevision = 0;
+    let active = true;
+    const assertReceipt = (expected: number) => {
+      if (!active) {
+        throw new Error("review source revoked");
+      }
+      if (expected !== revision) {
+        throw new Error("review source needs preparation");
+      }
+    };
+    const source = composeSessionSourceAssertion([
+      Object.assign(() => assertReceipt(validatedRevision), {
+        prepareSessionSourceScope: async () => {
+          validatedRevision = revision;
+          const expected = revision;
+          return { assertCurrent: () => assertReceipt(expected), checks: [] };
+        },
+      }),
+    ]);
+    const admission = prepareSystemAgentRunAdmission(
+      {},
+      "model-review-continuation",
+      "main",
+      "test",
+      source,
+    );
+    const admitted = await admission.admit("embedded");
+    const assertHostActive = resolveAdmittedRunActiveAssertion(admitted);
+    const requests: Context["messages"][] = [];
+    activeSession.agent.streamFn = (model, context) => {
+      requests.push(context.messages);
+      return createAssistantResultStream(
+        createAssistant(model, [{ type: "text", text: "review continues" }]),
+      );
+    };
+    try {
+      await submitEmbeddedAttemptPrompt({
+        ...createBaseInput(),
+        activeSession,
+        assertHostActive,
+        promptActiveSession: async (_prompt, options) => {
+          options?.preflightResult?.(true);
+          const request = async () => {
+            const messages = await activeSession.agent.transformContext(activeSession.messages);
+            return activeSession.agent.streamFn(testModel, {
+              messages: messages as Context["messages"],
+            });
+          };
+          await request();
+          // A denied tool does not enter its source wrapper; foreground appends may still land.
+          revision += 1;
+          await request();
+          active = false;
+          await expect(request()).rejects.toThrow("admitted run authority is no longer active");
+        },
+      });
+      expect(requests).toHaveLength(2);
+    } finally {
+      admission.close();
+    }
+  });
+
   it("replaces queued context without charging it twice or changing user overlap credit", () => {
     const user = {
       role: "user" as const,

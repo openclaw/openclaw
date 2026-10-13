@@ -92,7 +92,6 @@ export function bindSqliteWorkerBackend(
     originalExec(sql);
     if (sql === "BEGIN IMMEDIATE") {
       writeFileSync(input.marker, "native transaction entered");
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
     }
   };
   db.close = () => {

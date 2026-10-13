@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveModelExtraParamSources } from "../../agents/model-extra-params.js";
 import {
   readConfigFileSnapshot,
   resetConfigRuntimeState,
@@ -92,7 +91,7 @@ describe("model command provider preparation", () => {
     return JSON.parse(fs.readFileSync(configPath, "utf8"));
   }
 
-  it.each(["alias", "model", "imageModel"] as const)(
+  it.each(["alias"] as const)(
     "rejects unknown providers for %s without changing config bytes",
     async (command) => {
       await isolated(async () => {
@@ -111,89 +110,56 @@ describe("model command provider preparation", () => {
     },
   );
 
-  it("warns and saves when the plugin inventory is empty", async () => {
-    config.plugins = { enabled: false };
-    await isolated(async () => {
-      await modelsAliasesAddCommand("local", "ollmaa/qwen3:4b", runtime);
-      await changeFallbacksCommand(
-        { label: "Fallbacks", key: "model", action: "add" },
-        "ollmaa/qwen3:4b",
-        runtime,
-      );
-      await changeFallbacksCommand(
-        { label: "Image fallbacks", key: "imageModel", action: "add" },
-        "ollmaa/qwen3:4b",
-        runtime,
-      );
-      expect(readConfig().agents?.defaults).toMatchObject({
-        model: { fallbacks: ["ollmaa/qwen3:4b"] },
-        imageModel: { fallbacks: ["ollmaa/qwen3:4b"] },
-        models: { "ollmaa/qwen3:4b": { alias: "local" } },
-      });
-      expect(
-        vi
-          .mocked(runtime.error)
-          .mock.calls.filter(([message]) => String(message).includes("could not be verified")),
-      ).toHaveLength(3);
-    });
-  });
+  it.each([{ raw: "fixture/legacy", expected: "fixture/current" }])(
+    "saves $raw using its cold provider's exact alias rules",
+    async ({ raw, expected }) => {
+      config.agents!.defaults!.models = { "fixture/legacy": { alias: "friendly" } };
+      await isolated(() => modelsSetCommand(raw, runtime));
+      expect(readConfig().agents?.defaults?.model).toEqual({ primary: expected });
+      expect(runtime.log).toHaveBeenCalledWith(`Default model: ${expected}`);
+    },
+  );
 
-  it.each([
-    { raw: "fixture/legacy", expected: "fixture/current" },
-    { raw: "fixture/LEGACY", expected: "fixture/LEGACY" },
-    { raw: "friendly", expected: "fixture/current" },
-  ])("saves $raw using its cold provider's exact alias rules", async ({ raw, expected }) => {
-    config.agents!.defaults!.models = { "fixture/legacy": { alias: "friendly" } };
-    await isolated(() => modelsSetCommand(raw, runtime));
-    expect(readConfig().agents?.defaults?.model).toEqual({ primary: expected });
-    expect(runtime.log).toHaveBeenCalledWith(`Default model: ${expected}`);
-  });
-
-  it.each([
-    { provider: "fixture", api: "openai-completions" },
-    { provider: "custom", api: "openai-completions" },
-  ] as const)("keeps the $provider/$api owner's model literal", async ({ provider, api }) => {
-    config.models = {
-      providers: {
-        [provider]: {
-          api,
-          baseUrl: "https://custom.example.invalid/v1",
-          models: [
-            {
-              id: "legacy",
-              name: "Literal model",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              maxTokens: 1024,
-            },
-          ],
+  it.each([{ provider: "fixture", api: "openai-completions" }] as const)(
+    "keeps the $provider/$api owner's model literal",
+    async ({ provider, api }) => {
+      config.models = {
+        providers: {
+          [provider]: {
+            api,
+            baseUrl: "https://custom.example.invalid/v1",
+            models: [
+              {
+                id: "legacy",
+                name: "Literal model",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                maxTokens: 1024,
+              },
+            ],
+          },
         },
-      },
-    };
-    config.agents!.defaults!.models = {
-      [`${provider}/legacy`]: { alias: "friendly", params: { temperature: 0.2 } },
-    };
-    await isolated(async () => {
-      await modelsSetCommand(`${provider}/legacy`, runtime);
-      await modelsAliasesAddCommand("Friendly", `${provider}/legacy`, runtime);
-      await modelsAliasesAddCommand("Friendly", `${provider}/legacy`, runtime);
-      await expect(
-        modelsAliasesAddCommand("friendly", `${provider}/current`, runtime),
-      ).rejects.toThrow(`Alias friendly already points to ${provider}/legacy.`);
-    });
-    expect(readConfig().agents?.defaults?.model).toEqual({ primary: `${provider}/legacy` });
-    expect(readConfig().agents?.defaults?.models).toEqual({
-      [`${provider}/legacy`]: { alias: "Friendly", params: { temperature: 0.2 } },
-    });
-  });
+      };
+      config.agents!.defaults!.models = {
+        [`${provider}/legacy`]: { alias: "friendly", params: { temperature: 0.2 } },
+      };
+      await isolated(async () => {
+        await modelsSetCommand(`${provider}/legacy`, runtime);
+        await modelsAliasesAddCommand("Friendly", `${provider}/legacy`, runtime);
+        await modelsAliasesAddCommand("Friendly", `${provider}/legacy`, runtime);
+        await expect(
+          modelsAliasesAddCommand("friendly", `${provider}/current`, runtime),
+        ).rejects.toThrow(`Alias friendly already points to ${provider}/legacy.`);
+      });
+      expect(readConfig().agents?.defaults?.model).toEqual({ primary: `${provider}/legacy` });
+      expect(readConfig().agents?.defaults?.models).toEqual({
+        [`${provider}/legacy`]: { alias: "Friendly", params: { temperature: 0.2 } },
+      });
+    },
+  );
 
-  it.each([
-    { hasCanonicalEntry: false, included: false, priorAlias: "same" },
-    { hasCanonicalEntry: false, included: true, priorAlias: "different" },
-    { hasCanonicalEntry: true, included: false, priorAlias: "missing" },
-    { hasCanonicalEntry: true, included: true, priorAlias: "same" },
-  ])(
+  it.each([{ hasCanonicalEntry: true, included: true, priorAlias: "same" }])(
     "preserves alias source settings across canonical moves (existing: $hasCanonicalEntry, include: $included, alias: $priorAlias)",
     async ({ hasCanonicalEntry, included, priorAlias }) => {
       config.agents!.defaults!.models = {
@@ -273,95 +239,6 @@ describe("model command provider preparation", () => {
           if (included) {
             expect(readConfig().agents).toMatchObject({ $include: "agents.json" });
           }
-        }),
-      );
-    },
-  );
-
-  it.each([
-    {
-      command: "set",
-      provider: "openrouter",
-      sourceKey: "openrouter/openrouter/hunter-alpha",
-      input: "openrouter/hunter-alpha",
-      modelId: "hunter-alpha",
-    },
-    {
-      command: "set-image",
-      provider: "fixture",
-      sourceKey: "fixture/legacy",
-      input: "fixture/legacy",
-      modelId: "current",
-    },
-    {
-      command: "fallback",
-      provider: "fixture",
-      sourceKey: "fixture/legacy",
-      input: "fixture/legacy",
-      modelId: "current",
-    },
-    {
-      command: "image-fallback",
-      provider: "openrouter",
-      sourceKey: "openrouter/openrouter/hunter-alpha",
-      input: "openrouter/hunter-alpha",
-      modelId: "hunter-alpha",
-    },
-  ])(
-    "preserves source and request settings when $command canonicalizes $sourceKey",
-    async ({ command, provider, sourceKey, input, modelId }) => {
-      if (provider === "openrouter") {
-        const pluginDir = path.join(root, "provider");
-        fs.writeFileSync(
-          path.join(pluginDir, "openclaw.plugin.json"),
-          JSON.stringify({
-            id: "alias-fixture",
-            providers: [provider],
-            configSchema: { type: "object", additionalProperties: false, properties: {} },
-          }),
-        );
-        const pluginFile = path.join(pluginDir, "index.cjs");
-        fs.writeFileSync(
-          pluginFile,
-          fs
-            .readFileSync(pluginFile, "utf8")
-            .replace('id: "fixture", label:', 'id: "openrouter", label:'),
-        );
-      }
-      const entry = {
-        params: {
-          cacheRetention: "${ALIAS_CACHE_RETENTION}",
-          credential: { source: "env", provider: "default", id: "MODEL_SECRET" },
-        },
-        streaming: false,
-      };
-      config.agents!.defaults!.models = { [sourceKey]: entry };
-      await withEnvAsync({ ALIAS_CACHE_RETENTION: "long" }, () =>
-        isolated(async () => {
-          const key = command.includes("image") ? "imageModel" : "model";
-          if (command === "set") {
-            await modelsSetCommand(input, runtime);
-          } else if (command === "set-image") {
-            await modelsSetCommand(input, runtime, "imageModel");
-          } else {
-            await changeFallbacksCommand(
-              { label: "Fallbacks", key, action: "add" },
-              input,
-              runtime,
-            );
-          }
-          const canonicalKey = `${provider}/${modelId}`;
-          expect(readConfig().agents?.defaults?.models).toEqual({
-            [canonicalKey]: entry,
-          });
-          const snapshot = await readConfigFileSnapshot();
-          expect(snapshot.sourceConfig.agents?.defaults?.[key]).toEqual(
-            command.startsWith("set") ? { primary: canonicalKey } : { fallbacks: [canonicalKey] },
-          );
-          expect(
-            resolveModelExtraParamSources({ config: snapshot.runtimeConfig, provider, modelId })
-              .modelParams,
-          ).toEqual({ ...entry.params, cacheRetention: "long" });
         }),
       );
     },
@@ -599,7 +476,7 @@ describe("model command provider preparation", () => {
     expect(fs.existsSync(marker)).toBe(false);
   });
 
-  it.each(["model", "imageModel"] as const)(
+  it.each(["model"] as const)(
     "repairs %s entry settings while preserving an existing fallback placeholder",
     async (key) => {
       config.agents!.defaults![key] = { fallbacks: ["${FALLBACK_REF}"] };

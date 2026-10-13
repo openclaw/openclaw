@@ -108,9 +108,9 @@ function createIdentityBoundRootFileFs(
     // SAFETY: Reflect invokes fs.lstatSync with the original overload arguments.
     const stat = Reflect.apply(fs.lstatSync, fs, args) as fs.Stats | fs.BigIntStats;
     if (args[0] === rootPath) {
-      const dev = typeof stat.dev === "bigint" ? stat.dev : BigInt(stat.dev);
-      const ino = typeof stat.ino === "bigint" ? stat.ino : BigInt(stat.ino);
-      if (!stat.isDirectory() || dev !== expected.dev || ino !== expected.ino) {
+      const identity =
+        typeof stat.ino === "bigint" ? stat : fs.lstatSync(rootPath, { bigint: true });
+      if (!stat.isDirectory() || identity.dev !== expected.dev || identity.ino !== expected.ino) {
         throw new FsSafeError(
           "path-mismatch",
           "plugin root identity changed during alias reconciliation",

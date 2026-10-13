@@ -204,13 +204,23 @@ export async function prepareWorktreeTemplate(params: {
           existing.contentKey === params.contentKey &&
           existing.backend === params.backend
         ) {
-          retained = await retainWorktreeTemplate(params.env, existing, assertCurrent, true);
+          // A ready generation with readers is immutable until they settle. Reuse
+          // that admission instead of rescanning the same tree for every clone.
+          retained = await retainWorktreeTemplate(
+            params.env,
+            existing,
+            assertCurrent,
+            hasReaders ? undefined : true,
+          );
           if (
-            (await worktreePathExists(existing.path)) &&
-            (await params.validate(existing, options))
+            hasReaders ||
+            ((await worktreePathExists(existing.path)) &&
+              (await params.validate(existing, options)))
           ) {
             setWorktreePreparationTemplate("warm", { reason: "ready" });
-            await markTemplateReadyAsync(params.env, existing.id, params.now(), assertCurrent);
+            if (!hasReaders) {
+              await markTemplateReadyAsync(params.env, existing.id, params.now(), assertCurrent);
+            }
             return retained;
           }
           await retained.release();

@@ -1,5 +1,5 @@
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFailed, vi } from "vitest";
 import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -120,6 +120,10 @@ describe("agent session deduplication across reconnect", () => {
     "replays one accepted run and one terminal transcript without a second provider call",
     { timeout: TEST_TIMEOUT_MS },
     async () => {
+      let stage = "start-provider";
+      onTestFailed(() => {
+        process.stderr.write(`Session dedup reconnect failed at stage=${stage}\n`);
+      });
       const provider = await startHeldResponsesProvider({
         modelRef: MODEL_REF,
         terminalText: TERMINAL_TEXT,
@@ -127,6 +131,7 @@ describe("agent session deduplication across reconnect", () => {
       cleanups.push(() => provider.stop());
       const gatewayOwner = createQaGatewayChild();
       cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
+      stage = "start-gateway";
       const gateway = await gatewayOwner.start({
         repoRoot: process.cwd(),
         command: {
@@ -147,11 +152,16 @@ describe("agent session deduplication across reconnect", () => {
           OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
         },
         mutateConfig: (config) => ({ ...config, plugins: { enabled: false } }),
+        onListening: () => {
+          stage = "gateway-ready";
+        },
       });
       cleanups.push(async () => provider.release());
 
+      stage = "connect-client-a";
       const clientA = await connectOperator(gateway, "Session dedup client A");
       cleanups.push(() => clientA.stopAndWait({ timeoutMs: 1_000 }));
+      stage = "accept-original-run";
       const acceptedA = await clientA.request<AgentResult>("agent", {
         sessionKey: SESSION_KEY,
         message: ORIGINAL_MESSAGE,
@@ -162,14 +172,18 @@ describe("agent session deduplication across reconnect", () => {
         status: "accepted",
         runId: IDEMPOTENCY_KEY,
       });
+      stage = "wait-provider-request";
       await vi.waitFor(() => expect(provider.requests).toHaveLength(1), {
         interval: 20,
         timeout: REQUEST_TIMEOUT_MS,
       });
+      stage = "disconnect-client-a";
       await clientA.stopAndWait({ timeoutMs: 1_000 });
 
+      stage = "connect-client-b";
       const clientB = await connectOperator(gateway, "Session dedup client B");
       cleanups.push(() => clientB.stopAndWait({ timeoutMs: 1_000 }));
+      stage = "replay-in-flight-run";
       const acceptedB = await clientB.request<AgentResult>("agent", {
         sessionKey: SESSION_KEY,
         message: ORIGINAL_MESSAGE,
@@ -184,6 +198,7 @@ describe("agent session deduplication across reconnect", () => {
       expect(provider.requests).toHaveLength(1);
 
       provider.release();
+      stage = "wait-terminal-run";
       const terminal = await clientB.request<AgentResult>(
         "agent.wait",
         { runId: IDEMPOTENCY_KEY, timeoutMs: 30_000 },
@@ -194,6 +209,7 @@ describe("agent session deduplication across reconnect", () => {
         runId: IDEMPOTENCY_KEY,
       });
 
+      stage = "replay-terminal-run";
       const cachedTerminal = await clientB.request<AgentResult>("agent", {
         sessionKey: SESSION_KEY,
         message: ORIGINAL_MESSAGE,
@@ -207,6 +223,7 @@ describe("agent session deduplication across reconnect", () => {
           payloads: [{ text: TERMINAL_TEXT }],
         },
       });
+      stage = "replay-changed-message";
       const changedReplay = await clientB.request<AgentResult>("agent", {
         sessionKey: SESSION_KEY,
         message: CHANGED_MESSAGE,
@@ -216,6 +233,7 @@ describe("agent session deduplication across reconnect", () => {
       expect(changedReplay).toEqual(cachedTerminal);
       expect(provider.requests).toHaveLength(1);
 
+      stage = "read-history";
       const history = await clientB.request<{ messages?: unknown[] }>("chat.history", {
         sessionKey: SESSION_KEY,
         limit: 20,

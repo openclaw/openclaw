@@ -1,8 +1,9 @@
-import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
+import { readSqliteDatabaseScopedWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import type { AuthProfileRowRead } from "./types.js";
 
 type RowsReader = {
+  identity?: string;
   read: () => Promise<AuthProfileRowRead>;
   assertCurrent: () => void;
 };
@@ -11,7 +12,7 @@ type RowsReader = {
 export function createRuntimeAuthProfileRowsCache(revisionAtPath: (path: string) => string) {
   const entries = new Map<
     string,
-    { writeToken: string; revision: string; rows: AuthProfileRowRead }
+    { identity: string | undefined; writeToken: string; revision: string; rows: AuthProfileRowRead }
   >();
   return {
     clear(databasePath?: string) {
@@ -28,9 +29,14 @@ export function createRuntimeAuthProfileRowsCache(revisionAtPath: (path: string)
         async read() {
           reader.assertCurrent();
           const entry = entries.get(databasePath);
-          const writeToken = readSqliteDatabaseWriteTokenForPath(databasePath);
+          // Session-only writes leave auth rows intact; auth and unscoped writes still fence reuse.
+          const writeToken = readSqliteDatabaseScopedWriteTokenForPath(
+            databasePath,
+            "auth-profiles",
+          );
           if (
             writeToken !== undefined &&
+            entry?.identity === reader.identity &&
             entry?.revision === revision &&
             entry.writeToken === writeToken
           ) {
@@ -46,10 +52,10 @@ export function createRuntimeAuthProfileRowsCache(revisionAtPath: (path: string)
             rows.state.status !== "unreadable" &&
             revisionAtPath(databasePath) === revision &&
             writeToken !== undefined &&
-            readSqliteDatabaseWriteTokenForPath(databasePath) === writeToken
+            readSqliteDatabaseScopedWriteTokenForPath(databasePath, "auth-profiles") === writeToken
           ) {
             freezeJsonSnapshot(rows);
-            entries.set(databasePath, { writeToken, revision, rows });
+            entries.set(databasePath, { identity: reader.identity, writeToken, revision, rows });
             // Bound retained credential owners; eviction never changes read authority.
             while (entries.size > 64) {
               entries.delete(entries.keys().next().value!);

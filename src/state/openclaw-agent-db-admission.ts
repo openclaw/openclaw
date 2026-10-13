@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { getSqliteDatabaseAdmissionIdentityForPath } from "../infra/sqlite-database-admission.js";
 import { assertSqliteIntegrityInWorker } from "../infra/sqlite-integrity-worker.js";
 import {
   runSqliteIntegrityCheckSync,
@@ -17,7 +17,10 @@ import {
   type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
 import { registerDeferredSqliteWalWriteAdmission } from "../infra/sqlite-wal-write-admission.js";
-import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import {
+  readDatabasePathIdentitySync,
+  resolveDatabasePathKey,
+} from "../infra/sqlite-worker-identity.js";
 import {
   createSqliteWorkerOperationAdmission,
   requestSqliteWorkerOperationAdmission,
@@ -53,11 +56,6 @@ import {
   assertAgentDatabaseResourceAdmission,
   registerOpenClawAgentDatabaseAsyncResource,
 } from "./openclaw-agent-db-resources.js";
-import {
-  assertExistingAgentSchemaOwner,
-  assertSupportedAgentSchemaVersion,
-  readExistingAgentSchemaMeta,
-} from "./openclaw-agent-db-schema-helpers.js";
 import { revalidateAgentDatabaseTerminalOpenAsync } from "./openclaw-agent-db-terminal.js";
 import {
   captureOpenClawAgentDatabaseAliasPublication,
@@ -422,7 +420,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
           suspended = false;
           assertAgentDatabaseOpenAuthority(steps, () => {
             assertCurrent();
-            assertOpenClawAgentDatabaseAdmissionCurrent(options, pending, check?.database);
+            assertOpenClawAgentDatabaseAdmissionCurrent(options, pending);
           });
           pending.validation = validation;
           const step = failure ? steps.throw(failure.error) : steps.next();
@@ -532,7 +530,6 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
   function assertOpenClawAgentDatabaseAdmissionCurrent(
     options: OpenClawAgentDatabaseOptions,
     pending: PendingAgentDatabaseOpen,
-    database?: DatabaseSync,
   ): void {
     const pathname = pending.path;
     pending.controller.signal.throwIfAborted();
@@ -544,14 +541,6 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     assertAgentCreationClaimCurrent(options);
     getAgentDeletionDatabaseCleanup(options)?.assertCurrent();
     pending.assertHeld?.();
-    if (database) {
-      assertSupportedAgentSchemaVersion(database, pathname);
-      assertExistingAgentSchemaOwner(
-        readExistingAgentSchemaMeta(database),
-        pending.agentId,
-        pathname,
-      );
-    }
   }
 
   function startOpenClawAgentDatabaseAdmission(
@@ -569,7 +558,6 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
       assertAgentDatabaseOpenAuthority(operation, assertCurrent);
       let step = operation.next();
       while (!step.done) {
-        const database = step.value.database;
         let failure: unknown;
         let failed = false;
         try {
@@ -586,7 +574,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
         }
         // Throwing an integrity verdict into the generator can repair indexes too.
         assertAgentDatabaseOpenAuthority(operation, () => {
-          assertOpenClawAgentDatabaseAdmissionCurrent(options, pending, database);
+          assertOpenClawAgentDatabaseAdmissionCurrent(options, pending);
           assertCurrent?.();
         });
         // Resuming, or throwing into, the same owner preserves repair and unwind policy.
@@ -624,7 +612,12 @@ async function withWorkerAdmission<T>(
   assertAgentCreationClaimCurrent(options);
   assertAgentCreationClaimAliases(options);
   const creationClaim = captureAgentCreationClaim(options);
-  const identity = readDatabasePathIdentitySync(pathname);
+  const admittedIdentity = borrowedExecution
+    ? getSqliteDatabaseAdmissionIdentityForPath(pathname)
+    : undefined;
+  const identity = admittedIdentity
+    ? { ...admittedIdentity, canonicalPath: resolveDatabasePathKey(pathname) }
+    : readDatabasePathIdentitySync(pathname);
   const agentId = normalizeAgentId(options.agentId);
   if (borrowedExecution) {
     borrowedExecution.assertCurrent();
@@ -647,14 +640,6 @@ async function withWorkerAdmission<T>(
     borrowedExecution?.assertCurrent();
     creationClaim?.assertCurrent();
     signal?.throwIfAborted();
-    const current = readDatabasePathIdentitySync(pathname);
-    if (
-      current.canonicalPath !== identity.canonicalPath ||
-      (identity.key.startsWith("file:") &&
-        (current.key !== identity.key || current.birthtime !== identity.birthtime))
-    ) {
-      throw new Error("Agent database changed during worker preparation");
-    }
   };
   const resource = {
     agentId,

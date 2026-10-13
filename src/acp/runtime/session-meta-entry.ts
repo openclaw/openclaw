@@ -135,6 +135,12 @@ export async function updateAcpSessionStoreEntry(params: {
           receipt.membershipInvalidatedKeys,
           receipt.sharingUnchangedKeys,
           receipt.generationUnchangedKeys,
+          undefined,
+          new Map(
+            [...receipt.current].filter(
+              ([key]) => !receipt.unavailableParticipantKeys?.includes(key),
+            ),
+          ),
         );
       }
     },

@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -40,7 +44,7 @@ describe("plugin registry runtime session ownership", () => {
         context: { channel: "slack", to: "C123" },
       });
       let stored: SessionEntry = original;
-      runtime.agent.session.getSessionEntry = () => stored;
+      runtime.agent.session.getSessionEntryAsync = async () => stored;
       runtime.agent.session.upsertSessionEntry = async ({ entry }) => {
         entered.resolve();
         await resume.promise;
@@ -229,8 +233,8 @@ describe("plugin registry runtime session ownership", () => {
     };
     const runtime = createPluginRuntime();
     runtime.config.current = () => cfg;
-    runtime.agent.session.getSessionEntry = vi.fn(() => entry);
-    runtime.agent.session.listSessionEntries = vi.fn(() => [{ sessionKey, entry }]);
+    runtime.agent.session.getSessionEntryAsync = vi.fn(async () => entry);
+    runtime.agent.session.listSessionEntriesAsync = vi.fn(async () => [{ sessionKey, entry }]);
     let executionScope = getPluginRuntimeGatewayRequestScope();
     const runEmbeddedAgent = vi.fn<PluginRuntime["agent"]["runEmbeddedAgent"]>(async () => {
       executionScope = getPluginRuntimeGatewayRequestScope();
@@ -301,6 +305,9 @@ describe("plugin registry runtime session ownership", () => {
   });
 
   it("limits locked harness session mutation and execution to the harness owner", async () => {
+    const cfg: OpenClawConfig = {};
+    setRuntimeConfigSnapshot(cfg);
+    onTestFinished(() => clearRuntimeConfigSnapshot());
     const key = {
       reserved: "agent:main:harness:codex:thread-1",
       ordinary: "agent:main:ordinary",
@@ -356,8 +363,8 @@ describe("plugin registry runtime session ownership", () => {
     } satisfies PluginRuntime["subagent"];
     const runtime = createPluginRuntime({ subagent });
     const session = runtime.agent.session;
-    session.getSessionEntry = vi.fn((params) => entries[params.sessionKey]);
-    session.listSessionEntries = vi.fn(() =>
+    session.getSessionEntryAsync = vi.fn(async (params) => entries[params.sessionKey]);
+    session.listSessionEntriesAsync = vi.fn(async () =>
       Object.entries(entries).map(([sessionKey, entry]) => ({ sessionKey, entry })),
     );
     session.patchSessionEntry = vi.fn(async (params) => {
@@ -403,7 +410,7 @@ describe("plugin registry runtime session ownership", () => {
     const gatewayRequest = vi.fn(async () => ({ ok: true }));
     runtime.gateway.isAvailable = vi.fn(async () => true);
     runtime.gateway.request = gatewayRequest as unknown as PluginRuntime["gateway"]["request"];
-    const createApi = createApis(runtime);
+    const createApi = createApis(runtime, cfg);
     const owner = createApi("codex-owner");
     const other = createApi("other-plugin");
     const voice = createApi("voice-call");
@@ -577,9 +584,9 @@ describe("plugin registry runtime session ownership", () => {
       otherSession.runWithWorkAdmission(legacyAdmission, async () => "admitted"),
     ).resolves.toBe("admitted");
     const ownershipChangedRun = vi.fn(async () => "must-not-run");
-    vi.mocked(session.getSessionEntry)
-      .mockImplementationOnce(() => legacy)
-      .mockImplementationOnce(() => reserved);
+    vi.mocked(session.getSessionEntryAsync)
+      .mockImplementationOnce(async () => legacy)
+      .mockImplementationOnce(async () => reserved);
     await expect(
       otherSession.runWithWorkAdmission(legacyAdmission, ownershipChangedRun),
     ).rejects.toThrow("does not match its reserved session key");

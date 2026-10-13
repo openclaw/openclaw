@@ -2,8 +2,7 @@ import { html, nothing, render } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import { PRESENTATION_CHANGED_EVENT } from "../lit/presentation-binding.ts";
-import { markdownBlocks } from "./markdown-blocks.ts";
+import { MarkdownBlocks } from "./markdown-blocks-owner.ts";
 import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
 import { htmlFragment } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
@@ -31,7 +30,7 @@ function renderCodeCopyButton(text = "const answer = 42;"): HTMLButtonElement {
   return button;
 }
 
-it("reobserves reused Markdown DOM while fencing scans queued before disconnect", async () => {
+it("reobserves retained Markdown DOM while fencing scans queued before hide or disposal", async () => {
   const observed = new Set<Element>();
   vi.stubGlobal(
     "ResizeObserver",
@@ -48,9 +47,6 @@ it("reobserves reused Markdown DOM while fencing scans queued before disconnect"
     },
   );
   const container = document.body.appendChild(document.createElement("div"));
-  const owner = new EventTarget();
-  let presented = true;
-  const presentation = { owner, isPresented: () => presented };
   const content = toSanitizedMarkdownHtml(
     "```ts\nconst answer = 42;\n```\n\n| Name | Value |\n| --- | --- |\n| Alpha | One |",
     {
@@ -58,28 +54,27 @@ it("reobserves reused Markdown DOM while fencing scans queued before disconnect"
       tableInteractions: "enabled",
     },
   );
-  const view = (active = true) =>
-    html`<section class="chat-text" ${markdownBlocks(active ? presentation : false)}>
-      ${unsafeHTML(content)}
-    </section>`;
-  const part = render(view(), container);
+  render(html`<section class="chat-text">${unsafeHTML(content)}</section>`, container);
+  let blocks = new MarkdownBlocks(container.querySelector("section")!);
+  blocks.update(true);
   const code = container.querySelector("code");
   const tableViewport = container.querySelector(".markdown-table__viewport");
 
   try {
-    part.setConnected(false);
+    blocks.dispose();
     await Promise.resolve();
     expect(observed.size).toBe(0);
 
-    part.setConnected(true);
+    blocks = new MarkdownBlocks(container.querySelector("section")!);
+    blocks.update(true);
     await Promise.resolve();
     expect(observed.size).toBe(4);
     expect(observed.has(code!)).toBe(true);
     expect(observed.has(tableViewport!)).toBe(true);
 
-    part.setConnected(false);
+    blocks.update(false);
     expect(observed.size).toBe(0);
-    part.setConnected(true);
+    blocks.update(true);
     await Promise.resolve();
     expect(container.querySelector("code")).toBe(code);
     expect(observed.has(code!)).toBe(true);
@@ -87,39 +82,25 @@ it("reobserves reused Markdown DOM while fencing scans queued before disconnect"
     expect(observed.has(tableViewport!)).toBe(true);
     expect(observed.size).toBe(4);
 
-    presented = false;
-    owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    blocks.update(false);
     await Promise.resolve();
     expect(observed.size).toBe(0);
     expect(container.querySelector("code")).toBe(code);
-    presented = true;
-    owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    blocks.update(true);
+    blocks.update(false);
     await Promise.resolve();
     expect(observed.size).toBe(0);
-    render(view(), container);
-    await Promise.resolve();
-    expect(observed.size).toBe(4);
-
-    render(view(false), container);
-    await Promise.resolve();
-    expect(observed.size).toBe(0);
-    expect(container.querySelector("code")).toBe(code);
-    render(view(true), container);
-    render(view(false), container);
-    await Promise.resolve();
-    expect(observed.size).toBe(0);
-    render(view(true), container);
+    blocks.update(true);
     await Promise.resolve();
     expect(observed.size).toBe(4);
     expect(observed.has(code!)).toBe(true);
     expect(observed.has(tableViewport!)).toBe(true);
-    part.setConnected(false);
-    presented = false;
-    owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
-    part.setConnected(true);
+    blocks.update(true);
+    blocks.dispose();
     await Promise.resolve();
     expect(observed.size).toBe(0);
   } finally {
+    blocks.dispose();
     render(nothing, container);
   }
 });
@@ -132,11 +113,13 @@ it("does not remeasure settled Markdown while neighboring prose streams", async 
     { codeBlockInteraction: "interactive", tableInteractions: "enabled" },
   );
   const view = (prose: string) =>
-    html`<section class="chat-text" ${markdownBlocks()}>
+    html`<section class="chat-text">
       ${unsafeHTML(content)}
       <p>${prose}</p>
     </section>`;
   render(view("First"), container);
+  const blocks = new MarkdownBlocks(container.querySelector("section")!);
+  blocks.update(true);
   await Promise.resolve();
   await Promise.resolve();
   const widths = vi.fn(() => 300);
@@ -147,6 +130,7 @@ it("does not remeasure settled Markdown while neighboring prose streams", async 
   try {
     for (const prose of ["First paragraph", "First paragraph grows", "First paragraph grows"]) {
       render(view(prose), container);
+      blocks.update(true);
       await Promise.resolve();
       await Promise.resolve();
     }
@@ -163,6 +147,7 @@ it("does not remeasure settled Markdown while neighboring prose streams", async 
     expect(viewport.id).not.toBe("");
     expect(expand.getAttribute("aria-controls")).toBe(viewport.id);
   } finally {
+    blocks.dispose();
     render(nothing, container);
   }
 });

@@ -1,7 +1,7 @@
 import { createEffect, createSignal, onCleanup, onSettled } from "solid-js";
 import { currentThemeBranding, subscribeThemeBranding } from "../app/theme-branding.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../lit/solid-bridge.ts";
 import { MascotAnimator } from "./mascot-animator.ts";
 import { drawMascot } from "./mascot-canvas.ts";
 import {
@@ -14,7 +14,6 @@ import { ThemeBrandIcon } from "./theme-brand-icon.tsx";
 import "./openclaw-mascot.css";
 
 type Props = { mood: MascotMood; size: number; tease: boolean };
-export type OpenClawMascotElement = SolidBridgeElement<Props>;
 const moods = new Set<MascotMood>([
   "idle",
   "curious",
@@ -27,7 +26,7 @@ const moods = new Set<MascotMood>([
   "attentive",
 ]);
 
-export const OpenClawMascot = defineSolidBridge<Props>(
+defineSolidBridge<Props>(
   "openclaw-mascot",
   (props, host) => {
     host.setAttribute("aria-hidden", "true");

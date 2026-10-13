@@ -223,7 +223,7 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
 export type SessionWriterDeliveryAuthority = {
   agentId?: string;
-  /** Current facts from the original process-owned actor, never a replacement. */
+  /** Current facts from the original actor or its receipt-backed delivery preparation. */
   readCurrentSession?: () =>
     | {
         sessionId: string;
@@ -280,6 +280,8 @@ export type ReplyPayloadMetadata = {
   replyDispatcherNormalizationOwner?: object;
   /** The command owner produced this terminal reply without starting an agent run. */
   commandReply?: true;
+  /** Inline acknowledgements accompany a model turn and do not own another command input. */
+  inlineCommandReply?: true;
   /** A read-only status command exchange belongs in history, not model context. */
   contextFreeCommand?: true;
   /** Host-owned acknowledgement after this final payload is confirmed delivered. */
@@ -307,6 +309,8 @@ export type ReplyPayloadMetadata = {
     sessionKey: string;
     storePath: string;
   };
+  /** The final-dispatch owner joins cleanup to the core dispatcher's settled receipt. */
+  pendingFinalDeliveryCleanup?: { preserveActivity?: boolean };
   /** replyToId existed before reply threading could inject an implicit target. */
   replyToIdExplicit?: boolean;
   /** The host's single-use reply policy already consumed its target. */

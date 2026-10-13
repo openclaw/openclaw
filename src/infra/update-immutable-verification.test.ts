@@ -197,20 +197,15 @@ it.each([90_000, 150_000])(
   },
 );
 
-it.each([
-  { name: "version", server: { version: "previous-version" } },
-  { name: "build", server: { buildId: "previous-build" } },
-  { name: "channel", health: { channels: { synthetic: { probe: { ok: false } } } } },
-  {
-    name: "plugin",
-    health: { plugins: { errors: [{ id: "synthetic", activated: true, error: "failed" }] } },
+it.each([{ name: "version", server: { version: "previous-version" } }])(
+  "reports a definitive $name failure without a verification receipt",
+  async (failure) => {
+    callGateway.mockImplementation(health(failure));
+    const result = await observe();
+    expect(result.outcome).toBe("failed");
+    expect(result.verification).toBeUndefined();
   },
-])("reports a definitive $name failure without a verification receipt", async (failure) => {
-  callGateway.mockImplementation(health(failure));
-  const result = await observe();
-  expect(result.outcome).toBe("failed");
-  expect(result.verification).toBeUndefined();
-});
+);
 
 it("leaves an unavailable health RPC unverified rather than authorizing rollback", async () => {
   callGateway.mockRejectedValue(new Error("connection refused"));

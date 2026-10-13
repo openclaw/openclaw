@@ -192,17 +192,17 @@ function retainCommandProcess(
   let startedAt: number | null = null;
   let stopped = false;
   let groupExtinct = false;
-  let bindingFailed = false;
+  let settlementFailed = false;
   let custodySettled = false;
   const settleCustody = () => {
-    if (!reservation || bindingFailed || custodySettled) {
+    if (!reservation || settlementFailed || custodySettled) {
       return;
     }
     try {
       reservation.settled();
       custodySettled = true;
     } catch (error) {
-      bindingFailed = true;
+      settlementFailed = true;
       throw error;
     }
   };
@@ -246,7 +246,6 @@ function retainCommandProcess(
           stop();
         }
       } catch (error) {
-        bindingFailed = true;
         scope.failure ??= { error };
         stop();
         throw error;

@@ -10,7 +10,6 @@ import { readTrackedStateDatabaseIdentity } from "../state/openclaw-state-db-han
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
-  closeOpenClawStateDatabaseAsync,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -531,5 +530,3 @@ export function getPluginStateCapacity(
 }
 
 export const closePluginStateDatabase: () => void = closeOpenClawStateDatabase;
-
-export const closePluginStateDatabaseAsync: () => Promise<void> = closeOpenClawStateDatabaseAsync;

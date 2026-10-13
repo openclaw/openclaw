@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
@@ -31,6 +35,7 @@ afterEach(async () => {
   await dismissPendingTaskSuggestions();
   vi.restoreAllMocks();
   closeOpenClawAgentDatabasesForTest();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("task suggestion owner recovery", () => {
@@ -38,6 +43,7 @@ describe("task suggestion owner recovery", () => {
     "keeps %s suggestions retryable when their owner is temporarily unavailable",
     async (mode) => {
       await withOpenClawTestState({ scenario: "minimal" }, async ({ root }) => {
+        setRuntimeConfigSnapshot({});
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: SOURCE_SESSION_KEY },
           { sessionId: "source-session", updatedAt: 1 },

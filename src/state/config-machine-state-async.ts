@@ -11,9 +11,6 @@ export async function readVoiceWakeMachineState(
   if (!result) {
     return undefined;
   }
-  if (!result.ok || result.type !== key) {
-    throw new Error(result.ok ? "Unexpected voice wake state reply" : result.message);
-  }
   return result.row
     ? { value: JSON.parse(result.row.value_json) as unknown, updatedAtMs: result.row.updated_at_ms }
     : undefined;

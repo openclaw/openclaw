@@ -329,6 +329,27 @@ describe("normalizeAssistantReplayContent", () => {
     },
   );
 
+  it.each([
+    { type: "openai-responses-retained-compaction", stopReason: "stop", retained: true },
+    { type: "openai-responses-retained-compaction", stopReason: "error", retained: false },
+    { type: "openai-responses-compaction-suppression", stopReason: "stop", retained: false },
+    { type: "unrelated-provider-replay", stopReason: "stop", retained: false },
+  ] as const)("keeps only successful empty compaction carriers: $type/$stopReason", (testCase) => {
+    const message = bedrockAssistant([], testCase.stopReason);
+    if (message.role !== "assistant") {
+      throw new Error("Expected an assistant fixture");
+    }
+    message.providerReplay = {
+      type: testCase.type,
+      v: 1,
+      data: "opaque-checkpoint",
+      provider: message.provider,
+      api: message.api,
+      model: message.model,
+    };
+    expect(normalizeAssistantReplayContent([message])).toEqual(testCase.retained ? [message] : []);
+  });
+
   it("preserves empty content with non-error stopReasons (toolUse, length) untouched", () => {
     // Boundary lock: only `stopReason:"error"` should trip the sentinel
     // substitution. `toolUse` and `length` are reachable in practice when a
@@ -553,11 +574,14 @@ describe("normalizeAssistantReplayContent", () => {
     const toolCall = { type: "toolCall", id: "call_1", name: "read", arguments: {} };
     const messages = [
       userMessage("hi"),
-      bedrockAssistant([
-        { type: "text", text: COPIED_INBOUND_METADATA_ONLY_TEXT },
-        { type: "text", text: `${COPIED_INBOUND_METADATA_ONLY_TEXT}\n\nVisible reply` },
-        toolCall,
-      ]),
+      bedrockAssistant(
+        [
+          { type: "text", text: COPIED_INBOUND_METADATA_ONLY_TEXT },
+          { type: "text", text: `${COPIED_INBOUND_METADATA_ONLY_TEXT}\n\nVisible reply` },
+          toolCall,
+        ],
+        "toolUse",
+      ),
     ];
     const out = normalizeAssistantReplayContent(messages);
     const normalized = out[1] as AgentMessage & { content: unknown[] };
@@ -580,26 +604,28 @@ describe("normalizeAssistantReplayContent", () => {
     expect((out[1] as { provider: string }).provider).toBe("amazon-bedrock");
   });
 
-  it.each(["channel-final", "channel-final-suppressed", "message-tool-source-reply"] as const)(
-    "filters a stripped delivery mirror identified by %s",
-    (kind) => {
-      const strippedMirror = {
-        ...bedrockAssistant([{ type: "text", text: "channel mirror" }], "stop"),
-        provider: undefined,
-        model: undefined,
-        openclawDeliveryMirror: { kind },
-      } as unknown as AgentMessage;
-      const realReply = bedrockAssistant([{ type: "text", text: "real reply" }], "stop", {
-        input: 1,
-        output: 1,
-        totalTokens: 2,
-      });
+  it.each([
+    "channel-final",
+    "channel-final-suppressed",
+    "message-tool-source-reply",
+    "model-fallback",
+  ] as const)("filters a stripped delivery mirror identified by %s", (kind) => {
+    const strippedMirror = {
+      ...bedrockAssistant([{ type: "text", text: "channel mirror" }], "stop"),
+      provider: undefined,
+      model: undefined,
+      openclawDeliveryMirror: { kind },
+    } as unknown as AgentMessage;
+    const realReply = bedrockAssistant([{ type: "text", text: "real reply" }], "stop", {
+      input: 1,
+      output: 1,
+      totalTokens: 2,
+    });
 
-      expect(
-        normalizeAssistantReplayContent([userMessage("hello"), strippedMirror, realReply]),
-      ).toEqual([expect.objectContaining({ role: "user" }), realReply]);
-    },
-  );
+    expect(
+      normalizeAssistantReplayContent([userMessage("hello"), strippedMirror, realReply]),
+    ).toEqual([expect.objectContaining({ role: "user" }), realReply]);
+  });
 
   it("preserves an assistant carrying an invalid delivery-mirror marker", () => {
     const assistant = {

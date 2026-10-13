@@ -1,4 +1,5 @@
 import { listAgentIds } from "../agents/agent-scope.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -40,10 +41,16 @@ export async function resolveSessionResetTarget(
     key: params.key,
     ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
   };
-  const incognito = captureIncognitoSessionSource({
+  const memory = getSessionActorStorageBinding({
     sessionKey: params.key,
     agentId: requestedAgentId,
   });
+  const incognito =
+    !memory &&
+    captureIncognitoSessionSource({
+      sessionKey: params.key,
+      agentId: requestedAgentId,
+    });
   const target = incognito
     ? await withGatewaySessionEntryReadOnly(lookup, async (selected) => selected)
     : await resolveGatewaySessionStoreTargetInWorker(lookup);

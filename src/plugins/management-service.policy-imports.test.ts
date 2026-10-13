@@ -13,7 +13,7 @@ import {
 import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import { computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "./installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import { refreshInstalledPluginIndex } from "./installed-plugin-index.js";
 import type { PluginLifecycleRuntimeApply } from "./lifecycle.js";
@@ -186,7 +186,7 @@ describe("reload consent and current install preconditions", () => {
       },
       { env: state.env, config },
     );
-    const records = readPersistedInstalledPluginIndexInstallRecords({ env: state.env });
+    const records = await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env });
     const record = records?.["reload-proof"];
     if (!record) {
       throw new Error("Expected the actual persisted install record");
@@ -211,9 +211,9 @@ describe("reload consent and current install preconditions", () => {
         failure = error;
       },
     );
-    const current = readPersistedInstalledPluginIndexInstallRecords({ env: state.env })?.[
-      target.pluginId
-    ];
+    const current = (
+      await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env })
+    )?.[target.pluginId];
     expect(current?.acceptedSurfaceHash).toBe(reviewToken);
     expect(hashStableJson(current)).not.toBe(target.installHash);
     expect(request.plugins[0]?.installHash).toBe(hashStableJson(record));
@@ -274,7 +274,9 @@ describe("reload consent and current install preconditions", () => {
       }
       expect(reachedAdmission).toBe(true);
       expect(
-        readPersistedInstalledPluginIndexInstallRecords({ env: state.env })?.["reload-proof"],
+        (await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }))?.[
+          "reload-proof"
+        ],
       ).toEqual(record);
       expect(applyRuntime).not.toHaveBeenCalled();
     },
@@ -313,7 +315,7 @@ describe("reload consent and current install preconditions", () => {
         applyRuntime,
       }),
     ).rejects.toMatchObject({ capabilityConsent: { pluginId: "second-proof" } });
-    const current = readPersistedInstalledPluginIndexInstallRecords({ env: state.env });
+    const current = await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env });
     expect(current?.["reload-proof"]?.acceptedSurfaceHash).toBe(reviewToken);
     expect(current?.["second-proof"]?.acceptedSurface).toBeUndefined();
     expect(applyRuntime).not.toHaveBeenCalled();

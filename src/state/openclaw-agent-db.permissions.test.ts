@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { MessagePort } from "node:worker_threads";
@@ -249,6 +250,49 @@ describe("agent database permission repair", () => {
       expect(fs.statSync(database.path).mode & 0o7777).toBe(0o600);
     },
   );
+
+  it("reuses admitted descriptor identity across warm admission boundaries and writes", () => {
+    const databasePath = path.join(tempDirs.make("sqlite-admission-stat-"), "state.sqlite");
+    const result = execFileSync(
+      process.execPath,
+      [
+        "--import",
+        import.meta.resolve("tsx/esm"),
+        "--input-type=module",
+        "-e",
+        `
+          import fs from "node:fs";
+          import { syncBuiltinESMExports } from "node:module";
+          const { openNodeSqliteDatabase } = await import(process.argv[2]);
+          const { admitSqliteSchema } = await import(process.argv[3]);
+          const { captureSqliteDatabaseAdmissions, hasSqliteDatabaseSchemaAdmissionForPath } = await import(process.argv[4]);
+          const database = openNodeSqliteDatabase(process.argv[1]);
+          database.exec("CREATE TABLE proof(value); INSERT INTO proof VALUES (0)");
+          admitSqliteSchema(database);
+          let stats = 0;
+          for (const name of ["statSync", "lstatSync", "fstatSync"]) {
+            const original = fs[name];
+            fs[name] = (...args) => { stats++; return original(...args); };
+          }
+          syncBuiltinESMExports();
+          for (let index = 0; index < 16; index++) {
+            if (!hasSqliteDatabaseSchemaAdmissionForPath(process.argv[1])) throw new Error("lost schema admission");
+            if (captureSqliteDatabaseAdmissions(undefined, { location: process.argv[1] }).length !== 1) throw new Error("lost descriptor facts");
+            database.prepare("UPDATE proof SET value = value + 1").run();
+          }
+          const row = database.prepare("SELECT value FROM proof").get();
+          database.close();
+          process.stdout.write(JSON.stringify({ stats, value: row.value }));
+        `,
+        databasePath,
+        new URL("../infra/node-sqlite.ts", import.meta.url).href,
+        new URL("../infra/sqlite-schema-facts.ts", import.meta.url).href,
+        new URL("../infra/sqlite-database-admission.ts", import.meta.url).href,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(JSON.parse(result)).toEqual({ stats: 0, value: 16 });
+  });
 
   it("opens when a transient sidecar disappears during permission repair", () => {
     const options = {

@@ -331,6 +331,108 @@ describe("OpenAI realtime voice provider routing", () => {
     }
   });
 
+  it("selects a pasted ChatGPT token profile for the subscription route", async () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-voice-token-"));
+    const subscriptionToken = createTestJwt({
+      "https://api.openai.com/auth": { chatgpt_account_id: "token-account" },
+    });
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "token",
+          provider: "openai",
+          token: subscriptionToken,
+          expires: Date.now() + 3_600_000,
+        },
+      },
+    };
+    const realAuth = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-auth")>(
+      "openclaw/plugin-sdk/provider-auth",
+    );
+    isProviderAuthProfileConfiguredMock.mockImplementation((params) =>
+      realAuth.isProviderAuthProfileConfigured({ ...params, agentDir }),
+    );
+    resolveProviderAuthProfileApiKeyMock.mockImplementation((params) =>
+      realAuth.resolveProviderAuthProfileApiKey({ ...params, agentDir }),
+    );
+    const { broker, createBrowserSession } = createQuicksilverBrowserBrokerFixture();
+    const provider = buildOpenAIRealtimeVoiceProvider({ quicksilverBrowserSessionBroker: broker });
+    const internalApi = readInternalRealtimeVoiceProviderApi(provider);
+    const request = {
+      cfg: { auth: { order: { openai: ["openai:default"] } } },
+      providerConfig: { model: "gpt-live-1-codex" },
+      model: "gpt-live-1-codex",
+      agentId: "main",
+      workspaceDir: "/tmp/openclaw-agent-workspace",
+      initialItems: [],
+    };
+    try {
+      saveAuthProfileStore(store, agentDir, {
+        filterExternalAuthProfiles: false,
+        syncExternalCli: false,
+      });
+      expect(internalApi.isBrowserSessionConfigured(request)).toBe(true);
+      await provider.createBrowserSession?.(request);
+      expect(createBrowserSession).toHaveBeenLastCalledWith(expect.any(Object), {
+        type: "oauth",
+        token: subscriptionToken,
+        accountId: "token-account",
+      });
+
+      // A pasted bearer without the ChatGPT account claim never shadows a usable
+      // OAuth login, and falls through to Platform auth when it is the only one.
+      store.profiles["openai:default"] = {
+        type: "token",
+        provider: "openai",
+        token: "opaque-pasted-token",
+        expires: Date.now() + 3_600_000,
+      };
+      const codexToken = createTestJwt({
+        "https://api.openai.com/auth": { chatgpt_account_id: "codex-account" },
+      });
+      store.profiles["openai:codex"] = {
+        type: "oauth",
+        provider: "openai",
+        access: codexToken,
+        refresh: "codex-refresh",
+        expires: Date.now() + 3_600_000,
+      };
+      saveAuthProfileStore(store, agentDir, {
+        filterExternalAuthProfiles: false,
+        syncExternalCli: false,
+      });
+      const orderedRequest = {
+        ...request,
+        cfg: { auth: { order: { openai: ["openai:default", "openai:codex"] } } },
+      };
+      await provider.createBrowserSession?.(orderedRequest);
+      expect(createBrowserSession).toHaveBeenLastCalledWith(expect.any(Object), {
+        type: "oauth",
+        token: codexToken,
+        accountId: "codex-account",
+      });
+
+      delete store.profiles["openai:codex"];
+      saveAuthProfileStore(store, agentDir, {
+        filterExternalAuthProfiles: false,
+        syncExternalCli: false,
+      });
+      await provider.createBrowserSession?.({
+        ...request,
+        providerConfig: { model: "gpt-live-1-codex", apiKey: "test-api-key-platform" },
+      });
+      expect(createBrowserSession).toHaveBeenLastCalledWith(expect.any(Object), {
+        type: "api-key",
+        token: "test-api-key-platform",
+      });
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+      closeOpenClawAgentDatabasesForTest();
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     { name: "Platform", broker: true, auth: "api_key", supported: true },
     { name: "missing broker", broker: false, auth: "oauth", supported: false },

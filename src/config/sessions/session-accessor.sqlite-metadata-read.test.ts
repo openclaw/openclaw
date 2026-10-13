@@ -23,11 +23,46 @@ import {
   advanceTranscriptMutationAtInTransaction,
   readTranscriptMutationStateInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
-import { readTranscriptStatsFromDatabase } from "./session-accessor.sqlite-transcript-stats.js";
+import {
+  readTranscriptStatsBatchFromDatabase,
+  readTranscriptStatsFromDatabase,
+} from "./session-accessor.sqlite-transcript-stats.js";
 import { readSessionTranscriptAnchorsAsync } from "./session-transcript-anchor-read.js";
 import { createTranscriptEventInserter } from "./transcript-payload.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("preserves hot, cold, missing and repeated IDs across metadata batch boundaries", async () => {
+  await withOpenClawTestState({ label: "transcript-stats-batches" }, async (state) => {
+    const { database } = createFixture(state);
+    const expected = [
+      {
+        eventCount: 1,
+        maxSeq: 0,
+        sizeBytes: Buffer.byteLength('{"type":"session"}'),
+        lastObservedMutationAtMs: 10,
+        lastMutationAtMs: 20,
+      },
+      {
+        eventCount: 1,
+        maxSeq: 0,
+        sizeBytes: 1,
+        lastObservedMutationAtMs: 30,
+        lastMutationAtMs: 40,
+      },
+      { eventCount: 0, maxSeq: 0, sizeBytes: 0, lastObservedMutationAtMs: 1 },
+      { eventCount: 0, maxSeq: 0, sizeBytes: 0 },
+    ];
+    const names = ["hot", "cold", "empty", "missing"];
+    for (const count of [4, 11, 401]) {
+      const ids = Array.from({ length: count }, (_, index) => names[index % names.length]!);
+      expect(readTranscriptStatsBatchFromDatabase(database, ids)).toEqual(
+        Array.from({ length: count }, (_, index) => expected[index % expected.length]),
+      );
+    }
+    expect(readTranscriptStatsBatchFromDatabase(database, [])).toEqual([]);
+  });
+});
 
 function createFixture(state: OpenClawTestState, agentId = "main") {
   const options = { agentId, env: state.env };

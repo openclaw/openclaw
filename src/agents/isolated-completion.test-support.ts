@@ -90,8 +90,10 @@ vi.mock("./model-auth.js", () => ({
   ensureAuthProfileStoreAsync: isolatedCompletionMocks.ensureAuthProfileStore,
   hasAvailableAuthForProvider: isolatedCompletionMocks.hasAvailableAuthForProvider,
 }));
+// mock-isolation: Runtime admission uses fixture leases, never host registry or credential state.
 vi.mock("./prepared-model-runtime.js", () => ({
   acquireAgentRunPreparedModelRuntime: isolatedCompletionMocks.acquireAgentRunPreparedModelRuntime,
+  acquireReadOnlyPreparedModelRuntime: isolatedCompletionMocks.acquireAgentRunPreparedModelRuntime,
 }));
 vi.mock("./simple-completion-runtime.js", async () => ({
   // Selection stays real so utility completions can be prepared end to end;

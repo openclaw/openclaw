@@ -165,7 +165,7 @@ function SaveIndicatorContent(input: { props?: SettingsSaveIndicatorProps }) {
   );
 }
 
-export const SettingsSaveIndicator = defineSolidBridge<{ props?: SettingsSaveIndicatorProps }>(
+defineSolidBridge<{ props?: SettingsSaveIndicatorProps }>(
   "openclaw-settings-save-indicator",
   (props) => <SaveIndicatorContent props={props.props} />,
   {

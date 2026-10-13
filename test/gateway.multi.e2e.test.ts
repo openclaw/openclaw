@@ -217,10 +217,13 @@ try {
 `,
               canary.id,
             ],
-            { cwd: process.cwd(), env: manager.env, encoding: "utf8", timeout: 60_000 },
+            { cwd: process.cwd(), env: manager.env, encoding: "utf8", timeout: E2E_TIMEOUT_MS },
           );
           expect(scheduler.stderr).toBe("");
-          expect(scheduler.status).toBe(0);
+          expect(
+            scheduler.status,
+            scheduler.error?.message ?? scheduler.signal ?? scheduler.stderr,
+          ).toBe(0);
           const before = JSON.parse(scheduler.stdout) as {
             state: { lastRunAtMs?: number; lastStatus?: string };
           };

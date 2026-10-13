@@ -92,8 +92,7 @@ export function BoardModal(props: {
     }
     const initialDraft = draft();
     const client = props.client;
-    const isPresented = () => !disposed && props.draft === initialDraft;
-    const isCurrent = () => isPresented() && props.client === client;
+    const isCurrent = () => !disposed && props.client === client;
     let sessions: WorkboardSessionsBoardSpec | undefined;
     try {
       sessions = initialDraft.sessions
@@ -156,7 +155,7 @@ export function BoardModal(props: {
       }
     } finally {
       initialDraft.saving = false;
-      if (isPresented()) {
+      if (!disposed) {
         props.requestUpdate();
       }
     }
@@ -232,10 +231,7 @@ export function BoardModal(props: {
                 maxlength="120"
                 ref={nameValue}
                 disabled={draft().saving || !props.canWrite}
-                onInput={(event: Event) => {
-                  if (!(event.currentTarget instanceof HTMLInputElement)) {
-                    return;
-                  }
+                onInput={(event) => {
                   draft().name = event.currentTarget.value;
                   props.requestUpdate();
                 }}
@@ -336,11 +332,9 @@ function SessionsEditor(props: {
                   maxlength="60"
                   aria-label={t("workboard.sessionsBoard.columnLabel")}
                   ref={labelValue}
-                  onInput={(event: Event) => {
-                    if (event.currentTarget instanceof HTMLInputElement) {
-                      current().label = event.currentTarget.value;
-                      props.requestUpdate();
-                    }
+                  onInput={(event) => {
+                    current().label = event.currentTarget.value;
+                    props.requestUpdate();
                   }}
                 />
               </label>
@@ -350,11 +344,9 @@ function SessionsEditor(props: {
                   class="settings-input"
                   aria-label={t("workboard.boardColor")}
                   ref={colorValue}
-                  onChange={(event: Event) => {
-                    if (event.currentTarget instanceof HTMLSelectElement) {
-                      current().color = event.currentTarget.value || undefined;
-                      props.requestUpdate();
-                    }
+                  onChange={(event) => {
+                    current().color = event.currentTarget.value || undefined;
+                    props.requestUpdate();
                   }}
                 >
                   <option value="">{t("workboard.sessionsBoard.defaultColor")}</option>
@@ -379,11 +371,9 @@ function SessionsEditor(props: {
                   rows="2"
                   aria-label={t("workboard.sessionsBoard.description")}
                   ref={descriptionValue}
-                  onInput={(event: Event) => {
-                    if (event.currentTarget instanceof HTMLTextAreaElement) {
-                      current().description = event.currentTarget.value;
-                      props.requestUpdate();
-                    }
+                  onInput={(event) => {
+                    current().description = event.currentTarget.value;
+                    props.requestUpdate();
                   }}
                 />
               </label>

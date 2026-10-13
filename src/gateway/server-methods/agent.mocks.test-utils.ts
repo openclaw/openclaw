@@ -179,6 +179,7 @@ vi.mock("../../config/sessions.js", async () => {
 
 // mock-isolation: Handler fixtures supply lifecycle timestamps without opening transcript readers.
 vi.mock("../../config/sessions/lifecycle-read.js", () => ({
+  hasTerminalMainSessionTranscriptNewerThanRegistryAsync: async () => false,
   resolveSessionLifecycleTimestampsAsync: async (
     params: Parameters<typeof mocks.resolveSessionLifecycleTimestamps>[0],
   ) => mocks.resolveSessionLifecycleTimestamps(params),
@@ -672,6 +673,7 @@ export function resetSessionAccessorMocks() {
       options: {
         fallbackEntry?: Record<string, unknown>;
         replaceEntry?: boolean;
+        onCommitted?: (entry: Record<string, unknown>) => void;
       } = {},
     ) =>
       await mocks.updateSessionStore(
@@ -697,6 +699,7 @@ export function resetSessionAccessorMocks() {
             delete store[key];
           }
           store[scope.target.canonicalKey] = next;
+          options.onCommitted?.(structuredClone(next));
           return next;
         },
         options,

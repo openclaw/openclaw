@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import {
   sessionStore,
   registryRuntimeMock,
@@ -15,6 +19,12 @@ const { maybeWakeRequesterAfterAllChildrenSettled } =
   await import("./subagent-announce.requester-settle-wake.js");
 
 describe("quiet requester restart continuation", () => {
+  beforeEach(() => {
+    setRuntimeConfigSnapshot({ session: { mainKey: "main", scope: "per-sender" } });
+  });
+
+  afterEach(() => clearRuntimeConfigSnapshot());
+
   it.each(["main", "nested", "reset", "cancelled", "successful"] as const)(
     "keeps a quiet restart continuation private to its original %s parent",
     async (scenario) => {

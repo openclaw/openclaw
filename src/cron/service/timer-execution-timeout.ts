@@ -1,15 +1,12 @@
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
-import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
 import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
-import type { CronRunReceiptSettlementDisposition } from "../store/run-receipt-store.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
-import type { StartupDeferredJob } from "../store/runtime-worker.types.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -49,13 +46,12 @@ export type TimedCronRunOutcome = CronJobExecutionResult & {
   deliveryState: CronResolvedDeliveryState;
   isolatedAgentSetupTimeout?: IsolatedAgentSetupTimeoutSignal;
   activeJobMarker?: CronActiveJobMarker;
-  reservationIdentity?: object;
   runReceipt?: CronRunReceiptHandle;
   runReceiptContext?: OpenClawStateWorkerContext;
-  receiptSettlementDisposition?: CronRunReceiptSettlementDisposition;
   request?: {
     executionJob: CronJob;
     preserveCadence: boolean;
+    onExitWatcherCompletion?: boolean;
     scheduleOwnershipAtMs: number;
     runId?: string;
     terminalTracker?: { emitted: boolean };
@@ -85,27 +81,9 @@ export type IsolatedAgentSetupTimeoutResult = {
   isolatedAgentSetupTimeout?: IsolatedAgentSetupTimeoutSignal;
 };
 
-export type StartupCatchupCandidate = {
-  jobId: string;
-  job: CronJob;
-  reservedAtMs: number;
-  reservationIdentity: object;
-};
-
-export type StartupCatchupPlan = {
-  lifecycleGeneration: number;
-  candidates: StartupCatchupCandidate[];
-  deferredJobs: StartupDeferredJob[];
-};
-
-export type StartupCatchupExecution =
-  | { ok: true; outcomes: TimedCronRunOutcome[] }
-  | { ok: false; outcomes: TimedCronRunOutcome[]; error: unknown };
-
 export type ExecuteJobCoreOptions = {
   deliveryAttemptFence?: CronCompletionDeliveryFence;
   activeJobMarker?: CronActiveJobMarker;
-  owningCronLaneTaskMarker?: CommandLaneTaskMarker;
   onPayloadExecutionStarted?: () => void;
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
@@ -117,7 +95,7 @@ export type ExecuteJobCoreOptions = {
       }
     | undefined;
   executionIdentity?: import("./state.js").CronExecutionIdentityAdmission;
-  /** Revalidates the durable run fence after awaited planning and before effects. */
+  /** Revalidates live Gateway admission after awaited planning and before effects. */
   assertRunCurrent?: () => Promise<void>;
   streamBatch?: string;
   // Source definition and logical identity are an inseparable admission claim.

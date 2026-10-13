@@ -51,7 +51,7 @@ const enActivity = {
     toolCallId: "Tool call",
     runId: "Run",
     session: "Session",
-    outputTruncated: "Preview redacted and truncated.",
+    outputTruncated: "Preview truncated.",
     noOutputPreview: "No output preview.",
     currentWork: {
       title: "Active sessions",

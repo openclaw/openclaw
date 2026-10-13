@@ -33,12 +33,8 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
   const [currentQuestionIndex, setCurrentQuestionIndex] = createSignal(0);
   const [uncontrolledCollapsed, setUncontrolledCollapsed] = createSignal(initialModel.collapsed);
   const [draftRevision, setDraftRevision] = createSignal(0);
-  const [actionRevision, setActionRevision] = createSignal(0);
-  let pendingAction: { kind: "submit" | "skip" } | null = null;
-  const pendingKind = () => {
-    actionRevision();
-    return pendingAction?.kind ?? null;
-  };
+  const [pendingKind, setPendingKind] = createSignal<"submit" | "skip" | null>(null);
+  let resolving = false;
   let live = true;
   let answerTextarea: HTMLTextAreaElement | null = null;
   let measuredAnswer: string | null = null;
@@ -133,7 +129,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
   };
   const resolve = async (kind: "submit" | "skip") => {
     const value = model();
-    if (value.disabled || value.submitting || pendingAction) {
+    if (value.disabled || value.submitting || resolving) {
       return;
     }
     let run: () => void | Promise<void>;
@@ -156,17 +152,16 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
       }
       run = onSkip;
     }
-    const action = { kind };
-    pendingAction = action;
-    setActionRevision((revision) => revision + 1);
+    resolving = true;
+    setPendingKind(kind);
     try {
       await run();
     } catch {
       /* The caller owns the error shown in model.error. */
     } finally {
-      if (live && pendingAction === action) {
-        pendingAction = null;
-        setActionRevision((revision) => revision + 1);
+      resolving = false;
+      if (live) {
+        setPendingKind(null);
       }
     }
   };

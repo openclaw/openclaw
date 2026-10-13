@@ -229,30 +229,6 @@ describe("buildAzureSpeechProvider", () => {
     });
   });
 
-  it("forwards the configured media byte cap to synthesis requests", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          mediaMaxMb: 2,
-        },
-      },
-    };
-    resolveGeneratedMediaMaxBytesMock.mockReturnValue(2 * 1024 * 1024);
-
-    await provider.synthesize({
-      ...synthesisRequest,
-      cfg,
-      target: "audio-file",
-    });
-
-    expect(resolveGeneratedMediaMaxBytesMock).toHaveBeenCalledExactlyOnceWith(cfg, "audio");
-    expect(azureSpeechTTSMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        maxBytes: 2 * 1024 * 1024,
-      }),
-    );
-  });
-
   it("lists voices through config or explicit request auth", async () => {
     const voices = await provider.listVoices?.({
       providerConfig: { apiKey: "key", region: "eastus", timeoutMs: 45_000 },

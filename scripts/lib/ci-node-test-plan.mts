@@ -1465,11 +1465,20 @@ export function resolveUiE2ePrTestSelection(
   }
   const paths = [...changedPaths];
   const graphOptions = { tooling: true, resolveAliases: true, runtimeOnly: true };
-  const ownerWatches = UI_E2E_OWNER_WATCHES.map((watch) => ({
-    testFile: resolveUiTypeScriptPath(watch.testFile, cwd),
-    ownerRoots: watch.ownerRoots.map((root) => resolveUiTypeScriptPath(root, cwd)),
-    watchGlobs: watch.watchGlobs,
-  }));
+  const availableTests = new Set(inventory);
+  const ownerWatches = UI_E2E_OWNER_WATCHES.flatMap((watch) => {
+    const testFile = resolveUiTypeScriptPath(watch.testFile, cwd);
+    // Only inventoried tests can consume a source-owner match below.
+    return availableTests.has(testFile)
+      ? [
+          {
+            testFile,
+            ownerRoots: watch.ownerRoots.map((root) => resolveUiTypeScriptPath(root, cwd)),
+            watchGlobs: watch.watchGlobs,
+          },
+        ]
+      : [];
+  });
   const roots = [...new Set(ownerWatches.flatMap(({ ownerRoots }) => ownerRoots))];
   const policyTargets = new Set(
     resolvePolicyTestTargets(paths).map((file) => resolveUiTypeScriptPath(file, cwd)),
@@ -2847,12 +2856,33 @@ export function createVitestCacheWarmGroups(
   }
   return [
     ...[...coreShards, ...additionalShards].flatMap((shard) =>
-      shard.configs.map((config) => ({
-        configs: [config],
-        ...(shard.env ? { env: shard.env } : {}),
-        ...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {}),
-        shard_name: `cache-warm:${shard.shardName}:${config}`,
-      })),
+      shard.configs.flatMap((config) => {
+        const group = {
+          configs: [config],
+          ...(shard.env ? { env: shard.env } : {}),
+          ...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {}),
+          shard_name: `cache-warm:${shard.shardName}:${config}`,
+        };
+        if (config !== "test/vitest/vitest.gateway-methods.config.ts") {
+          return [group];
+        }
+        const files = listNodeTestConfigFiles(config);
+        if (!files?.length) {
+          throw new Error("Gateway methods cache seed files are missing");
+        }
+        // The full non-isolated Bun collection exceeds 8 GiB even with earlier GC.
+        // Release its module graph between bounded collections, not just test files.
+        const batches = [];
+        const maxFiles = 32;
+        for (let offset = 0; offset < files.length; offset += maxFiles) {
+          batches.push({
+            ...group,
+            includePatterns: files.slice(offset, offset + maxFiles),
+            shard_name: `${group.shard_name}:part-${batches.length + 1}`,
+          });
+        }
+        return batches;
+      }),
     ),
     uiGroup,
   ];
@@ -3256,6 +3286,7 @@ function packHostedReleaseShards(shards: NodeTestShard[]): NodeTestShard[] {
 // These owners retain their execution contract as test inventory changes. Keep
 // complete historical observations until the current selection is measured.
 const RELEASE_TIMING_CONTINUITY_SHARDS = new Set([
+  "agentic-agents-support",
   "agentic-cli-process",
   "agentic-control-plane-agent-chat",
   "agentic-gateway-methods",

@@ -151,19 +151,22 @@ describe("createOpenClawCodingTools availability guidance", () => {
     }
   });
 
-  it("describes only executable conversation routes", () => {
-    const [tool] = applyToolAvailabilityDescriptions([
-      { name: "sessions_send", description: describeSessionsSendTool() },
-      ...["conversations_list", "conversations_send"].map((name) => ({
-        name,
-        description: "available",
-      })),
-    ] as AnyAgentTool[]);
+  it.each([false, true])(
+    "describes only executable conversation routes (allowThreadTargets=%s)",
+    (allowThreadTargets) => {
+      const [tool] = applyToolAvailabilityDescriptions([
+        { name: "sessions_send", description: describeSessionsSendTool({ allowThreadTargets }) },
+        ...["conversations_list", "conversations_send"].map((name) => ({
+          name,
+          description: "available",
+        })),
+      ] as AnyAgentTool[]);
 
-    expect(tool?.description).toContain("conversations_list");
-    expect(tool?.description).toContain("conversations_send");
-    expect(tool?.description).not.toContain("conversations_turn");
-  });
+      expect(tool?.description).toContain("conversations_list");
+      expect(tool?.description).toContain("conversations_send");
+      expect(tool?.description).not.toContain("conversations_turn");
+    },
+  );
 
   it("keeps authorized history guidance and the prepared session URL", () => {
     const sessionLinkBase = "https://gateway.example/control";

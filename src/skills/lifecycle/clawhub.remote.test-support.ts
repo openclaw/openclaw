@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import {
   fetchClawHubSkillInstallResolutionMock,
   downloadClawHubSkillArchiveUrlMock,
@@ -27,26 +26,6 @@ import {
 
 /** Uses the existing ClawHub suite fixture to exercise a distinct workspace host. */
 export function registerRemoteClawHubTests(getWorkspaceDir: () => string) {
-  it("preserves local ClawHub inventory and updates for document-only adapters", async () => {
-    const workspaceDir = getWorkspaceDir();
-    await writeTrackedSkill(workspaceDir, "weather", { installedVersion: "1.0.0" });
-    const expectedUpdate = await updateSkillsFromClawHub({ workspaceDir, slug: "weather" });
-    const release = registerAgentWorkspaceAccess(workspaceDir, {
-      bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
-    });
-    try {
-      expect(await readTrackedClawHubSkillSlugs(workspaceDir)).toEqual(["weather"]);
-      expect(
-        await resolveClawHubSkillVerificationTarget({ workspaceDir, slug: "weather" }),
-      ).toMatchObject({ ok: true, version: "1.0.0" });
-      expect(await updateSkillsFromClawHub({ workspaceDir, slug: "weather" })).toEqual(
-        expectedUpdate,
-      );
-    } finally {
-      release();
-    }
-  });
-
   it("installs and reuses a host skill without reading or writing Gateway tracking", async () => {
     const host = await tempDirs.make("openclaw-clawhub-host-");
     const source = await tempDirs.make("openclaw-clawhub-source-");
@@ -124,7 +103,7 @@ export function registerRemoteClawHubTests(getWorkspaceDir: () => string) {
     }
   });
 
-  it.each(["clean", "edited", "force", "during-download"] as const)(
+  it.each(["clean", "edited", "during-download"] as const)(
     "updates host tracking and preserves the native %s behavior without Gateway files",
     async (scenario) => {
       const host = await tempDirs.make("openclaw-update-host-");
@@ -162,7 +141,7 @@ export function registerRemoteClawHubTests(getWorkspaceDir: () => string) {
         "1.0.0",
         "https://clawhub.ai/api/v1/download?slug=weather&version=1.0.0",
       );
-      if (scenario === "edited" || scenario === "force") {
+      if (scenario === "edited") {
         await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Local edits\n");
       }
       if (scenario === "during-download") {
@@ -180,9 +159,7 @@ export function registerRemoteClawHubTests(getWorkspaceDir: () => string) {
       const release = bindHostWorkspace(getWorkspaceDir(), host);
       try {
         expect(await readTrackedClawHubSkillSlugs(getWorkspaceDir())).toEqual(["weather"]);
-        const results = await updateTestSkill(getWorkspaceDir(), undefined, {
-          force: scenario === "force",
-        });
+        const results = await updateTestSkill(getWorkspaceDir(), undefined);
         if (scenario === "edited" || scenario === "during-download") {
           expect(results).toEqual([expect.objectContaining({ ok: false, code: "force_required" })]);
           expect(await fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).toBe(

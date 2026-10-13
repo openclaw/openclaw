@@ -14,13 +14,15 @@ import { createSpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { SpawnBrokerError } from "../process/spawn-broker/protocol.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import {
   createSqliteReadOnlyWorkerScope,
   runSqliteReadOnlyWorker,
   withSqliteReadOnlyWorkerScope,
 } from "./sqlite-readonly-worker.js";
+import { admitSqliteSchema } from "./sqlite-schema-facts.js";
 import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -108,6 +110,8 @@ describe.each([
     "serializes fresh auth reads in one scoped child and joins it on close",
     async () => {
       const { source, store, rows: expectedRows } = createAuthDatabase();
+      const writer = openNodeSqliteDatabase(source);
+      admitSqliteSchema(writer);
       const broker = transport.broker ? createSpawnBrokerHost() : undefined;
       try {
         await broker?.ready();
@@ -119,7 +123,7 @@ describe.each([
               Array.from({ length: 4 }, () => read(source, transport.sourceKind)),
             );
             expect(rows).toEqual(Array.from({ length: 4 }, () => expectedRows));
-            clearAuthState(source);
+            writer.prepare("UPDATE auth_profile_state SET state_json = ?").run('{"lastGood":{}}');
             expect((await read(source, transport.sourceKind)).state).toEqual({
               status: "readable",
               raw: { lastGood: {} },
@@ -143,6 +147,17 @@ describe.each([
             } finally {
               await connection.drain();
             }
+            writer.exec("DROP TABLE auth_profile_state");
+            expect((await read(source, transport.sourceKind)).state).toEqual({
+              status: "missing",
+              reason: "table",
+            });
+            writer.exec(`PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`);
+            expect(await read(source, transport.sourceKind)).toEqual({
+              store: { status: "unreadable" },
+              state: { status: "unreadable" },
+              cacheable: false,
+            });
             const child =
               transport.label === "broker"
                 ? brokerSpawn?.mock.results[0]?.value
@@ -155,6 +170,7 @@ describe.each([
         expect(spawning.mock.results[0]?.value.exitCode).toBe(0);
         expect(spawning.mock.results[0]?.value.connected).toBe(false);
       } finally {
+        writer.close();
         await broker?.close();
       }
     },

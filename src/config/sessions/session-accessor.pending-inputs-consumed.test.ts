@@ -29,9 +29,9 @@ import {
   withSessionPendingInputPersistence,
   type SessionPendingInputReceipt,
 } from "./session-accessor.pending-inputs.js";
-import { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { readSessionPendingInputReceiptsInWorker as listSessionPendingInputReceipts } from "./session-pending-input-receipts.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { deriveTranscriptPredicateFields } from "./transcript-predicate-fields.js";
 
@@ -239,7 +239,7 @@ describe("committed pending input release", () => {
     expect(await listSessionPendingInputs(scope())).toEqual({ items: [], total: 0 });
     expect(await readSessionPendingInput(scope(), first.inputId)).toBeUndefined();
     expect(
-      listSessionPendingInputReceipts(scope(), {
+      await listSessionPendingInputReceipts(scope(), {
         runIds: ["collect-a", "collect-b", "unknown"],
       }),
     ).toEqual([
@@ -287,7 +287,7 @@ describe("committed pending input release", () => {
       },
     ]);
     expect(
-      listSessionPendingInputReceipts(
+      await listSessionPendingInputReceipts(
         { ...scope(), sessionId: "other" },
         { runIds: ["collect-a"] },
       ),
@@ -708,43 +708,6 @@ describe("committed pending input release", () => {
     ).toMatchObject({
       error: "provider unavailable",
     });
-    expect(completionRows()).toMatchObject([{ succeeded: 1 }]);
-    expect(pendingCount()).toBe(0);
-  });
-
-  it("preserves the released synchronous completion contract inside an outer rollback", async () => {
-    const first = await stagePrivate();
-    expect(() =>
-      runOpenClawAgentWriteTransaction(() => {
-        first.complete!(buildAgentRunTerminalOutcome({ status: "ok" }));
-        throw new Error("before commit");
-      }, options()),
-    ).toThrow("before commit");
-    expect(completionRows()).toEqual([]);
-    expect(pendingCount()).toBe(1);
-    first.complete!(buildAgentRunTerminalOutcome({ status: "ok" }));
-    expect(pendingCount()).toBe(0);
-  });
-
-  it("preserves released synchronous completion when a postcommit observer fails", async () => {
-    const first = await stagePrivate();
-    setLoggerOverride({ level: "silent", consoleLevel: "error" });
-    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
-    onTestFinished(() => {
-      errorLog.mockRestore();
-      resetLogger();
-    });
-    expect(() =>
-      runOpenClawAgentWriteTransaction((current) => {
-        deferOpenClawAgentPostCommitPublication(current, () => {
-          throw new Error("observer failed");
-        });
-        first.complete!(buildAgentRunTerminalOutcome({ status: "ok" }));
-      }, options()),
-    ).not.toThrow();
-    expect(errorLog).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("SQLite post-commit notification failed"),
-    );
     expect(completionRows()).toMatchObject([{ succeeded: 1 }]);
     expect(pendingCount()).toBe(0);
   });

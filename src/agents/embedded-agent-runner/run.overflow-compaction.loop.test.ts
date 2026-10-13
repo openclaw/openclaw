@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { resolveWorkerToolAuthority } from "../../gateway/worker-environments/worker-tool-authority.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -29,7 +30,7 @@ import { prepareAndDispatchEmbeddedRunAttempt } from "./run/run-attempt-dispatch
 const mocks = vi.hoisted(() => ({
   runAttempt: vi.fn(),
   settleRequesterAfterSessionSpawns: vi.fn(),
-  prepareGitHubPublicationAvailability: vi.fn(),
+  readGitHubPublicationFact: vi.fn(),
 }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const codex = await loadBundledPluginFacade<{
@@ -46,8 +47,9 @@ const codex = await loadBundledPluginFacade<{
   }>;
 }>({ pluginId: "codex", artifactBasename: "test-api.js" });
 
-vi.mock("../../gateway/github-publication-availability.js", () => ({
-  prepareGitHubPublicationAvailability: mocks.prepareGitHubPublicationAvailability,
+// mock-isolation: Dispatch consumes publication facts without starting discovery or credential work.
+vi.mock("../../gateway/github-publication-discovery.js", () => ({
+  readGitHubPublicationFact: mocks.readGitHubPublicationFact,
 }));
 
 vi.mock("../delegation-capability.js", () => ({
@@ -237,13 +239,17 @@ async function dispatchExecSession(execSession: ExecSessionDefaults) {
 describe("embedded run retry dispatch", () => {
   let admission: ReturnType<typeof prepareSystemAgentRunAdmission>;
   beforeEach(async () => {
+    setRuntimeConfigSnapshot({});
     mocks.runAttempt.mockReset().mockResolvedValue({ terminal: { kind: "ok" } });
     mocks.settleRequesterAfterSessionSpawns.mockReset();
-    mocks.prepareGitHubPublicationAvailability.mockReset().mockResolvedValue(true);
+    mocks.readGitHubPublicationFact.mockReset().mockReturnValue({ available: true });
     admission = prepareSystemAgentRunAdmission({}, "run-1", "main", "dispatch-test");
     admittedRunContext = await admission.admit("plugin-harness", "dispatch-test");
   });
-  afterEach(() => admission.close());
+  afterEach(() => {
+    admission.close();
+    clearRuntimeConfigSnapshot();
+  });
 
   it.each([
     {
@@ -437,34 +443,31 @@ describe("embedded run retry dispatch", () => {
     },
   );
 
-  it.each(["openclaw"])(
-    "prepares GitHub tools for each admitted run and continuation (%s)",
-    async (harness) => {
-      const gateway = {} as GatewayRequestContext;
-      for (const continuation of [false, true]) {
-        if (continuation) {
-          admission.close();
-          admission = prepareSystemAgentRunAdmission({}, "run-1", "main", "dispatch-test");
-          admittedRunContext = await admission.admit("plugin-harness", "dispatch-test");
-        }
-        bindGatewayContextResolver(admittedRunContext, () => gateway);
-        const input = makeDispatchInput({}, createEmbeddedRunReplayState());
-        input.preparedRuntime.snapshot().agentHarness.id = harness;
-        input.preparedRuntime.snapshot().pluginHarnessOwnsTransport = harness !== "openclaw";
-        input.sessionPromptState.activePrompt.internal = continuation;
-        const { dispatchedAttempt } = await prepareAndDispatchEmbeddedRunAttempt(input);
-        const names = createOpenClawTools({
-          githubPublicationAvailable: dispatchedAttempt.preparedAttempt.githubPublicationAvailable,
-        }).map((tool) => tool.name);
-
-        expect(names).toContain("github_identity_status");
-        expect(names).toContain("github_publish");
+  it("uses published GitHub availability for each admitted run and continuation", async () => {
+    const gateway = {} as GatewayRequestContext;
+    for (const continuation of [false, true]) {
+      if (continuation) {
+        admission.close();
+        admission = prepareSystemAgentRunAdmission({}, "run-1", "main", "dispatch-test");
+        admittedRunContext = await admission.admit("plugin-harness", "dispatch-test");
       }
-      expect(mocks.prepareGitHubPublicationAvailability).toHaveBeenCalledTimes(2);
-    },
-  );
+      bindGatewayContextResolver(admittedRunContext, () => gateway);
+      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+      input.preparedRuntime.snapshot().agentHarness.id = "openclaw";
+      input.preparedRuntime.snapshot().pluginHarnessOwnsTransport = false;
+      input.sessionPromptState.activePrompt.internal = continuation;
+      const { dispatchedAttempt } = await prepareAndDispatchEmbeddedRunAttempt(input);
+      const names = createOpenClawTools({
+        githubPublicationAvailable: dispatchedAttempt.preparedAttempt.githubPublicationAvailable,
+      }).map((tool) => tool.name);
 
-  it("rechecks the adopted session and retains identity help when publication becomes unavailable", async () => {
+      expect(names).toContain("github_identity_status");
+      expect(names).toContain("github_publish");
+    }
+    expect(mocks.readGitHubPublicationFact).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads the adopted session fact and retains identity help when publication is unavailable", async () => {
     const gateway = {} as GatewayRequestContext;
     bindGatewayContextResolver(admittedRunContext, () => gateway);
     const input = makeDispatchInput({}, createEmbeddedRunReplayState());
@@ -480,7 +483,7 @@ describe("embedded run retry dispatch", () => {
       sessionId: "rotated-session",
       sessionTarget,
     };
-    mocks.prepareGitHubPublicationAvailability.mockResolvedValue(false);
+    mocks.readGitHubPublicationFact.mockReturnValue({ available: false });
 
     const { dispatchedAttempt } = await prepareAndDispatchEmbeddedRunAttempt(input);
     const names = createOpenClawTools({
@@ -489,82 +492,38 @@ describe("embedded run retry dispatch", () => {
 
     expect(names).toContain("github_identity_status");
     expect(names).not.toContain("github_publish");
-    expect(mocks.prepareGitHubPublicationAvailability).toHaveBeenLastCalledWith({
+    expect(mocks.readGitHubPublicationFact).toHaveBeenLastCalledWith({
       agentId: "main",
       sessionId: "rotated-session",
       sessionKey: "agent:main:session-1",
-      sessionTarget,
-      assertCurrent: expect.any(Function),
     });
   });
 
-  it.each(["closed", "replaced", "attempt-replaced"])(
-    "does not dispatch when GitHub preparation outlives a %s owner",
-    async (kind) => {
-      let gateway = {} as GatewayRequestContext;
-      bindGatewayContextResolver(admittedRunContext, () => gateway);
-      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
-      const started = createDeferred();
-      const release = createDeferred<boolean>();
-      mocks.prepareGitHubPublicationAvailability.mockImplementation(async ({ assertCurrent }) => {
-        expect(assertCurrent()).toBe(true);
-        started.resolve();
-        await release.promise;
-        expect(assertCurrent()).toBe(false);
-        return false;
-      });
-      const dispatch = prepareAndDispatchEmbeddedRunAttempt(input);
-      const rejected = expect(dispatch).rejects.toThrow("outlived its admitted Gateway run");
-      await started.promise;
-      const replacement =
-        kind === "attempt-replaced"
-          ? input.runInput.laneController.createAttemptControls({ admittedRunContext })
-          : undefined;
-      if (kind === "closed") {
-        admission.close();
-      } else if (kind === "replaced") {
-        gateway = {} as GatewayRequestContext;
-      }
-      release.resolve(true);
-      try {
-        await rejected;
-      } finally {
-        replacement?.close();
-      }
+  it("retains accepted spawns for the logical owner after a late post-compaction abort", async () => {
+    const postCompactionAbortError = new Error("post-compaction loop detected");
+    const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+    input.getPostCompactionAbortError = vi.fn(() => postCompactionAbortError);
+    const acceptedSessionSpawns = [
+      {
+        runId: "child-run",
+        childSessionKey: "agent:main:subagent:child",
+        expectsCompletionMessage: true,
+      },
+    ];
+    mocks.runAttempt.mockResolvedValueOnce({
+      terminal: { kind: "ok" },
+      agentHarnessId: "codex",
+      yieldDetected: true,
+      acceptedSessionSpawns,
+    });
 
-      expect(mocks.runAttempt).not.toHaveBeenCalled();
-      expect(input.clearPostCompactionAbortController).toHaveBeenCalledOnce();
-    },
-  );
+    await expect(prepareAndDispatchEmbeddedRunAttempt(input)).rejects.toBe(
+      postCompactionAbortError,
+    );
 
-  it.each([true])(
-    "retains accepted spawns for the logical owner after a late post-compaction abort (yielded: %s)",
-    async (yieldDetected) => {
-      const postCompactionAbortError = new Error("post-compaction loop detected");
-      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
-      input.getPostCompactionAbortError = vi.fn(() => postCompactionAbortError);
-      const acceptedSessionSpawns = [
-        {
-          runId: "child-run",
-          childSessionKey: "agent:main:subagent:child",
-          expectsCompletionMessage: true,
-        },
-      ];
-      mocks.runAttempt.mockResolvedValueOnce({
-        terminal: { kind: "ok" },
-        agentHarnessId: "codex",
-        yieldDetected,
-        acceptedSessionSpawns,
-      });
-
-      await expect(prepareAndDispatchEmbeddedRunAttempt(input)).rejects.toBe(
-        postCompactionAbortError,
-      );
-
-      expect(mergeAcceptedSessionSpawnsForRun(admittedRunContext.operationalRunInstance)).toEqual(
-        acceptedSessionSpawns,
-      );
-      expect(mocks.settleRequesterAfterSessionSpawns).not.toHaveBeenCalled();
-    },
-  );
+    expect(mergeAcceptedSessionSpawnsForRun(admittedRunContext.operationalRunInstance)).toEqual(
+      acceptedSessionSpawns,
+    );
+    expect(mocks.settleRequesterAfterSessionSpawns).not.toHaveBeenCalled();
+  });
 });

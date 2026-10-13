@@ -158,7 +158,9 @@ vi.mock("./openclaw-state-db-read-connection.js", () => ({
   openOpenClawStateReadOnlyLocation: mocks.forbidden,
   withOpenClawStateReadOnlyLocation: mocks.forbidden,
 }));
+// mock-isolation: Synchronous schema admission or reads must fail in async signal-custody tests.
 vi.mock("./openclaw-state-db-schema-version.js", () => ({
+  admitStateSchemaFacts: mocks.forbidden,
   assertSupportedStateSchemaVersion: mocks.forbidden,
 }));
 vi.mock("./openclaw-state-read-worker.js", async () => {

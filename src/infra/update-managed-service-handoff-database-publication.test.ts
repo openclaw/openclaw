@@ -4,8 +4,10 @@ import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { Worker } from "node:worker_threads";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockLargeDirectoryId } from "../../test/helpers/fs-large-directory-id.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -208,8 +210,16 @@ describe("managed handoff database publication", () => {
   });
 
   it("retains an exclusively created inode after a durability failure for ordinary recovery", () => {
-    vi.spyOn(fs, "fsyncSync").mockImplementationOnce(() => {
-      throw new Error("fixture sync failed");
+    const sync = fs.fsyncSync;
+    vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
+      if (
+        fs.existsSync(databasePath) &&
+        fs.fstatSync(descriptor, { bigint: true }).ino ===
+          fs.statSync(databasePath, { bigint: true }).ino
+      ) {
+        throw new Error("fixture sync failed");
+      }
+      sync(descriptor);
     });
     const withDatabase = createManagedHandoffLeaseDatabase(databasePath);
     expect(() => withDatabase(true, () => undefined)).toThrow("fixture sync failed");
@@ -229,7 +239,16 @@ describe("managed handoff database publication", () => {
       const retained = dirs.make("retained-initialization-");
       const originalParent = fs.statSync(root);
       let originalFile: fs.Stats | undefined;
-      vi.spyOn(fs, "fsyncSync").mockImplementationOnce((descriptor) => {
+      vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
+        if (
+          originalFile ||
+          !fs.existsSync(databasePath) ||
+          fs.fstatSync(descriptor, { bigint: true }).ino !==
+            fs.statSync(databasePath, { bigint: true }).ino
+        ) {
+          sync(descriptor);
+          return;
+        }
         originalFile = fs.fstatSync(descriptor);
         if (target === "file") {
           fs.renameSync(databasePath, path.join(retained, "original.sqlite"));
@@ -349,6 +368,90 @@ describe("managed handoff database publication", () => {
     }
   });
 
+  it.skipIf(process.platform !== "win32")(
+    "waits for private publication before admitting a competing first writer",
+    async ({ signal }) => {
+      const gate = new Int32Array(new SharedArrayBuffer(4));
+      const source = `
+        const fs = require("node:fs");
+        const { parentPort, workerData } = require("node:worker_threads");
+        (async () => {
+          const { register } = await import(workerData.loader);
+          register({ tsconfig: workerData.tsconfig });
+          const { createManagedHandoffLeaseDatabase } = await import(workerData.module);
+          const target = workerData.databasePath;
+          if (workerData.first) {
+            const link = fs.linkSync;
+            fs.linkSync = (from, to) => {
+              link(from, to);
+              if (to === target) {
+                parentPort.postMessage("published");
+                Atomics.wait(new Int32Array(workerData.gate), 0, 0);
+              }
+            };
+          } else {
+            const open = fs.openSync;
+            fs.openSync = (file, ...args) => {
+              try {
+                return open(file, ...args);
+              } catch (error) {
+                if (file === target + ".lock" && error.code === "EEXIST") {
+                  parentPort.postMessage("contended");
+                }
+                throw error;
+              }
+            };
+          }
+          const owner = workerData.first ? "first" : "second";
+          createManagedHandoffLeaseDatabase(target)(true, db => db.prepare(
+            "INSERT INTO managed_update_handoffs " +
+            "(install_root, owner, payload_json, updated_at) VALUES (?, ?, '{}', 1)"
+          ).run(owner, owner));
+          parentPort.close();
+        })().catch(error => { throw error; });
+      `;
+      const launch = (first: boolean) => {
+        const worker = new Worker(source, {
+          eval: true,
+          execArgv: [],
+          workerData: {
+            first,
+            gate: gate.buffer,
+            databasePath,
+            module: databaseModule,
+            loader: import.meta.resolve("tsx/esm/api"),
+            tsconfig: path.resolve("tsconfig.json"),
+          },
+        });
+        const exited = once(worker, "exit");
+        void exited.catch(() => undefined);
+        const ready = withinTest(
+          awaitGateBeforeSettlement(once(worker, "message"), exited, "Publication worker exited"),
+          signal,
+        );
+        return { worker, exited, ready };
+      };
+      const first = launch(true);
+      let second: ReturnType<typeof launch> | undefined;
+      try {
+        expect(await first.ready).toEqual(["published"]);
+        expect(fs.statSync(databasePath).nlink).toBe(2);
+        second = launch(false);
+        expect(await second.ready).toEqual(["contended"]);
+        Atomics.store(gate, 0, 1);
+        Atomics.notify(gate, 0);
+        expect(await first.exited).toEqual([0]);
+        expect(await second.exited).toEqual([0]);
+        expect(readOwners()).toEqual(["first", "second"]);
+        expect(fs.statSync(databasePath).nlink).toBe(1);
+      } finally {
+        Atomics.store(gate, 0, 1);
+        Atomics.notify(gate, 0);
+        await Promise.all([first.worker.terminate(), second?.worker.terminate()]);
+      }
+    },
+  );
+
   it("ordinary readers observe no lease while a real peer initializes the schema", async () => {
     const script = `
       const { createManagedHandoffLeaseDatabase } = await import(${JSON.stringify(databaseModule)});
@@ -364,7 +467,6 @@ describe("managed handoff database publication", () => {
           if (process.platform !== "win32") {
             expect(stat.mode & 0o777).toBe(0o600);
           }
-          expect(stat.nlink).toBe(1);
         }
         await new Promise((resolve) => {
           setTimeout(resolve, 1);
@@ -372,6 +474,7 @@ describe("managed handoff database publication", () => {
       } while (writer.child.exitCode === null && writer.child.signalCode === null);
       expect(await writer.closed).toEqual([0, null]);
       expect(writer.output().stderr).toBe("");
+      expect(fs.statSync(databasePath).nlink).toBe(1);
       expect(readOwners()).toEqual([]);
     } finally {
       await stopChildProcess(writer.child, 5_000);
@@ -381,7 +484,14 @@ describe("managed handoff database publication", () => {
   it("recovers the same inode when its first writer crashes before schema initialization", async () => {
     const script = `
       import fs from "node:fs";
-      fs.fsyncSync = () => {
+      const sync = fs.fsyncSync;
+      fs.fsyncSync = (descriptor) => {
+        if (!fs.existsSync(process.argv[1]) ||
+            fs.fstatSync(descriptor, { bigint: true }).ino !==
+            fs.statSync(process.argv[1], { bigint: true }).ino) {
+          sync(descriptor);
+          return;
+        }
         fs.writeSync(1, "before-schema\\n");
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
       };

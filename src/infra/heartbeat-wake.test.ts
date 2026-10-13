@@ -8,6 +8,7 @@ import {
 import { heartbeatLog } from "./heartbeat-log.js";
 import {
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+  HEARTBEAT_IDLE_RETRY_GRACE_MS,
   requestHeartbeat,
   requestHeartbeatAndWait,
   setHeartbeatWakeHandler as setRuntimeHeartbeatWakeHandler,
@@ -505,40 +506,38 @@ describe("heartbeat-wake", () => {
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
-  it("recovers interrupted wakes when a replacement handler is registered", async () => {
+  it("finishes an admitted wake before a replacement handles fresh work", async () => {
     vi.useFakeTimers();
 
-    // Simulate a handler that's mid-execution when SIGUSR2 fires.
-    // We do this by having the handler hang forever (never resolve).
     const { promise: hangPromise, resolve: resolveHang } = createDeferred();
     const handlerA = vi
       .fn()
       .mockReturnValue(hangPromise.then(() => ({ status: "ran" as const, durationMs: 1 })));
     setHeartbeatWakeHandler(handlerA);
 
-    // Trigger the handler — it starts running but never finishes
     const recovered = requestHeartbeatAndWait(wake("interval", { coalesceMs: 0 }));
     await vi.advanceTimersByTimeAsync(1);
     expect(handlerA).toHaveBeenCalledTimes(1);
 
-    // Now simulate SIGUSR2: register a new handler while handlerA is still running.
-    // Without the fix, `running` would stay true and handlerB would never fire.
     const handlerB = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
     setHeartbeatWakeHandler(handlerB);
 
-    // The replacement must handle both the interrupted global barrier and fresh
-    // targeted work. The recovered barrier runs first so the two cannot overlap.
-    requestHeartbeat(wake("interval", { agentId: "ready", coalesceMs: 0 }));
-    await vi.advanceTimersByTimeAsync(1);
-    expect(handlerB.mock.calls.map(([request]) => request.agentId)).toEqual([undefined, "ready"]);
-    await expect(recovered).resolves.toEqual({ status: "ran", durationMs: 1 });
-
-    // Clean up the hanging promise
-    resolveHang!();
-    await vi.advanceTimersByTimeAsync(0);
+    try {
+      requestHeartbeat(wake("interval", { agentId: "ready", coalesceMs: 0 }));
+      await vi.advanceTimersByTimeAsync(1);
+      expect(handlerB).not.toHaveBeenCalled();
+      resolveHang();
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(recovered).resolves.toEqual({ status: "ran", durationMs: 1 });
+      expect(handlerB.mock.calls.map(([request]) => request.agentId)).toEqual(["ready"]);
+      expect(handlerA).toHaveBeenCalledOnce();
+    } finally {
+      resolveHang();
+      await vi.advanceTimersByTimeAsync(0);
+    }
   });
 
-  it("does not let a stale heartbeat lifecycle release a newer active wake", async () => {
+  it("starts the next same-target wake only after its old handler settles", async () => {
     vi.useFakeTimers();
     let finishOldWake!: () => void;
     let finishNewWake!: () => void;
@@ -548,44 +547,51 @@ describe("heartbeat-wake", () => {
     const newWakeFinished = new Promise<void>((resolve) => {
       finishNewWake = resolve;
     });
-    const oldHandler = vi.fn(async () => {
-      await oldWakeFinished;
-      return { status: "ran" as const, durationMs: 1 };
-    });
-    setHeartbeatWakeHandler(oldHandler);
-    requestHeartbeat(wake("interval", { agentId: "main", coalesceMs: 0 }));
-    await vi.advanceTimersByTimeAsync(1);
-    expect(oldHandler).toHaveBeenCalledOnce();
+    try {
+      const oldHandler = vi.fn(async () => {
+        await oldWakeFinished;
+        return { status: "ran" as const, durationMs: 1 };
+      });
+      setHeartbeatWakeHandler(oldHandler);
+      requestHeartbeat(wake("interval", { agentId: "main", coalesceMs: 0 }));
+      await vi.advanceTimersByTimeAsync(1);
+      expect(oldHandler).toHaveBeenCalledOnce();
 
-    const newHandler = vi.fn(async (_request: WakeRequest) => {
-      await newWakeFinished;
-      return { status: "ran" as const, durationMs: 1 };
-    });
-    setHeartbeatWakeHandler(newHandler);
-    requestHeartbeat(wake("interval", { agentId: "main", coalesceMs: 0 }));
-    await vi.advanceTimersByTimeAsync(1);
-    expect(newHandler).toHaveBeenCalledOnce();
+      const newHandler = vi.fn(async (_request: WakeRequest) => {
+        await newWakeFinished;
+        return { status: "ran" as const, durationMs: 1 };
+      });
+      setHeartbeatWakeHandler(newHandler);
+      requestHeartbeat(wake("interval", { agentId: "main", coalesceMs: 0 }));
+      await vi.advanceTimersByTimeAsync(1);
+      expect(newHandler).not.toHaveBeenCalled();
 
-    finishOldWake();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(getActiveGatewayRootWorkCount()).toBe(1);
+      finishOldWake();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(newHandler).toHaveBeenCalledOnce();
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
 
-    requestHeartbeat(wake("manual", { agentId: "main", coalesceMs: 25 }));
-    await vi.advanceTimersByTimeAsync(25);
-    expect(newHandler).toHaveBeenCalledOnce();
+      requestHeartbeat(wake("manual", { agentId: "main", coalesceMs: 25 }));
+      await vi.advanceTimersByTimeAsync(25);
+      expect(newHandler).toHaveBeenCalledOnce();
 
-    finishNewWake();
-    await vi.advanceTimersByTimeAsync(25);
-    expect(newHandler).toHaveBeenCalledTimes(2);
-    expect(newHandler.mock.calls[1]?.[0]).toMatchObject({
-      intent: "manual",
-      reason: "manual",
-      agentId: "main",
-    });
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
+      finishNewWake();
+      await vi.advanceTimersByTimeAsync(25);
+      expect(newHandler).toHaveBeenCalledTimes(2);
+      expect(newHandler.mock.calls[1]?.[0]).toMatchObject({
+        intent: "manual",
+        reason: "manual",
+        agentId: "main",
+      });
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    } finally {
+      finishOldWake();
+      finishNewWake();
+      await vi.advanceTimersByTimeAsync(0);
+    }
   });
 
-  it("hands off only unfinished wakes when a replaced handler returns busy", async () => {
+  it("retains a busy wake's backoff while a replacement handles queued siblings", async () => {
     vi.useFakeTimers();
     const { promise: oldWakeFinished, resolve: finishOldWake } = createDeferred();
     const oldHandler = vi.fn(async () => {
@@ -613,9 +619,11 @@ describe("heartbeat-wake", () => {
     await vi.advanceTimersByTimeAsync(250);
 
     expect(oldHandler).toHaveBeenCalledOnce();
+    expect(newHandler.mock.calls.map(([request]) => request.reason)).toEqual(["cron:job-b"]);
+    await vi.advanceTimersByTimeAsync(HEARTBEAT_IDLE_RETRY_GRACE_MS);
     expect(newHandler.mock.calls.map(([request]) => request.reason)).toEqual([
-      "cron:job-a",
       "cron:job-b",
+      "cron:job-a",
     ]);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });

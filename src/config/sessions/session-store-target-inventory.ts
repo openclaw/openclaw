@@ -50,7 +50,7 @@ import {
   resolveExistingAgentSessionStoreTargetsReadOnlyResult,
   type SessionStoreTargetsReadCache,
   type SessionStoreTargetsReadResult,
-} from "./targets-read-availability.js";
+} from "./targets-read-availability.worker.js";
 import {
   isPerAgentSessionStoreConfig,
   listConfiguredSessionStoreAgentIds,

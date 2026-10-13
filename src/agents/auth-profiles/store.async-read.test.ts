@@ -21,6 +21,7 @@ import { createAuthProfileStoreRuntime } from "./store.js";
 import type { AuthProfileStore, AuthProfileRowRead } from "./types.js";
 
 const reader = vi.hoisted(() => ({
+  identity: undefined,
   read: vi.fn(),
   assertCurrent: vi.fn(),
   dispose: vi.fn(async () => {}),

@@ -253,6 +253,45 @@ For a release Gateway, keeping the observer default and assigning only a few
 release operators is useful. Role assignments are local to each Gateway;
 admission to the collaboration server does not grant release authority.
 
+### Invite guests
+
+To admit individual people outside the team for a limited time, use the
+[Visitor Access plugin](/plugins/reference/visitor-access), available from a
+source checkout. It manages one dedicated Access allow policy, adds each
+invited email or verified GitHub account to it, and ends Gateway access when
+the grant expires (14 days by default) or is revoked.
+
+Visitor Access requires `gateway.roles.default` to be a restricted guest role:
+
+```json5 validate=false
+// Inside gateway.roles
+default: "guest",
+definitions: {
+  guest: {
+    sessions: { others: "view" },
+    agents: ["assistant"],
+    scopes: ["operator.sessions.write"],
+    sandbox: "required",
+    accessPolicyPlugin: "visitor-access",
+    modelPolicy: {},
+  },
+},
+```
+
+Everyone who resolves to the default role needs a current visitor grant. Before
+switching the default, assign every staff member an explicit role with
+`users.setRole` or `gateway.roles.assignments.byGithubLogin`. An administrator
+then asks the agent to call `visitor_invite` with a GitHub login or email; the
+guest signs in at the normal Team URL.
+
+Guests can create sandboxed sessions on the listed agents and publish draft
+pull requests from their own sessions through the shared GitHub account. They
+cannot merge through OpenClaw. Before inviting anyone, review the paths a
+required sandbox does not contain, listed under
+[Named operator roles](/gateway/operator-scopes#named-operator-roles), and
+[Workflow and CI changes](/gateway/config-tools/github-identity#workflow-and-ci-changes)
+for publication.
+
 ## 4. Synchronize people with verified GitHub identities
 
 Keep these responsibilities separate:

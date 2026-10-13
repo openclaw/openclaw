@@ -37,6 +37,7 @@ it("settles queued heartbeat cron work before joining its shutdown drain", async
   const { cron } = buildGatewayCronService({
     scheduler,
     cfg,
+    storePath: path.join(stateDir, "cron", "jobs.json"),
     deps: {} as CliDeps,
     broadcast: () => {},
     env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },

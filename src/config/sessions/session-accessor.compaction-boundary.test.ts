@@ -32,6 +32,66 @@ import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js"
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-compaction-boundary-");
 
 describe("awaited compaction persistence", () => {
+  it("retains intervening accounting writes and publishes a usable transcript version", async () => {
+    const dir = sessionDirs.make();
+    const scope = {
+      agentId: "main",
+      sessionId: "successive-compactions",
+      sessionKey: "agent:main:successive-compactions",
+      env: { OPENCLAW_STATE_DIR: dir },
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      compactionCount: 0,
+    });
+    const manager = await SessionManager.openAsync(scope, dir);
+    const keptId = expectDefined(
+      await manager.appendMessageAsync({
+        role: "user",
+        content: "keep",
+        timestamp: 1,
+      }),
+      "Compaction fixture must append its retained user entry",
+    );
+    const compact = () =>
+      withSessionCompactionPersistenceAsync(
+        manager,
+        (prepared) =>
+          persistCompactionBoundaryWithSessionEntryAsync(scope, {
+            prepared,
+            transcriptByteCompactionLatch: {
+              activeBytes: 2048,
+              sessionId: scope.sessionId,
+              maxBytes: 1024,
+            },
+          }),
+        () => manager.appendCompactionAsync("summary", keptId, 100),
+      );
+    await compact();
+    await upsertSessionEntryCore(scope, {
+      ...loadSessionEntry(scope)!,
+      compactionCount: 7,
+      label: "preserve this metadata",
+    });
+    const boundaryId = await compact();
+    const nextId = await manager.appendMessageAsync({
+      role: "user",
+      content: "next",
+      timestamp: 2,
+    });
+    expect(loadSessionEntry(scope)).toMatchObject({
+      compactionCount: 8,
+      label: "preserve this metadata",
+    });
+    expect(loadTranscriptEventsSync(scope).slice(-2)).toMatchObject([
+      { id: boundaryId, type: "compaction" },
+      { id: nextId, type: "message", parentId: boundaryId },
+    ]);
+    expect((await SessionManager.openAsync(scope)).getBranch()).toEqual(manager.getBranch());
+  });
+
   it("retains a committed receipt when accounting retargets the manager before publication", async () => {
     const dir = sessionDirs.make();
     const scope = {
