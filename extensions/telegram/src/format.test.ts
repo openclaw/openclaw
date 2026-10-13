@@ -483,11 +483,12 @@ describe("file references", () => {
       "<pre><code><ul><li>literal</li></ul></code></pre>",
       "<pre><code>&lt;ul&gt;&lt;li&gt;literal&lt;/li&gt;&lt;/ul&gt;</code></pre>",
     ],
-    ["plain caption", "A plain caption  \n", "A plain caption  \n"],
   ])("renders %s captions without leaking rich blocks", (_name, input, expected) => {
-    expect(
-      renderTelegramHtmlText(input, { textMode: "html", downgradeRichPromptTags: true }),
-    ).toBe(expected);
+    for (const textMode of ["html", "markdown"] as const) {
+      expect(renderTelegramHtmlText(input, { textMode, downgradeRichPromptTags: true })).toBe(
+        expected,
+      );
+    }
   });
 
   it("downgrades Markdown captions without changing literal code or non-caption rendering", () => {
@@ -502,5 +503,11 @@ describe("file references", () => {
     ).toBe(
       '<pre><code class="language-html">&lt;ul&gt;&lt;li&gt;literal&lt;/li&gt;&lt;/ul&gt;\n</code></pre>',
     );
+    for (const textMode of ["html", "markdown"] as const) {
+      const plain = "A plain caption  \n";
+      expect(renderTelegramHtmlText(plain, { textMode, downgradeRichPromptTags: true })).toBe(
+        renderTelegramHtmlText(plain, { textMode }),
+      );
+    }
   });
 });
