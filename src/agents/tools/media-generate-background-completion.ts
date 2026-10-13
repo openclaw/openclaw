@@ -7,8 +7,10 @@ import {
   type SessionTranscriptTargetBinding,
 } from "../../config/sessions/transcript-target-binding.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
+import { loadPendingSessionDelivery } from "../../infra/session-delivery-queue-storage.js";
 import type { SessionDeliveryRequesterBinding } from "../../infra/session-delivery-queue.records.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { RequiredCompletionTerminalResult } from "../completion-result.js";
 import {
@@ -117,8 +119,29 @@ export async function retainBlockedMediaCompletion(params: {
 
 export type MediaGenerationCompletionWakeOutcome =
   | { status: "delivered" }
-  | { status: "pending" }
-  | { status: "permanent_failure" };
+  // queueOwned is set only after the durable queue accepts the handoff.
+  // queueEntryId is that receipt; later waits must read it, not enqueue again.
+  | { status: "pending"; queueOwned?: boolean; queueEntryId?: string }
+  | { status: "permanent_failure" }
+  | { status: "stopped" };
+
+/** Read an accepted media handoff without rewriting its durable receipt. */
+export async function watchQueuedMediaGenerationHandoff(
+  queueEntryId: string,
+): Promise<"pending" | "delivered" | "failed"> {
+  const entry = await loadPendingSessionDelivery(queueEntryId, captureOpenClawStateWorkerContext());
+  if (!entry) {
+    return "pending";
+  }
+  const failedAt = (entry as { failedAt?: unknown }).failedAt;
+  if (typeof failedAt === "number" || entry.settlementOutcome === "moved-to-failed") {
+    return "failed";
+  }
+  if (entry.acknowledgedAt !== undefined || entry.settlementOutcome === "recovered") {
+    return "delivered";
+  }
+  return "pending";
+}
 
 export function retainBlockedMediaReferences(
   terminalResult: RequiredCompletionTerminalResult | undefined,
@@ -236,11 +259,10 @@ export async function wakeMediaGenerationTaskCompletion(params: {
   if (delivery.delivered) {
     return { status: "delivered" };
   }
-  if (
-    delivery.disposition === "session_queued" ||
-    delivery.disposition === "retryable" ||
-    delivery.reason === "completion_handoff_pending"
-  ) {
+  if (delivery.disposition === "session_queued") {
+    return { status: "pending", queueOwned: true, queueEntryId: delivery.queueEntryId };
+  }
+  if (delivery.disposition === "retryable" || delivery.reason === "completion_handoff_pending") {
     return { status: "pending" };
   }
   if (delivery.disposition === "ambiguous") {

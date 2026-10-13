@@ -59,6 +59,7 @@ import {
   retainBlockedMediaCompletion,
   retainBlockedMediaReferences,
   wakeMediaGenerationTaskCompletion,
+  watchQueuedMediaGenerationHandoff,
   type MediaGenerationCompletionWakeOutcome,
   type MediaGenerationTaskHandle,
 } from "./media-generate-background-completion.js";
@@ -141,24 +142,68 @@ type WakeMediaGenerationTaskCompletionParams = Omit<
 async function wakeMediaGenerationTaskCompletionWithRetry(params: {
   wake: () => Promise<MediaGenerationCompletionWakeOutcome>;
   beforeRetry?: () => void;
+  watchQueueOwned?: (queueEntryId: string) => Promise<"pending" | "delivered" | "failed">;
+  onQueueOwnedDeadline?: () => void;
+  isCurrent?: () => boolean;
 }): Promise<MediaGenerationCompletionWakeOutcome> {
   const deadline = Date.now() + MEDIA_GENERATION_COMPLETION_HANDOFF_TIMEOUT_MS;
   let outcome = await params.wake();
   let retryIndex = 0;
+  let queueOwned = false;
+  let queueEntryId: string | undefined;
+  let notedQueueOwnedDeadline = false;
   while (outcome.status === "pending") {
+    queueOwned ||= outcome.queueOwned === true;
+    if (outcome.queueEntryId) {
+      queueEntryId = outcome.queueEntryId;
+    }
     const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) {
+    if (!queueOwned && remainingMs <= 0) {
+      // Unconfirmed pending owns nothing durable. Fail closed so blocked
+      // retention and failure recording still run.
       throw new Error("media completion did not settle before the handoff deadline");
+    }
+    if (queueOwned && remainingMs <= 0 && !notedQueueOwnedDeadline) {
+      notedQueueOwnedDeadline = true;
+      params.onQueueOwnedDeadline?.();
     }
     // Queue admission and an owned continuation can both be transient. Keep the
     // operation live until delivery, permanent refusal, or the bounded deadline.
+    // An accepted receipt is not rewritten: polling it cannot mark success early
+    // and cannot drop the handoff when the caller deadline expires.
     const delayMs = computeBackoffSchedule(
       MEDIA_GENERATION_COMPLETION_HANDOFF_RETRY_DELAYS_MS,
       retryIndex + 1,
     );
-    await sleepWithAbort(Math.min(delayMs, remainingMs), undefined, { ref: false });
+    const waitMs = queueOwned ? delayMs : Math.min(delayMs, remainingMs);
+    await sleepWithAbort(waitMs, undefined, { ref: false });
+    if (params.isCurrent && !params.isCurrent()) {
+      return { status: "stopped" };
+    }
     params.beforeRetry?.();
-    outcome = await params.wake();
+    // Keep the existing wake/admission path until the caller deadline. After
+    // that, an accepted receipt is only read so a later retry cannot rewrite it.
+    const deadlineExpired = deadline - Date.now() <= 0;
+    if (queueOwned && queueEntryId && params.watchQueueOwned && deadlineExpired) {
+      let watched: "pending" | "delivered" | "failed" = "pending";
+      try {
+        watched = await params.watchQueueOwned(queueEntryId);
+      } catch (error) {
+        log.warn("Queued media completion handoff could not be read; keeping the receipt", {
+          queueEntryId,
+          error,
+        });
+      }
+      if (watched === "delivered") {
+        return { status: "delivered" };
+      }
+      if (watched === "failed") {
+        return { status: "permanent_failure" };
+      }
+      outcome = { status: "pending", queueOwned: true, queueEntryId };
+    } else {
+      outcome = await params.wake();
+    }
     retryIndex += 1;
   }
   return outcome;
@@ -393,6 +438,12 @@ export function scheduleMediaGenerationTaskCompletion(params: {
       runId: params.handle.runId,
       ...meta,
     });
+  const noteQueueOwnedDeadline = () => {
+    log.info(
+      `${params.toolName} completion handoff is still queued past the wake deadline; waiting for durable delivery`,
+      { taskId: params.handle.taskId, runId: params.handle.runId },
+    );
+  };
   const runBackgroundWork = async () => {
     let executed: MediaGenerationExecutionResult;
     if (!isMediaGenerationOperationCurrent(params.handle.runId)) {
@@ -425,7 +476,13 @@ export function scheduleMediaGenerationTaskCompletion(params: {
               statusLabel: "failed",
               result: formatToolErrorMessage(error),
             }),
+          watchQueueOwned: watchQueuedMediaGenerationHandoff,
+          onQueueOwnedDeadline: noteQueueOwnedDeadline,
+          isCurrent: () => isMediaGenerationOperationCurrent(params.handle.runId),
         });
+        if (wakeOutcome.status === "stopped") {
+          return;
+        }
         if (wakeOutcome.status !== "delivered") {
           reportFailure(`${params.toolName} failure completion delivery was not confirmed`);
         }
@@ -466,7 +523,13 @@ export function scheduleMediaGenerationTaskCompletion(params: {
         // Keep the native operation and process-local activity fresh
         // while an exact cron continuation is still owned by its original run.
         beforeRetry: recordCompletionDeliveryProgress,
+        watchQueueOwned: watchQueuedMediaGenerationHandoff,
+        onQueueOwnedDeadline: noteQueueOwnedDeadline,
+        isCurrent: () => isMediaGenerationOperationCurrent(params.handle.runId),
       });
+      if (wakeOutcome.status === "stopped") {
+        return;
+      }
       if (wakeOutcome.status !== "delivered") {
         const failureReason = "completion delivery was not confirmed after successful generation";
         terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(failureReason);

@@ -38,6 +38,8 @@ export type SubagentAnnounceDeliveryResult = {
   // makes trying a second path unsafe.
   terminal?: boolean;
   disposition?: SubagentAnnounceDeliveryDisposition;
+  /** Durable session-delivery id when this handoff was accepted into the queue. */
+  queueEntryId?: string;
   missingMediaUrls?: string[];
   phases?: SubagentAnnounceDispatchPhaseResult[];
 };

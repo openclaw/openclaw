@@ -135,19 +135,22 @@ describe("original requester media handoff", () => {
           }
           let entryId: string | undefined;
           const complete = async () => {
-            expect(
-              await lifecycle.wakeTaskCompletion({
-                handle,
-                status: "ok",
-                statusLabel: "completed",
-                result: "generated lighthouse",
-                attachments: [{ type: "image", path: mediaPath, mimeType: "image/png" }],
-              }),
-            ).toEqual({ status: "pending" });
+            const queued = await lifecycle.wakeTaskCompletion({
+              handle,
+              status: "ok",
+              statusLabel: "completed",
+              result: "generated lighthouse",
+              attachments: [{ type: "image", path: mediaPath, mimeType: "image/png" }],
+            });
             const [entry] = await queue.loadPendingSessionDeliveries(queueContext);
             if (!entry) {
               throw new Error("Expected queued media completion");
             }
+            expect(queued).toEqual({
+              status: "pending",
+              queueOwned: true,
+              queueEntryId: entry.id,
+            });
             entryId = entry.id;
             await drain(entry.id);
             const [pending] = await queue.loadPendingSessionDeliveries(queueContext);
@@ -242,9 +245,13 @@ describe("original requester media handoff", () => {
           expect(enqueue).toHaveBeenCalledTimes(1);
           expect(entries).toEqual([]);
         } else {
-          expect(result).toEqual({ status: "pending" });
           expect(entries).toHaveLength(1);
           const entry = entries[0]!;
+          expect(result).toEqual({
+            status: "pending",
+            queueOwned: true,
+            queueEntryId: entry.id,
+          });
           expect(entry).toMatchObject({
             requesterBinding: {
               ...scope,

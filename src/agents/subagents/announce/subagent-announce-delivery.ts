@@ -306,7 +306,12 @@ async function deliverSubagentAnnouncementBound(
         `[warn] Generated media session handoff retry scheduling failed; durable recovery remains pending: ${summarizeDeliveryError(error)}`,
       );
     });
-    return { delivered: false, path: "queued", disposition: "session_queued" };
+    return {
+      delivered: false,
+      path: "queued",
+      disposition: "session_queued",
+      queueEntryId: durableQueue.id,
+    };
   }
 
   const runtimeContextFragments = buildAgentInternalEventContext(params.internalEvents);
