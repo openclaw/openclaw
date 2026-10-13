@@ -605,6 +605,7 @@ export function createDeliveryState(
   const deliveryState = createLaneDeliveryStateTracker();
   const deliverLaneText = createLaneTextDeliverer({
     lanes: config.lanes,
+    allowStream: config.allowProviderPreview,
     sendPayload: async (payload, options) => await sendPayload(getTurn(), payload, options),
     editStreamMessage: async ({ messageId, text, textMode, buttons }) => {
       const turn = getTurn();

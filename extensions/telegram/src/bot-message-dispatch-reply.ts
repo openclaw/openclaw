@@ -213,6 +213,7 @@ async function adoptProgressDraft(
   info: Parameters<NonNullable<Deliver>>[1],
 ): Promise<boolean> {
   if (
+    !turn.allowProviderPreview ||
     info.kind !== "final" ||
     payload.isError === true ||
     typeof info.adoptProgressDraft !== "function"

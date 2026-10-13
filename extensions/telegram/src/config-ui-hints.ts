@@ -67,6 +67,8 @@ export const telegramChannelConfigUiHints = {
         "Show tool/progress activity in the live draft preview message (default: true when preview streaming is active). Set false to keep tool updates out of the edited Telegram preview.",
       "preview.commandText":
         'Command/exec detail in preview tool-progress lines: "status" is the safe default; "raw" opts into command text.',
+      "progress.previewWithHooks":
+        'Explicit waiver: keep the progress draft while plugins register reply_payload_sending or message_sending hooks, which normally suppress every provider preview (default: false). The draft status headline, plan milestones, approval requests and tool lines then reach Telegram without those hooks; durable messages still pass through them. Applies only when channels.telegram.streaming.mode="progress", progress.commentary is not enabled, and reasoning is not streamed into the draft.',
     },
     progress: { includeCommentary: true, commentaryOrder: "after-command" },
   }),

@@ -174,6 +174,139 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
   });
 
   it.each([
+    { hook: "reply_payload_sending", policy: "redact" },
+    { hook: "reply_payload_sending", policy: "cancel" },
+    { hook: "message_sending", policy: "redact" },
+    { hook: "message_sending", policy: "cancel" },
+  ] as const)(
+    "keeps questions and finals behind $hook ($policy) with the progress waiver",
+    async ({ hook, policy }) => {
+      const registry = createEmptyPluginRegistry();
+      const policyInputs: string[] = [];
+      if (hook === "reply_payload_sending") {
+        addTestHook({
+          registry,
+          pluginId: "http-waiver-policy",
+          hookName: hook,
+          handler: (event: PluginHookReplyPayloadSendingEvent) => {
+            const text = event.payload.text ?? "";
+            policyInputs.push(text);
+            return policy === "cancel" && text.includes("fixture-secret-question")
+              ? { cancel: true }
+              : {
+                  payload: {
+                    ...event.payload,
+                    text: text.replaceAll("fixture-secret", "filtered"),
+                  },
+                };
+          },
+        });
+      } else {
+        addTestHook({
+          registry,
+          pluginId: "http-waiver-policy",
+          hookName: hook,
+          handler: (event: { content: string }) => {
+            policyInputs.push(event.content);
+            return policy === "cancel" && event.content.includes("fixture-secret-question")
+              ? { cancel: true }
+              : { content: event.content.replaceAll("fixture-secret", "filtered") };
+          },
+        });
+      }
+      initializeGlobalHookRunner(registry);
+      await dispatchProgressTurn(async () => undefined, {
+        mode: "progress",
+        toolProgress: true,
+        telegramCfg: {
+          streaming: {
+            mode: "progress",
+            progress: { previewWithHooks: true, toolProgress: true },
+          },
+        },
+        producer: async ({ dispatcher, replyOptions }) => {
+          await replyOptions?.onReplyStart?.();
+          await replyOptions?.onAssistantMessageStart?.();
+          await emitToolStart(replyOptions, {
+            name: "exec",
+            phase: "start",
+            toolCallId: "waiver-tool",
+          });
+          await waitForBotApiCall(
+            (call) => call.method === "sendMessage" && String(call.fields.text).includes("Exec"),
+          );
+          dispatcher.sendToolResult({
+            text: "Choose fixture-secret-question.",
+            channelData: { askUser: { questionId: "ask_0123456789abcdef0123456789abcdef" } },
+          });
+          await dispatcher.waitForIdle();
+          dispatcher.sendFinalReply({ text: "Finished fixture-secret-final." });
+          dispatcher.sendFinalReply({ text: "Follow-up fixture-secret-final." });
+          return { queuedFinal: true, counts: dispatcher.getQueuedCounts() };
+        },
+      });
+      expect(policyInputs.some((text) => text.includes("fixture-secret-question"))).toBe(true);
+      expect(policyInputs.some((text) => text.includes("fixture-secret-final"))).toBe(true);
+      expect(JSON.stringify(calls)).not.toContain("fixture-secret");
+      expect([...visibleMessages.values()]).toEqual([
+        ...(policy === "redact" ? ["Choose filtered-question."] : []),
+        "Finished filtered-final.",
+        "Follow-up filtered-final.",
+      ]);
+      expect(
+        acceptedCalls.some(
+          (call) => call.method === "sendMessage" && String(call.fields.text).includes("Exec"),
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it.each([
+    { mode: "partial", commentary: false, reasoning: "off" },
+    { mode: "block", commentary: false, reasoning: "off" },
+    { mode: "progress", commentary: true, reasoning: "off" },
+    { mode: "progress", commentary: false, reasoning: "stream" },
+  ] as const)(
+    "keeps the waiver inert for $mode with commentary=$commentary and reasoning=$reasoning",
+    async ({ mode, commentary, reasoning }) => {
+      const registry = createEmptyPluginRegistry();
+      addTestHook({
+        registry,
+        pluginId: "http-waiver-exclusions",
+        hookName: "message_sending",
+        handler: () => ({ content: "Allowed final" }),
+      });
+      initializeGlobalHookRunner(registry);
+      await dispatchProgressTurn(
+        async (options) => {
+          await options?.onPartialReply?.({ text: "Unapproved fixture-secret-answer" });
+          await emitToolStart(options, {
+            name: "exec",
+            phase: "start",
+            toolCallId: "excluded-tool",
+          });
+          await options?.onReasoningStream?.({ text: "Unapproved fixture-secret-reasoning" });
+          expect(calls.filter((call) => call.method !== "sendChatAction")).toEqual([]);
+        },
+        {
+          mode,
+          toolProgress: true,
+          cfg: { agents: { defaults: { reasoningDefault: reasoning } } },
+          telegramCfg: {
+            streaming: {
+              mode,
+              progress: { previewWithHooks: true, commentary, toolProgress: true },
+            },
+          },
+          finalReply: { text: "Unapproved fixture-secret-final" },
+        },
+      );
+      expect(JSON.stringify(calls)).not.toContain("fixture-secret");
+      expect([...visibleMessages.values()]).toEqual(["Allowed final"]);
+    },
+  );
+
+  it.each([
     { hook: "reply_payload_sending", mode: "partial" },
     { hook: "message_sending", mode: "progress" },
   ] as const)("gates real preview writes with $hook in $mode mode", async ({ hook, mode }) => {

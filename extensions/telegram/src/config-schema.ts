@@ -5,6 +5,7 @@ import {
   buildChannelAccountSchemaParts,
   buildGroupEntrySchema,
   ChannelPreviewStreamingConfigSchema,
+  ChannelStreamingProgressSchema,
   ChannelThreadBindingsSchema,
   DmPolicySchema,
   GroupPolicySchema,
@@ -80,6 +81,11 @@ const TelegramCapabilitiesSchema = z.union([
     })
     .strict(),
 ]);
+const TelegramPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
+  progress: ChannelStreamingProgressSchema.extend({
+    previewWithHooks: z.boolean().optional(),
+  }).optional(),
+});
 const TelegramErrorPolicySchema = z.enum(["always", "once", "silent"]).optional();
 const TelegramTopicSchema = z
   .object({
@@ -167,7 +173,7 @@ const validateTelegramCustomCommands = (
 const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
   capabilities: TelegramCapabilitiesSchema.optional(),
   defaultTo: z.union([z.string(), z.number()]).optional(),
-  streaming: ChannelPreviewStreamingConfigSchema.optional(),
+  streaming: TelegramPreviewStreamingConfigSchema.optional(),
 });
 
 const TelegramAccountSchemaBase = z
