@@ -96,6 +96,7 @@ it("bounds current control scope work to the caller tree in a 5,000-run registry
           visited++;
           yield row;
         }
+        return undefined;
       });
       try {
         expect((await read()).details).toMatchObject({
