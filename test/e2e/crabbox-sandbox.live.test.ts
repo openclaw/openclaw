@@ -150,7 +150,12 @@ describe.skipIf(!LIVE)("Crabbox registered sandbox backend (live)", () => {
         // An inherited exact type overrides --class, so reject it before either warmup path.
         assertLiveCrabboxClassSizing(
           await crabbox(
-            ["config", "show", "--json", ...(sandbox.provider ? ["--provider", sandbox.provider] : [])],
+            [
+              "config",
+              "show",
+              "--json",
+              ...(sandbox.provider ? ["--provider", sandbox.provider] : []),
+            ],
             workspaceDir,
           ),
         );
