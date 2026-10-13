@@ -194,6 +194,14 @@ export function attachChatRealtimeActions(
       ? undefined
       : talkSettings.realtimeTalkInputDeviceId?.trim() || undefined;
     const { client, sessionKey } = state;
+    let voiceController = state.realtimeTalkVoiceController;
+    const playback = new GatewaySpeechPlayback();
+    const onSuperseded = () => {
+      if (state.realtimeTalkVoiceController === voiceController) {
+        stopChatRealtimeTalk(state);
+        state.requestUpdate();
+      }
+    };
     const replacementTransport = voiceChange
       ? state.realtimeTalkSession?.getTransport()
       : undefined;
@@ -212,7 +220,13 @@ export function attachChatRealtimeActions(
       );
       conversationGeneration += 1;
       state.requestUpdate();
-      await closed;
+      try {
+        playback.prepare(client, onSuperseded);
+        await closed;
+      } catch (error) {
+        playback.stop();
+        throw error;
+      }
       if (
         state.realtimeTalkVoiceController !== previousController ||
         state.client !== client ||
@@ -220,6 +234,7 @@ export function attachChatRealtimeActions(
         !state.connected ||
         !canStart()
       ) {
+        playback.stop();
         return undefined;
       }
     } else {
@@ -242,9 +257,9 @@ export function attachChatRealtimeActions(
           state.requestUpdate();
         },
       });
+      voiceController = controller;
       state.realtimeTalkVoiceController = controller;
     }
-    const voiceController = state.realtimeTalkVoiceController;
     const itemPrefix = voiceChange ? `voice-${conversationGeneration}:` : "";
     const orderOffset = voiceChange ? state.realtimeTalkConversationState.entries.length : 0;
     const videoDeviceId = talkSettings.realtimeTalkVideoDeviceId?.trim() || undefined;
@@ -264,14 +279,8 @@ export function attachChatRealtimeActions(
     state.requestUpdate();
     let split: SplitTalkOptions | undefined;
     if (!voiceChange) {
-      const playback = new GatewaySpeechPlayback();
       try {
-        playback.prepare(client, () => {
-          if (state.realtimeTalkVoiceController === voiceController) {
-            stopChatRealtimeTalk(state);
-            state.requestUpdate();
-          }
-        });
+        playback.prepare(client, onSuperseded);
         const [result, maxTextLength] = await Promise.all([
           client.request<TalkConfigResult>("talk.config", {}),
           maxSpeechTextLength?.(),
@@ -283,6 +292,7 @@ export function attachChatRealtimeActions(
           state.sessionKey !== sessionKey ||
           !canStart()
         ) {
+          playback.stop();
           if (state.realtimeTalkVoiceController === voiceController) {
             stopChatRealtimeTalk(state);
             state.requestUpdate();
@@ -303,6 +313,7 @@ export function attachChatRealtimeActions(
           };
         }
       } catch (error) {
+        playback.stop();
         if (state.realtimeTalkVoiceController === voiceController) {
           stopChatRealtimeTalk(state);
           state.realtimeTalkStatus = "error";
@@ -310,10 +321,6 @@ export function attachChatRealtimeActions(
           state.requestUpdate();
         }
         return undefined;
-      } finally {
-        if (!split) {
-          playback.stop();
-        }
       }
     }
     const forCurrentSession =
@@ -425,7 +432,7 @@ export function attachChatRealtimeActions(
             transport: replacementTransport,
           }
         : {},
-      { inputDeviceId, videoDeviceId, split },
+      { inputDeviceId, videoDeviceId, split, playback },
     );
     state.realtimeTalkSession = session;
     try {

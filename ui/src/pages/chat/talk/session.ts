@@ -9,6 +9,7 @@ import { VOICE_TRANSCRIPT_QUEUE_POLICY } from "../../../../../src/talk/voice-tra
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import type { GatewaySpeechPlayback } from "../../../lib/speech-playback.ts";
 import { RealtimeTalkInputController } from "./input.ts";
 import type {
   RealtimeTalkCallbacks,
@@ -36,6 +37,7 @@ type RealtimeTalkLocalOptions = {
   inputDeviceId?: string;
   videoDeviceId?: string;
   split?: SplitTalkOptions;
+  playback?: GatewaySpeechPlayback;
 };
 
 const activeRealtimeTalkSessions = new Set<RealtimeTalkSession>();
@@ -73,14 +75,25 @@ export class RealtimeTalkSession {
   private transcriptItems: ClientVoiceTranscriptQueue | undefined;
   private transcriptQueue = VOICE_TRANSCRIPT_QUEUE_POLICY.createQueue();
   private clientVoiceSessionOwner: ClientVoiceSessionOwner | undefined;
+  private readonly callbacks: RealtimeTalkCallbacks;
 
   constructor(
     private readonly client: GatewayBrowserClient,
     private readonly sessionKey: string,
-    private readonly callbacks: RealtimeTalkCallbacks = {},
+    callbacks: RealtimeTalkCallbacks = {},
     private readonly options: RealtimeTalkLaunchOptions = {},
     private readonly localOptions: RealtimeTalkLocalOptions = {},
-  ) {}
+  ) {
+    this.callbacks = {
+      ...callbacks,
+      onStatus: (status, detail) => {
+        if (status === "idle" || status === "error") {
+          this.localOptions.playback?.stop();
+        }
+        callbacks.onStatus?.(status, detail);
+      },
+    };
+  }
 
   async start(): Promise<void> {
     const owner = reserveClientVoiceSessionOwner(this.client, this.sessionKey);
@@ -392,7 +405,6 @@ export class RealtimeTalkSession {
     try {
       return this.retireTransport();
     } finally {
-      this.localOptions.split?.playback.stop();
       this.callbacks.onStatus?.("idle");
     }
   }

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { loadSettings } from "../../app/settings.ts";
+import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   attachChatRealtimeActions,
@@ -12,17 +13,23 @@ import {
   type ChatRealtimeState,
 } from "./chat-realtime.ts";
 import { useRealtimeTalkMicrophoneFixture } from "./talk/input.test-support.ts";
+import { RealtimeTalkSession } from "./talk/session.ts";
 import type { RealtimeTalkTransportContext } from "./talk/shared.ts";
 
 const transports = vi.hoisted(() => ({
   contexts: [] as RealtimeTalkTransportContext[],
   stop: vi.fn(),
+  onActivated: undefined as (() => void) | undefined,
 }));
 
 vi.mock("./talk/transport.runtime.ts", () => ({
   createRealtimeTalkTransport: vi.fn((_session: unknown, context: RealtimeTalkTransportContext) => {
     transports.contexts.push(context);
-    return { start: async () => "ready", stop: transports.stop };
+    return {
+      start: async () => "ready",
+      activate: () => transports.onActivated?.(),
+      stop: transports.stop,
+    };
   }),
 }));
 
@@ -33,8 +40,15 @@ function fixture() {
   const close = createDeferred();
   const closeStarted = createDeferred();
   const replacementStarted = createDeferred();
+  const replacementActive = createDeferred();
   const transportStopped = createDeferred();
+  const speech = createDeferred<{ audioBase64: string; mimeType: string; provider: string }>();
   transports.stop.mockImplementation(() => transportStopped.resolve());
+  transports.onActivated = () => {
+    if (transports.contexts.length === 2) {
+      replacementActive.resolve();
+    }
+  };
   const saved: string[] = [];
   const snapshots: string[][] = [];
   const listeners = new Set<(event: GatewayEventFrame) => void>();
@@ -63,6 +77,9 @@ function fixture() {
       await close.promise;
       saved.push("Provider final speech");
     }
+    if (method === "tts.speak") {
+      return speech.promise;
+    }
     return { ok: true };
   });
   const client = {
@@ -83,10 +100,13 @@ function fixture() {
   attachChatRealtimeActions(state);
   return {
     state,
+    client,
+    speech,
     transcript,
     close,
     closeStarted,
     replacementStarted,
+    replacementActive,
     transportStopped,
     request,
     snapshots,
@@ -115,10 +135,101 @@ describe("browser voice handoff history", () => {
     vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
     transports.contexts.length = 0;
     transports.stop.mockReset();
+    transports.onActivated = undefined;
   });
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it.each([false, true])(
+    "Read aloud stops active realtime Talk before synthesis settles (replacement: %s)",
+    async (replacement) => {
+      const f = fixture();
+      const reader = new GatewaySpeechPlayback();
+      let reading: Promise<void> | undefined;
+      let call: RealtimeTalkSession | null = null;
+      try {
+        f.transcript.resolve();
+        f.close.resolve();
+        await f.state.toggleRealtimeTalk();
+        if (replacement) {
+          f.changeVoice();
+          await f.replacementActive.promise;
+        }
+        call = expectDefined(f.state.realtimeTalkSession, "active realtime call");
+        expect(call.getTransport()).toBe("webrtc");
+        const stopsBeforeReading = transports.stop.mock.calls.length;
+        reading = reader.speak(f.client, "Read this assistant message");
+        expect(transports.stop).toHaveBeenCalledTimes(stopsBeforeReading + 1);
+        expect(f.state.realtimeTalkSession).toBeNull();
+        expect(f.state.realtimeTalkActive).toBe(false);
+      } finally {
+        reader.stop();
+        f.speech.resolve({ audioBase64: "UklGRg==", mimeType: "audio/wav", provider: "openai" });
+        await reading;
+        stopChatRealtimeTalk(f.state);
+        await call?.stop();
+      }
+    },
+  );
+
+  it.each(["stop", "idle", "error"] as const)(
+    "%s releases the realtime call's playback registration",
+    async (release) => {
+      const f = fixture();
+      const playback = new GatewaySpeechPlayback();
+      const reader = new GatewaySpeechPlayback();
+      const superseded = vi.fn();
+      playback.prepare(f.client, superseded);
+      const call = new RealtimeTalkSession(f.client, "main", {}, {}, { playback });
+      f.close.resolve();
+      try {
+        await call.start();
+        if (release === "stop") {
+          await call.stop();
+        } else {
+          expectDefined(transports.contexts[0], "active realtime transport").callbacks.onStatus?.(
+            release,
+          );
+        }
+        reader.prepare(f.client);
+        expect(superseded).not.toHaveBeenCalled();
+      } finally {
+        playback.stop();
+        reader.stop();
+        await call.stop();
+      }
+    },
+  );
+
+  it("Read aloud cancels a realtime voice replacement while provider close drains", async () => {
+    const f = fixture();
+    const reader = new GatewaySpeechPlayback();
+    let reading: Promise<void> | undefined;
+    let original: RealtimeTalkSession | null = null;
+    try {
+      f.transcript.resolve();
+      await f.state.toggleRealtimeTalk();
+      original = expectDefined(f.state.realtimeTalkSession, "original realtime call");
+      f.changeVoice();
+      await f.closeStarted.promise;
+      expect(f.state.realtimeTalkActive).toBe(true);
+      expect(f.state.realtimeTalkSession).toBeNull();
+      reading = reader.speak(f.client, "Read this assistant message");
+      expect(f.state.realtimeTalkActive).toBe(false);
+      f.close.resolve();
+      await original.stop();
+      expect(f.state.realtimeTalkSession).toBeNull();
+      expect(f.snapshots).toHaveLength(1);
+    } finally {
+      reader.stop();
+      f.speech.resolve({ audioBase64: "UklGRg==", mimeType: "audio/wav", provider: "openai" });
+      f.close.resolve();
+      await reading;
+      stopChatRealtimeTalk(f.state);
+      await original?.stop();
+    }
   });
 
   it.each(["none", "transcript", "provider-close"])(
