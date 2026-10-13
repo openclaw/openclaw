@@ -1,5 +1,7 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { MessageChannel, receiveMessageOnPort, type Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
@@ -15,6 +17,8 @@ import {
   fenceUserProfileMutationAuthority,
 } from "../state/user-profile-events.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { SqliteWorkerSlotCustody } from "./sqlite-worker-request-custody.js";
+import { assertSqliteWriterBrokerAdmission } from "./sqlite-writer-admission-client.js";
 import { createSqliteWriterAdmissionService } from "./sqlite-writer-admission-service.js";
 import * as workerCpu from "./worker-cpu.js";
 
@@ -46,6 +50,99 @@ async function fixture() {
   const bound = authority.bind(profile.id)!;
   return { options, profile, context, authority, bound };
 }
+
+it("checks broker custody through a direct worker port while its host cannot run callbacks", async () => {
+  const owner = service();
+  const connection = await owner.connect();
+  const slot = new SqliteWorkerSlotCustody();
+  const current = slot.createRequest();
+  current.activate();
+  current.accept();
+  try {
+    // The synchronous waiter blocks this host; only the service worker can answer.
+    assertSqliteWriterBrokerAdmission(connection, current.descriptor);
+    current.cancel();
+    assertSqliteWriterBrokerAdmission(connection, current.descriptor);
+    current.retire();
+    const successor = slot.createRequest();
+    successor.activate();
+    assertSqliteWriterBrokerAdmission(connection, successor.descriptor);
+    expect(() =>
+      assertSqliteWriterBrokerAdmission(connection, structuredClone(current.descriptor)),
+    ).toThrow("revoked");
+    slot.retire();
+    expect(() => assertSqliteWriterBrokerAdmission(connection, successor.descriptor)).toThrow(
+      "revoked",
+    );
+    const closing = owner.close();
+    expect(Atomics.load(connection.lifetime, 0)).toBe(0);
+    await closing;
+  } finally {
+    connection.port.close();
+  }
+});
+
+it("expires a lost native-to-service request without relying on host scheduling or reviving it", () => {
+  const { port1, port2 } = new MessageChannel();
+  const lifetime = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+  Atomics.store(lifetime, 0, 1);
+  const custody = new SqliteWorkerSlotCustody().createRequest();
+  custody.activate();
+  let now = 0n;
+  vi.spyOn(process.hrtime, "bigint").mockImplementation(() => now);
+  const wait = vi.spyOn(Atomics, "wait").mockImplementation(() => {
+    now += 31_000_000_000n;
+    return "timed-out";
+  });
+  try {
+    expect(() =>
+      assertSqliteWriterBrokerAdmission({ port: port2, lifetime }, custody.descriptor),
+    ).toThrow(expect.objectContaining({ code: "admission-timeout" }));
+    expect(wait).toHaveBeenCalledOnce();
+    const late: unknown = receiveMessageOnPort(port1)?.message;
+    if (!isRecord(late) || !(late.decision instanceof Int32Array)) {
+      throw new Error("Missing expired admission decision");
+    }
+    expect(late.decision).toBeInstanceOf(Int32Array);
+    expect(Atomics.compareExchange(late.decision, 0, 0, 1)).toBe(3);
+    expect(Atomics.load(late.decision, 0)).toBe(3);
+    expect(custody.dispatched).toBe(false);
+  } finally {
+    port1.close();
+    port2.close();
+  }
+});
+
+it("does not revive a connection after service crash and restart", async () => {
+  const workers: Worker[] = [];
+  const createWorker = workerCpu.createCpuTrackedWorker;
+  vi.spyOn(workerCpu, "createCpuTrackedWorker").mockImplementation((url, options) => {
+    const worker = createWorker(url, options);
+    workers.push(worker);
+    return worker;
+  });
+  const owner = service();
+  const previous = await owner.connect();
+  const custody = new SqliteWorkerSlotCustody().createRequest();
+  custody.activate();
+  const worker = workers[0];
+  if (!worker) {
+    throw new Error("Service worker was not created");
+  }
+  await worker.terminate();
+  await owner.close();
+  const replacement = await service().connect();
+  try {
+    expect(() => assertSqliteWriterBrokerAdmission(previous, custody.descriptor)).toThrow(
+      "revoked",
+    );
+    assertSqliteWriterBrokerAdmission(replacement, custody.descriptor);
+    expect(replacement.lifetime.buffer).not.toBe(previous.lifetime.buffer);
+  } finally {
+    previous.port.close();
+    replacement.port.close();
+  }
+});
 
 it("sees revocation after dispatch and rejects late registration after retirement", async () => {
   const { options, profile, context, authority, bound } = await fixture();

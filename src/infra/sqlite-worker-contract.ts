@@ -10,6 +10,7 @@ import {
 } from "./sqlite-source-fence-contract.js";
 import type { SqliteWalCheckpointSnapshot } from "./sqlite-wal-checkpoint.js";
 import type { DatabasePathIdentity } from "./sqlite-worker-identity.js";
+import type { SqliteWorkerRequestCustodyDescriptor } from "./sqlite-worker-request-custody.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 import type { SqliteWorkerTransferHandle } from "./sqlite-worker-transfer.js";
 
@@ -74,6 +75,7 @@ export type SqliteWorkerRequest = {
   actor: number;
   stateContext?: SqliteWorkerStateContext;
   operationAdmission?: MessagePort;
+  requestCustody?: SqliteWorkerRequestCustodyDescriptor;
   stateDatabasePath?: string;
   databaseAdmissions?: SqliteDatabaseAdmissions;
   timing?: DiagnosticWorkerRequestFields["timing"];
