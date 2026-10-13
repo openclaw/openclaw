@@ -21,14 +21,15 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  // Best-effort cleanup of any handoff directories left behind by tests.
-  const entries = await fs.readdir(os.tmpdir()).catch(() => [] as string[]);
+  // Remove only the handoff directories this test created (recorded from the
+  // paths handed to the opener), never other processes' handoffs.
+  const created = openLocalFileMock.mock.calls.map(([filePath]) => path.dirname(filePath));
   await Promise.all(
-    entries
-      .filter((name) => name.startsWith("openclaw-browser-handoff-"))
-      .map((name) => fs.rm(path.join(os.tmpdir(), name), { recursive: true, force: true }).catch(() => {})),
+    created.map((dir) => fs.rm(dir, { recursive: true, force: true }).catch(() => {})),
   );
 });
+
+const isPosix = process.platform !== "win32";
 
 describe("openUrlPrivately", () => {
   it("hands the browser a private file path instead of the credential URL", async () => {
@@ -47,9 +48,15 @@ describe("openUrlPrivately", () => {
     const dir = path.dirname(openedPath);
     const dirStat = await fs.stat(dir);
     expect(dirStat.isDirectory()).toBe(true);
-    expect((dirStat.mode & 0o777).toString(8)).toBe("700");
-    const fileStat = await fs.stat(openedPath);
-    expect((fileStat.mode & 0o777).toString(8)).toBe("600");
+    expect(path.dirname(dir)).toBe(path.resolve(os.tmpdir()));
+    expect(path.basename(dir)).toMatch(/^openclaw-browser-handoff-/);
+    if (isPosix) {
+      // POSIX owner-only permissions. Windows does not expose these mode
+      // bits; there the per-user temp directory's ACL is the boundary.
+      expect((dirStat.mode & 0o777).toString(8)).toBe("700");
+      const fileStat = await fs.stat(openedPath);
+      expect((fileStat.mode & 0o777).toString(8)).toBe("600");
+    }
     const content = await fs.readFile(openedPath, "utf8");
     expect(content).toContain(encodeURIComponent("secret-handoff-token"));
     expect(content).toContain('location.replace("http://127.0.0.1:18789/#bootstrapToken=');

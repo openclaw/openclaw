@@ -102,14 +102,18 @@ export async function openLocalFile(filePath: string): Promise<boolean> {
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return false;
   }
-  // Path-only seam: refuse URL-shaped inputs so a caller cannot smuggle an
-  // http(s) credential URL through this function into opener argv.
-  const asUrl = URL.parse(filePath);
-  if (asUrl && asUrl.protocol !== "file:") {
+  // Path-only seam: accept only a native absolute filesystem path (POSIX
+  // `/tmp/...` or Windows `C:\...`). URL-shaped strings such as
+  // `http://host/#token=...` are never absolute paths, so a caller cannot
+  // smuggle a credential URL through this function into opener argv.
+  // Checking the path form first also keeps Windows drive letters from being
+  // misread as URL schemes.
+  const windows = process.platform === "win32";
+  const platformPath = windows ? path.win32 : path.posix;
+  if (!platformPath.isAbsolute(filePath)) {
     return false;
   }
-  const absolute = path.resolve(asUrl && asUrl.protocol === "file:" ? asUrl.pathname : filePath);
-  const normalizedPath = pathToFileURL(absolute).toString();
+  const normalizedPath = pathToFileURL(platformPath.resolve(filePath), { windows }).toString();
   return await openBrowserPath(normalizedPath);
 }
 

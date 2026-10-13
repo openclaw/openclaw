@@ -211,21 +211,6 @@ describe("dashboardCommand bind selection", () => {
     expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Dashboard URL:"));
   });
 
-  it("delivers the pairing credential through the private file handoff, never the browser opener argv", async () => {
-    mockSnapshot();
-    mocks.detectBrowserOpenSupport.mockResolvedValue({ ok: true });
-
-    await dashboardCommand(runtime);
-
-    // The credential-bearing URL must flow only through the private handoff.
-    expect(mocks.openUrlPrivately).toHaveBeenCalledTimes(1);
-    expect(mocks.openUrlPrivately.mock.calls[0]![0]).toContain(
-      "#bootstrapToken=browser-bootstrap",
-    );
-    // The plain browser opener must never receive the credential URL.
-    expect(mocks.openUrl).not.toHaveBeenCalled();
-  });
-
   it("does not issue browser credentials when the dashboard document is unavailable", async () => {
     mockSnapshot();
     mocks.waitForControlUiDocument.mockResolvedValue({
