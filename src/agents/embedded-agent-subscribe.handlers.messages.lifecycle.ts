@@ -68,6 +68,7 @@ export function handleMessageEnd(
       finalMessageStart: ctx.state.assistantMessageStartIndex,
       lastAssistant: ctx.state.lastAssistant,
       keptAnswer: ctx.state.keptAnswer,
+      sourceReplyDeliveryState: ctx.state.sourceReplyDeliveryState,
     });
     ctx.state.inputAnswer = undefined;
     ctx.state.keptAnswer = undefined;

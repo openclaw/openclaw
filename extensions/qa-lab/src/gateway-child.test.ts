@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { preserveQaGatewayDebugArtifacts } from "./gateway-child-artifacts.js";
 import { runQaGatewayCliCommand } from "./gateway-child-command.js";
 import {
+  buildGatewayEnvironmentCaptureScript,
   readJsonLines,
   registerSourceGatewayHostLifelineTest,
   writePackagedGatewayFixture,
@@ -637,23 +638,7 @@ describe("buildQaRuntimeEnv", () => {
     qaTempPathState.preferredTmpDir = tempParent;
     const observedEnvPath = path.join(tempParent, "observed-env.json");
     vi.stubEnv("OPENCLAW_QA_CONVEX_SECRET_MAINTAINER", "convex-maintainer-secret");
-    const captureScript = [
-      'const fs = require("node:fs");',
-      "const env = {",
-      "SAFE_VALUE: process.env.SAFE_VALUE,",
-      "OPENCLAW_LIVE_SETUP_TOKEN_VALUE: process.env.OPENCLAW_LIVE_SETUP_TOKEN_VALUE,",
-      "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN: process.env.OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN,",
-      "OPENCLAW_QA_CONVEX_SECRET_CI: process.env.OPENCLAW_QA_CONVEX_SECRET_CI,",
-      "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: process.env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER,",
-      '"BASH_FUNC_sudo%%": process.env["BASH_FUNC_sudo%%"],',
-      "OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL: process.env.OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL,",
-      "OPENCLAW_QA_TELEGRAM_GROUP_ID: process.env.OPENCLAW_QA_TELEGRAM_GROUP_ID,",
-      "OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: process.env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN,",
-      "OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: process.env.OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN,",
-      "OPENCLAW_DEV_SOURCE_ROOT: process.env.OPENCLAW_DEV_SOURCE_ROOT,",
-      "};",
-      `fs.writeFileSync(${JSON.stringify(observedEnvPath)}, JSON.stringify(env));`,
-    ].join("\n");
+    const captureScript = buildGatewayEnvironmentCaptureScript(observedEnvPath);
 
     const owner = ownGateway();
     await expect(

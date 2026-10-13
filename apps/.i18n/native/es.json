@@ -3933,7 +3933,6 @@
     "native.apple.c759f413805ffeb5": "Finaliza la grabación, elimina los archivos adjuntos o espera a que se complete la entrega antes de cambiar de gateway.",
     "native.apple.c765f8ee9029f090": "Enviar un mensaje a OpenClaw",
     "native.apple.c767224da1135c79": "¿Cambiar el Gateway principal?",
-    "native.apple.c77108fac3872bbb": "La función de voz no pudo codificar su solicitud al Gateway.",
     "native.apple.c7b0c6e40fb8acd0": "Grabar nota de voz",
     "native.apple.c80c9a2842d05ae4": "Aprobación resuelta en otro lugar",
     "native.apple.c80f7af67b5544e0": "Se requiere una identidad segura del dispositivo",

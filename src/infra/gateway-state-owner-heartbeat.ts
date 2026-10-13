@@ -7,12 +7,9 @@ import {
   type GatewayStateOwnerHeartbeatData,
   renewGatewayStateOwnerLock,
 } from "./gateway-state-owner-heartbeat.runtime.js";
-import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
-import {
-  resolveRuntimeWorkerThreadExecArgv,
-  resolveRuntimeWorkerUrl,
-} from "./runtime-worker-url.js";
+import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
 import { createCpuTrackedWorker } from "./worker-cpu.js";
 
 const now = Date.now.bind(Date);
@@ -35,7 +32,7 @@ export function startGatewayStateOwnerHeartbeat(
   }
   const rootIdentity = fs.statSync(rootPath, { bigint: true });
   const { moduleUrl: url, runtimeGeneration } = captureRuntimeWorkerSource(
-    resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.gatewayStateOwnerHeartbeat),
+    resolveRuntimeProcessEntrypointUrl("gatewayStateOwnerHeartbeat"),
   );
   return runInDetachedAsyncContext(() => {
     const lastBeat = new BigInt64Array(new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT));

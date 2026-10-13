@@ -661,6 +661,11 @@ Claude CLI backends scale this cap with the resolved Claude context window inste
 
 ## Troubleshooting
 
+Once a final CLI reply is committed to the OpenClaw transcript, later cleanup,
+continuity, or authority failures are logged as warnings and do not turn the
+completed run into a failed request. Failures before the final reply commits
+still fail the run; interrupted or paused replies are not completed answers.
+
 When a local Claude Code subprocess fails, its run error includes a bounded,
 redacted stderr diagnostic when available. Check the run error or `openclaw logs`
 for the underlying launch, permission, or runtime failure. Successful turns do not

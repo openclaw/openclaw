@@ -2,7 +2,7 @@ import { createEffect, createMemo, onCleanup, untrack, Show } from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
-import { renderHubTabs } from "../../components/hub-tabs.ts";
+import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { LearnMoreLink } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { i18n } from "../../i18n/index.ts";
@@ -54,24 +54,19 @@ export function SessionsPageContent(props: { controller: SessionsPageController 
           </div>
         </div>
         <div class="hub-page-header__tabs">
-          <LitContent
-            render={() => {
-              locale.revision();
-              return renderHubTabs({
-                id: "sessions",
-                active: "sessions",
-                tabs: [
-                  { value: "sessions", label: t("tabs.sessions") },
-                  { value: "worktrees", label: t("tabs.worktrees") },
-                ],
-                ariaLabel: t("sessionsPage.hubTablistLabel"),
-                panelId: "sessions-hub-panel",
-                onSelect: (tab) => {
-                  if (tab !== "sessions") {
-                    context.navigate(tab);
-                  }
-                },
-              });
+          <HubTabs<"sessions" | "worktrees">
+            id="sessions"
+            active="sessions"
+            tabs={[
+              { value: "sessions", label: t("tabs.sessions") },
+              { value: "worktrees", label: t("tabs.worktrees") },
+            ]}
+            ariaLabel={t("sessionsPage.hubTablistLabel")}
+            panelId="sessions-hub-panel"
+            onSelect={(tab) => {
+              if (tab !== "sessions") {
+                context.navigate(tab);
+              }
             }}
           />
         </div>

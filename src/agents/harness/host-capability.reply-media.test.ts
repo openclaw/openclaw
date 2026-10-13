@@ -9,6 +9,10 @@ import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js"
 import { saveMediaBuffer } from "../../media/store.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { ensureSandboxWorkspaceForSession } from "../sandbox/context.js";
+import {
+  buildEmbeddedRunnerAssistant,
+  makeEmbeddedRunnerAttempt,
+} from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -16,6 +20,78 @@ afterEach(resetAgentRunRegistryForTest);
 afterEach(() => vi.restoreAllMocks());
 
 describe("agent harness reply media", () => {
+  it.each(["missing", "delivered"] as const)(
+    "selects current-input attachments by canonical completion after an earlier final reply (%s)",
+    async (sourceReplyDeliveryState) => {
+      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+        const host = await createAdmittedHostCapabilityTestFixture({
+          runId: "run-steered-reply-media",
+          agentId: "main",
+          sessionId: "steered-reply-media",
+          sessionKey: "agent:main:steered-reply-media",
+          workspaceDir: state.workspaceDir,
+          cwd: state.workspaceDir,
+          config: {},
+          sourceReplyDeliveryMode: "automatic",
+        });
+        const currentText = "Current answer.\nMEDIA:./current.pdf";
+        const currentAssistant = buildEmbeddedRunnerAssistant({
+          content: [{ type: "text", text: currentText }],
+        });
+        const bytes = Buffer.from("%PDF-1.4\nCurrent input attachment\n%%EOF\n");
+        const readWorkspaceFile = vi.fn(async () => bytes);
+        try {
+          const result = await host.hostCapabilities.prepareReplyMedia!({
+            kind: "attempt",
+            attempt: {
+              ...makeEmbeddedRunnerAttempt({
+                assistantTexts: [currentText],
+                lastAssistant: currentAssistant,
+                currentAttemptCompletedAssistant: currentAssistant,
+                didSendViaMessagingTool: true,
+                didDeliverSourceReplyViaMessageTool: true,
+                sourceReplyDeliveryState,
+                messagingToolSourceReplyPayloads: [
+                  { text: "Earlier reply.", sourceReplyFinal: true },
+                ],
+              }),
+              answerSegments: [
+                {
+                  textEnd: 0,
+                  messageEnd: 1,
+                  finalMessageStart: 1,
+                  lastAssistant: buildEmbeddedRunnerAssistant({}),
+                  sourceReplyDeliveryState: "delivered",
+                },
+              ],
+            },
+            workspaceRoot: "/remote-workspace",
+            readWorkspaceFile,
+          });
+          if (result.kind !== "attempt") {
+            throw new Error("expected prepared attempt media");
+          }
+          if (sourceReplyDeliveryState === "delivered") {
+            expect(readWorkspaceFile).not.toHaveBeenCalled();
+            expect(result.preparedMedia).toEqual([]);
+          } else {
+            expect(readWorkspaceFile).toHaveBeenCalledOnce();
+            expect(result.preparedMedia).toHaveLength(1);
+            const outcome = result.preparedMedia[0]?.outcome;
+            if (!outcome || !("mediaUrl" in outcome)) {
+              throw new Error("expected staged current-input attachment");
+            }
+            expect(outcome.trustedLocalMedia).toBe(true);
+            expect(fs.readFileSync(outcome.mediaUrl)).toEqual(bytes);
+          }
+        } finally {
+          host.closeHost();
+          host.closeAdmission();
+        }
+      });
+    },
+  );
+
   it("rejects Gateway sibling decoys while retaining managed media and HTTP references", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
       const outside = state.path("gateway-generated", `${"decoy-".repeat(30)}.txt`);
