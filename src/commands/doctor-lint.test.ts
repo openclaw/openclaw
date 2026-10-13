@@ -484,6 +484,13 @@ describe("runDoctorLintCli", () => {
       );
       const previousResolveChecks =
         mocks.resolveDoctorContributionHealthChecks.getMockImplementation();
+      const inspectOptionalDiagnostic = vi.fn(async () => [
+        {
+          checkId: "core/doctor/deferred-inspection",
+          severity: "error" as const,
+          message: "Optional inspection needs attention.",
+        },
+      ]);
       mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([
         ...CORE_HEALTH_CHECKS.filter((check) => check.id === "core/doctor/security"),
         {
@@ -491,13 +498,7 @@ describe("runDoctorLintCli", () => {
           kind: "core",
           description: "Synthetic optional diagnostic",
           updateWork: { kind: "inspection", scope: "run" },
-          detect: async () => [
-            {
-              checkId: "core/doctor/deferred-inspection",
-              severity: "error",
-              message: "Optional inspection needs attention.",
-            },
-          ],
+          detect: inspectOptionalDiagnostic,
         },
       ]);
 
@@ -512,7 +513,6 @@ describe("runDoctorLintCli", () => {
         ).resolves.toBe(1);
         expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0]))).toMatchObject({
           ok: false,
-          checksRun: includeOptionalInspections ? 5 : 3,
           findings: [
             {
               checkId: "memory-core/managed-local-embedding-setup",
@@ -522,7 +522,8 @@ describe("runDoctorLintCli", () => {
           ],
         });
         const report = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
-        const inspectionWarnings = report.warnings.filter(
+        expect(inspectOptionalDiagnostic).toHaveBeenCalledTimes(includeOptionalInspections ? 1 : 0);
+        const inspectionWarnings = (report.warnings ?? []).filter(
           (finding: { checkId: string }) => finding.checkId === "core/doctor/deferred-inspection",
         );
         expect(inspectionWarnings).toEqual(

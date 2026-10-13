@@ -68,12 +68,15 @@ export function registerFreshDoctorDiagnosticTests({
       expect(result.pluginUpdate.doctorLint?.deferredInspectionCheckIds).toEqual(
         all ? [] : undefined,
       );
-      const [args, options] = mocks.runUtf8.mock.calls[0];
-      expect(args.includes("--all")).toBe(all);
-      expect(options.env).toMatchObject({
-        OPENCLAW_UPDATE_IN_PROGRESS: "1",
-        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
-      });
+      expect(mocks.runUtf8).toHaveBeenCalledExactlyOnceWith(
+        all ? expect.arrayContaining(["--all"]) : expect.not.arrayContaining(["--all"]),
+        expect.objectContaining({
+          env: expect.objectContaining({
+            OPENCLAW_UPDATE_IN_PROGRESS: "1",
+            OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
+          }),
+        }),
+      );
     },
   );
 
