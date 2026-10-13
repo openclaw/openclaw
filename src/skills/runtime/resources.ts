@@ -136,10 +136,12 @@ const localSkillResourceReader: SkillResourceSourceReader = {
  * tree walk that cannot establish the bundle promptly omits the identity
  * instead of holding up turn preparation or a completed delivery. Preparation
  * discovery walks share one budget across all of a preparation's bundles, so
- * a slow reader delays traced turn startup at most once. It never bounds
- * resource-integrity reads.
+ * a slow reader delays traced turn startup at most once, and that delay stays
+ * within one second: optional telemetry must never gate the first model call
+ * for longer, and bundles that miss the budget still arm the opportunistic
+ * delivery-time acquisition below. It never bounds resource-integrity reads.
  */
-export const SKILL_BUNDLE_IDENTITY_ACQUISITION_TIMEOUT_MS = 15_000;
+export const SKILL_BUNDLE_IDENTITY_ACQUISITION_TIMEOUT_MS = 1_000;
 
 /**
  * Opportunistic bound on delivery-time identity acquisition: the serving

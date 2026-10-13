@@ -606,6 +606,45 @@ it("omits an identity whose resource-reader walk cannot be established promptly"
   }
 });
 
+it("keeps a stalled reader's discovery stall on traced turn startup under one second", async () => {
+  const f = await fixture();
+  try {
+    const workspaceSkill = f.snapshot.resolvedSkills?.[0];
+    if (!workspaceSkill) {
+      throw new Error("missing workspace skill fixture");
+    }
+    recordSkillFileHost(workspaceSkill, "workspace");
+    f.skillResources.readSkillFiles.mockImplementationOnce(() => new Promise<never>(() => {}));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const pending = stampLocalSkillBundleIdentities({
+        snapshot: f.snapshot,
+        libraryEntries: [],
+        workspaceDir: f.gateway,
+      });
+      // Optional telemetry must not gate the first model call for seconds: a
+      // preparation budget above this one-second ceiling leaves the await
+      // below stuck while the owning reader never settles. The pinned
+      // millisecond ceiling is the regression contract; the symbolic
+      // deadline test above stays value-independent.
+      await vi.advanceTimersByTimeAsync(1_001);
+      const stamped = await pending;
+      const entry = stamped.snapshot?.resolvedSkills?.find(
+        (skill) => skill.name === workspaceSkill.name,
+      );
+      if (!entry) {
+        throw new Error("missing stamped workspace entry");
+      }
+      expect(entry.bundleFingerprint).toBeUndefined();
+      expect(stamped.deliveredIdentityAcquirers.get(entry)).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  } finally {
+    f.release();
+  }
+});
+
 it("walks discovered bundles concurrently under one shared preparation budget", async () => {
   const f = await fixture();
   try {
