@@ -3,8 +3,8 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
 import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openMockAbortableRun } from "./chat-run-lifecycle.test-support.ts";
@@ -170,17 +170,15 @@ suite.define(() => {
       .getByText(reply.content, { exact: true });
     await replyBody.waitFor();
     const operationLabel = currentPage.locator(".chat-work-group .chat-activity-group__label");
-    const refreshedSession = await currentPage.evaluate(async (key) => {
-      const app = document.querySelector<
-        HTMLElement & { runtime?: { context?: ApplicationContext } }
-      >("openclaw-app");
-      const sessions = app?.runtime?.context?.sessions;
-      if (!sessions) {
-        throw new Error("Session capability is missing");
-      }
-      await sessions.refresh({ agentId: "main", force: true });
-      return sessions.state.result?.sessions.find((row) => row.key === key);
-    }, sessionKey);
+    const refreshedSession = await evaluateControlUiContext(
+      currentPage,
+      async (application, key) => {
+        const sessions = application.sessions;
+        await sessions.refresh({ agentId: "main", force: true });
+        return sessions.state.result?.sessions.find((row) => row.key === key);
+      },
+      sessionKey,
+    );
     expect(refreshedSession).toMatchObject({ lastRunId: runId, runtimeMs: 13_000 });
     await operationLabel.waitFor();
     await expect.poll(() => operationLabel.textContent()).toBe("Worked for 13 seconds");
@@ -338,14 +336,7 @@ suite.define(() => {
 
     await gateway.setOnline(false);
     await expect
-      .poll(() =>
-        currentPage.evaluate(() => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-          };
-          return app.runtime?.context.gateway.snapshot.phase;
-        }),
-      )
+      .poll(() => currentPage.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase))
       .toBe("reconnecting");
     await stop.waitFor({ state: "visible" });
     expect(await stop.isEnabled()).toBe(true);
@@ -676,14 +667,8 @@ suite.define(() => {
       });
       await gateway.waitForRequest("chat.history", { after: historyCount });
       // A newer sidebar read may publish while Stop's history is still pending.
-      await currentPage.evaluate(async () => {
-        const app = document.querySelector<
-          HTMLElement & { runtime?: { context: ApplicationContext } }
-        >("openclaw-app");
-        if (!app?.runtime?.context) {
-          throw new Error("Control UI context is unavailable");
-        }
-        await app.runtime.context.sessions.refreshList({ force: true });
+      await evaluateControlUiContext(currentPage, async (application) => {
+        await application.sessions.refreshList({ force: true });
       });
       await gateway.resolveDeferred("chat.history");
       await currentPage

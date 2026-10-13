@@ -31,6 +31,12 @@ it exists, OpenClaw manages the process. Without it, `baseUrl` identifies an
 existing endpoint. Switching choices rewrites ownership-specific state on the
 same provider. It never creates another provider namespace.
 
+Managed llama.cpp uses the plugin's non-secret authentication marker. An older
+`apiKey` SecretRef stays in your configuration but is inactive for this managed
+transport. Explicit headers and request credentials still resolve normally.
+Other managed providers retain their own authentication rules; `localService`
+alone does not make an authored API key optional.
+
 ## Managed local server
 
 The managed loopback server does not need an API key. Fresh setup leaves `apiKey`

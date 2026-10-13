@@ -290,9 +290,8 @@ describePosix("native successor source admission entry", () => {
       const rejected = f.run("prepare-baseline-refresh", f.manifest(baseline, []));
       expect(rejected.status).not.toBe(0);
       expect(rejected.stderr).toContain("already bound baseline refresh source");
-      expect(
-        f.git(f.repo, "for-each-ref", "--format=%(refname)", "refs/openclaw/pr-operation-locks/42"),
-      ).toBe("");
+      expect(rejected.stderr).toContain("Released the operation lock for PR #42");
+      expect(f.git(f.repo, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
     }
     expect(archives()).toMatchObject(retained);
   });
