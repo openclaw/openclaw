@@ -1,3 +1,6 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import {
   createAnthropicMessagesTransportStreamFn,
@@ -113,6 +116,40 @@ function responsesBody(): string {
 }
 
 describe("prepared session fork provider boundary", () => {
+  it("keeps fork snapshots without retaining completed parent contexts or payload hooks", async () => {
+    const callers = new AsyncLocalStorage<object>();
+    const references: WeakRef<object>[] = [];
+    const payloads: Record<string, unknown>[] = [];
+
+    async function completeParent() {
+      const caller = { turn: "completed" };
+      const parentContext = structuredClone(context);
+      const onPayload = (payload: unknown) => {
+        expect(callers.getStore()).toBe(caller);
+        return payload;
+      };
+      references.push(new WeakRef(caller), new WeakRef(parentContext), new WeakRef(onPayload));
+      const parent = wrapStreamFnWithSessionFork(transport(payloads, []), identity);
+      await callers.run(caller, async () => {
+        await (await parent(model, parentContext, { onPayload })).result();
+      });
+    }
+
+    try {
+      await completeParent();
+      const control = new WeakRef({ unowned: true });
+      // End the creation job before GC; retain the real expiry timer and enabled ALS.
+      await nextTurn();
+      queryObjects(WeakRef);
+      expect(control.deref()).toBeUndefined();
+      expect(references.filter((reference) => reference.deref())).toHaveLength(0);
+      await expect(fork()).resolves.toBe("Answer");
+      expect(payloads).toHaveLength(2);
+    } finally {
+      callers.disable();
+    }
+  });
+
   function guardedTransport(
     beforeDns?: () => void,
     api: "openai-responses" | "anthropic-messages" = "openai-responses",

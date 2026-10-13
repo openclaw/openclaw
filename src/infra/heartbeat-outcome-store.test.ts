@@ -1,6 +1,5 @@
 import { existsSync } from "node:fs";
 import { setImmediate } from "node:timers/promises";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -9,8 +8,8 @@ import {
 } from "../agents/admitted-run-context.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -168,12 +167,12 @@ describe("heartbeat outcome store", () => {
     });
     expect(await claimHeartbeatOutcomeForRun({ ...target, runId: "another-user" })).toBeUndefined();
     const memoryPath = resolveIncognitoOpenClawAgentSqlitePath(target);
-    const database = getOpenClawAgentDatabaseIfOpen({ ...target, path: memoryPath });
-    const identity = readOpenClawAgentDatabaseIdentity(
-      expectDefined(database, "Incognito session must retain its memory database"),
-    );
-    expect(typeof identity.identity).toBe("symbol");
-    expect(identity.filename).toBe("");
+    expect(
+      memorySessionActorOwners
+        .read({ agentId: target.agentId, path: memoryPath })
+        ?.readSession(target.sessionKey, { assertCurrent() {}, authorize() {} })?.entry?.sessionId,
+    ).toBe("private-session");
+    expect(getOpenClawAgentDatabaseIfOpen({ ...target, path: memoryPath })).toBeUndefined();
     expect(existsSync(memoryPath)).toBe(false);
     expect(existsSync(resolveOpenClawAgentSqlitePath(target))).toBe(false);
   });

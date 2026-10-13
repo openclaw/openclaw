@@ -538,17 +538,51 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
   const inheritedEnv = options.env ?? process.env;
   const jobEnv = mergePlanEnv({}, parseJsonEnv(inheritedEnv, "OPENCLAW_NODE_TEST_ENV_JSON"));
   const baseEnv = mergePlanEnv(inheritedEnv, jobEnv);
+  const extraArgs = (entry: ShardPlan) =>
+    [
+      inheritedEnv,
+      mergePlanEnv(jobEnv, entry.kind === "group" ? entry.plan.env : undefined),
+    ].flatMap((env) => {
+      const value = parseJsonEnv(env, VITEST_EXTRA_ARGS_ENV_KEY, []);
+      return isStringArray(value) ? value : [];
+    });
   if (
     baseEnv.OPENCLAW_E2E_USE_PREBUILT_DIST === "1" &&
     fileURLToPath(import.meta.url) === join(process.cwd(), "scripts/ci-run-node-test-shard.mts")
   ) {
-    const { preparePrebuiltAiPackage } = await import("./lib/vitest-build-prerequisites.mts");
+    const { preparePrebuiltAiPackage, prepareVitestControlUi } =
+      await import("./lib/vitest-build-prerequisites.mts");
+    const { matchesVitestCliSelection } = await import("../test/vitest/vitest.pattern-file.ts");
+    const uiSelections = [];
     for (const entry of plans) {
       const selection = entry.kind === "target" ? { includePatterns: [entry.target] } : entry.plan;
-      const code = await preparePrebuiltAiPackage([selection], prepareChildEnv(entry, baseEnv));
+      const childEnv = prepareChildEnv(entry, baseEnv);
+      const code = await preparePrebuiltAiPackage([selection], childEnv);
       if (code !== 0) {
         return vitestInfrastructureExitCode(code);
       }
+      if (childEnv.OPENCLAW_E2E_SKIP_BUILD !== "1") {
+        uiSelections.push({
+          ...selection,
+          matchesFile: (
+            file: string,
+            included: boolean,
+            includePatterns?: readonly string[] | null,
+          ) =>
+            matchesVitestCliSelection(
+              file,
+              included ? [file] : [],
+              extraArgs(entry),
+              "",
+              childEnv,
+              includePatterns,
+            ),
+        });
+      }
+    }
+    const code = await prepareVitestControlUi(uiSelections, baseEnv);
+    if (code !== 0) {
+      return vitestInfrastructureExitCode(code);
     }
   }
   // Historical targets use a workflow-owned adapter. Their Node
@@ -757,13 +791,7 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
         }
         // A standalone plan already projects the job environment. Resolve its
         // scoped override once, then append it to the inherited global flags.
-        const vitestExtraArgs = [
-          inheritedEnv,
-          mergePlanEnv(jobEnv, entry.kind === "group" ? entry.plan.env : undefined),
-        ].flatMap((env) => {
-          const value = parseJsonEnv(env, VITEST_EXTRA_ARGS_ENV_KEY, []);
-          return isStringArray(value) ? value : [];
-        });
+        const vitestExtraArgs = extraArgs(entry);
         const selections = preparedRuntimeSelections.get(entry) ??
           runtimeOwner?.resolveCiTestRuntimeSelections(
             {

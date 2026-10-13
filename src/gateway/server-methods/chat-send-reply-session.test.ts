@@ -9,6 +9,7 @@ import { prepareQualifiedSessionEntryTarget } from "../../config/sessions/sessio
 import { resolveSessionTranscriptDatabasePath } from "../../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import * as transcriptAnchors from "../../config/sessions/session-transcript-anchor-read.js";
+import * as historyReaders from "../../config/sessions/session-transcript-worker-readers.js";
 import { targetDiscoveryLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
@@ -20,6 +21,61 @@ import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-
 import { createReplyTranscriptFixture } from "./chat-send-reply-dispatch.test-support.js";
 import { createChatReplySessionReader } from "./chat-send-reply-session.js";
 import { createChatSendWorkAdmission } from "./chat-send-work-admission.js";
+
+it("selects display payloads and delivery anchors in one transcript request", async () => {
+  await withOpenClawTestState({ label: "chat-delivery-one-snapshot" }, async () => {
+    const { dispatch, append } = await createReplyTranscriptFixture();
+    dispatch.captureAgentTranscriptStart();
+    await append("answer", { role: "assistant", content: "Committed answer." });
+    const requests: string[] = [];
+    const createReaders = historyReaders.createSessionHistoryWorkerReaders;
+    const readerSpy = vi
+      .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
+      .mockImplementation((runRequest) =>
+        createReaders((prepare, ...args) =>
+          runRequest(
+            () => {
+              const input = prepare();
+              requests.push(input.kind);
+              return input;
+            },
+            ...args,
+          ),
+        ),
+      );
+    try {
+      expect(await dispatch.resolveReplyDeliveryFacts()).toEqual({
+        source: "missing",
+        terminal: "delivered",
+      });
+      expect(requests.filter((kind) => kind === "transcript-anchors")).toHaveLength(1);
+      requests.length = 0;
+      expect(await dispatch.resolveReplyDelivery()).toBe("delivered");
+      expect(
+        requests.filter((kind) =>
+          ["transcript-anchors", "transcript-watermark", "history-page"].includes(kind),
+        ),
+      ).toEqual(["transcript-anchors"]);
+      await append("source-answer", {
+        role: "assistant",
+        content: "Committed source answer.",
+        openclawDeliveryMirror: { kind: "message-tool-source-reply", final: true },
+      });
+      requests.length = 0;
+      expect(await dispatch.resolveReplyDeliveryFacts()).toEqual({
+        source: "delivered",
+        terminal: "delivered",
+      });
+      expect(
+        requests.filter((kind) =>
+          ["transcript-anchors", "transcript-watermark", "history-page"].includes(kind),
+        ),
+      ).toEqual(["transcript-anchors"]);
+    } finally {
+      readerSpy.mockRestore();
+    }
+  });
+});
 
 it.each(["release", "replacement"] as const)(
   "rereads a borrowed reply source and refuses %s without rediscovery",

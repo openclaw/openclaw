@@ -328,7 +328,7 @@ suite.define(() => {
       await tooltip.evaluate((element) => {
         document.documentElement.dataset.buildTooltipOpenedByClick = "false";
         element.addEventListener(
-          "wa-show",
+          "overlay-show",
           () => {
             document.documentElement.dataset.buildTooltipOpenedByClick = "true";
           },

@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import { executeOpenClawAgentWorkerPublication } from "../../state/openclaw-agent-worker-store.js";
@@ -28,34 +27,16 @@ export async function mutateSessionGoalInWorker(
   execution: OpenClawAgentDatabaseExecution,
   input: SessionGoalManagementInput,
   assertion: SessionSourceAssertion | undefined,
-  native: (assertCaptured: () => void) => Promise<SessionGoalManagementResult>,
 ): Promise<SessionGoalManagementResult> {
-  let identity: ReturnType<typeof readDatabasePathIdentitySync>;
   let source: PreparedSessionSourceAuthority;
   try {
     execution.assertCurrent();
-    identity = readDatabasePathIdentitySync(database.path);
     source = await prepareSessionSourceAuthority(assertion);
   } catch (error) {
     await releaseSessionSourceAuthorities([execution], [error]);
     throw error;
   }
   const release = () => releaseSessionSourceAuthorities([execution, source]);
-  if (
-    source.nativeSource ||
-    source.checks.some(
-      ({ predicate }) =>
-        typeof predicate.source.databaseIdentity !== "string" ||
-        `file:${predicate.source.databaseIdentity}` !== identity.key,
-    )
-  ) {
-    try {
-      // Cross-store and opaque SDK guards retain event-loop atomicity with native writes.
-      return await native(() => execution.assertCurrent());
-    } finally {
-      await release();
-    }
-  }
   return runSessionEntryWorkerOperation<
     SessionGoalManagementCandidate,
     SessionGoalManagementResult

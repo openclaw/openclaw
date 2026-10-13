@@ -131,11 +131,7 @@ export function spawnWithInheritedOomScore(
     options.shell ||
     options.argv0 !== undefined
   ) {
-    const child = spawn(command, args, options);
-    if (!options.shell && options.argv0 !== undefined) {
-      prepareOomScoreAdjustedSpawn(command, args, options).afterSpawn?.(child.pid);
-    }
-    return child;
+    return spawnOomScoreAdjusted(command, args, options);
   }
   let scoreFd: number | undefined;
   let original: string;

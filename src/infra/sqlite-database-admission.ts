@@ -121,6 +121,7 @@ const scopedWrites = createSqliteDatabaseWriteReceipts({
   },
 });
 export const {
+  retireSqliteDatabaseWriteScopes,
   withSqliteDatabaseWriteScope,
   withoutSqliteDatabaseWriteScope,
   readSqliteDatabaseScopedWriteToken,
@@ -575,10 +576,10 @@ export function readSqliteDatabaseSiblingWriteRevision(database: DatabaseSync): 
 /** A stopped worker may have committed before delivering its row-cache receipt. */
 export function trackSqliteDatabaseAdmissionWorker(worker: {
   readonly threadId: number;
-  once(event: "exit", listener: () => void): unknown;
+  once(event: "exit", listener: (code: number | undefined) => void): unknown;
 }): void {
   const owner = worker.threadId;
-  worker.once("exit", () => state.registry.releaseWorker(owner));
+  worker.once("exit", (code) => state.registry.releaseWorker(owner, code));
 }
 
 export function hasPendingSqliteDatabaseSchemaMutation(database: DatabaseSync): boolean {

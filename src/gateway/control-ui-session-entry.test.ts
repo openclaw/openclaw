@@ -87,14 +87,15 @@ describe("protected canonical session handoff", () => {
     current.mockReturnValue(false);
     expect(isCurrent?.()).toBe(false);
   });
-  it("keeps denied members on the public reader without an automatic redirect loop", async () => {
+  it("ends a denied handoff without redirecting into another reader probe", async () => {
     resolveSession.mockResolvedValue(null);
     const probe = await request(`${entry}&probe=1`);
     expect(probe.res.statusCode).toBe(403);
     expect(probe.serveApp).not.toHaveBeenCalled();
     const opened = await request();
-    expect(opened.res.statusCode).toBe(303);
-    expect(opened.setHeader).toHaveBeenCalledWith("Location", canonical);
+    expect(opened.res.statusCode).toBe(403);
+    expect(opened.setHeader).not.toHaveBeenCalledWith("Location", expect.anything());
+    expect(opened.getBody()).toContain("Session unavailable");
     expect(opened.setHeader).not.toHaveBeenCalledWith("X-OpenClaw-Session-Entry", "1");
   });
   it.each(["password"] as const)(

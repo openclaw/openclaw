@@ -14,8 +14,8 @@ The ordered migration steps. Work through them in order; each step is self-conta
 Use the asynchronous `SessionManager` methods for durable sessions on the
 Gateway main thread, including
 `openAsync`, `openModelContextAsync`, `readSessionContextAsync`, and
-`appendMessageAsync`. Deprecated synchronous SDK methods remain compatible until
-the next SDK major. Replace
+`appendMessageAsync`. Deprecated synchronous SDK methods remain compatible
+during their deprecation period and will be removed in a later stable release. Replace
 `readCodexSessionContext` with the reader from `createCodexSessionContextReader`.
 
 The `codex-session-transcript-runtime` facade also retains deprecated
@@ -823,10 +823,10 @@ results; their existing reducers now execute in the owning worker. Awaited
 completion includes committed-fact installation. No schema, stored-byte,
 retention, or update migration is introduced.
 
-Unbound incognito sessions retain their native owner until the incognito actor
-cutover. Cross-store source assertions retain their existing native
-adapter until the typed cross-store entry writer is available. These explicit
-routes are not worker-only; neither route retries a failed worker mutation.
+Incognito sessions use the actor's memory backend, including calls without an
+explicit binding. Cross-store source assertions retain their existing native
+adapter until the typed cross-store entry writer is available. That explicit
+compatibility route never retries a failed worker mutation.
 
 ## Await locked transcript preparation
 
@@ -883,8 +883,8 @@ return its original receipt after another writer advances the transcript, but
 the stale scope then refuses further mutations.
 
 Durable targets retain their shared worker writer across callback awaits;
-native compatibility and unbound native incognito targets retain their native
-writer queue. Their reads do not automatically impose an exact version
+released durable native compatibility retains its native writer queue. Their
+reads do not automatically impose an exact version
 precondition on later appends. On every path, awaited
 `prepareMessage` still captures and rechecks its own preparation snapshot before
 a fresh insert, as described above. These process-local reservations do not
@@ -924,9 +924,9 @@ form with an error naming `withSessionTranscriptWrite` and
 next Plugin SDK major. `prepareMessageAfterIdempotencyCheckAsync` remains a
 compatible spelling; migrate it to `preparation.prepareMessage` too.
 
-Actor routing remains inactive unless the host explicitly selects an actor.
-Ordinary unbound incognito operations retain their existing host owner. This
-migration changes no schema, retention, or stored data and needs no update step.
+Incognito targets select the memory actor, including calls without an explicit
+binding. No incognito SQLite owner or worker fallback remains. This migration
+changes no schema or retained durable data and needs no update step.
 
 ## Await session transcript persistence
 
@@ -994,21 +994,22 @@ The `session-manager-sync-context-read` record deprecates the synchronous reader
 October 4, 2026, with one warning per process and removal at the next Plugin SDK
 major. Its existing synchronous result remains compatible during that window.
 
-Actor-bound incognito sessions reject the deprecated synchronous persistence and
-context methods before native storage or loaded-view mutation. The error names
-the awaited replacement. Production incognito remains host-owned until the atomic
-worker activation; durable synchronous compatibility is unchanged. An ordinary
+Incognito sessions reject the deprecated synchronous persistence and context
+methods before storage access or loaded-view mutation, including targets without
+an explicit actor binding. The error names the awaited replacement. Durable
+synchronous compatibility is unchanged. An ordinary
 `resolveCurrentTurnEntryId()` only walks the loaded view. Its
 `includeOmittedCustomMessages` option is deprecated; await `openAsync(target)`
 and walk that complete view instead.
 
 Bundled Codex history captures `captureCodexSessionContextReader(target, signal?)`
-from `openclaw/plugin-sdk/codex-session-transcript-runtime` before yielding. When
-an actor binding exists, await the returned reader with the same target and a
-context consumer. It retains the actor through scanning, consumption, validation,
-and cleanup. Without an actor binding it returns `undefined`, preserving the
-existing host route. The synchronous Codex context reader and validators refuse
-actor-bound access; they never reopen a native incognito database.
+from `openclaw/plugin-sdk/codex-session-transcript-runtime` before yielding. For
+incognito, await the returned reader with the same target and a context consumer.
+It captures the memory namespace even without an explicit binding and retains
+live disclosure authority while consuming committed context. Durable targets
+return `undefined` and retain their existing route. The synchronous Codex context
+reader and validators refuse all incognito targets; there is no native incognito
+database to reopen.
 
 Plugins that project durable history in their own worker can await
 `readCodexSessionContextProjection(target, project, signal?)` from the same SDK
@@ -1034,9 +1035,9 @@ prepared rewrite, await both `prepareTranscriptRewriteAsync()` and the returned
 
 User and custom messages use the worker append path, including appends with
 `beforeFreshMessageCommit`; those options do not select synchronous persistence.
-Incognito storage is the explicit exception: it remains with its process-local
-owner until its worker cutover. Await its calls too so dependent publication
-keeps the same ordering. This migration changes no transcript format, schema,
+Incognito storage uses the actor's memory backend without a SQLite database or
+database worker. Await its calls too so dependent publication keeps the same
+ordering. This migration changes no transcript format, schema,
 retention, or update/Doctor behavior, and needs no data conversion.
 
 Synchronous methods remain named third-party compatibility adapters. They keep
@@ -1044,8 +1045,8 @@ their existing immediate return values and emit one `DeprecationWarning` per
 method per process with code `DEP_SESSION_PERSISTENCE`, naming the
 awaited replacement. The
 `session-manager-sync-persistence` compatibility record deprecates them on
-October 1, 2026, with removal at the next Plugin SDK major
-(`next-plugin-sdk-major`); there is no calendar removal deadline. Bundled callers
+October 1, 2026, with removal in a later stable release after the deprecation
+period; there is no calendar removal deadline. Bundled callers
 use the awaited methods. Do not add a sync fallback when adopting the new API.
 
 User-turn transcript recorders also provide optional

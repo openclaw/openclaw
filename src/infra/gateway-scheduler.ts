@@ -13,6 +13,7 @@ export type GatewaySchedulerClock = {
 };
 
 export type GatewayScheduledJob = {
+  readonly atMs: number;
   cancel: () => void;
   stop: () => Promise<void>;
 };
@@ -20,6 +21,8 @@ export type GatewayScheduledJob = {
 type ScheduleParams = {
   id: string;
   everyMs?: number;
+  /** Best-effort work may run up to 10s early to share a stable maintenance phase. */
+  phase?: "maintenance";
   /** Keep both pending clock deadlines when a stale read would postpone the wake. */
   mode?: "replace" | "earliest";
   run: () => void | Promise<unknown>;
@@ -44,6 +47,7 @@ type ScheduledWork = {
   atMs: number;
   elapsedAtMs?: number;
   everyMs?: number;
+  phase?: "maintenance";
   run: () => void | Promise<unknown>;
   context: ReturnType<typeof AsyncLocalStorage.snapshot>;
   running?: Promise<void>;
@@ -145,7 +149,11 @@ export class GatewayScheduler {
   private scheduleOwned(params: ScheduleParams, owner?: ScheduleOwner): GatewayScheduledJob {
     const relative = "delayMs" in params;
     const nowMs = this.now();
-    const atMs = relative ? nowMs + params.delayMs : params.atMs;
+    const requestedAtMs = relative ? nowMs + params.delayMs : params.atMs;
+    const atMs =
+      params.phase === "maintenance"
+        ? Math.max(nowMs, Math.floor(requestedAtMs / 10_000) * 10_000)
+        : requestedAtMs;
     if (
       !Number.isFinite(atMs) ||
       (params.everyMs !== undefined && (!Number.isFinite(params.everyMs) || params.everyMs <= 0))
@@ -164,6 +172,7 @@ export class GatewayScheduler {
       }`,
       run: params.run,
       everyMs: params.everyMs,
+      phase: params.phase,
       atMs,
       elapsedAtMs:
         relative || params.everyMs !== undefined
@@ -192,6 +201,9 @@ export class GatewayScheduler {
       this.arm();
     }
     return {
+      get atMs() {
+        return job.atMs;
+      },
       cancel,
       stop: async () => {
         cancel();
@@ -313,8 +325,28 @@ export class GatewayScheduler {
       this.pending.delete(done.promise);
       // Coalesce all missed periods, including time spent in the callback, into this one run.
       if (job.everyMs !== undefined && !job.cancelled && !this.signal.aborted) {
-        job.atMs = this.now() + job.everyMs;
-        job.elapsedAtMs = this.clock.monotonicNow() + job.everyMs;
+        if (job.phase === "maintenance") {
+          // Advance nominal slots, including across sleep and slow async work, without replay.
+          // An immediate startup pass joins the shared phase on its next iteration.
+          const alignmentMs = job.atMs - Math.floor(job.atMs / 10_000) * 10_000;
+          job.atMs -= alignmentMs;
+          if (job.elapsedAtMs !== undefined) {
+            job.elapsedAtMs -= alignmentMs;
+          }
+          // A wall-clock jump must not advance the elapsed cadence with it.
+          const nowMs = this.now();
+          if (job.atMs <= nowMs) {
+            job.atMs += (Math.floor((nowMs - job.atMs) / job.everyMs) + 1) * job.everyMs;
+          }
+          const elapsedMs = this.clock.monotonicNow();
+          if (job.elapsedAtMs !== undefined && job.elapsedAtMs <= elapsedMs) {
+            job.elapsedAtMs +=
+              (Math.floor((elapsedMs - job.elapsedAtMs) / job.everyMs) + 1) * job.everyMs;
+          }
+        } else {
+          job.atMs = this.now() + job.everyMs;
+          job.elapsedAtMs = this.clock.monotonicNow() + job.everyMs;
+        }
       } else {
         job.owner?.jobs.delete(job);
       }

@@ -518,6 +518,38 @@ it("serializes simultaneous first admissions across independent worker brokers",
   }
 });
 
+it.each(["default", "read-only"] as const)(
+  "invalidates retained receipts only for write-capable task retirement: %s",
+  async (access) => {
+    const databaseAccess = access === "read-only" ? access : undefined;
+    const location = path.join(tempDirs.make("sqlite-task-retirement-"), "shared.sqlite");
+    const database = openNodeSqliteDatabase(location);
+    const pool = createOwnedWorkerTaskPool<AdmissionTaskInput, AdmissionTaskResult>(
+      {
+        workerUrl: new URL("./sqlite-database-admission.task.test-support.ts", import.meta.url),
+        maxWorkers: 1,
+        idleTimeoutMs: 0,
+      },
+      { retainedTransport: true, databaseAccess },
+    );
+    try {
+      const receipt = readSqliteDatabaseScopedWriteToken(database, "retained-session");
+      expect(receipt).toBeDefined();
+      await pool.run({}, {});
+      await pool.close();
+      const current = readSqliteDatabaseScopedWriteToken(database, "retained-session");
+      if (databaseAccess === "read-only") {
+        expect(current).toBe(receipt);
+      } else {
+        expect(current).not.toBe(receipt);
+      }
+    } finally {
+      await pool.close();
+      database.close();
+    }
+  },
+);
+
 it("shares facts with retained task workers across awaited host exchanges", async () => {
   const root = tempDirs.make("sqlite-admission-tasks-");
   const location = path.join(root, "shared.sqlite");
@@ -598,5 +630,51 @@ it("shares facts with retained task workers across awaited host exchanges", asyn
   } finally {
     await Promise.all(pools.map((pool) => pool.close()));
     retained?.close();
+  }
+});
+
+it("keeps 5,000 task messages bounded while unrelated session receipts change", async () => {
+  const location = path.join(tempDirs.make("sqlite-task-payload-"), "unrelated.sqlite");
+  const database = openNodeSqliteDatabase(location);
+  const pool = createOwnedWorkerTaskPool<AdmissionTaskInput, AdmissionTaskResult>({
+    workerUrl: new URL("./sqlite-database-admission.task.test-support.ts", import.meta.url),
+    maxWorkers: 1,
+    idleTimeoutMs: 0,
+  });
+  let taskMessages = 0;
+  // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the actual worker receiver.
+  const postMessage = Worker.prototype.postMessage;
+  const messages = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+    this: Worker,
+    ...args: Parameters<Worker["postMessage"]>
+  ) {
+    const message: unknown = args[0];
+    if (typeof message === "object" && message !== null && "taskId" in message) {
+      const payload = JSON.stringify(message, (_key, value: unknown) =>
+        value instanceof Map || value instanceof Set
+          ? [...value]
+          : value instanceof SharedArrayBuffer
+            ? [...new Uint8Array(value)]
+            : value,
+      );
+      expect(Buffer.byteLength(payload)).toBeLessThan(16 * 1024);
+      taskMessages += 1;
+    }
+    Reflect.apply(postMessage, this, args);
+  });
+  try {
+    readSqliteDatabaseScopedWriteToken(
+      database,
+      Array.from({ length: 5_000 }, (_, index) => `session-${index}`),
+    );
+    for (let index = 0; index < 5_000; index += 1) {
+      publishSqliteDatabaseAdmission(database, hostFactKey, index);
+      await pool.run({}, {});
+    }
+    expect(taskMessages).toBe(5_000);
+  } finally {
+    messages.mockRestore();
+    await pool.close();
+    database.close();
   }
 });

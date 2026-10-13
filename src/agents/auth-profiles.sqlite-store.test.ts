@@ -24,6 +24,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { resolveAgentDir } from "./agent-scope.js";
+import { refreshAuthProfileFileState } from "./auth-profiles/file-state.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import { loadPersistedAuthProfileStore } from "./auth-profiles/persisted.js";
 import { upsertAuthProfileAsync } from "./auth-profiles/profiles.js";
@@ -415,32 +416,17 @@ describe("auth profile sqlite store", () => {
     });
   });
 
-  it("keeps serving SQLite credentials when a credential source appears during the read", async () => {
-    await withAgentDirEnv("openclaw-auth-sqlite-late-legacy-", (agentDir) => {
+  it("keeps serving SQLite credentials after observing a retired credential source", async () => {
+    await withAgentDirEnv("openclaw-auth-sqlite-late-legacy-", async (agentDir) => {
       saveAuthProfileStore(apiKeyStore("not-a-real"), agentDir);
       const legacyPath = path.join(agentDir, "auth.json");
-      const existsSync = fs.existsSync.bind(fs);
-      let legacyChecks = 0;
-      const existsSpy = vi.spyOn(fs, "existsSync").mockImplementation((pathname) => {
-        if (path.resolve(String(pathname)) === path.resolve(legacyPath)) {
-          legacyChecks += 1;
-          if (legacyChecks === 2) {
-            fs.writeFileSync(legacyPath, '{"openai":{"key":"not-a-real"}}\n', "utf8");
-            return true;
-          }
-          return false;
-        }
-        return existsSync(pathname);
-      });
-      try {
-        // The migrated store already owns these credentials, so a retired file
-        // appearing beside it is unarchived bytes rather than pending migration.
-        expect(
-          ensureAuthProfileStore(agentDir, { syncExternalCli: false }).profiles["openai:default"],
-        ).toMatchObject({ type: "api_key", provider: "openai", key: "not-a-real" });
-      } finally {
-        existsSpy.mockRestore();
-      }
+      ensureAuthProfileStore(agentDir, { syncExternalCli: false });
+      fs.writeFileSync(legacyPath, '{"openai":{"key":"not-a-real"}}\n', "utf8");
+      await refreshAuthProfileFileState();
+      // A migrated store still owns its credentials after a retired file reappears.
+      expect(
+        ensureAuthProfileStore(agentDir, { syncExternalCli: false }).profiles["openai:default"],
+      ).toMatchObject({ type: "api_key", provider: "openai", key: "not-a-real" });
       // Runtime never reads or removes it; Doctor still owns the archive step.
       expect(fs.existsSync(legacyPath)).toBe(true);
     });

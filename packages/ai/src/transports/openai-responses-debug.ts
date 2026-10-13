@@ -151,7 +151,7 @@ function stringifyRedactedPayload(value: unknown): string {
   }
 }
 
-export function stringifyRedactedEvent(value: unknown): string {
+function stringifyRedactedEvent(value: unknown): string {
   const redacted = stringifyRedactedPayload(value);
   return redacted.length > 2000 ? `${truncateUtf16Safe(redacted, 2000)}…<truncated>` : redacted;
 }

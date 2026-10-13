@@ -9,6 +9,7 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   patchSessionEntryCore,
   replaceSessionEntry,
@@ -50,6 +51,16 @@ import { deleteGatewayAgent } from "./agents-delete.js";
 import { prepareSessionLifecycleDrain } from "./sessions-lifecycle-drain.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+function hasOnlyAuthorityFailures(error: unknown, message: string): boolean {
+  if (error instanceof AggregateError) {
+    return (
+      error.errors.length > 0 &&
+      error.errors.every((failure: unknown) => hasOnlyAuthorityFailures(failure, message))
+    );
+  }
+  return error instanceof Error && error.message.includes(message);
+}
 
 it.each(["rollback", "rollback during recovery"] as const)(
   "keeps session writes fenced after a draining deletion fails until %s",
@@ -119,11 +130,12 @@ it.each(["rollback", "rollback during recovery"] as const)(
 
 it("preserves another agent's replacement run and admissions in a shared store during inventory", async () => {
   await withOpenClawTestState({ label: "deletion-run-identity" }, async (state) => {
-    const storePath = state.path("agents/keeper/sessions/sessions.json");
+    const storePath = state.path("shared-sessions.sqlite");
     const cfg = {
       agents: { entries: { keeper: {}, doomed: {} } },
       session: { store: storePath },
     };
+    setRuntimeConfigSnapshot(cfg);
     const sessionId = "reused-session";
     const original = createEmbeddedRunHandle({ runId: "original" });
     const replacementAbort = vi.fn(() => clearActiveEmbeddedRun(sessionId, replacement));
@@ -187,6 +199,7 @@ it.each([false, true])(
   async (placed) => {
     await withOpenClawTestState({ label: "deletion-session-aliases" }, async (state) => {
       const cfg = { agents: { entries: { doomed: {}, keeper: {} } } };
+      setRuntimeConfigSnapshot(cfg);
       const sessionId = "cron-shared-session";
       const baseKey = "agent:doomed:cron:job";
       const runKey = `${baseKey}:run:run-id`;
@@ -299,11 +312,22 @@ it.each(authorityLossCases)(
   async ({ owner, transition }) => {
     await withOpenClawTestState({ label: `deletion-${owner}-${transition}` }, async (state) => {
       const cfg = { agents: { entries: { doomed: {}, keeper: {} } } };
+      setRuntimeConfigSnapshot(cfg);
       const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
       const prefix = `${owner}-${transition}`;
       const firstId = `${prefix}-first`;
       const laterId = `${prefix}-later`;
+      const authorityMessage =
+        transition === "revoked"
+          ? "agent deletion core:agent-deletion/doomed was lost"
+          : "Agent doomed deletion no longer owns database cleanup.";
       const sessionKey = "agent:doomed:protected";
+      if (owner !== "unkeyed") {
+        await replaceSessionEntry(
+          { agentId: "doomed", env: state.env, sessionKey },
+          { sessionId: "protected-session", updatedAt: 1 },
+        );
+      }
       const completion = createDeferred();
       const authorityRejected = createDeferred<unknown>();
       const traces: unknown[] = [];
@@ -465,7 +489,9 @@ it.each(authorityLossCases)(
                       embeddedJoined.promise,
                       "deletion joined an uncancelled replacement sharing the run id",
                     ),
-                  ).rejects.toThrow("Agent doomed deletion no longer owns database cleanup.");
+                  ).rejects.toSatisfy((error: unknown) =>
+                    hasOnlyAuthorityFailures(error, authorityMessage),
+                  );
                   expect(backendAbort.signal.aborted).toBe(false);
                   expect(embeddedTarget?.isActive()).toBe(true);
                 } else {
@@ -505,10 +531,6 @@ it.each(authorityLossCases)(
               "cancellation did not recheck live deletion authority",
             );
             expect(rejection).toBeInstanceOf(Error);
-            const authorityMessage =
-              transition === "revoked"
-                ? "agent deletion core:agent-deletion/doomed was lost"
-                : "Agent doomed deletion no longer owns database cleanup.";
             expect(String(rejection)).toContain(authorityMessage);
             expect(changedRows).toBe(1);
             expect(wasFirstCancelled()).toBe(true);
@@ -523,9 +545,13 @@ it.each(authorityLossCases)(
               expect(settled).not.toHaveBeenCalled();
             }
             settleFirst();
-            await expect(draining).rejects.toThrow(
-              owner === "unkeyed" ? "deletion is still draining" : authorityMessage,
-            );
+            if (owner === "unkeyed") {
+              await expect(draining).rejects.toThrow("deletion is still draining");
+            } else {
+              await expect(draining).rejects.toSatisfy((error: unknown) =>
+                hasOnlyAuthorityFailures(error, authorityMessage),
+              );
+            }
             expect(wasLaterCancelled()).toBe(false);
             if (owner === "unkeyed") {
               traces.push(

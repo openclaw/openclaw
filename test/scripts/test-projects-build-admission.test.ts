@@ -26,6 +26,7 @@ const commands = vi.hoisted(() => ({
   uiAssets: vi.fn(),
   sourceLoader: vi.fn(),
   runtimeBuildId: "fixture-runtime",
+  runtimeBuildInfoPresent: true,
 }));
 vi.mock("../../scripts/lib/managed-child-process.mts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../scripts/lib/managed-child-process.mts")>()),
@@ -85,8 +86,13 @@ beforeEach(() => {
   commands.uiAssets.mockReset().mockReturnValue({ kind: "ready", indexPath: "fixture-index" });
   commands.sourceLoader.mockReset().mockResolvedValue(undefined);
   commands.runtimeBuildId = "fixture-runtime";
+  commands.runtimeBuildInfoPresent = true;
   const readFileSync = fs.readFileSync;
+  const existsSync = fs.existsSync;
   const buildInfoPath = path.resolve(import.meta.dirname, "../../dist/build-info.json");
+  vi.spyOn(fs, "existsSync").mockImplementation((file) =>
+    file === buildInfoPath ? commands.runtimeBuildInfoPresent : existsSync(file),
+  );
   vi.spyOn(fs, "readFileSync").mockImplementation(
     (file, options?: BufferEncoding | fs.ReadFileSyncOptions | null) => {
       const readOptions = typeof options === "string" ? { encoding: options } : (options ?? {});
@@ -1266,6 +1272,64 @@ describe("test-projects build admission", () => {
   const uiConfig = "test/vitest/vitest.ui-e2e.config.ts";
   const avatarTarget = "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts";
   const mockUiTarget = "ui/src/e2e/chat-code-block-fences.e2e.test.ts";
+
+  it.each([
+    "test/e2e/line-doctor-group-allowlist.built-cli.e2e.test.ts",
+    "test/e2e/qa-lab/runtime/codex-auth-doctor-migration-product-proof.e2e.test.ts",
+    "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",
+    "test/e2e/qa-lab/runtime/doctor-auth-secretref-checks.e2e.test.ts",
+    "test/e2e/qa-lab/runtime/gateway-codex-refusal-product-proof.e2e.test.ts",
+  ])("prepares cold UI before admitting the real Doctor fixture %s", async (target) => {
+    const runtime = createPreparationGate<NodeJS.ProcessEnv>(commands.prepareE2e);
+    const ui = createPreparationGate<number>(commands.prepare);
+    commands.uiAssets.mockReturnValueOnce({ kind: "missing-index", indexPath: null });
+    const entry = start([target]);
+    try {
+      await Promise.race([runtime.started, entry]);
+      expect(commands.uiAssets).not.toHaveBeenCalled();
+      expect(commands.reader).not.toHaveBeenCalled();
+      runtime.resolve({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
+      await Promise.race([ui.started, entry]);
+      expect(commands.reader).not.toHaveBeenCalled();
+      expect(commands.prepare.mock.lastCall?.[0].args).toEqual(["scripts/ui.js", "build"]);
+    } finally {
+      runtime.resolve({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
+      ui.resolve(0);
+      await entry;
+    }
+    expect(await terminal.promise).toMatch(/^\[test\] passed /u);
+    expect(commands.reader).toHaveBeenCalled();
+  });
+
+  it.each(["ready", "missing", "failed", "skip"])(
+    "handles prebuilt Doctor UI with no runtime build-info: %s",
+    async (state) => {
+      const target = "test/e2e/line-doctor-group-allowlist.built-cli.e2e.test.ts";
+      commands.runtimeBuildInfoPresent = false;
+      commands.prepareE2e.mockResolvedValue({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
+      if (state === "skip") {
+        vi.stubEnv("OPENCLAW_E2E_SKIP_BUILD", "1");
+      } else if (state !== "ready") {
+        commands.uiAssets.mockReturnValueOnce({ kind: "missing-index", indexPath: null });
+      }
+      commands.prepare.mockResolvedValue(state === "failed" ? 7 : 0);
+      await start([target]);
+      await terminal.promise;
+      if (state === "skip") {
+        expect(commands.uiAssets).not.toHaveBeenCalled();
+      } else {
+        expect(commands.uiAssets).toHaveBeenCalledWith(path.resolve("dist/control-ui"), null);
+      }
+      expect(commands.prepare).toHaveBeenCalledTimes(["missing", "failed"].includes(state) ? 1 : 0);
+      if (state === "missing") {
+        expect(
+          commands.prepare.mock.lastCall?.[0].env.OPENCLAW_CONTROL_UI_BUILD_ID,
+        ).toBeUndefined();
+      }
+      expect(commands.reader).toHaveBeenCalledTimes(state === "failed" ? 0 : 1);
+      expect(process.exitCode).toBe(state === "failed" ? 7 : 0);
+    },
+  );
 
   it.each([false, true])(
     "holds Gateway readers behind the matching UI build (mixed E2E=%s)",

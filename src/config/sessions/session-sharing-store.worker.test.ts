@@ -3,7 +3,10 @@ import path from "node:path";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { initializeSessionReadContext } from "../../gateway/server-methods/sessions-read-cache.test-support.js";
 import { sessionSharingHandlers } from "../../gateway/server-methods/sessions-sharing.js";
 import {
@@ -18,6 +21,7 @@ import type {
 } from "../../gateway/server-methods/types.js";
 import { createSessionMembershipProjection } from "../../gateway/session-membership-projection.js";
 import { getSessionRowProjection } from "../../gateway/session-row-projection-access.js";
+import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
 import {
   SqliteWorkerError,
   hasSqliteWorkerOutcomeUnknown,
@@ -30,6 +34,9 @@ import { sessionChanges, type SessionRowChange } from "../../sessions/session-ro
 import { createDeferredCore } from "../../shared/deferred.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
+  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
+  getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
@@ -44,10 +51,8 @@ import {
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import { retainPreparedSessionSharingFacts } from "./session-accessor.sqlite-entry-cache-publication-state.js";
-import {
-  readCommittedSessionEntryCache,
-  readSessionEntryCache,
-} from "./session-accessor.sqlite-entry-cache.js";
+import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
+import { readCommittedSessionEntryCache } from "./session-accessor.sqlite-entry-cache.test-support.js";
 import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 import { updateSessionGroupCategoriesInWorker } from "./session-group-categories.js";
@@ -310,19 +315,8 @@ it("commits aliased worker membership and participant facts before publishing, a
         participantLifecycle(event);
       }
     });
-    const prototype: StatementSync = Object.getPrototypeOf(database.db.prepare("SELECT 1"));
-    const queries: string[] = [];
-    const methods = (["all", "get", "run", "iterate"] as const).map((method) => {
-      const original = prototype[method];
-      return vi.spyOn(prototype, method).mockImplementation(
-        new Proxy(original, {
-          apply(target, receiver: StatementSync, args) {
-            queries.push(receiver.sourceSQL);
-            return Reflect.apply(target, receiver, args);
-          },
-        }),
-      );
-    });
+    await closeOpenClawAgentDatabaseByPathAsync(database.path);
+    const sql = observeHostDataSql();
     try {
       expect(
         await addSessionMember(scope, {
@@ -392,15 +386,12 @@ it("commits aliased worker membership and participant facts before publishing, a
         sessionKey: scope.sessionKey,
         facts: { kind: "member", identityId: "guest", present: false },
       });
-      expect(
-        queries.filter((sql) => /\b(session_members|session_participants)\b/.test(sql)),
-      ).toEqual([]);
+      expect(sql.queries).toEqual([]);
+      expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main" })).toBeUndefined();
     } finally {
       stop();
       stopLifecycle();
-      for (const method of methods) {
-        method.mockRestore();
-      }
+      sql.restore();
     }
     expect((await readSessionMembersInWorker(scope)).members).toEqual([]);
   });
@@ -498,13 +489,14 @@ it("preserves entry changes and skips reassigned categories after preparation", 
 });
 
 it.each([
-  { mutation: "membership", receipt: "valid" },
-  { mutation: "category", receipt: "valid" },
-  { mutation: "membership", receipt: "conflicting" },
-  { mutation: "membership", receipt: "missing" },
+  { mutation: "membership", receipt: "valid", closeBeforeFailure: false },
+  { mutation: "category", receipt: "valid", closeBeforeFailure: false },
+  { mutation: "membership", receipt: "conflicting", closeBeforeFailure: false },
+  { mutation: "membership", receipt: "missing", closeBeforeFailure: false },
+  { mutation: "membership", receipt: "missing", closeBeforeFailure: true },
 ] as const)(
-  "settles committed $mutation with $receipt receipt when the ordinary worker reply is lost",
-  async ({ mutation, receipt }) => {
+  "settles committed $mutation with $receipt receipt when the ordinary worker reply is lost (host closed: $closeBeforeFailure)",
+  async ({ mutation, receipt, closeBeforeFailure }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       await captureRuntimeConfigAsyncReader()();
       const scope = {
@@ -549,6 +541,18 @@ it.each([
         cachesAtPublication.push(readCommittedSessionEntryCache(database.db));
         projection.invalidate(change);
       });
+      const cfg = { agents: { entries: { main: {} } }, session: { store: database.path } };
+      const sharing = await prepareSessionMutationFacts({ cfg, ...scope });
+      const publishedMemberships: boolean[] = [];
+      const stopPublic = sessionChanges.subscribe((change) => {
+        if (
+          receipt === "valid" &&
+          "sessionKey" in change &&
+          change.sessionKey === scope.sessionKey
+        ) {
+          publishedMemberships.push(sharing.readCurrent(cfg).membership.has("guest"));
+        }
+      });
       const failure = new SqliteWorkerError(
         "membership reply lost after commit",
         "outcome-unknown",
@@ -579,7 +583,18 @@ it.each([
           async <Operations extends SqliteWorkerOperations>(
             ...args: Parameters<typeof original>
           ) => {
-            const worker = await original<Operations>(...args);
+            const [databaseOptions, native, configuration] = args;
+            const worker = await original<Operations>(databaseOptions, native, {
+              ...configuration,
+              onAdmitted(request) {
+                configuration.onAdmitted?.(request);
+                if (request.stage === "commit") {
+                  expect(() => sharing.readCurrent(cfg)).toThrow(
+                    "Session access facts are unavailable",
+                  );
+                }
+              },
+            });
             const intercept = async <T>(
               type: keyof Operations,
               run: () => Promise<T>,
@@ -590,6 +605,12 @@ it.each([
               }
               const result = await run();
               if (selected) {
+                if (closeBeforeFailure) {
+                  expect(closeOpenClawAgentDatabaseByPath(database.path, database.agentId)).toBe(
+                    true,
+                  );
+                  expect(database.db.isOpen).toBe(false);
+                }
                 throw failure;
               }
               return result;
@@ -652,7 +673,20 @@ it.each([
           expect(mutations).toBe(1);
           expect(projection.membership(database.path, scope.sessionKey)).toEqual([]);
           expect(projection.needsPreparation).toBe(true);
+          if (closeBeforeFailure) {
+            await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
+          }
           expect((await readSessionMembersInWorker(scope)).members).toEqual([]);
+          expect(() => sharing.readCurrent(cfg)).toThrow("Session access facts are unavailable");
+          await expect(prepareSessionMutationFacts({ cfg, ...scope })).rejects.toThrow(
+            "Session access facts are unavailable",
+          );
+          open.mockRestore();
+          corruptReceipt.mockRestore();
+          await addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 3 });
+          await expect(prepareSessionMutationFacts({ cfg, ...scope })).rejects.toThrow(
+            "Session access facts are unavailable",
+          );
           return;
         }
         await expect(run()).resolves.toEqual(
@@ -689,6 +723,8 @@ it.each([
           expect(loadSessionEntry(aliasedScope)?.category).toBeUndefined();
         }
         const members = mutation === "category" ? ["guest"] : [];
+        expect([...sharing.readCurrent(cfg).membership]).toEqual(members);
+        expect(publishedMemberships).toEqual([mutation === "category"]);
         expect(projection.membership(database.path, scope.sessionKey)).toEqual(members);
         expect(projection.needsPreparation).toBe(false);
         expect(
@@ -699,6 +735,8 @@ it.each([
         ).toBe(mutation === "category" ? undefined : " Work ");
         expect(projection.groupTargets().has("Work")).toBe(mutation !== "category");
       } finally {
+        stopPublic();
+        sharing.release();
         open.mockRestore();
         corruptReceipt.mockRestore();
         stop();

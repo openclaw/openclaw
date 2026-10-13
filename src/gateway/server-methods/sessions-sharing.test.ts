@@ -16,7 +16,7 @@ import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { listSessionMembers } from "../../config/sessions/session-sharing-store.js";
+import { readSessionMembersInWorker } from "../../config/sessions/session-sharing-store.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import * as sharingLifecycle from "../../sessions/session-lifecycle-admission.js";
 import {
@@ -31,15 +31,17 @@ import {
   prepareGatewayLocalUserIngress,
 } from "../local-user-ingress.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
+import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import { SessionMutationFactsUnavailableError } from "../session-sharing-preparation.js";
 import {
-  authorizeResolvedSessionMutation,
+  authorizeResolvedSessionMutationAsync,
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
   canReceiveSessionEvent,
+  prepareProjectedSessionSharing,
   createSessionListEntryFilter,
-  invalidateSessionSharingSnapshot,
 } from "../session-sharing.js";
+import { canReceivePreparedSessionEvent } from "../session-sharing.test-utils.js";
 import { createControlUiHandlers } from "./control-ui.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
@@ -478,7 +480,7 @@ describe("session sharing handlers", () => {
       // The agent-run handler authorizes this resolved (default/effective) key
       // even when the request omitted sessionKey; a non-participant is blocked.
       expect(
-        authorizeResolvedSessionMutation({
+        await authorizeResolvedSessionMutationAsync({
           cfg: {},
           client: outsider,
           sessionKey,
@@ -487,7 +489,7 @@ describe("session sharing handlers", () => {
       ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
       // The owner, and a not-yet-created session, both pass.
       expect(
-        authorizeResolvedSessionMutation({
+        await authorizeResolvedSessionMutationAsync({
           cfg: {},
           client: identifiedClient(owner.id, owner.label),
           sessionKey,
@@ -495,7 +497,7 @@ describe("session sharing handlers", () => {
         }),
       ).toBeNull();
       expect(
-        authorizeResolvedSessionMutation({
+        await authorizeResolvedSessionMutationAsync({
           cfg: {},
           client: outsider,
           sessionKey: "agent:main:fresh",
@@ -534,7 +536,6 @@ describe("session sharing handlers", () => {
           await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
             visibility: "shared",
           }));
-          invalidateSessionSharingSnapshot(sessionKey);
           const responses: Parameters<RespondFn>[] = [];
           await sessionReadHandlers["sessions.list"]?.({
             req: { type: "req", id: "session-list-test", method: "sessions.list" },
@@ -546,7 +547,6 @@ describe("session sharing handlers", () => {
                 await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
                   visibility: "draft",
                 }));
-                invalidateSessionSharingSnapshot(sessionKey);
                 return { entries: [] };
               },
             } as unknown as GatewayRequestContext,
@@ -625,7 +625,6 @@ describe("session sharing handlers", () => {
             await patchSessionEntryCore({ agentId: "main", sessionKey: hiddenKey }, () => ({
               visibility: "draft",
             }));
-            invalidateSessionSharingSnapshot(hiddenKey);
             return { entries: [] };
           },
         } as unknown as GatewayRequestContext,
@@ -674,6 +673,15 @@ describe("session sharing handlers", () => {
           getLocalSnapshot: () => ({ request: { sessionKey, agentId: "main" } }),
         },
       } as unknown as GatewayRequestContext;
+      await initializeSessionReadContext(requestContext);
+      const projection = getSessionRowProjection(requestContext)!;
+      await projection.prepareMembership();
+      const sharing = prepareProjectedSessionSharing({
+        cfg: {},
+        client: memberClient,
+        isMember: (target, identity) =>
+          projection.hasMembership(target.storePath, target.storeKey, identity),
+      });
       const mutations: Array<[string, Record<string, unknown>]> = [
         ["chat.send", { sessionKey }],
         ["sessions.steer", { key: sessionKey }],
@@ -690,14 +698,16 @@ describe("session sharing handlers", () => {
         ["sessions.reclaim", { key: sessionKey }],
         ["exec.approval.resolve", { id: "approval-1" }],
       ];
-      const expectAccess = (allowed: boolean) => {
+      const expectAccess = async (allowed: boolean) => {
         for (const [method, requestParams] of mutations) {
-          const error = resolveSessionMutationAuthorization({
+          const result = await resolveSessionMutationAuthorizationAsync({
             client: memberClient,
             method,
             requestParams,
             context: requestContext,
-          }).error;
+          });
+          using _ = { [Symbol.dispose]: () => result.authorization?.release?.() };
+          const error = result.error;
           if (allowed) {
             expect(error, method).toBeNull();
           } else {
@@ -718,29 +728,32 @@ describe("session sharing handlers", () => {
             client: memberClient as never,
             sessionKeys: [sessionKey],
             agentId: "main",
+            prepared: {
+              sharing,
+              target: (key) => projection.sharingTarget({ key, agentId: "main" }),
+            },
           }),
         ).toBe(allowed);
       };
 
-      expectAccess(true);
-      const captured = resolveSessionMutationAuthorization({
+      await expectAccess(true);
+      const captured = await resolveSessionMutationAuthorizationAsync({
         client: memberClient,
         method: "sessions.dispatch",
         requestParams: { key: sessionKey, profileId: "shared" },
         context: requestContext,
       });
+      using _ = { [Symbol.dispose]: () => captured.authorization?.release?.() };
       expect(captured.error).toBeNull();
       await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({ visibility: "draft" }));
-      invalidateSessionSharingSnapshot(sessionKey);
-      expectAccess(false);
+      await expectAccess(false);
       expect(() => captured.authorization?.assertCurrent()).toThrow(
         SessionMutationAuthorizationChangedError,
       );
       await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
         visibility: "shared",
       }));
-      invalidateSessionSharingSnapshot(sessionKey);
-      expectAccess(true);
+      await expectAccess(true);
     });
   });
 
@@ -773,7 +786,7 @@ describe("session sharing handlers", () => {
       expect(
         await call("session.members.add", { sessionKey, identityId: member.id }, requestContext),
       ).toEqual([[true, { ok: true, sessionKey, identityId: member.id }, undefined]]);
-      expect(listSessionMembers({ agentId: "main", sessionKey })).toEqual([
+      expect((await readSessionMembersInWorker({ agentId: "main", sessionKey })).members).toEqual([
         expect.objectContaining({
           identityId: member.id,
           addedBy: "actor-evidence:unattributed",
@@ -783,7 +796,9 @@ describe("session sharing handlers", () => {
       expect(
         await call("session.members.remove", { sessionKey, identityId: member.id }, requestContext),
       ).toEqual([[true, { ok: true, sessionKey, identityId: member.id }, undefined]]);
-      expect(listSessionMembers({ agentId: "main", sessionKey })).toEqual([]);
+      expect((await readSessionMembersInWorker({ agentId: "main", sessionKey })).members).toEqual(
+        [],
+      );
 
       expect(
         await loadTranscriptEvents({
@@ -858,10 +873,9 @@ describe("session sharing handlers", () => {
       await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
         visibility: "shared",
       }));
-      invalidateSessionSharingSnapshot();
       const viewerClient = identifiedClient("viewer") as never;
       expect(
-        canReceiveSessionEvent({
+        await canReceivePreparedSessionEvent({
           cfg: {},
           client: viewerClient,
           sessionKeys: ["main"],
@@ -869,9 +883,8 @@ describe("session sharing handlers", () => {
         }),
       ).toBe(true);
       await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({ visibility: "draft" }));
-      invalidateSessionSharingSnapshot(sessionKey);
       expect(
-        canReceiveSessionEvent({
+        await canReceivePreparedSessionEvent({
           cfg: {},
           client: viewerClient,
           sessionKeys: ["main"],

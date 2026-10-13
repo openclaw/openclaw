@@ -60,6 +60,7 @@ import {
 } from "./session-manager-incognito.js";
 import { receiveSessionManagerCommit } from "./session-manager-persistence-error.js";
 import { openSessionManagerBoundedView } from "./session-manager-reload.js";
+import { cloneTranscriptView } from "./session-manager-snapshot.js";
 import type {
   SessionLeafControl,
   AppendPersistenceOptions,
@@ -203,7 +204,7 @@ export class SessionManager extends SessionManagerBranching {
   flushPendingPersistence(): void {}
 
   // Worker rollback instrumentation wraps the method on this public prototype.
-  /** @deprecated Await appendMessageAsync. This method will be removed in the next Plugin SDK major. */
+  /** @deprecated Await appendMessageAsync. This method will be removed in a later stable release after the deprecation period. */
   override appendMessage(
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
@@ -211,7 +212,7 @@ export class SessionManager extends SessionManagerBranching {
     return super.appendMessage(message, options);
   }
 
-  /** @deprecated Await appendMessageWithTranscriptAnchorAsync. This method will be removed in the next Plugin SDK major. */
+  /** @deprecated Await appendMessageWithTranscriptAnchorAsync. This method will be removed in a later stable release after the deprecation period. */
   override appendMessageWithTranscriptAnchor(
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
@@ -219,7 +220,7 @@ export class SessionManager extends SessionManagerBranching {
     return super.appendMessageWithTranscriptAnchor(message, options);
   }
 
-  /** @deprecated Use prepareTranscriptRewriteAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Use prepareTranscriptRewriteAsync; removed in a later stable release after the deprecation period. */
   prepareTranscriptRewrite() {
     prepareSessionManagerSync("prepareTranscriptRewrite", this.persistenceTarget, this);
     this.assertTranscriptWriteActive();
@@ -249,7 +250,7 @@ export class SessionManager extends SessionManagerBranching {
           writeAdmission &&
           "db" in writeAdmission.database)
       ) {
-        const detachedView = target ? undefined : structuredClone(this.captureTranscriptView());
+        const detachedView = target ? undefined : cloneTranscriptView(this.captureTranscriptView());
         const assertPrepared = () => {
           assertNavigation();
           if (
@@ -382,15 +383,11 @@ export class SessionManager extends SessionManagerBranching {
       sources: ReadonlyMap<string, SessionEntry>,
       adopt: (version: SessionTranscriptContextVersion) => void,
     ) => void,
-    publishAsync?: (
-      entries: Array<SessionEntry | SessionLeafControl>,
-      sources: ReadonlyMap<string, SessionEntry>,
-      adopt: (version: SessionTranscriptContextVersion) => void,
-    ) => Promise<void>,
+    publishAsync?: (...args: Parameters<NonNullable<typeof publish>>) => Promise<void>,
     assertBeforeCommit?: () => void,
   ) {
     const prepared = SessionManager.inMemory(this.cwd);
-    Object.assign(prepared, structuredClone(this.captureTranscriptView()));
+    Object.assign(prepared, cloneTranscriptView(this.captureTranscriptView()));
     const initialEntryCount = prepared.fileEntries.length;
     const persistedBoundaryCount = prepared.persistedBoundaryCount;
     prepared.persistedBoundaryCount = undefined;
@@ -402,7 +399,11 @@ export class SessionManager extends SessionManagerBranching {
         rewrittenEntryIds: ReadonlyMap<string, string>,
       ): Generator<SessionPersistenceStep, void, void> {
         const publication = SessionManager.inMemory(prepared.cwd);
-        Object.assign(publication, structuredClone(prepared.captureTranscriptView()));
+        Object.assign(publication, cloneTranscriptView(prepared.captureTranscriptView()));
+        // Publication changes ancestry and storage metadata, never the sealed payloads.
+        publication.fileEntries = publication.fileEntries.map((entry, index) =>
+          index < initialEntryCount ? entry : { ...entry },
+        );
         const entries = publication.fileEntries
           .slice(initialEntryCount)
           .filter((entry) => entry.type !== "session");
@@ -455,6 +456,7 @@ export class SessionManager extends SessionManagerBranching {
             persistedBoundaryCount + publication.getBoundaryCount() - loadedBoundaryCount;
         }
         const adopt = (version = publication.transcriptVersion) => {
+          entries.forEach((entry) => freezeJsonSnapshot(entry));
           publication.transcriptVersion = version;
           publication.transcriptMutationAt = version?.updatedAt;
           Object.assign(this, publication.captureTranscriptView());
@@ -508,7 +510,7 @@ export class SessionManager extends SessionManagerBranching {
     );
   }
 
-  /** @deprecated Runtime callers should await openAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Runtime callers should await openAsync; removed in a later stable release after the deprecation period. */
   static open(
     target: SessionTranscriptRuntimeTarget,
     cwdOverride?: string,
@@ -536,7 +538,7 @@ export class SessionManager extends SessionManagerBranching {
     );
   }
 
-  /** @deprecated Runtime callers should await openBoundedAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Runtime callers should await openBoundedAsync; removed in a later stable release after the deprecation period. */
   static openBounded(
     target: SessionTranscriptRuntimeTarget,
     options: SessionManagerBoundedContextLimits & { cwd?: string; onTruncated?: () => void },
@@ -625,7 +627,7 @@ export class SessionManager extends SessionManagerBranching {
     return SessionManager.detachBounded(await SessionManager.openBoundedAsync(target, options));
   }
 
-  /** @deprecated Runtime callers should await openDetachedBoundedAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Runtime callers should await openDetachedBoundedAsync; removed in a later stable release after the deprecation period. */
   static openDetachedBounded(
     target: SessionTranscriptRuntimeTarget,
     options: Parameters<typeof SessionManager.openBounded>[1],
@@ -634,7 +636,7 @@ export class SessionManager extends SessionManagerBranching {
     return SessionManager.detachBounded(SessionManager.openBounded(target, options));
   }
 
-  /** @deprecated Await openModelContextAsync. This method will be removed in the next Plugin SDK major. */
+  /** @deprecated Await openModelContextAsync. This method will be removed in a later stable release after the deprecation period. */
   static openModelContext(
     target: SessionTranscriptRuntimeTarget,
     options: {
@@ -682,7 +684,7 @@ export class SessionManager extends SessionManagerBranching {
     return manager;
   }
 
-  /** @deprecated Await readSessionContextAsync. This method will be removed in the next Plugin SDK major. */
+  /** @deprecated Await readSessionContextAsync. This method will be removed in a later stable release after the deprecation period. */
   static readSessionContext<T>(
     target: SessionTranscriptRuntimeTarget,
     read: (messages: Iterable<AgentMessage>, header: unknown) => T,
@@ -704,7 +706,7 @@ export class SessionManager extends SessionManagerBranching {
   }
 
   /**
-   * @deprecated Await appendMessageToTranscriptAsync. This method will be removed in the next Plugin SDK major.
+   * @deprecated Await appendMessageToTranscriptAsync. This method will be removed in a later stable release after the deprecation period.
    */
   static appendMessageToTranscript(
     target: SessionTranscriptRuntimeTarget,

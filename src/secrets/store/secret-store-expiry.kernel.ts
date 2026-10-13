@@ -3,7 +3,6 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import { normalizeSqliteNumber } from "../../infra/sqlite-number.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
@@ -37,7 +36,6 @@ export function captureSecretStoreExpiryCutoffs(): SecretStoreExpiryCutoffs {
 export type SecretStoreExpiryResult = {
   removed: number;
   nextExpiryAtMs: number | null;
-  writeToken?: string;
 };
 
 export function purgeExpiredSecretStoreEntriesInDatabase(
@@ -133,9 +131,8 @@ export function purgeExpiredSecretStoreEntriesInDatabase(
       return {
         removed,
         nextExpiryAtMs: expiry.nextExpiryAtMs,
-        writeToken: readSqliteDatabaseWriteTokenForPath(state.path),
       };
     },
-    { removed: 0, nextExpiryAtMs: null, writeToken: undefined },
+    { removed: 0, nextExpiryAtMs: null },
   );
 }

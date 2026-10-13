@@ -486,6 +486,7 @@ export async function prepareReplyAgentPayloads(state: {
   }
 
   if (
+    completion.outcome !== "delivered" &&
     payloadArray.length === 0 &&
     fallbackNoticePayloads.length === 0 &&
     !shouldDeliverTerminalFailure &&
@@ -569,8 +570,8 @@ export async function prepareReplyAgentPayloads(state: {
   const canDeliverStandaloneFallbackNotice =
     Boolean(blockReplyPipeline?.didStream()) || successfulSideEffectDelivery;
   if (
-    replyPayloads.length === 0 ||
-    (!hasVisibleReplyPayload && !canDeliverStandaloneFallbackNotice)
+    completion.outcome !== "delivered" &&
+    (replyPayloads.length === 0 || (!hasVisibleReplyPayload && !canDeliverStandaloneFallbackNotice))
   ) {
     return finishEmptyReply();
   }

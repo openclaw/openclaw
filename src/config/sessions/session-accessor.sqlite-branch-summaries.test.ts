@@ -5,7 +5,6 @@ import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import * as sqliteRuntime from "../../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -15,14 +14,13 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime
 import {
   appendTranscriptMessage,
   listSessionBranches,
-  loadSessionEntry,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import {
   readSessionBranchSnapshot,
   readSessionBranchSummariesInWorker,
-} from "./session-accessor.sqlite-branches.js";
+} from "./session-accessor.sqlite-branches.worker.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type { SessionBranchListResult } from "./session-accessor.types.js";
@@ -394,8 +392,6 @@ it("reads only the newest usable appended headline while retaining cached histor
   const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
   const expected = {
     sessionKey: scope.sessionKey,
-    sessionId: scope.sessionId,
-    lifecycleRevision: loadSessionEntry(scope)?.lifecycleRevision,
   };
   const previous = readSessionBranchSnapshot(database, expected);
   expect(previous).toMatchObject({ status: "ok", appendSafe: true });
@@ -464,16 +460,9 @@ it("uses one snapshot for navigation and lazy headline reads", async () => {
   const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
   const writer = sqliteRuntime.openNodeSqliteDatabase(database.path);
   admitSqliteSchema(writer);
-  const databaseIdentity = readOpenClawAgentDatabaseIdentity(database).identity;
-  if (typeof databaseIdentity !== "string") {
-    throw new Error("expected a persisted branch fixture");
-  }
   const request = {
     database: { agentId: scope.agentId, path: database.path },
-    databaseIdentity,
     sessionKey: scope.sessionKey,
-    sessionId: scope.sessionId,
-    lifecycleRevision: loadSessionEntry(scope)?.lifecycleRevision,
   };
   const openSqlite = sqliteRuntime.openNodeSqliteDatabase;
   let changed = false;

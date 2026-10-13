@@ -33,16 +33,11 @@ import type {
   OpenClawStateReadRequest,
 } from "../../../state/openclaw-state-read.types.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
-import {
-  conflictingSubagentRegistrationCohort,
-  conflictingSubagentRunVersions,
-  writeSubagentRunValuesInDatabase,
-} from "./subagent-registry.store.kernel.js";
-import { subagentRunRowVersion } from "./subagent-registry.store.row.js";
+import { writeSubagentRunValuesInDatabase } from "./subagent-registry.store.kernel.js";
 import {
   loadSubagentMaintenanceRunsInDatabase,
   loadSubagentRunsForSessionsInDatabase,
-  loadVersionedSubagentRunsInDatabase,
+  loadSubagentRunsByIdsInDatabase,
   loadSubagentRunsForSessionFromSqlite,
 } from "./subagent-registry.store.sqlite.js";
 import type {
@@ -81,7 +76,7 @@ export function readSubagentRunsInWorker(
   if (command.scope.kind === "ids") {
     return {
       type: command.type,
-      ...loadVersionedSubagentRunsInDatabase({ db }, command.scope.runIds),
+      runs: loadSubagentRunsByIdsInDatabase({ db }, command.scope.runIds),
     };
   }
   const rows = loadSubagentRunsForSessionFromSqlite(command.scope.sessionKey, { db });
@@ -126,7 +121,7 @@ export async function streamSubagentRegistryInWorker(
       if (!entry) {
         throw new Error("Canonical subagent restore found an unreadable durable row");
       }
-      batch.push({ entry, version: subagentRunRowVersion(row), createdAt: row.created_at });
+      batch.push({ entry, createdAt: row.created_at });
       bytes += size;
       count += 1;
     }
@@ -155,31 +150,16 @@ export async function streamSubagentRegistryInWorker(
   return count;
 }
 
-/** The row owner's worker adapter commits selected versions and terminal signals together. */
+/** The row owner's worker adapter commits FIFO-planned rows and terminal signals together. */
 export function persistSubagentRunChangesInWorker(
   input: SubagentRegistryWrite,
   writeOptions: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
 ): SubagentRegistryWriteReceipt {
-  const { writeId, values, deleteRunIds, versions, terminalEvents = [] } = input;
-  const admittedRunIds = new Set(versions.map(({ runId }) => runId));
-  if (
-    [...values.map((row) => row.run_id), ...deleteRunIds].some(
-      (runId) => !admittedRunIds.has(runId),
-    )
-  ) {
-    throw new Error("Subagent registry write is missing a row version");
-  }
+  const { writeId, values, deleteRunIds, terminalEvents = [] } = input;
   let committedReceipt: SubagentRegistryWriteReceipt | undefined;
   try {
     return runOpenClawStateWriteTransaction((writer): SubagentRegistryWriteReceipt => {
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: writeId });
-      const conflictRunIds = [
-        ...conflictingSubagentRunVersions(writer, versions),
-        ...conflictingSubagentRegistrationCohort(writer, input.registrationCohort),
-      ];
-      if (conflictRunIds.length > 0) {
-        return { writeId, conflictRunIds };
-      }
       const admitEvents = (stage: "transaction" | "commit") => {
         for (const [eventIndex, event] of terminalEvents.entries()) {
           requestSessionEntryCurrentAdmission(event.sessionEntryCurrentSource, {
@@ -201,10 +181,6 @@ export function persistSubagentRunChangesInWorker(
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: writeId });
       const receipt: SubagentRegistryWriteReceipt = {
         writeId,
-        versions: new Map([
-          ...values.map((row) => [row.run_id, subagentRunRowVersion(row)] as const),
-          ...deleteRunIds.map((runId) => [runId, null] as const),
-        ]),
         notices,
       };
       deferSqliteWorkerCommitReceipt(writer.db, receipt);

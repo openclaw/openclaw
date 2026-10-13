@@ -285,6 +285,7 @@ vi.mock("../agents/embedded-agent-runner/active-run-projections.js", async (impo
     typeof import("../agents/embedded-agent-runner/active-run-projections.js")
   >()),
   getActiveEmbeddedRunCount: () => embeddedRunMock.activeIds.size,
+  isEmbeddedAgentRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
 }));
 
 vi.mock("/src/agents/embedded-agent-runner/active-run-projections.js", async (importOriginal) => ({
@@ -292,6 +293,7 @@ vi.mock("/src/agents/embedded-agent-runner/active-run-projections.js", async (im
     typeof import("../agents/embedded-agent-runner/active-run-projections.js")
   >()),
   getActiveEmbeddedRunCount: () => embeddedRunMock.activeIds.size,
+  isEmbeddedAgentRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
 }));
 
 vi.mock("./health/collector.js", () => ({

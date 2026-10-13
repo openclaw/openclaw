@@ -69,6 +69,7 @@ function createRelaySession(refuseCloseSource = false): {
       sessionKey: "main",
       canonicalKey: "agent:main:work",
       storePath: "/tmp/relay-voice-sessions.sqlite",
+      assertCurrent: () => {},
     },
     provider: "openai",
     context: {

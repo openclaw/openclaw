@@ -342,7 +342,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
                 });
               };
               metadata.bindDatabaseAuthority({
-                databasePath: authority.databasePath,
+                databasePath: resolveIdentityPathViaExistingAncestorSync(authority.databasePath),
                 assertRequest: assertCreationCurrent,
                 assertAccess,
                 assertCreate(location) {

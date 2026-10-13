@@ -117,7 +117,7 @@ it.skipIf(process.platform !== "linux")(
           { repair: true, nonInteractive: true, workspaceSuggestions: false },
         );
         expect(readerClosed).toBe(true);
-        expect(tools.exchanges).toBe(2);
+        expect(tools.exchanges, log.mock.calls.flat().join("\n")).toBe(2);
         expect(log.mock.calls.flat().join("\n")).not.toContain("SQLite NOCOW repair refused");
         for (const [index, pathname] of paths.entries()) {
           expect(fs.statSync(pathname).ino).not.toBe(originalInodes[index]);

@@ -14,7 +14,7 @@ import { createGatewayHarness, mountSidebar } from "../test-helpers/app-sidebar.
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 async function mount(request: Parameters<typeof createTestGatewayClient>[0]) {
   const harness = createGatewayHarness(createTestGatewayClient(request));
@@ -129,6 +129,8 @@ it.each([
       expect(sidebar.sessionData.sessionsLoading).toBe(false);
       expect(keys()).toEqual(initialRows.map((row) => row.key));
     });
+    // Finish the initial filter request before opening the held successor read.
+    await sidebar.sessionData.refreshSidebarSessions();
 
     hold = true;
     refresh = sidebar.sessionData.refreshSidebarSessions();

@@ -16,7 +16,10 @@ import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionTranscriptContextVersion } from "./session-accessor.sqlite-contract.js";
-import { publishSessionEntryPlaceholderInsertion } from "./session-accessor.sqlite-entry-cache.js";
+import {
+  preserveSessionEntryCacheAcrossWrite,
+  publishSessionEntryPlaceholderInsertion,
+} from "./session-accessor.sqlite-entry-cache.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
@@ -352,25 +355,27 @@ export function ensureTranscriptSessionRoot(
           }
         }
       }
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .insertInto("session_windows")
-          .values({
-            session_id: scope.sessionId,
-            session_key: scope.sessionKey,
-            previous_session_id: null,
-            reason: null,
-            session_scope: "conversation",
-            created_at: updatedAt,
-            updated_at: updatedAt,
-          })
-          .onConflict((conflict) =>
-            conflict.column("session_id").doUpdateSet({
+      preserveSessionEntryCacheAcrossWrite(database, () => {
+        executeSqliteQuerySync(
+          database.db,
+          db
+            .insertInto("session_windows")
+            .values({
+              session_id: scope.sessionId,
+              session_key: scope.sessionKey,
+              previous_session_id: null,
+              reason: null,
+              session_scope: "conversation",
+              created_at: updatedAt,
               updated_at: updatedAt,
-            }),
-          ),
-      );
+            })
+            .onConflict((conflict) =>
+              conflict.column("session_id").doUpdateSet({
+                updated_at: updatedAt,
+              }),
+            ),
+        );
+      });
       if (actor?.window) {
         actor.window.updated_at = updatedAt;
       }

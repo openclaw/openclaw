@@ -62,13 +62,9 @@ export function mountTooltipView(
   overlay.bindSurface(surface);
   overlay.setParent(findOverlayParent(policy.trigger ?? host));
   const unsubscribe = overlay.subscribe((open) => policy.acceptedOpen(open));
-  const events = [
-    ["overlay-show", "wa-show"],
-    ["overlay-hide", "wa-hide"],
-    ["overlay-after-show", "wa-after-show"],
-    ["overlay-after-hide", "wa-after-hide"],
-  ] as const;
-  const listeners = events.map(([source, target]) => {
+  // Requests cross the shadow boundary; only completion events need forwarding.
+  const events = ["overlay-after-show", "overlay-after-hide"] as const;
+  const listeners = events.map((type) => {
     const listener = (event: Event) => {
       if (event.target !== surface) {
         return;
@@ -76,14 +72,14 @@ export function mountTooltipView(
       event.stopPropagation();
       if (
         !host.dispatchEvent(
-          new CustomEvent(target, { bubbles: true, composed: true, cancelable: event.cancelable }),
+          new CustomEvent(type, { bubbles: true, composed: true, cancelable: event.cancelable }),
         )
       ) {
         event.preventDefault();
       }
     };
-    surface.addEventListener(source, listener);
-    return () => surface.removeEventListener(source, listener);
+    surface.addEventListener(type, listener);
+    return () => surface.removeEventListener(type, listener);
   });
   const updateAnchor = () => {
     const trigger = policy.trigger;

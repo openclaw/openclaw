@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import "../../lib/toast-host.ts";
 import {
   createContext,
   createGatewayHarness,
@@ -13,7 +14,7 @@ import {
 import { createDataTransferStub } from "../drag-data.ts";
 import { installDialogPolyfill, submitInputDialog } from "../modal-dialog.ts";
 import { waitForFast } from "../wait-for.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 function dispatchDragEvent(
   target: Element,
@@ -97,7 +98,7 @@ describe("AppSidebar group mutation collapsed state", () => {
       new CustomEvent("wa-select", {
         bubbles: true,
         cancelable: true,
-        detail: { item: { value } },
+        detail: { item },
       }),
     );
     await vi.dynamicImportSettled();
@@ -441,14 +442,14 @@ describe("AppSidebar group mutation collapsed state", () => {
       new CustomEvent("wa-select", {
         bubbles: true,
         cancelable: true,
-        detail: { item: { value: "rename-group" } },
+        detail: { item: rename },
       }),
     );
     dropdown?.dispatchEvent(
       new CustomEvent("wa-select", {
         bubbles: true,
         cancelable: true,
-        detail: { item: { value: "delete-group" } },
+        detail: { item: remove },
       }),
     );
 

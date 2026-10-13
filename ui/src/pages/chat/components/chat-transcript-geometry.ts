@@ -121,6 +121,20 @@ export function initialTranscriptRect() {
   };
 }
 
+export function isTranscriptRangeCommitted(
+  inner: HTMLElement | null,
+  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+): boolean {
+  return virtualizer.getVirtualItems().every((row) => {
+    const node = virtualizer.elementsCache.get(row.key);
+    return (
+      node !== undefined &&
+      inner?.contains(node) === true &&
+      Number.parseFloat(node.style.getPropertyValue("contain-intrinsic-block-size")) === row.size
+    );
+  });
+}
+
 export function readConnectedTranscriptRows(
   scrollElement: HTMLDivElement | null,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,

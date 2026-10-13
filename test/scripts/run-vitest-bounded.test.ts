@@ -336,6 +336,8 @@ cp.spawn = (bin, args, options) => {
   }
   return spawn(bin, args, options);
 };
+const existsSync = fs.existsSync;
+fs.existsSync = file => file === ${JSON.stringify(metadataPath)} || existsSync(file);
 const readFileSync = fs.readFileSync;
 fs.readFileSync = (file, ...args) => {
   if (file === ${JSON.stringify(metadataPath)}) {

@@ -853,6 +853,11 @@ export const en: TranslationMap & {
     all: "All",
     snooze: "Snooze",
     wakeSession: "Wake session",
+    snoozeChooseTime: "Choose another time",
+    snoozeCustom: "Custom",
+    snoozeDateTime: "Date and time",
+    snoozeLocalTime: "Your local time ({zone})",
+    snoozeFutureRequired: "Choose a date and time in the future.",
     snoozeHour: "In 1 hour",
     snoozeThreeHours: "In 3 hours",
     snoozeEvening: "This evening",
@@ -3974,6 +3979,7 @@ export const en: TranslationMap & {
     },
     voice: {
       asking: "Asking OpenClaw...",
+      replyFailed: "The voice reply was interrupted. Start Talk again to retry.",
       preparing: "Preparing voice session...",
       connecting: "Connecting voice input...",
       listening: "Listening...",
@@ -3997,18 +4003,24 @@ export const en: TranslationMap & {
       openApp:
         "Grant access in the OpenClaw Mac app on that device: Settings → This Mac → Permissions. Then tell the agent to try again.",
       ready: "Access is available. You can ask the agent to try again.",
-      grant: "Grant {permissions}",
-      relaunch: "Relaunch OpenClaw",
+      following: "Then grant the remaining permissions: {permissions}.",
+      actions: {
+        "not-determined": "Grant {permissions}",
+        denied: "Open System Settings",
+        "restart-required": "Relaunch OpenClaw",
+        "stale-grant": "Open System Settings",
+        "disabled-in-openclaw": "Enable {permissions}",
+      },
       tryAgain: "Try again",
       retryMessage: "I granted {permissions}, try again.",
       states: {
         "not-determined": "Choose Grant to review the permission request.",
-        denied: "Choose Grant to open System Settings and allow access for OpenClaw.",
+        denied: "Open System Settings to allow access for OpenClaw.",
         "restart-required":
           "If you enabled access in System Settings, relaunch OpenClaw to make it available.",
         "stale-grant":
-          "macOS may be using a stale permission grant. Choose Grant to review it in System Settings.",
-        "disabled-in-openclaw": "Choose Grant to review and enable this capability in OpenClaw.",
+          "macOS may be using a stale permission grant. Open System Settings to review it.",
+        "disabled-in-openclaw": "Choose Enable to review and enable this capability in OpenClaw.",
       },
       capabilities: {
         notifications: "Notifications",

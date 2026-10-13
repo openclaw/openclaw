@@ -14,7 +14,7 @@ export type PreparedProjectVerification = {
   preparedManifestRef: string;
 };
 
-export const RUN_ENVIRONMENT_COMMAND_JS = `async (command, context) => {
+const RUN_ENVIRONMENT_COMMAND_JS = `async (command, context) => {
 const { spawn } = require("node:child_process");
 const { workspaceDir, homeDir, timeoutMs, env = {}, settleDescendants = true } = context;
 const run = async (command) => {

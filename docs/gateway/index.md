@@ -77,23 +77,28 @@ Gateway config reload watches the active config file path (resolved from profile
 
 ### Module compile cache
 
-Foreground Gateway runs through the packaged CLI and the compiled `dist/entry.js`
-and `dist/index.js` entries automatically enable Node's on-disk module compile
-cache. This includes compiled source deployments
-that retain their Git checkout. Cache entries live outside the release directory,
-under the operating system's temporary directory by default. Set
-`NODE_COMPILE_CACHE` to a writable persistent cache root to retain them across
-host reboots. OpenClaw namespaces that root by package version and build identity;
-each new build starts with its own cache. `NODE_DISABLE_COMPILE_CACHE=1` disables
-it. An unavailable cache produces one diagnostic and startup continues.
-With Node's permission model enabled, an already-active cache remains caller-owned
-so cache scoping never requires launching a process that permissions may forbid.
-One-shot commands do not enable a cache by default: cold cache persistence on Node
-and Bun can delay process exit after output. Setting `NODE_COMPILE_CACHE` explicitly
-opts those commands in. Explicit Gateway prewarming still populates the cache.
+The Gateway main thread runs without Node's on-disk module compile cache. Node
+flushes cached bytecode synchronously, which can stall the event loop during
+startup or shutdown. This trades main-thread cache reuse for responsive lifecycle
+handling. Gateway workers and child processes retain the cache and flush their
+startup and newly loaded database operation modules on their own threads.
 
-The first boot populates the cache; later boots reuse it. Deployment systems can
-warm a candidate before cutover by booting and cleanly stopping it with isolated
+Cache entries live outside the release directory, under the operating system's
+temporary directory by default. Set `NODE_COMPILE_CACHE` to a writable persistent
+root to retain worker caches across host reboots. OpenClaw namespaces that root
+by package version and build identity; each new build starts with its own cache.
+`NODE_DISABLE_COMPILE_CACHE=1` disables caching for the Gateway and its workers.
+An unavailable cache produces a diagnostic and startup continues.
+
+An inherited active cache requires a startup respawn to leave the main thread
+uncached; platforms with `execve` preserve the serving PID. Node's permission
+model retains an already-active caller cache because it may forbid process
+replacement. One-shot commands keep caching opt-in through `NODE_COMPILE_CACHE`;
+explicit release prewarming still populates the cache. See
+[compile-cache environment policy](/help/environment#temporary-compile-cache).
+
+Deployment systems can
+warm a candidate's worker caches before cutover by booting and cleanly stopping it with isolated
 state, a loopback port, the runtime user, and the same cache root. Warm it at its
 final release path: moving the release after warming can prevent Node from
 reusing its entries. Recent build caches coexist, including the serving release

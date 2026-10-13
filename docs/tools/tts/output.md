@@ -84,6 +84,10 @@ When `tts.auto` is enabled, OpenClaw:
   text. Generated media goes through the same channel media normalization as
   normal reply attachments.
 
+In the Control UI, delayed speech attaches to its original answer, including
+after a reload. Publishing the answer text does not consume its pending speech
+supplement; a final message-tool reply retains its separate delivery custody.
+
 If the reply exceeds `maxLength`, OpenClaw never skips audio outright:
 
 - **Summary on** (default) and a summary model is available: summarizes the

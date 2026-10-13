@@ -25,6 +25,22 @@ Memory Core's private shadow-index owner uses
 `memory-core-host-engine-storage` facade before draining its private queue and
 closing the connection.
 
+Memory Core's publication worker uses `stageMemoryIndexSchemaExtension(db)` from
+the private `memory-core-host-engine-schema` facade before replacing derived
+indexes in a managed transaction. Successful commit republishes the already
+admitted memory table contracts, so a clean restart can reuse their seal without
+repeating schema setup. Full-index publication supplies the replacement's FTS
+availability; a missing required index leaves admission invalid for repair.
+Rollback publishes no replacement receipt, and an unclean restart still performs
+normal integrity and schema admission.
+
+Memory Core's `MemorySearchManager.statusAsync({ includeCounts: false })` returns
+in-process provider and index facts without database diagnostics. Query callers
+can pass the same option to `readMemorySearchManagerStatus`; file, chunk, source,
+storage, and embedding-cache counts are omitted by the built-in manager.
+Calling `statusAsync()` retains the full diagnostic result, and legacy managers
+keep the existing synchronous fallback.
+
 ## State, config, and system namespaces
 
 <AccordionGroup>
@@ -193,7 +209,7 @@ closing the connection.
 
     Current host factories provide `count`, but it remains optional in the public async and synchronous store types for shipped hosts and adapters through the next Plugin SDK major. Callers supporting those stores can use `store.count ? await store.count() : (await store.entries()).length`; synchronous callers omit `await`. The fallback retains the older store's enumeration and decoding behavior. Only fall back when the method is absent, never after a failed count.
 
-    `openSyncKeyedStore<T>(...)` remains available for callers that cannot await, with its existing synchronous return values and errors. It is deprecated through the `next-plugin-sdk-major` compatibility gate. See [Synchronous keyed store migration](/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration).
+    `openSyncKeyedStore<T>(...)` remains available for callers that cannot await, with its existing synchronous return values and errors. It is deprecated through the `stable-deprecation-period` compatibility gate. See [Synchronous keyed store migration](/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration).
 
     `openBlobStore<TMetadata>(...)` stores bounded binary payloads in shared SQLite without base64 or file sidecars. It requires per-entry, per-namespace byte, and row limits; copies byte arrays at the API boundary; and lists metadata without loading every BLOB. `register(...)` is an explicit upsert, including for expired keys. `registerIfAbsent(...)` provides collision-safe creation: an expired key remains occupied until its owner claims it with `deleteExpiredKey(key)` or `deleteExpired()`, preserving metadata needed to remove related named artifacts after the SQLite commit. Any row with a TTL is transient and excluded from backup/restore even before it expires; omit TTL for durable, restorable state. Host fuses cap each BLOB at 100 MiB, each plugin at 512 MiB of physically stored BLOBs, and each plugin at 50,000 physically stored rows, including expired rows awaiting owner cleanup. Use `registerIfAbsent(...)` with `overflowPolicy: "reject-new"` when external materializations must not be silently orphaned by replacement or eviction.
 
@@ -224,8 +240,8 @@ closing the connection.
 `api.runtime.state.openSyncKeyedStore` and `PluginStateSyncKeyedStore` are deprecated
 as of September 11, 2026. The existing `createPluginStateSyncKeyedStore` factory is
 the named `plugin-state-sync-keyed-store` compatibility adapter. Existing methods
-remain supported through the next Plugin SDK major; removal also requires a
-supported external-plugin migration and explicit breaking-release approval.
+remain supported during a stable deprecation period. Removal in a later stable
+release requires a supported external-plugin migration.
 
 Use `api.runtime.state.openKeyedStoreV2` with the same namespace and options, then
 await its operations. The opener itself still returns a store synchronously.
@@ -293,10 +309,23 @@ that native work has stopped.
 The async store's `update` updater and `deleteIf` predicate are deprecated
 compatibility methods. They still run synchronously on the main thread inside
 the transaction containing the authoritative read and mutation, and remain
-supported until they are removed in the next Plugin SDK major. Actual legacy
+supported during the stable deprecation period. Actual legacy
 calls emit one deprecation diagnostic per plugin and capability family per
 Gateway process; importing the SDK does not warn. Synchronous methods still
 commit and install their facts before returning.
+
+Bundled caches, dedupe stores, and Discord/Telegram binding persistence open V2
+receivers directly. The account-scoped conversation binding manager also returns
+an async-only V2 receiver; its deprecated factory separately supplies synchronous
+methods over the same owner. Native session initialization uses `linkAsync`,
+including exact-identity rollback through the upstream-link worker.
+
+Final ClickClack and Codex binding/revocation checks still use native reads where
+compound binding settlement invalidates a fact without publishing its replacement.
+The bounded observation cache is not complete authority for a cold or evicted key.
+These security reads remain migration debt until the owner can publish every
+replacement and deletion; they must continue to deny revoked actions immediately.
+
 Runtime-bound stores retain their plugin identity for diagnostics even when a
 saved method is called outside the opening invocation.
 Finish asynchronous planning before calling these methods; do not make their

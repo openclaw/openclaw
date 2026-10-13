@@ -67,10 +67,11 @@ enable **OpenClaw** in Chrome. OpenClaw never restarts Chrome or approves its
 permission prompt for you. The request applies to all profiles in that Chrome
 user-data directory. Chrome controls approval in each profile.
 
-The native macOS app prepares this automatically after primary launch and
-after successful CLI installation or updates. Packaged apps use their validated
-private runtime, so a remote-only Mac does not need a separate CLI install.
-Automatic registration belongs to the default app profile; named profiles keep
+The native macOS app does not inspect or change Chrome data on startup. Choose
+**Set up Chrome on this device** to prepare the extension. Packaged apps use their
+validated private runtime, so a remote-only Mac does not need a separate CLI
+install. After you start setup, the default app profile refreshes
+registration on CLI updates during that app session. Named profiles keep
 explicit setup because Chrome shares one native-host registration per user.
 
 **Dashboard → Settings → This Mac → Browser → Set up Chrome on this device** retries
@@ -90,13 +91,13 @@ removal/disable choices. Development builds need an existing CLI, and Windows
 Tauri test builds do not provision this runtime. Remote-only desktop connections
 still need a browser node on the Chrome host to expose its tabs to the Gateway.
 
-The **This Mac** page checks installation when opened and when you return from
-Chrome. An existing extension shows **Installed**, including when Chrome still
+Choose **Refresh setup status** on the **This Mac** page to check installation.
+Opening settings or returning from Chrome does not inspect browser data. An existing extension shows **Installed**, including when Chrome still
 needs you to enable it. If its local helper is missing, **Set up Chrome on this device**
 repairs automatic pairing without treating the extension as absent. **Refresh setup
 status** refreshes this status without installing anything. Installation status
 does not prove a live connection; open the extension to check that separately.
-Older Mac app versions keep their setup action when automatic status checks are
+Older Mac app versions keep their setup action when status checks are
 unavailable. Update the Mac app to detect an existing installation without
 running setup.
 

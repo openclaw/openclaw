@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
@@ -174,7 +173,7 @@ describe("board and progress-card database write admission", () => {
                     ? "grant"
                     : "putWidget",
               );
-        let request: Promise<void> | undefined;
+        let mutationCalls: number;
         let requestFailure: { error: unknown } | undefined;
         let inGrant = false;
         const stages: string[] = [];
@@ -195,32 +194,47 @@ describe("board and progress-card database write admission", () => {
             inGrant = false;
           }
         });
-        const reservation = runOpenClawAgentWorkerWrite(database, async () => {
-          request = handleGatewayRequest({
-            req: { type: "req", id: "admission", method, params },
-            client,
-            context: board.context,
-            respond,
-            isWebchatConnect: () => false,
-            extraHandlers: { ...board.handlers, ...createProgressCardHandlers() },
-            signal: controller.signal,
-            sessionMutationCommitGuard:
-              change === "allow-worker"
-                ? undefined
-                : () => {
-                    if (!requestCurrent) {
-                      throw retiredError;
-                    }
-                  },
-          }).catch((error: unknown) => {
-            requestFailure = { error };
-          });
-          entered.resolve();
-          await release.promise;
+        const handlers = { ...board.handlers, ...createProgressCardHandlers() };
+        const handler = handlers[method]!;
+        const request = handleGatewayRequest({
+          req: { type: "req", id: "admission", method, params },
+          client,
+          context: board.context,
+          respond,
+          isWebchatConnect: () => false,
+          extraHandlers: {
+            ...handlers,
+            [method]: async (invocation) => {
+              // Authorization may read through the same writer queue before handler entry.
+              const { mutationRequest: pendingMutation } = await runOpenClawAgentWorkerWrite(
+                database,
+                async () => {
+                  const mutationRequest = Promise.resolve(handler(invocation));
+                  // Observe early failure while reserved; the await below still propagates it.
+                  void mutationRequest.catch(() => {});
+                  entered.resolve();
+                  await release.promise;
+                  return { mutationRequest };
+                },
+              );
+              await pendingMutation;
+            },
+          },
+          signal: controller.signal,
+          sessionMutationCommitGuard:
+            change === "allow-worker"
+              ? undefined
+              : () => {
+                  if (!requestCurrent) {
+                    throw retiredError;
+                  }
+                },
+        }).catch((error: unknown) => {
+          requestFailure = { error };
         });
         try {
-          await entered.promise;
-          await setImmediate();
+          await Promise.race([entered.promise, request]);
+          expect(mutation).toHaveBeenCalledOnce();
           expect(tables()).toEqual(previousTables);
           expect(boardRowCounts()).toEqual(previousBoardRowCounts);
           expect(respond).not.toHaveBeenCalled();
@@ -241,9 +255,9 @@ describe("board and progress-card database write admission", () => {
         } finally {
           release.resolve();
           try {
-            await reservation;
             await request;
           } finally {
+            mutationCalls = mutation.mock.calls.length;
             mutation.mockRestore();
             grants.mockRestore();
             reads.restore();
@@ -294,6 +308,7 @@ describe("board and progress-card database write admission", () => {
           }
           return;
         }
+        expect(mutationCalls).toBe(1);
         expect(respond.mock.calls[0]?.[0]).toBe(true);
         if (method === "board.update") {
           expect((await boardStore.getSnapshot(target)).tabs).toEqual([

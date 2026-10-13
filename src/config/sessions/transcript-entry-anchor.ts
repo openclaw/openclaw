@@ -1,3 +1,5 @@
+import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
+
 /** Immutable transcript identity issued by the SQLite append transaction. */
 export type TranscriptEntryAnchor = Readonly<{
   agentId: string;
@@ -23,14 +25,15 @@ export function sameTranscriptEntryAnchor(
         "agentId",
         "sessionId",
         "sessionKey",
-        "storePath",
         "generation",
         "entryId",
         "rawSeq",
         "effectiveParentId",
         "activeMessagePosition",
       ] as const
-    ).every((field) => left[field] === right[field])
+    ).every((field) => left[field] === right[field]) &&
+    (left.storePath === right.storePath ||
+      isSameOpenClawAgentDatabasePath(left.storePath, right.storePath))
   );
 }
 

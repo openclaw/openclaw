@@ -585,6 +585,17 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     state: MemoryIndexIdentityState,
     indexState?: MemoryRetrievalIndexState,
   ): MemoryIndexIdentityState {
+    if (indexState) {
+      // Search may observe another manager's publication before this handle refreshes
+      // its full facts. Retain those observations without advancing its write token.
+      this.database.facts = {
+        ...this.database.facts,
+        meta: indexState.meta,
+        serialized: indexState.meta ? JSON.stringify(indexState.meta) : null,
+        hasIndexedChunks: indexState.hasIndexedChunks,
+        vectorState: indexState.vectorState,
+      };
+    }
     this.indexIdentityState = state;
     this.indexIdentityDirty =
       state.status === "mismatched" ||

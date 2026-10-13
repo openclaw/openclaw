@@ -22,16 +22,29 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { handleControlUiAssistantMediaRequest } from "./control-ui.js";
 import { resolveHttpProfile } from "./http-auth-user-profile.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
-import { invalidateSessionSharingSnapshot } from "./session-sharing-snapshot-cache.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 const state = vi.hoisted(() => ({
   loaded: vi.fn(),
+  retained: vi.fn(),
+  config: undefined as OpenClawConfig | undefined,
   auth: vi.fn(),
   placements: vi.fn(),
   placementsAsync: vi.fn(),
 }));
-vi.mock("./session-utils.js", () => ({ loadGatewaySessionEntryReadOnly: state.loaded }));
+vi.mock("./session-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils.js")>()),
+  loadGatewaySessionEntryReadOnlyAsync: async (...args: unknown[]) => state.loaded(...args),
+}));
+vi.mock("../config/sessions/session-entry-read-facts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-entry-read-facts.js")>()),
+  readRetainedSessionEntryFacts: (_database: unknown, selection: unknown) =>
+    state.retained(selection),
+}));
+vi.mock("../config/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/io.js")>()),
+  getRuntimeConfig: () => state.config ?? {},
+}));
 vi.mock("./http-utils.js", () => ({ authorizeControlUiReadRequestOrReply: state.auth }));
 vi.mock("./session-worker-placement-context.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-worker-placement-context.js")>()),
@@ -73,6 +86,7 @@ beforeEach(async () => {
     agents: { entries: { main: { workspace: path.join(temp, "agent") } } },
     tools: { fs: { workspaceOnly: true } },
   };
+  state.config = cfg;
   entry = {
     sessionId: "session-one",
     spawnedCwd: project,
@@ -83,7 +97,11 @@ beforeEach(async () => {
     cfg,
     agentId: "main",
     canonicalKey: requestedKey,
+    storePath: path.join(temp, "sessions.json"),
     entry,
+  }));
+  state.retained.mockImplementation(({ sessionKeys }: { sessionKeys: string[] }) => ({
+    entries: sessionKeys.map((key) => ({ sessionKey: key, entry })),
   }));
   state.auth.mockResolvedValue({
     authMethod: "token",
@@ -366,6 +384,7 @@ describe("assistant image session policy", () => {
       cfg,
       agentId: "other",
       canonicalKey: requestedKey,
+      storePath: path.join(temp, "other-sessions.json"),
       entry,
     }));
     const source = path.join(project, "image.png");
@@ -491,9 +510,6 @@ describe("assistant image session policy", () => {
         const metadata = await request(source);
         expect(metadata.payload).toMatchObject({ available: true });
         const ticket = String(metadata.payload!.mediaTicket);
-        // Ordinary mutations elsewhere must not revoke a still-authorized reader's ticket.
-        invalidateSessionSharingSnapshot("agent:main:unrelated");
-        expect((await request(source, { ticket, bytes: true })).bytes).toEqual(PNG);
         if (change === "role assignment") {
           setUserProfileRole(profile.id, "denied");
           invalidateOperatorRolePolicy(profile.id);
@@ -548,7 +564,6 @@ describe("assistant image session policy", () => {
           if (filePath === source) {
             if (authority === "session") {
               entry.visibility = "draft";
-              invalidateSessionSharingSnapshot(sessionKey);
             } else {
               current = false;
             }

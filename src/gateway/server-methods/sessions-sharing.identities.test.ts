@@ -8,11 +8,13 @@ import * as combinedStore from "../../config/sessions/combined-store-gateway.js"
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,
+  replaceSessionEntry,
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import * as sharingStore from "../../config/sessions/session-sharing-store.js";
-import { listSessionMembers } from "../../config/sessions/session-sharing-store.js";
+import { readSessionMembersInWorker } from "../../config/sessions/session-sharing-store.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
@@ -21,6 +23,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import * as userProfileReads from "../../state/user-profile-reads.js";
 import { setDisplayName } from "../../state/user-profile-writes.worker.js";
@@ -32,11 +35,9 @@ import {
   getSessionRowProjection,
 } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
+import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import { SessionMutationFactsUnavailableError } from "../session-sharing-preparation.js";
-import {
-  authorizeResolvedSessionMutation,
-  resolveSessionMutationAuthorization,
-} from "../session-sharing.js";
+import { authorizeResolvedSessionMutationAsync } from "../session-sharing.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import {
   initializeSessionReadContext,
@@ -132,7 +133,7 @@ describe("session member picker identities", () => {
   });
 
   it("lists current identities and adds members without decoding unrelated saved prompts", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:profile-member";
       const profile = ensureProfileForEmail("member@example.com");
@@ -178,7 +179,7 @@ describe("session member picker identities", () => {
         );
       }
       const incognitoKey = "agent:main:dashboard:incognito-picker";
-      replaceSessionEntrySync(
+      await replaceSessionEntry(
         { agentId: "main", sessionKey: incognitoKey },
         {
           sessionId: "incognito-picker",
@@ -187,62 +188,73 @@ describe("session member picker identities", () => {
           createdActor: { type: "agent", id: "incognito-creator", label: "Incognito" },
         },
       );
-      const profileOnly = ensureProfileForEmail("profile-only@example.com");
-      setDisplayName(profileOnly.id, "Profile only");
-      const requestContext = context(vi.fn(), {
-        agents: { ownership: "explicit", entries: { main: {}, research: {} } },
-      });
-      setRuntimeConfigSnapshot(requestContext.getRuntimeConfig());
-      await call("session.members.list", { sessionKey }, requestContext);
-      const projection = getSessionRowProjection(requestContext)!;
-      await projection.ensureMaterialized();
-      const expected = [
-        { type: "agent", id: "research", label: "Alpha Research" },
-        { type: "agent", id: "archived-creator", label: "Archive" },
-        { type: "agent", id: "incognito-creator", label: "Incognito" },
-        { type: "agent", id: "duplicate", label: "Last label" },
-        { type: "agent", id: "sentinel-main", label: "Main sentinel" },
-        { type: "human", id: profile.id, label: "Member" },
-        { type: "human", id: profileOnly.id, label: "Profile only" },
-      ];
-      const scans = vi.spyOn(combinedStore, "loadCombinedSessionStoreForGatewayCore");
-      const profileReads = vi
-        .spyOn(userProfileReads, "listProfiles")
-        .mockRejectedValue(new Error("Profile worker enumeration is unavailable"));
-      const parse = JSON.parse;
-      let unrelatedDecodes = 0;
-      const parsed = vi.spyOn(JSON, "parse").mockImplementation((value, reviver) => {
-        if (typeof value === "string" && value.includes(savedPrompt)) {
-          unrelatedDecodes++;
-        }
-        return parse(value, reviver);
-      });
       try {
-        for (const method of ["session.members.list", "session.members.listEvidence"] as const) {
-          const listed = await call(method, { sessionKey }, requestContext);
-          expect(listed[0]?.[1]).toMatchObject({ identities: expected });
+        const profileOnly = ensureProfileForEmail("profile-only@example.com");
+        setDisplayName(profileOnly.id, "Profile only");
+        const requestContext = context(vi.fn(), {
+          agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+        });
+        setRuntimeConfigSnapshot(requestContext.getRuntimeConfig());
+        await call("session.members.list", { sessionKey }, requestContext);
+        const projection = getSessionRowProjection(requestContext)!;
+        await projection.ensureMaterialized();
+        const expected = [
+          { type: "agent", id: "research", label: "Alpha Research" },
+          { type: "agent", id: "archived-creator", label: "Archive" },
+          { type: "agent", id: "incognito-creator", label: "Incognito" },
+          { type: "agent", id: "duplicate", label: "Last label" },
+          { type: "agent", id: "sentinel-main", label: "Main sentinel" },
+          { type: "human", id: profile.id, label: "Member" },
+          { type: "human", id: profileOnly.id, label: "Profile only" },
+        ];
+        const scans = vi.spyOn(combinedStore, "loadCombinedSessionStoreForGatewayCore");
+        const profileReads = vi
+          .spyOn(userProfileReads, "listProfiles")
+          .mockRejectedValue(new Error("Profile worker enumeration is unavailable"));
+        const parse = JSON.parse;
+        let unrelatedDecodes = 0;
+        const parsed = vi.spyOn(JSON, "parse").mockImplementation((value, reviver) => {
+          if (typeof value === "string" && value.includes(savedPrompt)) {
+            unrelatedDecodes++;
+          }
+          return parse(value, reviver);
+        });
+        try {
+          for (const method of ["session.members.list", "session.members.listEvidence"] as const) {
+            const listed = await call(method, { sessionKey }, requestContext);
+            expect(listed[0]?.[1]).toMatchObject({ identities: expected });
+          }
+          expect(scans).not.toHaveBeenCalled();
+          expect(
+            projection.capture({ agentId: "main", key: "agent:main:archived" })?.materialized,
+          ).toBeUndefined();
+          expect(
+            await call(
+              "session.members.add",
+              { sessionKey, identityId: profile.id },
+              requestContext,
+            ),
+          ).toEqual([[true, { ok: true, sessionKey, identityId: profile.id }, undefined]]);
+        } finally {
+          parsed.mockRestore();
+          scans.mockRestore();
+          profileReads.mockRestore();
         }
-        expect(scans).not.toHaveBeenCalled();
         expect(
-          projection.capture({ agentId: "main", key: "agent:main:archived" })?.materialized,
-        ).toBeUndefined();
-        expect(
-          await call("session.members.add", { sessionKey, identityId: profile.id }, requestContext),
-        ).toEqual([[true, { ok: true, sessionKey, identityId: profile.id }, undefined]]);
+          await authorizeResolvedSessionMutationAsync({
+            cfg: {},
+            client: identifiedClient(profile.id, "Member"),
+            sessionKey,
+            agentId: "main",
+          }),
+        ).toBeNull();
+        expect(unrelatedDecodes).toBe(0);
       } finally {
-        parsed.mockRestore();
-        scans.mockRestore();
-        profileReads.mockRestore();
-      }
-      expect(
-        authorizeResolvedSessionMutation({
-          cfg: {},
-          client: identifiedClient(profile.id, "Member"),
-          sessionKey,
+        memorySessionActorOwners.closeDatabase({
           agentId: "main",
-        }),
-      ).toBeNull();
-      expect(unrelatedDecodes).toBe(0);
+          path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
+        });
+      }
     });
   });
 
@@ -598,7 +610,9 @@ describe("session sharing authority", () => {
           release.resolve();
           await rejected;
           expect(respond).not.toHaveBeenCalled();
-          expect(listSessionMembers({ agentId: "main", sessionKey })).toEqual([]);
+          expect(
+            (await readSessionMembersInWorker({ agentId: "main", sessionKey })).members,
+          ).toEqual([]);
         } finally {
           release.resolve();
           await Promise.allSettled([pending]);
@@ -663,46 +677,63 @@ describe("session sharing board ticket authority", () => {
       const unscopedTicket = issueTicket();
       const memberClient = identifiedClient("outsider@example.com");
 
+      const authorizations: Awaited<ReturnType<typeof resolveSessionMutationAuthorizationAsync>>[] =
+        [];
+      using _ = {
+        [Symbol.dispose]: () => {
+          for (const result of authorizations) {
+            result.authorization?.release?.();
+          }
+        },
+      };
+      const authorize = async (
+        request: Parameters<typeof resolveSessionMutationAuthorizationAsync>[0],
+      ) => {
+        const result = await resolveSessionMutationAuthorizationAsync(request);
+        authorizations.push(result);
+        return result.error;
+      };
+
       expect(
-        resolveSessionMutationAuthorization({
+        await authorize({
           client: memberClient,
           method: "board.action",
           requestParams: { ticket, agentId: "work" },
           context: gatewayA,
-        }).error,
+        }),
       ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
       expect(
-        resolveSessionMutationAuthorization({
+        await authorize({
           client: identifiedClient("owner@example.com"),
           method: "board.action",
           requestParams: { ticket, agentId: "work" },
           context: gatewayA,
-        }).error,
+        }),
       ).toBeNull();
       expect(
-        resolveSessionMutationAuthorization({
+        await authorize({
           client: identifiedClient("owner@example.com"),
           method: "board.action",
           requestParams: { ticket, agentId: "work" },
           context: gatewayB,
-        }).error,
+        }),
       ).toMatchObject({ details: { code: "SESSION_MUTATION_TARGET_REQUIRED" } });
       gatewayAActive = false;
       expect(
-        resolveSessionMutationAuthorization({
+        await authorize({
           client: identifiedClient("owner@example.com"),
           method: "board.event",
           requestParams: { ticket, agentId: "work" },
           context: gatewayA,
-        }).error,
+        }),
       ).toMatchObject({ details: { code: "SESSION_MUTATION_TARGET_REQUIRED" } });
       expect(
-        resolveSessionMutationAuthorization({
+        await authorize({
           client: memberClient,
           method: "board.action",
           requestParams: { ticket: unscopedTicket, agentId: "work" },
           context: gatewayA,
-        }).error,
+        }),
       ).toMatchObject({ details: { code: "SESSION_MUTATION_TARGET_REQUIRED" } });
     });
   });

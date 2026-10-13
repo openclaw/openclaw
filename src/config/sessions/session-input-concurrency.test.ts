@@ -308,9 +308,14 @@ it.each(["stage", "acceptInput", "adoptRun"] as const)(
   },
 );
 
-it.each(["lifecycle", "authority"] as const)(
-  "refuses run adoption when %s changes during version rebasing",
-  async (change) => {
+it.each([
+  { phase: "acceptInput", change: "metadata" },
+  { phase: "adoptRun", change: "metadata" },
+  { phase: "adoptRun", change: "lifecycle" },
+  { phase: "adoptRun", change: "authority" },
+] as const)(
+  "preserves input persistence and authority when $change changes before $phase admission",
+  async ({ phase, change }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot({});
       const f = createSessionCompoundWorkerFixture();
@@ -333,24 +338,47 @@ it.each(["lifecycle", "authority"] as const)(
         updateMode: "none",
       });
       await input.actor.read({ assertCurrent, authorize: assertCurrent });
-      bindUserTurnInputActor(recorder, { phase: "adoptRun", acquire: async () => input });
-      const adopt = input.actor.adoptRun;
-      vi.spyOn(input.actor, "adoptRun").mockImplementationOnce(async (...args) => {
+      bindUserTurnInputActor(recorder, { phase, acquire: async () => input });
+      let metadataWrites = 0;
+      const afterCompetingWrite = async <T>(submit: () => Promise<T>) => {
         await patchSessionEntryCore(f.scope, () =>
-          change === "lifecycle" ? { abortedLastRun: true } : { displayName: "Updated" },
+          change === "lifecycle"
+            ? { abortedLastRun: true }
+            : { displayName: `Updated ${++metadataWrites}` },
         );
-        const outcome = await adopt(...args);
-        expect(outcome.kind).toBe("stale-version");
         current = change !== "authority";
-        return outcome;
-      });
+        return submit();
+      };
+      const accept = input.actor.acceptInput;
+      const adopt = input.actor.adoptRun;
+      // Every submission observes a real metadata write, including a cache-version retry.
+      const competingWrite =
+        phase === "acceptInput"
+          ? vi
+              .spyOn(input.actor, "acceptInput")
+              .mockImplementation((...args) => afterCompetingWrite(() => accept(...args)))
+          : vi
+              .spyOn(input.actor, "adoptRun")
+              .mockImplementation((...args) => afterCompetingWrite(() => adopt(...args)));
       try {
-        await expect(recorder.persistApproved()).rejects.toThrow(
-          change === "lifecycle" ? "refused by its current owner" : "Input authority revoked",
-        );
-        expect(recorder.hasPersisted()).toBe(false);
-        expect(f.events()).toEqual([]);
+        if (change === "metadata") {
+          await expect(recorder.persistApproved()).resolves.toMatchObject({ appended: true });
+          await recorder.persistFallback();
+          expect(f.read()?.displayName).toBe(`Updated ${metadataWrites}`);
+          expect(f.events().filter((event) => event.type === "message")).toEqual([
+            expect.objectContaining({
+              message: expect.objectContaining({ content: "Keep the original admission" }),
+            }),
+          ]);
+        } else {
+          await expect(recorder.persistApproved()).rejects.toThrow(
+            change === "lifecycle" ? "refused by its current owner" : "Input authority revoked",
+          );
+          expect(recorder.hasPersisted()).toBe(false);
+          expect(f.events()).toEqual([]);
+        }
       } finally {
+        competingWrite.mockRestore();
         await input.actor.release();
       }
     });

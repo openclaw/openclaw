@@ -186,10 +186,10 @@ export function wrapStreamFnWithSessionFork(
               authority,
               bytes,
               expires: Date.now() + TTL_MS,
-              expiryTimer: setTimeout(
-                () => clearEmbeddedSessionForkSnapshot(identity.sessionId),
-                TTL_MS,
-              ).unref(),
+              // Expiry owns only the session ID, never the completed turn or its async context.
+              expiryTimer: getAiTransportHost().runInDetachedAsyncContext(() =>
+                setTimeout(clearEmbeddedSessionForkSnapshot, TTL_MS, identity.sessionId).unref(),
+              ),
             });
             retainedBytes += bytes;
           } else {

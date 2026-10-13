@@ -1646,8 +1646,202 @@ describe("Codex app-server thread lifecycle bindings", () => {
   });
 
   it.each([
+    {
+      name: "leaving Ultrafast with an inherited lower limit",
+      fastMode: "ultrafast",
+      nextFastMode: true,
+      nativeLimit: 120_000,
+      nativeScope: "total",
+      retained: true,
+      expectedLimit: 120_000,
+      nativeLoaded: null,
+    },
+    {
+      name: "leaving Ultrafast with the native default scope",
+      fastMode: "ultrafast",
+      nextFastMode: true,
+      nativeLimit: 120_000,
+      nativeScope: undefined,
+      retained: true,
+      expectedLimit: 120_000,
+      nativeLoaded: null,
+    },
+    {
+      name: "entering Ultrafast with unchanged inherited settings",
+      fastMode: true,
+      nextFastMode: "ultrafast",
+      nativeLimit: 120_000,
+      nativeScope: "total",
+      retained: true,
+      expectedLimit: 120_000,
+      nativeLoaded: null,
+    },
+    {
+      name: "replacing an unavailable Ultrafast thread",
+      fastMode: "ultrafast",
+      nextFastMode: "ultrafast",
+      nativeLimit: 700_000,
+      nativeScope: "total",
+      retained: false,
+      expectedLimit: 260_000,
+      nativeLoaded: null,
+    },
+    {
+      name: "deferring unloaded native-owned threads to replacement authority",
+      fastMode: "ultrafast",
+      nextFastMode: "ultrafast",
+      nativeLimit: 700_000,
+      nativeScope: "total",
+      retained: false,
+      expectedLimit: 260_000,
+      nativeLoaded: false,
+    },
+    {
+      name: "preserving unknown creation settings on a live native-owned thread",
+      fastMode: true,
+      nextFastMode: "ultrafast",
+      nativeLimit: 700_000,
+      nativeScope: "total",
+      retained: false,
+      expectedLimit: 700_000,
+      nativeLoaded: true,
+    },
+  ] as const)("continues incognito compaction when $name", async (testCase) => {
+    const { sessionFile, workspaceDir } = createPaths();
+    const params = createParams(sessionFile, workspaceDir);
+    params.sessionKey = "agent:main:dashboard:incognito-compaction";
+    params.fastMode = testCase.fastMode;
+    params.agentDir = path.join(tempDir, "agent");
+    let starts = 0;
+    let catalogLookups = 0;
+    const fixture = await createLeasedCodexLifecycleHarness({
+      agentDir: params.agentDir,
+      respond: async (method) => {
+        if (method === "config/read") {
+          return {
+            config: {
+              model_auto_compact_token_limit: testCase.nativeLimit,
+              ...(testCase.nativeScope
+                ? { model_auto_compact_token_limit_scope: testCase.nativeScope }
+                : {}),
+            },
+            origins: {},
+            layers: [],
+          };
+        }
+        if (method === "configRequirements/read") {
+          return { requirements: null };
+        }
+        if (method === "model/list") {
+          if (++catalogLookups > 2) {
+            throw new Error("Synthetic catalog unavailable during replacement");
+          }
+          return {
+            data: [
+              {
+                id: params.modelId,
+                model: params.modelId,
+                displayName: "Synthetic model",
+                description: "Synthetic model",
+                hidden: false,
+                isDefault: false,
+                supportedReasoningEfforts: [],
+                defaultReasoningEffort: "medium",
+                serviceTiers: [{ id: "ultrafast", name: "Ultrafast", description: "Faster" }],
+              },
+            ],
+            nextCursor: null,
+          };
+        }
+        if (method === "thread/start") {
+          return threadStartResult(`incognito-${++starts}`);
+        }
+        throw new Error(`unexpected method: ${method}`);
+      },
+    });
+    const common = { client: fixture.client, params, userMcpServersEnabled: false };
+    const first = await startOrResumeThread(common);
+    expect(first.liveThreadEphemeralPolicy).toMatchObject({
+      autoCompactTokenLimit: testCase.expectedLimit,
+      autoCompactTokenLimitScope: "total",
+    });
+    if (testCase.retained) {
+      await retainCodexAppServerLiveThread(
+        fixture.client,
+        first.threadId,
+        undefined,
+        first.liveThreadConfigFingerprint,
+        null,
+        first.liveThreadEphemeralPolicy,
+      );
+    }
+    if (testCase.nativeLoaded !== null) {
+      const binding = (await readCodexAppServerBinding(sessionFile))!;
+      await writeRawCodexAppServerBinding(sessionFile, { ...binding, preserveNativeModel: true });
+      fixture.seed(threadStartResult(first.threadId), {
+        loaded: testCase.nativeLoaded,
+        subscribed: testCase.nativeLoaded,
+      });
+      params.expectedSessionRuntimeOwnership = {
+        model: "native",
+        auth: "host",
+        modelRef: { model: first.model!, provider: first.modelProvider! },
+      };
+    }
+    params.fastMode = testCase.nextFastMode;
+    if (testCase.nativeLoaded !== null) {
+      const before = await readCodexAppServerBinding(sessionFile);
+      await expect(startOrResumeThread(common)).rejects.toThrow(
+        testCase.nativeLoaded
+          ? "compaction settings"
+          : "native model ownership prevents rotating an unavailable ephemeral thread",
+      );
+      await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(before);
+      expect(
+        fixture.request.mock.calls.filter(([method]) => method === "thread/start"),
+      ).toHaveLength(1);
+      return;
+    }
+    const second = await startOrResumeThread(common);
+    expect(second).toMatchObject({
+      threadId: testCase.retained ? first.threadId : "incognito-2",
+      lifecycle: { action: testCase.retained ? "resumed" : "started" },
+    });
+    if (!testCase.retained) {
+      expect(second.preparedServiceTier).toBe("ultrafast");
+      expect(catalogLookups).toBe(2);
+      expect(
+        fixture.request.mock.calls.filter(([method]) => method === "thread/start")[1]?.[1],
+      ).toMatchObject({
+        config: {
+          model_auto_compact_token_limit: 260_000,
+          model_auto_compact_token_limit_scope: "total",
+        },
+      });
+    }
+    expect(
+      fixture.request.mock.calls
+        .filter(([method]) => method === "thread/start" || method === "thread/resume")
+        .map(([method, requestParams]) => [method, requestParams]),
+    ).toEqual(
+      testCase.retained
+        ? [["thread/start", expect.objectContaining({ ephemeral: true })]]
+        : [
+            ["thread/start", expect.objectContaining({ ephemeral: true })],
+            ["thread/start", expect.objectContaining({ ephemeral: true })],
+          ],
+    );
+  });
+
+  it.each([
     { change: "policy", policy: "generic policy v2", skills: "## OpenClaw Skills\n\nweather" },
     { change: "skills", policy: "generic policy", skills: undefined },
+    { change: "compaction", policy: "generic policy", skills: "## OpenClaw Skills\n\nweather" },
+    {
+      change: "compaction-scope",
+      policy: "generic policy",
+      skills: "## OpenClaw Skills\n\nweather",
+    },
   ] as const)(
     "refreshes live incognito instructions but refuses generic policy drift ($change: $skills)",
     async ({ change, policy, skills }) => {
@@ -1689,8 +1883,20 @@ describe("Codex app-server thread lifecycle bindings", () => {
         ...common,
         developerInstructions: "generic policy",
         refreshableInstructions: firstSkills,
+        ...(change === "compaction-scope"
+          ? {
+              config: {
+                model_auto_compact_token_limit: 120_000,
+                model_auto_compact_token_limit_scope: "body_after_prefix",
+              },
+            }
+          : {}),
       });
       expect(first.liveThreadEphemeralPolicy).toEqual({
+        autoCompactTokenLimitScope: "total",
+        ...(change === "compaction-scope"
+          ? { autoCompactTokenLimit: 120_000, autoCompactTokenLimitScope: "body_after_prefix" }
+          : {}),
         developerInstructions: "generic policy",
         refreshableInstructions: firstSkills,
         // Creation carries the catalog natively, so compaction restores this one.
@@ -1714,13 +1920,23 @@ describe("Codex app-server thread lifecycle bindings", () => {
         request.mock.calls
           .filter(([method]) => method.startsWith("thread/"))
           .map(([method, requestParams]) => [method, requestParams]);
-      const secondTurn = {
+      const secondTurn: Parameters<typeof startOrResumeThread>[0] = {
         ...common,
         developerInstructions: policy,
         refreshableInstructions: skills,
+        ...(change === "compaction"
+          ? { config: { model_auto_compact_token_limit: 260_000 } }
+          : change === "compaction-scope"
+            ? {
+                config: {
+                  model_auto_compact_token_limit: 120_000,
+                  model_auto_compact_token_limit_scope: "total",
+                },
+              }
+            : {}),
       };
 
-      if (change === "policy") {
+      if (change === "policy" || change === "compaction" || change === "compaction-scope") {
         await expect(startOrResumeThread(secondTurn)).rejects.toBeInstanceOf(
           CodexIncognitoPolicyChangeError,
         );

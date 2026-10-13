@@ -1,8 +1,10 @@
 import { expect, test } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createGatewayWorkerPlacementMoveBarrier } from "./server-worker-placement-move-barrier.js";
+import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
-import { loadSessionEntry, resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils.js";
+import { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -19,9 +21,9 @@ const unexpectedPlacementOperation = async (): Promise<never> => {
   throw new Error("Unexpected placement operation in lifecycle ordering test");
 };
 
-test.each(["delete", "archive", "recover"] as const)(
+test.for(["delete", "archive", "recover"] as const)(
   "%s lets an earlier move acquire its session fence before reclaim",
-  async (action) => {
+  async (action, { signal }) => {
     const { storePath } = await createSessionStoreDir();
     const sessionId = `lifecycle-order-${action}`;
     const sessionKey = `agent:main:${sessionId}`;
@@ -85,9 +87,13 @@ test.each(["delete", "archive", "recover"] as const)(
               path: "/fixture/worktree",
             }),
           },
-          resolveGatewaySessionStoreTargetInWorker,
+          resolveGatewaySessionStoreTargetInWorker: (params) =>
+            resolveGatewaySessionStoreTargetInWorker({
+              ...params,
+              cfg: { ...params.cfg, session: { ...params.cfg.session, store: storePath } },
+            }),
           resolveCanonicalSessionEntryFromStoreKeys,
-        } as never;
+        };
       },
       revokeSessionAuthority: () => {},
     });
@@ -171,7 +177,8 @@ test.each(["delete", "archive", "recover"] as const)(
         }),
       ]);
       releaseMove.resolve();
-      await moving;
+      // The retained worker read can finish after the next event-loop turn.
+      await withinTest(moving, signal);
       acquiredBeforeCleanup = moveAcquired;
       if (moveAcquired) {
         await serializedReclaim;
@@ -183,11 +190,11 @@ test.each(["delete", "archive", "recover"] as const)(
       await Promise.allSettled([moving, lifecycle, cleanupBlockedReclaim.promise]);
       await serializedReclaim?.catch(() => {});
     }
-    expect(acquiredBeforeCleanup).toBe(true);
     expect(await moving).toMatchObject({ message: "move preflight rejected" });
+    expect(acquiredBeforeCleanup).toBe(true);
     const result = await lifecycle;
     expect(result.ok, JSON.stringify(result.error)).toBe(true);
-    const entry = loadSessionEntry(sessionKey).entry;
+    const entry = (await loadSessionEntryAsync(sessionKey)).entry;
     if (action === "delete") {
       expect(entry).toBeUndefined();
     } else {

@@ -7,6 +7,10 @@ read_when:
 title: "Integrity, troubleshooting, and recovery"
 ---
 
+## Gateway database ownership
+
+Gateway process owns every OpenClaw database and its state. In-process writer receipts invalidate cached rows across workers and handles; use direct reads when cache cannot be covered. Never add runtime foreign-commit probes (`PRAGMA data_version`, version observations, foreign-observation scopes); remove when touched. Outside writers, including CLI, Doctor, cron, plugin children: must use Gateway or hold exclusive ownership while Gateway stopped. Preserve live-authority checks at effect boundaries and consistent snapshots for multi-statement reads.
+
 ## Integrity checks
 
 Admission validates SQLite format, schema, canonical indexes, and required
@@ -16,7 +20,13 @@ and worker isolates while a database remains open. Final close releases those
 in-memory payloads. Reopens reuse a matching seal without validation SQL; an
 uncheckpointed or failed close requires fresh admission. Current ownership, live write authority,
 row-cache freshness, and durable quarantine refusals remain separate checks.
-A seal never overrides a recorded corruption refusal.
+A seal never overrides a recorded corruption refusal. This includes
+quarantine-store format checks; existing indexed durable quarantine-row guards
+still observe recorded corruption. Share schema-version and table-existence
+facts too, across opens, scopes, requests, and idle close. Never add repeated
+format checks; remove them when touched. Identify replacement files by volume,
+inode, and birthtime with `fstat`, not SQL. Migration/repair owners publish new
+facts after their DDL; Doctor and explicit verification retain full checks.
 
 Each owned database can have a regular file named `<database>.seal` beside it,
 for example `openclaw.sqlite.seal`. The database admission owner writes this file
@@ -27,6 +37,16 @@ schema identity, the time of the last full verification, and the final physical
 file metadata. It is reconstructible verification metadata, not database state
 or a backup.
 
+Completed memory index schema receipts also survive a clean close. They remain
+scoped to the cache, FTS, and tokenizer settings that were validated, so an
+unchanged restart skips memory schema setup and the resulting agent schema
+refresh. Owner-controlled FTS and vector replacements republish that receipt
+after commit when they preserve the admitted table contracts. Rollback cannot
+publish a replacement receipt. Changed settings, other in-process DDL, or a
+missing or invalid seal take the ordinary memory schema admission path. An
+unclean shutdown still requires integrity verification. Imported-row backfills
+still run.
+
 At startup, admission accepts the seal only when its JSON parses, its short
 checksum matches, and all of the following match the current database: device,
 inode, stable birthtime, byte size, nanosecond modification time, and schema
@@ -36,6 +56,16 @@ empty. The last full verification must be no more than seven days old; clean
 close and seal reuse do not advance that timestamp. On Linux, where Node can
 substitute change time for unavailable birthtime, the existing physical-file
 identity policy uses a stable unknown birthtime value.
+
+Schema identity covers the application version, canonical SQL definitions,
+and the admission policy revision. Commit and build
+IDs do not invalidate seals for otherwise compatible builds. Maintainers must advance
+the policy revision for migrations or schema-version changes not reflected in canonical
+SQL, and for changes to validation rules or serialized admission facts.
+Updating from an older seal-identity format requires one full validation;
+subsequent compatible builds reuse the new seal. Managed drain followed by an
+interrupt uses ordinary close and can publish a seal once its writers settle.
+Forced termination before successful close cannot certify the database.
 
 A matching seal supplies the previously admitted facts without copying or
 inspecting the database again for startup state snapshots, readiness, schema
@@ -48,6 +78,8 @@ runtime scan or a new timer.
 
 Before the first write after admission, the owner unlinks the seal. Explicit
 maintenance also invalidates it before checkpointing or rewriting a database.
+The seal is an allowed small sidecar, published only after successful close.
+Acceptance is atomic: a partial payload cannot supply admitted facts.
 Publication uses a plain file write with a checksum: it needs no temporary-file
 rename or `fsync` protocol. A torn write fails parsing or checksum validation and
 falls back to a full check. If a crash loses the unlink but preserves a database
@@ -344,7 +376,14 @@ Doctor also shares one private shared-state snapshot across a synchronous
 workspace-alias check. The next check reads fresh state, so committed repairs are
 visible without taking a separate snapshot for every configured workspace.
 
-Memory search and maintenance managers borrow the verified per-agent connection. Acquisition does not reopen or rescan a healthy shared handle. Native and transformed plugin modules share the same process-owned connection lifecycle, query cache, and commit observers. Nested synchronous writes use SQLite savepoints on that connection. A manager retains that exact connection against cache eviction until its work drains, then releases its borrow without closing the database. Explicit quarantine and disposal still revoke it. Full memory rebuilds use separate temporary shadow databases and publish their derived tables in one synchronous transaction. Read-only memory status keeps its separate diagnostic connection and does not create or migrate a missing database.
+Memory search and maintenance managers retain the per-agent publication worker
+and its admitted schema, physical identity, and index facts. Acquisition does not
+open a second main-thread reader. Worker lifetime and accepted writes drain with
+the manager; explicit quarantine and disposal still revoke the database. Full
+memory rebuilds use temporary shadow databases and publish their derived tables
+in one worker transaction. Read-only admission and bundled status reads use the
+retrieval worker without creating or migrating a missing database. The released
+synchronous status API retains a lazily opened diagnostic reader.
 
 If nested rollback or savepoint cleanup fails, the transaction owner preserves the original failure, discards staged state and post-commit observers, and closes the connection. Catching that failure cannot resume writes on the abandoned handle. A later operation must acquire a fresh connection through its database owner. Doctor plugin-state imports retain earlier committed batches; an aborted batch cannot commit its prefix. Ordinary row refusals that successfully roll back their savepoint still commit the successful prefix for resumable imports.
 
@@ -538,6 +577,10 @@ free space of at least twice the uncompressed store directory size. It takes
 verified WAL-aware SQLite backups, streams copies into a fresh NOCOW sibling,
 preserves ownership, modes, and access/default ACLs, checks copy size and
 `PRAGMA quick_check`, then atomically exchanges directories.
+It also re-records the relocated identity of any recorded migration recovery
+original and destination database it rewrites, so `update cleanup` eligibility
+survives the rewrite; a copy that no longer matches the recorded content keeps
+its original record and stays protected.
 Symbolic links retain their exact link text and ownership without following targets (including dangling links), and empty regular files are preserved.
 The report names the retained original directory and the standalone backups.
 Keep them until the updated Gateway has been verified; do not overwrite newer

@@ -1,4 +1,4 @@
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { fstatSync, renameSync } from "node:fs";
 import path from "node:path";
 import { getEnvironmentData, MessageChannel, type MessagePort, Worker } from "node:worker_threads";
@@ -9,11 +9,13 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
+import { readSqliteDatabaseGeneration } from "./sqlite-database-admission-record.js";
 import {
   captureSqliteDatabaseAdmissions,
   installSqliteDatabaseAdmissions,
   readSqliteDatabaseAdmissions,
   readSqliteDatabasePendingWriteToken,
+  readSqliteDatabaseScopedWriteToken,
   prepareSqliteDatabaseCleanClose,
   recordSqliteDatabaseIntegrity,
   readSqliteDatabaseWriteTokenForPath,
@@ -43,6 +45,66 @@ function createDatabase(location: string) {
 function recordsFor(location: string) {
   return captureSqliteDatabaseAdmissions().filter((record) => record.location === location);
 }
+
+it.each([
+  { code: 0, references: 0, invalidates: false },
+  { code: 1, references: 0, invalidates: true },
+  { code: undefined, references: 0, invalidates: true },
+  { code: 0, references: 1, invalidates: true },
+  { code: 0, references: undefined, invalidates: true },
+])(
+  "settles worker exit $code with $references references without releasing siblings",
+  ({ code, references, invalidates }) => {
+    const location = path.join(tempDirs.make("sqlite-admission-worker-exit-"), "proof.sqlite");
+    const database = createDatabase(location);
+    const events = new EventEmitter<{ exit: [number | undefined] }>();
+    const worker: Pick<WorkerLifecycle, "threadId" | "once"> = Object.assign(events, {
+      threadId: 12345,
+    });
+    const reference = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+    const sibling = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+    sibling[0] = 1;
+    try {
+      const scopedToken = readSqliteDatabaseScopedWriteToken(database, "proof");
+      const record = recordsFor(location)[0]!;
+      const transferred = new Map(record.references);
+      if (references !== undefined) {
+        reference[0] = references;
+        transferred.set(worker.threadId, reference.buffer);
+      }
+      transferred.set(worker.threadId + 1, sibling.buffer);
+      installSqliteDatabaseAdmissions([{ ...record, references: transferred }]);
+      const writeRevision = readSqliteDatabaseGeneration(record, "writeRevision");
+      const unscopedRevision = readSqliteDatabaseGeneration(record, "unscopedWriteRevision");
+      expect(scopedToken).toBeDefined();
+
+      trackSqliteDatabaseAdmissionWorker(worker);
+      events.emit("exit", code);
+
+      expect(readSqliteDatabaseGeneration(record, "writeRevision")).toBe(
+        writeRevision + Number(invalidates),
+      );
+      expect(readSqliteDatabaseGeneration(record, "unscopedWriteRevision")).toBe(
+        unscopedRevision + Number(invalidates),
+      );
+      expect(readSqliteDatabaseScopedWriteToken(database, "proof") === scopedToken).toBe(
+        !invalidates,
+      );
+      const remaining = recordsFor(location)[0]!;
+      expect(remaining.references.has(worker.threadId)).toBe(false);
+      expect(remaining.references.get(worker.threadId + 1)).toBe(sibling.buffer);
+      expect(Atomics.load(sibling, 0)).toBe(1);
+      if (references !== undefined) {
+        expect(Atomics.load(reference, 0)).toBe(-1);
+      }
+      expect(database.prepare("SELECT value FROM proof").get()).toEqual({ value: 42 });
+    } finally {
+      Atomics.store(sibling, 0, 0);
+      database.close();
+      retireSqliteDatabaseAdmissionForPath(location);
+    }
+  },
+);
 
 it("retires the final closed handle's facts while preserving open siblings and descriptor custody", () => {
   const location = path.join(tempDirs.make("sqlite-admission-retention-"), "proof.sqlite");
@@ -310,8 +372,13 @@ it.each(["reference-first", "close-first", "explicit-retirement", "path-replaced
 it.each([false, true])(
   "retains later worker siblings until final close or exit (retained: %s)",
   async (retained) => {
-    const location = path.join(tempDirs.make("sqlite-admission-worker-retention-"), "proof.sqlite");
+    const root = tempDirs.make("sqlite-admission-worker-retention-");
+    const location = path.join(root, "proof.sqlite");
     const database = createDatabase(location);
+    const closedLocation = path.join(root, "closed.sqlite");
+    const closedDatabase = createDatabase(closedLocation);
+    const unrelatedLocation = path.join(root, "unrelated.sqlite");
+    const unrelatedDatabase = createDatabase(unrelatedLocation);
     const relay = createSqliteDatabaseAdmissionRelay(() => {});
     let closeSource: Parameters<RuntimeWorkerGeneration["retain"]>[1] | undefined;
     const source = retained
@@ -341,6 +408,9 @@ it.each([false, true])(
            if (command === "open") {
              database = openNodeSqliteDatabase(workerData.location);
              admitSqliteSchema(database);
+             const closed = openNodeSqliteDatabase(workerData.closedLocation);
+             admitSqliteSchema(closed);
+             closed.close();
            } else if (command === "close") {
              database.close();
            } else if (command === "retire") {
@@ -360,6 +430,7 @@ it.each([false, true])(
       execArgv: [],
       workerData: {
         location,
+        closedLocation,
         port: relay.port,
         loader: import.meta.resolve("tsx/esm/api"),
         native: new URL("./node-sqlite.ts", import.meta.url).href,
@@ -411,6 +482,8 @@ it.each([false, true])(
       expect(recordsFor(location)).toHaveLength(1);
       expect(await command("close")).toBe("close");
       expect(recordsFor(location)).toHaveLength(1);
+      expect(await command("open")).toEqual({ value: 42, admissionId });
+      expect(await command("close")).toBe("close");
       const siblingReply = once(siblingWorker, "message");
       siblingWorker.postMessage("read", []);
       expect((await siblingReply)[0]).toEqual({ value: 42, admissionId });
@@ -427,9 +500,29 @@ it.each([false, true])(
         value: 42,
         admissionId: getAdmittedSqliteSchemaFacts(database)?.admissionId,
       });
-      database.close();
-      expect(recordsFor(location)).toHaveLength(1);
+      const retiredOwner = worker.threadId;
+      const stale = structuredClone(recordsFor(location));
+      expect(stale[0]!.references.has(retiredOwner)).toBe(true);
+      const beforeExit = readSqliteDatabaseWriteTokenForPath(location);
+      const closedBeforeExit = readSqliteDatabaseWriteTokenForPath(closedLocation);
+      const unrelatedBeforeExit = readSqliteDatabaseWriteTokenForPath(unrelatedLocation);
+      expect(beforeExit).toBeTypeOf("string");
+      expect(closedBeforeExit).toBeTypeOf("string");
+      expect(unrelatedBeforeExit).toBeTypeOf("string");
       await worker.terminate();
+      // An unclean exit cannot certify settled receipts, even for already-closed handles.
+      expect(readSqliteDatabaseWriteTokenForPath(location)).not.toBe(beforeExit);
+      expect(readSqliteDatabaseWriteTokenForPath(closedLocation)).not.toBe(closedBeforeExit);
+      expect(readSqliteDatabaseWriteTokenForPath(unrelatedLocation)).not.toBe(unrelatedBeforeExit);
+      const inherited = readSqliteDatabaseAdmissions(
+        getEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY),
+      )?.find((record) => record.location === location);
+      expect(inherited).toBeDefined();
+      expect(inherited!.references.has(retiredOwner)).toBe(false);
+      installSqliteDatabaseAdmissions(stale);
+      expect(recordsFor(location)[0]!.references.has(retiredOwner)).toBe(false);
+      expect(getAdmittedSqliteSchemaFacts(database)?.tables.has("proof")).toBe(true);
+      database.close();
       expect(recordsFor(location)).toEqual([]);
     } finally {
       await sibling?.worker.terminate();
@@ -440,6 +533,10 @@ it.each([false, true])(
         database.close();
       }
       retireSqliteDatabaseAdmissionForPath(location);
+      closedDatabase.close();
+      unrelatedDatabase.close();
+      retireSqliteDatabaseAdmissionForPath(closedLocation);
+      retireSqliteDatabaseAdmissionForPath(unrelatedLocation);
       const retireSource = await closeSource?.();
       await retireSource?.();
     }

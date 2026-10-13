@@ -22,7 +22,6 @@ import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-cli
 import { createOperatorWsClient } from "../server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { prepareGatewayConnectOperatorAccess } from "../server/ws-connection/connect-operator-access.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils-store.js";
 import { sessionsGitHubHandlers } from "./sessions-github.js";
 import type {
   GatewayClient,
@@ -32,7 +31,10 @@ import type {
 
 const mocks = vi.hoisted(() => ({
   caller: vi.fn(),
-  loadSession: vi.fn(),
+  loadSession:
+    vi.fn<
+      typeof import("../session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
+    >(),
   request: vi.fn<GitHubPublicationCoordinator["requestForSessionV2"]>(),
 }));
 
@@ -40,10 +42,17 @@ vi.mock("../../agents/tools/gateway-caller-context.js", async (importOriginal) =
   ...(await importOriginal<typeof import("../../agents/tools/gateway-caller-context.js")>()),
   getGatewayToolCallerIdentity: mocks.caller,
 }));
-vi.mock("../session-utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../session-utils.js")>()),
-  loadGatewaySessionEntryReadOnly: mocks.loadSession,
+vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: mocks.loadSession,
 }));
+
+async function useRealSessionReads() {
+  const { loadGatewaySessionEntryReadOnlyInWorker } = await vi.importActual<
+    typeof import("../session-utils-store-worker.js")
+  >("../session-utils-store-worker.js");
+  mocks.loadSession.mockImplementation(loadGatewaySessionEntryReadOnlyInWorker);
+}
 
 const expectedSystemRequester = {
   version: 2,
@@ -107,12 +116,21 @@ describe("sessions.github.publish", () => {
       sessionKey: "agent:main:dashboard:task",
       operationalRunInstance: { runId: "run-1" },
     });
-    mocks.loadSession.mockReturnValue({
-      canonicalKey: "agent:main:dashboard:task",
-      agentId: "main",
-      entry: { sessionId: "session-1" },
+    mocks.loadSession.mockImplementation(async ({ cfg }) => {
+      const canonicalKey = "agent:main:dashboard:task";
+      const entry = { sessionId: "session-1", updatedAt: 1 };
+      return {
+        cfg,
+        canonicalKey,
+        agentId: "main",
+        storePath: "/synthetic/sessions-github.sqlite",
+        storeKeys: [canonicalKey],
+        store: { [canonicalKey]: entry },
+        entry,
+        legacyKey: undefined,
+      };
     });
-    mocks.request.mockImplementation(async ({ requester }) => {
+    mocks.request.mockReset().mockImplementation(async ({ requester }) => {
       expect(() => requester.assertCurrent()).not.toThrow();
       return {
         requestId: "publication-1",
@@ -256,7 +274,7 @@ describe("sessions.github.publish", () => {
           prepareGatewayConnectOperatorAccess(client);
         }
         mocks.caller.mockReturnValue(undefined);
-        mocks.loadSession.mockImplementation(loadGatewaySessionEntryReadOnly);
+        await useRealSessionReads();
 
         const respond = await invoke(
           { sessionKey: "main", idempotencyKey: "operator-publication-1" },
@@ -325,7 +343,7 @@ describe("sessions.github.publish", () => {
           );
         }
         mocks.caller.mockReturnValue(undefined);
-        mocks.loadSession.mockImplementation(loadGatewaySessionEntryReadOnly);
+        await useRealSessionReads();
         const respond = await invoke({
           sessionKey,
           idempotencyKey: "global-publication",

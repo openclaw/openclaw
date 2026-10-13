@@ -1,8 +1,8 @@
 import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { prepareSessionCostUsageRefreshLock } from "../../infra/session-cost-usage-cache.sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
-import { loadUsageCacheOperations } from "../../state/openclaw-agent-execution-operations.js";
-import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
+import * as participantCache from "./session-accessor.sqlite-entry-cache.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   participantRecordsBySessionKey,
@@ -12,6 +12,8 @@ import { recordSessionParticipantFromWorker } from "./session-accessor.sqlite-pa
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { withActor, type Mutation } from "./session-actor-worker.test-support.js";
+import type { SessionEntryPatchGuard } from "./session-entry-patch.types.js";
+import { readSessionEntryPatchSnapshot } from "./session-entry-patch.worker.js";
 
 // mock-isolation: Actor ownership proof must not schedule unrelated background maintenance.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -91,6 +93,67 @@ it("reads committed participant counts and ordering in the same and next turn wi
   });
 });
 
+it("autocommits resident contributions and keeps consecutive actor counts current", async () => {
+  await withActor((f) => {
+    f.read();
+    const input = { identity: { type: "agent" as const, id: "peer" }, promptedAt: 10 };
+    f.participant(input);
+    const sql = trackSqliteStatementExecutions(f.database.db, ["contribution", "read"], (text) =>
+      /^insert into "session_participants"/iu.test(text)
+        ? "contribution"
+        : /^select\b/iu.test(text)
+          ? "read"
+          : null,
+    );
+    const exec = vi.spyOn(f.database.db, "exec");
+    try {
+      f.participant({ ...input, promptedAt: 20 });
+      f.participant({ ...input, promptedAt: 30 });
+      expect(f.read().participants).toMatchObject([
+        { identity: { id: "peer" }, contributionCount: 3, firstPromptedAt: 10, lastPromptedAt: 30 },
+      ]);
+      expect(sql.counts).toEqual({ contribution: 2, read: 0 });
+      expect(exec.mock.calls.some(([text]) => /BEGIN|COMMIT/iu.test(text))).toBe(false);
+    } finally {
+      exec.mockRestore();
+      sql.restore();
+    }
+    f.restartActor();
+    expect(f.read().participants).toMatchObject([{ contributionCount: 3, lastPromptedAt: 30 }]);
+  });
+});
+
+it("refuses a prepared contribution before its statement and retains it after publication failure", async () => {
+  await withActor((f) => {
+    f.read();
+    const input = { identity: { type: "agent" as const, id: "peer" }, promptedAt: 10 };
+    f.participant(input);
+    for (const refused of ["transaction", "commit"] as const) {
+      f.hooks.admit = (stage) => {
+        if (stage === refused) {
+          throw new Error("participant admission refused");
+        }
+      };
+      expect(() => f.participant(input)).toThrow("participant admission refused");
+    }
+    f.hooks.admit = undefined;
+    expect(f.read().participants).toMatchObject([{ contributionCount: 1 }]);
+    const publish = vi
+      .spyOn(participantCache, "publishSessionEntryCacheParticipantUpdate")
+      .mockImplementation(() => {
+        throw new Error("participant publication failed");
+      });
+    try {
+      expect(f.participant({ ...input, promptedAt: 20 })).toMatchObject({ value: "updated" });
+      expect(f.read().participants).toMatchObject([{ contributionCount: 2, lastPromptedAt: 20 }]);
+    } finally {
+      publish.mockRestore();
+    }
+    f.restartActor();
+    expect(f.read().participants).toMatchObject([{ contributionCount: 2, lastPromptedAt: 20 }]);
+  });
+});
+
 it("discards rolled-back participant facts and retains the next committed contribution", async () => {
   await withActor((f) => {
     const before = f.read();
@@ -125,16 +188,9 @@ it("discards rolled-back participant facts and retains the next committed contri
 });
 
 it("retains resident session facts across usage cache writes and reloads actual session changes", async () => {
-  const usage = await loadUsageCacheOperations();
-  await withActor((f) => {
+  await withActor(async (f) => {
     const initial = f.read();
-    const context: AgentWorkerOperationContext = {
-      open: () => f.database,
-      options: { agentId: f.database.agentId, path: f.database.path },
-      admit() {},
-      writeTransaction: (_label, _owner, write) =>
-        runSqliteImmediateTransactionSync(f.database.db, () => write(f.database)),
-    };
+    const usage = prepareSessionCostUsageRefreshLock(f.database.agentId, f.database.path);
     const reads = trackSqliteStatementExecutions(f.database.db, ["hydration"], (sql) =>
       sql.includes('as "actor_participants"') ? "hydration" : null,
     );
@@ -143,31 +199,20 @@ it("retains resident session facts across usage cache writes and reloads actual 
       expect(reads.counts.hydration).toBe(0);
     };
     try {
-      expect(
-        usage["usageCache.acquireLock"](
-          { previousRaw: null, previousOwnerIsRunning: false, lockJson: "lock", startedAt: 1 },
-          context,
-        ),
-      ).toBe(true);
+      expect(await usage.acquire()).toBe(true);
       unchanged();
       expect(
-        usage["usageCache.writeRollup"](
-          {
-            rollupId: "synthetic-rollup",
-            valueJson: new TextEncoder().encode("{}"),
-            blob: null,
-            updatedAt: 2,
-          },
-          context,
-        ),
+        await usage.writeRollup({
+          rollupId: "synthetic-rollup",
+          valueJson: new TextEncoder().encode("{}"),
+          blob: null,
+          updatedAt: 2,
+        }),
       ).toBe(true);
       unchanged();
-      usage["usageCache.prune"](
-        [{ key: "synthetic-rollup", valueJson: "{}", updatedAt: 2 }],
-        context,
-      );
+      await usage.pruneRows([{ key: "synthetic-rollup", valueJson: "{}", updatedAt: 2 }]);
       unchanged();
-      usage["usageCache.releaseLock"]("lock", context);
+      await usage.release();
       unchanged();
 
       runSqliteImmediateTransactionSync(f.database.db, () =>
@@ -180,12 +225,18 @@ it("retains resident session facts across usage cache writes and reloads actual 
       expect(reads.counts.hydration).toBe(1);
     } finally {
       reads.restore();
+      await usage.release();
     }
   });
 });
 
 it("keeps transcript residency across entry patches without losing either owner's writes", async () => {
   await withActor(async (f) => {
+    f.database.db
+      .prepare(
+        "INSERT INTO board_tabs (session_key, tab_id, title, position, created_by, revision) VALUES (?, 'main', 'Synthetic board', 0, 'user', 0)",
+      )
+      .run(f.target.sessionKey);
     runSqliteImmediateTransactionSync(f.database.db, () =>
       appendTranscriptEventsInTransaction(f.database, f.scope, [
         {
@@ -205,7 +256,16 @@ it("keeps transcript residency across entry patches without losing either owner'
       ]),
     );
     const before = f.read();
-    const entryPatch = (fields: { label?: string; lifecycleRevision?: string }) =>
+    const predicate: SessionEntryPatchGuard["shouldCommitIf"] = {
+      kind: "transcript",
+      sessionId: f.scope.sessionId,
+      generation: before.transcript.watermark.generation,
+      leafEntryId: "before-patch",
+    };
+    const entryPatch = (
+      fields: { label?: string; lifecycleRevision?: string; model?: string },
+      shouldCommitIf = predicate,
+    ) =>
       f.patchEntry({
         selection: { kind: "entry", sessionKey: f.target.sessionKey, exact: true },
         sessionKey: f.target.sessionKey,
@@ -213,16 +273,36 @@ it("keeps transcript residency across entry patches without losing either owner'
         operationLabel: "session-entry.patch",
         validateCanonicalKeys: false,
         preserveActivity: true,
+        shouldCommitIf,
       });
-    entryPatch({ label: "entry owner committed" });
-    const reads = trackSqliteStatementExecutions(f.database.db, ["select"], (sql) =>
-      /^select\b/iu.test(sql) ? "select" : null,
+    const reads = trackSqliteStatementExecutions(f.database.db, ["select", "watermark"], (sql) =>
+      sql.startsWith("select coalesce(") &&
+      sql.includes('as "max_seq"') &&
+      sql.includes('"session_transcript_cold_archives"')
+        ? "watermark"
+        : /^select\b/iu.test(sql)
+          ? "select"
+          : null,
     );
     try {
+      entryPatch({ label: "entry owner committed", model: "updated-model" });
+      expect(reads.counts.watermark).toBe(0);
+      runSqliteImmediateTransactionSync(f.database.db, () =>
+        recordSessionParticipantFromWorker(f.database, f.scope, {
+          identity: { type: "agent", id: "peer" },
+          promptedAt: 10,
+        }),
+      );
+      reads.counts.select = 0;
       const after = f.read();
       expect(after.entry?.label).toBe("entry owner committed");
+      expect(after.entry?.model).toBe("updated-model");
+      expect(after.hasBoard).toBe(true);
+      expect(after.participants).toMatchObject([
+        { identity: { id: "peer" }, contributionCount: 1 },
+      ]);
       expect(after.transcript).toEqual(before.transcript);
-      expect(after.version).toEqual({ ...before.version, sequence: before.version.sequence + 1 });
+      expect(after.version).toEqual({ ...before.version, sequence: before.version.sequence + 2 });
       const accounting: Mutation = {
         type: "session.actor.patch",
         input: {
@@ -260,6 +340,11 @@ it("keeps transcript residency across entry patches without losing either owner'
       await f.prepare(append);
       expect(f.mutate(append).kind).toBe("committed");
       expect(reads.counts.select).toBe(0);
+      entryPatch({ label: "wrong generation" }, { ...predicate, generation: "superseded" });
+      entryPatch({ label: "wrong branch" }, { ...predicate, leafEntryId: "off-path" });
+      expect(f.read().entry?.label).toBe("entry owner committed");
+      entryPatch({ label: "entry owner committed" }, { ...predicate, leafEntryId: "after-patch" });
+      expect(reads.counts.watermark).toBe(0);
     } finally {
       reads.restore();
     }
@@ -286,5 +371,95 @@ it("keeps transcript residency across entry patches without losing either owner'
     const replaced = f.read();
     expect(replaced.version.epoch).not.toBe(rolledBack.version.epoch);
     expect(replaced.entry?.lifecycleRevision).toBe("new-lifecycle");
+    expect(replaced.entry?.model).toBe("updated-model");
+    expect(replaced.hasBoard).toBe(true);
   });
 });
+
+it.each(["entry", "target"] as const)(
+  "patches %s from current actor facts without losing intervening writes or publishing a rollback",
+  async (kind) => {
+    await withActor((f) => {
+      f.read();
+      const selection =
+        kind === "entry"
+          ? { kind, sessionKey: f.target.sessionKey, exact: false }
+          : {
+              kind,
+              target: { canonicalKey: f.target.sessionKey, storeKeys: [f.target.sessionKey] },
+            };
+      if (kind === "entry") {
+        expect(
+          readSessionEntryPatchSnapshot(f.database, {
+            kind,
+            sessionKey: ` ${f.target.sessionKey} `,
+            exact: true,
+          }),
+        ).toEqual([]);
+        expect(
+          readSessionEntryPatchSnapshot(f.database, {
+            kind,
+            sessionKey: ` ${f.target.sessionKey} `,
+            exact: false,
+          })[0]?.sessionKey,
+        ).toBe(f.target.sessionKey);
+      }
+      const snapshot = () => readSessionEntryPatchSnapshot(f.database, selection);
+      const prepare = (label: string) => {
+        const prepared = snapshot();
+        const writeBase = prepared[0]!.entry;
+        return {
+          selection,
+          prepared,
+          writeBase,
+          next: { ...writeBase, label },
+          sessionKey: f.target.sessionKey,
+          operationLabel: "session-entry.patch" as const,
+          validateCanonicalKeys: false,
+        };
+      };
+      // Warm publication setup before measuring ordinary patches.
+      f.patchEntry(prepare("warm publication"));
+      const reads = trackSqliteStatementExecutions(f.database.db, ["select"], (sql) =>
+        /^select\b/iu.test(sql) ? "select" : null,
+      );
+      try {
+        const stale = prepare("stale replacement");
+        f.patchEntry(prepare("first committed patch"));
+        expect(snapshot()[0]?.entry.label).toBe("first committed patch");
+        expect(() => f.patchEntry(stale)).toThrow(/changed|conflict/i);
+        f.patchEntry(prepare("second committed patch"));
+        expect(snapshot()[0]?.entry.label).toBe("second committed patch");
+        expect(reads.counts.select).toBe(0);
+
+        const refused = prepare("must roll back");
+        f.hooks.admit = (stage) => {
+          if (stage === "commit") {
+            throw new Error("patch commit refused");
+          }
+        };
+        expect(() => f.patchEntry(refused)).toThrow("patch commit refused");
+        delete f.hooks.admit;
+        expect(snapshot()[0]?.entry.label).toBe("second committed patch");
+      } finally {
+        reads.restore();
+      }
+      expect(f.nativeEntry()?.label).toBe("second committed patch");
+
+      const beforeExternalWrite = prepare("stale after another owner writes");
+      runSqliteImmediateTransactionSync(f.database.db, () =>
+        writeSessionEntry(f.database, f.target.sessionKey, {
+          ...f.nativeEntry()!,
+          model: "other owner model",
+        }),
+      );
+      expect(() => f.patchEntry(beforeExternalWrite)).toThrow(/changed|conflict/i);
+      expect(snapshot()[0]?.entry.model).toBe("other owner model");
+      f.restartActor();
+      expect(snapshot()[0]?.entry).toMatchObject({
+        label: "second committed patch",
+        model: "other owner model",
+      });
+    });
+  },
+);

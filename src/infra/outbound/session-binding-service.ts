@@ -565,6 +565,7 @@ const DEFAULT_SESSION_BINDING_SERVICE: SessionBindingServiceV2 = {
       : (getGenericCurrentConversationBindingCapabilities(params) ??
           resolveAdapterCapabilities(null));
   },
+  /** @deprecated Use listBySessionAsync; removal follows a stable deprecation period. */
   listBySession: (targetSessionKey) => {
     warnPluginSdkDeprecation({
       family: "conversation-bindings",
@@ -583,6 +584,7 @@ const DEFAULT_SESSION_BINDING_SERVICE: SessionBindingServiceV2 = {
     results.push(...listGenericCurrentConversationBindingsBySession(key));
     return dedupeBindings(results).filter((record) => routableBinding(record));
   },
+  /** @deprecated Use resolveByConversationAsync; removal follows a stable deprecation period. */
   resolveByConversation: (ref) => {
     warnPluginSdkDeprecation({
       family: "conversation-bindings",
@@ -618,6 +620,7 @@ const DEFAULT_SESSION_BINDING_SERVICE: SessionBindingServiceV2 = {
     assertAdapterSelectionCurrent(normalized, adapter);
     return routableBinding(binding);
   },
+  /** @deprecated Use touchAsync; removal follows a stable deprecation period. */
   touch: (bindingId, at, scope) => {
     warnPluginSdkDeprecation({
       family: "conversation-bindings",

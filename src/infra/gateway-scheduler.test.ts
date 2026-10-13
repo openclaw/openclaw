@@ -21,6 +21,88 @@ function fixture() {
 }
 
 describe("Gateway timed work", () => {
+  it("shares maintenance slots across owners and skips slots missed by async work and sleep", async () => {
+    const { time, scheduler } = fixture();
+    const scope = scheduler.scope();
+    const gate = createDeferredCore();
+    const first = vi.fn(() => gate.promise);
+    const second = vi.fn();
+    scheduler.schedule({
+      id: "first",
+      delayMs: 30_000,
+      everyMs: 30_000,
+      phase: "maintenance",
+      run: first,
+    });
+    await time.advanceBy(2_000);
+    scope.schedule({
+      id: "second",
+      delayMs: 30_000,
+      everyMs: 30_000,
+      phase: "maintenance",
+      run: second,
+    });
+    expect(scheduler.nextWakeAtMs).toBe(30_000);
+    const wake = time.advanceTo(30_000);
+    expect(first).toHaveBeenCalledOnce();
+    expect(second).toHaveBeenCalledOnce();
+    await time.advanceTo(95_000);
+    expect(first).toHaveBeenCalledOnce();
+    expect(second).toHaveBeenCalledTimes(2);
+    gate.resolve();
+    await wake;
+    expect(scheduler.nextWakeAtMs).toBe(120_000);
+    await scope.stop();
+    await time.advanceTo(120_000);
+    expect(first).toHaveBeenCalledTimes(2);
+    expect(second).toHaveBeenCalledTimes(2);
+    await scheduler.stop();
+  });
+
+  it("leaves exact expiry and liveness cadences outside the maintenance phase", async () => {
+    const { time, scheduler } = fixture();
+    const expiry = vi.fn();
+    const keepalive = vi.fn();
+    scheduler.schedule({
+      id: "maintenance",
+      delayMs: 30_000,
+      everyMs: 30_000,
+      phase: "maintenance",
+      run: () => {},
+    });
+    scheduler.schedule({ id: "expiry", atMs: 31_001, run: expiry });
+    scheduler.schedule({ id: "keepalive", delayMs: 25_000, everyMs: 25_000, run: keepalive });
+    await time.advanceTo(26_000);
+    expect(keepalive).toHaveBeenCalledOnce();
+    await time.advanceTo(30_000);
+    expect(expiry).not.toHaveBeenCalled();
+    await time.advanceTo(31_001);
+    expect(expiry).toHaveBeenCalledOnce();
+    expect(scheduler.nextWakeAtMs).toBe(51_000);
+    await scheduler.stop();
+  });
+
+  it("keeps maintenance cadence after a forward wall-clock jump is corrected", async () => {
+    const { time, scheduler } = fixture();
+    const run = vi.fn();
+    scheduler.schedule({
+      id: "maintenance",
+      delayMs: 30_000,
+      everyMs: 30_000,
+      phase: "maintenance",
+      run,
+    });
+    time.setTime(301_000);
+    await time.wake();
+    expect(run).toHaveBeenCalledOnce();
+    time.setTime(30_000);
+    await time.advanceBy(29_999);
+    expect(run).toHaveBeenCalledOnce();
+    await time.advanceBy(1);
+    expect(run).toHaveBeenCalledTimes(2);
+    await scheduler.stop();
+  });
+
   it.each(["root", "scope"] as const)(
     "releases the retiring caller while its %s abort signal remains reachable",
     (kind) => {

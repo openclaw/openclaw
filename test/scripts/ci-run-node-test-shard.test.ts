@@ -115,6 +115,81 @@ afterEach(() => {
 
 describe("scripts/ci-run-node-test-shard.mts", () => {
   it.each([0, 23])(
+    "settles shared UI preparation before prebuilt readers (exit %s)",
+    async (code) => {
+      vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(false);
+      const started = createDeferred();
+      const prepared = createDeferred<number>();
+      const prepare = vi
+        .spyOn(buildPrerequisites, "prepareVitestControlUi")
+        .mockImplementation(async () => {
+          started.resolve();
+          return prepared.promise;
+        });
+      const target = "test/e2e/line-doctor-group-allowlist.built-cli.e2e.test.ts";
+      const runChild = vi.fn().mockResolvedValue(0);
+      const pending = runShardPlans(
+        [
+          { kind: "target", name: "LINE", target },
+          {
+            kind: "group",
+            name: "Doctor",
+            plan: {
+              configs: ["test/vitest/vitest.e2e.config.ts"],
+              includePatterns: ["test/e2e/qa-lab/runtime/doctor-auth-secretref-checks.e2e.test.ts"],
+            },
+          },
+          {
+            kind: "group",
+            name: "Explicit skip",
+            plan: {
+              configs: ["test/vitest/vitest.e2e.config.ts"],
+              env: { OPENCLAW_E2E_SKIP_BUILD: "1" },
+            },
+          },
+        ],
+        {
+          env: { OPENCLAW_E2E_USE_PREBUILT_DIST: "1" },
+          scratchDir: makeScratchDir(),
+          runChild,
+        },
+      );
+      await started.promise;
+      expect(runChild).not.toHaveBeenCalled();
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(prepare.mock.calls[0]?.[0]).toEqual([
+        expect.objectContaining({ includePatterns: [target] }),
+        expect.objectContaining({
+          configs: ["test/vitest/vitest.e2e.config.ts"],
+          includePatterns: ["test/e2e/qa-lab/runtime/doctor-auth-secretref-checks.e2e.test.ts"],
+        }),
+      ]);
+      prepared.resolve(code);
+      expect(await pending).toBe(code);
+      expect(runChild).toHaveBeenCalledTimes(code === 0 ? 3 : 0);
+    },
+  );
+
+  it("does not prepare UI for an excluded Doctor target", async () => {
+    const target = "test/e2e/line-doctor-group-allowlist.built-cli.e2e.test.ts";
+    const prepare = vi.spyOn(buildPrerequisites, "prepareVitestControlUi");
+    const runChild = vi.fn().mockResolvedValue(0);
+    expect(
+      await runShardPlans([{ kind: "target", name: "LINE", target }], {
+        env: {
+          OPENCLAW_E2E_USE_PREBUILT_DIST: "1",
+          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify(["--exclude", target]),
+        },
+        scratchDir: makeScratchDir(),
+        runChild,
+      }),
+    ).toBe(0);
+    expect(prepare).toHaveResolvedWith(0);
+    const selection = prepare.mock.calls[0]![0][0]!;
+    expect(selection.matchesFile?.(target, true, selection.includePatterns)).toBe(false);
+  });
+
+  it.each([0, 23])(
     "settles package preparation before starting shard readers (exit %s)",
     async (code) => {
       vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(false);
