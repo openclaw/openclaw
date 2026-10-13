@@ -23,7 +23,7 @@ import {
   consumeGitHubSetupHandoff,
   deleteHiddenGitHubSecretRecord,
   deleteSecretStoreEntry,
-  listHiddenGitHubSecretRecordNames,
+  listHiddenGitHubSecretRecords,
   listSecretStoreEntries,
   purgeExpiredSecretStoreEntries as purgeStoredSecrets,
   readHiddenGitHubSecretRecord,
@@ -316,11 +316,11 @@ describe("secret store", () => {
     });
     await write("UNRELATED_SECRET", "keep-value");
 
-    expect(await listHiddenGitHubSecretRecordNames({ prefix: "github-device", database })).toEqual([
-      deviceName,
+    expect(await listHiddenGitHubSecretRecords({ prefix: "github-device", database })).toEqual([
+      { name: deviceName, value: "device-value" },
     ]);
-    expect(await listHiddenGitHubSecretRecordNames({ prefix: "github-oauth", database })).toEqual([
-      oauthName,
+    expect(await listHiddenGitHubSecretRecords({ prefix: "github-oauth", database })).toEqual([
+      { name: oauthName, value: "oauth-value" },
     ]);
     expect(await readHiddenGitHubSecretRecord({ name: deviceName, database })).toBe("device-value");
     expect(await readHiddenGitHubSecretRecord({ name: oauthName, database })).toBe("oauth-value");
@@ -427,7 +427,9 @@ describe("secret store", () => {
           null,
         );
       }
-      expect(await listHiddenGitHubSecretRecordNames({ prefix, database })).toEqual(
+      expect(
+        (await listHiddenGitHubSecretRecords({ prefix, database })).map(({ name }) => name),
+      ).toEqual(
         fixtures
           .filter((entry) => entry.accept)
           .map((entry) => entry.name)

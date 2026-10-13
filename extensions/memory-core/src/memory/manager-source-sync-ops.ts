@@ -180,7 +180,6 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     targetArchiveFiles?: string[];
     corpusEntries?: readonly SessionTranscriptCorpusEntry[];
     progress?: MemorySyncProgressState;
-    deferIndex?: boolean;
     prefixIndexItems?: MemoryIndexWorkItem[];
   }): Promise<void> {
     const corpusEntries = params.corpusEntries ?? (await this.listSessionCorpusEntries());

@@ -86,13 +86,6 @@ export async function listHiddenGitHubSecretRecords(params: {
   return rows;
 }
 
-export async function listHiddenGitHubSecretRecordNames(params: {
-  prefix: HiddenGitHubStorePrefix;
-  database?: OpenClawStateDatabaseOptions;
-}): Promise<string[]> {
-  return (await listHiddenGitHubSecretRecords(params)).map(({ name }) => name);
-}
-
 /** Hard-deletes one exact hidden GitHub authorization record. */
 export async function deleteHiddenGitHubSecretRecord(params: {
   name: string;
