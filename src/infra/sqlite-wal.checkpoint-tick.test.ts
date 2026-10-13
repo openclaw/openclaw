@@ -30,10 +30,8 @@ describe("sqlite WAL checkpoint tick", () => {
       const initialNowMs = 1_000;
       const clock = createGatewaySchedulerClock(initialNowMs);
       const scheduler = new GatewayScheduler({ clock: clock.clock });
-      const originalScope = GatewayScheduler.prototype.scope;
-      vi.spyOn(GatewayScheduler.prototype, "scope").mockImplementation(() =>
-        originalScope.call(scheduler),
-      );
+      const originalScope = GatewayScheduler.prototype.scope.bind(scheduler);
+      vi.spyOn(GatewayScheduler.prototype, "scope").mockImplementation(() => originalScope());
       const sqlite = requireNodeSqlite();
       const dir = tempDirs.make("openclaw-sqlite-wal-worker-writer-");
       const dbPath = path.join(dir, "openclaw.sqlite");

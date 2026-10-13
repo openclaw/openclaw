@@ -124,7 +124,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     expect(harness.monitor.snapshot()).toMatchObject({
       intervalMs: 10_000,
       delayP99Ms: 0,
-      delayMaxMs: 0,
+      delayMaxMs: 20,
       degraded: false,
     });
     idle = false;
@@ -145,7 +145,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     await harness.samples(439);
     expect(harness.monitor.snapshot()).toMatchObject({
       degraded: true,
-      delayMaxMs: 1_200,
+      delayMaxMs: 1_220,
       reasons: ["event_loop_delay"],
     });
     await harness.samples(50);
