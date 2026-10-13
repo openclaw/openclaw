@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
@@ -24,8 +25,9 @@ import {
   mountConfigPage,
   publishConfigSource,
 } from "./config-page.test-support.ts";
+import type { ConfigPageRouteData } from "./config-page.tsx";
 import { configSelectionFromSearch, type ConfigPageId } from "./config-sections.ts";
-import { configRouteData, type ConfigRouteData } from "./route-data.ts";
+import { configRouteData } from "./route-data.ts";
 import { pages } from "./route.ts";
 
 describe("ConfigPage navigation", () => {
@@ -258,11 +260,13 @@ describe("ConfigPage navigation", () => {
         if (!data || typeof data !== "object" || !("section" in data)) {
           throw new Error("Config route did not return section data");
         }
+        expect(data).toMatchObject({ pageId });
         const module = await route.component();
         const provider = createSolidApplicationContextProvider(completeConfigContext(context));
         const render = expectDefined(module.renderSolid, "Solid config route");
         const { container } = mountSolid(
-          () => render({ data: data as ConfigRouteData, loaderPending: false, presented: true }),
+          () =>
+            render({ data: data as ConfigPageRouteData, loaderPending: false, presented: true }),
           { wrapper: provider.wrapper },
         );
         const page = expectDefined(
@@ -279,6 +283,56 @@ describe("ConfigPage navigation", () => {
           );
         }
       },
+    );
+  });
+
+  it("keeps one config host while the shared route renderer changes subpages", async () => {
+    const communications = expectDefined(
+      pages.find((route) => route.id === "communications"),
+      "communications route",
+    );
+    const advanced = expectDefined(
+      pages.find((route) => route.id === "advanced"),
+      "advanced route",
+    );
+    const firstModule = await communications.component();
+    const nextModule = await advanced.component();
+    const render = expectDefined(firstModule.renderSolid, "config renderer");
+    expect(nextModule.renderSolid).toBe(render);
+    const [data, setData] = createSignal<ConfigPageRouteData>({
+      ...configRouteData({
+        pathname: "/settings/communications",
+        search: "?section=tts",
+        hash: "",
+      }),
+      pageId: "communications",
+    });
+    const provider = createSolidApplicationContextProvider(completeConfigContext(routeContext()));
+    const { container } = mountSolid(
+      () =>
+        createComponent(render, {
+          get data() {
+            return data();
+          },
+          loaderPending: false,
+          presented: true,
+        }),
+      { wrapper: provider.wrapper },
+    );
+    flush();
+    const host = expectDefined(container.querySelector("openclaw-config-page"), "config host");
+    expect(Reflect.get(host, "pageId")).toBe("communications");
+    expect(host.querySelector("#config-section-tts")).not.toBeNull();
+
+    setData({
+      ...configRouteData({ pathname: "/settings/advanced", search: "", hash: "" }),
+      pageId: "advanced",
+    });
+    flush();
+    expect(container.querySelector("openclaw-config-page")).toBe(host);
+    expect(Reflect.get(host, "pageId")).toBe("advanced");
+    expect(host.querySelector(".content-header--settings .page-title")?.textContent).toBe(
+      "Advanced",
     );
   });
 

@@ -1,17 +1,10 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage, redirect } from "@openclaw/uirouter";
-import { createComponent } from "solid-js";
 import { pathForRoute, routePageSpec, type RouteId } from "../../app-route-paths.ts";
-import type { SolidRouteProps } from "../../app-route-types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
 import { CONFIG_PAGE_IDS, type ConfigPageId } from "./config-sections.ts";
-import {
-  configRouteData,
-  configTargetIdFromHash,
-  SETTINGS_ROUTE_TARGETS,
-  type ConfigRouteData,
-} from "./route-data.ts";
+import { configRouteData, configTargetIdFromHash, SETTINGS_ROUTE_TARGETS } from "./route-data.ts";
 
 // Sections relocated by the settings restructure, keyed by "<oldPage>:<section>".
 // Kept so pre-restructure bookmarks and generated links still land somewhere
@@ -67,6 +60,7 @@ function loadConfigRoute(
   }
   return {
     ...route,
+    pageId,
     ...(agentSelectionIntent ? { agentSelectionIntent } : {}),
   };
 }
@@ -85,13 +79,7 @@ function configPage(id: ConfigPageId) {
     component: () =>
       import("./config-page.tsx").then((module) => ({
         header: true,
-        renderSolid: (props: SolidRouteProps<ConfigRouteData>) =>
-          createComponent(module.ConfigPage, {
-            pageId: id,
-            get routeData() {
-              return props.data ?? null;
-            },
-          }),
+        renderSolid: module.ConfigRoute,
       })),
   });
 }

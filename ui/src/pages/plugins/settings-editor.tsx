@@ -25,7 +25,7 @@ import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-ma
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
-import type { JSX } from "../../types/solid-elements.d.ts";
+import type { JSX as SolidJSX } from "../../types/solid-elements.d.ts";
 import { PluginCredentialEditor, type PluginCredentialEditorProps } from "./credential-editor.tsx";
 import "./custom-elements.ts";
 import { renderPluginDetailBreadcrumb } from "./detail-shell.tsx";
@@ -216,7 +216,7 @@ function PluginSettingsFields(
   );
 }
 
-function EditorSection(props: { title: string; id?: string; children: JSX.Element }) {
+function EditorSection(props: { title: string; id?: string; children: SolidJSX.Element }) {
   return (
     <section
       class="plugin-editor__section"
