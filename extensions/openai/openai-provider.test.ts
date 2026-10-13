@@ -245,6 +245,14 @@ describe("buildOpenAIProvider", () => {
           }),
         ).toBe(reason);
       }
+      for (const errorMessage of [
+        "Provider finish_reason: content_filter",
+        "Provider incomplete_reason: content_filter",
+      ]) {
+        expect(provider.classifyFailoverReason?.({ provider: providerId, errorMessage })).toBe(
+          "format",
+        );
+      }
       expect(
         provider.classifyFailoverReason?.({
           provider: providerId,
