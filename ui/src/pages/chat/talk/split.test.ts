@@ -159,8 +159,11 @@ function harness(provider?: string) {
     listeners.add(listener);
     return () => listeners.delete(listener);
   };
-  const context = createChatPageStateContext();
-  context.runtimeConfig = createRuntimeConfigCapability(context.gateway);
+  const baseContext = createChatPageStateContext();
+  const context = {
+    ...baseContext,
+    runtimeConfig: createRuntimeConfigCapability(baseContext.gateway),
+  };
   onTestFinished(() => context.runtimeConfig.dispose());
   const state = createPageState(
     context,
@@ -192,20 +195,23 @@ function harness(provider?: string) {
     nextCapture,
     getRunId: () => runId,
     requireReview: () => {
-      state.sessionsResult = sessionsResult([
-        {
-          key: state.sessionKey,
-          kind: "direct",
-          updatedAt: 1,
-          providerReview: {
-            id: "review-one",
-            runId: "reviewed-run",
-            explanation: "Review is required.",
-            continuationMessage: "Continue after review.",
-            canContinue: true,
+      state.sessionsResult = sessionsResult(
+        [
+          {
+            key: state.sessionKey,
+            kind: "direct",
+            updatedAt: 1,
+            providerReview: {
+              id: "review-one",
+              runId: "reviewed-run",
+              explanation: "Review is required.",
+              continuationMessage: "Continue after review.",
+              canContinue: true,
+            },
           },
-        },
-      ]);
+        ],
+        1,
+      );
     },
   };
 }
