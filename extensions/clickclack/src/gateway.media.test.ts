@@ -27,6 +27,18 @@ vi.mock("./http-client.js", async (importOriginal) => {
   };
 });
 
+function requestUrl(input: string | URL | Request): URL {
+  return new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+}
+
+function requestBodyJson(init: RequestInit | undefined): unknown {
+  const body = init?.body;
+  if (typeof body !== "string") {
+    throw new Error("expected string request body");
+  }
+  return JSON.parse(body);
+}
+
 describe("ClickClack attachment notice admission", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -62,20 +74,21 @@ describe("ClickClack attachment notice admission", () => {
       setClickClackRuntime(runtime);
       const abort = new AbortController();
       const stopped = new Error("notice gateway stopped");
-      const preparing = createDeferred<void>();
-      const prepared = createDeferred<void>();
+      const preparing = createDeferred();
+      const prepared = createDeferred();
       const notices: unknown[] = [];
       const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-        const url = new URL(String(input));
-        if (url.pathname === "/api/uploads/upl_notice")
+        const url = requestUrl(input);
+        if (url.pathname === "/api/uploads/upl_notice") {
           return new Response("missing", { status: 404 });
+        }
         if (url.pathname === "/api/dms" && init?.method === "POST") {
           preparing.resolve();
           await prepared.promise;
           return Response.json({ conversation: { id: "dm_notice" } });
         }
         if (url.pathname === "/api/dms/dm_notice/messages" && init?.method === "POST") {
-          notices.push(JSON.parse(String(init.body)));
+          notices.push(requestBodyJson(init));
           return Response.json({ message: createInboundMessage({ id: "msg_notice" }) });
         }
         throw new Error(`unexpected synthetic notice request ${url.pathname}`);
@@ -115,9 +128,12 @@ describe("ClickClack attachment notice admission", () => {
             throw new Error("notice settled before DM preparation");
           }),
         ]);
-        if (outcome === "revoked")
+        if (outcome === "revoked") {
           publishInboundAccountConfig(runtime, { ...account, allowFrom: [] });
-        if (outcome === "shutdown") abort.abort(stopped);
+        }
+        if (outcome === "shutdown") {
+          abort.abort(stopped);
+        }
         prepared.resolve();
         const result = await sending;
         expect(result).toEqual(
@@ -134,7 +150,7 @@ describe("ClickClack attachment notice admission", () => {
         expect(notices).toEqual(
           outcome === "allowed" ? [{ body: texts[kind], quoted_message_id: "msg_1" }] : [],
         );
-        expect(fetchMock.mock.calls.map(([url]) => new URL(String(url)).pathname)).toEqual([
+        expect(fetchMock.mock.calls.map(([url]) => requestUrl(url).pathname)).toEqual([
           ...(kind === "unavailable" ? ["/api/uploads/upl_notice"] : []),
           "/api/dms",
           ...(outcome === "allowed" ? ["/api/dms/dm_notice/messages"] : []),
@@ -150,7 +166,7 @@ describe("ClickClack attachment notice admission", () => {
 });
 
 class FakeSocket extends EventEmitter {
-  closed = createDeferred<void>();
+  closed = createDeferred();
   close = vi.fn(() => {
     this.emit("close");
     this.closed.resolve();
@@ -186,8 +202,8 @@ describe("ClickClack gateway attachment outcomes", () => {
       setClickClackRuntime(runtime);
       const abort = new AbortController();
       const socket = new FakeSocket();
-      const socketReady = createDeferred<void>();
-      const nextDispatched = createDeferred<void>();
+      const socketReady = createDeferred();
+      const nextDispatched = createDeferred();
       const replayCursors: string[] = [];
       const notices: unknown[] = [];
       let uploadRequests = 0;
@@ -218,10 +234,14 @@ describe("ClickClack gateway attachment outcomes", () => {
       });
       const dispatch = vi.mocked(runtime.channel.inbound.dispatch);
       const originalDispatch = dispatch.getMockImplementation();
-      if (!originalDispatch) throw new Error("missing inbound runtime fixture");
+      if (!originalDispatch) {
+        throw new Error("missing inbound runtime fixture");
+      }
       dispatch.mockImplementation(async (params) => {
         const result = await originalDispatch(params);
-        if (params.ctxPayload.MessageSid === "msg_2") nextDispatched.resolve();
+        if (params.ctxPayload.MessageSid === "msg_2") {
+          nextDispatched.resolve();
+        }
         return result;
       });
       sockets.websocket.mockImplementation(() => {
@@ -229,22 +249,28 @@ describe("ClickClack gateway attachment outcomes", () => {
         return socket;
       });
       const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-        const url = new URL(String(input));
+        const url = requestUrl(input);
         if (url.pathname === "/api/me") {
           return Response.json({ user: createInboundAuthor({ id: "usr_receiver", kind: "bot" }) });
         }
         if (url.pathname === "/api/realtime/events") {
-          if (url.searchParams.has("include_tail"))
+          if (url.searchParams.has("include_tail")) {
             return Response.json({ events: [], tail_cursor: "cursor_0" });
+          }
           const cursor = url.searchParams.get("after_cursor") ?? "";
           replayCursors.push(cursor);
-          if (cursor === "cursor_0")
+          if (cursor === "cursor_0") {
             return Response.json({ events: [createEvent(1), createEvent(2)] });
+          }
           abort.abort();
           return Response.json({ events: [] });
         }
-        if (url.pathname === "/api/messages/msg_1") return Response.json({ message: first });
-        if (url.pathname === "/api/messages/msg_2") return Response.json({ message: next });
+        if (url.pathname === "/api/messages/msg_1") {
+          return Response.json({ message: first });
+        }
+        if (url.pathname === "/api/messages/msg_2") {
+          return Response.json({ message: next });
+        }
         if (url.pathname === "/api/uploads/upl_plan") {
           uploadRequests += 1;
           return uploadRequests === 1
@@ -255,7 +281,7 @@ describe("ClickClack gateway attachment outcomes", () => {
           return Response.json({ conversation: { id: "dm_queue" } });
         }
         if (url.pathname === "/api/dms/dm_queue/messages" && init?.method === "POST") {
-          notices.push(JSON.parse(String(init.body)));
+          notices.push(requestBodyJson(init));
           return Response.json({ message: createInboundMessage({ id: "msg_notice" }) });
         }
         throw new Error(`unexpected synthetic request ${init?.method ?? "GET"} ${url.pathname}`);

@@ -75,7 +75,9 @@ describe("ClickClack inbound media", () => {
     const fetchMock = stubUploadResponse();
     const message = createMediaMessage("upl_plan", 3);
     const firstAttachment = message.attachments?.[0];
-    if (!firstAttachment) throw new Error("missing synthetic attachment");
+    if (!firstAttachment) {
+      throw new Error("missing synthetic attachment");
+    }
     message.attachments = [
       firstAttachment,
       { ...firstAttachment, id: "upl_second", filename: "second.png" },
@@ -193,8 +195,11 @@ describe("ClickClack inbound media", () => {
       const abort = new AbortController();
       stubUploadResponse();
       vi.mocked(runtime.channel.media.saveResponseMedia).mockImplementationOnce(async () => {
-        if (change === "shutdown") abort.abort();
-        else publishInboundAccountConfig(runtime, { ...account, allowFrom: [] });
+        if (change === "shutdown") {
+          abort.abort();
+        } else {
+          publishInboundAccountConfig(runtime, { ...account, allowFrom: [] });
+        }
         return { id: "media", path: "/managed/plan.png", size: 3, contentType: "image/png" };
       });
       await handleClickClackInbound({
@@ -205,7 +210,9 @@ describe("ClickClack inbound media", () => {
       });
       const assertCurrent = vi.mocked(runtime.channel.media.saveResponseMedia).mock.calls[0]?.[1]
         ?.assertCurrent;
-      if (!assertCurrent) throw new Error("missing media publication admission callback");
+      if (!assertCurrent) {
+        throw new Error("missing media publication admission callback");
+      }
       expect(assertCurrent).toThrow(
         change === "shutdown"
           ? abort.signal.reason
