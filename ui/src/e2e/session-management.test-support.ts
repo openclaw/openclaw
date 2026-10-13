@@ -3,7 +3,7 @@ import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
 import { createRequireRecord } from "../../../test/helpers/record.js";
-import type { SessionCapability } from "../lib/sessions/session-capability.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionPath,
@@ -41,12 +41,7 @@ export async function waitForMobileSidebarDrawerOpen(page: Page): Promise<void> 
 
 /** Foreground chat startup admits the canonical roster after document load. */
 export async function waitForSessionRosterHydration(page: Page): Promise<void> {
-  await page.evaluate(async () => {
-    await customElements.whenDefined("openclaw-app");
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime: { context: { sessions: SessionCapability } };
-    };
-    const sessions = app.runtime.context.sessions;
+  await evaluateControlUiContext(page, async ({ sessions }) => {
     const ready = () =>
       sessions.canonicalListRevision > 0 &&
       sessions.presentation.result !== null &&
@@ -117,34 +112,9 @@ export async function waitForPatch(
   throw new Error(`No matching sessions.patch request found: ${JSON.stringify(requests)}`);
 }
 
-/** Wait for actionability, then dispatch once before the control can remove itself. */
+/** Playwright reacquires replaced controls before dispatching the single click. */
 export async function activateSelfRemovingControl(control: Locator): Promise<void> {
-  await control.click({ trial: true });
-  await control.evaluate((element) => {
-    const target = element as HTMLElement & { disabled?: boolean };
-    const style = getComputedStyle(target);
-    const bounds = target.getBoundingClientRect();
-    const root = target.getRootNode();
-    const hitTestRoot = root instanceof ShadowRoot ? root : document;
-    const hitTarget = hitTestRoot.elementFromPoint(
-      bounds.left + bounds.width / 2,
-      bounds.top + bounds.height / 2,
-    );
-    if (
-      !target.isConnected ||
-      style.display === "none" ||
-      style.visibility === "hidden" ||
-      bounds.width <= 0 ||
-      bounds.height <= 0 ||
-      target.disabled === true ||
-      target.getAttribute("aria-disabled") === "true" ||
-      !hitTarget ||
-      (hitTarget !== target && !target.contains(hitTarget))
-    ) {
-      throw new Error("Self-removing control must be visible and enabled before activation");
-    }
-    target.click();
-  });
+  await control.click();
 }
 
 export function trimmedTextContents(locator: Locator): Promise<string[]> {

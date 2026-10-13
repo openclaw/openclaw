@@ -5,6 +5,7 @@ import {
 } from "../../agents/admitted-run-context.js";
 import type { CronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
 import type { ReplyDeliveryObserver } from "../../agents/reply-completion.js";
+import type { SessionEntryCreationCommit } from "../../config/sessions/session-entry-creation.types.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { SessionEntry, SessionToolOverrides } from "../../config/sessions/types.js";
 // Shared get-reply type contracts for command, directive, and runtime layers.
@@ -12,6 +13,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { DashboardMessageReadAdmission } from "../../gateway/message-action-turn-capability.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
 import type { PluginCommandReplyOptions } from "../../plugins/plugin-command-dispatch-contract.js";
+import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type { PreparedTtsPreferences } from "../../tts/tts-preferences.js";
 import { getCommandOwnerAuthority } from "../command-owner-authority.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
@@ -83,6 +85,10 @@ type InternalReplySessionOptions = {
   cleanupBundleMcpOnRunEnd?: boolean;
   /** Defers the child-completion wake until the visible waiting status is delivered. */
   onPendingContinuation?: (settlement?: PendingContinuationSettlement) => void;
+  bindSessionCreation?: SessionEventExecution["bindSessionCreation"];
+  /** Follow the admitted turn's own first-store registration in its retained request facts. */
+  onDatabaseRegistration?: AgentDatabaseRequestExecutionSource["onRegistryChange"];
+  onSessionCreated?: (created: SessionEntryCreationCommit) => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
   /** Observes one transcript-start reader preparation; completion cannot control the run. */
   onTranscriptStartPreparation?: () => (() => void) | undefined;

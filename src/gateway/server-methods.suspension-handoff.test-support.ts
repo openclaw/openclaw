@@ -102,6 +102,7 @@ export function registerSuspensionHandoffLifecycleTests() {
         acceptStop: () => {},
       });
       const context = {
+        getRuntimeConfig: () => ({}),
         cron,
         hostLifecycle: host.capability,
         logGateway: { warn: vi.fn(), info: vi.fn() },
@@ -323,6 +324,7 @@ export function registerSuspensionHandoffAuthorizationTests() {
           },
         },
         context: {
+          getRuntimeConfig: () => ({}),
           hostLifecycle: host.capability,
           logGateway: { warn: vi.fn() },
         } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],

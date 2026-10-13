@@ -1,5 +1,8 @@
+import fs from "node:fs";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { runOutsideStoreWriterContext } from "../../shared/store-writer-queue.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -11,8 +14,123 @@ import { patchSessionEntryCore, replaceSessionEntry } from "./session-accessor.s
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import * as actorScope from "./session-actor-scope.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
+import { captureSessionEntryReadSource } from "./session-entry-read-source.js";
 import { acquireSessionInputActor, bindUserTurnInputActor } from "./session-input-actor.js";
 import { recordSessionParticipantInWorker } from "./session-sharing-store.async.js";
+
+it("acquires a captured input actor outside unrelated writer work and checks authority before writing", async ({
+  signal,
+}) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    const f = createSessionCompoundWorkerFixture();
+    const warmed = expectDefined(
+      await acquireSessionInputActor(
+        { ...f.scope, target: f.target },
+        { assertCurrent() {}, assertReadable() {} },
+      ),
+      "prepared input actor",
+    );
+    await warmed.actor.release();
+    const readSource = captureSessionEntryReadSource(f.database, undefined);
+    const entered = createDeferred();
+    const release = createDeferred();
+    let current = true;
+    const assertCurrent = () => {
+      if (!current) {
+        throw new Error("Input authority revoked while waiting for the writer");
+      }
+    };
+    const heldWriter = runOpenClawAgentWriteAdmission(
+      { agentId: f.scope.agentId, path: f.database.path },
+      async () => {
+        entered.resolve();
+        await release.promise;
+      },
+    );
+    let input: Awaited<ReturnType<typeof acquireSessionInputActor>>;
+    let acquiring: ReturnType<typeof acquireSessionInputActor> | undefined;
+    let write: Promise<unknown> | undefined;
+    try {
+      await withinTest(entered.promise, signal);
+      acquiring = acquireSessionInputActor(
+        { ...f.scope, target: f.target, readSource },
+        { assertCurrent, assertReadable: assertCurrent },
+      );
+      input = expectDefined(await withinTest(acquiring, signal), "captured input actor");
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text: "Retain authority at the actual write", idempotencyKey: "captured-input" },
+        target: { ...f.scope, expectedSessionId: f.scope.sessionId, sessionEntry: f.read() },
+        updateMode: "none",
+        onPersistenceError() {},
+      });
+      bindUserTurnInputActor(recorder, { phase: "acceptInput", acquire: async () => input });
+      write = recorder.persistApproved();
+      void write.catch(() => {});
+      expect(f.events()).toEqual([]);
+      current = false;
+      release.resolve();
+      await expect(write).rejects.toThrow("Input authority revoked while waiting for the writer");
+      expect(f.events()).toEqual([]);
+    } finally {
+      release.resolve();
+      await heldWriter;
+      await Promise.allSettled(write ? [write] : []);
+      input ??= await acquiring;
+      await input?.actor.release();
+    }
+  });
+});
+
+it("accepts input through a captured path alias using the native owner's canonical identity", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    const f = createSessionCompoundWorkerFixture();
+    const alias = path.join(path.dirname(f.database.path), "input-alias");
+    fs.symlinkSync(
+      path.dirname(f.database.path),
+      alias,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const aliasPath = path.join(alias, path.basename(f.database.path));
+    const input = expectDefined(
+      await acquireSessionInputActor(
+        {
+          ...f.scope,
+          storePath: aliasPath,
+          target: f.target,
+          readSource: {
+            ...captureSessionEntryReadSource(f.database, undefined),
+            path: aliasPath,
+          },
+        },
+        { assertCurrent() {}, assertReadable() {} },
+      ),
+      "aliased input actor",
+    );
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "Accept through the original native owner", idempotencyKey: "aliased-input" },
+      target: {
+        ...f.scope,
+        storePath: aliasPath,
+        expectedSessionId: f.scope.sessionId,
+        sessionEntry: f.read(),
+      },
+      updateMode: "none",
+    });
+    bindUserTurnInputActor(recorder, { phase: "acceptInput", acquire: async () => input });
+    try {
+      await expect(recorder.persistApproved()).resolves.toMatchObject({ appended: true });
+      expect(f.events()).toContainEqual(
+        expect.objectContaining({
+          message: expect.objectContaining({ content: "Accept through the original native owner" }),
+        }),
+      );
+    } finally {
+      await input.actor.release();
+    }
+  });
+});
 
 it.each(["before", "after"] as const)(
   "checks input staging lifecycle changes %s writer admission",

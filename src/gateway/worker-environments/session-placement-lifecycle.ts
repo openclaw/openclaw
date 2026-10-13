@@ -452,6 +452,7 @@ export async function ensureWorkerSessionPlacement(params: {
   onTransition?: Parameters<WorkerPlacementDispatchContract["dispatch"]>[1];
   signal?: AbortSignal;
   waitForReady?: boolean;
+  retainDispatch?: () => () => void;
 }): Promise<{ assertCurrent: () => void; release: () => void }> {
   const { request } = params;
   const prepared = await params.placements.prepareSessionPlacement(request.sessionId);

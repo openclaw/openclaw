@@ -446,6 +446,15 @@ function validateRelease(root, expected, owner, sealed, requireManifest = true) 
   }
   auditTree(root, owner, sealed);
   const uiDigest = createHash("sha256").update(html).digest("hex");
+  const buildCacheInputsPath = join(root, "dist", "build-cache-inputs.json");
+  const buildCacheInputs = existsSync(buildCacheInputsPath) ? jsonFile(buildCacheInputsPath) : undefined;
+  if (buildCacheInputs && (buildCacheInputs.version !== 1 ||
+      !buildCacheInputs.steps || typeof buildCacheInputs.steps !== "object" ||
+      Array.isArray(buildCacheInputs.steps) ||
+      Object.entries(buildCacheInputs.steps).some(([label, hash]) =>
+        !label || typeof hash !== "string" || !/^[a-f0-9]{64}$/.test(hash)))) {
+    reject("release build cache input hashes are invalid");
+  }
   if (requireManifest) {
     const manifest = jsonFile(join(root, "deployment.json"));
     if (
@@ -455,7 +464,8 @@ function validateRelease(root, expected, owner, sealed, requireManifest = true) 
       manifest.controlUiSha256 !== uiDigest ||
       manifest.origin !== "https://github.com/openclaw/openclaw.git" ||
       manifest.schemaVersions?.state !== schemas.state ||
-      manifest.schemaVersions?.agent !== schemas.agent
+      manifest.schemaVersions?.agent !== schemas.agent ||
+      !isDeepStrictEqual(manifest.buildCacheInputs, buildCacheInputs)
     ) {
       reject("deployment manifest does not match the exact sealed candidate");
     }
@@ -465,6 +475,7 @@ function validateRelease(root, expected, owner, sealed, requireManifest = true) 
     buildId: build.buildId,
     controlUiSha256: uiDigest,
     schemaVersions: schemas,
+    ...(buildCacheInputs ? { buildCacheInputs } : {}),
   };
 }
 
@@ -561,21 +572,27 @@ function releaseCapacity(phase, reference, mirror, buildHome, servingRoot, runti
 }
 
 function sealTree(root) {
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
-    const pathname = join(root, entry.name);
+  const pending = [root];
+  while (pending.length) {
+    const pathname = pending.pop();
     const metadata = lstatSync(pathname);
-    if (metadata.isSymbolicLink()) continue;
-    if (metadata.isDirectory()) {
-      sealTree(pathname);
+    if (metadata.isSymbolicLink()) {
       continue;
     }
-    if (!metadata.isFile()) reject(`cannot seal unsupported release entry: ${pathname}`);
-    chmodSync(pathname, (metadata.mode & 0o111) !== 0 ? 0o555 : 0o444);
-    syncPath(pathname);
+    if (metadata.isDirectory()) {
+      for (const name of readdirSync(pathname)) {
+        pending.push(join(pathname, name));
+      }
+    } else if (!metadata.isFile()) {
+      reject(`cannot seal unsupported release entry: ${pathname}`);
+    }
+    chmodSync(pathname, metadata.isDirectory() || (metadata.mode & 0o111) !== 0 ? 0o555 : 0o444);
   }
-  // Publishing a directory name cannot make its unsynced descendants durable.
-  chmodSync(root, 0o555);
-  syncPath(root);
+  // GNU sync -f uses syncfs: persist all data, modes and directory entries before publication.
+  const synced = spawnSync("sync", ["-f", "--", root], { encoding: "utf8" });
+  if (synced.status !== 0) {
+    reject(`cannot sync sealed release filesystem: ${synced.error?.message ?? synced.stderr.trim()}`);
+  }
 }
 
 function makeDirectoriesOwnerWritable(root) {
@@ -4313,6 +4330,7 @@ try {
         buildId: release.buildId,
         controlUiSha256: release.controlUiSha256,
         schemaVersions: release.schemaVersions,
+        ...(release.buildCacheInputs ? { buildCacheInputs: release.buildCacheInputs } : {}),
         createdAt: new Date().toISOString(),
       });
       result = JSON.stringify(release);

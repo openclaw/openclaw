@@ -19,9 +19,13 @@ import {
   useProviderToolSchemaRuntimeForTest,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ModelCompatConfig } from "openclaw/plugin-sdk/provider-model-types";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as clientCleanup from "./attempt-client-cleanup.js";
 import { codexTestTurnIds, nativeCommandItem } from "./codex-app-server.test-fixtures.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
@@ -124,6 +128,10 @@ function codexHookCommand(config: unknown, key: string) {
     .at(0)
     ?.hooks?.at(0);
 }
+
+beforeAll(() => setRuntimeConfigSnapshot({}));
+afterAll(() => clearRuntimeConfigSnapshot());
+beforeEach(() => setRuntimeConfigSnapshot({}));
 
 useProviderToolSchemaRuntimeForTest(["openai", "codex", "lmstudio"]);
 

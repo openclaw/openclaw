@@ -30,6 +30,7 @@ import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-pref
 import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   prepareOpenClawStateDatabaseSchema,
   runOpenClawStateWriteTransaction,
@@ -452,6 +453,7 @@ it("re-registers durable lineage children before configured-only runtime reads",
     }).path;
     await closeOpenClawAgentDatabasesAsync(stateDir);
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     unregisterOpenClawAgentDatabase({ agentId: "codex", env, path: childDatabasePath });
 
     expect(fs.existsSync(childDatabasePath)).toBe(true);

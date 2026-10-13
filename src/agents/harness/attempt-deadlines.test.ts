@@ -6,21 +6,27 @@ const SETTLEMENT_TIMEOUT_MS = 2 * 60_000;
 
 describe("agent harness attempt deadlines", () => {
   beforeEach(() => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
     vi.setSystemTime(0);
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.clearAllTimers();
     vi.useRealTimers();
   });
 
-  function createController(timeoutMs = 60_000, startedAtMs = Date.now()) {
+  function createController(
+    timeoutMs = 60_000,
+    startedAtMs = Date.now(),
+    startedAtMonotonicMs = startedAtMs,
+  ) {
     const abort = new AbortController();
     const onTimeout = vi.fn();
     const onDeadlineChanged = vi.fn();
     const controller = createAgentHarnessAttemptDeadlineController({
       startedAtMs,
+      startedAtMonotonicMs,
       timeoutMs,
       settlementTimeoutMs: SETTLEMENT_TIMEOUT_MS,
       signal: abort.signal,
@@ -31,13 +37,13 @@ describe("agent harness attempt deadlines", () => {
   }
 
   it.each(["timer", "clock"] as const)("expires the admitted execution budget via %s", (expiry) => {
-    vi.setSystemTime(20_000);
+    vi.advanceTimersByTime(20_000);
     const { controller, onTimeout, onDeadlineChanged } = createController(60_000, 0);
     expect(controller.ownsExecutionWait()).toBe(true);
     expect(onDeadlineChanged).toHaveBeenCalledWith({ kind: "bounded", deadlineAtMs: 60_000 });
 
     if (expiry === "clock") {
-      vi.setSystemTime(60_000);
+      vi.spyOn(performance, "now").mockReturnValue(60_000);
       expect(controller.ownsExecutionWait()).toBe(false);
       expect(onTimeout).not.toHaveBeenCalled();
       controller.dispose();
@@ -98,6 +104,25 @@ describe("agent harness attempt deadlines", () => {
     expect(onDeadlineChanged).toHaveBeenCalledTimes(2);
   });
 
+  it.each([90_000, -90_000])("preserves the admitted budget across a %ims clock jump", (jumpMs) => {
+    vi.advanceTimersByTime(20_000);
+    vi.setSystemTime(20_000 + jumpMs);
+    const { controller, onTimeout, onDeadlineChanged } = createController(60_000, 0, 0);
+    expect(onDeadlineChanged).toHaveBeenCalledWith({ kind: "bounded", deadlineAtMs: 60_000 });
+    expect(controller.ownsExecutionWait()).toBe(true);
+    vi.advanceTimersByTime(39_999);
+    expect(onTimeout).not.toHaveBeenCalled();
+    vi.setSystemTime(Date.now() + jumpMs);
+    expect(controller.ownsExecutionWait()).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(onTimeout).toHaveBeenCalledExactlyOnceWith({
+      kind: "execution",
+      elapsedMs: 60_000,
+      timeoutMs: 60_000,
+    });
+    expect(controller.ownsExecutionWait()).toBe(false);
+  });
+
   it.each(["abort", "dispose"] as const)("cannot revive a deadline after %s", (closure) => {
     const { controller, abort, onTimeout, onDeadlineChanged } = createController();
     controller.beginSettlement(Date.now());
@@ -120,6 +145,7 @@ describe("agent harness attempt deadlines", () => {
     const onDeadlineChanged = vi.fn();
     const controller = createAgentHarnessAttemptDeadlineController({
       startedAtMs: 0,
+      startedAtMonotonicMs: 0,
       timeoutMs: 60_000,
       settlementTimeoutMs: SETTLEMENT_TIMEOUT_MS,
       signal: abort.signal,

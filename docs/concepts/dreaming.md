@@ -215,7 +215,7 @@ recognized managed rows instead. Jobs with a different declaration key and
 unrelated operator jobs remain unchanged; malformed or ambiguous rows produce
 a repair warning and remain in place.
 
-Dreaming completions share the [background work budget](/concepts/queue#background-work) with Skill Workshop and other plugin completions: at most three runs in total, with up to three available to `memory-core`. The sweep coordinator does not consume a completion slot while it waits for phase work. System busyness shows these runs together in the `background` row.
+Dreaming completions use the [subagent queue](/concepts/queue#background-work) at background priority and honor `agents.defaults.subagents.maxConcurrent`. Setting this existing limit to `1` serializes diary and consolidation completions across workspaces and plugins. The sweep coordinator does not consume a completion slot while it waits for phase work. System busyness shows these completions in the `subagent` row.
 
 An explicit multi-agent fleet needs an [ambient system owner](/gateway/config-agents/heartbeat-compaction-and-streaming#agents.defaults.systemagent) for this job. If logs report `Agent-less cron job has no resolvable owner`, choose an existing agent to own the sweep. For example, if that agent is `ops`:
 

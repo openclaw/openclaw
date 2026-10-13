@@ -1,8 +1,10 @@
 import { expect, it, vi } from "vitest";
 import { readActivitySummarySource } from "../../gateway/session-activity-summary-source.js";
+import { readActivitySummaryBatch } from "../../gateway/session-activity-summary-source.worker.js";
 import { capturePersistedModelPromptProjection } from "../../sessions/user-turn-transcript-updates.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import type { SessionActivitySummaryBatchResult } from "./activity-summary-source.types.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { rewriteTranscriptEventRowsExact } from "./session-accessor.sqlite-transcript-write.js";
@@ -26,23 +28,56 @@ vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMa
 
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
 
-it("retains durable transcript reads across prompt capture and bookkeeping but refreshes body rewrites and resets", async () => {
+function summaryFacts(source: SessionActivitySummaryBatchResult) {
+  if (!source) {
+    throw new Error("Expected an activity summary source");
+  }
+  return {
+    previous: source.previous,
+    watermark: source.watermark,
+    covered: source.covered,
+    omitted: source.omitted,
+    totalMessages: source.snapshot.totalMessages,
+    activeLeafEntryId: source.snapshot.activeLeafEntryId,
+    generation: source.snapshot.snapshot.generation,
+    events: source.page.events.map(({ event }) => event),
+    scannedMessages: source.page.scannedMessages,
+  };
+}
+
+it("reuses durable summaries across model and runtime metadata while refreshing body rewrites and resets", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const fixture = createSessionCompoundWorkerFixture();
     const scope = { ...fixture.scope, env };
     const answer = {
       type: "message",
       id: "answer",
-      parentId: "question",
+      parentId: "initial-runtime",
       message: { role: "assistant", content: "Original answer" },
     };
     const events = [
       { type: "session", id: scope.sessionId, version: 3, cwd: "/synthetic" },
       {
+        type: "custom",
+        id: "initial-model",
+        parentId: null,
+        customType: "model-snapshot",
+        data: { provider: "synthetic", modelApi: "test-api", modelId: "first-model", timestamp: 1 },
+      },
+      {
         type: "message",
         id: "question",
-        parentId: null,
+        parentId: "initial-model",
         message: { role: "user", content: "Original question" },
+      },
+      {
+        type: "custom_message",
+        id: "initial-runtime",
+        parentId: "question",
+        customType: "openclaw.runtime-context",
+        content: "Initial runtime",
+        display: false,
+        details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
       },
       answer,
     ];
@@ -70,6 +105,10 @@ it("retains durable transcript reads across prompt capture and bookkeeping but r
     const historyReads = vi.spyOn(historyLane.pool, "run");
     const discoveryReads = vi.spyOn(targetDiscoveryLane.pool, "run");
     try {
+      const cold = await readActivitySummarySource({ scope, assertCurrent() {} });
+      expect(cold?.notes).toEqual(["user: Original question", "assistant: Original answer"]);
+      expect(summaryFacts(cold)).toEqual(summaryFacts(readActivitySummaryBatch({ scope })));
+      expect(historyReads).toHaveBeenCalled();
       await actor.read(authority);
       await withOwnedSessionTranscriptWrites(
         {
@@ -83,7 +122,50 @@ it("retains durable transcript reads across prompt capture and bookkeeping but r
             maxEvents: 100,
           });
           expect((await hydration.read()).snapshot.events).toEqual(events);
+          historyReads.mockClear();
+          discoveryReads.mockClear();
+          const initial = await readActivitySummarySource({ scope, assertCurrent() {} });
+          expect(summaryFacts(initial)).toEqual(summaryFacts(cold));
+          expect(initial?.notes).toEqual(cold?.notes);
+          expect(historyReads).not.toHaveBeenCalled();
+          expect(discoveryReads).not.toHaveBeenCalled();
           const previousSeq = actor.snapshot(authority)!.transcript.version.rawSeq!;
+          const metadata = [
+            {
+              type: "custom",
+              id: "switched-model",
+              parentId: "answer",
+              customType: "model-snapshot",
+              data: {
+                provider: "synthetic",
+                modelApi: "test-api",
+                modelId: "second-model",
+                timestamp: 2,
+              },
+            },
+            {
+              type: "custom_message",
+              id: "updated-runtime",
+              parentId: "switched-model",
+              customType: "openclaw.system-update",
+              content: "Updated runtime",
+              display: false,
+              details: { kind: "runtime-context", turnScoped: true },
+            },
+          ];
+          for (const event of metadata) {
+            const appendedMetadata = await actor.appendTranscriptEvent(
+              {
+                commandId: event.id,
+                phaseId: "turn",
+                sessionId: scope.sessionId,
+                lifecycleRevision: actor.snapshot(authority)!.entry!.lifecycleRevision ?? null,
+                eventJson: JSON.stringify(event),
+              },
+              authority,
+            );
+            expect(appendedMetadata.kind).toBe("committed");
+          }
           const userMessage = { role: "user" as const, content: "Next question", timestamp: 4 };
           const appended = await actor.appendToolResult(
             {
@@ -169,6 +251,15 @@ it("retains durable transcript reads across prompt capture and bookkeeping but r
             "next-answer",
           ]);
           const summary = await readActivitySummarySource({ scope, assertCurrent() {} });
+          expect(summaryFacts(summary)).toEqual(summaryFacts(readActivitySummaryBatch({ scope })));
+          expect(summary?.snapshot.totalMessages).toBe(4);
+          expect(summary?.notes).toEqual([
+            "user: Original question",
+            "assistant: Original answer",
+            "user: Next question",
+            "assistant: Next answer",
+          ]);
+          expect(summary?.snapshot.activeLeafEntryId).toBe("next-answer");
           expect(summary?.page.events).toContainEqual({
             event: expect.objectContaining({ id: "next-question", message: captured }),
           });
@@ -198,6 +289,7 @@ it("retains durable transcript reads across prompt capture and bookkeeping but r
           const warm = await hydration.read();
           expect(warm.snapshot.events).toMatchObject([
             ...events,
+            ...metadata,
             { id: "next-question", message: { role: "user", content: "Next question" } },
             { id: "next-answer", message: { role: "assistant", content: "Next answer" } },
           ]);
@@ -243,7 +335,9 @@ it("retains durable transcript reads across prompt capture and bookkeeping but r
             expect(historyReads).not.toHaveBeenCalled();
           }
 
-          const row = readTranscriptEventRows(fixture.database, scope.sessionId)[2]!;
+          const row = readTranscriptEventRows(fixture.database, scope.sessionId).find(
+            (candidate) => JSON.parse(candidate.eventJson).id === answer.id,
+          )!;
           const rewrittenAnswer = {
             ...answer,
             message: { role: "assistant", content: "Corrected answer" },
@@ -257,6 +351,18 @@ it("retains durable transcript reads across prompt capture and bookkeeping but r
           await updateMetadata("after rewrite");
           expect(actor.snapshot(authority)).toBeUndefined();
           await recordAndAdopt(3);
+          historyReads.mockClear();
+          const rewrittenSummary = await readActivitySummarySource({ scope, assertCurrent() {} });
+          expect(summaryFacts(rewrittenSummary)).toEqual(
+            summaryFacts(readActivitySummaryBatch({ scope })),
+          );
+          expect(rewrittenSummary?.notes).toEqual([
+            "user: Original question",
+            "assistant: Corrected answer",
+            "user: Next question",
+            "assistant: Next answer",
+          ]);
+          expect(historyReads).toHaveBeenCalled();
           historyReads.mockClear();
           const refreshed = await hydration.read();
           expect(refreshed.snapshot.events).toContainEqual(rewrittenAnswer);

@@ -200,18 +200,25 @@ export async function prepareGatewayKernelState(params: {
               if (!text.trim()) {
                 return;
               }
-              const { captureAbortedPartial, persistAbortedPartials } =
-                await import("./server-methods/chat-transcript-persistence.runtime.js");
+              const {
+                captureAbortedPartial,
+                persistAbortedPartials,
+                prepareChatAbortSessionSnapshot,
+              } = await import("./server-methods/chat-transcript-persistence.runtime.js");
               await persistAbortedPartials({
                 context: { logGateway: log },
                 snapshots: [
                   captureAbortedPartial({
                     sessionKey,
                     sessionId,
-                    agentId,
                     runId,
                     text,
                     abortOrigin: "placement-abandon",
+                    session: await prepareChatAbortSessionSnapshot({
+                      cfg: getCommittedRuntimeConfig(),
+                      key: sessionKey,
+                      agentId,
+                    }),
                   }),
                 ],
               });

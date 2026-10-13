@@ -574,8 +574,11 @@ export async function withEmbeddedTuiStateLock<T>(
     });
     return await run(signalBridge.signal);
   } finally {
-    await stateLock?.release();
-    signalBridge.dispose();
+    try {
+      await stateLock?.release();
+    } finally {
+      signalBridge.dispose();
+    }
   }
 }
 

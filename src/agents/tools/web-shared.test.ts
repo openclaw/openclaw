@@ -176,6 +176,35 @@ describe("readResponseText", () => {
     );
   });
 
+  it.each([
+    {
+      body: '<?xml version="1.0" encoding="utf-16"?><rss><title>café</title></rss>',
+      contentType: "application/rss+xml",
+    },
+    {
+      body: '<meta charset="UTF-16LE"><p>café</p>',
+      contentType: "text/html",
+    },
+    {
+      body: '<meta http-equiv="Content-Type" content="text/html; charset=utf-16"><p>café</p>',
+      contentType: "text/html",
+    },
+  ])(
+    "decodes ASCII-compatible documents that declare UTF-16 as UTF-8: $body",
+    async ({ body, contentType }) => {
+      const bytes = new TextEncoder().encode(body);
+      for (const options of [undefined, { maxBytes: bytes.byteLength }]) {
+        const response = new Response(bytes, { headers: { "content-type": contentType } });
+
+        await expect(readResponseText(response, options)).resolves.toEqual({
+          text: body,
+          truncated: false,
+          bytesRead: bytes.byteLength,
+        });
+      }
+    },
+  );
+
   it("does not mark multi-chunk exact-limit streamed responses as truncated", async () => {
     const cancel = vi.fn(async () => undefined);
     const releaseLock = vi.fn();

@@ -80,6 +80,21 @@ detection only presents available connections; it checks and activates one after
 you select it. A verified existing model opens the normal dashboard without
 replacing the configured route.
 
+Automatic setup preserves an existing configured model. Otherwise it tries saved
+OpenClaw auth profiles, a stored Codex login, a Claude CLI login, `OPENAI_API_KEY`,
+`ANTHROPIC_API_KEY`, then eligible loaded models in Ollama, LM Studio, or
+llama.cpp. It activates the first connection that passes a live completion. If
+none works, it installs or enables the official Codex plugin and uses its login
+or asks you to sign in with ChatGPT. Apple Foundation Models is never selected
+as the primary model, and native Claude/Codex conversation discovery stays off.
+
+When setup reuses Codex, the card says **Using your existing Codex login ·
+sessions shared with Codex**. Codex owns authentication and token refresh in the
+Gateway user's `CODEX_HOME` (or `~/.codex`); OpenClaw does not copy the OAuth
+tokens. Choose **Use a separate login** on the card to sign in to an isolated
+OpenClaw agent home. You can also change providers or sign in separately through
+**Model Setup**. See [Codex login and isolation](/start/onboarding#codex-login-and-isolation).
+
 For the CLI/Gateway setup path, use [Getting started](/start/getting-started).
 For permission recovery, use [macOS permissions](/platforms/mac/permissions).
 

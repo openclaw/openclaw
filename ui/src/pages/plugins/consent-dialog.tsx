@@ -59,7 +59,9 @@ type PluginConsentDialogProps = {
   onRetry: () => void;
 };
 
-type ArtTileOptions = {
+type ArtTileProps = {
+  slug: string;
+  name: string;
   iconUrl?: string;
   onIconError?: () => void;
   authorIconUrl?: string;
@@ -68,26 +70,14 @@ type ArtTileOptions = {
   whiteBackground?: boolean;
 };
 
-export function renderArtTile(
-  slug: string,
-  name: string,
-  options: ArtTileOptions = {},
-): JSX.Element {
-  return <PluginArtTile slug={slug} name={name} options={options} />;
-}
-
-export function PluginArtTile(props: {
-  slug: string;
-  name: string;
-  options: ArtTileOptions;
-}): JSX.Element {
+export function PluginArtTile(props: ArtTileProps): JSX.Element {
   type ImageState = { source: string | undefined; status: "loading" | "ready" | "failed" };
   const [packageImage, setPackageImage] = createSignal<ImageState>((previous) => {
-    const source = props.options.iconUrl;
+    const source = props.iconUrl;
     return previous && previous.source === source ? previous : { source, status: "loading" };
   });
   const [authorImage, setAuthorImage] = createSignal<ImageState>((previous) => {
-    const source = props.options.authorIconUrl;
+    const source = props.authorIconUrl;
     return previous && previous.source === source ? previous : { source, status: "loading" };
   });
   let disposed = false;
@@ -101,8 +91,8 @@ export function PluginArtTile(props: {
   const source = () =>
     currentImage().state.status === "failed" ? undefined : currentImage().state.source;
   const pending = () =>
-    source() ? currentImage().state.status === "loading" : Boolean(props.options.loading);
-  const className = () => props.options.className ?? "plugins-tile";
+    source() ? currentImage().state.status === "loading" : Boolean(props.loading);
+  const className = () => props.className ?? "plugins-tile";
   const settle = (url: string, status: "ready" | "failed") => {
     const image = currentImage();
     if (disposed || image.state.source !== url) {
@@ -110,7 +100,7 @@ export function PluginArtTile(props: {
     }
     image.update({ ...image.state, status });
     if (status === "failed" && image.package) {
-      props.options.onIconError?.();
+      props.onIconError?.();
     }
   };
   // Only the displayed image is admitted; failed sources stay failed until their URL changes.
@@ -120,7 +110,7 @@ export function PluginArtTile(props: {
         <span
           class={[
             className(),
-            { "plugins-tile--white": props.options.whiteBackground, skeleton: pending() },
+            { "plugins-tile--white": props.whiteBackground, skeleton: pending() },
           ]}
           data-plugin-icon-id={props.slug}
           aria-hidden="true"
@@ -481,7 +471,12 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
     >
       <section class="plugins-consent oc-card" data-plugin-consent={consent().intent.kind}>
         <header class="plugins-consent__header">
-          {renderArtTile(slug(), name(), { iconUrl: props.iconUrl, loading: props.iconLoading })}
+          <PluginArtTile
+            slug={slug()}
+            name={name()}
+            iconUrl={props.iconUrl}
+            loading={props.iconLoading}
+          />
           <div>
             <div class="plugins-detail__title">
               <h2>{name()}</h2>

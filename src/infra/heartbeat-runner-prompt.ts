@@ -155,7 +155,7 @@ export async function resolveHeartbeatPreflight(params: {
     wakeFlags.isExecEventWake && !authoritativeScheduledTick && !params.scheduledTasks?.length
       ? resolveConversationCompletionRoute(pendingEventEntries, queue.entry)
       : undefined;
-  const heartbeatSession = resolveHeartbeatSessionSelection(
+  const heartbeatSession = await resolveHeartbeatSessionSelection(
     params.cfg,
     params.agentId,
     params.heartbeat,
@@ -164,7 +164,13 @@ export async function resolveHeartbeatPreflight(params: {
   );
   // Isolation saves periodic-poll history cost; a conversation's continuation needs its history.
   const session = conversationRoute
-    ? resolveHeartbeatSessionSelection(params.cfg, params.agentId, params.heartbeat, queue, false)
+    ? await resolveHeartbeatSessionSelection(
+        params.cfg,
+        params.agentId,
+        params.heartbeat,
+        queue,
+        false,
+      )
     : heartbeatSession;
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),

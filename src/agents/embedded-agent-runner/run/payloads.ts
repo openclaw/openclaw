@@ -56,6 +56,7 @@ import {
 } from "../delivery-evidence.js";
 import { buildSourceReplyPayloadState } from "./source-reply-payloads.js";
 import { buildFailureWarning } from "./tool-error-warning.js";
+import type { EmbeddedRunAttemptResult } from "./types.js";
 
 /**
  * Converts a completed embedded attempt into reply payloads for channels. This
@@ -74,6 +75,7 @@ export function buildEmbeddedRunPayloads(params: {
   currentAssistant?: AssistantMessage | null;
   lastToolError?: ToolErrorSummary;
   config?: OpenClawConfig;
+  sandboxRuntime?: EmbeddedRunAttemptResult["sandboxRuntime"];
   isCronTrigger?: boolean;
   isHeartbeatTrigger?: boolean;
   sessionKey: string;
@@ -208,6 +210,7 @@ export function buildEmbeddedRunPayloads(params: {
       providerOwner: params.providerOwner,
       model: params.model,
       authMode: params.authMode,
+      sandboxRuntime: params.sandboxRuntime,
     };
     const errorText =
       assistantForPayload && lastAssistantNeedsErrorSurface

@@ -315,6 +315,9 @@ export class SqliteDatabaseAdmissionRegistry {
   }
 
   install(admissions: SqliteDatabaseAdmissions): void {
+    if (admissions.length === 0) {
+      return;
+    }
     this.publish();
     for (const incoming of admissions) {
       if (incoming.descriptorOwner !== 0 || isSqliteDatabaseAdmissionRetired(incoming)) {

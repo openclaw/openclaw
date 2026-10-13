@@ -2,6 +2,7 @@ import path from "node:path";
 import * as ts from "typescript/unstable/ast";
 import { SymbolFlags, type Symbol } from "typescript/unstable/sync";
 import { createNativeTypeScriptProject } from "./native-typescript.mts";
+import { inspectPersonalCredentialWriters } from "./personal-credential-writer-guard.mts";
 
 // Each entry is a reviewed, released compatibility boundary, not a whole-file exemption.
 // Kernels may join this list only after their bundled callers have moved to workers.
@@ -114,10 +115,6 @@ const reviewedMembers = new Map<string, readonly string[]>([
 // another proven candidate or an inventory-reviewed worker/maintenance entry.
 const nonRuntimeCandidates = new Map<string, readonly string[]>([
   ["src/state/openclaw-state-db-maintenance.ts", ["writeCurrentStateSchemaMetadata"]],
-  [
-    "src/state/github-publication-session-lifecycles.ts",
-    ["insertGitHubPublicationSessionLifecycle"],
-  ],
   ["src/state/user-github-connections.kernel.ts", ["listUserGitHubConnectionsInDatabase"]],
   ["src/state/user-profile-mutation.ts", ["runUserProfileWriteTransaction"]],
   ["src/gateway/channel-operator-authority.ts", ["resolveChannelOperatorIdentityFacts"]],
@@ -207,6 +204,10 @@ const nonRuntimeMemberForwards = new Map([
 // These exact declarations consume their inline callbacks synchronously.
 const synchronousScopes = new Map<string, ReadonlyMap<string, number>>([
   [
+    "src/agents/subagents/spawn/subagent-session-store-legacy.ts",
+    new Map([["withLegacySessionCapabilityRead", 0]]),
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-participants.native.ts",
     new Map([["recordSessionParticipantWithAliasRead", 2]]),
   ],
@@ -273,11 +274,7 @@ export function inspectDatabaseWorkerBoundaries(
   const nonRuntimeOperations = new Map<string, Map<string, NonRuntimeTier>>();
   const nonRuntimeCallLocations = new Map<string, Set<string>>();
   const violations: string[] = [];
-  if (
-    ![...reviewed.keys(), ...reviewedMembers.keys(), ...nonRuntimeCandidates.keys()].some((file) =>
-      sourceTexts.has(file),
-    )
-  ) {
+  if (sourceTexts.size === 0) {
     return { operations, callLocations, nonRuntimeOperations, nonRuntimeCallLocations, violations };
   }
   const config = ".openclaw-database-worker-compat.tsconfig.json";
@@ -437,6 +434,7 @@ export function inspectDatabaseWorkerBoundaries(
     }
     return { file, source };
   });
+  violations.push(...inspectPersonalCredentialWriters(sources, checker));
   // Follow named kernels from the reviewed boundaries. A symbol reference from
   // outside this closure (or an escaped callback) will make that kernel live.
   // A returned receiver exists only through its factory. Keep its methods in

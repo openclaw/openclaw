@@ -323,6 +323,8 @@ it("settles cancelled message reads before reuse and closes their database handl
     setRuntimeConfigSnapshot({});
     const fixture = await seed(state, "main", "cancel-message-read");
     await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
+    // Cold admission uses the discovery lane; compare cancellation reuse on the warm history lane.
+    await prewarmSessionHistoryWorker({ agentId: "main", path: fixture.path, env: state.env });
     const controller = new AbortController();
     const cancelled = new Error("history consumer closed");
     const reads: Array<{ worker: Worker; threadId: number }> = [];

@@ -13,10 +13,7 @@ import {
   blockSubagentCompletionDelivery,
   reconcileRetiredSubagentCancellation,
 } from "../completion/subagent-completion-admission.store.js";
-import {
-  resolveSubagentChildAuthority,
-  warnLegacySubagentAuthority,
-} from "./subagent-child-owner-match.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
@@ -85,6 +82,7 @@ export function createSubagentRegistrySweeper(params: {
   startSubagentAnnounceCleanupFlow: SubagentLifecycleController["startSubagentAnnounceCleanupFlow"];
   completeCleanupBookkeeping: SubagentLifecycleController["completeCleanupBookkeeping"];
   isCleanupOwnerCurrent: SubagentLifecycleController["isCleanupOwnerCurrent"];
+  isTerminalTailActive: SubagentLifecycleController["isTerminalTailActive"];
   sessionEffectsHostCurrent: SubagentLifecycleController["sessionEffectsHostCurrent"];
   shouldSuppressSessionEffects: SubagentLifecycleController["shouldSuppressSessionEffects"];
   discardTerminalDelivery: typeof SubagentLifecycleController.discardTerminalDelivery;
@@ -182,6 +180,7 @@ export function createSubagentRegistrySweeper(params: {
     getRunsForChildSession: params.getRunsForChildSession,
     getGatewayRuntime: params.getGatewayRecoveryRuntime,
     finalizeRun: params.finalizeInterruptedSubagentRun,
+    isTerminalTailActive: params.isTerminalTailActive,
     recoverRow: async (recoveryParams) =>
       (await restartRecoveryLoader.load()).recoverInterruptedSubagentRow(recoveryParams),
     schedule: (delayMs) => schedule({ delayMs }),
@@ -258,7 +257,6 @@ export function createSubagentRegistrySweeper(params: {
         if (resolveSubagentChildAuthority(entry).status === "mismatch") {
           continue;
         }
-        warnLegacySubagentAuthority(entry, params.warn);
         if (isRestoredQueuedFailureSettlementClaimed(entry)) {
           // The restored FIFO callback owns this row until durable settlement.
           continue;

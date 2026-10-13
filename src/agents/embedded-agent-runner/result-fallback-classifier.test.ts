@@ -213,6 +213,17 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
 
   it.each([
     {
+      name: "a status-less serialized Google 503 error",
+      createPayloads: () => [
+        {
+          isError: true,
+          text: "Google Generative AI API error (503): The service is currently unavailable. [code=UNAVAILABLE]",
+        },
+      ],
+      code: "embedded_error_payload",
+      reason: "server_error",
+    },
+    {
       name: "a generic external runner failure",
       createPayloads: () => [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
       code: "generic_external_run_failure",

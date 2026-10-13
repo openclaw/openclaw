@@ -411,6 +411,38 @@ describe("public session sharing", () => {
 });
 
 describe("chat pane sharing authorization", () => {
+  it("does not invalidate each render when sharing cannot load, then hydrates when access arrives", async () => {
+    const row = sessionRow();
+    const request = vi.fn(async () => sharingResult(row));
+    const { pane } = createSharingTestChatPane({
+      client: createGatewayBrowserClientFixture({ request }),
+      sessions: createSessionCapabilityFixture(),
+    });
+    const invalidate = vi.spyOn(pane.chatState, "requestBackgroundUpdate");
+    const hydration = vi.spyOn(pane, "loadSessionSharing");
+    setSharingAuthorization(pane, { scopes: ["operator.sessions.write"] });
+
+    pane.syncSelectedSessionSharing(row);
+    pane.syncSelectedSessionSharing(row);
+
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+
+    setSharingAuthorization(pane, { scopes: ["operator.read"] });
+    pane.syncSelectedSessionSharing(row);
+    pane.syncSelectedSessionSharing(row);
+    await hydration.mock.results.at(-1)?.value;
+
+    expect(request).toHaveBeenCalledExactlyOnceWith("session.members.listEvidence", {
+      sessionKey: row.key,
+      agentId: "main",
+    });
+    expect(pane.sessionSharingStates.get(pane.sessionSharingCacheKey(row.key))).toEqual({
+      loading: false,
+      result: sharingResult(row),
+    });
+  });
+
   it("loads selected-global Work suggestions after visibility changes to shared", async () => {
     const visibility = "shared";
     const pending: SessionSuggestion = {

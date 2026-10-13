@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   formatDeferredPluginMigration,
+  readConfigWritePendingMigrations,
   type DeferredPluginMigration,
 } from "../infra/deferred-plugin-migrations.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
@@ -9,8 +10,9 @@ import { collectPluginConfigContractMatches } from "../plugins/config-contract-m
 import { parseConcreteConfigPath, toDotPath } from "../shared/dot-path.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { applyUnsetPathsForWrite } from "./config-path-mutation.js";
-import type { ConfigWriteOptions } from "./io.types.js";
+import type { ConfigIoFactoryOptions, ConfigWriteOptions } from "./io.types.js";
 import type { OpenClawConfig } from "./types.js";
+import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
 const snapshotMigrationFacts = new WeakMap<object, readonly DeferredPluginMigration[]>();
 
@@ -19,7 +21,7 @@ export function setDeferredPluginMigrationConfigFacts(
   source: object,
   pending: readonly DeferredPluginMigration[] | undefined,
 ): void {
-  if (pending?.length) {
+  if (pending !== undefined) {
     snapshotMigrationFacts.set(source, structuredClone(pending));
   }
 }
@@ -28,6 +30,19 @@ export function getDeferredPluginMigrationConfigFacts(
   source: unknown,
 ): readonly DeferredPluginMigration[] | undefined {
   return isRecord(source) ? snapshotMigrationFacts.get(source) : undefined;
+}
+
+export function readConfigWriteMigrationFacts(
+  snapshot: Pick<ConfigFileSnapshot, "path" | "sourceConfig">,
+  env?: NodeJS.ProcessEnv,
+  options?: Pick<ConfigIoFactoryOptions, "deferredPluginMigrations">,
+): readonly DeferredPluginMigration[] | undefined {
+  return readConfigWritePendingMigrations(
+    snapshot.path,
+    env,
+    options?.deferredPluginMigrations ??
+      getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig),
+  );
 }
 
 function readPathValue(value: unknown, segments: readonly string[]): unknown {

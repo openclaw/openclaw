@@ -32,7 +32,11 @@ import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { emptyLegacyContent } from "../../../lit/solid-content.tsx";
-import { AttachmentCardHeader, CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
+import {
+  AttachmentCardHeader,
+  AttachmentPreviewSkeleton,
+  CompactAttachmentCard,
+} from "./chat-attachment-card-solid.tsx";
 import {
   isCrossOriginHttpSource,
   safeAttachmentHref,
@@ -225,15 +229,7 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
             style={{ "--preview-ratio": model().ratio }}
           >
             <Show when={model().pending || model().imagePreview}>
-              <div
-                class="sidebar-attachment-preview__loading"
-                role="status"
-                aria-label={t("common.loading")}
-              >
-                <div class="skeleton skeleton-line" aria-hidden="true" />
-                <div class="skeleton skeleton-line skeleton-line--long" aria-hidden="true" />
-                <div class="skeleton skeleton-line skeleton-line--medium" aria-hidden="true" />
-              </div>
+              <AttachmentPreviewSkeleton />
             </Show>
             <Show when={model().imagePreview && model().src} keyed>
               {(src) => (
