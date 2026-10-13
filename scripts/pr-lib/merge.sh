@@ -291,7 +291,7 @@ merge_verify() {
         { [ "$auto_merge_requested" = true ] || [ -n "$replacement_head" ]; }; } ||
       [ "${HOSTED_GATES_TARGET_HEAD_SHA:-}" != "$PREP_HEAD_SHA" ] ||
       [ "${MERGE_TRANSPORT:-graphql}" != graphql ]; then
-      echo "Deferred GitHub gates require exact-head auto-merge or qualified recovery." >&2
+      echo "Deferred GitHub gates require --auto-merge at the exact prepared head or qualified recovery." >&2
       return 1
     fi
     github_pending=true
