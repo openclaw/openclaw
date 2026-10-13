@@ -762,11 +762,13 @@ python3 "$HOME/.agents/skills/autoreview/scripts/autoreview" --mode branch --bas
 node scripts/watch-pr-ci.mjs <pr> <head-sha> --repo openclaw/openclaw
 ```
 
-Use focused local or Testbox proof; observe existing CI without dispatching,
-rerunning, or re-pushing just to obtain green. Proven red-main repairs follow
-the maintainer workflow's direct-main rule. Other changes use its native PR
-route under the user's existing authorization. Do not run unrelated full-suite
-proof or combine `OPENCLAW_TESTBOX=1` with `OPENCLAW_PR_GATES_REMOTE=github`.
+Focused local proof; PR CI = broad proof. Testbox only for CI/local gaps, immediate grant.
+Observe existing CI; never dispatch/rerun/re-push just for green.
+CI fails → `pnpm test:ci-failed <pr>`; read classification, fix new failures →
+`pnpm test:ci-failed <pr> --run` until local pass → push once. Never local full-suite CI repair.
+Proven red-main repairs: maintainer workflow direct-main rule. Other changes:
+native PR route under existing user authorization. Never combine
+`OPENCLAW_TESTBOX=1` with `OPENCLAW_PR_GATES_REMOTE=github`.
 
 ## Post-Land Monitoring
 
