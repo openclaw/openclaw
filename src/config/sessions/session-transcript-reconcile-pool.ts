@@ -8,6 +8,7 @@ import { runWithSqliteDatabaseAdmissionTurn } from "../../infra/sqlite-database-
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { resolveWorkerPoolSize } from "../../infra/worker-pool-sizing.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
@@ -25,15 +26,19 @@ import type {
 type ReconcilePool = WorkerTaskPool<SessionTranscriptReconcileWorkerTask, void>;
 type ReconcileRuntime = {
   pool?: ReconcilePool;
-  operations: Set<Promise<unknown>>;
+  operations: Map<Promise<unknown>, AbortController>;
+  tasks: Map<AbortController, string>;
   stopped: boolean;
   closing?: Promise<void>;
 };
 const MAX_WORKERS = resolveWorkerPoolSize("writer");
+const CLOSE_GRACE_MS = 5_000;
+const log = createSubsystemLogger("sessions/transcript-index");
 const runtime = resolveGlobalSingleton<ReconcileRuntime>(
   Symbol.for("openclaw.sessionTranscriptReconcilePool"),
   () => ({
-    operations: new Set(),
+    operations: new Map(),
+    tasks: new Map(),
     stopped: false,
   }),
   () => closeSessionTranscriptReconcileWorkerPool(),
@@ -78,7 +83,7 @@ export function runSessionTranscriptReconcileOperation<T>(
       unregister?.();
     }
   });
-  runtime.operations.add(promise);
+  runtime.operations.set(promise, controller);
   try {
     unregister =
       owner &&
@@ -96,7 +101,7 @@ export function runSessionTranscriptReconcileOperation<T>(
                 unregister?.();
               }
             });
-          runtime.operations.add(closing);
+          runtime.operations.set(closing, controller);
           return closing.finally(() => runtime.operations.delete(closing));
         },
       });
@@ -227,30 +232,44 @@ export function closeSessionTranscriptReconcileWorkerPool(): Promise<void> {
     return runtime.closing;
   }
   runtime.stopped = true;
+  const deadline = setTimeout(() => {
+    const error = new Error("Session transcript reconciliation shutdown grace expired");
+    log.warn(
+      `${error.message}; cancelling ${runtime.operations.size} operations; terminating workers: ${[...runtime.tasks.values()].join(", ") || "none"}`,
+    );
+    for (const controller of runtime.operations.values()) {
+      controller.abort(error);
+    }
+    for (const controller of runtime.tasks.keys()) {
+      controller.abort(error);
+    }
+  }, CLOSE_GRACE_MS);
   runtime.closing = Promise.resolve()
     .then(async () => {
       while (runtime.operations.size) {
-        await Promise.allSettled(runtime.operations);
+        await Promise.allSettled(runtime.operations.keys());
       }
       await runtime.pool?.close();
       runtime.pool = undefined;
       runtime.stopped = false;
     })
     .finally(() => {
+      clearTimeout(deadline);
       runtime.closing = undefined;
     });
   return runtime.closing;
 }
 
 export function getSessionTranscriptReconcileWorkerPoolSnapshot() {
-  const snapshot = runtime.pool?.getSnapshot() ?? {
-    maxWorkers: MAX_WORKERS,
-    workers: 0,
-    workersCreated: 0,
-    activeTasks: 0,
-    pendingTasks: 0,
-  };
-  return snapshot;
+  return (
+    runtime.pool?.getSnapshot() ?? {
+      maxWorkers: MAX_WORKERS,
+      workers: 0,
+      workersCreated: 0,
+      activeTasks: 0,
+      pendingTasks: 0,
+    }
+  );
 }
 
 async function startReconcileWorkerTask(
@@ -289,6 +308,12 @@ async function startReconcileWorkerTask(
   const { port1: port, port2 } = new MessageChannel();
   // Owner revocation stops new publication, not settlement of an already-dispatched plan.
   const controller = new AbortController();
+  runtime.tasks.set(
+    controller,
+    input.mode === "memory"
+      ? "memory"
+      : `transcript:${input.mode}:${input.leaseId} (${input.path})`,
+  );
   const closed = new Promise<void>((resolve) => {
     port.once("close", resolve);
   });
@@ -364,7 +389,10 @@ async function startReconcileWorkerTask(
           },
           "reconciliation",
         )
-  ).finally(() => port2.close());
+  ).finally(() => {
+    runtime.tasks.delete(controller);
+    port2.close();
+  });
   const leaseRelease = Promise.allSettled([completion, closed]).then(([result]) => {
     if (result.status === "rejected") {
       failure ??= toStringifiedError(result.reason);

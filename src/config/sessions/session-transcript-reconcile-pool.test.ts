@@ -296,7 +296,7 @@ it.each(["complete", "native-exit"] as const)(
   30_000,
 );
 
-it.each(["complete", "native-exit"] as const)(
+it.each(["complete", "native-exit", "pool-timeout"] as const)(
   "joins transcript lease settlement before closing an agent (%s)",
   async (ending) => {
     const stateDir = tempDirs.make("openclaw-reconcile-agent-close-");
@@ -404,23 +404,34 @@ it.each(["complete", "native-exit"] as const)(
           .prepare("DELETE FROM transcript_events WHERE session_id = ?")
           .run(orphanSessionId);
       }
+      if (ending === "pool-timeout") {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const terminate = vi.spyOn(activeWorker!, "terminate");
+        const poolClosing = closeSessionTranscriptReconcileWorkerPool();
+        await vi.advanceTimersByTimeAsync(4_999);
+        expect(terminate).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(terminate).toHaveBeenCalledOnce();
+        vi.useRealTimers();
+        await poolClosing;
+      }
       closing = closeOpenClawAgentDatabaseByPathAsync(database.path);
       if (ending === "native-exit") {
         releaseAcknowledgement = undefined;
         await activeWorker!.terminate();
-      } else {
+      } else if (ending === "complete") {
         releaseAcknowledgement!();
         releaseAcknowledgement = undefined;
       }
       await expect(closing).resolves.toBe(true);
       const [result] = await reconciliation;
       expect(result).toEqual(
-        ending === "native-exit"
+        ending !== "complete"
           ? expect.objectContaining({ status: "rejected" })
           : { status: "fulfilled", value: { reconciledSessions: 1 } },
       );
       expect(events).toEqual(
-        ending === "native-exit"
+        ending !== "complete"
           ? ["release-task", "worker-release", "native-close"]
           : ["worker-release", "native-close"],
       );
@@ -467,6 +478,7 @@ it.each(["complete", "native-exit"] as const)(
         });
       }
     } finally {
+      vi.useRealTimers();
       canonical.restore();
       releaseAcknowledgement?.();
       await reconciliation;
