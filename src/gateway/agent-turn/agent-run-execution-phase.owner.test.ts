@@ -761,7 +761,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
     expect(execution.callerRelease).toHaveBeenCalledOnce();
   });
 
-  it.each([undefined])(
+  it.each([undefined, "/workspace/session-override"])(
     "preserves the admitted workspace with session override %s",
     async (workspaceOverride) => {
       const execution = createExecution();

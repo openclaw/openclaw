@@ -365,6 +365,43 @@ describe("matrix message actions", () => {
     expect(hydrateEvents).toHaveBeenNthCalledWith(1, "!room:example.org", [encrypted]);
   });
 
+  it.each([
+    { direction: "backward", after: undefined },
+    { direction: "forward", after: "previous-page" },
+  ])("collapses valid Matrix replacements in $direction history", async ({ after }) => {
+    const chronological = [
+      createHistoryMessage({ eventId: "$original", body: "original text", timestamp: 10 }),
+      createHistoryMessage({
+        eventId: "$edit-old",
+        body: "intermediate text",
+        timestamp: 20,
+        replaces: "$original",
+      }),
+      createHistoryMessage({
+        eventId: "$edit-new",
+        body: "final text",
+        timestamp: 30,
+        replaces: "$original",
+      }),
+    ];
+    const chunk = after ? chronological : chronological.toReversed();
+    const { client } = createMessagesClient({ chunk });
+
+    const result = await readMatrixMessages("room:!room:example.org", { client, after });
+
+    expect(result.messages).toEqual([
+      {
+        eventId: "$original",
+        sender: "@alice:example.org",
+        body: "final text",
+        msgtype: "m.text",
+        attachment: undefined,
+        timestamp: 10,
+        relatesTo: undefined,
+      },
+    ]);
+  });
+
   it("uses the Matrix event-id tie-break for equally timed replacements", async () => {
     const winner = createHistoryMessage({
       eventId: "$edit-z",

@@ -129,6 +129,19 @@ describe("action client helpers", () => {
     });
   });
 
+  it("releases shared action clients when the wrapped call throws", async () => {
+    const sharedClient = createMockMatrixClient();
+    setAcquiredMatrixClient(sharedClient);
+
+    await expect(
+      withResolvedActionClient({ cfg: TEST_CFG, accountId: "default" }, async () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+
+    expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "persist" });
+  });
+
   it("resolves room ids before running wrapped room actions", async () => {
     const sharedClient = createMockMatrixClient();
     const lease = setAcquiredMatrixClient(sharedClient);

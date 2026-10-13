@@ -315,6 +315,43 @@ describe("buildDiscordInteractiveComponents", () => {
     ).toBeUndefined();
   });
 
+  it("splits long shared button rows to stay within Discord action limits", () => {
+    expect(
+      buildDiscordInteractiveComponents({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "One", value: "1" },
+              { label: "Two", value: "2" },
+              { label: "Three", value: "3" },
+              { label: "Four", value: "4" },
+              { label: "Five", value: "5" },
+              { label: "Six", value: "6" },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({
+      blocks: [
+        {
+          type: "actions",
+          buttons: [
+            { label: "One", style: "secondary", callbackData: "1" },
+            { label: "Two", style: "secondary", callbackData: "2" },
+            { label: "Three", style: "secondary", callbackData: "3" },
+            { label: "Four", style: "secondary", callbackData: "4" },
+            { label: "Five", style: "secondary", callbackData: "5" },
+          ],
+        },
+        {
+          type: "actions",
+          buttons: [{ label: "Six", style: "secondary", callbackData: "6" }],
+        },
+      ],
+    });
+  });
+
   it("does not duplicate presentation text when appending controls", () => {
     expect(
       buildDiscordPresentationComponents({

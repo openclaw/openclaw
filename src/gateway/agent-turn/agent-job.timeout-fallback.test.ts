@@ -5,7 +5,7 @@ import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../../agents/run-terminatio
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { waitForAgentJob } from "./agent-job.js";
 
-const HARD_TIMEOUT_PHASES = ["provider"] as const;
+const HARD_TIMEOUT_PHASES = ["preflight", "provider", "post_turn"] as const;
 const NON_HARD_TIMEOUTS = [
   {
     label: "soft queue timeout",

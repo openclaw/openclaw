@@ -58,6 +58,11 @@ describe("Security: allowlist ship matching", () => {
 
 describe("Security: DM Allowlist", () => {
   describe("DM ingress allowlist", () => {
+    it("rejects DMs when allowlist is empty", async () => {
+      await expectDmAllowed("~zod", [], false);
+      await expectDmAllowed("~sampel-palnet", [], false);
+    });
+
     it("rejects DMs when allowlist is undefined", async () => {
       await expectDmAllowed("~zod", undefined, false);
     });
@@ -92,6 +97,12 @@ describe("Security: DM Allowlist", () => {
 
 describe("Security: Group Invite Allowlist", () => {
   describe("isGroupInviteAllowed", () => {
+    it("rejects invites when allowlist is empty (fail-safe)", () => {
+      expect(isGroupInviteAllowed("~zod", [])).toBe(false);
+      expect(isGroupInviteAllowed("~sampel-palnet", [])).toBe(false);
+      expect(isGroupInviteAllowed("~malicious-actor", [])).toBe(false);
+    });
+
     it("rejects invites when allowlist is undefined (fail-safe)", () => {
       // CRITICAL: Undefined allowlist must DENY, not accept-all
       expect(isGroupInviteAllowed("~zod", undefined)).toBe(false);

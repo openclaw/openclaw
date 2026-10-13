@@ -588,6 +588,42 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("preserves the visible runtime model during a heartbeat using another model", async () => {
+    await withSession(async ({ seed, update, read, sessionStore }) => {
+      const visible = {
+        modelProvider: "anthropic",
+        model: "claude-opus-4-6",
+        agentHarnessId: "openclaw",
+        contextTokens: 1_000_000,
+        cliSessionBindings: { "claude-cli": { sessionId: "existing-cli-session" } },
+        cliSessionIds: { "claude-cli": "existing-cli-session" },
+        claudeCliSessionId: "existing-cli-session",
+        contextBudgetStatus: contextBudgetStatus({
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          estimatedPromptTokens: 640_000,
+          contextTokenBudget: 1_000_000,
+        }),
+      };
+      await seed(visible);
+      await update({
+        preserveRuntimeModel: true,
+        result: createRunResult({
+          sessionId,
+          provider: "claude-cli",
+          model: "claude-sonnet-4-6",
+          agentHarnessId: "codex",
+          contextTokens: 128_000,
+          cliSessionBinding: { sessionId: "heartbeat-cli-session" },
+          contextBudgetStatus: contextBudgetStatus({ provider: "ollama", model: "llama3.2:1b" }),
+        }),
+      });
+      for (const entry of [sessionStore[sessionKey], read()]) {
+        expect(entry).toMatchObject(visible);
+      }
+    });
+  });
+
   it("preserves user-facing accounting while allowing session touch metadata", async () => {
     await withSession(async ({ seed, update, read, sessionStore, storePath }) => {
       await seed({

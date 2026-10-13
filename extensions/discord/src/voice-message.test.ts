@@ -135,48 +135,56 @@ describe("ensureOggOpus", () => {
     expect(runFfmpegMock).not.toHaveBeenCalled();
   });
 
-  it("re-encodes 24kHz Ogg input with bounded ffmpeg execution", async () => {
-    runFfprobeMock.mockResolvedValueOnce("opus,24000\n");
-    runFfmpegMock.mockImplementationOnce(async (...callArgs: unknown[]) => {
-      const args = callArgs[0] as string[];
-      const outputPath = args.at(-1);
-      if (typeof outputPath !== "string") {
-        throw new Error("missing ffmpeg output path");
+  it.each([
+    { extension: "ogg", probeOutput: "opus,24000\n" },
+    { extension: "mp3", probeOutput: undefined },
+  ])(
+    "re-encodes .$extension input with bounded ffmpeg execution",
+    async ({ extension, probeOutput }) => {
+      if (probeOutput) {
+        runFfprobeMock.mockResolvedValueOnce(probeOutput);
       }
-      await fs.writeFile(outputPath, "ogg");
-    });
+      runFfmpegMock.mockImplementationOnce(async (...callArgs: unknown[]) => {
+        const args = callArgs[0] as string[];
+        const outputPath = args.at(-1);
+        if (typeof outputPath !== "string") {
+          throw new Error("missing ffmpeg output path");
+        }
+        await fs.writeFile(outputPath, "ogg");
+      });
 
-    const inputPath = "/tmp/input.ogg";
-    const result = await ensureOggOpus(inputPath);
+      const inputPath = `/tmp/input.${extension}`;
+      const result = await ensureOggOpus(inputPath);
 
-    expect(result.cleanup).toBe(true);
-    expect(path.dirname(result.path)).toBe(path.normalize("/tmp"));
-    expect(path.basename(result.path)).toMatch(/^voice-.*\.ogg$/);
-    expect(runFfprobeMock).toHaveBeenCalledTimes(1);
-    expect(runFfmpegMock).toHaveBeenCalledTimes(1);
-    const ffmpegArgs = readSingleCommandArgs(runFfmpegMock);
-    expect(ffmpegArgs.slice(0, -1)).toEqual([
-      "-y",
-      "-i",
-      inputPath,
-      "-vn",
-      "-sn",
-      "-dn",
-      "-t",
-      "1200",
-      "-ar",
-      "48000",
-      "-c:a",
-      "libopus",
-      "-b:a",
-      "64k",
-      "-f",
-      "ogg",
-    ]);
-    const ffmpegOutputPath = ffmpegArgs.at(-1);
-    expectStagedFfmpegOutput(ffmpegOutputPath, result.path);
-    await expect(fs.readFile(result.path, "utf8")).resolves.toBe("ogg");
-  });
+      expect(result.cleanup).toBe(true);
+      expect(path.dirname(result.path)).toBe(path.normalize("/tmp"));
+      expect(path.basename(result.path)).toMatch(/^voice-.*\.ogg$/);
+      expect(runFfprobeMock).toHaveBeenCalledTimes(probeOutput ? 1 : 0);
+      expect(runFfmpegMock).toHaveBeenCalledTimes(1);
+      const ffmpegArgs = readSingleCommandArgs(runFfmpegMock);
+      expect(ffmpegArgs.slice(0, -1)).toEqual([
+        "-y",
+        "-i",
+        inputPath,
+        "-vn",
+        "-sn",
+        "-dn",
+        "-t",
+        "1200",
+        "-ar",
+        "48000",
+        "-c:a",
+        "libopus",
+        "-b:a",
+        "64k",
+        "-f",
+        "ogg",
+      ]);
+      const ffmpegOutputPath = ffmpegArgs.at(-1);
+      expectStagedFfmpegOutput(ffmpegOutputPath, result.path);
+      await expect(fs.readFile(result.path, "utf8")).resolves.toBe("ogg");
+    },
+  );
 });
 
 describe("sendDiscordVoiceMessage", () => {

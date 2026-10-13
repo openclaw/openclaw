@@ -240,7 +240,12 @@ describe("createAgentCommandLifecycle", () => {
     );
   });
 
-  it("redacts credentials from a fallback payload before publishing the lifecycle event", () => {
+  it.each([
+    "lifecycle callback",
+    "fallback payload",
+    "structured result",
+    "post-turn error",
+  ] as const)("redacts credentials from a %s before publishing the lifecycle event", (source) => {
     emitAgentEvent.mockClear();
     const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
     const error = `The provider failed. Authorization: Bearer ${secret}`;
@@ -248,6 +253,7 @@ describe("createAgentCommandLifecycle", () => {
       currentTurnUserMessagePersisted: true,
       lifecycleFinishing: false,
       lifecycleEnded: false,
+      ...(source === "lifecycle callback" ? { lifecycleError: error } : {}),
     };
     const lifecycle = createAgentCommandLifecycle({
       runId: "secret-safe-terminal-owner",
@@ -260,11 +266,23 @@ describe("createAgentCommandLifecycle", () => {
       outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
     };
 
-    lifecycle.emitResultError(
-      { payloads: [{ isError: true, text: error }], meta: { durationMs: 0 } },
-      true,
-      terminal,
-    );
+    if (source === "post-turn error") {
+      lifecycle.emitPostTurnError(new Error(error), terminal);
+    } else {
+      lifecycle.emitResultError(
+        {
+          payloads: source === "fallback payload" ? [{ isError: true, text: error }] : [],
+          meta: {
+            durationMs: 0,
+            ...(source === "structured result"
+              ? { error: { kind: "compaction_failure" as const, message: error } }
+              : {}),
+          },
+        },
+        source === "fallback payload",
+        terminal,
+      );
+    }
 
     const event = emitAgentEvent.mock.calls[0]?.[0];
     expect(event.data.error).toContain("The provider failed.");

@@ -1104,6 +1104,25 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(updatedEntry?.cliSessionBindings?.[provider]?.sessionId).toBe("native-session");
   });
 
+  it("does not skip compaction when backend does not declare ownsNativeCompaction", async () => {
+    const scenario = await prepareCompactionScenario({
+      suffix: "generic-no-ownership",
+      tmpDir,
+      provider: "generic-backend",
+      model: "model",
+      deps: {
+        resolveCliBackendConfig: () => ({
+          id: "generic-backend",
+          config: { command: "generic" },
+          bundleMcp: false,
+        }),
+      },
+    });
+    await scenario.run();
+
+    expect(scenario.compactCalls).toHaveLength(1);
+  });
+
   it("still uses native harness path when backend declares ownsNativeCompaction and has agentHarnessId", async () => {
     const compactAgentHarnessSession = vi.fn(async () => ({
       ok: true,
