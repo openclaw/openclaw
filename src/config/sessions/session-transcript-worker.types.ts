@@ -563,7 +563,10 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     readBoardWidgetDocument: SessionHistoryReader<"board-widget-document", "value">;
     readBranchSummaries: CancellableSessionHistoryReader<"branch-summaries", "result">;
     readMessagePresence: CancellableSessionHistoryReader<"transcript-message-presence", "present">;
-    readInactiveIdentity: CancellableSessionHistoryReader<"transcript-inactive-identity", "inactive">;
+    readInactiveIdentity: CancellableSessionHistoryReader<
+      "transcript-inactive-identity",
+      "inactive"
+    >;
     readAnchors: CancellableSessionHistoryReader<"transcript-anchors", "facts">;
     readConversations: SessionHistoryReader<"conversation-rows", "rows">;
     readConversationBindings: SessionHistoryReader<"conversation-bindings", "snapshot">;
