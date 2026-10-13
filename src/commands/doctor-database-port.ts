@@ -54,7 +54,7 @@ import {
   record,
   refuse,
   revise,
-  snapshot,
+  readDatabasePortConfigSnapshot,
   stagePath,
   storeAt,
   storeDirectory,
@@ -69,7 +69,7 @@ export type DatabasePortOptions = {
 async function preflight(ctx: Context, options: DatabasePortOptions) {
   ctx.phase = "preflight";
   const captured = await configInputs(ctx),
-    current = await snapshot(ctx);
+    current = await readDatabasePortConfigSnapshot(ctx);
   for (const input of captured) {
     await assertDatabaseArtifact(input);
   }
@@ -365,7 +365,7 @@ async function assertOriginal(ctx: Context, index: number, config: OpenClawConfi
   }
 }
 async function classifyConfig(ctx: Context) {
-  const current = await snapshot(ctx),
+  const current = await readDatabasePortConfigSnapshot(ctx),
     files = await configInputs(ctx),
     saved = manifest(ctx);
   if (isDeepStrictEqual(files, saved.originalConfig)) {
@@ -546,7 +546,7 @@ function finalize(ctx: Context, outcome: "ported" | "rolled-back") {
 }
 async function resume(ctx: Context) {
   const current = manifest(ctx),
-    config = (await snapshot(ctx)).snapshot.config;
+    config = (await readDatabasePortConfigSnapshot(ctx)).snapshot.config;
   if (current.state === "preparing") {
     for (const input of current.originalConfig) {
       await assertDatabaseArtifact(input);
@@ -562,7 +562,7 @@ async function rollback(ctx: Context) {
   if (engine !== manifest(ctx).direction.from) {
     refuse(ctx, "changed engine environment", "original engine environment before rollback");
   }
-  return await finishPort(ctx, (await snapshot(ctx)).snapshot.config, true);
+  return await finishPort(ctx, (await readDatabasePortConfigSnapshot(ctx)).snapshot.config, true);
 }
 async function finishPort(ctx: Context, config: OpenClawConfig, restoring: boolean) {
   try {

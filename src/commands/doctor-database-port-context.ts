@@ -108,7 +108,7 @@ export async function configInputs(ctx: Context) {
   privatePaths(ctx, files);
   return await Promise.all(files.map(captureDatabaseArtifact));
 }
-export async function snapshot(ctx: Context) {
+export async function readDatabasePortConfigSnapshot(ctx: Context) {
   ctx.assertCurrent();
   const value = await readConfigFileSnapshotForWrite({
     observe: false,
