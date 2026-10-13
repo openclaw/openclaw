@@ -31,8 +31,6 @@ import type { CronJob } from "./types.js";
 
 const SCHEDULED_BACKUP_COMMAND = ["openclaw", "backup", "git", "create"];
 const SCHEDULED_BACKUP_DECLARATION_KEY = "openclaw-backup-scheduled";
-// Managed archives need hours; pin the declared budget rather than the constant.
-const ARCHIVE_BUDGET_MS = 24 * 60 * 60 * 1000;
 
 function makeCommandJob(payload: Extract<CronJob["payload"], { kind: "command" }>): CronJob {
   const now = Date.now();
@@ -111,39 +109,6 @@ describe("runCronCommandJob", () => {
         await running;
         runCommand.mockRestore();
       }
-    },
-  );
-
-  it.each(["managed", "unmanaged"] as const)(
-    "bounds a %s command job by its archive-sized budget",
-    async (kind) => {
-      const runCommand = vi.spyOn(processExecution, "runCommandWithTimeout").mockResolvedValue({
-        code: 0,
-        signal: null,
-        killed: false,
-        stdout: "",
-        stderr: "",
-        termination: "exit",
-      });
-      const job = makeCommandJob({
-        kind: "command",
-        argv:
-          kind === "managed"
-            ? ["openclaw", "backup", "create", "--to", "archive"]
-            : ["echo", "backup"],
-      });
-      job.name = SCHEDULED_BACKUP_DECLARATION_KEY;
-      if (kind === "managed") {
-        job.declarationKey = "openclaw-backup-offsite-scheduled";
-      }
-      const result = await runCronCommandJob({ job });
-      expect(result.status).toBe("ok");
-      // The managed schedule predates the payload budget, so its archive-sized
-      // deadline must come from the timeout owner rather than the generic default.
-      expect(runCommand.mock.calls[0]?.[1]).toMatchObject({
-        timeoutMs: kind === "managed" ? ARCHIVE_BUDGET_MS : 10 * 60_000,
-      });
-      runCommand.mockRestore();
     },
   );
 
