@@ -42,6 +42,10 @@ export function projectSessionSharingEntry(entry: InternalSessionEntry) {
       ? structuredClone(entry.mainRestartRecovery)
       : undefined,
     modelSelectionLocked: entry.modelSelectionLocked,
+    pluginOwnerId: entry.pluginOwnerId,
+    skillLibrarySelections: entry.skillLibrarySelections
+      ? structuredClone(entry.skillLibrarySelections)
+      : undefined,
     pendingProjectGitUrl: entry.pendingProjectGitUrl,
     pendingWorktree: entry.pendingWorktree ? structuredClone(entry.pendingWorktree) : undefined,
     lifecycleRevision: entry.lifecycleRevision,
@@ -77,6 +81,10 @@ export function projectSessionSharingEntry(entry: InternalSessionEntry) {
     parentSessionKey: entry.parentSessionKey,
     sessionStartedAt: entry.sessionStartedAt,
     permissionMode: entry.permissionMode,
+    execNode: entry.execNode,
+    sessionRoot: entry.sessionRoot,
+    spawnedCwd: entry.spawnedCwd,
+    spawnedWorkspaceDir: entry.spawnedWorkspaceDir,
     toolOverrides: entry.toolOverrides ? structuredClone(entry.toolOverrides) : undefined,
   };
 }

@@ -66,7 +66,7 @@ export class SessionManagerEntries extends SessionManagerAppend {
     return entry.id;
   }
 
-  /** @deprecated Await appendCompactionAsync. This method will be removed in the next Plugin SDK major. */
+  /** @deprecated Await appendCompactionAsync. This method will be removed in a later stable release after the deprecation period. */
   appendCompaction(
     summary: string,
     firstKeptEntryId: string,
@@ -103,7 +103,7 @@ export class SessionManagerEntries extends SessionManagerAppend {
     return entry.id;
   }
 
-  /** @deprecated Await appendResetBoundaryAsync. This method will be removed in the next Plugin SDK major. */
+  /** @deprecated Await appendResetBoundaryAsync. This method will be removed in a later stable release after the deprecation period. */
   appendResetBoundary(reason: ResetReason, firstKeptEntryId?: string): string {
     prepareSessionManagerSync("appendResetBoundary", this.persistenceTarget, this);
     const entry: ResetEntry = this.createEntry({
@@ -126,7 +126,7 @@ export class SessionManagerEntries extends SessionManagerAppend {
     return entry.id;
   }
 
-  /** @deprecated Await appendCustomEntryAsync. This method will be removed in the next Plugin SDK major. */
+  /** @deprecated Await appendCustomEntryAsync. This method will be removed in a later stable release after the deprecation period. */
   appendCustomEntry(customType: string, data?: unknown): string {
     prepareSessionManagerSync("appendCustomEntry", this.persistenceTarget, this);
     const entry: CustomEntry = this.createEntry({
@@ -148,7 +148,7 @@ export class SessionManagerEntries extends SessionManagerAppend {
     return entry.id;
   }
 
-  /** @deprecated Await appendSessionInfoAsync. This method will be removed in the next Plugin SDK major. */
+  /** @deprecated Await appendSessionInfoAsync. This method will be removed in a later stable release after the deprecation period. */
   appendSessionInfo(name: string): string {
     prepareSessionManagerSync("appendSessionInfo", this.persistenceTarget, this);
     const entry: SessionInfoEntry = this.createEntry({
@@ -175,7 +175,7 @@ export class SessionManagerEntries extends SessionManagerAppend {
     return entry.id;
   }
 
-  /** @deprecated Await appendCustomMessageEntryAsync. This method will be removed in the next Plugin SDK major. */
+  /** @deprecated Await appendCustomMessageEntryAsync. This method will be removed in a later stable release after the deprecation period. */
   appendCustomMessageEntry(
     customType: string,
     content: string | (TextContent | ImageContent)[],
@@ -252,7 +252,7 @@ export class SessionManagerEntries extends SessionManagerAppend {
     });
   }
 
-  /** @deprecated Await appendLeafControlAsync. This method will be removed in the next Plugin SDK major. */
+  /** @deprecated Await appendLeafControlAsync. This method will be removed in a later stable release after the deprecation period. */
   appendLeafControl(params: LeafControlSelection): SessionLeafControl {
     prepareSessionManagerSync("appendLeafControl", this.persistenceTarget, this);
     return this.appendLeafControlSync(params);
@@ -313,7 +313,7 @@ export class SessionManagerEntries extends SessionManagerAppend {
     return entry.id;
   }
 
-  /** @deprecated Await appendLabelChangeAsync. This method will be removed in the next Plugin SDK major. */
+  /** @deprecated Await appendLabelChangeAsync. This method will be removed in a later stable release after the deprecation period. */
   appendLabelChange(targetId: string, label: string | undefined): string {
     prepareSessionManagerSync("appendLabelChange", this.persistenceTarget, this);
     this.assertTranscriptViewAvailable();
@@ -356,7 +356,7 @@ export class SessionManagerEntries extends SessionManagerAppend {
     });
   }
 
-  /** @deprecated Await branchAsync. This method will be removed in the next Plugin SDK major. */
+  /** @deprecated Await branchAsync. This method will be removed in a later stable release after the deprecation period. */
   branch(branchFromId: string): void {
     prepareSessionManagerSync("branch", this.persistenceTarget, this);
     this.branchSync(branchFromId);
@@ -417,7 +417,7 @@ export class SessionManagerEntries extends SessionManagerAppend {
     });
   }
 
-  /** @deprecated Await branchWithSummaryAsync. This method will be removed in the next Plugin SDK major. */
+  /** @deprecated Await branchWithSummaryAsync. This method will be removed in a later stable release after the deprecation period. */
   branchWithSummary(
     branchFromId: string | null,
     summary: string,

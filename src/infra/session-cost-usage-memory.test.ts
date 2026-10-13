@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionActorAuthority } from "../config/sessions/session-actor-contract.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { failSessionActorMemoryPublication } from "../config/sessions/session-actor-memory-publication.test-support.js";
 import {
   acquireSessionActorStorage,
   runWithSessionActorStorage,
@@ -121,6 +122,36 @@ async function fixture(
 }
 
 describe("actor memory usage", () => {
+  it("reports publication failure while keeping the refreshed usage rollup", async () => {
+    const { binding, append, sessionFile } = await fixture();
+    await append(5);
+    const refresh = () =>
+      runSessionActorUsage(
+        binding,
+        { kind: "refresh", pricingFingerprint: "fixture" },
+        () => undefined,
+      );
+    const stop = failSessionActorMemoryPublication(sessionKey);
+    try {
+      await expect(refresh()).rejects.toMatchObject({ name: "SessionActorStorageCommittedError" });
+    } finally {
+      stop();
+    }
+    expect(await refresh()).toEqual({ kind: "refresh", changed: false });
+    expect(
+      await runSessionActorUsage(
+        binding,
+        {
+          kind: "sessions",
+          pricingFingerprint: "fixture",
+          sessions: [{ sessionFile }],
+          dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+        },
+        () => undefined,
+      ),
+    ).toMatchObject({ kind: "sessions", summaries: [{ input: 5, output: 2 }] });
+  });
+
   it("uses production memory acquisition and refreshes a stale report after an in-process append", async () => {
     const { binding, append, sessionFile } = await fixture();
     await append(5);

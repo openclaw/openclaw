@@ -16,6 +16,9 @@ class HoverMarqueeDirective extends AsyncDirective {
       options,
       className,
     );
+    if (this.isConnected) {
+      this.controller.connect();
+    }
     return nothing;
   }
 
@@ -27,6 +30,7 @@ class HoverMarqueeDirective extends AsyncDirective {
     this.controller.disconnect();
   }
 }
+
 const hoverMarquee = directive(HoverMarqueeDirective);
 
 export function renderHoverMarquee(

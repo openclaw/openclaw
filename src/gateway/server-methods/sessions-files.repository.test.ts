@@ -73,17 +73,40 @@ const mocks = vi.hoisted(() => ({
   store: vi.fn(),
   open: vi.fn(),
 }));
-vi.mock("../session-utils.js", () => ({ loadGatewaySessionEntryReadOnly: mocks.load }));
-
 vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
   loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
     mocks.load(params.key, { agentId: params.agentId }),
 }));
-vi.mock("../../config/sessions/session-accessor.js", async (original) => ({
-  ...(await original<typeof import("../../config/sessions/session-accessor.js")>()),
-  loadSessionEntryReadOnly: () => mocks.load().entry,
-}));
+vi.mock("../../config/sessions/session-entry-read-facts.js", async (original) => {
+  const actual =
+    await original<typeof import("../../config/sessions/session-entry-read-facts.js")>();
+  return {
+    ...actual,
+    readRetainedSessionEntryFacts: ((database, request, owner) => {
+      const loaded = mocks.load();
+      if (
+        !loaded ||
+        database.agentId !== loaded.agentId ||
+        database.path !== loaded.storePath ||
+        !request.sessionKeys?.includes(loaded.canonicalKey)
+      ) {
+        return actual.readRetainedSessionEntryFacts(database, request, owner);
+      }
+      return {
+        kind: "session-exact-entries",
+        entries: [{ sessionKey: loaded.canonicalKey, entry: loaded.entry }],
+        lifecycleTimestamps: {},
+        source: { ...database, databaseIdentity: "repository-files-fixture" },
+        databaseIdentity: {
+          identity: "repository-files-fixture",
+          incarnation: "repository-files-fixture",
+          filename: database.path,
+        },
+      };
+    }) satisfies typeof actual.readRetainedSessionEntryFacts,
+  };
+});
 vi.mock("../../agents/agent-scope.js", async (original) => ({
   ...(await original<typeof import("../../agents/agent-scope.js")>()),
   resolveAgentWorkspaceDir: mocks.workspace,

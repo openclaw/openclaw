@@ -9,9 +9,9 @@ import {
   type SessionStoreReadCandidate,
 } from "../config/sessions/session-store-read-candidates.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
+import { createExistingAgentSessionStoreTargetResolver } from "../config/sessions/targets-discovery.native.js";
 import { shouldSkipDiscoveryError } from "../config/sessions/targets-path-validation.js";
 import {
-  createExistingAgentSessionStoreTargetResolver,
   listConfiguredSessionStoreAgentIds,
   resolveSessionStoreCompatibilityAgentId,
 } from "../config/sessions/targets.js";

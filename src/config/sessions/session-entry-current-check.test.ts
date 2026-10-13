@@ -1,5 +1,6 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { Worker } from "node:worker_threads";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
@@ -12,6 +13,7 @@ import {
 } from "./session-accessor.sqlite-entry.js";
 import { deleteSessionEntryLifecycle } from "./session-accessor.sqlite-lifecycle.js";
 import { captureSessionEntryCurrentCheckAsyncInternal } from "./session-entry-current-check.js";
+import type { PreparedSessionSourceAuthority } from "./session-source-authority.js";
 import type { InternalSessionEntry } from "./types.js";
 
 const tempDirs = createTempDirTracker();
@@ -45,9 +47,17 @@ it("keeps prepared entry authority current through native and worker writes with
   replaceSessionEntrySync(scope, initial);
   type Prepared = Awaited<ReturnType<typeof captureSessionEntryCurrentCheckAsyncInternal>>;
   const prepared: Prepared[] = [];
+  const sources = new Map<Prepared, PreparedSessionSourceAuthority>();
   const capture = async (fields?: ("execHost" | "execNode")[]) => {
     const check = await captureSessionEntryCurrentCheckAsyncInternal({ ...scope, fields });
     prepared.push(check);
+    const requests = vi.spyOn(Worker.prototype, "postMessage");
+    try {
+      sources.set(check, await check.source.prepareSessionSource());
+      expect(requests).not.toHaveBeenCalled();
+    } finally {
+      requests.mockRestore();
+    }
     return check;
   };
   const expectCurrent = async (check: Prepared, current: boolean) => {
@@ -55,8 +65,10 @@ it("keeps prepared entry authority current through native and worker writes with
     try {
       if (current) {
         expect(() => check.source()).not.toThrow();
+        expect(() => sources.get(check)!.assertCurrent()).not.toThrow();
       } else {
         expect(() => check.source()).toThrow("selected session changed");
+        expect(() => sources.get(check)!.assertCurrent()).toThrow("selected session changed");
       }
       await expect(check.isCurrent()).resolves.toBe(current);
       expect(sql.queries).toEqual([]);
@@ -68,6 +80,10 @@ it("keeps prepared entry authority current through native and worker writes with
     const generation = await capture();
     const policy = await capture(["execHost", "execNode"]);
     policy.entry!.execNode = "caller-local-edit";
+    await expectCurrent(policy, true);
+    const released = await policy.source.prepareSessionSource();
+    await released.release?.();
+    // A mutation borrows the selected entry; finishing it does not revoke its caller.
     await expectCurrent(policy, true);
 
     replaceSessionEntrySync(scope, { ...initial, displayName: "Native metadata edit" });
@@ -105,9 +121,13 @@ it("keeps prepared entry authority current through native and worker writes with
     await expectCurrent(absent, true);
     await replaceSessionEntry(scope, { ...initial, sessionId: "created-again", updatedAt: 3 });
     await expectCurrent(absent, false);
+    const latest = await capture();
+    latest.release();
+    await expectCurrent(latest, false);
   } finally {
     for (const check of prepared) {
       check.release();
+      await sources.get(check)?.release?.();
     }
   }
 });

@@ -241,7 +241,6 @@ export abstract class MemoryManagerSyncBase {
     needsFullReindex: boolean;
     targetArchiveFiles?: string[];
     progress?: MemorySyncProgressState;
-    deferIndex?: boolean;
     prefixIndexItems?: MemoryIndexWorkItem[];
   }): Promise<void>;
 
@@ -412,7 +411,7 @@ export abstract class MemoryManagerSyncBase {
         needsFullReindex: params.needsFullSessionReindex ?? params.needsFullReindex,
         targetArchiveFiles: params.targetArchiveFiles,
         progress: params.progress,
-        ...(deferIndex ? { deferIndex: true, prefixIndexItems: memoryPlan?.indexItems } : {}),
+        ...(deferIndex ? { prefixIndexItems: memoryPlan?.indexItems } : {}),
       });
     } else if (deferIndex) {
       await this.indexQueuedFiles(memoryPlan?.indexItems ?? [], params.progress);

@@ -59,7 +59,10 @@ import {
   createUsageCostWorkerPriceResolver,
   scanUsageCostRollupInWorker,
 } from "./session-cost-usage-worker-refresh.js";
-import { readUsageCostReportEntry } from "./session-cost-usage-worker-report.js";
+import {
+  prepareUsageCostReportEntry,
+  readUsageCostReportEntry,
+} from "./session-cost-usage-worker-report.js";
 import {
   UsageCostHostEffectError,
   type UsageCostWorkerDatabase,
@@ -69,6 +72,7 @@ import {
   type UsageCostWorkerReply,
   type UsageCostWorkerResult,
 } from "./session-cost-usage-worker.types.js";
+import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
 import { isTransientSqliteError } from "./unhandled-rejections.js";
 import type { WorkerTaskChannel } from "./worker-task-server.js";
 
@@ -220,15 +224,6 @@ export async function executeUsageCostWorker(
         readCache((db) => readSessionCostUsageRollupBodyInDatabase(db, row), undefined),
       ),
     );
-  const readPartitions = (filePath: string, startMs?: number, endMs?: number) =>
-    control.runNativeSection(() =>
-      readDatabase(cacheDatabase, () =>
-        readCache(
-          (db) => readSessionCostUsagePartitionsInDatabase(db, filePath, startMs, endMs),
-          [],
-        ),
-      ),
-    );
   const readPartitionedBody = async (row: SessionCostUsageRollupRow) => {
     const receipt = refreshReceipt;
     const cached = refreshInputs?.readRollup(row.key, receipt)?.body;
@@ -297,12 +292,7 @@ export async function executeUsageCostWorker(
   if (operation.kind === "summary" || operation.kind === "sessions") {
     const project = async (
       rows: SessionCostUsageRollupRow[],
-      body: (row: SessionCostUsageRollupRow) => Uint8Array | null | Promise<Uint8Array | null>,
-      partitions: (
-        filePath: string,
-        startMs?: number,
-        endMs?: number,
-      ) => UsageCostPartition[] | Promise<UsageCostPartition[]> = readPartitions,
+      entries: Map<string, ReturnType<typeof prepareUsageCostReportEntry>>,
     ): Promise<UsageCostWorkerResult> => {
       // Capture cache metadata before transcript stats: a concurrent refresh must
       // not make a valid newer checkpoint appear ahead of this report's inventory.
@@ -327,17 +317,14 @@ export async function executeUsageCostWorker(
           consumed.add(filePath);
           return byPath.get(filePath);
         },
-        readBody: body,
+        readBody: (row: SessionCostUsageRollupRow) => entries.get(row.key)?.blob ?? null,
         readEntry: (row: SessionCostUsageRollupRow) =>
           readUsageCostReportEntry({
-            row,
+            prepared: entries.get(row.key)!,
             file: filesByPath.get(row.key),
-            body,
-            partitions,
             startMs: operation.startMs,
             endMs: operation.endMs,
             dayBucket: operation.dayBucket,
-            overview: operation.kind === "sessions" && operation.projection === "overview",
             scan: {
               pricingFingerprint: operation.pricingFingerprint,
               resolveCosts,
@@ -394,43 +381,52 @@ export async function executeUsageCostWorker(
       return { ...result, invalidRows: [...invalidRows.values()] };
     };
     try {
-      return await control.runNativeSection(async () => {
+      const snapshot = await control.runNativeSection(() => {
         const opened = openOpenClawAgentDatabaseReadOnly({ ...cacheDatabase, env });
         if (!opened.found) {
-          return project([], () => null);
+          return {
+            rows: [],
+            entries: new Map<string, ReturnType<typeof prepareUsageCostReportEntry>>(),
+          };
         }
         const { db } = opened.database;
         try {
-          // sqlite-allow-raw: This dedicated read-only handle owns the complete report snapshot.
-          db.exec("BEGIN DEFERRED");
-          return await project(
-            readSessionCostUsageRollupRowsInDatabase(db, selectedPaths),
-            (row) => {
-              const body = readSessionCostUsageRollupBodyInDatabase(db, row);
-              if (!body) {
-                throw new WorkerTaskError("Usage cache snapshot is unavailable", "unavailable");
-              }
-              return body.blob;
-            },
-            (filePath, startMs, endMs) =>
-              readSessionCostUsagePartitionsInDatabase(db, filePath, startMs, endMs),
-          );
+          return runSqliteReadSnapshotSync(db, () => {
+            const rows = readSessionCostUsageRollupRowsInDatabase(db, selectedPaths);
+            const entries = new Map(
+              rows.map((row) => [
+                row.key,
+                prepareUsageCostReportEntry({
+                  row,
+                  ...operation,
+                  overview: operation.kind === "sessions" && operation.projection === "overview",
+                  body: (cachedRow) => {
+                    const body = readSessionCostUsageRollupBodyInDatabase(db, cachedRow);
+                    if (!body) {
+                      throw new WorkerTaskError(
+                        "Usage cache snapshot is unavailable",
+                        "unavailable",
+                      );
+                    }
+                    return body.blob;
+                  },
+                  partitions: (filePath, startMs, endMs) =>
+                    readSessionCostUsagePartitionsInDatabase(db, filePath, startMs, endMs),
+                }),
+              ]),
+            );
+            return { rows, entries };
+          });
         } finally {
-          try {
-            if (db.isTransaction) {
-              // sqlite-allow-raw: End this report's read-only snapshot before closing its handle.
-              db.exec("ROLLBACK");
-            }
-          } finally {
-            opened.database.close();
-          }
+          opened.database.close();
         }
       });
+      return await project(snapshot.rows, snapshot.entries);
     } catch (error) {
       if (!isTransientSqliteError(error)) {
         throw error;
       }
-      return project([], () => null);
+      return project([], new Map());
     }
   }
 

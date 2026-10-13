@@ -333,11 +333,15 @@ export class GatewayScheduler {
           if (job.elapsedAtMs !== undefined) {
             job.elapsedAtMs -= alignmentMs;
           }
-          const overdueMs = -this.remaining(job, this.now(), this.clock.monotonicNow());
-          const advanceMs = (Math.floor(Math.max(0, overdueMs) / job.everyMs) + 1) * job.everyMs;
-          job.atMs += advanceMs;
-          if (job.elapsedAtMs !== undefined) {
-            job.elapsedAtMs += advanceMs;
+          // A wall-clock jump must not advance the elapsed cadence with it.
+          const nowMs = this.now();
+          if (job.atMs <= nowMs) {
+            job.atMs += (Math.floor((nowMs - job.atMs) / job.everyMs) + 1) * job.everyMs;
+          }
+          const elapsedMs = this.clock.monotonicNow();
+          if (job.elapsedAtMs !== undefined && job.elapsedAtMs <= elapsedMs) {
+            job.elapsedAtMs +=
+              (Math.floor((elapsedMs - job.elapsedAtMs) / job.everyMs) + 1) * job.everyMs;
           }
         } else {
           job.atMs = this.now() + job.everyMs;

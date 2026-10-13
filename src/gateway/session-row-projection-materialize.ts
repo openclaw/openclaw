@@ -22,6 +22,7 @@ import { readSessionRowLookup, type prepareSessionRowScopes } from "./session-ro
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { deriveSessionTitle, type SessionChildLink } from "./session-utils-core.js";
+import { resolveGatewaySessionDisplayName } from "./session-utils-display.js";
 import { materializeSessionRow, readSessionRowInputs } from "./session-utils-row.js";
 
 /** Bind live projection state to the same prepared or resident source-read boundary. */
@@ -286,19 +287,18 @@ export function readResidentSessionRow(
       readSourceEntry: prepared ? (key) => prepared.entries[key] : params.readSourceEntry,
     },
     rowContext: context,
-    // Incognito rows are transient exact reads and never enter the resident backfill queue.
-    includeDerivedTitles: false,
-    includeLastMessage: false,
+    preparedTitle: {
+      derivedTitle: deriveSessionTitle(
+        row.entry,
+        prepared?.titleFields?.firstUserMessage,
+        resolveGatewaySessionDisplayName(row.key, row.entry),
+      ),
+      lastMessagePreview: prepared?.titleFields?.lastMessagePreview ?? row.lastMessagePreview,
+    },
     skipTranscriptUsageFallback: true,
     includeSwarmChildren: true,
     childLinks: prepared ? undefined : params.links,
   });
-  inputs.derivedTitle = deriveSessionTitle(
-    row.entry,
-    prepared?.titleFields?.firstUserMessage ?? undefined,
-    inputs.displayName,
-  );
-  inputs.lastMessagePreview = prepared?.titleFields?.lastMessagePreview ?? row.lastMessagePreview;
   inputs.subagentRunInputs = params.subagentInputs;
   const materialized = materializeSessionRow(inputs);
   // Row preparation may populate the metadata used by automatic utility policy.

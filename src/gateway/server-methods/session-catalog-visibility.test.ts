@@ -31,7 +31,9 @@ const hoisted = vi.hoisted(() => ({
   resolveSessionSharingRole: vi.fn<
     typeof import("../session-sharing-policy.js").resolveSessionSharingRole
   >(() => "viewer"),
-  resolveSessionSharingTargetAsync: vi.fn(async () => null as Record<string, unknown> | null),
+  resolveSessionSharingTargetAsync: vi.fn<
+    typeof import("../session-sharing-policy.js").resolveSessionSharingTargetAsync
+  >(async () => null),
 }));
 
 vi.mock("../../plugins/runtime.js", async (importOriginal) => ({

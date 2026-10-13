@@ -253,7 +253,7 @@ const APP_SIDEBAR_TAG = "openclaw-app-sidebar";
 export const APP_SIDEBAR_ELEMENT = {
   tagName: APP_SIDEBAR_TAG,
   label: APP_SIDEBAR_TAG,
-  loadModule: () => import("../components/app-sidebar.ts"),
+  loadModule: () => import("../components/app-sidebar.tsx"),
 } satisfies OptionalCustomElement;
 
 const MACOS_TITLEBAR_TAG = "openclaw-macos-titlebar-controls";
@@ -267,7 +267,7 @@ export const MACOS_TITLEBAR_ELEMENT = {
 export const SIDEBAR_ATTENTION_ELEMENT = {
   tagName: "openclaw-sidebar-attention",
   label: t("attention.issues"),
-  loadModule: () => import("../components/sidebar-attention.ts"),
+  loadModule: () => import("../components/sidebar-attention.tsx"),
 } satisfies OptionalCustomElement;
 
 export const TERMINAL_PANEL_ELEMENT = {

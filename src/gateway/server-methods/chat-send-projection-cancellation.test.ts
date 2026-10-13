@@ -20,7 +20,7 @@ import {
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadSessionEntryAsync } from "../session-entry-load.test-support.js";
 import { createChatSendReplyDispatch } from "./chat-send-reply-dispatch.js";
 
 vi.mock("node:worker_threads", async () =>
@@ -41,7 +41,8 @@ it.each(["reply-observation", "commentary-media"] as const)(
         agentId: "main",
         sessionId: "projection-session",
         sessionKey: "agent:main:projection",
-        storePath: loadSessionEntry("agent:main:projection", { agentId: "main" }).storePath,
+        storePath: (await loadSessionEntryAsync("agent:main:projection", { agentId: "main" }))
+          .storePath,
       };
       const entry = { sessionId: scope.sessionId, lifecycleRevision: "initial", updatedAt: 1 };
       await replaceSessionEntry(scope, entry);

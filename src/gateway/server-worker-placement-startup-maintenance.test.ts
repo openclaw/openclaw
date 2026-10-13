@@ -458,6 +458,7 @@ describe("worker placement session maintenance ownership", () => {
         | Awaited<ReturnType<WorkerSessionPlacementStore["prepareRuntimeRefresh"]>>
         | undefined;
       try {
+        vi.mocked(getRuntimeConfig).mockReturnValue(cfg);
         createMaintenanceRuntime({ placements: [placement] });
         const options = createRetention.mock.calls.at(-1)?.[0];
         const additionalManifestRefs = options?.additionalManifestRefs;
@@ -483,6 +484,7 @@ describe("worker placement session maintenance ownership", () => {
       } finally {
         prepared?.release();
         createRetention.mockRestore();
+        vi.mocked(getRuntimeConfig).mockReturnValue({});
       }
     });
   });

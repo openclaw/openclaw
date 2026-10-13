@@ -19,7 +19,7 @@ import { sessionCreateHandlers } from "./server-methods/sessions-create.js";
 import { sessionMessagingHandlers } from "./server-methods/sessions-messaging.js";
 import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
-import { resolveSessionSharingTarget } from "./session-sharing.js";
+import { resolveSessionSharingTargetAsync } from "./session-sharing.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -403,7 +403,7 @@ describe("invocation-owned session mutations", () => {
         ...ownedEntry(owner, "mixed-session"),
         visibility: "shared",
       });
-      const target = resolveSessionSharingTarget({ cfg, ...scope })!;
+      const target = (await resolveSessionSharingTargetAsync({ cfg, ...scope }))!;
       await addSessionMember(
         { ...scope, storePath: target.storePath },
         {

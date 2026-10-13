@@ -116,10 +116,6 @@ export function withAuthProfileCredentialWriteCustody<T>(
     throw new Error("Credential writes require their owning transaction publication scope");
   }
   const agent = findOpenClawAgentDatabaseIdentity({ db: database });
-  if (isMainThread && typeof agent?.identity === "symbol") {
-    // Incognito handles are process-private and have no durable root to exclude.
-    return operation();
-  }
   const databasePath =
     agent?.ownerDatabasePath ?? readTrackedStateDatabaseIdentity(database)?.canonicalPath;
   if (!databasePath) {

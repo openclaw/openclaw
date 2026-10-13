@@ -15,7 +15,7 @@ import {
 } from "../app-sidebar.ts";
 import { createGatewayRequestMock, createTestGatewayClient } from "../gateway-client.ts";
 import { settleLitElement } from "../lit-settle.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar catalog row lifecycle", () => {
   it("keeps an adopted catalog row archived after it leaves the active roster", async () => {

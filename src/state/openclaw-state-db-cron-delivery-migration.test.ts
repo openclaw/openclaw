@@ -58,6 +58,7 @@ it.each(["managed transaction", "implicit snapshot"] as const)(
         expect(db.prepare("SELECT receipt_id FROM cron_run_receipts").get()).toEqual({
           receipt_id: "legacy-receipt",
         });
+        expect(readStateSchemaContentVersion(db)).toBe(19);
         const writer = openOpenClawStateDatabase(options);
         expect(readStateSchemaContentVersion(writer.db)).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
         const observation = observeSqliteReadSql(StatementSync.prototype);

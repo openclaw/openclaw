@@ -5,7 +5,6 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import {
   addSessionMember,
@@ -44,13 +43,12 @@ import type {
   RespondFn,
 } from "./server-methods/types.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
-import { createGatewaySessionEntryReader } from "./session-utils-store-lineage.js";
 import {
-  resolveGatewaySessionStoreTarget,
-  resolveGatewaySessionStoreTargetWithStore,
+  resolveGatewaySessionStoreTargetWithStoreAsync,
   withGatewaySessionStoreTarget,
 } from "./session-utils-store-lookup.js";
 import { withQualifiedGatewaySessionStoreTarget } from "./session-utils-store-retained.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 
 afterEach(() => memorySessionActorOwners.reset());
 
@@ -99,21 +97,27 @@ async function withGlobalSessions(mainKey: string, run: (cfg: OpenClawConfig) =>
 }
 
 describe("global session lookup ownership", () => {
-  it("rejects a malformed canonical candidate before falling back to its alias", async () => {
+  it("rejects an unreadable canonical candidate instead of returning its alias", async () => {
     await withGlobalSessions("main", async (cfg) => {
       const alias = "agent:main:main";
       await replaceSessionEntry(
         { agentId: "main", sessionKey: alias },
         { sessionId: "retained-alias", updatedAt: 1 },
       );
-      resolveGatewaySessionStoreTargetWithStore({ cfg, key: "agent:main:global" });
+      await resolveGatewaySessionStoreTargetWithStoreAsync({ cfg, key: "agent:main:global" });
       openOpenClawAgentDatabase({ agentId: "main" })
         .db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
         .run("{", "global");
 
-      expect(() => resolveGatewaySessionStoreTarget({ cfg, key: alias })).toThrow(
-        "invalid persisted session row requires repair for global",
-      );
+      await expect(
+        resolveGatewaySessionStoreTargetInWorker({
+          cfg,
+          key: alias,
+          projection: "list",
+          exactRead: true,
+          readOnly: false,
+        }),
+      ).rejects.toThrow(/persisted row.*global/u);
     });
   });
 
@@ -143,16 +147,19 @@ describe("global session lookup ownership", () => {
         if (scenario.unreadableRegistry) {
           mkdirSync(path.join(stateDir, "state", "openclaw.sqlite"), { recursive: true });
         }
-        const resolve = () =>
-          resolveGatewaySessionStoreTarget({
+        const resolve = async () =>
+          await resolveGatewaySessionStoreTargetInWorker({
             cfg,
             key,
             clone: scenario.clone,
+            projection: "list",
+            exactRead: true,
+            readOnly: false,
           });
         if (scenario.unreadableRegistry) {
-          expect(resolve).toThrow();
+          await expect(resolve()).rejects.toThrow();
         } else {
-          expect(resolve()).toEqual({
+          expect(await resolve()).toMatchObject({
             agentId: scenario.agentId,
             canonicalKey: key,
             storeKeys: [key],
@@ -169,27 +176,18 @@ describe("global session lookup ownership", () => {
   it("preserves exact lookup failures without retrying an alias", async () => {
     await withGlobalSessions("main", async (cfg) => {
       const failure = new Error("metadata unavailable", { cause: new Error("SQLITE_IOERR") });
-      const failingSingleRead = vi
-        .spyOn(sessionAccessor, "loadExactSessionEntryCandidates")
-        .mockImplementation(() => {
-          throw failure;
-        });
-      try {
-        expect(() =>
-          resolveGatewaySessionStoreTargetWithStore({
-            cfg,
-            key: "agent:main:main",
-            exactRead: true,
-          }),
-        ).toThrow(failure);
-        failingSingleRead.mockClear();
-        const readParent = createGatewaySessionEntryReader({ cfg, agentId: "main", store: {} });
-        expect(() => readParent("agent:research:main")).toThrow(failure);
-        // A failed exact read must not become absence followed by an alias lookup.
-        expect(failingSingleRead).toHaveBeenCalledOnce();
-      } finally {
-        failingSingleRead.mockRestore();
-      }
+      const failingPreparedRead = vi.fn(() => {
+        throw failure;
+      });
+      await expect(
+        resolveGatewaySessionStoreTargetWithStoreAsync({
+          cfg,
+          key: "agent:main:main",
+          exactRead: true,
+          readStore: failingPreparedRead,
+        }),
+      ).rejects.toThrow(failure);
+      expect(failingPreparedRead).toHaveBeenCalledOnce();
     });
   });
 
@@ -213,8 +211,8 @@ describe("global session lookup ownership", () => {
         }
         // Normal planning rejects this explicit replacement owner. Legacy success
         // and duplicate selection errors must both finish before that boundary.
-        const resolve = () =>
-          resolveGatewaySessionStoreTargetWithStore({
+        const resolve = async () =>
+          await resolveGatewaySessionStoreTargetWithStoreAsync({
             cfg,
             key,
             agentId: "research",
@@ -223,9 +221,9 @@ describe("global session lookup ownership", () => {
             projection: "full",
           });
         if (duplicate) {
-          expect(resolve).toThrow("duplicate rows");
+          await expect(resolve()).rejects.toThrow("duplicate rows");
         } else {
-          expect(resolve()).toMatchObject({
+          expect(await resolve()).toMatchObject({
             agentId: "main",
             store: { [key]: { sessionId: key } },
           });
@@ -236,12 +234,12 @@ describe("global session lookup ownership", () => {
 
   it("rejects contradictory key and fixed-store owners", async () => {
     await withGlobalSessions("main", async (cfg) => {
-      const read = (config: OpenClawConfig, key: string, agentId?: string) => {
+      const read = async (config: OpenClawConfig, key: string, agentId?: string) => {
         setRuntimeConfigSnapshot(config, config);
-        return resolveGatewaySessionStoreTargetWithStore({ cfg: config, key, agentId });
+        return await resolveGatewaySessionStoreTargetWithStoreAsync({ cfg: config, key, agentId });
       };
       for (const key of ["agent:main:main", "agent:main:global"]) {
-        expect.soft(() => read(cfg, key, "research")).toThrow('belongs to "main"');
+        await expect.soft(read(cfg, key, "research")).rejects.toThrow('belongs to "main"');
       }
       for (const owner of ["main", "retired"]) {
         const fixed: OpenClawConfig = {
@@ -253,9 +251,9 @@ describe("global session lookup ownership", () => {
           },
         };
         for (const key of ["global", "agent:research:main"]) {
-          expect
-            .soft(() => read(fixed, key, "research"))
-            .toThrow(owner === "retired" ? 'retired agent "retired"' : 'belongs to "main"');
+          await expect
+            .soft(read(fixed, key, "research"))
+            .rejects.toThrow(owner === "retired" ? 'retired agent "retired"' : 'belongs to "main"');
         }
       }
     });
@@ -766,20 +764,6 @@ it.each([
         .resolves.toMatchObject({ sessionInfo: expected });
       const allAgents = await listSessions({ client, context, request: { limit: 20 } });
       expect(allAgents.sessions.find((row) => row.key === created.key)).toMatchObject(expected);
-
-      const cachedRequest = {
-        cfg,
-        key: created.key,
-        agentId: "work",
-        readOnly: true,
-        exactRead: true,
-        storeCache: new Map(),
-      };
-      resolveGatewaySessionStoreTargetWithStore(cachedRequest);
-      const cached = resolveGatewaySessionStoreTargetWithStore(cachedRequest);
-      expect(createGatewaySessionEntryReader({ cfg, ...cached })("global")?.modelOverride).toBe(
-        "qwen3:14b",
-      );
     });
   },
 );

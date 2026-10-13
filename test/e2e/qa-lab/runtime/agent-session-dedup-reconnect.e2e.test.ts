@@ -121,12 +121,20 @@ describe("agent session deduplication across reconnect", () => {
     { timeout: TEST_TIMEOUT_MS },
     async () => {
       let stage = "start-provider";
-      onTestFailed(() => {
-        process.stderr.write(`Session dedup reconnect failed at stage=${stage}\n`);
-      });
       const provider = await startHeldResponsesProvider({
         modelRef: MODEL_REF,
         terminalText: TERMINAL_TEXT,
+      });
+      let gatewayLogs = () => "Gateway startup did not return a ready child.";
+      onTestFailed(() => {
+        process.stderr.write(
+          [
+            "Session dedup reconnect fixture failed",
+            JSON.stringify({ stage, providerRequests: provider.requests.length }),
+            gatewayLogs(),
+            "",
+          ].join("\n"),
+        );
       });
       cleanups.push(() => provider.stop());
       const gatewayOwner = createQaGatewayChild();
@@ -152,10 +160,13 @@ describe("agent session deduplication across reconnect", () => {
           OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
         },
         mutateConfig: (config) => ({ ...config, plugins: { enabled: false } }),
-        onListening: () => {
-          stage = "gateway-ready";
+        onListening: ({ logs }) => {
+          gatewayLogs = logs;
+          stage = "gateway-listening";
         },
       });
+      gatewayLogs = gateway.logs;
+      stage = "gateway-ready";
       cleanups.push(async () => provider.release());
 
       stage = "connect-client-a";

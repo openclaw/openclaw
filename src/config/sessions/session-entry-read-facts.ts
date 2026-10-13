@@ -4,7 +4,6 @@ import { ok } from "@openclaw/normalization-core/result";
 import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { captureOpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import type { AgentDatabaseGenerationClaim } from "../../state/openclaw-agent-execution-admission-contract.js";
 import { resolveTimestamp } from "./lifecycle-timestamps.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
@@ -154,8 +153,7 @@ export function readRetainedSessionEntryFacts(
   if (!eligible(request)) {
     return undefined;
   }
-  const validation = captureOpenClawAgentDatabaseReadValidation(database);
-  if (!validation || Atomics.load(new Int32Array(validation.validation.canonicalReady), 0) !== 1) {
+  if (!readSqliteDatabaseWriteTokenForPath(database.path)) {
     return undefined;
   }
   nativeOwner?.assertCurrent();

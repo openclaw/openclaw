@@ -30,7 +30,7 @@ import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
-import type { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import type { GatewaySessionEntryRead } from "../session-utils.js";
 import { buildTerminalEnv, type TerminalLaunchResolution } from "../terminal/launch.js";
 import { createNodeRelayBackend } from "../terminal/node-relay.js";
 import {
@@ -184,7 +184,7 @@ async function openTerminalSessionWithSource(
   opts: GatewayRequestHandlerOptions,
   request: TerminalSessionOpenRequest,
   source?: {
-    entry: ReturnType<typeof loadGatewaySessionEntryReadOnly>["entry"];
+    entry: GatewaySessionEntryRead["entry"];
     assertCurrent(): void;
   },
 ): Promise<void> {

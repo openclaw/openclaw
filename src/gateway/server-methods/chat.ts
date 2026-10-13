@@ -20,7 +20,8 @@ import {
 } from "../chat-display-projection.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { findCanonicalStoreMatch } from "../session-utils-store-selection.js";
-import { loadGatewaySessionEntryReadOnlyInWorker, loadSessionEntry } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
+import { loadIncognitoGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
   resolveGlobalAwareNodeChatDeliveryKeys,
@@ -91,7 +92,7 @@ async function injectChat(
     entry,
     canonicalKey: sessionKey,
   } = isIncognitoSessionKey(rawSessionKey)
-    ? loadSessionEntry(rawSessionKey, sessionLoadOptions, cfg)
+    ? loadIncognitoGatewaySessionEntryReadOnly(rawSessionKey, sessionLoadOptions, cfg)
     : await loadGatewaySessionEntryReadOnlyInWorker({
         excludeInternalEffects: true,
         cfg,
@@ -132,7 +133,7 @@ async function injectChat(
           throw new Error(`Session "${sessionKey}" changed while starting work. Retry.`);
         }
         const latestEntry = isIncognitoSessionKey(sessionKey)
-          ? loadSessionEntry(rawSessionKey, sessionLoadOptions).entry
+          ? loadIncognitoGatewaySessionEntryReadOnly(rawSessionKey, sessionLoadOptions).entry
           : (current?.entry ?? entry);
         if (latestEntry?.sessionId !== sessionId) {
           throw new Error(`Session "${sessionKey}" changed while starting work. Retry.`);

@@ -59,7 +59,11 @@ export async function startOrResumeThread(
   const incognito = isIncognitoSessionKey(input.params.sessionKey);
   const clientId = resolveCodexAppServerClientInstanceId(input.client);
   let cleanupWarmBinding: (() => Promise<void>) | undefined;
-  const prep = withCodexThreadLifecycleBinding(input, async (bindingIdentity, saved, authority) => {
+  const prepare: Parameters<typeof withCodexThreadLifecycleBinding>[1] = async (
+    bindingIdentity,
+    saved,
+    authority,
+  ) => {
     const assert = authority.assertCurrent;
     const params: CodexStartOrResumeThreadParams = { ...input, assertCurrent: assert, authority };
     const expectedOwnership = params.params.expectedSessionRuntimeOwnership;
@@ -612,10 +616,8 @@ export async function startOrResumeThread(
       await releaseRetainedThread(replacementPredecessor.threadId, replacementPredecessor.clientId);
     }
     return publishCodexThreadInferenceBinding(params, started);
-  });
-  try {
-    return await prep;
-  } catch (error) {
+  };
+  return withCodexThreadLifecycleBinding(input, prepare, async (error) => {
     // Warm reuse transfers its claim before publication and lease settlement.
     // Until this function returns, a rejected preparation still owns cleanup.
     if (cleanupWarmBinding) {
@@ -630,5 +632,5 @@ export async function startOrResumeThread(
       }
     }
     throw error;
-  }
+  });
 }

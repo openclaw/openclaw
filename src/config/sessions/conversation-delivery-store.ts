@@ -17,6 +17,7 @@ import {
   type ConversationRegistryScope,
 } from "./conversation-registry.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { createSessionWorkerExecutionSource } from "./session-worker-execution-source.js";
@@ -167,10 +168,9 @@ function writeConversationDelivery(
               { type: "session.conversation.delivery.transition", input },
               authority,
             );
-      if (outcome.kind === "rolled-back") {
-        throw Object.assign(new Error(outcome.error.message), { name: outcome.error.name });
-      }
-      return outcome.value;
+      return readSessionActorStorageResult<
+        ConversationDeliveryRecord | { created: boolean; record: ConversationDeliveryRecord }
+      >(outcome);
     });
   }
   const { options } = pinConversationDatabaseScope(scope);

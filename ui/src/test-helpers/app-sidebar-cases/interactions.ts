@@ -28,7 +28,7 @@ import {
   selectedRowKeys,
   sessionMenu,
 } from "./multi-select-support.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar multi-select", () => {
   it("restores the thread link when Tab exits its keyboard context menu", async () => {

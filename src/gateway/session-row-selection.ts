@@ -70,6 +70,7 @@ export function createSessionRowSelection(
       }
       involvementRevision = revision;
     }
+    configuredAgentIds ??= new Set(listAgentIds(cfg));
     const identities = context.userProfileIdentityById;
     for (const key of changedInvolvements) {
       const { entry } = winners.get(key)!.row;

@@ -412,6 +412,11 @@ export function createGatewayWorkerDispatchAdmission(
     // The requested acknowledgment can release the RPC while dispatch still owns setup.
     const releaseCaller = retainGatewayDeviceRevocation(authorize);
     try {
+      using sourceRetention = new DisposableStack();
+      const releaseSource = authorize?.retain?.();
+      if (releaseSource) {
+        sourceRetention.defer(releaseSource);
+      }
       const admit = async () => {
         // v2026.9.8 Gateway contexts accept opaque dispatch/move authorization callbacks.
         const sourceAuthorize = captureExternalSessionCommitGuard(authorize);

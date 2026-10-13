@@ -9,9 +9,8 @@ import { readEngineAnchor } from "../infra/database-engine/open.js";
 import {
   inspectDatabasePort,
   materializeDatabasePort,
-  type PortDescriptor,
 } from "../infra/database-engine/port.worker.js";
-import { expectedPostgresCatalog } from "../infra/database-engine/postgres-catalog.js";
+import { withWorkboardPostgres as withPostgres } from "../infra/database-engine/workboard-port.js";
 import { requireDirectorySync, syncDirectory, sha256File } from "../infra/directory-durability.js";
 import { copyFileHandle } from "../infra/file-descriptor.js";
 import { hasActiveGatewayStateOwner } from "../infra/gateway-state-owner.js";
@@ -95,50 +94,27 @@ export function readBackupEngine(sourcePath: string): BackupEngine {
   }
 }
 
-async function withPostgres<T>(
-  config: OpenClawConfig,
-  run: (client: import("pg").Client, descriptor: PortDescriptor) => Promise<T>,
-): Promise<T> {
-  const { resolveDatabaseEngineInput } = await import("../infra/database-engine/config.js");
-  const input = await resolveDatabaseEngineInput(config);
-  if (!input) {
-    throw new Error(
-      "PostgreSQL backup requires database.engine=postgres and its configured connection.",
-    );
+export async function captureDatabaseArtifact(file: string) {
+  await using handle = await fs.open(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  const stat = await handle.stat();
+  if (!stat.isFile() || stat.nlink !== 1) {
+    throw new Error(`Database artifact must be an unaliased regular file: ${file}`);
   }
-  const { Client } = await import("pg");
-  const client = new Client({ connectionString: input.connection });
-  await client.connect();
-  try {
-    const metadata = (
-      await import("../infra/database-engine/workboard-port.generated.json", {
-        with: { type: "json" },
-      })
-    ).default;
-    const { resolveBundledPluginsDir } = await import("../plugins/bundled-dir.js");
-    const plugins = resolveBundledPluginsDir();
-    if (!plugins) {
-      throw new Error("Bundled store backup descriptors are unavailable.");
-    }
-    const postgres = await fs.readFile(
-      path.join(plugins, "workboard/src/workboard-schema.postgres.sql"),
-      "utf8",
-    );
-    return await run(client, {
-      ...metadata,
-      preData: postgres.slice(metadata.preData[0], metadata.preData[1]),
-      postData: postgres.slice(metadata.postData[0], metadata.postData[1]),
-      expectedCatalog: expectedPostgresCatalog(metadata),
-    });
-  } finally {
-    await client.end();
-  }
+  const { digest, bytes } = await sha256File(handle);
+  return { path: file, sha256: digest, size: bytes };
 }
 
 async function artifact(file: string) {
-  await using handle = await fs.open(file, "r");
-  const { digest, bytes } = await sha256File(handle);
-  return { sha256: digest, sizeBytes: bytes };
+  const { sha256, size } = await captureDatabaseArtifact(file);
+  return { sha256, sizeBytes: size };
+}
+
+export async function assertDatabaseArtifact(
+  expected: Awaited<ReturnType<typeof captureDatabaseArtifact>>,
+) {
+  if (!isDeepStrictEqual(await captureDatabaseArtifact(expected.path), expected)) {
+    throw new Error(`Database artifact changed: ${expected.path}`);
+  }
 }
 
 async function inspectHeldAnchor(handle: FileHandle) {

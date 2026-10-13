@@ -37,7 +37,7 @@ async function handleSessionGoalMutation(
   options: GatewayRequestHandlerOptions,
   request: SessionsGoalUpdateParams | (SessionsGoalClearParams & { action: "clear" }),
 ): Promise<void> {
-  const { client, context, respond } = options;
+  const { client, context, respond, sessionMutationAuthorization } = options;
   const method = request.action === "clear" ? "sessions.goal.clear" : "sessions.goal.update";
   let targetRead:
     | Awaited<ReturnType<typeof captureSessionEntryCurrentCheckAsyncInternal>>
@@ -54,7 +54,7 @@ async function handleSessionGoalMutation(
     using authorization = {
       ...resolvedAuthorization,
       [Symbol.dispose]: () => {
-        if (!options.sessionMutationAuthorization) {
+        if (!sessionMutationAuthorization) {
           resolvedAuthorization.authorization?.release?.();
         }
       },

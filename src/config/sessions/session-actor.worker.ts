@@ -199,6 +199,7 @@ export function createSessionActorWorker(
   const prepareParticipantUpdate = (
     database: Pick<OpenClawAgentDatabase, "db">,
     sessionKey: string,
+    singleStatement = false,
   ) => {
     const transaction = readSessionActorTransactionState(database, { sessionKey });
     if (transaction?.hot.target.sessionKey === sessionKey) {
@@ -214,6 +215,26 @@ export function createSessionActorWorker(
       const working = forkSessionActorStoredState(before);
       replaceParticipants(working, participants);
       working.hot.version = { ...before.hot.version, sequence: before.hot.version.sequence + 1 };
+      if (singleStatement) {
+        stageSqliteTransactionState(database.db, {
+          stage() {},
+          rollback() {},
+          commit() {
+            const committedToken = token(
+              database,
+              working.hot.target,
+              working.hot.dependencySessionIds,
+            );
+            if (committedToken === undefined) {
+              throw new Error("Session actor lost its committed participant revision");
+            }
+            working.hot.writeToken = committedToken;
+            remember(working);
+          },
+          invalidate: () => drop(sessionKey),
+        });
+        return;
+      }
       const pendingToken = readSqliteDatabasePendingScopedWriteToken(
         database.db,
         scopes(working.hot.target, working.hot.dependencySessionIds),

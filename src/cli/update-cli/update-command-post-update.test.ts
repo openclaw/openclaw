@@ -1013,7 +1013,7 @@ process.exitCode = 1;
           doctorLintFindings: findings,
           advisory: {
             kind: "recoverable-maintenance",
-            message: expect.stringContaining("openclaw doctor --lint --severity-min info"),
+            message: expect.stringContaining("openclaw doctor --lint --all --severity-min info"),
           },
         }),
       ]);

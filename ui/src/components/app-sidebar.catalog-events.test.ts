@@ -14,7 +14,7 @@ import {
 } from "../test-helpers/gateway-client.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 // Capture JSDOM's frame owner before the sidebar fixture installs its scheduler.
 const requestNativeFrame = window.requestAnimationFrame.bind(window);

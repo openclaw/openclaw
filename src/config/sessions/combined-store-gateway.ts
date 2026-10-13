@@ -8,6 +8,7 @@ import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
 } from "../../gateway/session-store-key.js";
+import { createGatewaySessionLineageReader } from "../../gateway/session-utils-store-lineage.native.js";
 import {
   isIncognitoSessionKey,
   normalizeAgentId,
@@ -55,11 +56,11 @@ import type { SessionEntrySummary } from "./session-accessor.types.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
+import { listKnownSessionStoreAgentIds } from "./targets-discovery.native.js";
 import {
   dedupeSessionStoreTargetsBySqliteTarget,
   isConfiguredAgentDatabaseTarget,
   listConfiguredSessionStoreAgentIds,
-  listKnownSessionStoreAgentIds,
   resolveAgentSessionStoreTargetsSync,
   resolveConfiguredAgentDatabaseCandidatePaths,
   resolveAllAgentSessionStoreTargetsSync,
@@ -161,10 +162,13 @@ function mergeOpenIncognitoStores(params: {
   modelSources: ReturnType<typeof createSessionModelSources>;
   projection: GatewaySessionEntryProjection;
   targets: ReadonlyArray<{ agentId: string; storePath: string }>;
+  readEntries?: (target: SessionStoreTarget) => SessionEntrySummary[];
 }): string[] {
   const storePaths: string[] = [];
   for (const target of params.targets) {
-    const store = captureMemoryExactSessionReader(target)?.entries(params.projection) ?? [];
+    const store = params.readEntries
+      ? params.readEntries(target)
+      : (captureMemoryExactSessionReader(target)?.entries(params.projection) ?? []);
     let merged = false;
     const addModelEntry = params.modelSources.prepareStore(target);
     const modelTarget = { agentId: target.agentId, storeTarget: target };
@@ -542,7 +546,8 @@ export function mergeCombinedSessionStore(
   opts: GatewaySessionStoreOptions,
   prepared: PreparedCombinedSessionStore,
   readEntries: (target: SessionStoreTarget) => SessionEntrySummary[],
-  preparedLineage?: GatewaySessionLineageReader,
+  readQualifiedParent: GatewaySessionLineageReader,
+  incognitoEntries?: (target: SessionStoreTarget) => SessionEntrySummary[],
 ): GatewayCombinedSessionStore {
   const env = opts.discovery?.env;
   // Store-wide metadata reads must not materialize saved prompts for every row.
@@ -570,7 +575,7 @@ export function mergeCombinedSessionStore(
     cfg,
     projectionDiagnostics,
     preparedAgentIds,
-    preparedLineage,
+    readQualifiedParent,
   );
   for (const { target, storeTarget } of prepared.reads) {
     const agentId = target.agentId;
@@ -649,6 +654,7 @@ export function mergeCombinedSessionStore(
     modelSources,
     projection,
     targets: incognitoTargets,
+    readEntries: incognitoEntries,
   });
   if (configuredAgentIds) {
     filterCombinedStoreToConfiguredAgents({
@@ -689,9 +695,14 @@ export function loadCombinedSessionStoreForGatewayCore(
   opts: GatewaySessionStoreOptions = {},
 ): GatewayCombinedSessionStore {
   const prepared = prepareCombinedSessionStore(cfg, opts);
-  return mergeCombinedSessionStore(cfg, opts, prepared, (target) =>
-    opts.loadEntries
-      ? opts.loadEntries(target, prepared.projection)
-      : loadGatewayStoreEntries({ ...target, projection: prepared.projection }),
+  return mergeCombinedSessionStore(
+    cfg,
+    opts,
+    prepared,
+    (target) =>
+      opts.loadEntries
+        ? opts.loadEntries(target, prepared.projection)
+        : loadGatewayStoreEntries({ ...target, projection: prepared.projection }),
+    createGatewaySessionLineageReader(cfg),
   );
 }
