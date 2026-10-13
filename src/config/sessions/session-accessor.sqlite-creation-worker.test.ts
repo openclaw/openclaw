@@ -4,11 +4,7 @@ import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../test/helpers/promise.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createNativeSessionCommitFinalizer } from "../../agents/harness/native-session/deletion-participant.js";
 import {
@@ -33,7 +29,6 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -62,66 +57,6 @@ import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-hea
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
-import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
-
-it("prepares canonical creation while an unrelated writer holds admission", async ({ signal }) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const options = { agentId: database.agentId, path: database.path, env: state.env };
-    const sessionKey = "agent:main:queued-creation";
-    const sessionId = "queued-creation";
-    await withSessionHistoryWorkerDatabase(options, async (reader) => {
-      await reader.readExactEntries({
-        projection: "creation",
-        sessionKeys: [sessionKey],
-        env: state.env,
-      });
-      const writerEntered = createDeferred();
-      const releaseWriter = createDeferred();
-      const prepared = createDeferred();
-      const blocking = runOpenClawAgentWriteAdmission(options, async () => {
-        writerEntered.resolve();
-        await releaseWriter.promise;
-      });
-      let creating: ReturnType<typeof createSessionEntryWithTranscript> | undefined;
-      try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            writerEntered.promise,
-            blocking,
-            "Writer did not acquire admission",
-          ),
-          signal,
-        );
-        creating = createSessionEntryWithTranscript(
-          { agentId: "main", storePath: database.path, sessionKey, env: state.env },
-          () => {
-            prepared.resolve();
-            return { ok: true, entry: { sessionId, updatedAt: 1 } };
-          },
-        );
-        await withinTest(
-          awaitGateBeforeSettlement(
-            prepared.promise,
-            creating,
-            "Creation settled before preparing its entry",
-          ),
-          signal,
-        );
-        expect(readExactSessionEntryRow(database, sessionKey)).toBeUndefined();
-        expect(readTranscriptStorageRows(database, sessionId)).toEqual([]);
-        releaseWriter.resolve();
-        await blocking;
-        await expect(creating).resolves.toMatchObject({ ok: true, entry: { sessionId } });
-        expect(readExactSessionEntryRow(database, sessionKey)?.entry.sessionId).toBe(sessionId);
-        expect(readTranscriptStorageRows(database, sessionId)).toHaveLength(1);
-      } finally {
-        releaseWriter.resolve();
-        await Promise.allSettled([blocking, creating]);
-      }
-    });
-  });
-});
 
 it.each([false, true])(
   "prepares a new custom-store suffix only while absent (appeared=%s)",

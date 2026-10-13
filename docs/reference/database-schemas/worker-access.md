@@ -395,10 +395,11 @@ visibility, membership, and conversation authority that the destination worker
 cannot validate. These changes add no schema, retention, or update migration.
 
 Cold session creation uses the existing session-entry worker for requested-key
-and parent lookups. Canonical per-agent paths prepare without reserving the writer
-queue; shared-store ownership discovery still reserves it against concurrent cold
-registration. Snapshot reads retain database admission, and creation commits retain
-writer admission and current authority checks.
+and parent lookups. The Gateway's `snapshot` timing includes scope preparation and
+its writer-queue reservation before the worker read; it does not clone the session
+store. That reservation preserves earlier queued writes when adopting an existing
+key and protects shared-store discovery from concurrent cold registration. Creation
+commits acquire their own writer admission and revalidate current authority.
 Personal default selection reads profile links and its selected
 credential through the existing shared-state and auth-store readers; credential
 authority still applies at the creation effect. Default cron loads resolve their

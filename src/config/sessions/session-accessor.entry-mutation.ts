@@ -48,7 +48,6 @@ import {
   type SessionSourceCheck,
   type AsyncSessionSourceCheck,
 } from "./session-source-authority.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import {
   assertSessionStoreReadCandidate,
@@ -502,14 +501,10 @@ export async function createSessionEntryWithTranscript<TError = string>(
   const agentId = captured.agentId ?? resolveAgentIdFromSessionKey(captured.sessionKey);
   const target = { ...captured, agentId, storePath };
   const incognito = captureIncognitoSessionBinding(target);
-  // Canonical agent paths need no ownership discovery. Shared stores still reserve
-  // discovery against sibling cold registration, separately from commit custody.
+  // Preserve earlier queued writes for existing-key adoption and protect shared-store
+  // discovery from sibling cold registration. Commit custody is acquired separately.
   const admission =
-    isMainThread &&
-    !incognito &&
-    !resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath).agentId
-      ? resolveSqliteWriteAdmissionScope(target)
-      : undefined;
+    isMainThread && !incognito ? resolveSqliteWriteAdmissionScope(target) : undefined;
   const prepare = () => prepareSqliteScope(target);
   const resolved = captureLifecycleDatabaseScope(
     isMainThread && !incognito
