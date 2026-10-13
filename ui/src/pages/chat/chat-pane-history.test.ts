@@ -511,6 +511,7 @@ describe("chat pane native history pagination", () => {
       expect(request).toHaveBeenCalledWith("chat.history", {
         sessionKey: state.sessionKey,
         limit: 1000,
+        maxBytes: 1024 * 1024,
         toolResultMaxChars: 2_000,
         offset: 2,
       });
@@ -563,6 +564,7 @@ describe("chat pane native history pagination", () => {
     expect(request).toHaveBeenLastCalledWith("chat.history", {
       sessionKey: state.sessionKey,
       limit: 1000,
+      maxBytes: 1024 * 1024,
       toolResultMaxChars: 2_000,
       offset: 5,
     });
@@ -720,6 +722,7 @@ describe("chat pane native history pagination", () => {
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: state.sessionKey,
       limit: 1000,
+      maxBytes: 1024 * 1024,
       toolResultMaxChars: 2_000,
       offset: 2,
     });
@@ -758,6 +761,7 @@ describe("chat pane native history pagination", () => {
     expect(request).toHaveBeenNthCalledWith(1, "chat.history", {
       sessionKey: state.sessionKey,
       limit: 1000,
+      maxBytes: 1024 * 1024,
       toolResultMaxChars: 2_000,
       offset: 2,
     });

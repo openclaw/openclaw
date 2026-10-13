@@ -278,9 +278,7 @@ suite.define(() => {
               "Reconnecting",
             );
             expect(await pane.locator(".agent-chat__welcome").count()).toBe(0);
-            await pollLocatorText(pane.locator(".agent-chat__composer-status-band")).toContain(
-              "1 in this conversation’s outbox.",
-            );
+            expect(await pane.locator(".agent-chat__composer-status-band").count()).toBe(0);
             expect(await pane.locator(".chat-topbar-notices .chat-error").count()).toBe(0);
             await captureUiProof(suite, page, "startup-disconnected.png");
             await gateway.setOnline(true);

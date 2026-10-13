@@ -516,12 +516,12 @@ test.for(["lost-worker-response", "restart-before-ack"] as const)(
   },
 );
 
-test("retains idle chat input custody when its separate transcript commit is refused", async () => {
+test("leaves idle chat input unaccepted when its durable commit is refused", async () => {
   const { storePath } = await createSessionStoreDir();
   const { ws } = await openClient();
-  const key = "agent:main:dashboard:idle-staging-preserved";
-  const message = "Idle input keeps its separately accepted bytes.";
-  const runId = "idle-staging-preserved";
+  const key = "agent:main:dashboard:idle-commit-refused";
+  const message = "Idle input is accepted only after its durable commit.";
+  const runId = "idle-commit-refused";
   const target = { agentId: "main", sessionKey: key, storePath };
   dispatch.start.mockClear();
   dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
@@ -547,9 +547,7 @@ test("retains idle chat input custody when its separate transcript commit is ref
     const entry = expectDefined(loadSessionEntry(target), "idle session");
     expect(entry.restartRecoveryDeliveryRunId).toBeUndefined();
     const scope = { ...target, sessionId: entry.sessionId };
-    const pending = await listSessionPendingInputs(scope);
-    expect(pending).toMatchObject({ total: 1, items: [{ state: "interrupted" }] });
-    expect(JSON.stringify(pending.items)).toContain(message);
+    expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
     expect(
       (await loadTranscriptEvents(scope)).filter((event) =>
         JSON.stringify(event).includes(message),

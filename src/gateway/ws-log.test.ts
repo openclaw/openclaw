@@ -5,7 +5,12 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { setVerbose } from "../global-state.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
-import { formatForLog, logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
+import {
+  formatForLog,
+  logWs,
+  summarizeAgentEventForWsLog,
+  summarizeSessionListForWsLog,
+} from "./ws-log.js";
 import { setGatewayWsLogStyle } from "./ws-logging.js";
 
 function shouldLogWs(direction: "in" | "out", kind: string): boolean {
@@ -27,6 +32,19 @@ afterEach(() => {
 });
 
 describe("gateway ws log helpers", () => {
+  test.each([
+    ["compact", "compact"],
+    ["dashboard", "dashboard"],
+    ["sidebar", "sidebar"],
+    [undefined, "full"],
+    ["unrecognized caller value", "full"],
+  ])("reports session row mode %s as %s", (rowMode, expected) => {
+    expect(summarizeSessionListForWsLog({ source: "sidebar", rowMode })).toMatchObject({
+      source: "sidebar",
+      rowMode: expected,
+    });
+  });
+
   test.each(["optimized", "compact", "full"] as const)(
     "bounds unanswered timing and preserves request identity across %s log changes",
     (style) => {

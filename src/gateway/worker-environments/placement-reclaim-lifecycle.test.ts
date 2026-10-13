@@ -1,13 +1,9 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../config/runtime-snapshot.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
 import {
   NODE_WORKSPACE_QUIESCENCE_COMMAND,
@@ -23,11 +19,8 @@ import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import * as support from "./service.test-support.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
 
-afterAll(() => clearRuntimeConfigSnapshot());
-
 describe("placement reclaim with provider-owned node teardown", () => {
   support.setupWorkerEnvironmentServiceSuite();
-  beforeEach(() => setRuntimeConfigSnapshot(support.testState.config));
 
   it.each([
     { operation: "reclaim", failure: "timeout" },
@@ -351,7 +344,6 @@ describe("placement reclaim with provider-owned node teardown", () => {
 
 describe("SSH placement cleanup after worker credential expiry", () => {
   support.setupWorkerEnvironmentServiceSuite();
-  beforeEach(() => setRuntimeConfigSnapshot(support.testState.config));
 
   it.each(["reclaim", "move", "idle suspend"] as const)(
     "%s reconciles the workspace before releasing the exact lease",

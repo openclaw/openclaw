@@ -10,6 +10,7 @@ import {
 export type { ShellLayoutTraits } from "./shell-layout-owner.ts";
 
 /** Render owners publish layout facts before their descendants can measure layout. */
+// Temporary Lit reporter for the shared layout owner; remove at renderer cutover.
 class ShellLayoutTraitsDirective extends AsyncDirective {
   private host?: Element;
   private traits: ShellLayoutTraits = {};

@@ -9,7 +9,6 @@ import type {
   SessionGoalOperation,
   SessionGoalOperationResult,
 } from "../../config/sessions/goals-operations.js";
-import type { SessionEntryCreationOperation } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { logVerbose } from "../../globals.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -44,6 +43,7 @@ import {
 } from "./chat-send-message-injection.js";
 import type { ChatSendInternalOptions } from "./chat-send-options.js";
 import { applyChatSendReplyContextFields } from "./chat-send-reply-context.js";
+import { createChatSendSessionInitialization } from "./chat-send-session-binding.js";
 import { prepareAndAdmitChatSend } from "./chat-send-setup.js";
 import { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 import {
@@ -626,18 +626,13 @@ async function handleChatSendWithOptions(
       },
       cronCreatorAuthority,
       assertDashboardReadCurrent,
-      ...(needsSessionCreationBinding && sessionMutationAuthorization?.bindCreation
-        ? {
-            bindSessionCreation: (operation: SessionEntryCreationOperation) => {
-              sessionMutationAuthorization.bindCreation?.(
-                { sessionKey, agentId: session.agentId },
-                operation,
-              );
-              return sessionMutationAuthorization.assertCurrent;
-            },
-            onSessionCreated: sessionMutationAuthorization.recordCreatedSession,
-          }
-        : {}),
+      getSessionInitializationOptions: createChatSendSessionInitialization({
+        sessionKey,
+        agentId: session.agentId,
+        authorization: sessionMutationAuthorization,
+        needsCreationBinding: needsSessionCreationBinding,
+        getSessionInitializationOptions: userTurn.getSessionInitializationOptions,
+      }),
       externalAuthorityAdmission,
       injection: {
         beginCapturedMessageInjection,

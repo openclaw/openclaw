@@ -162,7 +162,11 @@ Finished results stay open until you close them. While the parent waits on
 subagents, the conversation keeps each child’s claw, name, and current activity
 together in one clickable row. A single muted timer at the far right shows total
 time since your message, including subagent waits, when that request is known.
-There is no second status line above the composer.
+There is no second status line above the composer. When the conversation uses
+a fallback wait indicator instead of named child activity, its clock measures
+the current idle interval from the parent’s latest recorded run end, independently
+of loaded handoff history. Active children alone do not invent a wait for a
+parent that has never run.
 The panel loads all child pages automatically and groups running and finished
 work, keeping children waiting on their own
 descendants under **Running**. It shows elapsed time and available tool activity,

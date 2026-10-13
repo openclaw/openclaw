@@ -1,10 +1,6 @@
--- Generated lazy feature; create dependencies first.
+-- Generated runtime DDL; the owner supplies search_path and the transaction.
 
-BEGIN;
-
-SET LOCAL standard_conforming_strings = on;
-
-CREATE TABLE "openclaw_state"."device_pair_setup_completions" (
+CREATE TABLE "device_pair_setup_completions" (
   "setup_id" text COLLATE "C" NOT NULL,
   "device_id" text COLLATE "C" NOT NULL,
   "device_name" text COLLATE "C",
@@ -15,5 +11,3 @@ CREATE TABLE "openclaw_state"."device_pair_setup_completions" (
   PRIMARY KEY ("setup_id"),
   CHECK (("delivery_state" IN ('uncertain', 'confirmed')))
 );
-
-COMMIT;
