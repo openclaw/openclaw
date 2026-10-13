@@ -1,7 +1,7 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { deleteSubagentSessionForCleanup } from "../agents/subagents/registry/subagent-session-cleanup.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
@@ -41,6 +41,12 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
           acquisition = startGatewayServerHarness();
           harness = await acquisition;
           agentDispatch = await import("./agent-turn/agent-run-dispatch.js");
+          const [{ coreGatewayHandlers }, { prepareGatewayRequestHandler }] = await Promise.all([
+            import("./server-methods/core-handlers.js"),
+            import("./server-methods/lazy-core-handlers.js"),
+          ]);
+          // Lazy module transformation belongs to fixture setup, outside the RPC deadline.
+          await prepareGatewayRequestHandler(coreGatewayHandlers["sessions.create"]!);
         } finally {
           capture.mockRestore();
         }
@@ -210,18 +216,24 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
 
         if (mode === "graceful") {
           // This is the same owner inventory the CLI waits on before ordinary server.close().
-          grace = waitForGatewayActiveWork(5_000, {
-            onSnapshot: (snapshot) => {
-              if (!snapshot.idle) {
-                graceObserved.resolve();
-              }
-            },
-          });
-          await graceObserved.promise;
-          expect(runSignal?.aborted).toBe(false);
-          release();
-          await terminalObserved.promise;
-          expect(await grace).toMatchObject({ drained: true });
+          // Keep real polling and cleanup, but decouple the grace budget from runner speed.
+          vi.useFakeTimers({ toFake: ["Date"] });
+          try {
+            grace = waitForGatewayActiveWork(5_000, {
+              onSnapshot: (snapshot) => {
+                if (!snapshot.idle) {
+                  graceObserved.resolve();
+                }
+              },
+            });
+            await withinTest(graceObserved.promise, signal);
+            expect(runSignal?.aborted).toBe(false);
+            release();
+            await withinTest(terminalObserved.promise, signal);
+            expect(await withinTest(grace, signal)).toMatchObject({ drained: true });
+          } finally {
+            vi.useRealTimers();
+          }
         }
         closing = harness.server.close({
           reason: mode === "restart" ? "gateway restart" : "gateway stopping",

@@ -1263,6 +1263,7 @@ jobs:
           LIVE_MODELS_ONLY: ${{ inputs.live_models_only }}
           RELEASE_TEST_PROFILE: ${{ inputs.release_test_profile }}
           PREPARE_ONLY: ${{ inputs.prepare_only }}
+          PUBLISHED_UPGRADE_SURVIVOR_BASELINES: ${{ needs.validate_selected_ref.outputs.upgrade_baselines }}
         run: node scripts/plan-release-workflow-matrix.mjs >> "$GITHUB_OUTPUT"
 
   validate_release_live_cache:
@@ -1270,10 +1271,11 @@ jobs:
     needs: validate_selected_ref
     if: (!inputs.prepare_only) && inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'live-cache')
     runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404') }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       OPENCLAW_LIVE_CACHE_TEST: "1"
       OPENCLAW_LIVE_TEST: "1"
     steps:
@@ -1329,6 +1331,19 @@ jobs:
         run: |
           set -euo pipefail
           timeout --foreground --kill-after=30s 8m pnpm test:live:cache
+
+      - name: Verify live prompt prefix reuse
+        run: |
+          set -euo pipefail
+          timeout --foreground --kill-after=30s 8m node --import ./scripts/tsx.mjs scripts/e2e/anthropic-cache-live.mts
+
+      - name: Verify live agent prompt prefix reuse
+        env:
+          OPENCLAW_LIVE_ANTHROPIC_CACHE_MODEL: claude-sonnet-5
+          OPENCLAW_VITEST_RUNTIME: ${{ inputs.test_runtime }}
+        run: |
+          set -euo pipefail
+          timeout --foreground --kill-after=30s 8m pnpm test:live src/agents/embedded-agent-runner.cache.live.test.ts --testNamePattern 'release prompt-prefix gate'
 
   validate_repo_e2e_gateway:
     name: Gateway E2E${{ inputs.test_runtime == 'bun' && ' (Bun advisory)' || '' }}
@@ -1744,7 +1759,8 @@ jobs:
       OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION: ${{ needs.prepare_docker_e2e_image.outputs.package_version }}
       OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: ${{ needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_manifest_sha256 }}
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ needs.validate_selected_ref.outputs.upgrade_baseline }}
-      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ needs.validate_selected_ref.outputs.upgrade_baselines }}
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ matrix.docker_lanes != '' && matrix.published_upgrade_survivor_baselines || needs.validate_selected_ref.outputs.upgrade_baselines }}
+      OPENCLAW_DOCKER_ALL_LANES: ${{ matrix.docker_lanes }}
       OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: ${{ inputs.shared_image_policy == 'no-push-artifact' && '1' || '0' }}
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
@@ -2027,7 +2043,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: docker-e2e-${{ matrix.chunk_id }}
+          name: docker-e2e-${{ matrix.shard_id || matrix.chunk_id }}
           path: .artifacts/docker-tests/
           if-no-files-found: error
 
@@ -4645,7 +4661,9 @@ jobs:
 
       - name: Install Chromium for native live browser tests
         if: steps.selection.outputs.run == 'true' && matrix.suite_id == 'native-live-test'
-        run: pnpm --dir ui exec playwright install --with-deps chromium
+        uses: ./.release-harness/.github/actions/setup-playwright-chromium
+        with:
+          cache-mode: restore
 
       - name: Hydrate live auth/profile inputs
         if: steps.selection.outputs.run == 'true'
@@ -5089,7 +5107,9 @@ jobs:
 
       - name: Install Chromium for A-K live browser tests
         if: contains(matrix.profiles, inputs.release_test_profile) && matrix.suite_id == 'native-live-extensions-a-k' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
-        run: pnpm --dir ui exec playwright install --with-deps chromium
+        uses: ./.release-harness/.github/actions/setup-playwright-chromium
+        with:
+          cache-mode: restore
 
       - name: Hydrate live auth/profile inputs
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))

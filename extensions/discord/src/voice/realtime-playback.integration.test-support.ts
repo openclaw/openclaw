@@ -19,7 +19,6 @@ vi.mock("./audio-worker-thread.js", async () => {
 });
 import { DiscordRealtimePlayback } from "./realtime-playback.js";
 import { DiscordRealtimePlayer } from "./realtime-player.js";
-import { createVoiceReceiveRecoveryState } from "./receive-recovery.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 import type { VoiceSessionEntry } from "./session.js";
 import { DiscordVoiceConversationQueue } from "./voice-conversation-input.js";
@@ -91,7 +90,11 @@ export function createRealtimePlaybackFixture(
     ttsStreamFallbackWarned: false,
     capture: new Map(),
     realtimeLifecycle: { status: "inactive", generation: 0 },
-    receiveRecovery: createVoiceReceiveRecoveryState(),
+    receiveRecovery: {
+      decryptFailureCount: 0,
+      lastDecryptFailureAt: 0,
+      decryptRecoveryInFlight: false,
+    },
     stop: vi.fn(),
   };
   const roomPlayer = new DiscordRealtimePlayer(audio);

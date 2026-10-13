@@ -179,9 +179,13 @@ describe("runDoctorSessionSqlite", () => {
         const manifest = readMigrationManifest(manifestPath);
         manifest.targets = manifest.targets.filter((target) => target.agentId !== "main");
         writeSessionSqliteMigrationManifest({ manifestPath, manifest });
-        await expect(
-          runDoctorSessionSqlite({ cfg, env, agent: "main", mode: "import" }),
-        ).rejects.toThrow("Restored session index evidence cannot be verified");
+        const deferred = await runDoctorSessionSqlite({ cfg, env, agent: "main", mode: "import" });
+        expect(deferred.targets.flatMap((target) => target.issues)).toContainEqual(
+          expect.objectContaining({
+            code: "legacy_import_deferred",
+            message: expect.stringContaining("Restored session index evidence cannot be verified"),
+          }),
+        );
         for (const { scope, entry } of current) {
           expect(loadSessionEntry(scope)).toEqual(entry);
         }

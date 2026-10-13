@@ -1,9 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Updateable } from "kysely";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-} from "../../infra/kysely-sync.js";
+import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import type {
   WorkerEnvironmentCredentials,
   WorkerEnvironmentSshFallbackPorts,
@@ -25,6 +22,7 @@ import {
   normalizeSessionId,
 } from "./store-validation.js";
 import type { CredentialInput } from "./store-write-types.js";
+import { executeWorkerEnvironmentWrite } from "./store-write.js";
 type RowUpdate = Updateable<WorkerEnvironments>;
 type SshFallbackPortInsert = Insertable<WorkerEnvironmentSshFallbackPorts>;
 type CredentialInsert = Insertable<WorkerEnvironmentCredentials>;
@@ -57,7 +55,7 @@ export function updateRow(
   state: WorkerEnvironmentState,
   values: RowUpdate,
 ) {
-  const result = executeSqliteQuerySync(
+  const result = executeWorkerEnvironmentWrite(
     db,
     queryWorkerEnvironmentStore(db)
       .updateTable("worker_environments")
@@ -83,7 +81,7 @@ export function replaceSshFallbackPorts(
   environmentId: string,
   ports: readonly number[],
 ): void {
-  executeSqliteQuerySync(
+  executeWorkerEnvironmentWrite(
     db,
     queryWorkerEnvironmentStore(db)
       .deleteFrom("worker_environment_ssh_fallback_ports")
@@ -97,7 +95,7 @@ export function replaceSshFallbackPorts(
     position,
     port,
   }));
-  executeSqliteQuerySync(
+  executeWorkerEnvironmentWrite(
     db,
     queryWorkerEnvironmentStore(db)
       .insertInto("worker_environment_ssh_fallback_ports")
@@ -105,7 +103,7 @@ export function replaceSshFallbackPorts(
   );
 }
 export function revokeCredential(db: DatabaseSync, environmentId: string): void {
-  executeSqliteQuerySync(
+  executeWorkerEnvironmentWrite(
     db,
     queryWorkerEnvironmentStore(db)
       .deleteFrom("worker_environment_credentials")
@@ -114,7 +112,7 @@ export function revokeCredential(db: DatabaseSync, environmentId: string): void 
 }
 export function upsertCredential(db: DatabaseSync, credential: CredentialInsert): void {
   const { environment_id: environmentId, ...values } = credential;
-  executeSqliteQuerySync(
+  executeWorkerEnvironmentWrite(
     db,
     queryWorkerEnvironmentStore(db)
       .insertInto("worker_environment_credentials")
@@ -186,7 +184,7 @@ export function reconcileAttachedSessionOwners(db: DatabaseSync, nowMs: number):
     const [, ...duplicates] = owners.toSorted(compareAttachmentAuthority);
     for (const duplicate of duplicates) {
       // Fence legacy duplicate live owners before startup snapshots them.
-      updateWorkerEnvironmentRecord(db, duplicate.environmentId, "attached", {
+      updateRow(db, duplicate.environmentId, "attached", {
         owner_epoch: nextGlobalOwnerEpoch(db),
         state: "idle",
         attached_session_ids_json: json([]),

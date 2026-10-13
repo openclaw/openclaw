@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
+import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   startSecretEgressProxyWorker,
@@ -55,13 +56,20 @@ export async function startGatewaySecretEgressProxy(params: {
         }
       },
       onAudit: (event) => {
+        emitTrustedDiagnosticEvent({
+          type: "secret.egress",
+          outcome: event.kind,
+          substituted: event.substituted,
+        });
         if (event.reason === "certificate-error") {
           log.warn(
             "secret egress TLS certificate unavailable; check OpenSSL and the system clock, then retry",
             event,
           );
-        } else {
+        } else if (event.kind === "refused" || event.substituted) {
           log.info("secret egress request", event);
+        } else {
+          log.debug("secret egress request", event);
         }
       },
     });

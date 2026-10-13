@@ -8,6 +8,7 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
+import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { ensureColumn, tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -16,7 +17,7 @@ import {
   type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import type {
   OutboundMessageAuditEventRecord,
   OutboundMessageProgressInput,
@@ -46,23 +47,20 @@ const ensuredDatabases = new WeakSet<DatabaseSync>();
 const progressRowCounts = new WeakMap<DatabaseSync, number>();
 
 function progressSchemaSql(): string {
-  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-    "CREATE TABLE IF NOT EXISTS outbound_message_progress (",
-  );
-  const finalIndex = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-    "CREATE INDEX IF NOT EXISTS outbound_message_progress_run_occurred_idx",
-    start,
-  );
-  const end = finalIndex >= 0 ? OPENCLAW_STATE_SCHEMA_SQL.indexOf(";", finalIndex) : -1;
-  if (start < 0 || end < 0) {
-    throw new Error("canonical outbound message progress schema is missing");
-  }
-  return OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + 1);
+  return getOpenClawStateFeatureSchemaSql("outbound_message_progress", {
+    endMarker: "  ON outbound_message_progress (run_id, occurred_at, sequence);",
+    errorMessage: "canonical outbound message progress schema is missing",
+  });
 }
 
 function progressDb(db: DatabaseSync) {
   return getNodeSqliteKysely<ProgressDatabase>(db);
 }
+
+const ensureProgressSchemaInDatabase = createSqliteSchemaEnsurer(progressSchemaSql, {
+  tables: ["outbound_message_progress"],
+  indexes: ["outbound_message_progress_occurred_idx", "outbound_message_progress_run_occurred_idx"],
+});
 
 function ensureProgressSchema(options: OpenClawStateDatabaseOptions): void {
   const database = openOpenClawStateDatabase(options);
@@ -71,8 +69,7 @@ function ensureProgressSchema(options: OpenClawStateDatabaseOptions): void {
   }
   runOpenClawStateWriteTransaction(
     ({ db }) => {
-      // sqlite-allow-raw -- feature-local additive schema DDL; progress rows use Kysely.
-      db.exec(progressSchemaSql());
+      ensureProgressSchemaInDatabase(db);
       ensureColumn(db, "outbound_message_progress", "context_id TEXT");
       ensureColumn(db, "outbound_message_progress", "execution_id TEXT");
     },

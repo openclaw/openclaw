@@ -9,7 +9,7 @@ import {
   handleWorkboardChanged,
   resumeWorkboardLiveRefresh,
 } from "./live-refresh.ts";
-import { loadWorkboard, loadWorkboardCatalog } from "./loading.ts";
+import { loadWorkboard } from "./loading.ts";
 import { stopWorkboardLiveRefresh, getWorkboardState } from "./runtime.ts";
 import { createWorkboardCard } from "./test/index-helpers.ts";
 
@@ -71,16 +71,6 @@ describe("Workboard live refresh", () => {
       "workboard.cards.diagnostics.refresh",
       expect.anything(),
     );
-  });
-
-  it("requests one canonical reload for each newly installed client", () => {
-    const host = {};
-    const first = createClient(() => ({ cards: [], statuses: ["todo", "done"] }));
-    const second = createClient(() => ({ cards: [], statuses: ["todo", "done"] }));
-
-    expect(configureWorkboardLiveRefresh({ host, client: first as never })).toBe(true);
-    expect(configureWorkboardLiveRefresh({ host, client: first as never })).toBe(false);
-    expect(configureWorkboardLiveRefresh({ host, client: second as never })).toBe(true);
   });
 
   it("coalesces revisions that arrive during a canonical read", async () => {
@@ -251,7 +241,7 @@ it("retains cards on unchanged responses and still refreshes caller-scoped Sessi
     .mockResolvedValueOnce({ cards: [card], boards: [], revision })
     .mockResolvedValue({ unchanged: true, revision });
   const client = { request } as never;
-  await loadWorkboardCatalog({ host, client });
+  await loadWorkboard({ host, client, force: true, catalogOnly: true });
   expect(getWorkboardState(host).loaded).toBe(false);
   await loadWorkboard({ host, client });
   expect(getWorkboardState(host).loaded).toBe(true);

@@ -34,15 +34,14 @@ export function createDoctorConfigRepairPlanner(params: {
   skipLegacyParentConfigWrite: boolean;
   runWithPluginMetadataSnapshot: PluginMetadataSnapshotScopeRunner;
 }) {
-  const planScopedConfigRepair = (snapshot: ConfigFileSnapshot) => {
-    return params.runWithPluginMetadataSnapshot(
+  const planScopedConfigRepair = (snapshot: ConfigFileSnapshot) =>
+    params.runWithPluginMetadataSnapshot(
       { config: snapshot.sourceConfig ?? snapshot.config ?? {} },
       () => planAutomaticConfigRepair(snapshot),
     );
-  };
   const planAdmittedConfigRepair = (
     snapshot: ConfigFileSnapshot,
-    prepared: ReturnType<typeof planAutomaticConfigRepair> = null,
+    prepared: Awaited<ReturnType<typeof planAutomaticConfigRepair>> = null,
   ) =>
     (params.options.repairPrefixedConfig === true ||
       (params.stateMigrationsRequested && params.options.migrateLegacyConfig !== false)) &&
@@ -99,7 +98,7 @@ export async function prepareDoctorConfigRecovery(params: {
       ),
     ),
   );
-  let activeConfigRepair: ReturnType<typeof planAutomaticConfigRepair> = null;
+  let activeConfigRepair: Awaited<ReturnType<typeof planAutomaticConfigRepair>> = null;
   const recoveryEnabled =
     params.enabled && !resolveFutureConfigActionBlock({ action: "recover config", snapshot });
   if (recoveryEnabled && snapshot.valid) {
@@ -117,7 +116,7 @@ export async function prepareDoctorConfigRecovery(params: {
     // One retired key must not discard newer valid settings by restoring an older backup.
     activeConfigRepair =
       typeof snapshot.raw === "string" && parseConfigJson5(snapshot.raw).ok
-        ? params.planRepair(snapshot)
+        ? await params.planRepair(snapshot)
         : null;
     let configRepaired = false;
     if (

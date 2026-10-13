@@ -47,6 +47,7 @@ export function preparedModelRuntimeWorkspaceFactsKey(input: PreparedModelRuntim
     env: hashRuntimeConfigValue(input.env ?? process.env),
     readOnly: input.readOnly === true,
     loadRuntimePlugins: input.loadRuntimePlugins === true,
+    runtimePluginPurpose: input.runtimePluginPurpose,
     workspaceDir: input.workspaceDir,
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
     // Normalization already resolves each model to its runtime. The workspace
@@ -180,12 +181,18 @@ export function prepareWorkspacePluginRegistries(
   }
   // Resolve batch facts only for a registry load; read-only and reused registries need no scan.
   let primaryRegistry: PluginRegistry | undefined;
-  const inboundPluginRegistry = input.readOnly
-    ? undefined
-    : (reusableGeneration?.inboundPluginRegistry ??
-      loadInboundRegistry?.(input, metadataSnapshot, getConfiguredHarnessRuntimes?.(), (source) => {
-        primaryRegistry = source;
-      }));
+  const inboundPluginRegistry =
+    input.readOnly || input.runtimePluginPurpose === "isolated-completion"
+      ? undefined
+      : (reusableGeneration?.inboundPluginRegistry ??
+        loadInboundRegistry?.(
+          input,
+          metadataSnapshot,
+          getConfiguredHarnessRuntimes?.(),
+          (source) => {
+            primaryRegistry = source;
+          },
+        ));
   const baseRegistry = reusableGeneration?.pluginRegistry ?? inboundPluginRegistry;
   for (const registry of new Set([inboundPluginRegistry, baseRegistry])) {
     if (registry) {
@@ -208,6 +215,7 @@ export function prepareWorkspacePluginRegistries(
             // Inbound preparation already admitted this exact context. Let the runtime
             // planner check selected owners before acquiring another captured registry.
             ...(baseRegistry ? { reusableRegistry: baseRegistry } : {}),
+            purpose: input.runtimePluginPurpose,
             config: input.config,
             env: input.env ?? process.env,
             ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),

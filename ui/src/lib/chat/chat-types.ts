@@ -1,6 +1,7 @@
 import type { HumanMention } from "@openclaw/gateway-protocol";
 import type { MediaKind } from "@openclaw/media-core/constants";
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
+import type { NodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
 import type {
   AgentActivityItem,
   ChatSendIntent,
@@ -9,6 +10,8 @@ import type {
 import type { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";
 import type { MessageClientSource } from "../../../../src/chat/message-client-source.js";
 import type { ClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
+import type { RunFailureNotice } from "../../../../src/shared/run-failure-notice.js";
+import type { SkillWorkshopChangeNotice } from "../../../../src/shared/skill-workshop-change-notice.js";
 import type { BrowserTabTarget } from "../../components/browser/browser-target.ts";
 import type { toolIcons } from "../../components/icons-tools.ts";
 import type { SenderIdentity } from "./sender-label.ts";
@@ -119,6 +122,8 @@ export type ChatGoalAction = "pause" | "resume" | "clear";
 
 export type ChatGoalRecovery = {
   pending: boolean;
+  goalId?: string;
+  action?: ChatGoalAction | "edit" | "complete" | "block";
   retired?: "expired" | "invalid";
   onCheck: () => Promise<boolean>;
 };
@@ -137,6 +142,7 @@ export type ChatComposerMemoryFallback = {
 };
 
 export type ChatGuardianNotice = {
+  permissionMissing?: NodePermissionRequest;
   key: string;
   runId: string;
   timestamp: number;
@@ -227,6 +233,10 @@ export type ChatItem =
       collapsedBody?: true;
       /** Structural only: separates a handed-off run from its resumption. Never rendered. */
       handoffBoundary?: true;
+      /** A background skill review's changes; rendered as a native row instead of `text`. */
+      skillChanges?: SkillWorkshopChangeNotice;
+      runError?: RunFailureNotice;
+      permissionMissing?: NodePermissionRequest;
     }
   | {
       kind: "divider";
@@ -243,6 +253,7 @@ export type ChatItem =
       kind: "stream";
       key: string;
       text: string;
+      thinking?: string;
       startedAt: number;
       isStreaming: boolean;
       replyToSender?: SenderIdentity;
@@ -258,8 +269,8 @@ export type ChatItem =
       /** The run handed off and is idle; its subagents are what is still working. */
       waitingOn?: "subagents";
       /**
-       * Set for a run that resumed a handoff: when its request was asked, on the
-       * transcript's clock, and the earlier runs of the same answer, oldest first.
+       * Set while waiting on or resuming a handoff: when its request was asked,
+       * on the transcript's clock, and its handed-off runs, oldest first.
        */
       request?: { askedAt: number; runIds: readonly string[] };
       runId?: string;
@@ -268,21 +279,13 @@ export type ChatItem =
   | { kind: "question"; key: string; questionId: string; startedAt: number };
 
 export type ChatStreamSegment = {
+  /** Input observed when live commentary first arrived; omitted for history replay. */
+  afterUserSendId?: string;
   text: string;
   ts: number;
   runId?: string;
-  /** Persisted user send that causally precedes this transient output. */
-  afterBoundaryRunId?: string;
-  /** Persisted user send that causally follows this transient output. */
-  boundaryRunId?: string;
-  /** Ordering-only boundary with no renderable assistant text. */
-  boundaryMarker?: true;
   /** Hidden durable replacement; cumulative text still owns the prefix baseline. */
   persisted?: true;
-  /** Keyed item that consumed this cumulative occurrence; late updates cannot consume another. */
-  retiredItemId?: string;
-  /** In-flight handoff owned by the retired cumulative prefix, not its live display. */
-  pendingCommentary?: { text: string; prefixLength: number };
   toolCallId?: string;
   itemId?: string;
 };
@@ -291,11 +294,8 @@ export function streamSegmentHasItemId(segment: { itemId?: unknown }): boolean {
   return typeof segment.itemId === "string" && segment.itemId.trim().length > 0;
 }
 
-export function streamSegmentUsesAccumulatedText(segment: {
-  itemId?: unknown;
-  boundaryMarker?: unknown;
-}): boolean {
-  return segment.boundaryMarker !== true && !streamSegmentHasItemId(segment);
+export function streamSegmentUsesAccumulatedText(segment: { itemId?: unknown }): boolean {
+  return !streamSegmentHasItemId(segment);
 }
 
 /** Advance the accumulated-text tracker only when the segment genuinely

@@ -14,20 +14,24 @@ import {
 import type { WorkerInferenceTerminalOutcome } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
+import * as configRuntime from "../config/runtime-snapshot.js";
 import {
   resolveSessionTranscriptRuntimeTarget,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import {
-  captureSessionTranscriptStorageEnvironment,
   captureSessionTranscriptTargetBinding,
+  type CapturedSessionTranscriptTargetBinding,
 } from "../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayConnectionWork } from "../gateway/server-connection-work.js";
 import * as workerServer from "../gateway/server/ws-connection/worker-connection.js";
 import type { GatewayWsClient } from "../gateway/server/ws-types.js";
 import type { WorkerInstallationArtifact } from "../gateway/worker-environments/bundle.js";
-import type { WorkerConnectionIdentity } from "../gateway/worker-environments/connection-identity.js";
+import type {
+  WorkerConnectionIdentity,
+  WorkerInferenceExecutor,
+} from "../gateway/worker-environments/connection-identity.js";
 import { hashWorkerCredential } from "../gateway/worker-environments/credential.js";
 import { createWorkerInferenceStore } from "../gateway/worker-environments/inference-store.js";
 import { createWorkerChatProjection } from "../gateway/worker-environments/live-chat.test-support.js";
@@ -93,6 +97,11 @@ const PROVIDER: WorkerProvider = {
   inspect: async () => ({ status: "active" }),
   destroy: async () => {},
 };
+const workerHandshake = (artifact: WorkerInstallationArtifact) => ({
+  bundleHash: artifact.bundleHash,
+  openclawVersion: artifact.openclawVersion,
+  protocolFeatures: [...artifact.protocolFeatures],
+});
 
 type Deferred<T> = ReturnType<typeof createDeferred<T>>;
 
@@ -182,10 +191,6 @@ export class ComposedGatewayHarness {
   transcriptGate: TranscriptGate | undefined;
   providerPlan: ProviderPlan = { kind: "immediate", text: "done" };
 
-  // The simulated worker changes process.env; Gateway storage must survive service restarts.
-  private readonly gatewayStorageEnvironment = captureSessionTranscriptStorageEnvironment(
-    process.env,
-  );
   private readonly httpServer: Server;
   private readonly webSocketServer: WebSocketServer;
   private readonly connectionWork = new GatewayConnectionWork();
@@ -216,12 +221,14 @@ export class ComposedGatewayHarness {
       { agentId: "main", sessionKey: SESSION_KEY, storePath },
       { sessionId: SESSION_ID, updatedAt: 1 },
     );
-    const sessionTarget = await resolveSessionTranscriptRuntimeTarget({
-      agentId: "main",
-      sessionId: SESSION_ID,
-      sessionKey: SESSION_KEY,
-      storePath,
-    });
+    const sessionTarget = captureSessionTranscriptTargetBinding(
+      await resolveSessionTranscriptRuntimeTarget({
+        agentId: "main",
+        sessionId: SESSION_ID,
+        sessionKey: SESSION_KEY,
+        storePath,
+      }),
+    );
     const database = stateDb.openOpenClawStateDatabase({
       env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
     });
@@ -231,11 +238,7 @@ export class ComposedGatewayHarness {
       sessionId: SESSION_ID,
       credential: CREDENTIAL,
       sshEndpoint: SSH_ENDPOINT,
-      handshake: {
-        bundleHash: artifact.bundleHash,
-        openclawVersion: artifact.openclawVersion,
-        protocolFeatures: [...artifact.protocolFeatures],
-      },
+      handshake: workerHandshake(artifact),
       rpcSetVersion: WORKER_RPC_SET_VERSION,
     });
     return new ComposedGatewayHarness(root, sessionTarget, database, store, artifact);
@@ -243,7 +246,7 @@ export class ComposedGatewayHarness {
 
   private constructor(
     readonly root: string,
-    readonly sessionTarget: Awaited<ReturnType<typeof resolveSessionTranscriptRuntimeTarget>>,
+    readonly sessionTarget: CapturedSessionTranscriptTargetBinding,
     readonly database: stateDb.OpenClawStateDatabase,
     readonly store: envStore.WorkerEnvironmentStore,
     private readonly artifact: WorkerInstallationArtifact,
@@ -289,19 +292,12 @@ export class ComposedGatewayHarness {
     });
   }
 
-  private get handshake() {
-    return {
-      bundleHash: this.artifact.bundleHash,
-      openclawVersion: this.artifact.openclawVersion,
-      protocolFeatures: [...this.artifact.protocolFeatures],
-    };
-  }
-
   get epoch(): number {
     return expectDefined(this.store.get(ENVIRONMENT_ID), "fault environment missing").ownerEpoch;
   }
 
   async start(): Promise<void> {
+    configRuntime.setRuntimeConfigSnapshot(this.cfg);
     // ws forwards bind errors first; wait there so failed binds reject setup.
     const listening = once(this.webSocketServer, "listening");
     this.httpServer.listen(this.socketPath);
@@ -328,7 +324,7 @@ export class ComposedGatewayHarness {
     await this.placementLifecycle.settleRun(runId);
     for (const [claimId, source] of this.turnSources) {
       if (source.operationalRunInstance.runId === runId) {
-        source.dispose();
+        await source.dispose();
         this.turnSources.delete(claimId);
       }
     }
@@ -344,7 +340,12 @@ export class ComposedGatewayHarness {
     }
     let source = this.turnSources.get(claim.claimId);
     if (!source) {
-      source = await bindWorkerFixtureTurnSource(this.placementStore, claim, this.sessionTarget);
+      source = await bindWorkerFixtureTurnSource(
+        this.placementStore,
+        claim,
+        this.sessionTarget,
+        this.executeInference,
+      );
       this.turnSources.set(claim.claimId, source);
     }
     const descriptor: WorkerLaunchDescriptor = {
@@ -356,7 +357,7 @@ export class ComposedGatewayHarness {
         sessionId: SESSION_ID,
         ownerEpoch: epoch,
         rpcSetVersion: WORKER_RPC_SET_VERSION,
-        handshake: this.handshake,
+        handshake: workerHandshake(this.artifact),
       },
       assignment: {
         agentId: "worker-agent",
@@ -414,8 +415,9 @@ export class ComposedGatewayHarness {
     this.abandonedServices.push(this.serviceValue);
     this.liveEventsValue.clear();
     this.liveEventsValue = liveEvents.createWorkerLiveEventReceiver();
+    const placement = this.placementStore.get(SESSION_ID);
     this.placementGateValue = createWorkerSessionPlacementGate(this.placementStore, {
-      rejectExistingWorkerClaims: true,
+      recoveryPlacements: placement ? [placement] : [],
     });
     this.useReplacementExecutor = true;
     this.serviceValue = this.createService();
@@ -513,7 +515,7 @@ export class ComposedGatewayHarness {
     }
     this.liveEventsValue.clear();
     for (const source of this.turnSources.values()) {
-      source.dispose();
+      await source.dispose();
     }
     this.turnSources.clear();
     this.unsubscribeLive?.();
@@ -530,9 +532,45 @@ export class ComposedGatewayHarness {
     await cleanupSessionStateForTest({
       stateDir: path.join(this.root, "state"),
       rootPath: this.root,
-    });
+    }).finally(configRuntime.clearRuntimeConfigSnapshot);
     await fs.rm(this.root, { recursive: true, force: true });
   }
+
+  private executeInference: WorkerInferenceExecutor = async (params) => {
+    if (this.useReplacementExecutor) {
+      this.replacementProviderCalls += 1;
+    } else {
+      this.providerCalls += 1;
+    }
+    const plan = this.providerPlan;
+    if (plan.kind === "immediate") {
+      return structuredClone(plan.outcome ?? doneOutcome(plan.text));
+    }
+    if (plan.kind === "pending") {
+      plan.started.resolve();
+      return await plan.release.promise;
+    }
+    if (plan.kind === "live-preview") {
+      params.emit({
+        type: "start",
+        resolvedModel: { api: "openai-responses", ...MODEL_REF },
+        timestamp: Date.now(),
+      });
+      params.emit({ type: "text_start", contentIndex: 0 });
+      params.emit({ type: "text_delta", contentIndex: 0, delta: "preview " });
+      await plan.nextRelease.promise;
+      params.emit({ type: "text_delta", contentIndex: 0, delta: "reply" });
+      params.emit({ type: "text_end", contentIndex: 0 });
+      plan.produced.resolve();
+      return doneOutcome(plan.text);
+    }
+    plan.started.resolve();
+    params.emit({ type: "text_delta", contentIndex: 0, delta: "first" });
+    await plan.firstRelease.promise;
+    params.emit({ type: "text_delta", contentIndex: 0, delta: "second" });
+    await plan.secondRelease.promise;
+    return doneOutcome(plan.text);
+  };
 
   private createService(): workerEnv.WorkerEnvironmentService {
     const ledger = createWorkerTranscriptCommitStore({ database: this.database });
@@ -540,50 +578,13 @@ export class ComposedGatewayHarness {
       getConfig: () => this.cfg,
       store: ledger,
     });
-    const executeInference: Parameters<
-      typeof workerEnv.createWorkerEnvironmentService
-    >[0]["executeInference"] = async (params) => {
-      if (this.useReplacementExecutor) {
-        this.replacementProviderCalls += 1;
-      } else {
-        this.providerCalls += 1;
-      }
-      const plan = this.providerPlan;
-      if (plan.kind === "immediate") {
-        return structuredClone(plan.outcome ?? doneOutcome(plan.text));
-      }
-      if (plan.kind === "pending") {
-        plan.started.resolve();
-        return await plan.release.promise;
-      }
-      if (plan.kind === "live-preview") {
-        params.emit({
-          type: "start",
-          resolvedModel: { api: "openai-responses", ...MODEL_REF },
-          timestamp: Date.now(),
-        });
-        params.emit({ type: "text_start", contentIndex: 0 });
-        params.emit({ type: "text_delta", contentIndex: 0, delta: "preview " });
-        await plan.nextRelease.promise;
-        params.emit({ type: "text_delta", contentIndex: 0, delta: "reply" });
-        params.emit({ type: "text_end", contentIndex: 0 });
-        plan.produced.resolve();
-        return doneOutcome(plan.text);
-      }
-      plan.started.resolve();
-      params.emit({ type: "text_delta", contentIndex: 0, delta: "first" });
-      await plan.firstRelease.promise;
-      params.emit({ type: "text_delta", contentIndex: 0, delta: "second" });
-      await plan.secondRelease.promise;
-      return doneOutcome(plan.text);
-    };
     return workerEnv.createWorkerEnvironmentService({
       scheduler: createTestGatewayScheduler(),
       store: this.store,
       getConfig: () => this.cfg,
       resolveProvider: (providerId) => (providerId === PROVIDER.id ? PROVIDER : undefined),
       prepareInstallation: async () => this.artifact,
-      bootstrapWorker: async () => this.handshake,
+      bootstrapWorker: async () => workerHandshake(this.artifact),
       resolveSshIdentity: async () => ({ kind: "path", path: "/keys/worker" }),
       applyTranscriptCommit: async (params) => {
         const gate = this.transcriptGate;
@@ -591,13 +592,7 @@ export class ComposedGatewayHarness {
           gate.entered.resolve();
           await gate.release.promise;
         }
-        const result = await committer.commit({
-          ...params,
-          sessionTarget: captureSessionTranscriptTargetBinding({
-            ...params.sessionTarget,
-            env: this.gatewayStorageEnvironment,
-          }),
-        });
+        const result = await committer.commit(params);
         if (gate?.phase === "after-apply") {
           gate.entered.resolve();
           await gate.release.promise;
@@ -605,7 +600,6 @@ export class ComposedGatewayHarness {
         return result;
       },
       liveEvents: this.liveEventsValue,
-      executeInference,
       inferenceStore: createWorkerInferenceStore({ path: this.database.path }),
       ...(this.placementGateValue ? { placementStore: this.placementGateValue } : {}),
     });

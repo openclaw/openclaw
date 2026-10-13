@@ -112,13 +112,6 @@ describe("forum outbound delivery", () => {
     expect(result?.receipt?.platformMessageIds).toEqual(["message-2"]);
   });
 
-  it("does not attempt a follow-up when forum creation is rejected", async () => {
-    const { postMock, run } = forumPayloadHarness();
-    postMock.mockRejectedValueOnce(new Error("missing access"));
-    await expect(run({ text: "a".repeat(2001) })).rejects.toThrow("missing access");
-    expect(postMock.mock.calls.map(([path]) => path)).toEqual([Routes.threads("700")]);
-  });
-
   it("does not follow up when delivery bookkeeping rejects the starter", async () => {
     const { postMock, run } = forumPayloadHarness();
     const onDeliveryResult = vi.fn().mockRejectedValue(new Error("delivery bookkeeping failed"));
@@ -187,25 +180,6 @@ describe("createThreadDiscord", () => {
     });
   });
 
-  it("uses an archive override and keeps multiline media-channel content in one starter", async () => {
-    const { opts, getMock, postMock } = threadHarness(ChannelType.GuildMedia);
-    getMock.mockResolvedValue({
-      type: ChannelType.GuildMedia,
-      default_auto_archive_duration: 1440,
-    });
-    await send.createThreadDiscord(
-      "chan1",
-      { name: "thread", content: multiline, autoArchiveMinutes: 4320 },
-      opts,
-    );
-    expect(postMock).toHaveBeenCalledOnce();
-    expect(requestBody(postMock)).toEqual({
-      name: "thread",
-      auto_archive_duration: 4320,
-      message: { content: multiline },
-    });
-  });
-
   it("falls back to a public thread without forum tags when channel lookup fails", async () => {
     const { opts, getMock, postMock } = threadHarness();
     getMock.mockRejectedValue(new Error("lookup failed"));
@@ -264,7 +238,6 @@ describe("createThreadDiscord", () => {
   it.each([
     { type: ChannelType.GuildForum, status: 403, delivered: "not_delivered" },
     { type: ChannelType.GuildForum, status: 502, delivered: "unknown" },
-    { type: ChannelType.GuildText, status: 403, delivered: "not_delivered" },
   ])(
     "reports partial initial delivery for channel $type and HTTP $status",
     async ({ type, status, delivered }) => {

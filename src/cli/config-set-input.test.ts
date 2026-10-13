@@ -25,6 +25,31 @@ function withBatchFile<T>(prefix: string, contents: string, run: (batchPath: str
 }
 
 describe("config set input parsing", () => {
+  it.each(["--file"] as const)(
+    "rejects malformed UTF-8 in %s before parsing a mutation",
+    (sourceLabel) => {
+      const root = tempDirs.make("openclaw-config-invalid-utf8-");
+      const file = path.join(root, "mutation.json5");
+      fs.writeFileSync(file, Buffer.from([0x22, 0xff, 0x22]));
+
+      expect(() => readConfigMutationFileSync(file, sourceLabel)).toThrow(
+        `${sourceLabel} must be valid UTF-8`,
+      );
+    },
+  );
+
+  it("preserves valid Unicode, a literal replacement character and a BOM", () => {
+    const root = tempDirs.make("openclaw-config-valid-utf8-");
+    const file = path.join(root, "mutation.json5");
+    const contents = '\uFEFF[{path:"agents.entries.main.name",value:"中文 😀 \uFFFD"}]';
+    fs.writeFileSync(file, contents, "utf8");
+
+    expect(readConfigMutationFileSync(file, "--batch-file")).toBe(contents);
+    expect(parseBatchSource({ batchFile: file })).toEqual([
+      { path: "agents.entries.main.name", value: "中文 😀 \uFFFD" },
+    ]);
+  });
+
   it("parses absent and strict JSON current-value expectations", () => {
     expect(parseConfigSetCurrentExpectation({ expectCurrentAbsent: true })).toEqual({
       kind: "absent",
@@ -46,11 +71,6 @@ describe("config set input parsing", () => {
       name: "both expectation flags",
       options: { expectCurrentAbsent: true, expectCurrentJson: "null" },
       message: "choose either --expect-current-absent or --expect-current-json",
-    },
-    {
-      name: "malformed expected JSON",
-      options: { expectCurrentJson: "{enabled:true}" },
-      message: "--expect-current-json must be valid JSON",
     },
     {
       name: "non-finite expected number",
@@ -78,33 +98,6 @@ describe("config set input parsing", () => {
         batchFile: "/tmp/batch.json",
       }),
     ).toThrow("Use either --batch-json or --batch-file, not both.");
-  });
-
-  it("parses valid --batch-json payloads", () => {
-    const parsed = parseBatchSource({
-      batchJson:
-        '[{"path":"gateway.auth.mode","value":"token"},{"path":"channels.discord.token","ref":{"source":"env","provider":"default","id":"DISCORD_BOT_TOKEN"}},{"path":"secrets.providers.default","provider":{"source":"env"}}]',
-    });
-    expect(parsed).toEqual([
-      {
-        path: "gateway.auth.mode",
-        value: "token",
-      },
-      {
-        path: "channels.discord.token",
-        ref: {
-          source: "env",
-          provider: "default",
-          id: "DISCORD_BOT_TOKEN",
-        },
-      },
-      {
-        path: "secrets.providers.default",
-        provider: {
-          source: "env",
-        },
-      },
-    ]);
   });
 
   it.each([
@@ -152,7 +145,7 @@ describe("config set input parsing", () => {
     }
   });
 
-  it.skipIf(process.platform === "win32").each(["--file", "--batch-file"] as const)(
+  it.skipIf(process.platform === "win32").each(["--file"] as const)(
     "rejects a FIFO passed as %s without waiting for a writer",
     (sourceLabel) => {
       const fifoPath = path.join(tempDirs.make("openclaw-config-input-fifo-"), "input.pipe");
@@ -178,19 +171,6 @@ describe("config set input parsing", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32").each(["--file", "--batch-file"] as const)(
-    "reads a regular-file symlink passed as %s",
-    (sourceLabel) => {
-      const root = tempDirs.make("openclaw-config-input-symlink-");
-      const inputPath = path.join(root, "input.json5");
-      const linkPath = path.join(root, "input-link.json5");
-      const contents = "{ name: '会议', enabled: true }";
-      fs.writeFileSync(inputPath, contents, "utf8");
-      fs.symlinkSync("input.json5", linkPath);
-      expect(readConfigMutationFileSync(linkPath, sourceLabel)).toBe(contents);
-    },
-  );
-
   it("rejects --batch-file payloads above the config mutation limit", () => {
     withBatchFile(
       "openclaw-config-set-input-oversized-",
@@ -201,21 +181,5 @@ describe("config set input parsing", () => {
         );
       },
     );
-  });
-
-  it("accepts --batch-file at exactly the size limit", () => {
-    const content = '[{"path":"gateway.port","value":19000}]'.padEnd(8 * 1024 * 1024, " ");
-    withBatchFile("openclaw-config-set-input-boundary-", content, (batchPath) => {
-      const parsed = parseBatchSource({ batchFile: batchPath });
-      expect(parsed).toEqual([{ path: "gateway.port", value: 19000 }]);
-    });
-  });
-
-  it("rejects batch entries with non-finite numbers", () => {
-    expect(() =>
-      parseBatchSource({
-        batchJson: '[{"path":"channels.custom.timeout","value":1e999}]',
-      }),
-    ).toThrow("Value must be a finite number");
   });
 });

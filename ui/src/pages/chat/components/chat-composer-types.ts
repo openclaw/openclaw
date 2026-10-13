@@ -34,15 +34,15 @@ import type { RealtimeTalkStatus } from "../talk/session.ts";
 import type { FallbackStatus } from "../tool-stream-contract.ts";
 import type { AsyncQuestionPresentation } from "./chat-async-question.types.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
-import type { ComposerEmojiMenu } from "./chat-composer-emoji.ts";
-import type { HumanMentionDirectory, HumanMentionMenu } from "./chat-composer-mention-menu.ts";
+import type { ComposerEmojiMenu } from "./chat-composer-emoji.tsx";
+import type { HumanMentionDirectory, HumanMentionMenu } from "./chat-composer-mention-menu.tsx";
 import type {
   ChatComposerCapabilityMenuProps,
   ChatComposerPlusMenuView,
-} from "./chat-composer-plus-menu.ts";
-import type { SkillMenuState } from "./chat-composer-skill-menu.ts";
-import type { SlashMenuState } from "./chat-composer-slash-menu.ts";
-import type { ChatPermissionPickerProps } from "./chat-permission-picker.ts";
+} from "./chat-composer-plus-menu.tsx";
+import type { SkillMenuState } from "./chat-composer-skill-menu.tsx";
+import type { SlashMenuState } from "./chat-composer-slash-menu.tsx";
+import type { ChatPermissionPickerProps } from "./chat-permission-picker.tsx";
 
 type ChatQueuedEditProps = {
   editingId: string | null;
@@ -72,9 +72,10 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   paneId: string;
   sessionKey: string;
   currentAgentId: string;
+  /** Provisional/deleted previews must not mount session-scoped extension controllers. */
+  sessionAdmitted?: boolean;
   connected: boolean;
   offline?: boolean;
-  queuedOutboxCount?: number;
   canSend: boolean;
   canCompose?: boolean;
   modelRequiredReason?: string | null;
@@ -146,7 +147,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onOpenTalkSettings?: () => void;
   onOpenDictationSettings?: () => void;
   suggestionComposer?: boolean;
-  onTypingChange?: (typing: boolean, preview?: string) => void;
+  onTypingChange?: (typing: boolean, preview?: string, cursor?: number) => void;
   composerControls?: TemplateResult | typeof nothing;
   footerContent?: TemplateResult | typeof nothing;
   composerRecovery?: TemplateResult | typeof nothing;
@@ -218,7 +219,7 @@ export type ChatComposerState = SkillMenuState &
     composerInputRef: ((element?: Element) => void) | null;
     textareaRef: ((element?: Element) => void) | null;
     dictation: ComposerDictationController | null;
-    composerDraftScopeKey: string | null;
+    composerDraftScope: { key: string } | null;
     dictationError: string | null;
     dictationSelection: { start: number; end: number; value: string } | null;
   };

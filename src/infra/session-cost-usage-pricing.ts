@@ -6,7 +6,7 @@ import { countToolResults, extractToolCallNames } from "../utils/transcript-tool
 import type { CostBreakdown, ParsedTranscriptEntry } from "./session-cost-usage.types.js";
 
 const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | undefined => {
-  if (!usageRaw || typeof usageRaw !== "object") {
+  if (!usageRaw || usageRaw.usageReport?.state === "unavailable") {
     return undefined;
   }
   const cost = usageRaw.cost;
@@ -126,6 +126,7 @@ export function needsUsageCostEstimate(
   // Recorded estimates include request-time service tiers the current catalog cannot recover.
   return (
     Boolean(entry?.usage) &&
+    entry?.usage?.usageReport?.state !== "unavailable" &&
     !((entry?.costTotal ?? 0) > 0 || hasRecordedUsageCost(entry?.costBreakdown))
   );
 }

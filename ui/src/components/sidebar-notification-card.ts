@@ -1,7 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
-import "./relative-time.ts";
+import "./relative-time.tsx";
 
 export function renderSidebarDismissButton(
   itemLabel: string,
@@ -38,11 +38,17 @@ export function renderSidebarNotificationCard(props: {
   critical?: boolean;
   dismissing?: boolean;
   onDismiss?: () => void;
+  onToggle?: (open: boolean) => void;
   body: TemplateResult | typeof nothing;
   bodyClass?: string;
 }) {
   return html`<details
     class="sidebar-issues-panel__details ${props.severity ? `sidebar-issues-panel__details--${props.severity}` : ""}"
+    @toggle=${(event: Event) => {
+      if (event.currentTarget instanceof HTMLDetailsElement) {
+        props.onToggle?.(event.currentTarget.open);
+      }
+    }}
   >
     <summary class="sidebar-issues-panel__summary" data-issue-row-focus>
       <span

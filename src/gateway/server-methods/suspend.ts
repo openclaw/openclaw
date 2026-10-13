@@ -6,9 +6,8 @@ import {
   validateGatewaySuspendResumeParams,
   validateGatewaySuspendStatusParams,
   validateGatewaySuspendHandoffParams,
-  type GatewaySuspendPrepareResult,
-  type GatewaySuspendStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { waitForGatewayDrain } from "../../infra/gateway-drain.js";
 import {
   armGatewaySuspendHandoff,
   getGatewaySuspendStatus,
@@ -18,7 +17,7 @@ import {
 import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { createGatewayServerActiveWorkInspectors } from "../server-active-work.js";
 import type { GatewayRequestContext } from "./shared-types.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 function invalidParams(method: string) {
   return errorShape(ErrorCodes.INVALID_REQUEST, `invalid ${method} params`);
@@ -32,14 +31,31 @@ function schedulerRecoveryError(retryAfterMs: number) {
   });
 }
 
-function logDraining(
-  result: GatewaySuspendPrepareResult | GatewaySuspendStatusResult,
-  log: GatewayRequestContext["logGateway"],
-): void {
-  if (result.status === "draining") {
-    log.info(
-      `DRAINING activeCount=${result.activeCount} blockers=${result.blockers.map(({ kind, count }) => `${kind}:${count}`).join(",")} holders=${JSON.stringify(result.blockers.map(({ message }) => message))} custody=${result.writeCustody?.some(({ count }) => count > 0) ? "held" : "clear"}`,
+function respondSuspendStatus(
+  result: ReturnType<typeof prepareGatewaySuspend> | ReturnType<typeof getGatewaySuspendStatus>,
+  context: GatewayRequestContext,
+  respond: RespondFn,
+  conflictMessage: string,
+) {
+  if (result.status === "conflict") {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, conflictMessage, {
+        retryable: true,
+        retryAfterMs: Math.max(0, result.expiresAtMs - Date.now()),
+        details: { reason: "gateway-suspension-conflict", expiresAtMs: result.expiresAtMs },
+      }),
     );
+  } else if (result.status === "recovering") {
+    respond(false, undefined, schedulerRecoveryError(result.retryAfterMs));
+  } else {
+    if (result.status === "draining") {
+      context.logGateway.info(
+        `DRAINING activeCount=${result.activeCount} blockers=${result.blockers.map(({ kind, count }) => `${kind}:${count}`).join(",")} holders=${JSON.stringify(result.blockers.map(({ message }) => message))} custody=${result.writeCustody?.some(({ count }) => count > 0) ? "held" : "clear"}`,
+      );
+    }
+    respond(true, result);
   }
 }
 
@@ -95,24 +111,12 @@ export const suspendHandlers: GatewayRequestHandlers = {
       inspect: createGatewayServerActiveWorkInspectors(context),
       warn: (message) => context.logGateway.warn(message),
     });
-    if (result.status === "conflict") {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "another gateway suspension is already prepared", {
-          retryable: true,
-          retryAfterMs: Math.max(0, result.expiresAtMs - Date.now()),
-          details: { reason: "gateway-suspension-conflict", expiresAtMs: result.expiresAtMs },
-        }),
-      );
-      return;
-    }
-    if (result.status === "recovering") {
-      respond(false, undefined, schedulerRecoveryError(result.retryAfterMs));
-      return;
-    }
-    logDraining(result, context.logGateway);
-    respond(true, result);
+    respondSuspendStatus(
+      result,
+      context,
+      respond,
+      "another gateway suspension is already prepared",
+    );
   },
   "gateway.suspend.status": async ({ respond, params, context }) => {
     if (!validateGatewaySuspendStatusParams(params)) {
@@ -120,25 +124,25 @@ export const suspendHandlers: GatewayRequestHandlers = {
       return;
     }
     const suspensionId = params.suspensionId.trim();
+    // A policy check must let transient final writes settle, without interrupting
+    // admitted work or treating a drain lease as authority to stop it.
+    const settleDeadline = performance.now() + 15_000;
+    await waitForGatewayDrain(
+      () => {
+        const status = getGatewaySuspendStatus(suspensionId, params.includeLifecycle === true);
+        return {
+          idle:
+            status.status !== "draining" ||
+            !status.writeCustody?.some(({ count }) => count > 0) ||
+            performance.now() >= settleDeadline,
+        };
+      },
+      15_000,
+      { pollMs: 250 },
+    );
+    // Lease expiry, replacement, and new writes can race the awaited observation.
     const result = getGatewaySuspendStatus(suspensionId, params.includeLifecycle === true);
-    if (result.status === "conflict") {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "a different gateway suspension is prepared", {
-          retryable: true,
-          retryAfterMs: Math.max(0, result.expiresAtMs - Date.now()),
-          details: { reason: "gateway-suspension-conflict", expiresAtMs: result.expiresAtMs },
-        }),
-      );
-      return;
-    }
-    if (result.status === "recovering") {
-      respond(false, undefined, schedulerRecoveryError(result.retryAfterMs));
-      return;
-    }
-    logDraining(result, context.logGateway);
-    respond(true, result);
+    respondSuspendStatus(result, context, respond, "a different gateway suspension is prepared");
   },
   "gateway.suspend.resume": async ({ respond, params }) => {
     if (!validateGatewaySuspendResumeParams(params)) {

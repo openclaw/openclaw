@@ -22,26 +22,6 @@ import {
   listRuntimeVisibleChannelPlugins,
 } from "./runtime-visible-channels.js";
 
-function resolveAvailableChannel(params: {
-  cfg: OpenClawConfig;
-  channel: string | undefined;
-  agentId?: string;
-}): { channel: string; plugin: ChannelPlugin } | undefined {
-  // Availability belongs to the scoped resolver, not the process-root channel list.
-  if (!params.channel) {
-    return undefined;
-  }
-  // Local agent processes may have only setup metadata for external channels;
-  // explicit activation lets their message tools use the same send path as the CLI.
-  const plugin = resolveOutboundChannelPlugin({
-    channel: params.channel,
-    cfg: params.cfg,
-    agentId: params.agentId,
-    allowBootstrap: true,
-  });
-  return plugin ? { channel: plugin.id, plugin } : undefined;
-}
-
 export function isConfiguredChannel(cfg: OpenClawConfig, channelId: string): boolean {
   const entry = asOptionalRecord(asOptionalRecord(cfg.channels)?.[channelId]);
   return entry !== undefined && entry.enabled !== false;
@@ -78,19 +58,19 @@ const loggedChannelSelectionErrors = createDedupeCache({
   maxSize: 1024,
 });
 
-function logChannelSelectionError(params: {
-  pluginId: string;
-  accountId: string;
-  operation: "inspectAccount" | "resolveAccount" | "isConfigured";
-  error: unknown;
-}) {
-  const message = formatErrorMessage(params.error);
-  const key = `${params.pluginId}:${params.accountId}:${params.operation}:${message}`;
+function logChannelSelectionError(
+  pluginId: string,
+  accountId: string,
+  operation: "inspectAccount" | "resolveAccount" | "isConfigured",
+  error: unknown,
+) {
+  const message = formatErrorMessage(error);
+  const key = `${pluginId}:${accountId}:${operation}:${message}`;
   if (loggedChannelSelectionErrors.check(key)) {
     return;
   }
   defaultRuntime.error?.(
-    `[channel-selection] ${params.pluginId}(${params.accountId}) ${params.operation} failed: ${message}`,
+    `[channel-selection] ${pluginId}(${accountId}) ${operation} failed: ${message}`,
   );
 }
 
@@ -119,12 +99,7 @@ async function isPluginConfigured(
       operation = "resolveAccount";
       account = await resolveChannelAccount({ plugin, cfg, accountId });
     } catch (error) {
-      logChannelSelectionError({
-        pluginId: plugin.id,
-        accountId,
-        operation,
-        error,
-      });
+      logChannelSelectionError(plugin.id, accountId, operation, error);
       continue;
     }
     const enabled = plugin.config.isEnabled
@@ -134,17 +109,11 @@ async function isPluginConfigured(
       continue;
     }
     try {
-      const configured = (await plugin.config.isConfigured?.(account, cfg)) ?? true;
-      if (configured) {
+      if ((await plugin.config.isConfigured?.(account, cfg)) ?? true) {
         return true;
       }
     } catch (error) {
-      logChannelSelectionError({
-        pluginId: plugin.id,
-        accountId,
-        operation: "isConfigured",
-        error,
-      });
+      logChannelSelectionError(plugin.id, accountId, "isConfigured", error);
     }
   }
 
@@ -157,10 +126,10 @@ async function listConfiguredMessageChannelPlugins(
 ): Promise<ChannelPlugin[]> {
   const plugins: ChannelPlugin[] = [];
   for (const plugin of listRuntimeVisibleChannelPlugins()) {
-    if (!resolveOutboundChannelPlugin({ channel: plugin.id, cfg })) {
-      continue;
-    }
-    if (await isPluginConfigured(plugin, cfg, accountResolution)) {
+    if (
+      resolveOutboundChannelPlugin({ channel: plugin.id, cfg }) &&
+      (await isPluginConfigured(plugin, cfg, accountResolution))
+    ) {
       plugins.push(plugin);
     }
   }
@@ -184,22 +153,23 @@ export async function resolveMessageChannelSelection(params: {
   plugin: ChannelPlugin;
 }> {
   const normalized = normalizeMessageChannel(params.channel);
-  const explicit = resolveAvailableChannel({
-    cfg: params.cfg,
-    channel: normalized,
-    agentId: params.agentId,
-  });
-  if (explicit) {
-    return explicit;
-  }
-
-  const fallback = resolveAvailableChannel({
-    cfg: params.cfg,
-    channel: normalizeMessageChannel(params.fallbackChannel),
-    agentId: params.agentId,
-  });
-  if (fallback) {
-    return fallback;
+  for (const field of ["channel", "fallbackChannel"] as const) {
+    const cfg = params.cfg;
+    const channel = field === "channel" ? normalized : normalizeMessageChannel(params[field]);
+    const agentId = params.agentId;
+    if (!channel) {
+      continue;
+    }
+    // Explicit activation uses the scoped resolver, including external setup shells.
+    const selectedPlugin = resolveOutboundChannelPlugin({
+      channel,
+      cfg,
+      agentId,
+      allowBootstrap: true,
+    });
+    if (selectedPlugin) {
+      return { channel: selectedPlugin.id, plugin: selectedPlugin };
+    }
   }
 
   if (normalized) {

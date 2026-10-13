@@ -11,10 +11,10 @@ describe("Control UI build chunking", () => {
   it("emits one measured shared stylesheet while keeping optional code lazy", async () => {
     const modulePath = (relative: string) => new URL(relative, import.meta.url).pathname;
     const chat = modulePath("../pages/chat/chat-pane.ts");
-    const newSession = modulePath("../pages/new-session/new-session-page.ts");
+    const newSession = modulePath("../pages/new-session/new-session-page.tsx");
     const optional = modulePath("../components/assistant-panel-content.ts");
-    const sharedStyle = modulePath("../styles/hub-tabs.css");
-    const sidebarStyle = modulePath("../styles/sidebar-issues.css");
+    const sharedStyle = modulePath("../styles/mcp-app-extensions.css");
+    const sidebarStyle = modulePath("../styles/sidebar-reorder.css");
     const entry = "\0cold-load-fixture";
     const sources = new Map([
       [
@@ -91,7 +91,7 @@ describe("Control UI build chunking", () => {
       ["/repo/ui/src/lib/clipboard.ts", undefined],
       ["/repo/ui/src/build-info.ts", undefined],
       ["/repo/ui/src/build-info-normalizers.ts", undefined],
-      ["/repo/ui/src/app/app-host.ts", undefined],
+      ["/repo/ui/src/app/app-host.tsx", undefined],
       ["\0virtual:openclaw-control-ui-locale-config-hints/ru", "locale-config-hints-ru"],
       ["\0virtual:openclaw-control-ui-locale/ru", undefined],
     ] as const) {
@@ -134,11 +134,11 @@ describe("Control UI build chunking", () => {
     // Recursive inclusion is a correctness requirement for this group: merging
     // the lazy boot graph without it emitted chunks whose execution order broke
     // at application start.
-    expect(controlUiCodeSplitting.groups[2]).toMatchObject({
-      name: "control-ui-boot-shared",
-      includeDependenciesRecursively: true,
-    });
-    const bootGroup = controlUiCodeSplitting.groups[2] as {
+    const sharedGroup = controlUiCodeSplitting.groups.find(
+      (group) => group.name === "control-ui-boot-shared",
+    );
+    expect(sharedGroup).toMatchObject({ includeDependenciesRecursively: true });
+    const bootGroup = sharedGroup as {
       test: (id: string) => boolean;
     };
     const repoRoot = new URL("../../..", import.meta.url).pathname.replace(/\/$/, "");
@@ -154,10 +154,12 @@ describe("Control UI build chunking", () => {
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/chat/chat-view.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/styles/chat.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/components/assistant-panel-content.ts`)).toBe(false);
+    // Opening state stays cheap; rendering the debug overlay belongs to its lazy graph.
+    expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-state.ts`)).toBe(true);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-content.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay.ts`)).toBe(false);
-    expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-frame.ts`)).toBe(true);
-    expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-loading.ts`)).toBe(true);
+    expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-frame.ts`)).toBe(false);
+    expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-loading.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/node_modules/ghostty-web/dist/index.js`)).toBe(false);
   });
 

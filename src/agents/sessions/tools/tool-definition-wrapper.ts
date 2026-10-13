@@ -4,6 +4,23 @@ import type { AgentTool } from "../../runtime/index.js";
 import { copyInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.js";
 
+function toolDefinitionMetadata<TParams extends TSchema>(
+  tool: Omit<AgentTool<TParams>, "execute">,
+): Omit<AgentTool<TParams>, "execute"> {
+  return {
+    name: tool.name,
+    label: tool.label,
+    ...(tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
+    ...(tool.resultContentSource ? { resultContentSource: tool.resultContentSource } : {}),
+    description: tool.description,
+    parameters: tool.parameters,
+    ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
+    prepareArguments: tool.prepareArguments,
+    executionMode: tool.executionMode,
+    ...(tool.async === false ? { async: false as const } : {}),
+  };
+}
+
 export function wrapToolDefinition<
   TParams extends TSchema = TSchema,
   TDetails = unknown,
@@ -13,17 +30,7 @@ export function wrapToolDefinition<
   ctxFactory?: () => ExtensionContext,
 ): AgentTool<TParams, TDetails> {
   const tool: AgentTool<TParams, TDetails> = {
-    name: definition.name,
-    label: definition.label,
-    ...(definition.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
-    ...(definition.resultContentSource
-      ? { resultContentSource: definition.resultContentSource }
-      : {}),
-    description: definition.description,
-    parameters: definition.parameters,
-    ...(definition.outputSchema ? { outputSchema: definition.outputSchema } : {}),
-    prepareArguments: definition.prepareArguments,
-    executionMode: definition.executionMode,
+    ...toolDefinitionMetadata(definition),
     execute: (toolCallId, params, signal, onUpdate) =>
       definition.execute(toolCallId, params, signal, onUpdate, ctxFactory?.() as ExtensionContext),
   };
@@ -39,15 +46,7 @@ export function wrapToolDefinition<
  */
 export function createToolDefinitionFromAgentTool(tool: AgentTool): ToolDefinition {
   const definition: ToolDefinition = {
-    name: tool.name,
-    label: tool.label,
-    ...(tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
-    ...(tool.resultContentSource ? { resultContentSource: tool.resultContentSource } : {}),
-    description: tool.description,
-    parameters: tool.parameters,
-    ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
-    prepareArguments: tool.prepareArguments,
-    executionMode: tool.executionMode,
+    ...toolDefinitionMetadata(tool),
     execute: async (toolCallId, params, signal, onUpdate) =>
       tool.execute(toolCallId, params, signal, onUpdate),
   };

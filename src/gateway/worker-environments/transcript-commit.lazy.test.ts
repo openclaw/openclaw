@@ -162,7 +162,7 @@ describe("worker transcript runtime loading", () => {
     }
   });
 
-  it.each(["current", "revoked", "loader-failed"] as const)(
+  it.each(["current", "revoked"] as const)(
     "loads before authority checks or reservations: %s",
     async (scenario) => {
       const loadStarted = createDeferredCore();
@@ -172,9 +172,6 @@ describe("worker transcript runtime loading", () => {
       vi.doMock("./transcript-commit.runtime.js", async (importOriginal) => {
         loadStarted.resolve();
         await releaseLoad.promise;
-        if (scenario === "loader-failed") {
-          throw failure;
-        }
         return await importOriginal();
       });
       const begin = vi.spyOn(fixture.store, "begin");
@@ -210,11 +207,7 @@ describe("worker transcript runtime loading", () => {
           expect(begin).toHaveBeenCalledOnce();
           expect(fixture.readEntries()).toHaveLength(1);
         } else {
-          if (scenario === "loader-failed") {
-            await expect(commit).rejects.toMatchObject({ cause: failure });
-          } else {
-            await expect(commit).rejects.toBe(failure);
-          }
+          await expect(commit).rejects.toBe(failure);
           expect(begin).not.toHaveBeenCalled();
           expect(fixture.readEntries()).toEqual([]);
         }

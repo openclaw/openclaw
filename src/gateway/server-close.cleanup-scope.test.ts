@@ -5,12 +5,10 @@ import fs from "node:fs/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import { retainGatewayPluginMetadata } from "../plugins/plugin-metadata-lifecycle.js";
-import type { MemoryPluginRuntime } from "../plugins/registry-contribution-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { getPluginLoaderCacheState } from "../plugins/registry-lifecycle.js";
 import {
   createPluginRegistryOwner,
-  getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
@@ -18,40 +16,16 @@ import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { registerActiveDebugProxyCapture } from "../proxy-capture/runtime-cleanup.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { completeGatewayClose, prepareGatewayClose } from "./server-close.js";
-import {
-  createGatewayCloseTestDepsFactory,
-  createGatewayCloseTestHandlerFactory,
-} from "./server-close.test-support.js";
+import { createGatewayCloseTestDepsFactory } from "./server-close.test-support.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 
-const mocks = vi.hoisted(() => ({
-  logInfo: vi.fn(),
-  logWarn: vi.fn(),
-  closePluginStateDatabaseAsync: vi.fn(async () => {}),
-}));
-vi.mock("../plugin-state/plugin-state-store.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugin-state/plugin-state-store.js")>()),
-  closePluginStateDatabaseAsync: mocks.closePluginStateDatabaseAsync,
-}));
-vi.mock("../logging/subsystem.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
-  return {
-    ...actual,
-    createSubsystemLogger: (subsystem: string) => {
-      const logger = actual.createSubsystemLogger(subsystem);
-      return subsystem === "gateway/shutdown"
-        ? { ...logger, info: mocks.logInfo, warn: mocks.logWarn }
-        : logger;
-    },
-  };
-});
-
-const createGatewayCloseHandler = createGatewayCloseTestHandlerFactory({
-  prepareGatewayClose,
-  completeGatewayClose,
-});
+const sharedStateLifecycle = resolveGlobalMap<string, boolean>(
+  Symbol("gateway-close-cleanup-shared-state"),
+  "shared-state",
+);
 
 const createGatewayCloseTestDeps = createGatewayCloseTestDepsFactory({
   disposeAllBundleLspRuntimes: async () => {},
@@ -62,63 +36,14 @@ const createGatewayCloseTestDeps = createGatewayCloseTestDepsFactory({
 });
 
 beforeEach(() => {
-  mocks.logInfo.mockClear();
-  mocks.logWarn.mockClear();
-  mocks.closePluginStateDatabaseAsync.mockClear();
+  sharedStateLifecycle.set("open", true);
 });
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
 
-it("reports admitted memory cleanup failure while completing registry retirement", async () => {
-  const failure = new Error("memory teardown failed");
-  const cleanup = vi.fn(async () => {
-    throw failure;
-  });
-  const registry = createEmptyPluginRegistry();
-  const record = createPluginRecord({ id: "memory-close" });
-  registry.plugins.push(record);
-  const instance = new PluginInstance(record.id, { record, registry });
-  registry.memoryCapabilities.push({
-    pluginId: record.id,
-    capability: instance.wrap({
-      runtime: {
-        getMemorySearchManager: async () => ({ manager: null }),
-        resolveMemoryBackendConfig: () => ({ backend: "builtin" }),
-        prepareReload: () => ({ drain: cleanup, resume() {} }),
-      } satisfies MemoryPluginRuntime,
-    }),
-  });
-  setActivePluginRegistry(registry);
-  const owner = createPluginRegistryOwner(registry);
-  const clearSecretsRuntimeSnapshot = vi.fn();
-  const result = await createGatewayCloseHandler(
-    createGatewayCloseTestDeps({
-      preparePluginRegistryClose: () => owner.prepareClose(),
-      closePluginRegistry: owner.close,
-      clearSecretsRuntimeSnapshot,
-    }),
-  )();
-
-  expect(result.warnings).toContain("memory-managers");
-  expect(mocks.logWarn).toHaveBeenCalledWith(expect.stringContaining(failure.message));
-  expect(mocks.logInfo).not.toHaveBeenCalledWith(
-    expect.stringContaining("shutdown completed cleanly"),
-  );
-  expect(cleanup).toHaveBeenCalledOnce();
-  expect(instance.lifecycle.signal.aborted).toBe(true);
-  expect(getActivePluginRegistry()).toBeNull();
-  expect(mocks.closePluginStateDatabaseAsync).toHaveBeenCalledOnce();
-  expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledOnce();
-  const repeated = owner.close();
-  expect(owner.close()).toBe(repeated);
-  await expect(repeated).resolves.toEqual({ memoryErrors: [failure], pluginFailures: [] });
-  expect(cleanup).toHaveBeenCalledOnce();
-});
-
 it("finalizes capture after media drains even when stopping media cleanup fails", async () => {
-  mocks.closePluginStateDatabaseAsync.mockClear();
   const mediaCleanup = await import("./server-media-cleanup-lifecycle.js");
   const releaseMedia = createDeferredCore();
   const drainEntered = createDeferredCore();
@@ -158,14 +83,14 @@ it("finalizes capture after media drains even when stopping media cleanup fails"
     await Promise.race([drainEntered.promise, captureEntered.promise, closing]);
     expect(finalizeCapture).not.toHaveBeenCalled();
     expect(closed).toBe(false);
-    expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
+    expect(sharedStateLifecycle.has("open")).toBe(true);
     releaseMedia.resolve();
     await Promise.race([captureEntered.promise, closing]);
     expect(finalizeCapture).toHaveBeenCalledOnce();
     expect(closed).toBe(false);
     releaseCapture.resolve();
     await expect(closing).resolves.toMatchObject({ warnings: ["media-cleanup"] });
-    expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
+    expect(sharedStateLifecycle.size).toBe(0);
   } finally {
     releaseMedia.resolve();
     releaseCapture.resolve();
@@ -191,7 +116,7 @@ it("owns plugin cleanup and its descendants after the requesting connection drai
     void trackAsyncWork(async () => {
       entered.resolve();
       await release.promise;
-      expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
+      expect(sharedStateLifecycle.has("open")).toBe(true);
       completed();
     });
   });
@@ -219,12 +144,12 @@ it("owns plugin cleanup and its descendants after the requesting connection drai
   try {
     await Promise.race([entered.promise, closing]);
     expect(cleanup).toHaveBeenCalledOnce();
-    expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
+    expect(sharedStateLifecycle.has("open")).toBe(true);
     release.resolve();
     await expect(closing).resolves.toMatchObject({ warnings: [] });
     expect(instance.lifecycle.signal.aborted).toBe(true);
     expect(completed).toHaveBeenCalledOnce();
-    expect(mocks.closePluginStateDatabaseAsync).toHaveBeenCalledOnce();
+    expect(sharedStateLifecycle.size).toBe(0);
   } finally {
     release.resolve();
     await closing.catch(() => {});
@@ -232,7 +157,6 @@ it("owns plugin cleanup and its descendants after the requesting connection drai
 });
 
 it("joins detached request attachment cleanup before shared state closes", async () => {
-  mocks.closePluginStateDatabaseAsync.mockClear();
   const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
   const attachments = await import("./chat-attachments.js");
   const mediaStore = await import("../media/store.js");
@@ -288,7 +212,7 @@ it("joins detached request attachment cleanup before shared state closes", async
       // The empty owner resolves in this microtask; a retained deletion cannot.
       await Promise.resolve();
       expect(drained).toBe(false);
-      expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
+      expect(sharedStateLifecycle.has("open")).toBe(true);
       expect(await fs.readFile(uploaded.path, "utf8")).toBe("synthetic request attachment");
     } finally {
       releaseDeletion.resolve();
@@ -299,6 +223,6 @@ it("joins detached request attachment cleanup before shared state closes", async
       deleteSpy.mockRestore();
     }
     await expect(fs.stat(uploaded.path)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(mocks.closePluginStateDatabaseAsync).toHaveBeenCalledOnce();
+    expect(sharedStateLifecycle.size).toBe(0);
   });
 });

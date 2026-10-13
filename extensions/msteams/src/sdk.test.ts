@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { startMSTeamsQaBotFrameworkServer } from "./qa/bot-framework-server.js";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
-import type { MSTeamsCredentials } from "./token.js";
+import type { MSTeamsCredentials } from "./token-config.js";
 
 const secretCredentials: MSTeamsCredentials = {
   type: "secret",

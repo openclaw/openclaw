@@ -12,12 +12,13 @@ import SwiftUI
 
 // MARK: - Scripted transport
 
-/// Replays scripted gateway traffic against `OpenClawChatViewModel` with deterministic
-/// ordering: every event is yielded into a single FIFO `AsyncStream`, and the view model
-/// consumes that stream serially on the MainActor, so relative event order is exactly the
-/// scripted order. Tests never sleep for fixed intervals; each step awaits an observable
-/// view-model convergence point instead.
+/// Stream demand acknowledges synchronous event handling; spawned refreshes use their owner tasks.
 private final class ScriptedChatTransport: @unchecked Sendable, OpenClawChatTransport {
+    private enum Entry: Sendable {
+        case event(OpenClawChatTransportEvent)
+        case barrier(CheckedContinuation<Void, Never>)
+    }
+
     private actor State {
         var history: OpenClawChatHistoryPayload
         var historyRequestCount = 0
@@ -42,8 +43,8 @@ private final class ScriptedChatTransport: @unchecked Sendable, OpenClawChatTran
     }
 
     private let state: State
-    private let stream: AsyncStream<OpenClawChatTransportEvent>
-    private let continuation: AsyncStream<OpenClawChatTransportEvent>.Continuation
+    private let stream: AsyncStream<Entry>
+    private let continuation: AsyncStream<Entry>.Continuation
     private let beforeHistoryResponse: (@Sendable () async -> Void)?
 
     init(
@@ -52,7 +53,7 @@ private final class ScriptedChatTransport: @unchecked Sendable, OpenClawChatTran
     {
         self.state = State(history: history)
         self.beforeHistoryResponse = beforeHistoryResponse
-        var cont: AsyncStream<OpenClawChatTransportEvent>.Continuation!
+        var cont: AsyncStream<Entry>.Continuation!
         self.stream = AsyncStream { c in
             cont = c
         }
@@ -60,7 +61,20 @@ private final class ScriptedChatTransport: @unchecked Sendable, OpenClawChatTran
     }
 
     func events() -> AsyncStream<OpenClawChatTransportEvent> {
-        self.stream
+        AsyncStream(unfolding: {
+            for await entry in self.stream {
+                switch entry {
+                case let .event(event): return event
+                case let .barrier(continuation): continuation.resume()
+                }
+            }
+            return nil
+        })
+    }
+
+    func drain() async {
+        // The next stream demand acknowledges the previous MainActor handler's return.
+        await withCheckedContinuation { self.continuation.yield(.barrier($0)) }
     }
 
     /// Scripted history is mutable so reconnect scenarios can flip the durable
@@ -71,7 +85,7 @@ private final class ScriptedChatTransport: @unchecked Sendable, OpenClawChatTran
     }
 
     func emit(_ event: OpenClawChatTransportEvent) {
-        self.continuation.yield(event)
+        self.continuation.yield(.event(event))
     }
 
     func finish() {
@@ -298,23 +312,29 @@ private struct StreamReplayHarness {
         let vm = await MainActor.run {
             OpenClawChatViewModel(sessionKey: "main", transport: transport, transcriptCache: transcriptCache)
         }
-        await MainActor.run { vm.load() }
-        let harness = StreamReplayHarness(transport: transport, vm: vm)
-        try await harness.converge("replay bootstrap") { vm in
-            vm.healthOK && !vm.isLoading
+        let bootstrap = await MainActor.run {
+            vm.load()
+            return vm.bootstrapTask
         }
+        try await #require(bootstrap).value
+        let harness = StreamReplayHarness(transport: transport, vm: vm)
+        #expect(await MainActor.run { vm.healthOK && !vm.isLoading })
         return harness
     }
 
-    /// Awaits an observable view-model state instead of sleeping a fixed interval.
+    @MainActor
     func converge(
         _ label: String,
-        _ condition: @escaping @MainActor @Sendable (OpenClawChatViewModel) -> Bool) async throws
+        _ condition: @escaping @MainActor @Sendable (OpenClawChatViewModel) -> Bool) async
     {
-        let vm = self.vm
-        try await waitUntil(label) {
-            await MainActor.run { condition(vm) }
-        }
+        await self.transport.drain()
+        #expect(condition(self.vm), Comment(rawValue: label))
+    }
+
+    @MainActor
+    func handleAndSettle(_ event: OpenClawChatTransportEvent) async {
+        await self.transport.drain()
+        await self.vm.handleTransportEvent(event)?.value
     }
 
     /// Sends a user turn and returns the run id after the send acknowledgment has
@@ -324,31 +344,26 @@ private struct StreamReplayHarness {
     func send(_ text: String) async throws -> String {
         let priorSends = await self.transport.sentRunIds().count
         let priorHistoryRequests = await self.transport.historyRequestCount()
-        await MainActor.run {
+        let send = await MainActor.run {
             self.vm.input = text
-            self.vm.send()
+            return self.vm.send()
         }
-        try await waitUntil("transport accepted send") {
-            await self.transport.sentRunIds().count > priorSends
-        }
+        try await #require(send).value
+        #expect(await self.transport.sentRunIds().count == priorSends + 1)
         let runId = try #require(await self.transport.sentRunIds().last)
-        try await waitUntil("post-send ack refresh settled") {
-            await self.transport.historyRequestCount() > priorHistoryRequests
-        }
-        try await self.converge("run pending after send") { vm in
-            vm.pendingRunCount == 1
-        }
+        #expect(await self.transport.historyRequestCount() > priorHistoryRequests)
+        #expect(await self.vm.pendingRunCount == 1)
         return runId
     }
 
     /// Streams the full text as growing prefixes and waits until the final
     /// accumulated streaming text is visible.
-    func streamCumulativeChunks(runId: String, fullText: String, chunkLength: Int) async throws {
+    func streamCumulativeChunks(runId: String, fullText: String, chunkLength: Int) async {
         for (offset, prefix) in cumulativePrefixes(of: fullText, chunkLength: chunkLength).enumerated() {
             self.transport.emit(
                 replayAssistantDeltaEvent(runId: runId, cumulativeText: prefix, seq: offset + 1))
         }
-        try await self.converge("streamed text accumulated") { vm in
+        await self.converge("streamed text accumulated") { vm in
             vm.streamingAssistantText == fullText
         }
     }
@@ -463,7 +478,9 @@ struct ChatStreamReplayTests {
         }
 
         host.layoutSubtreeIfNeeded()
-        try await harness.converge("hosted replay bootstrap") { $0.healthOK && !$0.isLoading }
+        await waitForObservedState { vm.lastIssuedHistoryRequestID > 0 }
+        try await #require(vm.bootstrapTask).value
+        await harness.converge("hosted replay bootstrap") { $0.healthOK && !$0.isLoading }
         let runId = try await harness.send("show the equations")
         let initial = "<think>$$r = 0$$</think>\n\n$$x = 1$$"
         let appended = initial + "\n\n$$y = 2$$"
@@ -475,7 +492,7 @@ struct ChatStreamReplayTests {
         ].enumerated() {
             let (text, expected) = entry
             transport.emit(replayAssistantDeltaEvent(runId: runId, cumulativeText: text, seq: offset + 1))
-            try await harness.converge("hosted stream applied") { $0.streamingAssistantText == text }
+            await harness.converge("hosted stream applied") { $0.streamingAssistantText == text }
             expectRendered(expected)
         }
 
@@ -486,11 +503,123 @@ struct ChatStreamReplayTests {
         expectRendered(["z = 3"])
     }
 
+    @Test(arguments: [false, true], [false, true])
+    @MainActor func `hosted reply is not repeated when the same text is recorded`(
+        narration: Bool,
+        recordedFirst: Bool) async throws
+    {
+        _ = NSApplication.shared
+        let harness = try await StreamReplayHarness.bootstrapped()
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 960, height: 680),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: OpenClawChatView(
+            viewModel: harness.vm,
+            displayOptions: [],
+            showsAssistantAvatars: false,
+            showsComposer: false))
+        window.contentView = host
+        defer {
+            harness.vm.detachTransport()
+            harness.transport.finish()
+            window.contentView = nil
+            window.close()
+        }
+        let runId = try await harness.send("Show the equation")
+        let now = Int(Date().timeIntervalSince1970 * 1000)
+        let text = "$$x = 1$$"
+        let recorded = narration
+            ? replayNarrationEvent(runId: runId, itemId: "equation", text: text, seq: 2, timestamp: now + 100)
+            : replaySessionMessageEvent(
+                text: text, timestamp: Double(now + 100), runId: runId, messageId: "equation")
+        let streamed = replayAssistantDeltaEvent(runId: runId, cumulativeText: text, seq: 1)
+        for event in recordedFirst ? [recorded, streamed] : [streamed, recorded] {
+            harness.transport.emit(event)
+        }
+        // Wait for the inputs, not the expected absence: a duplicate must fail an assertion, not hang.
+        try await harness.converge("both sources received") { vm in
+            vm.streamingAssistantText == text &&
+                vm.transcriptMessages.contains { ChatMessageVisibleText.visibleText(in: $0) == text }
+        }
+        host.layoutSubtreeIfNeeded()
+        let labels = Self.mathLabels(in: host)
+        #expect(labels.map(\.latex) == ["x = 1"])
+        #expect(labels.allSatisfy { $0.error == nil && $0.frame.width > 0 && $0.frame.height > 0 })
+
+        // A repeated delta cannot resurrect the second bubble; different text remains visible.
+        harness.transport.emit(replayAssistantDeltaEvent(runId: runId, cumulativeText: text, seq: 3))
+        harness.transport.emit(.agent(OpenClawAgentEventPayload(
+            runId: runId, seq: 4, stream: "tool", ts: now + 200,
+            data: ["phase": AnyCodable("start"), "name": AnyCodable("read"), "toolCallId": AnyCodable("read-1")])))
+        try await harness.converge("repeat delta consumed before tool start") { $0.pendingToolCalls.count == 1 }
+        host.layoutSubtreeIfNeeded()
+        #expect(Self.mathLabels(in: host).map(\.latex) == ["x = 1"])
+        harness.transport.emit(replayAssistantDeltaEvent(runId: runId, cumulativeText: "$$y = 2$$", seq: 5))
+        try await harness.converge("different live text received") { $0.streamingAssistantText == "$$y = 2$$" }
+        host.layoutSubtreeIfNeeded()
+        #expect(Self.mathLabels(in: host).map(\.latex).sorted() == ["x = 1", "y = 2"])
+    }
+
     @MainActor private static func mathLabels(in view: NSView) -> [MTMathUILabel] {
         if let label = view as? MTMathUILabel { return [label] }
         return view.subviews.flatMap { Self.mathLabels(in: $0) }
     }
     #endif
+
+    @Test @MainActor func `live text suppression is exact and limited to the current turn`() {
+        let transport = ScriptedChatTransport(history: replayHistory())
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        defer {
+            vm.detachTransport()
+            transport.finish()
+        }
+        let user = replayDurableMessage(role: "USER", text: "Again", timestamp: 100)
+        let reply = replayDurableMessage(role: "ASSISTANT", text: " **Ready** ", timestamp: 200)
+        vm.updateStreamingAssistantText("**Ready**")
+
+        // Prior turns and non-assistant rows must not suppress a new reply.
+        vm.replaceMessages([reply, user])
+        #expect(vm.liveAssistantText == "**Ready**")
+        let tool = replayDurableMessage(role: "toolResult", text: "**Ready**", timestamp: 300)
+        vm.replaceMessages([user, tool])
+        #expect(vm.liveAssistantText == "**Ready**")
+        vm.replaceMessages([user, reply, tool])
+        #expect(vm.liveAssistantText == nil)
+        #expect(vm.streamingAssistantText == "**Ready**")
+
+        // Compare raw Markdown, not parsed visible words; dropping the matching row restores live text.
+        vm.updateStreamingAssistantText("Ready")
+        #expect(vm.liveAssistantText == "Ready")
+        vm.updateStreamingAssistantText("**Ready**")
+        vm.replaceMessages([user])
+        #expect(vm.liveAssistantText == "**Ready**")
+        vm.updateStreamingAssistantText(nil)
+        #expect(vm.liveAssistantText == nil)
+    }
+
+    @Test @MainActor func `live text comparison preserves supported text types and block boundaries`() {
+        let transport = ScriptedChatTransport(history: replayHistory())
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        defer {
+            vm.detachTransport()
+            transport.finish()
+        }
+        for type in [nil, "text", " input_text ", "OUTPUT_TEXT"] as [String?] {
+            let message = OpenClawChatMessage(role: "assistant", content: [
+                .init(type: type, text: "a"),
+                .init(type: "thinking", text: "private"),
+                .init(type: type, text: "b"),
+            ], timestamp: nil)
+            vm.replaceMessages([message])
+            vm.updateStreamingAssistantText("ab")
+            #expect(vm.liveAssistantText == "ab")
+            vm.updateStreamingAssistantText("a\nb")
+            #expect(vm.liveAssistantText == nil)
+        }
+    }
 
     @Test @MainActor func `settled history retires unsaved narration without erasing live or lagging work`() async throws {
         let harness = try await StreamReplayHarness.bootstrapped()
@@ -505,7 +634,7 @@ struct ChatStreamReplayTests {
         let narration = "Inspecting the layout."
         harness.transport.emit(replayNarrationEvent(
             runId: runId, itemId: "unsaved", text: narration, seq: 1, timestamp: now + 100))
-        try await harness.converge("sealed narration is visible") { vm in
+        await harness.converge("sealed narration is visible") { vm in
             vm.transcriptMessages.contains { ChatMessageVisibleText.visibleText(in: $0) == narration }
         }
 
@@ -543,7 +672,7 @@ struct ChatStreamReplayTests {
         await harness.transport.setHistory(history([user], active: true))
         harness.transport.emit(replayFinalEvent(
             runId: runId, text: "The layout is ready.", timestamp: Double(now + 300)))
-        try await harness.converge("terminal event releases the run") { $0.pendingRunCount == 0 }
+        await harness.converge("terminal event releases the run") { $0.pendingRunCount == 0 }
         apply(history([user], active: false))
         #expect(hasNarration())
         _ = harness.vm.applyHistoryPayload(
@@ -588,7 +717,7 @@ struct ChatStreamReplayTests {
             runId: "another-run", itemId: "first", text: "Foreign narration", seq: 4, timestamp: now + 400))
         harness.transport.emit(replayNarrationEvent(
             runId: runId, itemId: "withdrawn", text: "Retracted narration", seq: 5, timestamp: now + 500))
-        try await harness.converge("sealed narration follows the running tool") { vm in
+        await harness.converge("sealed narration follows the running tool") { vm in
             vm.transcriptMessages.contains { ChatMessageVisibleText.visibleText(in: $0) == "Retracted narration" }
         }
         #expect(harness.vm.pendingToolCalls.map(\.toolCallId) == ["read-1"])
@@ -606,7 +735,7 @@ struct ChatStreamReplayTests {
             messageId: "layout-read", messageSeq: nil)))
         harness.transport.emit(replayNarrationEvent(
             runId: runId, itemId: "second", text: secondText, seq: 8, timestamp: now + 600))
-        try await harness.converge("two narration items surround canonical tool output") { vm in
+        await harness.converge("two narration items surround canonical tool output") { vm in
             vm.transcriptMessages.contains { ChatMessageVisibleText.visibleText(in: $0) == secondText }
         }
         #expect(harness.vm.pendingRunCount == 1)
@@ -623,8 +752,8 @@ struct ChatStreamReplayTests {
             runId: runId, messageId: "saved-first", itemId: "first")
         await harness.transport.setHistory(replayHistory(
             messages: [user, first, tool], inFlightRun: OpenClawChatInFlightRun(runId: runId, text: "")))
-        harness.vm.resumeFromForeground()
-        try await harness.converge("canonical first item replaces its live projection") { vm in
+        await harness.vm.resumeFromForeground().value
+        await harness.converge("canonical first item replaces its live projection") { vm in
             vm.messages.contains { $0.transcriptMessageID == "saved-first" }
         }
         #expect(harness.vm.transcriptMessages.map { ChatMessageVisibleText.visibleText(in: $0) } == [
@@ -639,8 +768,8 @@ struct ChatStreamReplayTests {
             role: "assistant", text: finalText, timestamp: Double(now + 700),
             runId: runId, messageId: "saved-final")
         await harness.transport.setHistory(replayHistory(messages: [user, first, tool, second, final]))
-        harness.transport.emit(replayFinalEvent(runId: runId, text: finalText, timestamp: Double(now + 700)))
-        try await harness.converge("canonical final settles narration") { vm in
+        await harness.handleAndSettle(replayFinalEvent(runId: runId, text: finalText, timestamp: Double(now + 700)))
+        await harness.converge("canonical final settles narration") { vm in
             vm.pendingRunCount == 0 && vm.messages.contains { $0.transcriptMessageID == "saved-final" }
         }
         let settled = ChatTranscriptRow.collapseCompletedWork(
@@ -665,7 +794,7 @@ struct ChatStreamReplayTests {
         try harness.transport.emit(.sessionMessage(OpenClawSessionMessageEventPayload(
             sessionKey: "main", message: GatewayPayloadDecoding.decode(final),
             messageId: "saved-final", messageSeq: nil)))
-        try await harness.converge("final echo consumed after the retired event") { vm in
+        await harness.converge("final echo consumed after the retired event") { vm in
             vm.historyMutationGeneration > generation
         }
         #expect(!harness.vm.transcriptMessages.contains {
@@ -700,8 +829,8 @@ struct ChatStreamReplayTests {
         let harness = try await StreamReplayHarness.bootstrapped()
         defer { harness.vm.detachTransport() }
         await harness.transport.setHistory(history)
-        harness.transport.emit(.seqGap)
-        try await harness.converge("reconnect restores commentary and the active answer") { vm in
+        await harness.handleAndSettle(.seqGap)
+        await harness.converge("reconnect restores commentary and the active answer") { vm in
             vm.pendingRunCount == 1 && vm.streamingAssistantText == "The answer is streaming." &&
                 vm.transcriptMessages.contains {
                     ChatMessageVisibleText.visibleText(in: $0) == "Recovered **second** narration."
@@ -753,7 +882,7 @@ struct ChatStreamReplayTests {
         let event = try #require(OpenClawChatGatewayPayloadCodec.event(from: frame))
 
         harness.transport.emit(event)
-        try await harness.converge("live reset marker appended") { vm in
+        await harness.converge("live reset marker appended") { vm in
             vm.messages.contains { $0.historyMarker?.kind == "reset" }
         }
 
@@ -772,10 +901,10 @@ struct ChatStreamReplayTests {
         let harness = try await StreamReplayHarness.bootstrapped()
         let runId = try await harness.send("hi")
 
-        try await harness.streamCumulativeChunks(runId: runId, fullText: finalText, chunkLength: 4)
+        await harness.streamCumulativeChunks(runId: runId, fullText: finalText, chunkLength: 4)
 
         harness.transport.emit(replayFinalEvent(runId: runId, text: finalText, timestamp: now + 1000))
-        try await harness.converge("final clears run and shows provisional row") { vm in
+        await harness.converge("final clears run and shows provisional row") { vm in
             vm.pendingRunCount == 0 &&
                 vm.streamingAssistantText == nil &&
                 vm.replayAssistantRows(text: finalText).count == 1
@@ -797,7 +926,7 @@ struct ChatStreamReplayTests {
                 idempotencyKey: runId,
                 messageId: "durable-assistant"))
 
-        try await harness.converge("durable rows adopted") { vm in
+        await harness.converge("durable rows adopted") { vm in
             vm.replayUserRows.count == 1 &&
                 vm.replayUserRows.first?.timestamp == now + 500 &&
                 vm.replayAssistantRows(text: finalText).count == 1 &&
@@ -842,7 +971,7 @@ struct ChatStreamReplayTests {
                 idempotencyKey: "run-sentinel",
                 messageId: "durable-sentinel"))
 
-        try await harness.converge("sentinel visible after duplicates") { vm in
+        await harness.converge("sentinel visible after duplicates") { vm in
             vm.replayAssistantRows(text: "sentinel").count == 1
         }
 
@@ -864,7 +993,7 @@ struct ChatStreamReplayTests {
         let runId = try await harness.send("draft question")
 
         harness.transport.emit(replayFinalEvent(runId: runId, text: replyText, timestamp: now + 1000))
-        try await harness.converge("provisional final visible") { vm in
+        await harness.converge("provisional final visible") { vm in
             vm.pendingRunCount == 0 && vm.replayAssistantRows(text: replyText).count == 1
         }
         let provisionalID = try await MainActor.run {
@@ -880,7 +1009,7 @@ struct ChatStreamReplayTests {
                 emptyThinking: emptyThinking,
                 messageId: "durable-final"))
 
-        try await harness.converge("durable row arrives") { vm in
+        await harness.converge("durable row arrives") { vm in
             vm.replayAssistantRows(text: replyText).contains { $0.timestamp == now + 2000 }
         }
 
@@ -914,12 +1043,12 @@ struct ChatStreamReplayTests {
                 runId: legacyRunKey ? nil : runId,
                 emptyThinking: emptyThinking,
                 messageId: "durable-early"))
-        try await harness.converge("durable visible while run still pending") { vm in
+        await harness.converge("durable visible while run still pending") { vm in
             vm.replayAssistantRows(text: replyText).count == 1 && vm.pendingRunCount == 1
         }
 
         harness.transport.emit(replayFinalEvent(runId: runId, text: replyText, timestamp: now + 1000))
-        try await harness.converge("final drains pending run") { vm in
+        await harness.converge("final drains pending run") { vm in
             vm.pendingRunCount == 0
         }
 
@@ -967,7 +1096,7 @@ struct ChatStreamReplayTests {
 
         harness.transport.emit(finalFirst ? final : toolEvent)
         harness.transport.emit(finalFirst ? toolEvent : final)
-        try await harness.converge("tool row and completion consumed") { vm in
+        await harness.converge("tool row and completion consumed") { vm in
             vm.pendingRunCount == 0 && vm.messages.contains { $0.timestamp == now + 2000 }
         }
         await MainActor.run {
@@ -981,7 +1110,7 @@ struct ChatStreamReplayTests {
             runId: runId,
             emptyThinking: true,
             messageId: "terminal-tool-reply"))
-        try await harness.converge("terminal tool reply arrives") { vm in
+        await harness.converge("terminal tool reply arrives") { vm in
             vm.messages.contains { $0.timestamp == now + 3000 }
         }
         await MainActor.run {
@@ -997,7 +1126,7 @@ struct ChatStreamReplayTests {
         let harness = try await StreamReplayHarness.bootstrapped()
         let runId = try await harness.send("first turn")
         harness.transport.emit(replayFinalEvent(runId: runId, text: text, timestamp: now + 1000))
-        try await harness.converge("owned provisional final visible") { vm in
+        await harness.converge("owned provisional final visible") { vm in
             vm.pendingRunCount == 0 && vm.replayAssistantRows(text: text).count == 1
         }
 
@@ -1007,7 +1136,7 @@ struct ChatStreamReplayTests {
             idempotencyKey: matchingLegacyKey ? runId : nil,
             runId: "different-run",
             messageId: "different-durable-final"))
-        try await harness.converge("other run durable row arrives") { vm in
+        await harness.converge("other run durable row arrives") { vm in
             vm.replayAssistantRows(text: text).contains { $0.timestamp == now + 2000 }
         }
         await MainActor.run {
@@ -1021,7 +1150,7 @@ struct ChatStreamReplayTests {
         let harness = try await StreamReplayHarness.bootstrapped()
         let runId = try await harness.send("history refresh")
         harness.transport.emit(replayFinalEvent(runId: runId, text: text, timestamp: now + 1000))
-        try await harness.converge("provisional reply visible before history") { vm in
+        await harness.converge("provisional reply visible before history") { vm in
             vm.pendingRunCount == 0 && vm.replayAssistantRows(text: text).count == 1
         }
         let provisionalID = try await MainActor.run {
@@ -1041,8 +1170,8 @@ struct ChatStreamReplayTests {
                 runId: runId,
                 emptyThinking: true),
         ]))
-        await MainActor.run { harness.vm.resumeFromForeground() }
-        try await harness.converge("canonical history applied") { vm in
+        await harness.vm.resumeFromForeground().value
+        await harness.converge("canonical history applied") { vm in
             vm.replayAssistantRows(text: text).contains { $0.timestamp == now + 2000 }
         }
         await MainActor.run {
@@ -1075,8 +1204,8 @@ struct ChatStreamReplayTests {
             replayRawMessage(
                 role: "assistant", text: text, timestamp: now + 1000, messageId: transcriptMessageID),
         ]))
-        harness.transport.emit(replayFinalEvent(runId: runId, text: text, timestamp: now + 500))
-        try await harness.converge("untagged history adopted the streamed final") { vm in
+        await harness.handleAndSettle(replayFinalEvent(runId: runId, text: text, timestamp: now + 500))
+        await harness.converge("untagged history adopted the streamed final") { vm in
             vm.pendingRunCount == 0 && vm.replayAssistantRows.map(\.timestamp) == [now + 1000]
         }
         let originalWrite = await MainActor.run { harness.vm.pendingCacheWriteTask }
@@ -1108,7 +1237,8 @@ struct ChatStreamReplayTests {
         }
         let restored = StreamReplayHarness(transport: transport, vm: vm)
         await MainActor.run { vm.load() }
-        try await restored.converge("reopened database prepainted before history") { vm in
+        await waitForObservedState { vm.isShowingCachedTranscript }
+        await restored.converge("reopened database prepainted before history") { vm in
             vm.isShowingCachedTranscript && vm.replayAssistantRows.map(\.timestamp) == [now + 1000]
         }
         await MainActor.run {
@@ -1133,13 +1263,14 @@ struct ChatStreamReplayTests {
             try transport.emit(#require(OpenClawChatGatewayPayloadCodec.event(from: frame)))
             // A deduped event leaves the visible row unchanged; wait for the
             // handler's history fence before checking that no bubble was added.
-            try await restored.converge("canonical live reply was consumed") { vm in
+            await restored.converge("canonical live reply was consumed") { vm in
                 vm.historyMutationGeneration > priorMutation
             }
             await MainActor.run { #expect(vm.replayAssistantRows.count == 1) }
         }
         releaseHistory.finish()
-        try await restored.converge("cold-open history completed") { vm in
+        try await #require(await vm.bootstrapTask).value
+        await restored.converge("cold-open history completed") { vm in
             vm.healthOK && !vm.isLoading && !vm.isShowingCachedTranscript
         }
         await MainActor.run {
@@ -1156,8 +1287,9 @@ struct ChatStreamReplayTests {
     @Test func `reconnect mid-run converges via history refetch and drains pending run`() async throws {
         let harness = try await StreamReplayHarness.bootstrapped()
         let runId = try await harness.send("please finish")
+        let runOwner = try #require(await harness.vm.pendingRunOwnerTasks[runId])
 
-        try await harness.streamCumulativeChunks(runId: runId, fullText: "Working on it", chunkLength: 5)
+        await harness.streamCumulativeChunks(runId: runId, fullText: "Working on it", chunkLength: 5)
 
         // Stream stops here (no final, no lifecycle end). The gateway finished the
         // run while the client was away, so the next history fetch returns the
@@ -1181,9 +1313,10 @@ struct ChatStreamReplayTests {
                     timestamp: reconnectNow + 900,
                     idempotencyKey: runId),
             ]))
-        await MainActor.run { harness.vm.resumeFromForeground() }
+        await harness.vm.resumeFromForeground().value
+        await runOwner.value
 
-        try await harness.converge("reconnect refetch converges transcript") { vm in
+        await harness.converge("reconnect refetch converges transcript") { vm in
             vm.pendingRunCount == 0 &&
                 vm.streamingAssistantText == nil &&
                 vm.replayAssistantRows(text: "Finished while you were away.").count == 1
@@ -1203,7 +1336,7 @@ struct ChatStreamReplayTests {
         let harness = try await StreamReplayHarness.bootstrapped()
         let runId = try await harness.send("markdown please")
 
-        try await harness.streamCumulativeChunks(
+        await harness.streamCumulativeChunks(
             runId: runId,
             fullText: markdownShapesFixture,
             chunkLength: 5)
@@ -1223,7 +1356,7 @@ struct ChatStreamReplayTests {
                 idempotencyKey: runId,
                 messageId: "durable-markdown"))
 
-        try await harness.converge("markdown reply converges to durable row") { vm in
+        await harness.converge("markdown reply converges to durable row") { vm in
             vm.pendingRunCount == 0 &&
                 vm.streamingAssistantText == nil &&
                 vm.replayAssistantRows(text: markdownShapesFixture).first?.timestamp == now + 1500
@@ -1244,7 +1377,7 @@ struct ChatStreamReplayTests {
         let secondText = "Second response starts fresh."
 
         let firstRunId = try await harness.send("first")
-        try await harness.streamCumulativeChunks(
+        await harness.streamCumulativeChunks(
             runId: firstRunId,
             fullText: firstText,
             chunkLength: 3)
@@ -1256,12 +1389,12 @@ struct ChatStreamReplayTests {
                 timestamp: now + 1100,
                 idempotencyKey: firstRunId,
                 messageId: "durable-first"))
-        try await harness.converge("first stream finalized") { vm in
+        await harness.converge("first stream finalized") { vm in
             vm.streamingAssistantText == nil && vm.replayAssistantRows(text: firstText).count == 1
         }
 
         let secondRunId = try await harness.send("second")
-        try await harness.streamCumulativeChunks(
+        await harness.streamCumulativeChunks(
             runId: secondRunId,
             fullText: secondText,
             chunkLength: 4)
@@ -1278,7 +1411,7 @@ struct ChatStreamReplayTests {
                 timestamp: now + 2100,
                 idempotencyKey: secondRunId,
                 messageId: "durable-second"))
-        try await harness.converge("second stream finalized independently") { vm in
+        await harness.converge("second stream finalized independently") { vm in
             vm.streamingAssistantText == nil &&
                 vm.replayAssistantRows(text: firstText).count == 1 &&
                 vm.replayAssistantRows(text: secondText).count == 1

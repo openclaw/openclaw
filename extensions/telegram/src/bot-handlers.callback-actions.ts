@@ -2,14 +2,9 @@ import type { Message, User } from "grammy/types";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
+import type { TelegramCallbackButton } from "./button-types.js";
 import type { TelegramQuestionCallback } from "./question-callback-data.js";
 import { buildInlineKeyboard } from "./send.js";
-
-export type TelegramCallbackButton = {
-  text: string;
-  callback_data: string;
-  style?: "danger" | "success" | "primary";
-};
 
 type TelegramCallbackReplyParams = Omit<
   NonNullable<Parameters<RegisterTelegramHandlerParams["bot"]["api"]["sendMessage"]>[2]>,
@@ -168,11 +163,11 @@ export async function handleTelegramQuestionCallback(params: {
       clientDisplayName: "Telegram question",
     });
     if (params.callback.intent === "custom-input") {
-      if (result.status === "already-terminal") {
-        await params.feedback("This question was already answered.", "terminal");
-        return;
-      }
-      await params.feedback("Reply with your own answer.", "custom-input");
+      const terminal = result.status === "already-terminal";
+      await params.feedback(
+        terminal ? "This question was already answered." : "Reply with your own answer.",
+        terminal ? "terminal" : "custom-input",
+      );
       return;
     }
     await params

@@ -1,6 +1,42 @@
-// Provides shared assertions for provider plugin runtime tests.
+// Provides shared fixtures and assertions for provider plugin runtime tests.
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, vi, type Mock } from "vitest";
 import type { SubsystemLogger } from "../logging/subsystem.js";
+import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
+import type { AnyAgentTool } from "./types.js";
+
+export const PROVIDER_RUNTIME_TEST_MODEL: ProviderRuntimeModel = {
+  id: "demo-model",
+  name: "Demo Model",
+  api: "openai-responses",
+  provider: "demo",
+  baseUrl: "https://api.example.com/v1",
+  reasoning: true,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 128_000,
+  maxTokens: 8_192,
+};
+
+export const DEMO_SANITIZED_MESSAGE: AgentMessage = {
+  role: "assistant",
+  content: [{ type: "text", text: "sanitized" }],
+  api: PROVIDER_RUNTIME_TEST_MODEL.api,
+  provider: PROVIDER_RUNTIME_TEST_MODEL.provider,
+  model: PROVIDER_RUNTIME_TEST_MODEL.id,
+  usage: createZeroUsageFixture(),
+  stopReason: "stop",
+  timestamp: 2,
+};
+
+export const DEMO_TOOL = {
+  name: "demo-tool",
+  label: "Demo tool",
+  description: "Demo tool",
+  parameters: { type: "object", properties: {} },
+  execute: vi.fn(async () => ({ content: [], details: undefined })),
+} as unknown as AnyAgentTool;
 
 const openaiCodexCatalogEntries = [
   { provider: "openai", id: "gpt-5.5", name: "gpt-5.5" },

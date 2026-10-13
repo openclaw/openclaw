@@ -9,6 +9,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { runManagedCommand, terminateManagedChild } from "../../../lib/managed-child-process.mts";
+import { readJson } from "../fixtures/common.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 
 const expectedVersion = process.argv[2];
@@ -97,9 +98,7 @@ assert.notEqual(
 );
 const prepublishRoot = process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR;
 assert(prepublishRoot, "Doctor proof requires the candidate plugin prepublish artifact");
-const manifest = JSON.parse(
-  fs.readFileSync(path.join(prepublishRoot, "prepublish-plugin-registry.json"), "utf8"),
-);
+const manifest = readJson(path.join(prepublishRoot, "prepublish-plugin-registry.json"));
 const candidatePackage = manifest.packages.find((entry) => entry.name === packageName);
 assert.equal(
   candidatePackage?.version,
@@ -256,9 +255,7 @@ try {
     "Doctor fabricated operator capability acceptance",
   );
   assert(inspect.install.installPath, "Doctor omitted the installed payload path");
-  const payload = JSON.parse(
-    fs.readFileSync(path.join(inspect.install.installPath, "package.json"), "utf8"),
-  );
+  const payload = readJson(path.join(inspect.install.installPath, "package.json"));
   assert.equal(
     payload.name,
     "@openclaw/duckduckgo-plugin",
@@ -272,7 +269,7 @@ try {
   const after = cli("after-validate", ["config", "validate", "--json"]);
   assert.equal(after.valid, true, "Doctor left the configured plugin invalid");
   assert.deepEqual(after.warnings, [], "Doctor left unresolved config warnings");
-  const repairedConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  const repairedConfig = readJson(configPath);
   assert.equal(
     repairedConfig.tools?.web?.search?.provider,
     "duckduckgo",

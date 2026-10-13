@@ -1,9 +1,19 @@
 import { createHash, type Hash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { copyRootFileSync } from "@openclaw/fs-safe/advanced";
+import {
+  copyFileDescriptorSync,
+  copyRootFileSync,
+  createFileSync,
+} from "@openclaw/fs-safe/advanced";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
+import {
+  collectErrorGraphCandidates,
+  extractErrorCode,
+  formatErrorMessage,
+  readErrorCauses,
+} from "../infra/errors.js";
 import { isGitRuntimeStagingName } from "../infra/update-runtime-staging.js";
 
 // Git rollback trees retain links relative to their final location. Only explicit
@@ -13,6 +23,7 @@ export const isPluginSourceEntry = (name: string): boolean =>
 
 // Capture and native module hooks are synchronous; no read retains this scratch buffer.
 const scratch = Buffer.allocUnsafe(64 * 1024);
+const SMALL_SOURCE_COPY_BYTES = 64 * 1024;
 
 export const pluginSourceStatIdentity = (
   stat: fs.BigIntStats,
@@ -43,46 +54,100 @@ function withPluginSourceFile<T>(source: string, boundary: string, read: (fd: nu
   }
 }
 
-export function pluginSourceFileIdentity(source: string, boundary: string): string {
-  return withPluginSourceFile(source, boundary, (fd) =>
-    pluginSourceStatIdentity(fs.fstatSync(fd, { bigint: true })),
+export function isPluginNativeExecutable(source: string, boundary: string): boolean {
+  return withPluginSourceFile(source, boundary, isPluginNativeDescriptor);
+}
+
+function isPluginNativeDescriptor(fd: number): boolean {
+  if (fs.readSync(fd, scratch, 0, 4, 0) !== 4) {
+    return false;
+  }
+  const magic = scratch.readUInt32BE(0);
+  return (
+    scratch.readUInt16BE(0) === 0x4d5a ||
+    [0x7f454c46, 0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe, 0xbebafeca].includes(
+      magic,
+    )
   );
 }
 
-export function isPluginNativeExecutable(source: string, boundary: string): boolean {
-  return withPluginSourceFile(source, boundary, (fd) => {
-    if (fs.readSync(fd, scratch, 0, 4, 0) !== 4) {
-      return false;
+function copySmallPluginSourceFile(
+  target: string,
+  fd: number,
+  admitted: fs.BigIntStats,
+  mode: number,
+  hashCopiedContent?: boolean,
+) {
+  using copied = createFileSync(target, { mode: 0o600 });
+  const identity = fs.fstatSync(copied.fd, { bigint: true });
+  const assertCurrent = () => {
+    const named = fs.lstatSync(target, { bigint: true });
+    const current = fs.fstatSync(copied.fd, { bigint: true });
+    if (
+      !named.isFile() ||
+      named.nlink !== 1n ||
+      named.dev !== identity.dev ||
+      named.ino !== identity.ino ||
+      !current.isFile() ||
+      current.nlink !== 1n ||
+      current.dev !== identity.dev ||
+      current.ino !== identity.ino
+    ) {
+      throw new FsSafeError("path-mismatch", "Plugin capture destination changed during copying");
     }
-    const magic = scratch.readUInt32BE(0);
-    return (
-      scratch.readUInt16BE(0) === 0x4d5a ||
-      [0x7f454c46, 0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe, 0xbebafeca].includes(
-        magic,
-      )
-    );
+  };
+  // The pinned source and exclusive output own this synchronous transfer.
+  // Source edits after opening are best effort; validate the completed destination once.
+  const bytes = copyFileDescriptorSync(fd, copied.fd, {
+    maxBytes: Number(admitted.size),
   });
+  if (bytes !== Number(admitted.size)) {
+    throw new FsSafeError("path-mismatch", "Plugin source changed while copying");
+  }
+  fs.fchmodSync(copied.fd, mode);
+  assertCurrent();
+  return hashCopiedContent
+    ? {
+        ...hashPluginSourceDescriptor(copied.fd),
+        sourceIdentity: pluginSourceStatIdentity(admitted),
+      }
+    : undefined;
 }
 
 export function copyPluginSourceFile(
   source: string,
   boundary: string,
   target: string,
-  options: { hashCopiedContent?: boolean; preserveSourceMode?: boolean } = {},
+  options: {
+    hashCopiedContent?: boolean;
+    preserveSourceMode?: boolean;
+    copyFile?: typeof copyRootFileSync;
+  } = {},
 ) {
   return withPluginSourceFile(source, boundary, (fd) => {
     const admitted = fs.fstatSync(fd, { bigint: true });
     try {
+      const mode = options.preserveSourceMode
+        ? Number(admitted.mode & 0o777n)
+        : 0o600 | Number(admitted.mode & 0o100n);
+      // Windows needs this path most: fs-safe skips native copies and path-admission
+      // caching on win32, so guarded clones of every small file stall Gateway startup.
+      if (
+        admitted.size <= BigInt(SMALL_SOURCE_COPY_BYTES) &&
+        !/\.(?:node|so|dylib|dll)$/iu.test(source) &&
+        !isPluginNativeDescriptor(fd) &&
+        fs.realpathSync.native(path.dirname(target)) === path.dirname(target)
+      ) {
+        return copySmallPluginSourceFile(target, fd, admitted, mode, options.hashCopiedContent);
+      }
       // Keep our pin alive; fs-safe binds its own admitted open to this exact inode.
-      using copied = copyRootFileSync({
+      using copied = (options.copyFile ?? copyRootFileSync)({
         source: { rootPath: boundary, absolutePath: source },
         destination: { rootPath: path.dirname(target), absolutePath: target },
         expectedSourceIdentity: { dev: admitted.dev, ino: admitted.ino },
         clone: "auto",
         maxBytes: Number(admitted.size),
-        mode: options.preserveSourceMode
-          ? Number(admitted.mode & 0o777n)
-          : 0o600 | Number(admitted.mode & 0o100n),
+        mode,
         sourceHardlinks: "allow",
       });
       // The initial hash belongs to the copied descriptor; receipts still recheck its path.
@@ -93,6 +158,18 @@ export function copyPluginSourceFile(
           }
         : undefined;
     } catch (error) {
+      // fs-safe wraps native failures; retain the disk-full code and detail that
+      // plugin-load diagnostics use to explain how to recover.
+      if (
+        error instanceof FsSafeError &&
+        collectErrorGraphCandidates(error, readErrorCauses).some(
+          (cause) => extractErrorCode(cause) === "ENOSPC",
+        )
+      ) {
+        throw Object.assign(new Error(formatErrorMessage(error), { cause: error }), {
+          code: "ENOSPC",
+        });
+      }
       if (error instanceof FsSafeError && error.code === "too-large") {
         throw new Error(
           "Plugin source changed while preparing its reload; retry after the edit finishes.",

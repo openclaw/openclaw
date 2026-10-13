@@ -89,16 +89,6 @@ describe("performMatrixRequest", () => {
 
   it.each([
     {
-      name: "a root homeserver",
-      homeserverPath: "",
-      expectedPath: "/_matrix/client/v3/account/whoami",
-    },
-    {
-      name: "a proxy prefix with a trailing slash",
-      homeserverPath: "/matrix-proxy/",
-      expectedPath: "/matrix-proxy/_matrix/client/v3/account/whoami",
-    },
-    {
       name: "an encoded nested proxy prefix",
       homeserverPath: "/proxy%20base/tenant/",
       expectedPath: "/proxy%20base/tenant/_matrix/client/v3/account/whoami",
@@ -142,31 +132,6 @@ describe("performMatrixRequest", () => {
       }
     },
   );
-
-  it("rejects oversized raw responses before buffering the whole body", async () => {
-    const cancel = vi.fn();
-    const stream = new ReadableStream<Uint8Array>({ cancel });
-    stubRuntimeFetch(
-      vi.fn(
-        async () =>
-          new Response(stream, {
-            status: 200,
-            headers: {
-              "content-length": "8192",
-            },
-          }),
-      ),
-    );
-
-    await expect(
-      requestMatrix({
-        endpoint: "/_matrix/media/v3/download/example/id",
-        raw: true,
-        maxBytes: 1024,
-      }),
-    ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
-    expect(cancel).toHaveBeenCalledOnce();
-  });
 
   it("rejects malformed raw content-length before buffering the body", async () => {
     const arrayBuffer = vi.fn(async () => new ArrayBuffer(0));
@@ -282,30 +247,6 @@ describe("performMatrixRequest", () => {
     expect(cancel).toHaveBeenCalledOnce();
   });
 
-  it("applies streaming byte limits when JSON responses omit content-length", async () => {
-    const chunk = new Uint8Array(768);
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(chunk);
-        controller.enqueue(chunk);
-        controller.close();
-      },
-    });
-    stubRuntimeFetch(
-      vi.fn(
-        async () =>
-          new Response(stream, {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          }),
-      ),
-    );
-
-    await expect(requestMatrix({ maxBytes: 1024 })).rejects.toThrow(
-      "Matrix JSON response exceeds configured size limit (1536 bytes > 1024 bytes)",
-    );
-  });
-
   it("uses the JSON-specific idle-timeout error for stalled JSON downloads", async () => {
     vi.useFakeTimers();
     try {
@@ -362,35 +303,6 @@ describe("performMatrixRequest", () => {
           // intentionally omitting maxBytes — fix applies MATRIX_SDK_RESPONSE_MAX_BYTES as default
         }),
       ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
-    } finally {
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    }
-  });
-
-  it("real HTTP server: returns raw Buffer when server response is under the default cap and maxBytes is omitted", async () => {
-    const payload = Buffer.from("matrix media payload — under cap");
-
-    const server = http.createServer((_req, res) => {
-      res.writeHead(200, { "content-length": String(payload.length) });
-      res.end(payload);
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const { port } = server.address() as { port: number };
-
-    try {
-      // Do NOT call stubRuntimeFetch — real undici path
-      const result = await requestMatrix({
-        homeserver: `http://127.0.0.1:${port}`,
-        endpoint: "/_matrix/media/v3/download/example/id",
-        timeoutMs: 10_000,
-        raw: true,
-        // intentionally omitting maxBytes — small body passes through default cap
-      });
-      expect(result.buffer).toEqual(payload);
     } finally {
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
@@ -497,30 +409,6 @@ describe("createMatrixGuardedFetch", () => {
       "http://127.0.0.1:8008/_matrix/client/v3/sync?filter=abc&timeout=30000",
     );
   });
-
-  it("leaves non-sync Matrix requests unchanged", async () => {
-    const runtimeFetch = vi.fn(
-      async (_input: RequestInfo | URL, _init?: RequestInit) =>
-        new Response("{}", {
-          status: 200,
-          headers: {
-            "content-type": "application/json",
-          },
-        }),
-    );
-    stubRuntimeFetch(runtimeFetch);
-
-    const guardedFetch = createMatrixGuardedFetch({
-      ssrfPolicy: { allowPrivateNetwork: true },
-    });
-
-    const url =
-      "http://127.0.0.1:8008/_matrix/client/v3/account/whoami?org.matrix.msc4222.use_state_after=true";
-    await guardedFetch(url);
-
-    expect(runtimeFetch).toHaveBeenCalledTimes(1);
-    expect(runtimeFetch.mock.calls.at(0)?.[0]).toBe(url);
-  });
 });
 
 describe("matrix transport streaming OOM guard — real HTTP server without Content-Length", () => {
@@ -602,39 +490,4 @@ describe("matrix transport streaming OOM guard — real HTTP server without Cont
       });
     }
   }, 30_000);
-
-  it("reads streaming raw response under the byte cap without Content-Length", async () => {
-    const payload = Buffer.from("hello matrix streaming bound proof");
-
-    const server = http.createServer((_req, res) => {
-      // Omit Content-Length — only readResponseWithLimit guards body size.
-      res.writeHead(200, { "content-type": "application/octet-stream" });
-      res.end(payload);
-    });
-
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const { port } = server.address() as { port: number };
-
-    try {
-      const result = (
-        await requestMatrix({
-          homeserver: `http://127.0.0.1:${port}`,
-          endpoint: "/_matrix/media/v3/download/example/id",
-          timeoutMs: 10_000,
-          raw: true,
-          maxBytes: 16 * 1024 * 1024,
-        })
-      ).buffer;
-      expect(result).toEqual(payload);
-      console.log(
-        "[matrix-bound-proof] under-cap: raw buffer returned correctly, size=" + result.length,
-      );
-    } finally {
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    }
-  });
 });

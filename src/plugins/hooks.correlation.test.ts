@@ -1,7 +1,10 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { spawnSync } from "node:child_process";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createHookRunner } from "./hooks.js";
 import {
   createHookRunnerWithRegistry,
@@ -57,31 +60,141 @@ describe("hook timeouts", () => {
     }
   });
 
-  it.each(["before_compaction", "after_compaction"] as const)(
-    "bounds a hung %s hook with its default timeout",
-    async (hookName) => {
-      vi.useFakeTimers();
+  it("bounds a hung after_compaction hook with its default timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const logger = { error: vi.fn(), warn: vi.fn() };
+      const { runner } = createHookRunnerWithRegistry(
+        [
+          {
+            hookName: "after_compaction",
+            pluginId: "plugin-a",
+            handler: () => new Promise<void>(() => {}),
+          },
+        ],
+        { logger },
+      );
+      const run = runner.runAfterCompaction(
+        { messageCount: 2, compactedCount: 1 },
+        TEST_PLUGIN_AGENT_CTX,
+      );
+      await vi.advanceTimersByTimeAsync(30_000);
+      await expect(run).resolves.toBeUndefined();
+      expect(logger.error).toHaveBeenCalledWith(
+        "[hooks] after_compaction handler from plugin-a failed: timed out after 30000ms",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("timed hook work", () => {
+  it.each(["open", "closing"] as const)(
+    "joins a raw handler after its timeout with an %s owner",
+    async (phase) => {
+      const owner = new AsyncWorkScope();
+      const finish = createDeferredCore();
+      let settled = false;
+      const logger = { error: vi.fn(), warn: vi.fn() };
+      const runner = createHookRunner(
+        createMockPluginRegistry([
+          {
+            pluginId: "held-hook",
+            hookName: "before_compaction",
+            timeoutMs: 5,
+            handler: async () => {
+              await finish.promise;
+              settled = true;
+            },
+          },
+        ]),
+        { logger },
+      );
+      let drain: Promise<void> | undefined;
       try {
-        const logger = { error: vi.fn(), warn: vi.fn() };
-        const { runner } = createHookRunnerWithRegistry(
-          [{ hookName, pluginId: "plugin-a", handler: () => new Promise<void>(() => {}) }],
-          { logger },
+        if (phase === "closing") {
+          owner.beginClose();
+        }
+        await owner.run(() =>
+          runner.runBeforeCompaction({ messageCount: 3 }, TEST_PLUGIN_AGENT_CTX),
         );
-        const run =
-          hookName === "before_compaction"
-            ? runner.runBeforeCompaction({ messageCount: 3 }, TEST_PLUGIN_AGENT_CTX)
-            : runner.runAfterCompaction(
-                { messageCount: 2, compactedCount: 1 },
-                TEST_PLUGIN_AGENT_CTX,
-              );
-        await vi.advanceTimersByTimeAsync(30_000);
-        await expect(run).resolves.toBeUndefined();
+        expect(settled).toBe(false);
         expect(logger.error).toHaveBeenCalledWith(
-          `[hooks] ${hookName} handler from plugin-a failed: timed out after 30000ms`,
+          "[hooks] before_compaction handler from held-hook failed: timed out after 5ms",
         );
+        let drained = false;
+        drain = owner.drain().then(() => {
+          drained = true;
+        });
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(drained).toBe(false);
+        finish.resolve();
+        await drain;
+        expect(settled).toBe(true);
       } finally {
-        vi.useRealTimers();
+        finish.resolve();
+        await (drain ?? owner.drain());
       }
     },
   );
+
+  it.each([
+    { phase: "closed", outcome: "success" },
+    { phase: "raw", outcome: "late rejection" },
+    { phase: "closed", outcome: "late rejection" },
+  ] as const)("preserves $phase hook reporting through $outcome", async ({ phase, outcome }) => {
+    const owner = new AsyncWorkScope();
+    const context = owner.run(() => AsyncLocalStorage.snapshot());
+    await owner.drain();
+    const finish = createDeferredCore();
+    const settled = createDeferredCore();
+    const failure = new Error("fixture late hook failure");
+    let calls = 0;
+    const logger = { error: vi.fn(), warn: vi.fn() };
+    const runner = createHookRunner(
+      createMockPluginRegistry([
+        {
+          pluginId: "held-hook",
+          hookName: "before_compaction",
+          timeoutMs: 5,
+          handler: async () => {
+            calls++;
+            try {
+              await finish.promise;
+              if (outcome === "late rejection") {
+                throw failure;
+              }
+            } finally {
+              settled.resolve();
+            }
+          },
+        },
+      ]),
+      { logger },
+    );
+    const run = () => runner.runBeforeCompaction({ messageCount: 3 }, TEST_PLUGIN_AGENT_CTX);
+    const result = phase === "closed" ? context(run) : run();
+    try {
+      expect(calls).toBe(1);
+      if (outcome === "success") {
+        finish.resolve();
+      }
+      await expect(result).resolves.toBeUndefined();
+      if (outcome === "success") {
+        expect(logger.error).not.toHaveBeenCalled();
+      } else {
+        expect(logger.error).toHaveBeenCalledOnce();
+        expect(logger.error).toHaveBeenCalledWith(
+          "[hooks] before_compaction handler from held-hook failed: timed out after 5ms",
+        );
+      }
+    } finally {
+      finish.resolve();
+      await settled.promise;
+      await result;
+    }
+  });
 });

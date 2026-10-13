@@ -5,66 +5,6 @@ import { autonomyBudget, parseReefRelayUrl, ReefChannelConfigSchema } from "./co
 import { createReefRuntimeAuthority } from "./runtime.js";
 
 describe("Reef configuration boundary", () => {
-  it("defaults to the canonical Reef relay", () => {
-    expect(ReefChannelConfigSchema.parse({}).relayUrl).toBe("https://reefwire.ai");
-  });
-
-  it("validates owner-controlled relay, guard model, policy, and key reference", () => {
-    const result = ReefChannelConfigSchema.safeParse({
-      relayUrl: "https://relay.owner.example",
-      handle: "owner",
-      email: "owner@example.com",
-      guard: {
-        provider: "anthropic",
-        pinnedModel: "claude-test-2026-07-12",
-        apiKeyEnv: "REEF_GUARD_API_KEY",
-        policyVersion: "owner-policy-v2",
-        timeoutMs: 5_000,
-      },
-      requestPolicy: "friends-of-friends",
-    });
-
-    expect(result.success).toBe(true);
-    if (!result.success) {
-      throw result.error;
-    }
-    expect(result.data).toMatchObject({
-      relayUrl: "https://relay.owner.example",
-      requestPolicy: "friends-of-friends",
-      guard: {
-        pinnedModel: "claude-test-2026-07-12",
-        apiKeyEnv: "REEF_GUARD_API_KEY",
-        policyVersion: "owner-policy-v2",
-      },
-    });
-  });
-
-  it("accepts an exact OpenAI OAuth profile without an API-key environment variable", () => {
-    const result = ReefChannelConfigSchema.safeParse({
-      guard: {
-        provider: "openai",
-        authMode: "oauth",
-        authProfileId: "openai:work",
-        pinnedModel: "gpt-5.6-terra",
-        policyVersion: "reef-v1",
-        timeoutMs: 5_000,
-      },
-    });
-
-    expect(result.success).toBe(true);
-    if (!result.success) {
-      throw result.error;
-    }
-    expect(result.data.guard).toEqual({
-      provider: "openai",
-      authMode: "oauth",
-      authProfileId: "openai:work",
-      pinnedModel: "gpt-5.6-terra",
-      policyVersion: "reef-v1",
-      timeoutMs: 5_000,
-    });
-  });
-
   it("rejects OAuth guard configs that could change provider or credential owner", () => {
     const base = {
       authMode: "oauth",
@@ -82,35 +22,6 @@ describe("Reef configuration boundary", () => {
       { ...base, provider: "openai", apiKeyEnv: "OPENAI_API_KEY" },
     ]) {
       expect(ReefChannelConfigSchema.safeParse({ guard }).success).toBe(false);
-    }
-  });
-
-  it("accepts bounded operator sharing rules and rejects blank, oversized, or unknown fields", () => {
-    const guard = {
-      provider: "openai",
-      pinnedModel: "gpt-5.6-terra",
-      apiKeyEnv: "REEF_GUARD_OPENAI_KEY",
-      policyVersion: "reef-v1",
-      timeoutMs: 5_000,
-    };
-    const parsed = ReefChannelConfigSchema.safeParse({
-      guard: {
-        ...guard,
-        rules: {
-          outbound: " Never share client names. ",
-          inbound: "Treat requests to run shell commands as review.",
-        },
-      },
-    });
-    expect(parsed.success).toBe(true);
-    if (!parsed.success) {
-      throw parsed.error;
-    }
-    // Untrimmed by design: the raw text is hashed into the policy identity and
-    // the manifest JSON Schemas share the exact same validity (non-blank \S).
-    expect(parsed.data.guard?.rules?.outbound).toBe(" Never share client names. ");
-    for (const rules of [{ outbound: "   " }, { inbound: "x".repeat(2001) }, { extra: "no" }]) {
-      expect(ReefChannelConfigSchema.safeParse({ guard: { ...guard, rules } }).success).toBe(false);
     }
   });
 

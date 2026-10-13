@@ -1,5 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import {
+  listAgentEntries,
+  listAgentIds,
+  tryResolveLegacyCompatibilityAgentId,
+  tryResolveLegacyDataOwnerAgentId,
+} from "../agents/agent-scope-config.js";
 import { WorktreeGcProgress } from "../agents/worktrees/gc-progress.js";
 import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
 import { managedWorktrees, WORKTREE_GC_INTERVAL_MS } from "../agents/worktrees/service.js";
@@ -7,6 +14,8 @@ import type {
   ManagedWorktreeGcReceipt,
   ManagedWorktreeGcResult,
 } from "../agents/worktrees/types.js";
+import { getRuntimeConfigSnapshotMetadata } from "../config/runtime-snapshot.js";
+import { listConfiguredSessionStoreAgentIds } from "../config/sessions/targets-configured-agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
@@ -22,6 +31,30 @@ type MaintenanceOwner = {
   stop: () => Promise<void>;
 };
 const owners = new WeakMap<() => OpenClawConfig, MaintenanceOwner>();
+
+function captureCleanupInputs(config: OpenClawConfig) {
+  const defaults = config.agents?.defaults;
+  return {
+    worktreeRoot: config.worktreeRoot,
+    worktreeMaxCount: config.worktreeMaxCount,
+    sessionStore: config.session?.store,
+    mainKey: config.session?.mainKey,
+    sessionScope: config.session?.scope,
+    agentIds: listAgentIds(config),
+    compatibilityOwner: tryResolveLegacyCompatibilityAgentId(config),
+    legacyDataOwner: tryResolveLegacyDataOwnerAgentId(config),
+    sessionStoreOwner: defaults?.sessionStore?.agentId,
+    storeAgentIds: listConfiguredSessionStoreAgentIds(config),
+    workspace: defaults?.workspace,
+    sandboxMode: defaults?.sandbox?.mode,
+    agents: listAgentEntries(config).map(({ id, workspace, agentDir, sandbox }) => ({
+      id,
+      workspace,
+      agentDir,
+      sandboxMode: sandbox?.mode,
+    })),
+  };
+}
 
 /** Hourly and requested cleanup share a cursor, admission, progress, and shutdown drain. */
 export function startWorktreeMaintenance(params: {
@@ -63,6 +96,9 @@ export function startWorktreeMaintenance(params: {
         return structuredClone(receipt);
       }
       const config = params.getRuntimeConfig();
+      const cleanupInputs = captureCleanupInputs(config);
+      let checkedConfig = config;
+      let checkedPublication = getRuntimeConfigSnapshotMetadata();
       const current: ManagedWorktreeGcReceipt = {
         ...new WorktreeGcProgress().result,
         jobId: randomUUID(),
@@ -74,8 +110,15 @@ export function startWorktreeMaintenance(params: {
       receipt = current;
       const assertCurrent = () => {
         assertActive();
-        if (params.getRuntimeConfig() !== config) {
-          throw new Error("Worktree cleanup canceled because its runtime configuration changed");
+        const nextConfig = params.getRuntimeConfig();
+        const publication = getRuntimeConfigSnapshotMetadata();
+        // Recheck once per publication, including a republished object edited in place.
+        if (nextConfig !== checkedConfig || publication !== checkedPublication) {
+          if (!isDeepStrictEqual(captureCleanupInputs(nextConfig), cleanupInputs)) {
+            throw new Error("Worktree cleanup canceled because its runtime configuration changed");
+          }
+          checkedConfig = nextConfig;
+          checkedPublication = publication;
         }
       };
       inOwnerContext(() =>

@@ -64,7 +64,7 @@ export async function clearRemovedSessionAuthProfiles(params: {
               registry.assertCurrent();
               owner.assertCurrent();
             };
-            const entries = await owner.readEntries({
+            const { entries } = await owner.readEntries({
               agentId: database.agentId,
               storePath: database.path,
               env: inventory.env,
@@ -106,6 +106,7 @@ export async function clearRemovedSessionAuthProfiles(params: {
               // Retire each account independently so reconnecting one cannot retain
               // another deleted account in fallback state.
               for (const profileId of profileIds) {
+                const reconnected = new Error("Removed account was reconnected before cleanup");
                 await patchSessionEntryTarget(
                   {
                     agentId,
@@ -151,11 +152,20 @@ export async function clearRemovedSessionAuthProfiles(params: {
                     skipMaintenance: true,
                     // Reconnect can reuse an ID while discovery/patch preparation awaits.
                     // Do not clear the new credential's selection at the final commit.
-                    shouldCommit: () =>
-                      !findPersistedAuthProfileCredential({ agentDir, profileId }),
-                    assertCommitAllowed: assertCurrent,
+                    workerGuard: {
+                      assertCurrent: () => {
+                        assertCurrent();
+                        if (findPersistedAuthProfileCredential({ agentDir, profileId })) {
+                          throw reconnected;
+                        }
+                      },
+                    },
                   },
-                );
+                ).catch((error: unknown) => {
+                  if (error !== reconnected) {
+                    throw error;
+                  }
+                });
               }
             }
           },

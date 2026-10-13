@@ -544,7 +544,7 @@ describe("stuck session diagnostics threshold", () => {
         reason: "repeated_model_requests_without_progress",
         repeatedRequestNoProgressAgeMs: stuckSessionAbortMs,
         activeWorkKind,
-        activeToolAgeMs: activeWorkKind === "tool_call" ? stuckSessionAbortMs : undefined,
+        activeToolAgeMs: activeWorkKind === "tool_call" ? (stuckSessionAbortMs * 4) / 3 : undefined,
       });
       expect(recoverStuckSession).toHaveBeenCalledTimes(1);
       expectRecoveryCall(recoverStuckSession, {

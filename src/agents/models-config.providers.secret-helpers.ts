@@ -221,37 +221,24 @@ export function normalizeConfiguredProviderApiKey(params: {
     ? resolveConfigSecretRef(params.sourceInput)
     : parseSecretRef(configuredApiKey, params.secretDefaults);
 
+  let apiKey: string;
   if (configuredApiKeyRef && configuredApiKeyRef.id.trim()) {
     // Non-env secret refs intentionally become markers; loaders can route without exposing values.
-    const marker =
+    apiKey =
       configuredApiKeyRef.source === "env"
         ? configuredApiKeyRef.id.trim()
         : resolveNonEnvSecretRefApiKeyMarker(configuredApiKeyRef.source);
     params.secretRefManagedProviders?.add(params.providerKey);
-    if (params.provider.apiKey === marker) {
+  } else {
+    if (typeof configuredApiKey !== "string") {
       return params.provider;
     }
-    return {
-      ...params.provider,
-      apiKey: marker,
-    };
+    apiKey = configuredApiKey.trim();
+    if (isNonSecretApiKeyMarker(apiKey)) {
+      params.secretRefManagedProviders?.add(params.providerKey);
+    }
   }
-
-  if (typeof configuredApiKey !== "string") {
-    return params.provider;
-  }
-
-  const normalizedConfiguredApiKey = configuredApiKey.trim();
-  if (isNonSecretApiKeyMarker(normalizedConfiguredApiKey)) {
-    params.secretRefManagedProviders?.add(params.providerKey);
-  }
-  if (normalizedConfiguredApiKey === params.provider.apiKey) {
-    return params.provider;
-  }
-  return {
-    ...params.provider,
-    apiKey: normalizedConfiguredApiKey,
-  };
+  return apiKey === params.provider.apiKey ? params.provider : { ...params.provider, apiKey };
 }
 
 /** Rewrites literal env-derived keys back to env variable names when provenance is clear. */

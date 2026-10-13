@@ -25,6 +25,8 @@ export const postInstallAdvisory: NonNullable<DoctorHealthFlowContext["postInsta
 
 const mocks = vi.hoisted(() => ({
   outro: vi.fn(),
+  confirm: vi.fn(async () => true),
+  lint: vi.fn<(typeof import("../commands/doctor-lint.js"))["runDoctorLintCli"]>(),
   config: vi.fn<() => OpenClawConfig>(),
   runContributions: vi.fn<(ctx: DoctorHealthFlowContext) => Promise<void>>(),
   writeUpdatePostInstallDoctorResult: vi.fn(),
@@ -124,6 +126,8 @@ vi.mock("@clack/prompts", () => ({
   intro: vi.fn(),
   note: vi.fn(),
   outro: mocks.outro,
+  confirm: mocks.confirm,
+  select: vi.fn(),
 }));
 
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
@@ -210,6 +214,11 @@ vi.mock("../commands/doctor-update.js", () => ({
   maybeOfferUpdateBeforeDoctor: async () => ({ updated: false }),
 }));
 
+vi.mock("../commands/doctor-lint.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/doctor-lint.js")>()),
+  runDoctorLintCli: mocks.lint,
+}));
+
 vi.mock("../commands/doctor-ui.js", () => ({
   maybeRepairUiProtocolFreshness: async () => undefined,
 }));
@@ -227,8 +236,13 @@ vi.mock("../commands/doctor-platform-notes.js", () => ({
   noteStartupOptimizationHints: () => undefined,
 }));
 
+// mock-isolation: Keep config preparation outside service-lifecycle fixtures.
 vi.mock("../commands/doctor-config-flow.js", () => ({
-  loadAndMaybeMigrateDoctorConfig: async () => ({ cfg: mocks.config(), shouldWriteConfig: true }),
+  loadAndMaybeMigrateDoctorConfig: async () => ({
+    cfg: mocks.config(),
+    shouldWriteConfig: true,
+    [Symbol.asyncDispose]: async () => undefined,
+  }),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => ({
@@ -440,9 +454,7 @@ export function registerDoctorConfigReceiptTests(
     async (advisory) => {
       mocks.runContributions.mockImplementation(async (ctx) => {
         ctx.configResult.warnings = ['Plugin "fixture" config repair failed; config preserved.'];
-        await createDoctorHealthContribution({
-          id: "doctor:fixture-warning",
-          label: "Fixture warning",
+        await createDoctorHealthContribution("doctor:fixture-warning", "Fixture warning", {
           healthChecks: {
             description: "Optional fixture maintenance",
             detect: async () => [

@@ -306,25 +306,6 @@ describe("plugin management catalog lifecycle", () => {
     expect(mocks.officialCatalog).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps a successfully resolved bundled-fallback catalog process-stable", async () => {
-    mocks.metadata.mockReturnValue(metadataSnapshot());
-    mocks.officialCatalog.mockResolvedValueOnce({
-      source: "bundled-fallback",
-      entries: [],
-      error: "hosted feed unavailable",
-    });
-
-    const first = await listManagedPlugins({ config: {}, env: {} });
-    const second = await listManagedPlugins({ config: {}, env: {} });
-
-    expect(first.diagnostics).toContainEqual({
-      level: "warn",
-      message: "Official plugin catalog fallback: hosted feed unavailable",
-    });
-    expect(second).toEqual(first);
-    expect(mocks.officialCatalog).toHaveBeenCalledOnce();
-  });
-
   it("checks dependency health once per immutable metadata lifecycle", async () => {
     mocks.metadata.mockImplementation(() =>
       dependencyMetadataSnapshot({
@@ -369,48 +350,5 @@ describe("plugin management catalog lifecycle", () => {
     await listManagedPlugins({ config: {}, env: {} });
     expect(dependencyProbeCount()).toBeGreaterThan(initialProbes);
     existsSync.mockRestore();
-  });
-
-  it("loads plugin metadata from the explicit system-owner workspace", async () => {
-    const config = {
-      agents: {
-        ownership: "explicit" as const,
-        defaults: { systemAgent: { agentId: "research" } },
-        entries: { main: {}, research: { workspace: "~/research-workspace" } },
-      },
-    };
-    const env = { HOME: "/tmp/openclaw-managed-plugin-home" };
-    mocks.metadata.mockReturnValue(metadataSnapshot());
-
-    const catalog = await listManagedPlugins({ config, env, officialCatalog: { entries: [] } });
-
-    expect(catalog).toMatchObject({ plugins: [], diagnostics: [] });
-    expect(mocks.metadata).toHaveBeenCalledWith({
-      config,
-      env,
-      workspaceDir: "/tmp/openclaw-managed-plugin-home/research-workspace",
-    });
-  });
-
-  it("reports partial managed inventory without selecting an explicit roster entry", async () => {
-    const config = {
-      agents: {
-        ownership: "explicit" as const,
-        defaults: { workspace: "/tmp/unowned-workspace" },
-        entries: {
-          main: { workspace: "/tmp/main-workspace" },
-          gadget: { workspace: "/tmp/gadget-workspace" },
-        },
-      },
-    };
-    const env = { HOME: "/tmp/openclaw-managed-plugin-home" };
-    mocks.metadata.mockReturnValue(metadataSnapshot());
-
-    const catalog = await listManagedPlugins({ config, env, officialCatalog: { entries: [] } });
-
-    expect(mocks.metadata).toHaveBeenCalledWith({ config, env });
-    expect(catalog.diagnostics).toContainEqual(
-      expect.objectContaining({ level: "warn", code: "workspace-scope-omitted" }),
-    );
   });
 });

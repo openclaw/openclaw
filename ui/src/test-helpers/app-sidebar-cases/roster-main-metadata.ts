@@ -13,7 +13,7 @@ import {
 describe("AppSidebar main-chat metadata", () => {
   it("keeps main metadata and live PR snapshots on the header without an empty collapse control", async () => {
     const mainKey = "agent:working:main";
-    const { sidebar, request, gatewayHarness } = await mountRoster(roster, [
+    const { sidebar, gatewayHarness } = await mountRoster(roster, [
       session("working", 10, {
         owner: { actor: owners[0] },
         worktree: { id: "wt-main", branch: "feature/header", repoRoot: "/repo" },
@@ -24,12 +24,6 @@ describe("AppSidebar main-chat metadata", () => {
         unread: true,
       }),
     ]);
-    const originalRequest = request.getMockImplementation()!;
-    request.mockImplementation((method, ...args) =>
-      method === SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD
-        ? Promise.resolve({ subscribed: true })
-        : originalRequest(method, ...args),
-    );
     const hello = gatewayHarness.gateway.snapshot.hello!;
     gatewayHarness.publish({
       hello: {
@@ -47,24 +41,20 @@ describe("AppSidebar main-chat metadata", () => {
     };
     sidebar.sidebarAgentsMode = "roster";
     await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
-    await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith(
-        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-        expect.anything(),
-        expect.anything(),
-      ),
-    );
     const header = sidebar.querySelector(
       '[data-agent-group="working"] .sidebar-agent-roster__header',
     )!;
-    expect(header.querySelector(".session-owner-chip")).not.toBeNull();
-    expect(header.querySelector(".session-row-draft-indicator")).not.toBeNull();
-    expect(header.querySelector(".session-row-badge--draft")).not.toBeNull();
-    expect(header.querySelector('[aria-label="2 messages need attention"]')).not.toBeNull();
-    expect(header.querySelectorAll(".session-glyph__ring--queued")).toHaveLength(1);
-    expect(header.querySelectorAll('[aria-label="Unread"]')).toHaveLength(1);
-    expect(header.querySelector("[data-agent-collapse]")).toBeNull();
-    expect(sessionKeys(sidebar)).toEqual([]);
+    await vi.waitFor(() => {
+      // Upstream #168575 makes the agent avatar the header’s only identity.
+      expect(header.querySelector(".session-owner-chip")).toBeNull();
+      expect(header.querySelector(".session-row-draft-indicator")).not.toBeNull();
+      expect(header.querySelector(".session-row-badge--draft")).not.toBeNull();
+      expect(header.querySelector('[aria-label="2 messages need attention"]')).not.toBeNull();
+      expect(header.querySelectorAll(".session-glyph__ring--queued")).toHaveLength(1);
+      expect(header.querySelectorAll('[aria-label="Unread"]')).toHaveLength(1);
+      expect(header.querySelector("[data-agent-collapse]")).toBeNull();
+      expect(sessionKeys(sidebar)).toEqual([]);
+    });
     await sidebar.updateComplete;
     // These snapshots arrive while a different agent is selected. Header decoration
     // must watch Home itself, not depend on a duplicate main row or opening its chat.

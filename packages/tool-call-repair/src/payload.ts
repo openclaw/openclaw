@@ -25,13 +25,11 @@ import {
 
 /** Parsed standalone plain-text tool call block with source offsets for repair. */
 export type PlainTextToolCallBlock = {
-  /** Parsed JSON arguments object. */
   arguments: Record<string, unknown>;
   /** Exclusive end offset of the parsed block. */
   end: number;
   /** Tool name parsed from bracket, Harmony, or XML-ish syntax. */
   name: string;
-  /** Original text slice that produced this block. */
   raw: string;
   /** Inclusive start offset of the parsed block. */
   start: number;

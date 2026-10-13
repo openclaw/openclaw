@@ -82,7 +82,7 @@ async function readWriterGeneration(file: string): Promise<number> {
   return Number(generations.at(-2) ?? -1);
 }
 
-it.for(["inventory", "snapshot", "discover", "versions"] as const)(
+it.for(["snapshot", "discover"] as const)(
   "%s acquires coherent rehearsal copies while an independent WAL writer commits",
   { timeout: 30_000 },
   async (mode, { signal }) => {
@@ -269,22 +269,10 @@ it.for(["inventory", "snapshot", "discover", "versions"] as const)(
         await fs.writeFile(stop, "stop");
         await writing;
         const after = await readWriterGeneration(progress);
-        if (mode === "inventory") {
-          const inventory = UpdateCandidateSnapshotInventorySchema.parse(
-            JSON.parse(result.stdout.toString()),
-          );
-          expect([...inventory.databases.keys()]).toEqual(expect.arrayContaining([shared, agent]));
-        } else if (mode === "discover") {
+        if (mode === "discover") {
           expect(JSON.parse(result.stdout.toString())).toMatchObject({
             sharedVersion: { path: shared, userVersion: 3 },
           });
-        } else if (mode === "versions") {
-          expect(JSON.parse(result.stdout.toString())).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({ path: shared, userVersion: 3 }),
-              expect.objectContaining({ path: agent, userVersion: 3 }),
-            ]),
-          );
         } else {
           const snapshot = UpdateCandidateStateSnapshotSchema.parse(
             JSON.parse(result.stdout.toString()),

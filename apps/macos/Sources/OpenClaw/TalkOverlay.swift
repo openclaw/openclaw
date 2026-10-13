@@ -22,7 +22,6 @@ final class TalkOverlayController {
     var model = Model()
     private var window: NSPanel?
     private var hostingView: NSHostingView<TalkOverlayView>?
-    private let screenInset: CGFloat = 0
     @ObservationIgnored private var transitionID = UUID()
     @ObservationIgnored let state: AppVoiceRuntime.State
     @ObservationIgnored private let presentation: Presentation
@@ -144,8 +143,8 @@ final class TalkOverlayController {
         let size = NSSize(width: Self.overlaySize, height: Self.overlaySize)
         let visible = screen.visibleFrame
         let origin = CGPoint(
-            x: visible.maxX - size.width - self.screenInset,
-            y: visible.maxY - size.height - self.screenInset)
+            x: visible.maxX - size.width,
+            y: visible.maxY - size.height)
         return NSRect(origin: origin, size: size)
     }
 }

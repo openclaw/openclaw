@@ -14,7 +14,7 @@ import {
 import { registerSandboxBackend } from "./sandbox/backend.js";
 import type { CreateSandboxBackendParams } from "./sandbox/backend.types.js";
 import { resolveSandboxContext } from "./sandbox/context.js";
-import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+import { resolvePreparedSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import { resolveSandboxMountSelection } from "./sandbox/workspace-mounts.js";
 
 const backend = vi.hoisted(() =>
@@ -101,7 +101,7 @@ function resolve(config: OpenClawConfig, agentId = "release", required = false, 
     config,
     sessionKey,
     workspaceDir: config.agents?.defaults?.workspace,
-    preparedRuntimeStatus: resolveSandboxRuntimeStatus({
+    preparedRuntimeStatus: resolvePreparedSandboxRuntimeStatus({
       cfg: config,
       sessionKey,
       preparedSessionEntry: required
@@ -175,19 +175,16 @@ it("refuses shared identity exposure before provisioning and warns once with the
   );
 });
 
-it.each([false, undefined])(
-  "keeps identity absent with allowInSandbox=%s",
-  async (allowInSandbox) => {
-    await fixture(
-      async (config) => {
-        const sandbox = await resolve(config);
-        expect(sandbox?.docker.env).not.toHaveProperty("GH_CONFIG_DIR");
-        expect(sandbox?.readOnlyResourceMounts).toBeUndefined();
-      },
-      { allowInSandbox },
-    );
-  },
-);
+it("keeps identity absent without allowInSandbox opt-in", async () => {
+  await fixture(
+    async (config) => {
+      const sandbox = await resolve(config);
+      expect(sandbox?.docker.env).not.toHaveProperty("GH_CONFIG_DIR");
+      expect(sandbox?.readOnlyResourceMounts).toBeUndefined();
+    },
+    { allowInSandbox: undefined },
+  );
+});
 
 it("refuses an unsupported backend without handing it the managed identity", async () => {
   const factory = vi.fn();

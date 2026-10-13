@@ -96,7 +96,7 @@ export function holdConversationWriterForTest(scope: PreparedConversationRegistr
   return { entered: Promise.race([entered.promise, finished]), release };
 }
 
-export function createConversationDeliveryTestStore(agentId = "main") {
+export async function createConversationDeliveryTestStore(agentId = "main") {
   const dirs = createTempDirTracker();
   const agentDir = path.join(dirs.make("openclaw-gateway-conversation-"), "agents", agentId);
   const scope = { agentId, storePath: path.join(agentDir, "sessions", "sessions.json") };
@@ -106,7 +106,9 @@ export function createConversationDeliveryTestStore(agentId = "main") {
     );
     dirs.cleanup();
   });
-  registerConversationAddresses(scope, [{ ...conversation, deliveryTarget: conversation.target }]);
+  await registerConversationAddresses(scope, [
+    { ...conversation, deliveryTarget: conversation.target },
+  ]);
   return {
     scope,
     config: { session: { store: scope.storePath } },

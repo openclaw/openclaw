@@ -1,7 +1,3 @@
-/**
- * Anthropic Vertex stream runtime. It constructs Vertex SDK clients and adapts
- * OpenClaw stream options for the shared Anthropic Messages transport.
- */
 import { AnthropicVertex as AnthropicVertexSdk } from "@anthropic-ai/vertex-sdk";
 import { GoogleAuth, type GoogleAuthOptions } from "google-auth-library";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
@@ -206,7 +202,6 @@ function resolveAnthropicVertexSdkBaseUrl(baseUrl?: string): string | undefined 
   return trimmed;
 }
 
-/** Create an Anthropic Vertex stream function from model metadata and env. */
 export function createAnthropicVertexStreamFnForModel(
   model: { baseUrl?: string },
   env: NodeJS.ProcessEnv = process.env,

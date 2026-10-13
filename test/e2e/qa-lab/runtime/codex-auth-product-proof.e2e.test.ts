@@ -316,14 +316,22 @@ describe("Codex auth product proof", () => {
       expect(turnStartIndex).toBeGreaterThan(threadStartIndex);
       const completedTurn = await waitForAssistantHistory(instance, PRODUCT_OUTPUT);
 
-      const beforeUsage = appServerLog.read().length;
-      const status = await instance.cli(["status", "--usage", "--json", "--timeout", "60000"], {
-        timeoutMs: 120_000,
-      });
+      const usageRequestLog = instance.state.path("codex-auth-usage-app-server.jsonl");
+      const usageLog = createJsonlRequestTailer<AppServerLogEntry>(usageRequestLog);
+      // The running Gateway keeps its original log, including background catalog reads.
+      const cliEnv = instance.env;
+      cliEnv.OPENCLAW_QA_CODEX_AUTH_APP_SERVER_LOG = usageRequestLog;
+      const status = await instance
+        .cli(["status", "--usage", "--json", "--timeout", "60000"], {
+          timeoutMs: 120_000,
+        })
+        .finally(() => {
+          cliEnv.OPENCLAW_QA_CODEX_AUTH_APP_SERVER_LOG = requestLog;
+        });
       expect(status.code, status.stderr).toBe(0);
       expect(status.stdout).toContain("qa-codex-account@example.com");
 
-      const usageEntries = appServerLog.read().slice(beforeUsage);
+      const usageEntries = usageLog.read();
       const usageLoginIndex = usageEntries.findIndex(
         (request) => request.method === "account/login/start",
       );

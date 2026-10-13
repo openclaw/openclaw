@@ -1,5 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -551,10 +552,10 @@ suite.define(() => {
           ).toBe(false);
           const panel = page.locator("section.bp");
           if (firstOpen === "panel") {
-            await page.locator(".chat-side-panel-toggle").click();
+            await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
             await panel.waitFor({ state: "hidden" });
             const beforePanelOpen = (await gateway.getRequests("browser.request")).length;
-            await page.locator(".chat-side-panel-toggle").click();
+            await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
             await panel.locator('.bp-shot[alt="Node tab"]').waitFor();
             expect(await panel.locator(".bp-profile").textContent()).toBe("work");
             const panelOpenRequests = (await gateway.getRequests("browser.request")).slice(

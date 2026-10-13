@@ -9,13 +9,11 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
-import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
 import {
   readSessionCreationSnapshotInDatabase,
   assertSessionCreationLabelAvailable,
   type SessionCreationSnapshot,
 } from "./session-accessor.sqlite-creation-read.js";
-import { hasPreparedNativeSessionDeletion } from "./session-accessor.sqlite-deletion.js";
 import {
   withSessionEntryCreationPublication,
   runWithSessionEntryCreationPublication,
@@ -25,11 +23,9 @@ import { applySessionEntryCreationReplacement } from "./session-accessor.sqlite-
 import {
   initializeSessionTranscriptInWorker,
   prepareSessionEntryReplacementDatabase,
-  withSessionEntryWorker,
 } from "./session-accessor.sqlite-replacement-worker.js";
 import {
   runExclusiveSqliteSessionWrite,
-  resolveSqliteTranscriptArchiveDirectory,
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
   type ResolvedSqliteScope,
@@ -43,8 +39,8 @@ import type {
   SessionEntryCreateWithTranscriptResult,
   SessionEntryCommitContext,
 } from "./session-accessor.types.js";
-import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
-import { createIncognitoSessionEntryWithTranscript } from "./session-incognito-entry-creation.js";
+import { createSessionActorEntryWithTranscriptInScope } from "./session-actor-entry-adapter.js";
+import { publishSessionStateArchivesInWorker } from "./session-archive-publication.js";
 import { retainSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
 type CreationScope = ResolvedSqliteScope & { path: string; env: NodeJS.ProcessEnv };
@@ -65,15 +61,16 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
     | SessionEntryCreateWithTranscriptPrepareResult<TError>,
   options: SessionEntryCreateWithTranscriptOptions,
 ): Promise<SessionEntryCreateWithTranscriptResult<TError>> {
-  const binding = captureIncognitoSessionBinding({ ...scope, storePath: scope.path });
-  if (binding) {
-    return createIncognitoSessionEntryWithTranscript(binding, scope, createEntry, options);
+  const memory = await createSessionActorEntryWithTranscriptInScope(
+    { ...scope, storePath: scope.path },
+    createEntry,
+    options,
+  );
+  if (memory) {
+    return memory;
   }
   const databaseOptions = { ...toDatabaseOptions(scope), path: scope.path };
-  const useWorker =
-    isMainThread &&
-    supportsOpenClawAgentDatabaseExecution(databaseOptions) &&
-    !hasPreparedNativeSessionDeletion();
+  const useWorker = isMainThread && supportsOpenClawAgentDatabaseExecution(databaseOptions);
   const retained = useWorker ? retainSessionHistoryWorkerDatabase(databaseOptions) : undefined;
   try {
     let source: CreationSource;
@@ -88,10 +85,15 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
         });
       let snapshot = (await read()).creation;
       if (!snapshot) {
-        await prepareSessionEntryReplacementDatabase(databaseOptions, () => {
-          reader.assertCurrent();
-          options.commitGuard?.();
-        });
+        await prepareSessionEntryReplacementDatabase(
+          databaseOptions,
+          () => {
+            reader.assertCurrent();
+            options.commitGuard?.();
+          },
+          undefined,
+          options.followRegistration,
+        );
         snapshot = (await read()).creation;
       }
       if (!snapshot) {
@@ -280,6 +282,10 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
             storePath: scope.path,
             env: scope.env,
             sessionKey: normalizedKey,
+            creationSnapshot: {
+              ...source.snapshot,
+              databaseIdentity: source.databaseIdentity,
+            },
             previousSessionKeys: legacyKeys,
             entry: created.entry,
             assertCommitAllowed: assertCurrent,
@@ -312,7 +318,12 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
           throw error;
         }
         if (pendingArchiveRecovery) {
-          await publishCreationArchivesInWorker(scope, source.databaseIdentity, assertCurrent);
+          await publishSessionStateArchivesInWorker({
+            scope,
+            requested: [],
+            databaseIdentity: source.databaseIdentity,
+            assertCurrent,
+          });
         }
         return { ok: true, entry: created.entry, sessionFile: normalizedKey };
       },
@@ -320,47 +331,4 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
   } finally {
     retained?.release();
   }
-}
-
-async function publishCreationArchivesInWorker(
-  scope: CreationScope,
-  databaseIdentity: string,
-  assertCurrent: () => void,
-) {
-  const databaseOptions = { ...toDatabaseOptions(scope), path: scope.path };
-  const run = <T>(
-    execute: (
-      worker: import("../../state/openclaw-agent-execution-contract.js").AgentDatabaseExecutionScope,
-    ) => Promise<T>,
-  ) =>
-    withSessionEntryWorker(
-      databaseOptions,
-      databaseIdentity,
-      assertCurrent,
-      async (execution, source) => {
-        const result = await execution.runExisting(source, async (worker) => ({
-          value: await execute(worker),
-        }));
-        if (!result) {
-          throw new Error("Session database disappeared before archive publication");
-        }
-        return result.value;
-      },
-    );
-  await publishSessionStateArchives({ ...scope, agentId: databaseOptions.agentId }, [], {
-    prepare: (requested) =>
-      run((worker) =>
-        worker.execute({
-          type: "session.archives.preparePublication",
-          input: { archiveDirectory: resolveSqliteTranscriptArchiveDirectory(scope), requested },
-        }),
-      ),
-    record: (results) =>
-      run((worker) =>
-        worker.execute({
-          type: "session.archives.recordPublication",
-          input: { results, nowMs: Date.now() },
-        }),
-      ),
-  });
 }

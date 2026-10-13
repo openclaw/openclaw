@@ -26,9 +26,14 @@ const {
 registerAgentCommandCompactionTestHooks();
 
 describe("agent command foreground completion", () => {
-  it.each(["none", "compaction", "memory"] as const)(
-    "retains the accepted preflight successor (abort=%s)",
-    async (abortStage) => {
+  it.each([
+    { abortStage: "none", preserveUserFacingSessionModelState: false },
+    { abortStage: "none", preserveUserFacingSessionModelState: true },
+    { abortStage: "compaction", preserveUserFacingSessionModelState: false },
+    { abortStage: "memory", preserveUserFacingSessionModelState: false },
+  ] as const)(
+    "retains the accepted preflight successor (abort=$abortStage, preserve=$preserveUserFacingSessionModelState)",
+    async ({ abortStage, preserveUserFacingSessionModelState }) => {
       const aborted = abortStage !== "none";
       const sessionId = "preflight-predecessor";
       const successorId = "preflight-successor";
@@ -101,6 +106,7 @@ describe("agent command foreground completion", () => {
         sessionId,
         sessionKey,
         oneShotCliRun: true,
+        preserveUserFacingSessionModelState,
         abortSignal: controller.signal,
         onSessionIdChanged,
       });

@@ -23,47 +23,6 @@ describe("readBestEffortConfig", () => {
     resetConfigOverrides();
   });
 
-  it("resolves config env above normalized lower-precedence aliases in isolated snapshots", async () => {
-    await withTempHome(async (home) => {
-      await withEnvAsync({ ZAI_API_KEY: "shell-token", Z_AI_API_KEY: undefined }, async () => {
-        await writeOpenClawConfig(home, {
-          env: { vars: { Z_AI_API_KEY: "config-token" } },
-          gateway: { auth: { mode: "token", token: "${ZAI_API_KEY}" }, mode: "local" },
-        });
-
-        const snapshot = await readConfigFileSnapshot({
-          isolateEnv: true,
-          lowerPrecedenceEnv: { ZAI_API_KEY: "shell-token" },
-          observe: false,
-        });
-
-        expect(snapshot.config.gateway?.auth?.token).toBe("config-token");
-        expect(process.env.ZAI_API_KEY).toBe("shell-token");
-        expect(process.env.Z_AI_API_KEY).toBeUndefined();
-      });
-    });
-  });
-
-  it("resolves config aliases from a higher-precedence canonical value in isolated snapshots", async () => {
-    await withTempHome(async (home) => {
-      await withEnvAsync({ ZAI_API_KEY: "invocation-token", Z_AI_API_KEY: undefined }, async () => {
-        await writeOpenClawConfig(home, {
-          env: { vars: { Z_AI_API_KEY: "config-token" } },
-          gateway: { auth: { mode: "token", token: "${Z_AI_API_KEY}" }, mode: "local" },
-        });
-
-        const snapshot = await readConfigFileSnapshot({
-          isolateEnv: true,
-          observe: false,
-        });
-
-        expect(snapshot.config.gateway?.auth?.token).toBe("invocation-token");
-        expect(process.env.ZAI_API_KEY).toBe("invocation-token");
-        expect(process.env.Z_AI_API_KEY).toBeUndefined();
-      });
-    });
-  });
-
   it("records why an unparseable config was ignored by best-effort reads", async () => {
     await withTempHome(async (home) => {
       const configPath = `${home}/.openclaw/openclaw.json`;

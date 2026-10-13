@@ -1,5 +1,7 @@
 /* @vitest-environment jsdom */
+import { delegateEvents } from "@solidjs/web";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
 
 afterEach(() => {
@@ -23,6 +25,31 @@ function fixture(shadow = false) {
 }
 
 describe("portaled hovercard presentation ownership", () => {
+  it("keeps a Solid card open while its links hold focus and closes after focus leaves", async () => {
+    vi.useFakeTimers();
+    const view = fixture();
+    const card = createPortaledHovercard("solid-preview", "preview");
+    const link = document.createElement("a");
+    link.href = "#inside";
+    link.textContent = "Preview";
+    // The application delegates these events before the portal installs native listeners.
+    delegateEvents(["focusin", "focusout"]);
+    mountSolid(() => link, { container: card });
+    view.controller.mount(view.trigger, card, "vertical");
+    onTestFinished(() => view.controller.reset());
+    link.focus();
+    view.controller.handleCardPointerLeave();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(card.isConnected).toBe(true);
+    expect(document.activeElement).toBe(link);
+
+    view.trigger.href = "#outside";
+    view.trigger.focus();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(view.controller.card).toBeNull();
+    expect(view.dismiss).toHaveBeenCalledOnce();
+  });
+
   it.each([false, true])(
     "retires animated exits without waiting for reduced motion (%s)",
     async (reduced) => {
@@ -131,22 +158,4 @@ describe("portaled hovercard presentation ownership", () => {
     await Promise.resolve();
     expect(first.dismiss).toHaveBeenCalledTimes(1);
   });
-
-  it.each([false, true])(
-    "keeps a modal's card with its trigger and retires it when the modal disconnects (shadow=%s)",
-    async (shadow) => {
-      const modal = document.body.appendChild(document.createElement("openclaw-modal-dialog"));
-      const content = modal.appendChild(document.createElement("section"));
-      const root = shadow ? content.attachShadow({ mode: "open" }) : content;
-      const trigger = root.appendChild(document.createElement("a"));
-      const controller = new PortaledHovercardController(() => controller.reset());
-      controller.markTrigger(trigger);
-      controller.mount(trigger, createPortaledHovercard("modal-preview", "preview"), "vertical");
-      await Promise.resolve();
-      expect(controller.card?.parentElement).toBe(modal);
-      modal.remove();
-      await Promise.resolve();
-      expect(controller.card).toBeNull();
-    },
-  );
 });

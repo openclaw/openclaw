@@ -372,7 +372,7 @@ describe("heartbeat runner busy ownership", () => {
     heartbeatCase(async ({ cfg, storePath, seed, run, replySpy }) => {
       const sessionKey = await seed();
       const text = "Exec completed (late-run, code 0) :: result";
-      enqueueSystemEvent(text, { sessionKey, contextKey: "exec-event" });
+      enqueueSystemEvent(text, { sessionKey, contextKey: "exec:late-run" });
       replySpy.mockImplementationOnce(async (ctx, options: InternalGetReplyOptions | undefined) => {
         const operation = options?.replyOperation;
         if (!operation) {

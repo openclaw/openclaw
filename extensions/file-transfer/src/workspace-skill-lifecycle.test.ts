@@ -9,30 +9,16 @@ import {
   createTestPluginApi,
   createTestPluginServiceScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { registerNodeWorkspaces } from "./workspace-service.js";
 import { createNodeWorkspaceTestTransport } from "./workspace-service.test-support.js";
 
 vi.mock("./shared/audit.js", () => ({ appendFileTransferAudit: vi.fn() }));
-
-vi.mock("openclaw/plugin-sdk/agent-workspace-runtime", async (importOriginal) => {
-  const original =
-    await importOriginal<typeof import("openclaw/plugin-sdk/agent-workspace-runtime")>();
-  const { fileURLToPath } = await import("node:url");
-  // Source children run outside the checkout. Keep ESM dependencies native and
-  // resolve source aliases with the repository tsconfig, as other source fixtures do.
-  const register = `import { register } from ${JSON.stringify(import.meta.resolve("tsx/esm/api"))}; register({ tsconfig: ${JSON.stringify(fileURLToPath(new URL("../../../tsconfig.json", import.meta.url)))} });`;
-  return {
-    ...original,
-    resolveWorkspaceWorkerArgv(kind: "memory" | "skills") {
-      const argv = original.resolveWorkspaceWorkerArgv(kind);
-      return argv[0] === "--import"
-        ? ["--import", `data:text/javascript,${encodeURIComponent(register)}`, ...argv.slice(2)]
-        : argv;
-    },
-  };
-});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let local: string;
@@ -91,6 +77,7 @@ beforeEach(async () => {
       service = value;
     },
   });
+  setRuntimeConfigSnapshot(api.config);
   registerNodeWorkspaces(api);
 });
 afterEach(async () => {
@@ -98,7 +85,11 @@ afterEach(async () => {
   try {
     await service.stop?.(context());
   } finally {
-    await scheduler.stop();
+    try {
+      await scheduler.stop();
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
   }
 });
 function skillRequest() {
@@ -219,7 +210,7 @@ it("publishes, tracks, updates and removes Skills on the paired host with Gatewa
       workspaceDir: local,
       slug: "lifecycle-proof",
     }),
-  ).rejects.toThrow("canonical");
+  ).rejects.toThrow("resolved location");
   await fs.unlink(targetDir);
   await fs.rename(moved, targetDir);
 

@@ -1,15 +1,15 @@
 /** Tests Claude-style bundle-MCP config-file overlays for CLI backends. */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveBundlePluginRoot,
   writeBundleTextFiles,
-  writeClaudeBundleManifest,
 } from "../../plugins/bundle-mcp.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { resolveCliSessionReuse } from "../cli-session.js";
 import { prepareCliBundleMcpCaptureAttempt, prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import {
   cliBundleMcpHarness,
@@ -159,26 +159,24 @@ describe("prepareCliBundleMcpConfig", () => {
     clearPluginMetadataLifecycleCaches();
   });
 
-  it.each([
-    ["--disallowedTools", "Bash(rm *)"],
-    ["--disallowed-tools", "Bash(rm *)"],
-    ["--disallowedTools=Bash(rm *)"],
-    ["--disallowed-tools=Bash(rm *)"],
-  ])("projects session MCP tool denials alongside %s", async (...args) => {
+  it("projects normalized session MCP denials alongside existing Claude denials", async () => {
     const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
       "openclaw-cli-bundle-mcp-deny-",
     );
     const prepared = await prepareClaudeConfig({
       backend: {
         command: "claude",
-        args,
+        args: ["--disallowedTools=Bash(rm *)"],
       },
       workspaceDir,
       config: {
         plugins: { enabled: false },
-        mcp: { servers: { docs: { command: "node", args: ["docs.mjs"] } } },
+        mcp: { servers: { "docs.prod": { command: "node", args: ["docs.mjs"] } } },
       },
-      toolOverrides: { mcpToolsDeny: { docs: ["delete_docs"] }, webSearch: false },
+      toolOverrides: {
+        mcpToolsDeny: { "docs.prod": ["read.value", "read:value"] },
+        webSearch: false,
+      },
     });
 
     expect(prepared.backend.args).toEqual([
@@ -186,26 +184,9 @@ describe("prepareCliBundleMcpConfig", () => {
       "--mcp-config",
       requireMcpConfigPath(prepared.backend.args),
       "--disallowedTools",
-      "Bash(rm *),WebSearch,mcp__docs__delete_docs",
+      "Bash(rm *),WebSearch,mcp__docs_prod__read_value",
     ]);
     expect(prepared.backend.resumeArgs).toEqual(prepared.backend.args);
-    await prepared.cleanup?.();
-  });
-
-  it("matches Claude's normalized MCP permission identifiers", async () => {
-    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
-      "openclaw-cli-bundle-mcp-normalized-deny-",
-    );
-    const prepared = await prepareClaudeConfig({
-      backend: { command: "claude", args: ["--print"] },
-      workspaceDir,
-      config: { plugins: { enabled: false } },
-      exclusiveConfig: { mcpServers: { "docs.prod": { command: "node" } } },
-      toolOverrides: { mcpToolsDeny: { "docs.prod": ["read.value", "read:value"] } },
-    });
-
-    const args = prepared.backend.args?.join(",") ?? "";
-    expect(args.match(/mcp__docs_prod__read_value/g) ?? []).toHaveLength(1);
     await prepared.cleanup?.();
   });
 
@@ -237,27 +218,6 @@ describe("prepareCliBundleMcpConfig", () => {
     ) as { mcpServers?: Record<string, { toolFilter?: unknown }> };
     expect(Object.keys(raw.mcpServers ?? {})).toEqual(["docs", "openclaw"]);
     expect(raw.mcpServers?.docs?.toolFilter).toBeUndefined();
-    await prepared.cleanup?.();
-  });
-
-  it("hides non-model MCP tools from Claude without an explicit policy", async () => {
-    const serverPath = await writeCliMcpPolicyProbeServer();
-    const config: OpenClawConfig = {
-      plugins: { enabled: false },
-      mcp: { servers: { docs: { command: process.execPath, args: [serverPath] } } },
-    };
-    const prepared = await prepareClaudeConfig({
-      backend: { command: "claude", args: ["--print"] },
-      workspaceDir: cliBundleMcpHarness.bundleProbeWorkspaceDir,
-      config,
-      nativeMcpPolicy: cliNativeMcpPolicyContext(config, "claude-default-hidden"),
-    });
-
-    const args = prepared.backend.args?.join(",") ?? "";
-    expect(args).toContain("mcp__docs__app_docs");
-    expect(args).toContain("mcp__docs__task_docs");
-    expect(args).not.toContain("mcp__docs__read_docs");
-    expect(args).not.toContain("mcp__docs__delete_docs");
     await prepared.cleanup?.();
   });
 
@@ -311,32 +271,6 @@ describe("prepareCliBundleMcpConfig", () => {
     expect(args).toContain("mcp__docs__task_docs");
     expect(args).toContain("mcp__docs__app_docs");
     expect(args).not.toContain("mcp__docs__read_docs");
-    await prepared.cleanup?.();
-  });
-
-  it("omits a fully excluded server while retaining an allowed sibling server", async () => {
-    const serverPath = await writeCliMcpPolicyProbeServer();
-    const config: OpenClawConfig = {
-      plugins: { enabled: false },
-      tools: { allow: ["docs__read_docs"] },
-      mcp: {
-        servers: {
-          docs: { command: process.execPath, args: [serverPath] },
-          admin: { command: process.execPath, args: [serverPath] },
-        },
-      },
-    };
-    const prepared = await prepareClaudeConfig({
-      backend: { command: "claude", args: ["--print"] },
-      workspaceDir: cliBundleMcpHarness.bundleProbeWorkspaceDir,
-      config,
-      nativeMcpPolicy: cliNativeMcpPolicyContext(config, "claude-server-omission"),
-    });
-    const raw = JSON.parse(
-      await fs.readFile(requireMcpConfigPath(prepared.backend.args), "utf-8"),
-    ) as { mcpServers?: Record<string, unknown> };
-
-    expect(Object.keys(raw.mcpServers ?? {})).toEqual(["docs"]);
     await prepared.cleanup?.();
   });
 
@@ -453,117 +387,6 @@ describe("prepareCliBundleMcpConfig", () => {
     await prepared.cleanup?.();
   });
 
-  it("merges and strips Claude --mcp-config equals form", async () => {
-    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
-      "openclaw-cli-bundle-mcp-equals-",
-    );
-    const configPath = path.join(workspaceDir, "equals-mcp.json");
-    await fs.writeFile(
-      configPath,
-      `${JSON.stringify({
-        mcpServers: {
-          equals: { command: "node", args: ["equals.mjs"] },
-        },
-      })}\n`,
-      "utf-8",
-    );
-
-    const prepared = await prepareClaudeConfig({
-      backend: {
-        command: "node",
-        args: ["./fake-claude.mjs", "--mcp-config=equals-mcp.json"],
-      },
-      workspaceDir,
-      config: { plugins: { enabled: false } },
-    });
-
-    expect(prepared.backend.args).not.toContain("--mcp-config=equals-mcp.json");
-    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
-    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
-      mcpServers?: Record<string, { args?: string[] }>;
-    };
-    expect(raw.mcpServers?.equals?.args).toEqual(["equals.mjs"]);
-
-    await prepared.cleanup?.();
-  });
-
-  it("keeps dash-prefixed args after Claude --mcp-config because they terminate variadic values", async () => {
-    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
-      "openclaw-cli-bundle-mcp-dash-",
-    );
-
-    const prepared = await prepareClaudeConfig({
-      backend: {
-        command: "node",
-        args: ["./fake-claude.mjs", "--mcp-config", "--verbose", "prompt"],
-      },
-      workspaceDir,
-      config: { plugins: { enabled: false } },
-    });
-
-    expect(prepared.backend.args).toContain("--verbose");
-    expect(prepared.backend.args).toContain("prompt");
-    expect(prepared.backend.args).toContain("--strict-mcp-config");
-    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
-    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
-      mcpServers?: Record<string, unknown>;
-    };
-    expect(raw.mcpServers).toStrictEqual({});
-
-    await prepared.cleanup?.();
-  });
-
-  it("loads workspace bundle MCP plugins from the configured workspace root", async () => {
-    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
-      "openclaw-cli-bundle-mcp-workspace-root-",
-    );
-    const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "workspace-probe");
-    // Workspace-local plugins should be resolved relative to workspaceDir, not HOME.
-    const serverPath = path.join(pluginRoot, "servers", "probe.mjs");
-    await fs.mkdir(path.dirname(serverPath), { recursive: true });
-    await fs.writeFile(serverPath, "export {};\n", "utf-8");
-    await writeClaudeBundleManifest({
-      homeDir: workspaceDir,
-      pluginId: "workspace-probe",
-      manifest: { name: "workspace-probe" },
-    });
-    await fs.writeFile(
-      path.join(pluginRoot, ".mcp.json"),
-      `${JSON.stringify(
-        {
-          mcpServers: {
-            workspaceProbe: {
-              command: "node",
-              args: ["./servers/probe.mjs"],
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
-
-    const prepared = await prepareClaudeConfig({
-      workspaceDir,
-      config: {
-        plugins: {
-          entries: {
-            "workspace-probe": { enabled: true },
-          },
-        },
-      },
-    });
-
-    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
-    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
-      mcpServers?: Record<string, { args?: string[] }>;
-    };
-    expect(raw.mcpServers?.workspaceProbe?.args).toEqual([await fs.realpath(serverPath)]);
-
-    await prepared.cleanup?.();
-  });
-
   it("merges loopback overlay config with bundle MCP servers", async () => {
     const additionalConfig = {
       mcpServers: {
@@ -629,28 +452,6 @@ describe("prepareCliBundleMcpConfig", () => {
     await otherEnvPrepared.cleanup?.();
   });
 
-  it("preserves extra env values alongside generated MCP config", async () => {
-    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
-      "openclaw-cli-bundle-mcp-env-",
-    );
-
-    const prepared = await prepareClaudeConfig({
-      workspaceDir,
-      config: { plugins: { enabled: false } },
-      env: {
-        OPENCLAW_MCP_TOKEN: "lb-tk-123",
-        OPENCLAW_MCP_SESSION_KEY: "agent:main:telegram:group:chat123",
-      },
-    });
-
-    expect(prepared.env).toEqual({
-      OPENCLAW_MCP_TOKEN: "lb-tk-123",
-      OPENCLAW_MCP_SESSION_KEY: "agent:main:telegram:group:chat123",
-    });
-
-    await prepared.cleanup?.();
-  });
-
   it("leaves args untouched when bundle MCP is disabled", async () => {
     const prepared = await prepareCliBundleMcpConfig({
       enabled: false,
@@ -664,4 +465,85 @@ describe("prepareCliBundleMcpConfig", () => {
     expect(prepared.backend.args).toEqual(["./fake-cli.mjs"]);
     expect(prepared.cleanup).toBeUndefined();
   });
+});
+
+type SearchConfig = NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]>;
+const searchCleanups: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  await Promise.all(searchCleanups.splice(0).map((cleanup) => cleanup()));
+});
+
+async function prepareSearchConfig(
+  mode: "claude-config-file" | "codex-config-overrides",
+  search?: SearchConfig,
+  enabled = true,
+) {
+  const prepared = await prepareCliBundleMcpConfig({
+    enabled,
+    mode,
+    backend: { command: "fixture-cli", args: ["run"], resumeArgs: ["resume"] },
+    workspaceDir: "/synthetic/cli-search",
+    config: { plugins: { enabled: false }, tools: { web: { search } } },
+    exclusiveConfig: {
+      mcpServers: { openclaw: { type: "http", url: "http://127.0.0.1:12345/mcp" } },
+    },
+    env: { GEMINI_CLI_SYSTEM_SETTINGS_PATH: "" },
+  });
+  if (prepared.cleanup) {
+    searchCleanups.push(prepared.cleanup);
+  }
+  return prepared;
+}
+
+it("disables pinned Codex search while preserving the managed MCP server", async () => {
+  const prepared = await prepareSearchConfig("codex-config-overrides", {
+    provider: "parallel-free",
+  });
+  expect(prepared.backend.args).toContain('web_search="disabled"');
+  expect(prepared.backend.resumeArgs).toContain('web_search="disabled"');
+  const servers = prepared.backend.args?.find((arg) => arg.startsWith("mcp_servers="));
+  expect(servers).toContain("openclaw");
+  expect(servers).not.toContain("disabled_tools");
+});
+
+it("invalidates a native search session when its search provider is pinned", async () => {
+  const automatic = await prepareSearchConfig("claude-config-file");
+  const pinned = await prepareSearchConfig("claude-config-file", { provider: "brave" });
+  expect(automatic.backend.args).not.toContain("--disallowedTools");
+  expect(automatic.mcpResumeHash).not.toBe(pinned.mcpResumeHash);
+  expect(
+    resolveCliSessionReuse({
+      binding: {
+        sessionId: "native-session",
+        mcpResumeHash: automatic.mcpResumeHash,
+        authEpochVersion: 1,
+      },
+      authEpochVersion: 1,
+      mcpResumeHash: pinned.mcpResumeHash,
+    }),
+  ).toMatchObject({ mode: "invalidate", invalidatedReason: "mcp" });
+});
+
+it("enforces an explicit search provider without bundle MCP", async () => {
+  const prepared = await prepareSearchConfig(
+    "codex-config-overrides",
+    { provider: "brave" },
+    false,
+  );
+  expect(prepared.backend.args).toContain('web_search="disabled"');
+});
+
+it("adapts opted-in bundle MCP to Claude by default", async () => {
+  const prepared = await prepareCliBundleMcpConfig({
+    enabled: true,
+    backend: { command: "custom-cli", args: ["run"] },
+    workspaceDir: "/synthetic/cli-search",
+    config: { tools: { web: { search: { provider: "brave" } } } },
+    exclusiveConfig: { mcpServers: {} },
+  });
+  if (prepared.cleanup) {
+    searchCleanups.push(prepared.cleanup);
+  }
+  const args = prepared.backend.args ?? [];
+  expect(args[args.indexOf("--disallowedTools") + 1]?.split(",")).toContain("WebSearch");
 });

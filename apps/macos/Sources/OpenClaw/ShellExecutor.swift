@@ -61,30 +61,25 @@ enum ShellExecutor {
 
     private final class StreamingOutputCapture: @unchecked Sendable {
         private let lock = NSLock()
-        private var stdoutLines: [String] = []
-        private var stderrLines: [String] = []
+        private var stdout = ""
+        private var stderr = ""
 
         func appendStdout(line: String) {
             self.lock.withLock {
-                self.stdoutLines.append(line)
+                self.stdout += line + "\n"
             }
         }
 
         func appendStderr(line: String) {
             self.lock.withLock {
-                self.stderrLines.append(line)
+                self.stderr += line + "\n"
             }
         }
 
         func snapshot() -> (stdout: String, stderr: String) {
             self.lock.withLock {
-                (Self.output(from: self.stdoutLines), Self.output(from: self.stderrLines))
+                (self.stdout, self.stderr)
             }
-        }
-
-        private static func output(from lines: [String]) -> String {
-            guard !lines.isEmpty else { return "" }
-            return lines.joined(separator: "\n") + "\n"
         }
     }
 

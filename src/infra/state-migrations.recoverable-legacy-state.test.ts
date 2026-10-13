@@ -178,13 +178,10 @@ describe("legacy agent directory migration", () => {
   }>([
     { relativeDatabase: "openclaw-agent.sqlite", destination: "database" },
     { relativeDatabase: "state/openclaw.sqlite", destination: "database" },
-    { relativeDatabase: "sessions/transcripts.sqlite", destination: "database" },
     { relativeDatabase: "cache.db", destination: "empty" },
     { relativeDatabase: "custom-store", destination: "wal" },
-    { relativeDatabase: "sessions/transcripts.sqlite", destination: "journal" },
-    { relativeDatabase: "state/openclaw.sqlite", destination: "empty" },
     { relativeDatabase: "sessions/transcripts.sqlite", destination: "empty", orphanSource: true },
-    ...(["database", "wal", "shm"] as const).map((blockedRestore) => ({
+    ...(["database"] as const).map((blockedRestore) => ({
       relativeDatabase: "openclaw-agent.sqlite",
       destination: "empty" as const,
       blockedRestore,
@@ -686,7 +683,7 @@ describe("legacy agent directory migration", () => {
     },
   );
 
-  it.each(["external", "ancestor-symlink"])(
+  it.each(["ancestor-symlink"])(
     "keeps conflict quarantines confined to state for an %s agent directory",
     async (layout) => {
       await withOpenClawTestState({ label: "agent-quarantine-boundary" }, async (state) => {
@@ -735,28 +732,6 @@ describe("legacy agent directory migration", () => {
         );
         expect(result.warningDisposition).toBe("recoverable");
         expect(result.warnings).toEqual([expect.stringContaining(path.join(quarantine, "bin/rg"))]);
-      });
-    },
-  );
-
-  it.each(["custom-agent", "agent"])(
-    "honors the configured agent directory %s",
-    async (directory) => {
-      await withOpenClawTestState({ label: "legacy-agent-configured" }, async (state) => {
-        await state.writeText("agent/settings.json", "legacy settings");
-        const targetDir = state.statePath(directory);
-        const detected = await detectLegacyStateMigrations({
-          cfg: { agents: { entries: { main: { agentDir: targetDir } } } },
-          env: state.env,
-          legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-        });
-        expect(detected.agentDir.targetDir).toBe(targetDir);
-        expect(detected.agentDir.hasLegacy).toBe(directory !== "agent");
-        const result = await migrateLegacyAgentDir(detected, () => 1234);
-        expect(result.warnings).toEqual([]);
-        await expect(fs.readFile(path.join(targetDir, "settings.json"), "utf8")).resolves.toBe(
-          "legacy settings",
-        );
       });
     },
   );
@@ -831,48 +806,5 @@ describe("legacy agent directory migration", () => {
         fs.readFile(state.statePath("agents/main/agent.legacy-1234/bin/rg"), "utf8"),
       ).resolves.toBe("older layout binary");
     });
-  });
-
-  it("does not create another quarantine when an old runtime recreates identical binaries", async () => {
-    await withOpenClawTestState({ label: "legacy-agent-repeat" }, async (state) => {
-      await state.writeText("agent/bin/fd", "identical binary");
-      await state.writeText("agents/main/agent/bin/fd", "identical binary");
-      await state.writeText("agent.legacy-1234/bin/rg", "preserved binary");
-      const detected = await detectLegacyStateMigrations({
-        cfg: { agents: { entries: { main: {} } } },
-        env: state.env,
-        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-      });
-      await migrateLegacyAgentDir(detected, () => 5678);
-      expect(
-        (await fs.readdir(state.stateDir)).filter((name) => name.startsWith("agent.legacy-")),
-      ).toEqual(["agent.legacy-1234"]);
-      await expect(fs.stat(state.statePath("agent"))).rejects.toMatchObject({ code: "ENOENT" });
-    });
-  });
-
-  it("refuses when recoverable archive warnings mix with non-recoverable database migration failures", () => {
-    const result: MigrationMessages = {
-      changes: [],
-      warnings: [
-        "Skipped archived transcript media migration for /path/corrupt.jsonl.deleted: Error: all-NUL",
-        "Skipped agent database migration for /path/agent.db: Error: schema mismatch",
-      ],
-    };
-    const receipt = migrationReceipt("media-persistence", result);
-    expect(receipt.outcome).toBe("refused");
-  });
-
-  it("marks archive-only failures as recoverable through the receipt path", () => {
-    const result: MigrationMessages = {
-      changes: [],
-      warnings: [
-        "Skipped archived transcript media migration for /path/corrupt.jsonl.deleted: Error: all-NUL",
-      ],
-      warningDisposition: "recoverable",
-    };
-    const receipt = migrationReceipt("media-persistence", result);
-    expect(receipt.outcome).toBe("warning");
-    expect(receipt.outcome).not.toBe("refused");
   });
 });

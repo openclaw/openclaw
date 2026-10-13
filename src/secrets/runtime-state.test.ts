@@ -49,11 +49,9 @@ import {
   activateSecretsRuntimeSnapshotState,
   activateSecretsRuntimeSnapshotStateIfCurrent,
   clearSecretsRuntimeSnapshotState,
-  collectSecretStoreRefKeysInSnapshot,
   getActiveSecretsRuntimeConfigSnapshot,
   getActiveSecretsRuntimeSnapshotState,
   getActiveSecretsRuntimeSnapshotRevisionState,
-  hasSameSecretReloadContract,
   restoreSecretsRuntimeSourceSnapshotIfLineageCurrent,
   prepareSecretsRuntimeSnapshotRestoreState,
   setSecretsRuntimeSourceSnapshotIfCurrent,
@@ -147,49 +145,6 @@ function restoreSnapshotIfCurrent(
 }
 
 describe("secrets runtime state", () => {
-  it("finds canonical store refs without interpreting providerless or other-source values", () => {
-    const config = {
-      secrets: { defaults: { store: "default" } },
-      models: {
-        providers: {
-          one: {
-            apiKey: { source: "store", provider: "default", id: "TEAM_API_KEY" },
-            models: [],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    expect(
-      collectSecretStoreRefKeysInSnapshot({ sourceConfig: config, authStores: [] }, "TEAM_API_KEY"),
-    ).toEqual(new Set(["store:default:TEAM_API_KEY"]));
-    expect(
-      collectSecretStoreRefKeysInSnapshot(
-        {
-          sourceConfig: {
-            plugins: {
-              entries: { sample: { config: { apiKey: { source: "store", id: "TEAM_API_KEY" } } } },
-            },
-          },
-          authStores: [],
-        },
-        "TEAM_API_KEY",
-      ),
-    ).toEqual(new Set());
-    expect(
-      collectSecretStoreRefKeysInSnapshot(
-        {
-          sourceConfig: {
-            gateway: {
-              auth: { token: { source: "env", provider: "default", id: "TEAM_API_KEY" } },
-            },
-          },
-          authStores: [],
-        },
-        "TEAM_API_KEY",
-      ),
-    ).toEqual(new Set());
-  });
-
   let envSnapshot: ReturnType<typeof captureEnv>;
   const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -252,33 +207,6 @@ describe("secrets runtime state", () => {
     expect(observations).toEqual([
       { databasePath, profiles: { inline: canonical.profiles.inline! } },
     ]);
-  });
-
-  it("includes env shorthand SecretRefs in the reload contract", () => {
-    const configWithRef = (apiKey: string): OpenClawConfig => ({
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey,
-            models: [],
-          },
-        },
-      },
-    });
-
-    expect(
-      hasSameSecretReloadContract(
-        configWithRef("$OPENAI_API_KEY"),
-        configWithRef("$OPENAI_API_KEY"),
-      ),
-    ).toBe(true);
-    expect(
-      hasSameSecretReloadContract(
-        configWithRef("$OPENAI_API_KEY"),
-        configWithRef("$OPENAI_API_KEY_NEXT"),
-      ),
-    ).toBe(false);
   });
 
   it("preserves independent credential owners through snapshot replacement and rollback until teardown", () => {

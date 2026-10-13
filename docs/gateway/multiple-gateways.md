@@ -17,7 +17,7 @@ The simplest rescue-bot setup:
 - Run the rescue bot on `--profile rescue`, with its own Telegram bot token.
 - Put the rescue bot on a different base port, e.g. `19789`.
 
-This keeps the rescue bot able to debug or apply config changes if the primary bot is down. Leave at least 120 ports between base ports so derived browser/CDP ports never collide. Each instance reaches base + 110: its browser control port is base + 2, and that port's CDP range runs to base + 110.
+This keeps the rescue bot able to debug or apply config changes if the primary bot is down. Leave at least 120 ports between base ports so derived sandbox/browser/CDP ports never collide. Each instance reaches base + 110: its browser control port is base + 2, and that port's CDP range runs to base + 110.
 
 ```bash
 # Rescue bot (separate Telegram bot, separate profile, port 19789)
@@ -86,13 +86,13 @@ Use the rescue-bot quickstart for a fallback operator lane. Use the general prof
 
 Keep these unique per Gateway instance:
 
-| Setting                      | Purpose                              |
-| ---------------------------- | ------------------------------------ |
-| `OPENCLAW_CONFIG_PATH`       | Per-instance config file             |
-| `OPENCLAW_STATE_DIR`         | Per-instance sessions, creds, caches |
-| `agents.defaults.workspace`  | Per-instance workspace root          |
-| `gateway.port` (or `--port`) | Unique per instance                  |
-| Derived browser/CDP ports    | See below                            |
+| Setting                           | Purpose                              |
+| --------------------------------- | ------------------------------------ |
+| `OPENCLAW_CONFIG_PATH`            | Per-instance config file             |
+| `OPENCLAW_STATE_DIR`              | Per-instance sessions, creds, caches |
+| `agents.defaults.workspace`       | Per-instance workspace root          |
+| `gateway.port` (or `--port`)      | Unique per instance                  |
+| Derived sandbox/browser/CDP ports | See below                            |
 
 Sharing any of these causes config, state, or port conflicts. Gateway startup
 enforces unique state-directory ownership, including when
@@ -106,6 +106,7 @@ enforces unique state-directory ownership, including when
 
 Base port = `gateway.port` (or `OPENCLAW_GATEWAY_PORT` / `--port`).
 
+- Sandbox host listener port = base + 1 when the isolated widget/MCP App host is active (unless `mcp.apps.sandboxPort` overrides it).
 - Browser control service port = base + 2 (loopback only).
 - Hosted widget documents and A2UI renderer assets are served on the Gateway HTTP server itself (same port as `gateway.port`).
 - Browser profile CDP ports auto-allocate from `browser control port + 9` through `+ 108`.

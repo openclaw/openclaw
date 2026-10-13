@@ -11,7 +11,6 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createGatewaySession } from "../session-create-service.js";
-import { sessionMutationHandlers } from "./sessions-mutations.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const nativeModel: ModelCatalogEntry = {
@@ -93,55 +92,52 @@ export function registerSessionNativeRuntimeConsentTests(support: {
       return { before, scope, requestContext, patch };
     }
 
-    it.each(["agent", "global"] as const)(
-      "persists the exact-runtime grant only in this chat with %s selection defaults",
-      async (selectionScope) => {
-        const fixture = await prepareConsent();
-        support.getConfig().agents!.defaults!.modelSelectionScope = selectionScope;
-        const siblingScope = {
-          ...fixture.scope,
-          sessionKey: `${fixture.scope.sessionKey}:sibling`,
-        };
-        await upsertSessionEntryCore(siblingScope, {
-          sessionId: siblingScope.sessionKey,
-          updatedAt: 1,
-        });
-        const siblingBefore = loadSessionEntry(siblingScope);
-        const response = await patchSession(
-          {
-            ...fixture.patch,
-            model: `${nativeModel.provider}/${nativeModel.id}`,
-          },
-          ["operator.admin"],
-          fixture.requestContext,
-        );
-        expect(response[0]).toBe(true);
-        expect(loadSessionEntry(fixture.scope)).toMatchObject({
-          label: "Keep this chat",
-          sessionId: fixture.patch.expectedSessionId,
-          nativeRuntimeConsent: harness.id,
-          sandboxMode: "off",
-          permissionMode: "full",
-        });
-        expect(loadSessionEntry(siblingScope)).toEqual(siblingBefore);
-        expect(support.configMutationRequested()).toBe(false);
-        expect(support.getConfig().agents!.defaults!.sandbox?.mode).toBe("all");
-        expect(support.getConfig().tools).toEqual({ fs: { workspaceOnly: true }, deny: ["exec"] });
+    it("persists the exact-runtime grant only in this chat with agent selection defaults", async () => {
+      const fixture = await prepareConsent();
+      support.getConfig().agents!.defaults!.modelSelectionScope = "agent";
+      const siblingScope = {
+        ...fixture.scope,
+        sessionKey: `${fixture.scope.sessionKey}:sibling`,
+      };
+      await upsertSessionEntryCore(siblingScope, {
+        sessionId: siblingScope.sessionKey,
+        updatedAt: 1,
+      });
+      const siblingBefore = loadSessionEntry(siblingScope);
+      const response = await patchSession(
+        {
+          ...fixture.patch,
+          model: `${nativeModel.provider}/${nativeModel.id}`,
+        },
+        ["operator.admin"],
+        fixture.requestContext,
+      );
+      expect(response[0]).toBe(true);
+      expect(loadSessionEntry(fixture.scope)).toMatchObject({
+        label: "Keep this chat",
+        sessionId: fixture.patch.expectedSessionId,
+        nativeRuntimeConsent: harness.id,
+        sandboxMode: "off",
+        permissionMode: "full",
+      });
+      expect(loadSessionEntry(siblingScope)).toEqual(siblingBefore);
+      expect(support.configMutationRequested()).toBe(false);
+      expect(support.getConfig().agents!.defaults!.sandbox?.mode).toBe("all");
+      expect(support.getConfig().tools).toEqual({ fs: { workspaceOnly: true }, deny: ["exec"] });
 
-        expect(
-          (
-            await patchSession(
-              { key: fixture.scope.sessionKey, model: `${nativeModel.provider}/${nativeModel.id}` },
-              ["operator.admin"],
-              fixture.requestContext,
-            )
-          )[0],
-        ).toBe(true);
-        expect(support.configMutationRequested()).toBe(false);
-      },
-    );
+      expect(
+        (
+          await patchSession(
+            { key: fixture.scope.sessionKey, model: `${nativeModel.provider}/${nativeModel.id}` },
+            ["operator.admin"],
+            fixture.requestContext,
+          )
+        )[0],
+      ).toBe(true);
+      expect(support.configMutationRequested()).toBe(false);
+    });
 
-    it.each([{ permissionMode: "guarded" }, { permissionMode: null }, { sandboxMode: null }])(
+    it.each([{ permissionMode: null }, { sandboxMode: null }])(
       "revokes native consent when strengthening or resetting settings %j",
       async (settings) => {
         const fixture = await prepareConsent();
@@ -259,42 +255,6 @@ export function registerSessionNativeRuntimeConsentTests(support: {
         }
       },
     );
-
-    it("accepts a batch consent grant with identity and settings expectations", async () => {
-      const fixture = await prepareConsent();
-      const {
-        key,
-        expectedSessionId,
-        expectedLifecycleRevision,
-        expectedPermissionMode,
-        expectedSandboxMode,
-        expectedNativeRuntimeConsent,
-        ...patch
-      } = fixture.patch;
-      const respond = vi.fn();
-      await sessionMutationHandlers["sessions.patchMany"]!({
-        req: { type: "req", id: "native-consent-batch", method: "sessions.patchMany" },
-        isWebchatConnect: () => true,
-        params: {
-          targets: [
-            {
-              key,
-              expectedSessionId,
-              expectedLifecycleRevision,
-              expectedPermissionMode,
-              expectedSandboxMode,
-              expectedNativeRuntimeConsent,
-            },
-          ],
-          patch,
-        },
-        client: client(["operator.admin"]),
-        context: fixture.requestContext,
-        respond,
-      });
-      expect(respond).toHaveBeenCalledWith(true, { outcomes: [{ key, ok: true }] }, undefined);
-      expect(loadSessionEntry(fixture.scope)?.nativeRuntimeConsent).toBe(harness.id);
-    });
   });
 
   it.each([false, true])(

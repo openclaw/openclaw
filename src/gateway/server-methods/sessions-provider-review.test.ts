@@ -28,10 +28,14 @@ vi.mock("../session-sharing.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../session-sharing.js")>();
   return {
     ...actual,
-    resolveSessionSharingTarget: mocks.resolveTarget,
-    resolveSessionMutationAuthorization: mocks.resolveAuthorization,
+    resolveSessionSharingTargetAsync: async (...args: unknown[]) => mocks.resolveTarget(...args),
   };
 });
+// mock-isolation: Provider-review tests control authorization changes while the review is awaited.
+vi.mock("../session-sharing-authorization-async.js", () => ({
+  resolveSessionMutationAuthorizationAsync: (...args: unknown[]) =>
+    mocks.resolveAuthorization(...args),
+}));
 
 const sessionKey = "agent:main:provider-review";
 const sessionId = "session-a";
@@ -144,7 +148,7 @@ describe("registered provider review continuation", () => {
       deliver: false,
     });
     expect(readProviderReviewAcknowledgment(acknowledgment).review.id).toBe("review-a");
-    const normalized = normalizeChatSendRequest({
+    const normalized = await normalizeChatSendRequest({
       params: chatOptions.params,
       client: chatOptions.client,
       providerReviewAcknowledgment: acknowledgment,

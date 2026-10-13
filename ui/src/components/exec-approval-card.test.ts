@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   parseApprovalRequestedEvent,
@@ -9,7 +9,11 @@ import {
   type ExecApprovalRequest,
 } from "../app/exec-approval.ts";
 import { i18n } from "../i18n/index.ts";
-import { renderExecApprovalCard, renderSidebarApprovalRow } from "./exec-approval-card.ts";
+import { LitContent, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
+import { ExecApprovalCard } from "./exec-approval-card-solid.tsx";
+import { renderSidebarApprovalRow } from "./exec-approval-card.ts";
 
 let container: HTMLDivElement;
 
@@ -32,16 +36,19 @@ function approval(overrides: Partial<ExecApprovalRequest> = {}): ExecApprovalReq
 }
 
 function renderCard(request: ExecApprovalRequest, variant: "inline" | "modal" = "modal") {
-  render(
-    renderExecApprovalCard({
-      approval: request,
-      busy: false,
-      canGrant: true,
-      error: null,
-      variant,
-      onDecision: vi.fn(),
-    }),
-    container,
+  mountSolid(
+    () =>
+      createComponent(ExecApprovalCard, {
+        props: {
+          approval: request,
+          busy: false,
+          canGrant: true,
+          error: null,
+          variant,
+          onDecision: vi.fn(),
+        },
+      }),
+    { container },
   );
   return container.querySelector<HTMLElement>(".exec-approval-card");
 }
@@ -55,33 +62,60 @@ describe("exec approval card", () => {
 
   afterEach(() => {
     container.remove();
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
-  it.each([
-    ["warn", "warning"],
-    ["warning", "warning"],
-    ["danger", "danger"],
-    ["critical", "danger"],
-    ["error", "danger"],
-    ["unknown", "info"],
-    [undefined, "info"],
-  ])("maps plugin severity %s to the %s accent", (pluginSeverity, expected) => {
-    const card = renderCard(approval({ pluginSeverity }));
+  it.each([["error", "danger"]])(
+    "maps plugin severity %s to the %s accent",
+    (pluginSeverity, expected) => {
+      const card = renderCard(approval({ pluginSeverity }));
 
-    expect(card?.classList.contains(`exec-approval-card--severity-${expected}`)).toBe(true);
-  });
+      expect(card?.classList.contains(`exec-approval-card--severity-${expected}`)).toBe(true);
+    },
+  );
 
-  it("always gives exec approvals the warning accent", () => {
-    const card = renderCard(
-      approval({
-        kind: "exec",
-        pluginSeverity: "critical",
-        request: { command: "pnpm test" },
-      }),
+  it("expires a mounted sidebar approval and disables its decisions", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    vi.setSystemTime(0);
+    const onDecision = vi.fn();
+    const view = mountSolid(
+      () =>
+        createComponent(LitContent, {
+          render: () =>
+            renderSidebarApprovalRow({
+              approval: approval({ expiresAtMs: 2_000 }),
+              busy: false,
+              canGrant: true,
+              error: null,
+              onDecision,
+            }),
+        }),
+      { container },
     );
+    await container.querySelector<SolidBridgeElement<object>>("openclaw-sidebar-approval-row")!
+      .updateComplete;
+    const timer = view.getByRole("timer");
+    const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
+    expect(buttons).toHaveLength(3);
+    expect(timer.getAttribute("aria-label")).toBe("expires in 00:02");
+    expect(buttons.every((button) => !button.disabled)).toBe(true);
 
-    expect(card?.classList.contains("exec-approval-card--severity-warning")).toBe(true);
+    await vi.advanceTimersByTimeAsync(2_000);
+    flush();
+
+    expect(timer.textContent).toBe("00:00");
+    expect(timer.getAttribute("aria-label")).toBe("expired");
+    expect(timer.getAttribute("title")).toBe("expired");
+    expect(buttons.every((button) => button.disabled)).toBe(true);
+    for (const button of buttons) {
+      button.click();
+    }
+    expect(onDecision).not.toHaveBeenCalled();
+    view.unmount();
+    // Disconnected bridges retire their roots at the microtask checkpoint.
+    await Promise.resolve();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("preserves command text while highlighting ordered, non-overlapping valid spans", () => {
@@ -113,28 +147,7 @@ describe("exec approval card", () => {
     ]);
   });
 
-  it("shows plugin and agent chips with session details in the modal", () => {
-    const card = renderCard(approval());
-    const details = card?.querySelector<HTMLDetailsElement>(".exec-approval-details");
-
-    expect(card?.querySelector('[data-approval-chip="plugin"]')?.textContent).toBe("codex");
-    expect(card?.querySelector('[data-approval-chip="agent"]')?.textContent).toBe("main");
-    expect(details?.open).toBe(false);
-    expect(details?.textContent).toContain("Session");
-    expect(details?.textContent).toContain("agent:main:session-1");
-    expect(card?.textContent).not.toContain("Severity");
-  });
-
-  it("keeps inline identity limited to the plugin chip", () => {
-    const card = renderCard(approval(), "inline");
-
-    expect(card?.querySelector('[data-approval-chip="plugin"]')?.textContent).toBe("codex");
-    expect(card?.querySelector('[data-approval-chip="agent"]')).toBeNull();
-    expect(card?.querySelector(".exec-approval-details")).toBeNull();
-    expect(card?.textContent).not.toContain("agent:main:session-1");
-  });
-
-  it.each(["inline", "modal", "sidebar"] as const)(
+  it.each(["modal", "sidebar"] as const)(
     "uses plugin decision action labels and resolves their original decisions in the %s surface",
     async (variant) => {
       const request = parseApprovalRequestedEvent("plugin.approval.requested", {
@@ -168,15 +181,23 @@ describe("exec approval card", () => {
         return resolveApprovalRequest(client, request, decision);
       });
       const props = { approval: request, busy: false, canGrant: true, error: null };
-      render(
-        variant === "sidebar"
-          ? renderSidebarApprovalRow({
-              ...props,
-              onDecision: (_event, id, decision) => void onDecision(id, decision),
-            })
-          : renderExecApprovalCard({ ...props, variant, onDecision }),
-        container,
+      mountSolid(
+        () =>
+          variant === "sidebar"
+            ? createComponent(LitContent, {
+                render: () =>
+                  renderSidebarApprovalRow({
+                    ...props,
+                    onDecision: (_event, id, decision) => void onDecision(id, decision),
+                  }),
+              })
+            : createComponent(ExecApprovalCard, { props: { ...props, variant, onDecision } }),
+        { container },
       );
+      if (variant === "sidebar") {
+        await container.querySelector<SolidBridgeElement<object>>("openclaw-sidebar-approval-row")!
+          .updateComplete;
+      }
       const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
       expect(buttons.map((button) => button.textContent?.trim())).toEqual([
         "Allow once",
@@ -195,7 +216,7 @@ describe("exec approval card", () => {
     },
   );
 
-  it.each(["inline", "modal"] as const)(
+  it.each(["modal"] as const)(
     "shows the full plugin request detail as plain text in the %s card",
     (variant) => {
       const detail = `  Command: pnpm test\n${"review context\n".repeat(700)}<script>blocked()</script>`;

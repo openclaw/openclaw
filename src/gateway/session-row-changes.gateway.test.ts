@@ -5,7 +5,6 @@ import type { patchSessionEntryCore } from "../config/sessions/session-accessor.
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { setSessionActivitySummaryState } from "./session-activity-summary-state.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
-import { defaultPersistDigest } from "./session-observer-model.js";
 import type { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
 const persistence = vi.hoisted(() => ({
@@ -77,51 +76,34 @@ function observeChanges() {
 }
 
 describe("gateway session row change publications", () => {
-  it.each(["lifecycle errors", "observer digests"] as const)(
-    "publishes %s only after an accepted commit",
-    async (source) => {
-      const { changed, facts, unsubscribe } = observeChanges();
-      const write = (sessionId = entry.sessionId) =>
-        source === "lifecycle errors"
-          ? persistGatewaySessionLifecycleEvent({
-              sessionKey: target.sessionKey,
-              agentId: target.agentId,
-              event: { sessionId, runId: "row-run", ts: 2_000, data: { phase: "error" } },
-            })
-          : defaultPersistDigest({
-              ...target,
-              sessionId,
-              digest: {
-                sessionKey: target.sessionKey,
-                runId: "row-run",
-                revision: 1,
-                updatedAt: 2_000,
-                headline: "Checking files",
-                health: "on-track",
-              },
-            });
-      try {
-        rejectCommit = true;
-        await expect(write()).rejects.toThrow("commit rejected");
-        expect(changed).not.toHaveBeenCalled();
-        rejectCommit = false;
-        const committed = await write();
-        if (source === "observer digests") {
-          expect(committed).toBe(true);
-        }
-        expect(changed).toHaveBeenCalledExactlyOnceWith(target);
-        expect(facts).toHaveBeenCalledExactlyOnceWith({ ...target, facts: { kind: "unchanged" } });
-        if (source === "lifecycle errors") {
-          await write("replaced-generation");
-        } else {
-          expect(await write()).toBe(false);
-        }
-        expect(changed).toHaveBeenCalledTimes(1);
-      } finally {
-        unsubscribe();
-      }
-    },
-  );
+  it("publishes lifecycle errors only after an accepted commit", async () => {
+    const { changed, facts, unsubscribe } = observeChanges();
+    const write = (sessionId = entry.sessionId) =>
+      persistGatewaySessionLifecycleEvent({
+        sessionKey: target.sessionKey,
+        agentId: target.agentId,
+        event: { sessionId, runId: "row-run", ts: 2_000, data: { phase: "error" } },
+      });
+    try {
+      rejectCommit = true;
+      await expect(write()).rejects.toThrow("commit rejected");
+      expect(changed).not.toHaveBeenCalled();
+      expect(facts).not.toHaveBeenCalled();
+      rejectCommit = false;
+      await write();
+      expect(changed).toHaveBeenCalledExactlyOnceWith({ ...target, scope: "runtime" });
+      expect(facts).toHaveBeenCalledExactlyOnceWith({
+        ...target,
+        scope: "runtime",
+        facts: { kind: "unchanged" },
+      });
+      await write("replaced-generation");
+      expect(changed).toHaveBeenCalledTimes(1);
+      expect(facts).toHaveBeenCalledTimes(1);
+    } finally {
+      unsubscribe();
+    }
+  });
 
   it("publishes activity admission, updates, and owner-held drops", () => {
     const changed = vi.fn();
@@ -156,6 +138,7 @@ describe("gateway session row change publications", () => {
           {
             sessionKey: target.sessionKey,
             agentId: target.agentId,
+            scope: "runtime",
           },
         ]),
       );

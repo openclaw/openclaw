@@ -40,10 +40,31 @@ describe("agent database reader requests", () => {
     expect(decodeAgentDatabaseReaderRequest(encodeAgentDatabaseReaderRequest(close))).toEqual(
       close,
     );
+    const retained = { ...close, retainedPaths: [databasePath] };
+    expect(decodeAgentDatabaseReaderRequest(encodeAgentDatabaseReaderRequest(retained))).toEqual(
+      retained,
+    );
     const deleted = { ...close, deleted: true as const, agentId: "alpha" };
     expect(decodeAgentDatabaseReaderRequest(encodeAgentDatabaseReaderRequest(deleted))).toEqual(
       deleted,
     );
+    expect(
+      decodeAgentDatabaseReaderRequest(
+        JSON.stringify({
+          deleted: close.candidates,
+          agentId: "alpha",
+          retainedPaths: [databasePath],
+        }),
+      ),
+    ).toEqual(deleted);
+    expect(
+      decodeAgentDatabaseReaderRequest(
+        JSON.stringify({
+          candidates: close.candidates,
+          retainedPaths: [1],
+        }),
+      ),
+    ).toBeUndefined();
     const revive = { kind: "revive" as const, agentIds: ["alpha"] };
     expect(decodeAgentDatabaseReaderRequest(encodeAgentDatabaseReaderRequest(revive))).toEqual(
       revive,

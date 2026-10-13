@@ -119,7 +119,7 @@ describe("CustodianSessionStore", () => {
     expect(request).toHaveBeenCalledOnce();
     store.sensitive = false;
     store.wizardInputPending = false;
-    store.requestNudgeUpdate();
+    store.setInput(store.input);
     expect(store.input).toBe(
       "Keep this ordinary draft.\n\nExplain API key\n\nCurrent value: <redacted>",
     );

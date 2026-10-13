@@ -15,7 +15,6 @@ import {
   createAmbientVerifiedBinding,
   SystemAgentChatEngine,
   RuntimeSystemAgentChatEngine,
-  SystemAgentInferenceUnavailableError,
   runSystemAgentTurnWithDeps,
   type OpenClawConfig,
   type SystemAgentChatEngineOptions,
@@ -167,7 +166,9 @@ describe("SystemAgentChatEngine facade", () => {
     });
     engine.propose({ kind: "config-set", path: "gateway.port", value: "19001" });
 
-    await expect(engine.handle("yes")).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
+    await expect(engine.handle("yes")).rejects.toMatchObject({
+      message: expect.stringContaining("verified inference route changed"),
+    });
     expect(runConfigSet).not.toHaveBeenCalled();
   });
 
@@ -192,7 +193,7 @@ describe("SystemAgentChatEngine facade", () => {
             loadOverview: fakeOverviewLoader(),
           },
         } as unknown as SystemAgentChatEngineOptions),
-    ).toThrow(SystemAgentInferenceUnavailableError);
+    ).toThrow("openclaw onboard");
     expect(applySetup).not.toHaveBeenCalled();
   });
 
@@ -228,9 +229,9 @@ describe("SystemAgentChatEngine facade", () => {
       },
     });
 
-    await expect(engine.handle("what should I do next?")).rejects.toBeInstanceOf(
-      SystemAgentInferenceUnavailableError,
-    );
+    await expect(engine.handle("what should I do next?")).rejects.toMatchObject({
+      message: expect.stringContaining("verified inference route changed"),
+    });
   });
 
   it("preserves the inference failure without a second model attempt", async () => {

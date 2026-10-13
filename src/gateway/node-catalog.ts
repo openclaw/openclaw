@@ -1,5 +1,3 @@
-// Gateway node catalog builder.
-// Merges paired devices, approved node records, and live websocket sessions.
 import {
   hasNonEmptyString,
   normalizeLowercaseStringOrEmpty,
@@ -86,7 +84,6 @@ function compareKnownNodes(left: NodeListNode, right: NodeListNode): number {
   return left.nodeId.localeCompare(right.nodeId);
 }
 
-/** Builds a node catalog keyed by node id from pairing stores and live sessions. */
 export function createKnownNodeCatalog(params: {
   pairedDevices: readonly PairedDevice[];
   pairedNodes?: readonly PairedDeviceNode[];
@@ -165,6 +162,9 @@ export function createKnownNodeCatalog(params: {
     );
     const lastDisconnectedAtMs = live ? undefined : nodePairing?.lastDisconnectedAtMs;
     const hostStats = live ? live.hostStats : nodePairing?.lastHostStats;
+    const nodeMetadata = (
+      key: "version" | "coreVersion" | "uiVersion" | "deviceFamily" | "modelIdentifier",
+    ) => firstNormalizedString(live?.[key], nodePairing?.[key], pendingNodePairing?.[key]);
     catalog.set(nodeId, {
       nodeId,
       displayName: firstNormalizedString(
@@ -181,21 +181,9 @@ export function createKnownNodeCatalog(params: {
         devicePairing?.platform,
         pendingNodePairing?.platform,
       ),
-      version: firstNormalizedString(
-        live?.version,
-        nodePairing?.version,
-        pendingNodePairing?.version,
-      ),
-      coreVersion: firstNormalizedString(
-        live?.coreVersion,
-        nodePairing?.coreVersion,
-        pendingNodePairing?.coreVersion,
-      ),
-      uiVersion: firstNormalizedString(
-        live?.uiVersion,
-        nodePairing?.uiVersion,
-        pendingNodePairing?.uiVersion,
-      ),
+      version: nodeMetadata("version"),
+      coreVersion: nodeMetadata("coreVersion"),
+      uiVersion: nodeMetadata("uiVersion"),
       clientId: firstNormalizedString(
         live?.clientId,
         devicePairing?.clientId,
@@ -206,16 +194,8 @@ export function createKnownNodeCatalog(params: {
         devicePairing?.clientMode,
         pendingNodePairing?.clientMode,
       ),
-      deviceFamily: firstNormalizedString(
-        live?.deviceFamily,
-        nodePairing?.deviceFamily,
-        pendingNodePairing?.deviceFamily,
-      ),
-      modelIdentifier: firstNormalizedString(
-        live?.modelIdentifier,
-        nodePairing?.modelIdentifier,
-        pendingNodePairing?.modelIdentifier,
-      ),
+      deviceFamily: nodeMetadata("deviceFamily"),
+      modelIdentifier: nodeMetadata("modelIdentifier"),
       remoteIp: firstNormalizedString(
         live?.remoteIp,
         nodePairing?.remoteIp,

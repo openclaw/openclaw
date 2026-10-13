@@ -6,7 +6,6 @@ import {
   resolveGpt5SystemPromptContribution,
 } from "openclaw/plugin-sdk/provider-model-metadata";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { buildOpenAIDecisionProvider } from "./decision-provider.js";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 import { openaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
@@ -26,8 +25,6 @@ export default definePluginEntry({
   name: "OpenAI Provider",
   description: "Bundled OpenAI provider plugins",
   register(api) {
-    const { ensureAuthProfileStore, listProfilesForProvider, isProviderApiKeyConfigured } =
-      api.runtime.modelAuth;
     const openAIToolCompatHooks = buildProviderToolCompatFamilyHooks("openai");
     const provider = buildOpenAIProvider();
     api.registerProvider({
@@ -49,14 +46,10 @@ export default definePluginEntry({
       },
     });
     api.registerEmbeddingProvider(openAiMemoryEmbeddingProviderAdapter);
-    api.registerDecisionProvider(buildOpenAIDecisionProvider(getRuntimeConfig));
-    api.registerImageGenerationProvider(
-      buildOpenAIImageGenerationProvider({
-        ensureAuthProfileStore,
-        listProfilesForProvider,
-        isProviderApiKeyConfigured,
-      }),
+    api.registerDecisionProvider(
+      buildOpenAIDecisionProvider(() => api.runtime.config.current({ clone: true })),
     );
+    api.registerImageGenerationProvider(buildOpenAIImageGenerationProvider(api.runtime.modelAuth));
     api.registerRealtimeTranscriptionProvider(buildOpenAIRealtimeTranscriptionProvider);
     api.registerRealtimeVoiceProvider((context) => {
       const quicksilverSession =

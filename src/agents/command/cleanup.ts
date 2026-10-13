@@ -73,7 +73,7 @@ export async function finishAgentCommandCleanup(params: {
       const persisted = await patchSessionEntryCore(
         { agentId: params.prepared.sessionAgentId, sessionKey, storePath },
         (current) => {
-          if (!shouldPersistCurrentRunSessionCleanup(current, params.runOwnedSessionId)) {
+          if (!shouldPersistCurrentRunSessionCleanup(current, params.runOwnedSessionId, runId)) {
             return null;
           }
           if (ownsDeliveryClaim(current)) {
@@ -82,6 +82,7 @@ export async function finishAgentCommandCleanup(params: {
               ...buildMainSessionRecoverySettlementPatch({
                 entry: current,
                 recordTerminalSource: true,
+                clearRecoveryState: current.abortedLastRun !== true,
                 terminalRunId: runId,
                 terminalDeliveryEvidence: params.terminalDeliveryEvidence,
               }),
@@ -128,7 +129,7 @@ export async function finishAgentCommandCleanup(params: {
     }
   } finally {
     try {
-      await params.beforeTerminalDelivery?.();
+      await params.beforeTerminalDelivery?.(undefined, params.terminalEvent.data?.error);
     } finally {
       clearAgentRunContext(params.prepared.runId, params.lifecycleGeneration);
       params.sessionWorkAdmission?.release();

@@ -114,6 +114,9 @@ printf '%s\n' "$*" >>"$CAPTURE_DIR/docker-args"
 if [ "\${1:-}" = run ]; then
   for arg in "$@"; do
     case "$arg" in
+      *:/app/scripts/e2e/lib/upgrade-survivor:ro)
+        "$REAL_NODE" --input-type=module -e 'await import(process.argv[2])' fixture-loader "\${arg%%:*}/package-activation-recovery.mjs"
+        ;;
       *:/tmp/openclaw-worker-cleanup)
         printf '%s\\0' "$@" >"$CAPTURE_DIR/docker-cleanup-args"
         test -f "$CAPTURE_DIR/main-run-finished"

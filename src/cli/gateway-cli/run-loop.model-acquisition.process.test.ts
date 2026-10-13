@@ -100,7 +100,7 @@ it
       expect(child.kill("SIGTERM")).toBe(true);
       const exit = await withinTest(closed, signal);
       const elapsed = performance.now() - started;
-      expect(exit, output).toEqual([0, null]);
+      expect(exit, output).toEqual(mode === "cooperative" ? [0, null] : [null, "SIGKILL"]);
       expect(elapsed, output).toBeLessThan(stopTimeoutMs);
       expect(output).toContain("process proof: acquisition-cancelled");
       // The synthetic manager's loaded deadline must govern the actual stop,
@@ -122,9 +122,13 @@ it
         expect(output).toContain("shutdown deadline reached");
         expect(elapsed, output).toBeGreaterThanOrEqual(shutdownTimeoutMs);
       }
-      expect(output.indexOf("acquisition-cancelled")).toBeLessThan(
-        output.indexOf("process-exit:0"),
-      );
+      if (mode === "cooperative") {
+        expect(output.indexOf("acquisition-cancelled")).toBeLessThan(
+          output.indexOf("process-exit:0"),
+        );
+      } else {
+        expect(output).not.toContain("process-exit:");
+      }
     } finally {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGKILL");

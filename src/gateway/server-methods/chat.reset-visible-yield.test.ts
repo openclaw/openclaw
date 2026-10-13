@@ -16,10 +16,16 @@ import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-d
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import * as agentJob from "../agent-turn/agent-job.js";
-import * as githubPublication from "../github-publication-availability.js";
+import * as githubPublication from "../github-publication-discovery.js";
 import { waitForGatewayDispatch } from "../server-in-process-dispatch.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "../test-openai-responses-model.js";
+
+// Optional maintenance owns unrelated roots while this manual-RPC fixture stays open.
+vi.mock("../server-idle-task.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server-idle-task.js")>()),
+  scheduleGatewayIdleTask: () => ({ stop: vi.fn() }),
+}));
 
 type ResponseInput = {
   type?: string;
@@ -145,9 +151,9 @@ describe("visible yielded session continuation", () => {
       const resumedCatalog = createDeferred<string[]>();
       const publicationCatalogs: string[][] = [];
       let childResponse: ServerResponse | undefined;
-      const publicationSpy = vi.spyOn(githubPublication, "prepareGitHubPublicationAvailability");
+      const publicationSpy = vi.spyOn(githubPublication, "readGitHubPublicationFact");
       if (outcome === "complete") {
-        publicationSpy.mockResolvedValue(true);
+        publicationSpy.mockReturnValue({ available: true });
       }
       const requesterWaitFinished = createDeferred<WaitResult>();
       const resetAcknowledged = createDeferred<{ state?: string }>();

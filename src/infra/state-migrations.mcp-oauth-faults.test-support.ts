@@ -8,7 +8,7 @@ import * as workerCpu from "./worker-cpu.js";
 /** Fault only the real import for this exact source; preserve admission messages and SQL. */
 export function observeLegacyMcpOAuthImport(
   sourceKey: string,
-  mode: "observe" | "post-commit-error" | "native-exit",
+  mode: "observe" | "publication-error" | "result-delivery-error" | "native-exit",
 ) {
   const exit = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2));
   let writerThreadId: number | undefined;
@@ -20,14 +20,20 @@ export function observeLegacyMcpOAuthImport(
       const post = MessagePort.prototype.postMessage;
       MessagePort.prototype.postMessage = function(message, ...args) {
         const result = Reflect.apply(post, this, [message, ...args]);
-        if (message?.kind === "native-commit" &&
-            message.committed?.facts?.sourceKey === workerData.mcpMigrationSourceKey) {
+        const deliveryFailure = workerData.mcpMigrationFaultMode === "result-delivery-error";
+        const committed = deliveryFailure
+          ? message?.kind === "native-settlement" &&
+            message.settlement?.kind === "completed" && message.settlement.committed
+          : message?.kind === "native-commit" && message.committed;
+        if (committed?.facts?.sourceKey === workerData.mcpMigrationSourceKey) {
           const exit = new Int32Array(workerData.mcpMigrationExit);
           Atomics.store(exit, 0, 1);
           Atomics.store(exit, 1, threadId);
-          // Forward the real receipt before disrupting this exact command's completion.
+          // Result delivery faults escape the shield around commit publication.
           if (workerData.mcpMigrationFaultMode === "native-exit") process.exit(0);
-          throw new Error("simulated MCP OAuth result delivery failure");
+          throw new Error(deliveryFailure
+            ? "simulated MCP OAuth result delivery failure"
+            : "simulated MCP OAuth receipt publication failure");
         }
         return result;
       };

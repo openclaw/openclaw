@@ -4,18 +4,6 @@ import { t } from "../../../i18n/index.ts";
 import type { AsyncQuestionPresentation, AsyncQuestions } from "./chat-async-question.types.ts";
 import { questionDraftValues } from "./chat-question-answer-controls.ts";
 
-function draftForAnswer(
-  question: AsyncQuestions["questions"][number],
-  answer: string,
-): QuestionDraft {
-  const values = answer ? answer.split(", ") : [];
-  const selected =
-    values.length > 0 && values.every((value) => question.options?.includes(value))
-      ? new Set(values)
-      : new Set<string>();
-  return { selected, freeText: selected.size > 0 ? "" : answer };
-}
-
 export function parseGeneratedAsyncAnswer(
   question: AsyncQuestions,
   message: string,
@@ -45,7 +33,11 @@ export function parseGeneratedAsyncAnswer(
     if (!answer.trim()) {
       return null;
     }
-    answers.set(String(index), draftForAnswer(current, answer));
+    const values = answer.split(", ");
+    const selected = values.every((value) => current.options?.includes(value))
+      ? new Set(values)
+      : new Set<string>();
+    answers.set(String(index), { selected, freeText: selected.size > 0 ? "" : answer });
     offset = answerEnd + (separator ? 2 : 0);
   }
   return offset === message.length ? answers : null;

@@ -13,6 +13,7 @@ export default {
     statusQueued: "Queued",
   },
   workboard: {
+    pageLoadFailed: "Workboard could not load. Check your connection and reload this page.",
     pinBoard: "Pin to sidebar",
     unpinBoard: "Unpin from sidebar",
     deleteBoard: "Delete board…",
@@ -27,6 +28,7 @@ export default {
     keepEditing: "Keep editing",
     discardDraft: "Discard",
     viewBoard: "Columns",
+    boardColor: "Color",
     clearFilters: "Clear filters",
     activeFilters: "Active filters",
     removeFilter: "Remove filter: {filter}",

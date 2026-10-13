@@ -159,7 +159,7 @@ function isPlan(value: unknown): value is MatrixDeliveryPlan {
 function decodePlan(bytes: Uint8Array): MatrixDeliveryPlan {
   let value: unknown;
   try {
-    value = JSON.parse(new TextDecoder().decode(bytes));
+    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   } catch {
     throw new MatrixDeliveryPlanInvariantError("Matrix durable delivery plan is invalid JSON");
   }
@@ -332,12 +332,8 @@ function assertCompletePartTopology(plans: readonly MatrixDeliveryPlan[]): void 
     );
   }
   const storedParts = new Set(plans.map((plan) => plan.partIndex));
-  if (
-    storedParts.size !== partCount ||
-    Array.from({ length: partCount }, (_, partIndex) => partIndex).some(
-      (partIndex) => !storedParts.has(partIndex),
-    )
-  ) {
+  // Decoding bounds every integer index to [0, partCount), so cardinality proves coverage.
+  if (storedParts.size !== partCount) {
     throw new MatrixDeliveryPlanInvariantError(
       "Matrix ambiguous delivery has an incomplete event plan",
     );

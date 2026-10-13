@@ -26,6 +26,14 @@ type ImageCursor = {
 const cursors = new WeakMap<object, Map<string, ImageCursor>>();
 const internalCaller = {};
 
+function invalidImageCursor(message: string) {
+  return new ArtifactSessionResolutionError(
+    errorShape(ErrorCodes.INVALID_REQUEST, message, {
+      details: { type: "artifact_cursor_invalid" },
+    }),
+  );
+}
+
 export async function readArtifactImagePage(params: {
   scope: SessionTranscriptReadScope;
   binding: string;
@@ -49,14 +57,8 @@ export async function readArtifactImagePage(params: {
   }
   const cursor = params.cursor ? state.get(params.cursor) : undefined;
   if (params.cursor && (!cursor || cursor.binding !== params.binding)) {
-    throw new ArtifactSessionResolutionError(
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "Image cursor expired or belongs to another session; restart artifacts.list",
-        {
-          details: { type: "artifact_cursor_invalid" },
-        },
-      ),
+    throw invalidImageCursor(
+      "Image cursor expired or belongs to another session; restart artifacts.list",
     );
   }
   const page = await readSessionArtifacts(params.scope, {
@@ -69,11 +71,7 @@ export async function readArtifactImagePage(params: {
     readWindow: cursor?.readWindow,
   }).catch((error: unknown) => {
     if (cursor && isSessionTranscriptProjectionUnavailableError(error)) {
-      throw new ArtifactSessionResolutionError(
-        errorShape(ErrorCodes.INVALID_REQUEST, "Transcript changed; restart artifacts.list", {
-          details: { type: "artifact_cursor_invalid" },
-        }),
-      );
+      throw invalidImageCursor("Transcript changed; restart artifacts.list");
     }
     throw error;
   });

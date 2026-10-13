@@ -269,6 +269,17 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     const sourceReplyFinal = deliveredCurrentSourceReply
       ? resolveMessageToolSourceReplyFinal(toolArgs)
       : undefined;
+    // WebChat sends every targetless message through the internal sink while the run's
+    // own reply mode stays automatic; a final send there is still this turn's answer.
+    if (
+      !deliveredCurrentSourceReply &&
+      isMessagingSend &&
+      resolveMessageToolSourceReplyFinal(toolArgs) &&
+      context.params.inputProvenance?.kind !== "inter_session" &&
+      extractMessagingToolSourceReplyPayload(params.result)
+    ) {
+      sourceReplyDelivered = true;
+    }
     if (isMessagingSend) {
       appendUniqueCliMessagingEvidence(messagingToolSentTexts, content.text ? [content.text] : []);
       appendUniqueCliMessagingEvidence(messagingToolSentMediaUrls, content.mediaUrls ?? []);
@@ -496,10 +507,8 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       const pending = pendingCandidates[0];
       if (hasAssociatedPeer || pendingCandidates.length > 1 || pending?.ambiguous) {
         markCliLoopbackSignatureAmbiguous(admittedCall);
-        if (pending) {
-          bindCliLoopbackCall(pending, event.toolCallId, activeTool);
-        }
-      } else if (pendingCandidates.length === 1 && pending) {
+      }
+      if (pending) {
         bindCliLoopbackCall(pending, event.toolCallId, activeTool);
       }
     }

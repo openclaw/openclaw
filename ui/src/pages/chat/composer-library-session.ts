@@ -72,6 +72,12 @@ export class ComposerLibrarySession {
   private current(target: LibrarySessionTarget) {
     return this.target === target && target.isCurrent();
   }
+  private finish(target: LibrarySessionTarget, flag: "loading" | "busy") {
+    if (this.current(target)) {
+      this[flag] = false;
+      this.notify();
+    }
+  }
   closeRead() {
     this.readOwner = null;
     this.read = null;
@@ -98,10 +104,7 @@ export class ComposerLibrarySession {
         this.error = formatUiError(error);
       }
     } finally {
-      if (this.current(target)) {
-        this.loading = false;
-        this.notify();
-      }
+      this.finish(target, "loading");
     }
   }
 
@@ -130,10 +133,7 @@ export class ComposerLibrarySession {
         this.error = formatUiError(error);
       }
     } finally {
-      if (this.current(target)) {
-        this.busy = false;
-        this.notify();
-      }
+      this.finish(target, "busy");
     }
   }
 
@@ -173,10 +173,7 @@ export class ComposerLibrarySession {
         this.error = formatUiError(error);
       }
     } finally {
-      if (this.current(target)) {
-        this.busy = false;
-        this.notify();
-      }
+      this.finish(target, "busy");
     }
   }
 }

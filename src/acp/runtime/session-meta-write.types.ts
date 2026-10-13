@@ -1,6 +1,4 @@
-import type { readLegacyAcpMigrationContextInDatabase } from "../../config/sessions/session-accessor.sqlite-acp-provenance.js";
 import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
-import type { AgentDatabaseIncognitoIdentity } from "../../state/openclaw-agent-execution-contract.js";
 import type {
   AcpSessionControlBinding,
   AcpSessionControlConstraint,
@@ -10,12 +8,12 @@ import type { AcpSessionReadInput } from "./session-meta-read.types.js";
 
 export type AcpSessionMutationSource =
   | AcpSessionSourceReadInput["source"]
+  | (AcpSessionSourceReadInput["source"] & { kind: "reset" })
   | {
-      kind: "ephemeral";
+      kind: "memory";
       agentId: string;
       path: string;
-      identity: AgentDatabaseIncognitoIdentity;
-      snapshot: ReturnType<typeof readLegacyAcpMigrationContextInDatabase>;
+      snapshot: { entry: SessionEntry | undefined; sources: [] };
     };
 
 export type AcpSessionMutationDecision =
@@ -50,7 +48,7 @@ export type AcpSessionMutationPrepareInput = {
   read: AcpSessionReadInput;
   entry?: SessionEntry;
   updatedAt: number;
-  source: AcpSessionMutationSource;
+  source: Exclude<AcpSessionMutationSource, { kind: "reset" }>;
   sessionKey: string;
   agentId: string;
   expectedControlBinding?: AcpSessionControlBinding;

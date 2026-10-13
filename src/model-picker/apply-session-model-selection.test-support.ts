@@ -47,12 +47,19 @@ export function createModelSelectionMocks() {
       resolveSessionWorkerPlacementContext: () => ({
         workerSessionPlacementService: {
           getMany: placementMocks.getMany,
+          getManyAsync: async (sessionIds: readonly string[]) => placementMocks.getMany(sessionIds),
         },
       }),
     }),
     placementRuntime: () => ({
-      resolveWorkerPlacementSessionRuntimeCapabilities:
-        placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities,
+      resolveWorkerPlacementCapabilities: (...args: unknown[]) =>
+        placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities(...args),
+    }),
+    placementRuntimePreparation: () => ({
+      prepareWorkerPlacementSessionRuntime: async () => ({
+        read: () => "fixture",
+        [Symbol.dispose]: () => {},
+      }),
     }),
   };
   const resetMocks = () => {

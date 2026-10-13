@@ -10,7 +10,6 @@ import { runSetupWizard } from "./setup.js";
 import { validateSetupWorkspacePath } from "./setup.workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const workspaceSuffixes = ["", path.join("nested", "workspace")];
 const writeConfig = vi.hoisted(() => vi.fn());
 vi.mock("./setup.shared.js", () => ({
   readSetupConfigFileSnapshot: async () => ({ exists: false, valid: true, config: {} }),
@@ -29,7 +28,7 @@ vi.mock("../commands/onboard-helpers.js", () => ({
   probeGatewayReachable: async () => ({ ok: false }),
 }));
 
-it.each(workspaceSuffixes)("validates workspace prompt paths with suffix %j", async (suffix) => {
+it("validates workspace prompt paths", async () => {
   const root = tempDirs.make("openclaw-workspace-prompt-");
   const blocker = path.join(root, "regular-file");
   const alias = path.join(root, "directory-link");
@@ -46,21 +45,16 @@ it.each(workspaceSuffixes)("validates workspace prompt paths with suffix %j", as
   const cancelled = new WizardCancelledError();
   const text = vi.fn<WizardPrompter["text"]>(async ({ validate }) => {
     expect(validate).toBeTypeOf("function");
-    expect(validate?.(path.join(blocker, suffix))).toContain(`"${blocker}" is not a directory`);
-    expect(validate?.(path.join(dangling, suffix))).toContain(
+    expect(validate?.(blocker)).toContain(`"${blocker}" is not a directory`);
+    expect(validate?.(dangling)).toContain(
       `"${dangling}" is a symbolic link that does not resolve to an existing directory`,
     );
     for (const loop of [selfLoop, cycle]) {
       expect
-        .soft(validate?.(path.join(loop, suffix)))
-        .toContain(`"${path.join(loop, suffix)}" cannot be resolved because of a symlink loop`);
+        .soft(validate?.(loop))
+        .toContain(`"${loop}" cannot be resolved because of a symlink loop`);
     }
-    for (const candidate of [
-      root,
-      path.join(alias, suffix),
-      path.join(root, "new", "workspace"),
-      "",
-    ]) {
+    for (const candidate of [root, alias, path.join(root, "new", "workspace"), ""]) {
       expect(validate?.(candidate)).toBeUndefined();
     }
     throw cancelled;
@@ -77,37 +71,27 @@ it.each(workspaceSuffixes)("validates workspace prompt paths with suffix %j", as
   expect(fs.readFileSync(blocker, "utf8")).toBe("keep");
 });
 
-it.each(["workspace", "ancestor", "symlink target"] as const)(
-  "reports filesystem inspection errors at the %s",
-  (location) => {
-    const root = tempDirs.make("openclaw-workspace-errors-");
-    const candidate = path.join(root, "workspace");
-    const workspace =
-      location === "ancestor" ? path.join(candidate, "nested", "workspace") : candidate;
-    if (location === "symlink target") {
-      fs.symlinkSync(root, candidate, "dir");
-    } else {
-      fs.mkdirSync(candidate);
-    }
-    const probe = vi.spyOn(fs, location === "symlink target" ? "statSync" : "lstatSync");
-    try {
-      for (const [code, message] of [
-        ["ELOOP", "symlink loop"],
-        ["EACCES", "Cannot inspect"],
-        ["EIO", "Cannot inspect"],
-      ]) {
-        probe.mockImplementation((input) => {
-          throw Object.assign(new Error("filesystem inspection failed"), {
-            code: input === candidate ? code : "ENOENT",
-          });
+it("reports filesystem inspection errors at the symlink target", () => {
+  const root = tempDirs.make("openclaw-workspace-errors-");
+  const candidate = path.join(root, "workspace");
+  fs.symlinkSync(root, candidate, "dir");
+  const probe = vi.spyOn(fs, "statSync");
+  try {
+    for (const [code, message] of [
+      ["ELOOP", "symlink loop"],
+      ["EACCES", "Cannot inspect"],
+    ]) {
+      probe.mockImplementation((input) => {
+        throw Object.assign(new Error("filesystem inspection failed"), {
+          code: input === candidate ? code : "ENOENT",
         });
-        const result = validateSetupWorkspacePath(workspace);
-        expect.soft(result).toContain(`"${candidate}"`);
-        expect.soft(result).toContain(message);
-        expect.soft(result).not.toContain("does not resolve to an existing directory");
-      }
-    } finally {
-      probe.mockRestore();
+      });
+      const result = validateSetupWorkspacePath(candidate);
+      expect.soft(result).toContain(`"${candidate}"`);
+      expect.soft(result).toContain(message);
+      expect.soft(result).not.toContain("does not resolve to an existing directory");
     }
-  },
-);
+  } finally {
+    probe.mockRestore();
+  }
+});

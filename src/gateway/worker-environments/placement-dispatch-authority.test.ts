@@ -6,6 +6,10 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   addSessionMember,
@@ -14,6 +18,7 @@ import {
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
@@ -25,7 +30,7 @@ import {
   identifiedClient,
   sessionSharingTestContext,
 } from "../server-methods/sessions-sharing.test-support.js";
-import { resolveSessionMutationAuthorization } from "../session-sharing.js";
+import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import { type PlacementStore, REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
@@ -34,25 +39,29 @@ import { createWorkerTunnelManager } from "./tunnel.js";
 import { fakeRunner, PWD_COMMAND, startTestTunnel, success } from "./tunnel.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const cfg = {};
+afterEach(() => clearRuntimeConfigSnapshot());
 
 describe("worker placement cancellation and reclaim authority", () => {
   let root: string;
   let database: OpenClawStateDatabase;
   let placementStore: PlacementStore;
 
-  const createTestHarness = (options: Parameters<typeof createHarness>[2] = {}) =>
-    createHarness(database, placementStore, {
+  const createTestHarness = async (options: Parameters<typeof createHarness>[2] = {}) =>
+    await createHarness(database, placementStore, {
       workspacePath: path.join(root, "workspace"),
       ...options,
     });
 
   beforeEach(async () => {
+    setRuntimeConfigSnapshot(cfg);
     root = tempDirs.make("openclaw-reclaim-auth-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placementStore = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
   });
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -61,7 +70,7 @@ describe("worker placement cancellation and reclaim authority", () => {
     "does not activate after Stop closes the %s dispatch owner",
     async (stage) => {
       const controller = new AbortController();
-      const harness = createTestHarness();
+      const harness = await createTestHarness();
       await expect(
         harness.service.dispatch(
           REQUEST,
@@ -100,7 +109,7 @@ describe("worker placement cancellation and reclaim authority", () => {
       return await childClosed.promise;
     });
     const manager = createWorkerTunnelManager({ runner: fake.runner });
-    const harness = createTestHarness();
+    const harness = await createTestHarness();
     vi.mocked(harness.environments.startTunnel).mockImplementation(
       async ({ environmentId, ownerEpoch }) =>
         await startTestTunnel(manager, environmentId, ownerEpoch),
@@ -125,7 +134,7 @@ describe("worker placement cancellation and reclaim authority", () => {
       expect(settled).not.toHaveBeenCalled();
       expect(harness.environments.destroy).not.toHaveBeenCalled();
       expect(harness.log).not.toContain("activation");
-      await expect(fs.access(knownHostsPath)).resolves.toBeUndefined();
+      await fs.access(knownHostsPath);
     } finally {
       childClosed.resolve({
         ...success(),
@@ -149,7 +158,7 @@ describe("worker placement cancellation and reclaim authority", () => {
     const fake = fakeRunner(() => success("workspace still connected"));
     const manager = createWorkerTunnelManager({ runner: fake.runner });
     const reconciled = vi.fn();
-    const harness = createTestHarness({
+    const harness = await createTestHarness({
       afterReconcile: async () => {
         const command = await handle.runWorkspaceCommand(PWD_COMMAND);
         expect(command.stdout).toBe("workspace still connected");
@@ -193,7 +202,7 @@ describe("worker placement cancellation and reclaim authority", () => {
   });
 
   it("passes the Move admission signal through destination provisioning", async () => {
-    const harness = createTestHarness();
+    const harness = await createTestHarness();
     const active = await harness.service.dispatch(REQUEST);
 
     const entered = createDeferredCore();
@@ -243,7 +252,7 @@ describe("worker placement cancellation and reclaim authority", () => {
 
   it("stops final effects when authority closes during workspace reconciliation", async () => {
     let authorized = true;
-    const harness = createTestHarness({
+    const harness = await createTestHarness({
       afterReconcile: () => {
         authorized = false;
       },
@@ -268,7 +277,7 @@ describe("worker placement cancellation and reclaim authority", () => {
 
   it("finishes durable placement completion when authority closes during destroy", async () => {
     let authorized = true;
-    const harness = createTestHarness({
+    const harness = await createTestHarness({
       afterDestroy: () => {
         authorized = false;
       },
@@ -290,7 +299,7 @@ describe("worker placement cancellation and reclaim authority", () => {
   it("stops failed-placement teardown when authority closes after tunnel cleanup", async () => {
     let authorized = true;
     let revokeAfterStop = false;
-    const harness = createTestHarness({
+    const harness = await createTestHarness({
       failAt: "activation",
       destroyFailureCount: 1,
       afterStopTunnel: () => {
@@ -317,7 +326,7 @@ describe("worker placement cancellation and reclaim authority", () => {
 
   it("finishes failed-placement bookkeeping when authority closes during destroy", async () => {
     let authorized = true;
-    const harness = createTestHarness({
+    const harness = await createTestHarness({
       failAt: "activation",
       destroyFailureCount: 1,
       afterDestroy: () => {
@@ -342,6 +351,59 @@ describe("worker placement cancellation and reclaim authority", () => {
 
 describe("worker placement dispatch authority", () => {
   const effects = ["create", "attach", "tunnel:attached", "sync", "placement:starting"];
+  const deviceNode: NodeWorkerSupervisorNodeProof = {
+    nodeId: "device-1",
+    connId: "device-connection-1",
+    pairingIdentity: "device-identity-1",
+    pairingGeneration: "device-pairing-1",
+    clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+    clientMode: GATEWAY_CLIENT_MODES.NODE,
+    protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+    workerHost: {
+      enabled: true as const,
+      capacity: { total: 2, available: 2 },
+      capturedExecPolicy: true,
+      promptContext: 1,
+    },
+    commands: ["system.run"],
+  };
+
+  it("stops after requested placement acknowledgment before node readiness", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot(cfg);
+      const database = openOpenClawStateDatabase({ env: state.env });
+      const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
+      const harness = await createHarness(database, store, { workspacePath: state.workspaceDir });
+      const readNodeReadiness = vi.fn(async () => ({ available: true, node: deviceNode }));
+      bindDeviceWorkerAvailability(harness.environments, readNodeReadiness);
+      let authorized = true;
+
+      await expect(
+        harness.service.dispatch(
+          {
+            ...REQUEST,
+            profileId: "device:device-1",
+            deviceId: deviceNode.nodeId,
+            devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+          },
+          (placement) => {
+            if (placement.state === "requested") {
+              authorized = false;
+            }
+          },
+          () => {
+            if (!authorized) {
+              throw new Error("session creator authority closed after acknowledgment");
+            }
+          },
+        ),
+      ).rejects.toThrow("session creator authority closed after acknowledgment");
+
+      expect(readNodeReadiness).not.toHaveBeenCalled();
+      expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
+      expect(store.get(REQUEST.sessionId)).toMatchObject({ state: "failed", turnClaim: null });
+    });
+  });
 
   it.each([
     { boundary: "readiness", completedEffects: 0 },
@@ -354,9 +416,10 @@ describe("worker placement dispatch authority", () => {
     "stops after membership revocation during $boundary",
     async ({ boundary, completedEffects }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot(cfg);
         const database = openOpenClawStateDatabase({ env: state.env });
         const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
-        const harness = createHarness(database, store, { workspacePath: state.workspaceDir });
+        const harness = await createHarness(database, store, { workspacePath: state.workspaceDir });
         const scope = { agentId: REQUEST.agentId, sessionKey: REQUEST.sessionKey };
         const owner = ensureProfileForEmail("dispatch-owner@example.test");
         const member = ensureProfileForEmail("dispatch-member@example.test");
@@ -371,12 +434,13 @@ describe("worker placement dispatch authority", () => {
           addedBy: owner.id,
           expectedSessionId: REQUEST.sessionId,
         });
-        const result = resolveSessionMutationAuthorization({
+        const result = await resolveSessionMutationAuthorizationAsync({
           client: identifiedClient(member.id),
-          context: sessionSharingTestContext(vi.fn()),
+          context: sessionSharingTestContext(vi.fn(), cfg),
           method: "sessions.dispatch",
           requestParams: { key: REQUEST.sessionKey, deviceId: "device-1" },
         });
+        using _ = { [Symbol.dispose]: () => result.authorization?.release?.() };
         expect(result.error).toBeNull();
         if (!result.authorization) {
           throw new Error("dispatch fixture did not admit its session member");
@@ -388,34 +452,19 @@ describe("worker placement dispatch authority", () => {
             ).not.toBeNull();
           }
         };
-        const node: NodeWorkerSupervisorNodeProof = {
-          nodeId: "device-1",
-          connId: "device-connection-1",
-          pairingIdentity: "device-identity-1",
-          pairingGeneration: "device-pairing-1",
-          clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-          clientMode: GATEWAY_CLIENT_MODES.NODE,
-          protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-          workerHost: {
-            enabled: true as const,
-            capacity: { total: 2, available: 2 },
-            capturedExecPolicy: true,
-          },
-          commands: ["system.run"],
-        };
         let readinessObserved = false;
         bindDeviceWorkerAvailability(harness.environments, async () => {
           if (!readinessObserved) {
             readinessObserved = true;
             revokeAt("readiness");
           }
-          return { available: true, node };
+          return { available: true, node: deviceNode };
         });
         const deviceIdentity = {
           providerId: "device",
           profileId: "device:device-1",
           profileSnapshot: { install: "bundle" as const, settings: { device: "device-1" } },
-          nodeDeviceId: node.nodeId,
+          nodeDeviceId: deviceNode.nodeId,
           sshEndpoint: null,
           sharedHost: true,
         };
@@ -457,7 +506,7 @@ describe("worker placement dispatch authority", () => {
             {
               ...REQUEST,
               profileId: deviceIdentity.profileId,
-              deviceId: node.nodeId,
+              deviceId: deviceNode.nodeId,
               devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
               inheritedProfile: {
                 providerId: deviceIdentity.providerId,

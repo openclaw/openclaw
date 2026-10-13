@@ -3,6 +3,8 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { AsyncWorkScope, runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { materializeErrorStack } from "./error-graph-internal.js";
+import { runWithMainThreadTask } from "./main-thread-stall.js";
 
 export type GatewaySchedulerClock = {
   now: () => number;
@@ -38,6 +40,7 @@ type ScheduleOwner = {
 
 type ScheduledWork = {
   id: string;
+  diagnosticName: string;
   atMs: number;
   elapsedAtMs?: number;
   everyMs?: number;
@@ -55,7 +58,9 @@ const hostClock: GatewaySchedulerClock = {
   arm: (run, delayMs) => {
     // Host callbacks stay synchronous; execution joins belong to the scheduler.
     const timer = setTimeout(() => {
-      void run();
+      runWithMainThreadTask("scheduler:wake", () => {
+        void run();
+      });
     }, delayMs);
     timer.unref();
     return () => clearTimeout(timer);
@@ -111,6 +116,7 @@ export class GatewayScheduler {
     };
     const beginClose = () => {
       controller.abort();
+      materializeErrorStack(controller.signal.reason);
       for (const job of owner.jobs) {
         this.cancel(job);
       }
@@ -150,6 +156,12 @@ export class GatewayScheduler {
     const previous = cancelled ? undefined : this.jobs.get(params.id);
     const job: ScheduledWork = {
       id: params.id,
+      // Dynamic suffixes can contain session IDs or paths; maintenance names are code-owned.
+      diagnosticName: `scheduler:${
+        params.id.startsWith("maintenance:")
+          ? params.id.split(":").slice(0, 3).join(":")
+          : params.id.split(/[:/]/u, 1)[0]!
+      }`,
       run: params.run,
       everyMs: params.everyMs,
       atMs,
@@ -201,6 +213,7 @@ export class GatewayScheduler {
 
   beginClose(): void {
     this.controller.abort();
+    materializeErrorStack(this.controller.signal.reason);
     this.timerGeneration += 1;
     this.cancelTimer?.();
     this.cancelTimer = undefined;
@@ -310,7 +323,9 @@ export class GatewayScheduler {
     };
     let result: void | Promise<unknown> = undefined;
     try {
-      result = job.context(() => work.run(job.run));
+      result = job.context(() =>
+        runWithMainThreadTask(job.diagnosticName, () => work.run(job.run)),
+      );
     } catch (error) {
       log.error(`${job.id} failed: ${String(error)}`);
     }

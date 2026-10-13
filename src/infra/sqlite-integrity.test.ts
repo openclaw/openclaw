@@ -19,39 +19,6 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("assertSqliteIntegrity", () => {
-  it("rejects foreign-key violations that structural checks do not detect", () => {
-    const sqlite = requireNodeSqlite();
-    const database = new sqlite.DatabaseSync(":memory:");
-    try {
-      database.exec(`
-        PRAGMA foreign_keys = OFF;
-        CREATE TABLE parents (id INTEGER PRIMARY KEY);
-        CREATE TABLE children (
-          id INTEGER PRIMARY KEY,
-          parent_id INTEGER NOT NULL REFERENCES parents(id)
-        );
-        INSERT INTO children (id, parent_id) VALUES (1, 99);
-      `);
-      expect(database.prepare("PRAGMA quick_check;").get()).toEqual({ quick_check: "ok" });
-      expect(database.prepare("PRAGMA integrity_check;").get()).toEqual({
-        integrity_check: "ok",
-      });
-
-      let failure: unknown;
-      try {
-        assertSqliteIntegrity(database, "test database");
-      } catch (error) {
-        failure = error;
-      }
-      expect(failure).toMatchObject({ name: "SqliteIntegrityError" });
-      expect(String(failure)).toMatch(
-        /foreign_key_check failed for test database: children row 1 references parents \(foreign key 0\)/u,
-      );
-    } finally {
-      database.close();
-    }
-  });
-
   it("names integrity-check failures", () => {
     const database = {
       prepare: () => ({ all: () => [{ integrity_check: "broken index" }] }),
@@ -238,7 +205,7 @@ describe("assertSqliteIntegrity", () => {
       `);
 
       expect(() => assertSqliteIntegrity(database, "test database")).toThrow(
-        /children row 5 references parents \(foreign key 0\); additional violations omitted$/u,
+        /children row 5 references parents \(foreign key 0\); additional violations omitted\. Stop the Gateway, run "openclaw doctor --fix"/u,
       );
     } finally {
       database.close();

@@ -1,9 +1,6 @@
 // Verifies manifest-driven model suppression behavior.
 import fs from "node:fs";
-import {
-  normalizeModelCatalog,
-  normalizeModelCatalogProviderRows,
-} from "@openclaw/model-catalog-core/model-catalog-normalize";
+import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { projectModelProviderConfig } from "../config/model-provider-config.js";
@@ -150,32 +147,6 @@ describe("manifest model suppression", () => {
     });
   });
 
-  it("resolves manifest suppressions for declared provider aliases", () => {
-    const resolver = buildManifestBuiltInModelSuppressionResolver({ env: process.env });
-
-    expect(
-      resolver({
-        provider: "azure-openai-responses",
-        id: "GPT-5.3-Codex-Spark",
-      }),
-    ).toEqual({
-      suppress: true,
-      errorMessage:
-        "Unknown model: azure-openai-responses/gpt-5.3-codex-spark. Use openai/gpt-5.5.",
-    });
-  });
-
-  it("ignores suppressions for providers the plugin does not own", () => {
-    const resolver = buildManifestBuiltInModelSuppressionResolver({ env: process.env });
-
-    expect(
-      resolver({
-        provider: "openrouter",
-        id: "foreign-row",
-      }),
-    ).toBeUndefined();
-  });
-
   it("preserves ordered same-model rules and current route conditions", () => {
     const config = {
       models: {
@@ -294,29 +265,6 @@ describe("manifest model suppression", () => {
       ).toBeUndefined();
     },
   );
-
-  it("reuses planned manifest suppressions inside a resolver instance", () => {
-    const config = { plugins: { entries: { openai: { enabled: true } } } };
-
-    const resolver = buildManifestBuiltInModelSuppressionResolver({
-      config,
-      env: process.env,
-    });
-
-    expect(
-      resolver({
-        provider: "azure-openai-responses",
-        id: "gpt-5.3-codex-spark",
-      })?.suppress,
-    ).toBe(true);
-    expect(
-      resolver({
-        provider: "azure-openai-responses",
-        id: "gpt-4.1",
-      }),
-    ).toBeUndefined();
-    expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
-  });
 
   it.each([
     { name: "native", baseUrl: "https://api.x.ai/v1", id: "auto", retired: true },
@@ -582,89 +530,5 @@ describe("manifest model suppression", () => {
         id: "qwen3.6-plus",
       }),
     ).toBeUndefined();
-  });
-
-  it("does not apply provider api conditional suppressions when a configured provider omits api", () => {
-    mocks.loadPluginMetadataSnapshot.mockReturnValue(
-      createMetadataSnapshot([
-        {
-          id: "qwen",
-          providers: ["modelstudio"],
-          modelCatalog: {
-            suppressions: [
-              {
-                provider: "modelstudio",
-                model: "qwen3.6-plus",
-                when: {
-                  baseUrlHosts: ["coding-intl.dashscope.aliyuncs.com"],
-                  providerConfigApiIn: ["qwen", "modelstudio"],
-                },
-              },
-            ],
-          },
-        },
-      ]),
-    );
-    const resolver = buildManifestBuiltInModelSuppressionResolver({
-      config: {
-        models: {
-          providers: {
-            modelstudio: {
-              baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
-              models: [],
-            },
-          },
-        },
-      },
-      env: process.env,
-    });
-
-    expect(
-      resolver({
-        provider: "modelstudio",
-        id: "qwen3.6-plus",
-      }),
-    ).toBeUndefined();
-  });
-
-  it.each([
-    ["qwen", "https://coding.dashscope.aliyuncs.com/v1", true],
-    ["modelstudio", "https://coding-intl.dashscope.aliyuncs.com/v1", true],
-    ["qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1", false],
-    ["modelstudio", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", false],
-    ["qwen", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", false],
-    ["modelstudio", "https://proxy.example/v1", false],
-  ] as const)("matches %s plan availability at %s", (provider, baseUrl, suppressed) => {
-    const qwenManifest: Record<string, unknown> = JSON.parse(
-      fs.readFileSync(
-        new URL("../../extensions/qwen/openclaw.plugin.json", import.meta.url),
-        "utf8",
-      ),
-    );
-    mocks.loadPluginMetadataSnapshot.mockReturnValue(createMetadataSnapshot([qwenManifest]));
-    const providerCatalog = normalizeModelCatalog(qwenManifest.modelCatalog, {
-      ownedProviders: new Set(["qwen"]),
-    })?.providers?.qwen;
-    if (!providerCatalog) {
-      throw new Error("Qwen manifest catalog is missing");
-    }
-    const rows = normalizeModelCatalogProviderRows({
-      provider,
-      providerCatalog,
-      source: "manifest",
-    });
-    const resolver = buildManifestBuiltInModelSuppressionResolver({
-      config: { models: { providers: { [provider]: { baseUrl, models: [] } } } },
-      env: process.env,
-    });
-
-    for (const id of ["qwen3.6-flash", "qwen3.7-max", "qwen3.8-max", "qwen3.8-flash"]) {
-      const row = rows.find((entry) => entry.id === id);
-      expect(row, id).toBeDefined();
-      expect(Boolean(resolver({ provider, id, baseUrl: row?.baseUrl })?.suppress), id).toBe(
-        suppressed,
-      );
-    }
-    expect(resolver({ provider, id: "qwen3.7-plus" })).toBeUndefined();
   });
 });

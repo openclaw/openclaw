@@ -12,7 +12,7 @@ import {
   resolveDefaultAgentId,
   tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope.js";
-import { getRuntimeConfig, transformConfigFile } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, transformConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildWorkspaceHookStatus,
@@ -40,6 +40,7 @@ import {
   type HooksListOptions,
   type HooksReportOptions,
 } from "./hooks-cli.format.js";
+import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { runNativeHookRelayCli, type NativeHookRelayCliOptions } from "./native-hook-relay-cli.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import type { RunPluginInstallCommandParams } from "./plugins-install-preflight.js";
@@ -102,7 +103,7 @@ async function loadHooksReport<T>(
   agentId: string | undefined,
   consume: (report: HookStatusReport) => T,
 ): Promise<T> {
-  const config = getRuntimeConfig({ skipPluginValidation: true });
+  const config = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
   const target = resolveHooksReportTarget(config, agentId);
   const { callGateway } = await import("../gateway/call.js");
   let report: HookStatusReport;
@@ -181,7 +182,23 @@ async function runOneShotHooksCliAction(
   requestExitAfterOneShotOutput(defaultRuntime, exitCode);
 }
 async function setHookEnabled(hookName: string, enabled: boolean, agentId?: string): Promise<void> {
+  return await runWithLocalStateOwner({
+    method: `hooks.${enabled ? "enable" : "disable"}`,
+    params: {},
+    target: `hook "${hookName}"`,
+    onForeignOwner: "refuse",
+    runLocal: ({ assertCurrent }) => setHookEnabledLocal(hookName, enabled, agentId, assertCurrent),
+  });
+}
+
+async function setHookEnabledLocal(
+  hookName: string,
+  enabled: boolean,
+  agentId: string | undefined,
+  assertCurrent: () => void,
+): Promise<void> {
   const committed = await transformConfigFile({
+    writeOptions: { assertConfigPathForWrite: assertCurrent },
     transform: (config) =>
       withHooksReport(config, resolveHooksReportTarget(config, agentId), (report) => {
         const hook = resolveHookSelection(report, hookName);
@@ -328,6 +345,7 @@ export function registerHooksCli(program: Command): void {
     .requiredOption("--provider <provider>", "Native harness provider")
     .requiredOption("--relay-id <id>", "Native hook relay id")
     .option("--state-db <path>", "Shared state database path")
+    .option("--remote-credential <path>", "Dedicated harness relay credential file")
     .option("--generation <generation>", "Native hook relay registration generation")
     .requiredOption("--event <event>", "Native hook event")
     .option(

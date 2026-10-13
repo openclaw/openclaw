@@ -9,7 +9,7 @@ import {
 import { createOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import {
   reclaimNativeSessionGenerationWithAuthority,
-  resolveNativeSessionBindingWithAuthority,
+  resolveNativeSessionBindingWithAuthorityV2,
   type NativeSessionGenerationOperationsV2,
 } from "./binding-generation-authority.js";
 
@@ -44,10 +44,10 @@ describe("native session binding generation authority", () => {
         state === "ephemeral" ? { ...scope(), sessionKey: "agent:main:other" } : scope(),
         { sessionId: state === "ephemeral" ? "session-other" : target.sessionId, updatedAt: 1 },
       );
-      const pending = resolveNativeSessionBindingWithAuthority({
+      const pending = resolveNativeSessionBindingWithAuthorityV2({
         target: state === "stale" ? { ...target, sessionId: "session-stale" } : target,
         storePath,
-        readBinding: () => binding,
+        readBinding: async () => binding,
         createSupersededError,
         assertCurrent: () => {
           if (!active) {
@@ -74,6 +74,31 @@ describe("native session binding generation authority", () => {
       );
     },
   );
+
+  it("rechecks host generation after an awaited binding read", async () => {
+    await upsertSessionEntryCore(scope(), { sessionId: target.sessionId, updatedAt: 1 });
+    const reading = createDeferred();
+    const release = createDeferred();
+    const pending = resolveNativeSessionBindingWithAuthorityV2({
+      target,
+      storePath,
+      createSupersededError,
+      readBinding: async () => {
+        reading.resolve();
+        await release.promise;
+        return binding;
+      },
+    }).catch((error: unknown) => error);
+    await reading.promise;
+    try {
+      await patchSessionEntryCore(scope(), () => ({ sessionId: "session-successor" }));
+    } finally {
+      release.resolve();
+    }
+    expect(await pending).toMatchObject({
+      message: `Session generation is no longer current: ${target.sessionId}`,
+    });
+  });
 
   it("does not bridge two generations when the host rotates during a predecessor wait", async () => {
     const previous = { ...target, sessionId: "previous" };

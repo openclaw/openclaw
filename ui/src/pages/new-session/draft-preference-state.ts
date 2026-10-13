@@ -178,10 +178,7 @@ export class DraftPreferenceState {
     const accepted = expected !== undefined;
     const persist =
       !catalog.isTarget(data) && !data?.group && (accepted || !pendingPlacementSessionKey);
-    if (!persist && !accepted) {
-      return undefined;
-    }
-    if (!source) {
+    if ((!persist && !accepted) || !source) {
       return undefined;
     }
     const scope = this.preferenceScope;
@@ -245,9 +242,8 @@ export class DraftPreferenceState {
         return;
       }
       const isCurrent = () =>
-        accepted
-          ? ownsConnection() && writer.selection === selection
-          : ownsConnection() && this.preferenceScope === scope;
+        ownsConnection() &&
+        (accepted ? writer.selection === selection : this.preferenceScope === scope);
       // A disconnected controller must still fence work admitted to its Gateway queue.
       const queued = this.preferenceModeValue !== "local";
       const write = async () => {

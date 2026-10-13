@@ -1,5 +1,3 @@
-// Public SDK data contracts for Gateway transport, runs, sessions, tools,
-// artifacts, environments, and normalized event streams.
 import type { GatewayClientRequestOptions } from "@openclaw/gateway-client";
 import type {
   ArtifactSummary as GatewayArtifactSummaryType,
@@ -37,7 +35,6 @@ export type JsonObject = Record<string, unknown>;
 /** SDK request projection; additional GatewayClient lifecycle hooks stay client-owned. */
 export type GatewayRequestOptions = Pick<GatewayClientRequestOptions, "expectFinal" | "timeoutMs">;
 
-/** Raw event payload emitted by the Gateway transport. */
 export type GatewayEvent = {
   event: string;
   payload?: unknown;
@@ -45,7 +42,6 @@ export type GatewayEvent = {
   stateVersion?: unknown;
 };
 
-/** Minimal transport interface consumed by the OpenClaw SDK client. */
 export type OpenClawTransport = {
   request<T = unknown>(
     method: string,
@@ -56,7 +52,6 @@ export type OpenClawTransport = {
   close?(): Promise<void> | void;
 };
 
-/** Transport variant that requires an explicit connection step. */
 export type ConnectableOpenClawTransport = OpenClawTransport & {
   connect(): Promise<void>;
 };
@@ -145,7 +140,6 @@ export type ApprovalDecisionParams = {
   decision: "allow-once" | "allow-always" | "deny";
 };
 
-/** Terminal and non-terminal status values returned by Run.wait. */
 export type RunStatus = "accepted" | "completed" | "failed" | "cancelled" | "timed_out";
 
 export type RunTimestamp = number | string;
@@ -223,7 +217,6 @@ export type SDKError = {
   details?: unknown;
 };
 
-/** Parameters for direct tool invocation through the SDK. */
 export type ToolInvokeParams = Omit<
   GatewayToolsInvokeParamsType,
   "name" | "conversationReadOrigin"
@@ -233,7 +226,6 @@ export type ToolInvokeResult = Omit<GatewayToolsInvokeResultType, "error"> & {
   error?: SDKError;
 };
 
-/** Normalized result returned by Run.wait. */
 export type RunResult = {
   runId: string;
   status: RunStatus;
@@ -256,7 +248,6 @@ export type RunResult = {
   raw?: unknown;
 };
 
-/** Stable SDK event type taxonomy derived from raw Gateway events. */
 export type OpenClawEventType =
   | "run.created"
   | "run.queued"
@@ -286,7 +277,6 @@ export type OpenClawEventType =
   | "git.pr"
   | "raw";
 
-/** Normalized SDK event with common run/session metadata. */
 export type OpenClawEvent<TData = unknown> = {
   version: 1;
   id: string;
@@ -300,7 +290,6 @@ export type OpenClawEvent<TData = unknown> = {
   raw?: GatewayEvent;
 };
 
-/** Parameters for creating an agent run. */
 export type AgentRunParams = {
   input: string;
   agentId?: string;

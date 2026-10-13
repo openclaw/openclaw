@@ -20,7 +20,10 @@ export async function resolveXIngress(
 ) {
   const core = getXRuntime();
   const account = resolveXAccount(cfg, accountId);
-  const snapshot = await openXAllowlist(core).readSnapshot(accountId);
+  const snapshot = await openXAllowlist(core).readSnapshot(
+    accountId,
+    account.config.verifiedFromGitHub,
+  );
   // 2026.9.8 only invokes readStoreAllowFrom for DMs. This admin-owned store
   // supplies raw group entries; the host still owns all matching and policy.
   const groupAllowFrom = [...(account.config.allowFrom ?? []), ...snapshot.allowFrom];
@@ -59,5 +62,14 @@ export async function resolveXIngress(
     }
   };
   assertCurrent();
-  return { ingress, assertCurrent, tier };
+  const githubEntry = snapshot.github?.entries.find((entry) => entry.xUserId === post.author_id);
+  return {
+    ingress,
+    assertCurrent,
+    tier,
+    github:
+      githubEntry && snapshot.github
+        ? { repo: snapshot.github.repo, entry: githubEntry }
+        : undefined,
+  };
 }

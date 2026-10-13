@@ -19,7 +19,7 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getDeliveryQueueEntryStatus } from "../src/infra/delivery-queue-sqlite.js";
+import { getDeliveryQueueEntryStatus } from "../src/infra/delivery-queue-sqlite.test-support.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../src/infra/outbound/delivery-queue-media-staging.js";
 
 const CLASSIFIED_CODES = ["messages_tab_disabled", "account_inactive"] as const;

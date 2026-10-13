@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, expect, it } from "vitest";
 import type { PluginsSkillsReadResult } from "../../../../packages/gateway-protocol/src/index.ts";
-import type { OpenClawFilePreviewModal } from "../../components/file-preview-modal.ts";
 import type { PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
 import { reconnectMockGateway } from "../../test-helpers/control-ui-e2e.ts";
 import {
@@ -211,6 +210,8 @@ describeControlUiE2e("Plugin skill bundle routes", () => {
             await captureScreenshot(page, `skill-bundle-${width}.png`, "viewport");
           }
         }
+        // Move off the file hint so Escape tests viewer dismissal.
+        await modal.locator(".heading").hover();
         await page.keyboard.press("Escape");
         await expect.poll(() => modal.count()).toBe(0);
         expect(new URL(page.url()).pathname).toBe(`/${route}`);
@@ -321,7 +322,7 @@ describeControlUiE2e("Plugin skill bundle routes", () => {
       // Await the controller's completed read and the actual modal render, not just RPC delivery.
       await expect
         .poll(() =>
-          modal.evaluate(async (preview: OpenClawFilePreviewModal) => {
+          modal.evaluate(async (preview: HTMLElementTagNameMap["openclaw-file-preview-modal"]) => {
             await preview.updateComplete;
             return preview.files.find((file) => file.path === "references/config.md")?.contents;
           }),

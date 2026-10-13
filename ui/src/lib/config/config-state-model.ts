@@ -27,8 +27,14 @@ type RuntimeConfigGatewaySnapshot = {
 
 const initialConfigValue = <T>(value: T): T => value;
 
-export function createInitialConfigState(snapshot?: Partial<RuntimeConfigGatewaySnapshot>) {
+export function createInitialConfigState(
+  snapshot?: Partial<RuntimeConfigGatewaySnapshot>,
+  getBootstrapConfig?: () => Record<string, unknown> | null,
+) {
   return {
+    get bootstrapConfig() {
+      return getBootstrapConfig?.() ?? null;
+    },
     client: snapshot?.client ?? null,
     connected: snapshot?.phase === "connected",
     applySessionKey: snapshot?.sessionKey ?? "main",
@@ -59,8 +65,11 @@ export function createInitialConfigState(snapshot?: Partial<RuntimeConfigGateway
 }
 
 type ProducedRuntimeConfigState = ReturnType<typeof createInitialConfigState>;
-export type RuntimeConfigState = Omit<ProducedRuntimeConfigState, "configDraftBaseHash"> &
-  Partial<Pick<ProducedRuntimeConfigState, "configDraftBaseHash">> & {
+export type RuntimeConfigState = Omit<
+  ProducedRuntimeConfigState,
+  "configDraftBaseHash" | "bootstrapConfig"
+> &
+  Partial<Pick<ProducedRuntimeConfigState, "configDraftBaseHash" | "bootstrapConfig">> & {
     chatError?: string | null;
   };
 
@@ -196,6 +205,25 @@ export function currentConfigObject(
     ? (state.configForm ?? resolveEditableSnapshotConfig(state.configSnapshot))
     : null;
 }
+
+/** Read-only display facts cannot become an editor's base or write revision. */
+export function currentDisplayConfig(state: RuntimeConfigState): Record<string, unknown> | null {
+  return (
+    (!staleConfigSnapshots.has(state) ? asConfigRecord(state.configSnapshot?.config) : null) ??
+    state.bootstrapConfig ??
+    null
+  );
+}
+
+export function currentDisplayRuntimeConfig(
+  state: RuntimeConfigState,
+): Record<string, unknown> | null {
+  return (
+    (!staleConfigSnapshots.has(state) ? state.configSnapshot?.runtimeConfig : null) ??
+    state.bootstrapConfig ??
+    null
+  );
+}
 export type AgentConfigEntryTarget = {
   path: ["agents", "entries", string];
   entry: Record<string, unknown>;
@@ -228,11 +256,8 @@ export function resolveAgentConfigEntryTarget(
       AGENT_CONFIG_ENTRY_ID_PATTERN.test(candidate) &&
       normalizeAgentId(candidate) === normalizedAgentId,
   );
-  if (!entries || !authoredAgentId) {
-    return null;
-  }
-  const entry = entries[authoredAgentId];
-  if (!isRecord(entry)) {
+  const entry = authoredAgentId ? entries?.[authoredAgentId] : undefined;
+  if (!authoredAgentId || !isRecord(entry)) {
     return null;
   }
   return {
@@ -258,6 +283,5 @@ export function agentConfigEntry(
   if (!options.ensure) {
     return null;
   }
-  const path = ["agents", "entries", normalizedAgentId] as const;
-  return { path: [...path], entry: {} };
+  return { path: ["agents", "entries", normalizedAgentId], entry: {} };
 }

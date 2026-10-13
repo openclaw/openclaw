@@ -25,6 +25,7 @@ import {
   resolveFinalAssistantVisibleText,
   resolveReportedModelRef,
 } from "../../agents/embedded-agent-runner/run/helpers.js";
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import {
   createUsageAccumulator,
   mergeUsageIntoAccumulator,
@@ -45,7 +46,10 @@ import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { capturePresenceToolAuthority } from "../../agents/tools/presence-tool-authority.js";
 import { hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
-import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
+import {
+  runWithoutOwnedSessionTranscriptWrites,
+  withSessionTranscriptWriteAssertion,
+} from "../../config/sessions/transcript-write-context.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { SpawnResult } from "../../process/exec.js";
@@ -107,10 +111,8 @@ export function captureWorkerTurnInputAuthority(params: {
   transcriptTarget: BoundAgentRunSessionTarget;
   recorder: SessionPlacementTurnParams["userTurnTranscriptRecorder"];
   signal?: AbortSignal;
-  assertRunCurrent?: () => void;
+  assertRunCurrent: () => void;
   isBlocked: () => boolean;
-  placements: WorkerSessionPlacementStore;
-  turnClaim: WorkerSessionTurnClaim;
 }) {
   const assertInputCurrent = composeSessionSourceAssertion(
     [params.assertRunCurrent],
@@ -128,9 +130,6 @@ export function captureWorkerTurnInputAuthority(params: {
     assertSourceCurrent: composeSessionSourceAssertion([assertInputCurrent, transcriptSource]),
     assertContextCurrent: () => {
       assertInputCurrent();
-      if (!params.placements.validateTurnClaim(params.turnClaim)) {
-        throw new Error("Worker turn claim changed during context preparation");
-      }
       resolveWorkerTurnTranscriptTarget({
         ...params.transcriptTarget,
         sessionTarget: params.transcriptTarget,
@@ -359,7 +358,7 @@ function parseWorkerTurnProcessResult(processResult: SpawnResult) {
   return result;
 }
 
-/** Validates the committed worker result and settles context after workspace publication. */
+/** Delivers the committed reply while its result owner continues workspace settlement. */
 export async function finalizeWorkerTurnResult(
   params: Parameters<typeof reconcileWorkspaceAfterTurn>[0] & {
     turn: SessionPlacementTurnParams;
@@ -374,6 +373,7 @@ export async function finalizeWorkerTurnResult(
     settleSteering: () => Promise<void>;
     signal: AbortSignal;
     startedAt: number;
+    onReply: (result: EmbeddedAgentRunResult) => void;
   },
 ) {
   const { turn, placement, transcriptTarget, promptContext } = params;
@@ -382,14 +382,15 @@ export async function finalizeWorkerTurnResult(
 
   // A terminal result settles under its pending-result owner, even after execution ends.
   const completed = await SessionManager.openAsync(transcriptTarget);
+  const resultTarget = { ...transcriptTarget, expectedWriterRunId: undefined };
   const assertResultCurrent = () => {
     if (!params.placements.validateWorkspaceResultClaim(params.turnClaim)) {
       throw new Error("Cloud worker result lost its placement owner during transcript hydration");
     }
-    resolveWorkerTurnTranscriptTarget({ ...transcriptTarget, sessionTarget: transcriptTarget });
+    resolveWorkerTurnTranscriptTarget({ ...resultTarget, sessionTarget: resultTarget });
   };
   assertResultCurrent();
-  const currentPlacement = params.placements.get(placement.sessionId);
+  const currentPlacement = params.placements.preparedWorkspaceResultPlacement(params.turnClaim);
   if (
     runtimeResult.transcriptLeafId !== completed.getLeafId() ||
     runtimeResult.transcriptNextSeq !== (currentPlacement?.lastTranscriptAckCursor ?? 0) + 1
@@ -406,6 +407,21 @@ export async function finalizeWorkerTurnResult(
   if (!terminal || terminal.type !== "message" || terminal.message.role !== "assistant") {
     throw new Error("Cloud worker completed without a terminal assistant transcript message");
   }
+  // Reply accounting needs the admitted writer even when this turn did not compact.
+  if (transcriptTarget.expectedWriterRunId !== undefined) {
+    turn.onCompactionAccounting?.({
+      kind: "durable",
+      count: 0,
+      target: {
+        agentId: transcriptTarget.agentId,
+        sessionId: transcriptTarget.sessionId,
+        sessionKey: transcriptTarget.sessionKey,
+        storePath: transcriptTarget.storePath,
+        lifecycleRevision: transcriptTarget.expectedLifecycleRevision,
+        activeWriterRunId: transcriptTarget.expectedWriterRunId,
+      },
+    });
+  }
   const text = collectTextContentBlocks(terminal.message.content).join("");
   const baseIndex = completed.getBranch().findIndex((entry) => entry.id === params.baseLeafId);
   const workerMessages = completed
@@ -421,77 +437,74 @@ export async function finalizeWorkerTurnResult(
     recordModelFallbackStop(workerFailure);
   }
   const reply = workerFailure ? { text } : await params.prepareReplyMedia({ text });
-  const workspaceConflict = await reconcileWorkspaceAfterTurn({
-    ...params,
-    publishAcceptedWorkspace: async (claim) => {
-      await params.publishAcceptedWorkspace?.(claim);
-      assertResultCurrent();
-      const finalizationManager = turn.onContextEngineTurnCandidate
-        ? completed
-        : await SessionManager.openAsync(transcriptTarget);
-      assertResultCurrent();
-      const userEntry = params.baseLeafId
-        ? finalizationManager.getEntry(params.baseLeafId)
-        : undefined;
-      await finalizeHarnessContextEngineTurn({
-        ...promptContext.contextEngineTurn,
-        sessionManager: finalizationManager,
-        sessionIdUsed: placement.sessionId,
-        promptError: workerTurnFailed,
-        aborted: params.signal.aborted,
-        yieldAborted: false,
-        isHeartbeat: isHeartbeatLifecycleRunKind(turn.bootstrapContextRunKind),
-        messagesSnapshot: [
-          ...promptContext.history,
-          ...(userEntry?.type === "message" && userEntry.message.role === "user"
-            ? [userEntry.message]
-            : []),
-          ...workerMessages,
-        ],
-        prePromptMessageCount: promptContext.history.length,
-        turnCandidate: turn.onContextEngineTurnCandidate
-          ? {
-              admission: turn.userTurnTranscriptRecorder?.getAdmissionReceipt(),
-              terminalEntryId: terminal.id,
-              record: (facts) => {
-                assertResultCurrent();
-                turn.onContextEngineTurnCandidate?.(facts);
-              },
-            }
-          : undefined,
-        runMaintenance: (maintenance) =>
-          runHarnessContextEngineMaintenance({
-            ...maintenance,
-            withSessionManagerRewriteLock: (operation) =>
-              withSessionTranscriptWriteAssertion(transcriptTarget, assertResultCurrent, () =>
-                withSessionManagerWrite(finalizationManager, operation),
-              ),
-          }),
-      });
-      assertResultCurrent();
-    },
-  }).catch((reconciliationError: unknown) => {
-    if (workerFailure) {
-      throw workerWorkspaceFailure(workerFailure, reconciliationError);
-    }
-    throw reconciliationError;
-  });
-  if (workspaceConflict) {
-    const delta = `${reply.text ? "\n\n" : ""}${workspaceConflict.summary}`;
-    reply.text = `${reply.text ?? ""}${delta}`;
-    await Promise.resolve()
-      .then(() =>
-        turn.onAgentEvent?.({
-          stream: "assistant",
-          data: {
-            text: reply.text,
-            delta,
-          },
+  const aborted = params.signal.aborted;
+  const finalizeContext = async () => {
+    const finalizationManager = turn.onContextEngineTurnCandidate
+      ? completed
+      : await SessionManager.openAsync(resultTarget);
+    assertResultCurrent();
+    const userEntry = params.baseLeafId
+      ? finalizationManager.getEntry(params.baseLeafId)
+      : undefined;
+    await finalizeHarnessContextEngineTurn({
+      ...promptContext.contextEngineTurn,
+      sessionManager: finalizationManager,
+      sessionIdUsed: placement.sessionId,
+      promptError: workerTurnFailed,
+      aborted,
+      yieldAborted: false,
+      isHeartbeat: isHeartbeatLifecycleRunKind(turn.bootstrapContextRunKind),
+      messagesSnapshot: [
+        ...promptContext.history,
+        ...(userEntry?.type === "message" && userEntry.message.role === "user"
+          ? [userEntry.message]
+          : []),
+        ...workerMessages,
+      ],
+      prePromptMessageCount: promptContext.history.length,
+      turnCandidate: turn.onContextEngineTurnCandidate
+        ? {
+            admission: turn.userTurnTranscriptRecorder?.getAdmissionReceipt(),
+            terminalEntryId: terminal.id,
+            record: (facts) => {
+              assertResultCurrent();
+              turn.onContextEngineTurnCandidate?.(facts);
+            },
+          }
+        : undefined,
+      runMaintenance: (maintenance) =>
+        runHarnessContextEngineMaintenance({
+          ...maintenance,
+          withSessionManagerRewriteLock: (operation) =>
+            withSessionTranscriptWriteAssertion(resultTarget, assertResultCurrent, () =>
+              withSessionManagerWrite(finalizationManager, operation),
+            ),
         }),
-      )
-      .catch(() => undefined);
+    });
+    assertResultCurrent();
+  };
+  if (turn.onContextEngineTurnCandidate) {
+    await finalizeContext();
   }
+  // The exact result claim owns these writes after the caller closes its reply writer.
+  const settleWorkspace = () =>
+    runWithoutOwnedSessionTranscriptWrites(() =>
+      reconcileWorkspaceAfterTurn({
+        ...params,
+        transcriptTarget: resultTarget,
+        publishAcceptedWorkspace: async (claim) => {
+          await params.publishAcceptedWorkspace?.(claim);
+          assertResultCurrent();
+          if (!turn.onContextEngineTurnCandidate) {
+            await finalizeContext();
+          }
+        },
+      }),
+    );
   if (workerFailure) {
+    await settleWorkspace().catch((error: unknown) => {
+      throw workerWorkspaceFailure(workerFailure, error);
+    });
     throw workerFailure;
   }
   await params.settleSteering();
@@ -519,7 +532,7 @@ export async function finalizeWorkerTurnResult(
     ...params.modelRef,
     assistant: lastAssistant,
   });
-  return {
+  const result: EmbeddedAgentRunResult = {
     ...(reply.text || reply.mediaUrl || reply.mediaUrls?.length ? { payloads: [reply] } : {}),
     meta: {
       durationMs,
@@ -535,6 +548,10 @@ export async function finalizeWorkerTurnResult(
       finalAssistantRawText: resolveFinalAssistantRawText(terminal.message),
     },
   };
+  assertResultCurrent();
+  params.onReply(result);
+  await settleWorkspace();
+  return result;
 }
 
 export function assertSupportedTurn(params: SessionPlacementTurnParams) {

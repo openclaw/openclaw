@@ -13,7 +13,11 @@ export { resolvePersistedSessionRuntimeId } from "../agents/session-runtime-comp
 export { resolveSessionModelRef } from "../agents/session-model-ref.js";
 export const applySessionModelSelection: (
   params: ApplySessionModelSelectionParams,
-) => Promise<ApplySessionModelSelectionResult> = applySessionModelSelectionInternal;
+) => Promise<ApplySessionModelSelectionResult> = (params) =>
+  applySessionModelSelectionInternal({
+    ...params,
+    ...(params.validateAuthProfileSelection ? { nativeCommitValidation: true } : {}),
+  });
 export type {
   ApplySessionModelSelectionParams,
   ApplySessionModelSelectionResult,

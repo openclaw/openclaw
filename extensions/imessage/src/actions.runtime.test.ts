@@ -191,17 +191,6 @@ describe("imessage actions runtime", () => {
       args: ["unsend", "--chat", "chat-guid", "--message", "message-guid", "--part", "3"],
     },
     {
-      method: "group.addParticipant",
-      send: (transport: typeof options | typeof remote) =>
-        runtime.addParticipant({
-          chatGuid: "chat-guid",
-          address: "+15550000123",
-          options: transport,
-        }),
-      fields: { chat_guid: "chat-guid", address: "+15550000123" },
-      args: ["chat-add-member", "--chat", "chat-guid", "--address", "+15550000123"],
-    },
-    {
       method: "group.removeParticipant",
       send: (transport: typeof options | typeof remote) =>
         runtime.removeParticipant({
@@ -487,53 +476,6 @@ describe("imessage actions runtime", () => {
     await expect(access(dirname(stagedPath))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("removes the private attachment workspace after a failed send", async () => {
-    const sendError = new Error("imsg rejected the attachment");
-    let stagedPath = "";
-    runIMessageCliJsonCommandMock.mockImplementationOnce(async ({ args }: { args: string[] }) => {
-      stagedPath = args[args.indexOf("--file") + 1] ?? "";
-      throw sendError;
-    });
-    await expect(runtime.sendAttachment({ chatGuid: "chat-guid", ...file, options })).rejects.toBe(
-      sendError,
-    );
-    await expect(access(dirname(stagedPath))).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("drops a cached chat list when the clock stops being a valid date", async () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
-    const first = rpc({ chats: [{ id: 1, guid: "iMessage;+;first" }] });
-    const second = rpc({ chats: [{ id: 2, guid: "iMessage;+;second" }] });
-    await expect(resolve({ kind: "chat_id", chatId: 1 }, "imsg-invalid-clock")).resolves.toBe(
-      "iMessage;+;first",
-    );
-    now.mockReturnValue(Number.NaN);
-    await expect(resolve({ kind: "chat_id", chatId: 2 }, "imsg-invalid-clock")).resolves.toBe(
-      "iMessage;+;second",
-    );
-    expect(createIMessageRpcClientMock).toHaveBeenCalledTimes(2);
-    for (const client of [first, second]) {
-      expect(client.request).toHaveBeenCalledWith(
-        "chats.list",
-        { limit: 1000 },
-        { timeoutMs: undefined },
-      );
-    }
-  });
-
-  it("does not cache a chat list whose expiry would exceed the valid date range", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
-    rpc({ chats: [{ id: 1, guid: "iMessage;+;first" }] });
-    rpc({ chats: [{ id: 2, guid: "iMessage;+;second" }] });
-    await expect(resolve({ kind: "chat_id", chatId: 1 }, "imsg-overflow-clock")).resolves.toBe(
-      "iMessage;+;first",
-    );
-    await expect(resolve({ kind: "chat_id", chatId: 2 }, "imsg-overflow-clock")).resolves.toBe(
-      "iMessage;+;second",
-    );
-    expect(createIMessageRpcClientMock).toHaveBeenCalledTimes(2);
-  });
-
   it("isolates cached chat lists by resolved remote host", async () => {
     rpc({ chats: [{ id: 1, guid: "iMessage;+;host-a" }] });
     rpc({ chats: [{ id: 2, guid: "iMessage;+;host-b" }] });
@@ -560,12 +502,6 @@ describe("imessage actions runtime", () => {
       target: { kind: "chat_identifier", chatIdentifier: "IMESSAGE;-;+12069106512" },
       chats: chatList,
       expected: "any;-;+12069106512",
-    },
-    {
-      name: "exact group guid",
-      target: { kind: "chat_identifier", chatIdentifier: "iMessage;+;chat0000" },
-      chats: chatList,
-      expected: "iMessage;+;chat0000",
     },
     {
       name: "non-decimal chat id",

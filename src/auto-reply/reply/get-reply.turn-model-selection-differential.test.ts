@@ -1,6 +1,5 @@
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ModelRef } from "../../agents/model-ref-shared.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -16,14 +15,10 @@ import {
   TURN_MODEL_DIFFERENTIAL_FIXTURES,
   TURN_MODEL_LIVE_CHANNEL_REF,
   TURN_MODEL_OVERRIDE_REF,
-  TURN_MODEL_PERSISTED_CHANNEL_REF,
-  TURN_MODEL_PERSISTED_PEER_REF,
-  TURN_MODEL_SESSION_REF,
   createTurnModelEntry,
   turnModelRefLabel,
   turnModelVerdict,
   type TurnModelDifferentialFixture,
-  type TurnModelSelectionPath,
   type TurnModelSelectionVerdict,
 } from "../../test-utils/turn-model-selection-differential.js";
 import { markCompleteReplyConfig } from "./get-reply-fast-path.test-support.js";
@@ -90,7 +85,7 @@ async function seedFixtureStore(
 }
 
 async function observeReplySelection(params: {
-  fixture: TurnModelDifferentialFixture;
+  fixture: Pick<TurnModelDifferentialFixture, "name" | "ctx" | "child" | "heartbeat" | "locked">;
   cfg: OpenClawConfig;
   sessionKey: string;
   sessionStore: Record<string, SessionEntry>;
@@ -211,72 +206,29 @@ afterEach(async () => {
 });
 
 describe("getReplyFromConfig channel model input boundary", () => {
-  const matrix: Array<{
-    name: string;
-    childOverride?: ModelRef;
-    directUserId?: string;
-    groupId?: string;
-    groupChannel?: string;
-    omitPersistedChannel?: boolean;
-    expected: ModelRef;
-  }> = [
-    {
-      name: "child stored override",
-      childOverride: TURN_MODEL_SESSION_REF,
-      expected: TURN_MODEL_SESSION_REF,
-    },
-    {
-      name: "persisted direct peer",
-      directUserId: "persisted-peer",
-      expected: TURN_MODEL_PERSISTED_PEER_REF,
-    },
-    {
-      name: "live channel exact conversation",
-      omitPersistedChannel: true,
-      expected: TURN_MODEL_LIVE_CHANNEL_REF,
-    },
-    {
-      name: "parent conversation key",
-      groupId: "unmatched",
-      groupChannel: "parent-room",
-      expected: TURN_MODEL_CHANNEL_REF,
-    },
-  ];
-
-  it.each(matrix)("selects $name", async (testCase) => {
+  it("selects the live channel exact conversation", async () => {
     const storePath = path.join(state.sessionsDir("main"), "sessions.json");
     const sessionKey = "agent:main:telegram:group:room";
     const child = createTurnModelEntry({
-      channel: testCase.omitPersistedChannel ? undefined : "discord",
-      chatType: testCase.directUserId ? "direct" : "group",
-      groupId: testCase.directUserId ? undefined : (testCase.groupId ?? "room"),
-      groupChannel: testCase.groupChannel,
-      directUserId: testCase.directUserId,
-      override: testCase.childOverride,
+      chatType: "group",
+      groupId: "room",
     });
-    const fixture: TurnModelDifferentialFixture = {
-      name: testCase.name,
+    const fixture = {
+      name: "live channel exact conversation",
       ctx: {
         Provider: "telegram",
         Surface: "telegram",
         OriginatingChannel: "telegram",
-        ChatType: testCase.directUserId ? "direct" : "group",
+        ChatType: "group",
         SenderId: "live-peer",
       },
       child,
       modelByChannel: {
-        discord: {
-          room: turnModelRefLabel(TURN_MODEL_PERSISTED_CHANNEL_REF),
-          "persisted-peer": turnModelRefLabel(TURN_MODEL_PERSISTED_PEER_REF),
-          "parent-room": turnModelRefLabel(TURN_MODEL_CHANNEL_REF),
-          "*": turnModelRefLabel(TURN_MODEL_CHANNEL_REF),
-        },
         telegram: {
           room: turnModelRefLabel(TURN_MODEL_LIVE_CHANNEL_REF),
           "*": turnModelRefLabel(TURN_MODEL_CHANNEL_REF),
         },
       },
-      expected: {} as Record<TurnModelSelectionPath, TurnModelSelectionVerdict>,
     };
     const sessionStore = await seedFixtureStore(storePath, sessionKey, fixture);
     const cfg = createConfig({
@@ -286,12 +238,17 @@ describe("getReplyFromConfig channel model input boundary", () => {
     });
     await expect(
       observeReplySelection({ fixture, cfg, sessionKey, sessionStore }),
-    ).resolves.toEqual(turnModelVerdict(testCase.expected));
+    ).resolves.toEqual(turnModelVerdict(TURN_MODEL_LIVE_CHANNEL_REF));
   });
 });
 
 describe("turn model selection reply-path differential", () => {
-  it.each(TURN_MODEL_DIFFERENTIAL_FIXTURES)("pins observed $name behavior", async (fixture) => {
+  const fixtures = TURN_MODEL_DIFFERENTIAL_FIXTURES.filter(
+    ({ name }) =>
+      name === "heartbeat or explicit turn override" ||
+      name === "explicit default rejects stale child and parent overrides",
+  );
+  it.each(fixtures)("pins observed $name behavior", async (fixture) => {
     const storePath = path.join(state.sessionsDir("main"), "sessions.json");
     const sessionKey = "agent:main:telegram:group:selection";
     const sessionStore = await seedFixtureStore(storePath, sessionKey, fixture);

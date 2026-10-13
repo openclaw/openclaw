@@ -27,7 +27,7 @@ import {
   resolveCodexSupervisionAppServerRuntimeOptions,
   type CodexPluginConfig,
 } from "./config.js";
-import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
+import { prepareCodexNativeExecutionPolicyForRun } from "./native-execution-policy.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import { prepareCodexAttemptTools } from "./run-attempt-tool-setup.js";
@@ -36,13 +36,12 @@ import {
   CODEX_APP_SERVER_BINDING_NAMESPACE,
 } from "./session-binding-store.js";
 import { createCodexAppServerBindingStore, sessionBindingIdentity } from "./session-binding.js";
-import { createCodexRuntimeTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
+import { createCodexSqliteTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
 import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
-  resetSharedCodexAppServerClientForTests,
-  resolveCodexNativeConfigFenceKey,
 } from "./shared-client.js";
+import { resetSharedCodexAppServerClientForTests } from "./shared-client.test-support.js";
 import {
   codexTranscriptMirrorRuntime,
   createCodexAppServerUserMessagePersistenceNotifier,
@@ -117,10 +116,11 @@ export async function createCanonicalForkFixture(params: {
   );
   const storePath = resolveStorePath(config.session?.store, { agentId: "main" });
   const bindingStore = createCodexAppServerBindingStore(
-    createCodexRuntimeTestBindingStateStore(runtime, {
+    createCodexSqliteTestBindingStateStore({
       namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
       maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
       overflowPolicy: "reject-new",
+      env: { ...process.env },
     }),
   );
   const captured = createCapturedPluginRegistration({ id: "codex", config });
@@ -258,6 +258,11 @@ export async function createCanonicalForkFixture(params: {
           },
           runtimeParams: attempt,
           effectiveRuntimeModelId: model.id,
+          nativeExecutionPolicy: await prepareCodexNativeExecutionPolicyForRun(attempt, {
+            agentId: "main",
+            runtimeSessionKey: key,
+            sandbox: null,
+          }),
           nativeToolSurfaceEnabled: true,
           nativeProviderWebSearchSupport: "supported",
           bundleMcpThreadConfig,
@@ -272,8 +277,11 @@ export async function createCanonicalForkFixture(params: {
             buildAttemptParams: () => attempt,
             pluginConfig,
             computerUseConfig: resolveCodexComputerUseConfig({ pluginConfig }),
-            startupAuthProfileId: null,
-            startupAuthBindingFingerprint: undefined,
+            clientOptions: {
+              authProfileId: null,
+              authBindingFingerprint: undefined,
+              authRequirement: undefined,
+            },
             startupAuthAccountCacheKey: undefined,
             startupEnvApiKeyCacheKey: undefined,
             sessionAgentId: "main",
@@ -362,10 +370,6 @@ export async function createCanonicalForkFixture(params: {
         releaseLeasedSharedCodexAppServerClient(client);
       }
     },
-    holdConfiguration: (client: CodexAppServerClient) =>
-      acquireCodexNativeConfigFence(
-        expectDefined(resolveCodexNativeConfigFenceKey({ client }), "native configuration fence"),
-      ),
     bindingStore,
     identity,
     readEntries,

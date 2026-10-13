@@ -82,20 +82,15 @@ export function repairCronCodexRuntimePolicies(params: {
   blockedTargets: CronCodexRuntimePolicyTarget[];
   changedTargets: CronCodexRuntimePolicyTarget[];
 } {
-  if (params.targets.length === 0) {
-    return {
-      config: params.cfg,
-      changes: [],
-      warnings: [],
-      blockedTargets: [],
-      changedTargets: [],
-    };
-  }
-  const next = inheritLegacyDefaultAgentId(params.cfg, structuredClone(params.cfg));
   const changes: string[] = [];
   const warnings: string[] = [];
   const blockedTargets: CronCodexRuntimePolicyTarget[] = [];
   const changedTargets: CronCodexRuntimePolicyTarget[] = [];
+  const result = { config: params.cfg, changes, warnings, blockedTargets, changedTargets };
+  if (params.targets.length === 0) {
+    return result;
+  }
+  const next = inheritLegacyDefaultAgentId(params.cfg, structuredClone(params.cfg));
   // Distinct stored identities (agentId omitted vs the default agent named)
   // can resolve to one policy owner; every equivalent target must inherit the
   // first decision or the deferred rewrite filter misses blocked siblings.
@@ -156,13 +151,8 @@ export function repairCronCodexRuntimePolicies(params: {
     );
   }
 
-  return {
-    config: changes.length > 0 ? next : params.cfg,
-    changes,
-    warnings,
-    blockedTargets,
-    changedTargets,
-  };
+  result.config = changes.length > 0 ? next : params.cfg;
+  return result;
 }
 
 /** Restrict a post-config-write cron rewrite to runtime policies already on disk. */

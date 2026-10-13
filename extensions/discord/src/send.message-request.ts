@@ -51,13 +51,9 @@ export function resolveDiscordMessageFlags(params: {
   silent?: boolean;
   suppressEmbeds?: boolean;
 }): number | undefined {
-  let flags = 0;
-  if (params.suppressEmbeds) {
-    flags |= SUPPRESS_EMBEDS_FLAG;
-  }
-  if (params.silent) {
-    flags |= SUPPRESS_NOTIFICATIONS_FLAG;
-  }
+  const flags =
+    (params.suppressEmbeds ? SUPPRESS_EMBEDS_FLAG : 0) |
+    (params.silent ? SUPPRESS_NOTIFICATIONS_FLAG : 0);
   return flags || undefined;
 }
 
@@ -79,27 +75,16 @@ type DiscordMessageRequestParams = {
 } & ({ endpoint: "create-message"; nonce?: string } | { endpoint: "forum-thread"; nonce?: never });
 
 export function buildDiscordMessageRequest(params: DiscordMessageRequestParams) {
-  const payload: MessagePayloadObject = {};
   const hasV2 = hasDiscordV2Components(params.components);
   const trimmed = params.text.trim();
-  if (!hasV2 && trimmed) {
-    payload.content = params.text;
-  }
-  if (params.components?.length) {
-    payload.components = params.components;
-  }
-  if (!hasV2 && params.embeds?.length) {
-    payload.embeds = params.embeds;
-  }
-  if (params.allowedMentions) {
-    payload.allowed_mentions = params.allowedMentions;
-  }
-  if (params.flags !== undefined) {
-    payload.flags = params.flags;
-  }
-  if (params.files?.length) {
-    payload.files = params.files;
-  }
+  const payload: MessagePayloadObject = {
+    content: !hasV2 && trimmed ? params.text : undefined,
+    components: params.components?.length ? params.components : undefined,
+    embeds: !hasV2 && params.embeds?.length ? params.embeds : undefined,
+    allowed_mentions: params.allowedMentions || undefined,
+    flags: params.flags,
+    files: params.files?.length ? params.files : undefined,
+  };
   const nonce =
     params.endpoint === "create-message"
       ? (params.nonce ?? createDiscordMessageNonce())

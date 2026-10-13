@@ -15,9 +15,10 @@ import {
   moveSidebarMenuFocus,
   renderSidebarHelpMenu,
 } from "./app-sidebar-agent-menu.ts";
-import { renderSidebarMenuAction, renderSidebarMenuTrigger } from "./app-sidebar-nav-menus.ts";
+import { renderSidebarMenuAction } from "./app-sidebar-nav-menus.ts";
 import { icons } from "./icons.ts";
 import { renderKbd, renderKeyboardShortcut } from "./kbd.ts";
+import { renderMenuTrigger } from "./menu-surface.ts";
 import "./sidebar-build-chip.ts";
 import "./viewer-facepile.ts";
 import { syncDropdownItemRadio, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
@@ -56,7 +57,7 @@ function renderIdentityGateways(onClose: SidebarIdentityMenuParams["onClose"]) {
         unknown: t("nav.gateway.unknown"),
       }[gateway.health];
       const openWindow = (event: MouseEvent) => {
-        if (event.metaKey || event.ctrlKey) {
+        if (capability.openWindow && (event.metaKey || event.ctrlKey)) {
           event.preventDefault();
           event.stopPropagation();
           capability.openWindow(gateway.id);
@@ -87,7 +88,7 @@ function renderIdentityGateways(onClose: SidebarIdentityMenuParams["onClose"]) {
               : nothing
           }
           ${
-            !selected && index < 9
+            capability.openWindow && !selected && index < 9
               ? renderKbd(["⌘", String(index + 1)], {
                   className: "session-menu__shortcut",
                   ariaHidden: true,
@@ -193,7 +194,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
       }}
       @wa-after-hide=${(event: Event) => closeMenuAfterOwnDropdownHide(event, params.onClose)}
     >
-      ${renderSidebarMenuTrigger(
+      ${renderMenuTrigger(
         { x: position.x, y: position.bottom },
         t("profilePage.identity.menuLabel"),
         "bottom",

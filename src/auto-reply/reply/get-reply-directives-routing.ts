@@ -31,11 +31,15 @@ export function resolveReplyDirectiveRouting(params: {
   unauthorizedReasoningDirectiveAttempt: boolean;
 } {
   const allowStatusDirective = params.canInterpretTextDirectives;
-  let parsed = parseInlineSessionDirectives(params.commandText, {
-    modelAliases: params.modelAliases,
-    allowStatusDirective,
-    command: params.command,
-  });
+  const parseDirectives = (text: string) =>
+    parseInlineSessionDirectives(text, {
+      modelAliases: params.modelAliases,
+      allowStatusDirective,
+      command: params.command,
+    });
+  const cleanStatus = (text: string) =>
+    allowStatusDirective ? stripInlineStatus(text).cleaned : text;
+  let parsed = parseDirectives(params.commandText);
   const hasInlineStatus = parsed.hasStatusDirective && parsed.cleaned.trim().length > 0;
   if (hasInlineStatus) {
     parsed = { ...parsed, hasStatusDirective: false };
@@ -114,9 +118,7 @@ export function resolveReplyDirectiveRouting(params: {
     };
   }
 
-  const cleanedCommand = allowStatusDirective
-    ? stripInlineStatus(parsed.cleaned).cleaned
-    : parsed.cleaned;
+  const cleanedCommand = cleanStatus(parsed.cleaned);
   const requestedInlineCommand =
     params.canInterpretTextDirectives &&
     params.isAuthorizedSender &&
@@ -173,14 +175,7 @@ export function resolveReplyDirectiveRouting(params: {
         (leadingSender && params.agentText[commandSource.length] === "\n")
           ? "\n"
           : "");
-      const parsedSender = parseInlineSessionDirectives(source, {
-        modelAliases: params.modelAliases,
-        allowStatusDirective,
-        command: params.command,
-      });
-      let cleanedSender = allowStatusDirective
-        ? stripInlineStatus(parsedSender.cleaned).cleaned
-        : parsedSender.cleaned;
+      let cleanedSender = cleanStatus(parseDirectives(source).cleaned);
       const shortcut = requestedInlineCommand ? extractInlineSimpleCommand(cleanedSender) : null;
       // Normalized aliases may select a command; cleanup still needs the corresponding raw token.
       if (shortcut && shortcut.command === requestedInlineCommand?.command) {

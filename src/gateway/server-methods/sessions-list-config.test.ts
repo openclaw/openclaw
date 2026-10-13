@@ -1,7 +1,6 @@
 import { StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import * as acpReads from "../../acp/runtime/session-meta-readonly.js";
 import { notifyPreparedModelRuntimePublication } from "../../agents/prepared-model-runtime.publication-events.js";
 import {
   createConfigResolutionFacts,
@@ -20,6 +19,7 @@ import * as history from "../../config/sessions/session-transcript-worker-runtim
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import * as sharedReads from "../../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { OperatorScope } from "../operator-scopes.js";
 import * as projectionWork from "../session-projection-work.js";
@@ -140,7 +140,7 @@ it("reuses committed row facts when a changed model catalog updates session list
       expect((await list()).sessions.map((row) => row.contextTokens)).toEqual([8192, 8192]);
       const reads: string[] = [];
       observeRowFacts(reads);
-      const acp = vi.spyOn(acpReads, "readAcpSessionMetaForEntries");
+      const shared = vi.spyOn(sharedReads, "executeExistingOpenClawStateRead");
       const hostReads = observeSqliteReadSql(StatementSync.prototype);
       try {
         catalog = [{ ...catalog[0]!, contextTokens: 16384 }];
@@ -154,7 +154,9 @@ it("reuses committed row facts when a changed model catalog updates session list
           });
         }
         expect(reads).toEqual([]);
-        expect(acp).not.toHaveBeenCalled();
+        expect(
+          shared.mock.calls.filter(([, command]) => command.type === "sessionRows.sharedFacts"),
+        ).toEqual([]);
         expect(
           hostReads.queries.filter((sql) =>
             /session_nodes|board_tabs|transcript_rewrite_watermarks|acp_sessions/.test(sql),
@@ -176,6 +178,7 @@ it("reuses committed row facts when a changed model catalog updates session list
         ...loadSessionEntry(first)!,
         label: "Committed during renewal",
       });
+      sessionChanges.emit({ ...first, factsInvalidated: true });
       const listing = list();
       try {
         await captured.promise;
@@ -285,7 +288,7 @@ it("retains session facts on identity-scope changes and refreshes changes that a
       expect((await list()).sessions.find((row) => row.key === scope.sessionKey)?.label).toBe(
         "Changed during reload",
       );
-      expect(reads).toEqual([scope.sessionKey]);
+      expect(reads).toEqual([]);
 
       const changedModel = await publish(
         {

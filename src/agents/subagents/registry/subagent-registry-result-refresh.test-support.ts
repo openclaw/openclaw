@@ -39,6 +39,7 @@ export function registerSubagentResultRefreshCases(params: {
       await mod.registerSubagentRun({
         runId: "run-refresh-admission-old",
         childSessionKey,
+        sessionEntry: { sessionId: "sess-refresh-admission" },
         task: "capture replacement completion",
         expectsCompletionMessage: true,
       });

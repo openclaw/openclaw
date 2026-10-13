@@ -1,7 +1,12 @@
+import "../../../../src/test-utils/prepare-compiled-subprocesses.js";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { GatewayClient, type GatewayClientOptions } from "../../../../src/gateway/client.js";
-import { NODE_RUNNER_INVENTORY_UPDATE_METHOD } from "../../../../src/infra/node-runner-inventory.js";
+import {
+  NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+  parseNodeRunnerInventoryDeclaration,
+  resolveNodeWorkerExecutionIssue,
+} from "../../../../src/infra/node-runner-inventory.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import { createPairedNodeWorkerHost } from "./paired-node-worker-wire-fixture.js";
 
@@ -93,6 +98,11 @@ it("gates inventory on current hello, propagates failures, and retires removed n
   try {
     expect(client.options.env?.OPENCLAW_STATE_DIR).toBe(path.join(root, "node-state"));
     expect(client.request).toHaveBeenCalledOnce();
+    const inventory = parseNodeRunnerInventoryDeclaration(client.request.mock.calls[0]?.[1]);
+    if (!inventory || !("workerHost" in inventory)) {
+      throw new Error("paired worker fixture did not publish a worker host inventory");
+    }
+    expect(resolveNodeWorkerExecutionIssue(inventory.workerHost)).toBeUndefined();
     client.request.mockClear();
     client.options.onClose?.(1012, "Gateway replacement");
     expect(client.connected).toBe(true);

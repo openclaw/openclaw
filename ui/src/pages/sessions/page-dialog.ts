@@ -19,8 +19,11 @@ export class SessionsPageDialog {
     const lifecycle = active ?? new AbortController();
     this.lifecycle = lifecycle;
     try {
-      const showInputDialog = await this.load();
-      if (!showInputDialog) {
+      let showInputDialog: InputDialogOpener;
+      try {
+        ({ showInputDialog } = await import("../../components/input-dialog.ts"));
+      } catch (error) {
+        this.onError(formatUiError(error));
         return null;
       }
       const resolved = options();
@@ -36,16 +39,6 @@ export class SessionsPageDialog {
       if (!active && this.lifecycle === lifecycle) {
         this.lifecycle = null;
       }
-    }
-  }
-
-  /** A dialog that never opens still owes the operator a visible outcome. */
-  private async load(): Promise<InputDialogOpener | null> {
-    try {
-      return (await import("../../components/input-dialog.ts")).showInputDialog;
-    } catch (error) {
-      this.onError(formatUiError(error));
-      return null;
     }
   }
 }

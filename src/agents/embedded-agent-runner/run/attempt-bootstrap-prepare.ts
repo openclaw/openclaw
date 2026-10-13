@@ -58,31 +58,22 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
   });
   const resolveWorkspaceBootstrapFiles = (workspaceDir: string) =>
     resolveBootstrapFilesForRun({
+      ...attempt,
       workspaceDir,
-      config: attempt.config,
-      sessionKey: attempt.sessionKey,
-      sessionId: attempt.sessionId,
-      bootstrapUserProfileId: attempt.bootstrapUserProfileId,
-      chatType: attempt.chatType,
       agentId: params.setup.sessionAgentId,
       warn: bootstrapWarn,
       contextMode: attempt.bootstrapContextMode,
       runKind: attempt.bootstrapContextRunKind,
     });
   let completedBootstrapTurn: boolean | undefined;
-  const hasCompletedBootstrapTurnForAttempt = async () => {
-    completedBootstrapTurn ??= await hasCompletedBootstrapTurn(attempt.sessionTarget);
-    return completedBootstrapTurn;
-  };
+  const hasCompletedBootstrapTurnForAttempt = async () =>
+    (completedBootstrapTurn ??= await hasCompletedBootstrapTurn(attempt.sessionTarget));
   const resolveBootstrapRouting = (bootstrapFiles?: readonly WorkspaceBootstrapFile[]) =>
     resolveWorkspaceBootstrapRouting({
+      ...attempt,
       isWorkspaceBootstrapPending,
       bootstrapFiles,
-      bootstrapContextRunKind: attempt.bootstrapContextRunKind,
-      trigger: attempt.trigger,
-      sessionKey: attempt.sessionKey,
       isPrimaryRun: isPrimaryBootstrapRun(attempt.sessionKey),
-      isCanonicalWorkspace: attempt.isCanonicalWorkspace,
       effectiveWorkspace: params.setup.effectiveWorkspace,
       resolvedWorkspace: bootstrapWorkspaceDir,
       hasBootstrapFileAccess: params.hasReadTool,

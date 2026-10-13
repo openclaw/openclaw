@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE } from "../../config/sessions/lifecycle.js";
 import {
   deleteSessionEntryLifecycle,
@@ -14,6 +15,7 @@ import {
 } from "../../logging/diagnostic-run-activity.js";
 import { markDiagnosticToolStartedForTest } from "../../logging/diagnostic-run-activity.test-support.js";
 import {
+  getTerminalSessionWorkAdmissionRelease,
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
@@ -138,12 +140,12 @@ async function expectRecoveryReleased(storePath: string, key = sessionKey) {
     ).toBeUndefined(),
   );
 }
-function interrupt(storePath: string, run: () => Promise<void>) {
+function interrupt(storePath: string, run: () => Promise<void>, reason?: Error) {
   const target = { scope: storePath, identities: [sessionKey, sessionId] };
   return runExclusiveSessionLifecycleMutation("patch", {
     ...target,
     prepare: async () => {
-      await interruptSessionWorkAdmissions(target);
+      await interruptSessionWorkAdmissions({ ...target, reason });
     },
     run,
   });
@@ -227,6 +229,16 @@ it("preserves a source recovery identity after adopting a distinct target sessio
   expect(adopted).toBe(source);
   expect(adopted.key).toBe(sessionKey);
   expect(adopted.sessionId).toBe("target-session");
+  const targets = [sourceKey, sessionKey].map((key) => ({ scope: storePath, identities: [key] }));
+  expect(targets.map(getTerminalSessionWorkAdmissionRelease)).toEqual([false, false]);
+  adopted.freezeAbort();
+  const terminalReleases = targets.map((target) => {
+    const released = getTerminalSessionWorkAdmissionRelease(target);
+    if (released === false) {
+      throw new Error("Committed reply admission is still classified as live");
+    }
+    return released;
+  });
   const release = holdRecoveryRelease();
   adopted.complete();
   await release.started;
@@ -240,6 +252,7 @@ it("preserves a source recovery identity after adopting a distinct target sessio
   await Promise.resolve();
   expect(settled).toBe(false);
   release.release();
+  await Promise.all(terminalReleases);
   const next = owned(await successor);
   expect(next.sessionId).toBe(sessionId);
   next.complete();
@@ -472,35 +485,50 @@ it("lets visible turns reclaim terminal operations after settle grace elapsed", 
   expect(replyRunRegistry.get(sessionKey)).not.toBe(active);
   result.complete();
 });
-it("adopts a source-keyed command reservation into the target run slot", async () => {
-  const storePath = store();
-  const reservation = operation({ sessionKey: sourceKey, sessionId: "source-session" });
-  expect(
-    owned(
-      await admit({
-        storePath,
-        sessionId: reservation.sessionId,
-        expectedSessionId: sessionId,
-        waitForActive: false,
-        adoptOperation: reservation,
-      }),
-    ),
-  ).toBe(reservation);
-  expect(reservation.key).toBe(sessionKey);
-  expect(replyRunRegistry.get(sourceKey)).toBeUndefined();
-  expect(replyRunRegistry.get(sessionKey)).toBe(reservation);
-  reservation.setPhase("running");
-  let mutationRan = false;
-  const mutation = interrupt(storePath, async () => {
-    mutationRan = true;
-  });
-  await vi.waitFor(() => expect(reservation.abortSignal.aborted).toBe(true));
-  expect(reservation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
-  expect(mutationRan).toBe(false);
-  reservation.complete();
-  await mutation;
-  expect(mutationRan).toBe(true);
-});
+it.for([false, true])(
+  "adopts a source-keyed command reservation and preserves restart=%s on interruption",
+  async (restart, { signal }) => {
+    const storePath = store();
+    const reservation = operation({ sessionKey: sourceKey, sessionId: "source-session" });
+    expect(
+      owned(
+        await admit({
+          storePath,
+          sessionId: reservation.sessionId,
+          expectedSessionId: sessionId,
+          waitForActive: false,
+          adoptOperation: reservation,
+        }),
+      ),
+    ).toBe(reservation);
+    expect(reservation.key).toBe(sessionKey);
+    expect(replyRunRegistry.get(sourceKey)).toBeUndefined();
+    expect(replyRunRegistry.get(sessionKey)).toBe(reservation);
+    reservation.setPhase("running");
+    const aborted = createDeferred();
+    reservation.abortSignal.addEventListener("abort", () => aborted.resolve(), { once: true });
+    let mutationRan = false;
+    const mutation = interrupt(
+      storePath,
+      async () => {
+        mutationRan = true;
+      },
+      restart ? createAgentRunRestartAbortError() : undefined,
+    );
+    try {
+      await withinTest(aborted.promise, signal);
+      expect(reservation.result).toEqual({
+        kind: "aborted",
+        code: restart ? "aborted_for_restart" : "aborted_by_user",
+      });
+      expect(mutationRan).toBe(false);
+    } finally {
+      reservation.complete();
+      await mutation;
+    }
+    expect(mutationRan).toBe(true);
+  },
+);
 it("skips adoption without waiting when the target run slot is owned", async () => {
   const blocker = operation();
   blocker.setPhase("running");

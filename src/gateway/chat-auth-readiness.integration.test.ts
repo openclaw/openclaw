@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expect, it } from "vitest";
-import "../../ui/src/app/app-host.ts";
+import { ShellGatewayOwner } from "../../ui/src/app/app-shell-gateway.ts";
 import type { ApplicationContext } from "../../ui/src/app/context.ts";
 import { makeChatHost, makeRequestMock } from "../../ui/src/pages/chat/chat-host.test-support.ts";
 import { handlePageGatewayEvent } from "../../ui/src/pages/chat/chat-state-events.ts";
@@ -13,6 +13,7 @@ import {
 import { createTestGatewayClient } from "../../ui/src/test-helpers/gateway-client.ts";
 import { waitForFast } from "../../ui/src/test-helpers/wait-for.ts";
 import { getRuntimeConfig } from "../config/io.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { applySessionModelSelectionInternal as applySessionModelSelection } from "../model-picker/apply-session-model-selection.js";
@@ -24,6 +25,7 @@ import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 it("refreshes a retained pane from a persisted profile-only selection through the Gateway lifecycle broadcaster", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     // The picker supplies prepared capabilities; omission would start unrelated catalog discovery.
     const model = {
       provider: "anthropic",
@@ -72,17 +74,22 @@ it("refreshes a retained pane from a persisted profile-only selection through th
       client,
     }) as ChatPageHost;
     const sibling = makeChatHost({ sessionKey: otherKey, client }) as ChatPageHost;
-    const shell = document.createElement("openclaw-app-shell") as HTMLElement & {
-      runtime: { context: ApplicationContext };
-      handleGatewayEvent: (event: { event: string; payload: unknown }) => void;
-    };
-    shell.runtime = {
+    const shell = new ShellGatewayOwner({
       context: {
         gateway: { snapshot: { client, hello: retained.hello, phase: "connected" } },
         agents: { state: { agentsList: null } },
         sessions: retained.sessions,
       } as unknown as ApplicationContext,
-    };
+      routeState: { routeId: "chat" },
+      activeSessionKey: sessionKey,
+      desktopNavigationExpanded: false,
+      lastLocalePrefSignature: null,
+      outboxStoreImport: { load: async () => undefined },
+      observeDeletedSessions() {},
+      recoverDeletedActiveSession() {},
+      selectChatSession() {},
+      requestUpdate() {},
+    });
     await refreshChatMetadata(retained);
     await refreshChatMetadata(sibling);
     expect(retained.chatModelCatalog[0]?.available).toBe(false);
@@ -94,7 +101,7 @@ it("refreshes a retained pane from a persisted profile-only selection through th
       sessionEventSubscribers: { getAll: () => new Set(["reader"]) },
       chatAbortControllers: new Map(),
       broadcastToConnIds: (event, payload) => {
-        shell.handleGatewayEvent({ event, payload });
+        shell.handleGatewayEvent({ type: "event", event, payload });
         handlePageGatewayEvent(retained, { type: "event", event, payload });
         handlePageGatewayEvent(sibling, { type: "event", event, payload });
       },
@@ -130,7 +137,7 @@ it("refreshes a retained pane from a persisted profile-only selection through th
       await Promise.all(publications);
       await waitForFast(() => expect(retained.chatModelCatalog[0]?.available).toBe(true));
       expect(sibling.chatModelCatalog[0]?.available).toBe(false);
-      expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(3);
+      expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(2);
       expect(retained.chatMessage).toBe("Keep this draft");
       expect(retained.chatMessages).toBe(transcript);
     } finally {

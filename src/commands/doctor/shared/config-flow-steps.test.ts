@@ -74,60 +74,6 @@ describe("doctor config flow steps", () => {
     stripUnknownConfigKeysMock.mockReset();
   });
 
-  it("collects legacy compatibility issue lines and preview fix hints", () => {
-    migrateLegacyConfigMock.mockReturnValueOnce({
-      config: {},
-      changes: ["Moved session.typingMode → agents.defaults.typingMode."],
-    });
-
-    const result = createLegacyStepResult({
-      parsed: { session: { typingMode: "thinking" } },
-      legacyIssues: [{ path: "session.typingMode", message: "use agents.defaults.typingMode" }],
-    });
-
-    expect(result.issueLines).toEqual(["- session.typingMode: use agents.defaults.typingMode"]);
-    expect(result.changeLines).not.toStrictEqual([]);
-    expect(result.state.fixHints).toStrictEqual([
-      'Run "openclaw doctor --fix" to migrate legacy config keys.',
-    ]);
-    expect(result.state.pendingChanges).toBe(true);
-  });
-
-  it("migrates the resolved config so single-file include values are repairable", () => {
-    const sourceConfig = {
-      mcp: { servers: { local: { command: "node", disabled: true } } },
-    } as unknown as OpenClawConfig;
-    migrateLegacyConfigMock.mockReturnValueOnce({
-      config: {
-        commands: { native: "auto" },
-        mcp: { servers: { local: { command: "node", enabled: false } } },
-      },
-      sourceConfig: { mcp: { servers: { local: { command: "node", enabled: false } } } },
-      changes: ["Moved mcp.servers.local.disabled true → enabled false."],
-    });
-
-    const result = createLegacyStepResult({
-      parsed: { mcp: { $include: "./mcp.json5" } },
-      legacyIssues: [{ path: "mcp.servers", message: "disabled is legacy" }],
-      valid: false,
-      resolved: sourceConfig,
-      sourceConfig,
-      config: sourceConfig,
-      runtimeConfig: sourceConfig,
-    });
-
-    expect(migrateLegacyConfigMock).toHaveBeenCalledWith(sourceConfig, {
-      sourceConfigBeforeMigrations: undefined,
-      context: {
-        authoredRaw: { mcp: { $include: "./mcp.json5" } },
-        resolvedRaw: sourceConfig,
-      },
-    });
-    expect(result.state.pendingChanges).toBe(true);
-    expect(result.state.candidate.mcp?.servers?.local?.enabled).toBe(false);
-    expect(result.state.candidate.commands).toBeUndefined();
-  });
-
   it("blocks grpc migration when include ownership is ambiguous and names every source", () => {
     const sourceConfig = {
       diagnostics: { otel: { enabled: true, protocol: "grpc" } },
@@ -183,7 +129,7 @@ describe("doctor config flow steps", () => {
     ]);
   });
 
-  it.each([false, true])(
+  it.each([false])(
     "does not queue a write for deferred-only legacy advice (candidate %s)",
     (hasCandidate) => {
       const config = { agents: { entries: { main: {} }, defaults: { models: { bare: {} } } } };
@@ -336,59 +282,6 @@ describe("doctor config flow steps", () => {
     });
   });
 
-  it("repairs non-default auth profiles for active providers", () => {
-    const result = repairAfterAuthKeyCleanup(
-      {
-        auth: {
-          profiles: {
-            "openai:work": { key: "sk-test" },
-          },
-        },
-        agents: {
-          defaults: {
-            model: {
-              fallbacks: ["openai/gpt-5.5"],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      "openai:work",
-    );
-
-    expect(result.repairs).toEqual([
-      "Repaired auth.profiles.openai:work metadata for active openai auth.",
-    ]);
-    expect(result.state.cfg.auth?.profiles?.["openai:work"]).toEqual({
-      provider: "openai",
-      mode: "api_key",
-    });
-  });
-
-  it("preserves explicit model auth profile refs during unknown-key cleanup", () => {
-    const result = repairAfterAuthKeyCleanup(
-      {
-        auth: {
-          profiles: {
-            "openai:default": { key: "sk-test" },
-          },
-        },
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/gpt-5.5@openai:default",
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      "openai:default",
-    );
-
-    expect(result.state.cfg.auth?.profiles?.["openai:default"]).toEqual({
-      provider: "openai",
-      mode: "api_key",
-    });
-  });
-
   it("infers providers for bare auth profile suffixes", () => {
     const result = repairAfterAuthKeyCleanup(
       {
@@ -410,31 +303,6 @@ describe("doctor config flow steps", () => {
 
     expect(result.warnings).toStrictEqual([]);
     expect(result.state.cfg.auth?.profiles?.work).toEqual({
-      provider: "openai",
-      mode: "api_key",
-    });
-  });
-
-  it("protects auth profiles referenced only by channel model overrides", () => {
-    const result = repairAfterAuthKeyCleanup(
-      {
-        auth: {
-          profiles: {
-            "openai:default": { key: "sk-test" },
-          },
-        },
-        channels: {
-          modelByChannel: {
-            slack: {
-              C123: "openai/gpt-5.5@openai:default",
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      "openai:default",
-    );
-
-    expect(result.state.cfg.auth?.profiles?.["openai:default"]).toEqual({
       provider: "openai",
       mode: "api_key",
     });

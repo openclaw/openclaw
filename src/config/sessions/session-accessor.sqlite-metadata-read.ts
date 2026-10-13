@@ -2,6 +2,7 @@ import {
   createSqliteQueryCache,
   prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
 import {
@@ -37,6 +38,17 @@ export function hasSessionTranscriptEventsSync(scope: SessionTranscriptReadScope
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   return Boolean(transcriptPresenceQuery(database.db)(resolved.sessionId));
+}
+
+/** Physical presence and freshness share the caller's read transaction; neither scans events. */
+export function readSessionTranscriptMetadataInDatabase(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionId: string,
+) {
+  return {
+    present: Boolean(transcriptPresenceQuery(database.db)(sessionId)),
+    ...readTranscriptMutationStateInTransaction(database, sessionId),
+  };
 }
 
 /** Reads both physical mutation fences from the same session window snapshot. */

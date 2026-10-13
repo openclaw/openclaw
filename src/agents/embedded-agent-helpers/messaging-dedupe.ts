@@ -66,15 +66,13 @@ export function resolveCurrentSourceMessagingToolPartial(
   const normalized = state.currentSourceMessagingToolSentTextsNormalized.length
     ? normalizeTextForComparison(text)
     : "";
-  if (!normalized) {
-    state.currentSourceMessagingToolHeldPartial = undefined;
-    return { hold: false, text };
-  }
   // A confirmed current-source tool send already made this prefix visible.
   // Hold it until the assistant either repeats the sent text or diverges with new content.
-  const hold = state.currentSourceMessagingToolSentTextsNormalized.some(
-    (sentText) => sentText === normalized || sentText.startsWith(normalized),
-  );
+  const hold =
+    Boolean(normalized) &&
+    state.currentSourceMessagingToolSentTextsNormalized.some(
+      (sentText) => sentText === normalized || sentText.startsWith(normalized),
+    );
   state.currentSourceMessagingToolHeldPartial = hold ? text : undefined;
   return { hold, text };
 }

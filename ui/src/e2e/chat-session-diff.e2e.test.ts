@@ -11,6 +11,7 @@ import {
   installMockGateway,
   navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openDetailsPullRequests } from "./chat-details.test-support.ts";
 import {
   activateChatHeaderPanelAction,
   openChatSidePanelType,
@@ -350,7 +351,7 @@ suite.define(() => {
     expect(await gateway.getRequests("sessions.diff")).toHaveLength(2);
   });
 
-  it("opens the session diff from the branch change stats", async () => {
+  it("opens the session diff from All changes in Details", async () => {
     const context = await newBrowserContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -401,10 +402,8 @@ suite.define(() => {
       },
     });
 
-    await page
-      .locator('.chat-pr[data-state="branch"]')
-      .getByRole("button", { name: "Show session changes" })
-      .click();
+    await openDetailsPullRequests(page);
+    await page.getByRole("button", { name: "All changes", exact: true }).click();
 
     await waitForSessionDiff(page);
     expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);

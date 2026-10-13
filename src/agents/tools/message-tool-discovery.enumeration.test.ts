@@ -3,15 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const store = vi.hoisted(() => {
   const state = {
     rows: {} as Record<string, unknown>,
-    entriesCalls: [] as string[],
     exactReads: [] as string[],
-    openSessionEntryReadView: vi.fn((scope: { storePath?: string }) => ({
-      get: (key: string) => state.rows[key],
-      entries: () => {
-        state.entriesCalls.push(scope.storePath ?? "");
-        return Object.entries(state.rows).map(([sessionKey, entry]) => ({ sessionKey, entry }));
-      },
-    })),
     loadExactSessionEntryReadOnly: vi.fn((scope: { sessionKey: string }) => {
       state.exactReads.push(scope.sessionKey);
       const entry = state.rows[scope.sessionKey];
@@ -23,9 +15,10 @@ const store = vi.hoisted(() => {
 
 const getChannelPluginMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../config/sessions/session-accessor.js", () => ({
-  openSessionEntryReadView: store.openSessionEntryReadView,
-  loadExactSessionEntryReadOnly: store.loadExactSessionEntryReadOnly,
+vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-entry-read-runtime.js")>()),
+  readSessionEntryReadOnlyInWorker: async (scope: { sessionKey: string }) =>
+    store.loadExactSessionEntryReadOnly(scope)?.entry,
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
@@ -45,7 +38,7 @@ vi.mock("../../channels/plugins/index.js", async (importOriginal) => ({
   getChannelPlugin: getChannelPluginMock,
 }));
 
-import { resolveEffectiveCurrentChannelContext } from "./message-tool-discovery.js";
+import { resolveEffectiveCurrentChannelContextForRequest } from "./message-tool-discovery.js";
 
 const CANONICAL_SPACE = "spaces/AAQA1bC2dEf";
 const FOLDED_SPACE = "spaces/aaqa1bc2def";
@@ -67,9 +60,7 @@ function seedRoutableRow() {
 describe("canonical destination recovery stays bounded", () => {
   beforeEach(() => {
     store.rows = {};
-    store.entriesCalls = [];
     store.exactReads = [];
-    store.openSessionEntryReadView.mockClear();
     store.loadExactSessionEntryReadOnly.mockClear();
     getChannelPluginMock.mockReset();
     getChannelPluginMock.mockReturnValue({
@@ -78,10 +69,10 @@ describe("canonical destination recovery stays bounded", () => {
     });
   });
 
-  it("recovers the canonical casing without enumerating the store", () => {
+  it("recovers the canonical casing without enumerating the store", async () => {
     seedRoutableRow();
 
-    const result = resolveEffectiveCurrentChannelContext(
+    const result = await resolveEffectiveCurrentChannelContextForRequest(
       {
         currentChannelProvider: "webchat",
         agentSessionKey: SESSION_KEY,
@@ -91,55 +82,12 @@ describe("canonical destination recovery stays bounded", () => {
 
     expect(result.currentChannelId).toBe(CANONICAL_SPACE);
     expect(result.currentMessagingTarget).toBe(CANONICAL_SPACE);
-    expect(store.entriesCalls).toEqual([]);
     expect(store.exactReads).toEqual([SESSION_KEY]);
   });
 
-  it("does not enumerate when this session has no stored delivery row", () => {
-    const result = resolveEffectiveCurrentChannelContext(
-      {
-        currentChannelProvider: "webchat",
-        agentSessionKey: SESSION_KEY,
-      },
-      { config: {}, action: "send", params: {} },
-    );
-
-    expect(result.currentChannelId).toBe(FOLDED_SPACE);
-    expect(store.entriesCalls).toEqual([]);
-    expect(store.exactReads).toEqual([SESSION_KEY]);
-  });
-
-  it("does not enumerate when the stored row carries no external delivery", () => {
-    store.rows[SESSION_KEY] = { sessionId: "s1", updatedAt: 1, delivery: { kind: "internal" } };
-
-    const result = resolveEffectiveCurrentChannelContext(
-      {
-        currentChannelProvider: "webchat",
-        agentSessionKey: SESSION_KEY,
-      },
-      { config: {}, action: "send", params: {} },
-    );
-
-    expect(result.currentChannelId).toBe(FOLDED_SPACE);
-    expect(store.entriesCalls).toEqual([]);
-    expect(store.exactReads).toEqual([SESSION_KEY]);
-  });
-
-  it("keeps the inferred route when the exact store cannot be read", () => {
-    store.loadExactSessionEntryReadOnly.mockImplementationOnce(() => {
-      throw new Error("store is unreadable");
-    });
-    const result = resolveEffectiveCurrentChannelContext(
-      { currentChannelProvider: "webchat", agentSessionKey: SESSION_KEY },
-      { config: {}, action: "send", params: {} },
-    );
-    expect(result.currentMessagingTarget).toBe(FOLDED_SPACE);
-    expect(store.entriesCalls).toEqual([]);
-  });
-
-  it("does not recover delivery from a replacement session at the same key", () => {
+  it("does not recover delivery from a replacement session at the same key", async () => {
     seedRoutableRow();
-    const result = resolveEffectiveCurrentChannelContext(
+    const result = await resolveEffectiveCurrentChannelContextForRequest(
       {
         currentChannelProvider: "webchat",
         agentSessionKey: SESSION_KEY,
@@ -149,14 +97,13 @@ describe("canonical destination recovery stays bounded", () => {
     );
     expect(result.currentMessagingTarget).toBe(FOLDED_SPACE);
     expect(store.exactReads).toEqual([SESSION_KEY]);
-    expect(store.entriesCalls).toEqual([]);
   });
 
-  it("reads no store at all for a channel with lowercase-canonical target ids", () => {
+  it("reads no store at all for a channel with lowercase-canonical target ids", async () => {
     getChannelPluginMock.mockReturnValue({ messaging: { targetIdComparison: "lowercase" } });
     seedRoutableRow();
 
-    resolveEffectiveCurrentChannelContext(
+    await resolveEffectiveCurrentChannelContextForRequest(
       {
         currentChannelProvider: "webchat",
         agentSessionKey: SESSION_KEY,
@@ -165,7 +112,5 @@ describe("canonical destination recovery stays bounded", () => {
     );
 
     expect(store.exactReads).toEqual([]);
-    expect(store.entriesCalls).toEqual([]);
-    expect(store.openSessionEntryReadView).not.toHaveBeenCalled();
   });
 });

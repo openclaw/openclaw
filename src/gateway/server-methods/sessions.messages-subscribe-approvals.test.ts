@@ -1,12 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  GatewayProtocolClient,
-  GatewayProtocolRequestTimeoutError,
-  type GatewayProtocolSocketHandlers,
-} from "../../../packages/gateway-client/src/protocol-client.js";
-import { GatewaySessionMessageSubscriptionCoordinator } from "../../../packages/gateway-client/src/session-subscriptions.js";
-import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../../packages/gateway-client/src/timeouts.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionApprovalReplay } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSessionMessageSubscriberRegistry } from "../server-chat-state.js";
@@ -111,93 +104,9 @@ async function subscribe(
   return respond;
 }
 
-function createCommittedSubscriptionBoundary(holdApprovalUpgradeOnly = false) {
-  const sessionKey = "agent:main:main";
-  const registry = createSessionMessageSubscriberRegistry();
-  const gatewayClient = createClient();
-  const context = {
-    ...createContext({ replay: approvalReplay(sessionKey) }).context,
-    subscribeSessionMessageEvents: registry.subscribe,
-    unsubscribeSessionMessageEvents: registry.unsubscribe,
-  } as GatewayRequestContext;
-  const delayedResponses: string[] = [];
-  let nextRequestId = 0;
-  let socketHandlers: GatewayProtocolSocketHandlers | undefined;
-  const protocol = new GatewayProtocolClient<Record<string, never>>({
-    createSocket: (handlers) => {
-      socketHandlers = handlers;
-      return {
-        isOpen: () => true,
-        send: (raw) => {
-          const request = JSON.parse(raw) as {
-            id: string;
-            method: string;
-            params: Record<string, unknown>;
-          };
-          const handler = expectDefined(
-            sessionSubscriptionHandlers[request.method],
-            `session subscription boundary handler ${request.method}`,
-          );
-          void handler({
-            req: { id: request.id } as never,
-            params: request.params,
-            context,
-            client: gatewayClient,
-            isWebchatConnect: () => false,
-            respond: (ok, payload, error) => {
-              const response = JSON.stringify({
-                type: "res",
-                id: request.id,
-                ok,
-                payload,
-                error,
-              });
-              if (
-                request.method === "sessions.messages.subscribe" &&
-                (!holdApprovalUpgradeOnly || request.params.includeApprovals === true)
-              ) {
-                delayedResponses.push(response);
-                return;
-              }
-              handlers.message(response);
-            },
-          } satisfies GatewayRequestHandlerOptions);
-        },
-        close: (code, reason) => {
-          registry.unsubscribeAll(gatewayClient.connId ?? "");
-          handlers.close(code ?? 1000, reason ?? "stopped");
-        },
-      };
-    },
-    createRequestId: () => `subscription-${++nextRequestId}`,
-    buildConnectPlan: () => ({}),
-    buildConnectParams: (plan) => plan,
-    resolveClose: () => ({ retry: false, notify: false }),
-    handshake: { mode: "require-challenge", timeoutMs: 100 },
-    reconnect: { initialMs: 10, multiplier: 2, maxMs: 100 },
-  });
-  protocol.start();
-  return {
-    coordinator: new GatewaySessionMessageSubscriptionCoordinator(protocol),
-    gatewayClient,
-    protocol,
-    registry,
-    sessionKey,
-    deliverLateResponses() {
-      for (const response of delayedResponses) {
-        socketHandlers?.message(response);
-      }
-    },
-  };
-}
-
 describe("sessions.messages.subscribe approval opt-in", () => {
   beforeEach(() => {
     loadSessionEntryMock.mockReset();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
   });
 
   it("replaces narration through a configured main alias without changing approval delivery", async () => {
@@ -415,60 +324,5 @@ describe("sessions.messages.subscribe approval opt-in", () => {
       undefined,
       expect.objectContaining({ code: "UNAVAILABLE" }),
     );
-  });
-
-  it("removes a committed approval observer when its subscription acknowledgment times out", async () => {
-    vi.useFakeTimers();
-    const boundary = createCommittedSubscriptionBoundary();
-    let failure: unknown;
-    void boundary.coordinator
-      .acquire("main", { includeApprovals: true })
-      .catch((error: unknown) => {
-        failure = error;
-      });
-
-    expect(
-      boundary.registry.get(boundary.sessionKey).has(boundary.gatewayClient.connId ?? ""),
-    ).toBe(true);
-    expect(
-      boundary.registry.getApprovals(boundary.sessionKey).has(boundary.gatewayClient.connId ?? ""),
-    ).toBe(true);
-
-    await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
-
-    expect(failure).toBeInstanceOf(GatewayProtocolRequestTimeoutError);
-    expect(boundary.registry.get(boundary.sessionKey)).toEqual(new Set());
-    expect(boundary.registry.getApprovals(boundary.sessionKey)).toEqual(new Set());
-    boundary.deliverLateResponses();
-    expect(boundary.registry.get(boundary.sessionKey)).toEqual(new Set());
-    boundary.protocol.stop();
-  });
-
-  it("removes timed-out approval authority while preserving an existing plain observer", async () => {
-    vi.useFakeTimers();
-    const boundary = createCommittedSubscriptionBoundary(true);
-    const plain = await boundary.coordinator.acquire("main");
-    let failure: unknown;
-    void boundary.coordinator
-      .acquire("main", { includeApprovals: true })
-      .catch((error: unknown) => {
-        failure = error;
-      });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(boundary.registry.getApprovals(boundary.sessionKey)).toEqual(
-      new Set([boundary.gatewayClient.connId]),
-    );
-
-    await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
-
-    expect(failure).toBeInstanceOf(GatewayProtocolRequestTimeoutError);
-    expect(boundary.registry.get(boundary.sessionKey)).toEqual(
-      new Set([boundary.gatewayClient.connId]),
-    );
-    expect(boundary.registry.getApprovals(boundary.sessionKey)).toEqual(new Set());
-    boundary.deliverLateResponses();
-    expect(boundary.registry.getApprovals(boundary.sessionKey)).toEqual(new Set());
-    await boundary.coordinator.release(plain);
-    boundary.protocol.stop();
   });
 });

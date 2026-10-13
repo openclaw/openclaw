@@ -15,7 +15,6 @@ import {
 } from "./model-catalog.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
-import type { ModelRegistry } from "./sessions/index.js";
 
 type AugmentModelCatalogWithProviderPlugins =
   typeof import("../plugins/provider-runtime.js").augmentModelCatalogWithProviderPlugins;
@@ -68,10 +67,6 @@ function providerManifestSnapshot(params: {
   return createPluginMetadataSnapshotFixture({ plugins: [plugin] });
 }
 
-function registry(entries: ModelCatalogEntry[]): ModelRegistry {
-  return { getAll: () => entries } as unknown as ModelRegistry;
-}
-
 async function build(params: {
   config?: OpenClawConfig;
   entries?: ModelCatalogEntry[];
@@ -85,7 +80,7 @@ async function build(params: {
     authCredentials: {},
     config: params.config ?? { plugins: { enabled: false } },
     metadataSnapshot: params.metadataSnapshot ?? metadataSnapshot,
-    modelRegistry: registry(params.entries ?? []),
+    models: params.entries ?? [],
     readOnly: params.readOnly ?? true,
     providerOutcomes: params.providerOutcomes,
     ...(params.includeProviderPluginAugmentation !== undefined
@@ -640,7 +635,7 @@ describe("prepared model catalog builder", () => {
       },
       config: { plugins: { enabled: false } },
       metadataSnapshot,
-      modelRegistry: registry([]),
+      models: [],
     });
 
     expect(resolvedKey).toBe("test-api-key");

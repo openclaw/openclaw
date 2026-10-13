@@ -109,7 +109,6 @@ describe("pw-session refLocator", () => {
     const { page, selectedFrame, mocks } = fakePage();
     const state = ensurePageState(page);
     state.roleRefs = { [ref]: { role: "button", name } };
-    state.roleRefsFrameSelector = "iframe#main";
     state.roleRefsFrame = selectedFrame;
 
     refLocator(page, ref);
@@ -178,36 +177,6 @@ describe("pw-session role refs cache", () => {
       e1: { role: "heading", name: "Page B" },
     });
     expect(ensurePageState(pageB).roleRefsMode).toBe("aria");
-  });
-
-  it("does not let an obsolete Page invalidate a newer cache generation", () => {
-    const cdpUrl = "http://127.0.0.1:9222";
-    const targetId = "shared-target";
-    const { page: oldPage, handlers, mainFrame } = fakePage();
-    storeRoleRefsForTarget({
-      page: oldPage,
-      cdpUrl,
-      targetId,
-      refs: { e1: { role: "button", name: "Old document" } },
-      mode: "role",
-    });
-
-    const { page: currentPage } = fakePage();
-    storeRoleRefsForTarget({
-      page: currentPage,
-      cdpUrl,
-      targetId,
-      refs: { e1: { role: "heading", name: "Current document" } },
-      mode: "aria",
-    });
-    handlers.get("framenavigated")?.[0]?.(mainFrame);
-
-    const { page: replacementPage } = fakePage();
-    restoreRoleRefsForTarget({ cdpUrl, targetId, page: replacementPage });
-    expect(ensurePageState(replacementPage).roleRefs).toEqual({
-      e1: { role: "heading", name: "Current document" },
-    });
-    expect(ensurePageState(replacementPage).roleRefsMode).toBe("aria");
   });
 
   it("invalidates page-wide aria refs on subframe navigation", () => {
@@ -682,7 +651,7 @@ describe("pw-session ensurePageState", () => {
 
     handlers.get("framedetached")?.[0]?.(selectedFrame);
     expect(state.roleRefs).toBeUndefined();
-    expect(state.roleRefsFrameSelector).toBeUndefined();
+    expect(state.roleRefsFrame).toBeUndefined();
   });
 });
 

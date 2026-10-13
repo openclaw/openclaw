@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Dispatches full release validation against a temporary SHA-pinned branch.
 import {
   execFileSync,
   spawnSync,
@@ -38,6 +37,7 @@ import {
   readDispatchRecord,
   retainDispatchRecord,
   dispatchInputsDigest,
+  formatDispatchSelection,
   observeQualificationAdmission,
   qualifyAdmission,
   type DispatchInputs,
@@ -172,6 +172,8 @@ always performs read-only reconciliation. --reconcile-request refuses a missing 
 mutation; after a qualification POST it is observation-only, never a redispatch.
 Retain the artifact until operator cleanup; its loss never proves non-execution.
 Frozen tooling must declare FULL_RELEASE_DISPATCH_WITNESS_CONTRACT=1 before a new request.
+Prints the frozen candidate/tooling, effective profile, group, soak and redacted
+waiver selection before dispatch and when reconciling the retained request.
 
 Preflights the Validation SHA with a bare-SHA fetch into a fresh temporary repository.
 Creates one immutable release-ci/* workflow ref pinned to the exact Tooling SHA,
@@ -742,6 +744,31 @@ function resolveTrustedWorkflowSha(requestedSha: string, trustedWorkflowRef: str
   return workflowSha;
 }
 
+function assertAdmissionContract(admissionWorkflowSha: string) {
+  const workflow = parseYaml(
+    run("git", ["show", `${admissionWorkflowSha}:.github/workflows/${ADMISSION_WORKFLOW}`]),
+  );
+  requireDispatch(
+    workflow?.env?.RELEASE_QUALIFICATION_ADMISSION_CONTRACT === "1",
+    "Selected P lacks qualification admission; update P independently without changing C/Q",
+  );
+}
+
+// Main routinely advances between P selection and the admission POST. A newer
+// tip replaces P only when it is trusted main, descends from the selected P,
+// and still declares the admission contract.
+function verifyMainAdmissionAdvance(previousSha: string, currentSha: string) {
+  requireDispatch(
+    resolveTrustedWorkflowSha(currentSha, "main") === currentSha,
+    `Main tip ${currentSha} did not resolve to itself`,
+  );
+  requireDispatch(
+    runStatus("git", ["merge-base", "--is-ancestor", previousSha, currentSha]).status === 0,
+    `Main tip ${currentSha} does not descend from selected P ${previousSha}`,
+  );
+  assertAdmissionContract(currentSha);
+}
+
 function requireDispatch(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(message);
@@ -1140,6 +1167,7 @@ const qualificationDispatchClient = {
   readApi: readGhApi,
   postApi: (args: string[]) => runGh(args, { stdio: ["ignore", "pipe", "pipe"] }),
   httpStatus: (response: string) => parseGhHttpResponse(response).status,
+  verifyMainAdvance: verifyMainAdmissionAdvance,
 };
 
 async function reopenDispatch(path: string, args: ReturnType<typeof parseArgs>, argv: string[]) {
@@ -1176,6 +1204,7 @@ async function reopenDispatch(path: string, args: ReturnType<typeof parseArgs>, 
       ),
     "Reopen arguments conflict with the retained request",
   );
+  console.log(formatDispatchSelection(request));
   try {
     if (record.admission && record.phase === "prepared") {
       const observed = observeQualificationAdmission(record, qualificationDispatchClient);
@@ -1704,13 +1733,7 @@ async function main() {
     ? resolveTrustedWorkflowSha(args.admissionWorkflowSha, args.admissionWorkflowRef)
     : undefined;
   if (admissionWorkflowSha) {
-    const workflow = parseYaml(
-      run("git", ["show", `${admissionWorkflowSha}:.github/workflows/${ADMISSION_WORKFLOW}`]),
-    );
-    requireDispatch(
-      workflow?.env?.RELEASE_QUALIFICATION_ADMISSION_CONTRACT === "1",
-      "Selected P lacks qualification admission; update P independently without changing C/Q",
-    );
+    assertAdmissionContract(admissionWorkflowSha);
   }
   if (candidateOwned) {
     const baselinePolicy: unknown = JSON.parse(
@@ -1845,9 +1868,6 @@ async function main() {
   console.log(`Validation SHA: ${targetSha}`);
   console.log(`Tooling SHA: ${workflowSha}`);
   console.log(`Trusted workflow ref: ${args.trustedWorkflowRef}`);
-  console.log(
-    `Frozen validation tuple: candidate=${targetSha} tooling=${workflowSha} rerun_group=${args.inputs.rerun_group}`,
-  );
   console.log(`Temporary workflow ref: ${branch}`);
 
   await executeFrozenDispatch({
@@ -1872,6 +1892,11 @@ async function executeFrozenDispatch(options: {
 }) {
   const { args, requestPath, workflowSha, branch, admissionWorkflowSha } = options;
   let { record, selection } = options;
+  console.log(
+    formatDispatchSelection(
+      record?.request ?? { targetSha: String(selection.inputs.ref), workflowSha, ...selection },
+    ),
+  );
   const candidateOwned = args.trustedWorkflowRef === "candidate";
   const remoteBranchRef = `refs/heads/${branch}`;
   let parentRunId: string | undefined;
@@ -2001,16 +2026,12 @@ async function executeFrozenDispatch(options: {
     }
     if (parentRunId) {
       console.log(`Parent run: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`);
-      const completedRun = waitForWorkflowRun(parentRunId, workflowSha, record);
-      parentConclusion = stringValue(completedRun.conclusion);
-      if (parentConclusion !== "success") {
-        throw new Error(
-          `Full Release Validation concluded ${parentConclusion.toLowerCase() || "without a conclusion"}: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
-        );
-      }
+      waitForWorkflowRun(parentRunId, workflowSha, record);
+      parentConclusion = "success";
       verifyReleaseEvidence(
         parentRunId,
-        admissionWorkflowSha ?? workflowSha,
+        // Admission may have advanced P with main before its POST.
+        record?.admission?.workflowSha ?? admissionWorkflowSha ?? workflowSha,
         candidateOwned ? args.admissionWorkflowRef : args.trustedWorkflowRef,
       );
       evidenceVerified = true;

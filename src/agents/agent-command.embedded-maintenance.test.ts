@@ -305,7 +305,10 @@ describe("agentCommand embedded maintenance", () => {
       lastCallUsage,
     };
     state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
-      await params.userTurnTranscriptRecorder?.persistApproved();
+      if (!params.userTurnTranscriptRecorder) {
+        throw new Error("missing embedded user-turn transcript recorder");
+      }
+      await params.userTurnTranscriptRecorder.persistApproved();
       await appendTranscriptMessage(
         { agentId: "main", sessionId, sessionKey, storePath },
         {
@@ -324,6 +327,14 @@ describe("agentCommand embedded maintenance", () => {
             },
           },
           cwd: state.workspaceDir,
+        },
+      );
+      await appendTranscriptEvent(
+        { agentId: "main", sessionId, sessionKey, storePath },
+        {
+          type: "custom",
+          customType: "openclaw:bootstrap-context:full",
+          data: { runId: "embedded-run" },
         },
       );
       params.onSuccessfulAuthProfile?.({
@@ -367,6 +378,30 @@ describe("agentCommand embedded maintenance", () => {
     );
 
     await waitForSessionMaintenance(sessionKey);
+    const events = (await loadTranscriptEvents({
+      agentId: "main",
+      sessionId,
+      storePath,
+    })) as Array<{
+      type?: unknown;
+      customType?: unknown;
+      message?: { role?: unknown; api?: unknown };
+    }>;
+    const assistantEvents = events.filter(
+      (event) => event.type === "message" && event.message?.role === "assistant",
+    );
+    expect(assistantEvents).toHaveLength(1);
+    expect(assistantEvents.filter((event) => event.message?.api === "cli")).toHaveLength(0);
+    expect(
+      events.filter(
+        (event) =>
+          event.type === "custom" && event.customType === "openclaw:bootstrap-context:full",
+      ),
+    ).toHaveLength(1);
+    expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledOnce();
+    expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionEntry: expect.objectContaining({ totalTokens: 904_869 }) }),
+    );
     expect(storedBeforeMaintenance).toMatchObject({
       totalTokens: 904_869,
       inputTokens: lastCallUsage.input,
@@ -577,89 +612,6 @@ describe("agentCommand embedded maintenance", () => {
     if (testCase.observeAuth === false) {
       expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
     }
-  });
-
-  it("keeps embedded transcript ownership and flushes once for gateway ingress", async () => {
-    const storePath = requireStorePath();
-    const sessionId = "embedded-projected-final";
-    const sessionKey = `agent:main:explicit:${sessionId}`;
-    await replaceSessionEntry(
-      { sessionKey, storePath },
-      {
-        sessionId,
-        updatedAt: Date.now(),
-        totalTokens: 180_000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      },
-    );
-    state.runAgentAttemptMock.mockImplementationOnce(async (attempt) => {
-      if (!attempt.userTurnTranscriptRecorder) {
-        throw new Error("missing embedded user-turn transcript recorder");
-      }
-      await attempt.userTurnTranscriptRecorder.persistApproved();
-      await appendTranscriptMessage(
-        { agentId: "main", sessionId, sessionKey, storePath },
-        {
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "[Thu 2026-08-13 16:39 PDT] OVERRIDE-OK" }],
-            api: "ollama",
-            provider: "ollama",
-            model: "llama3.2:latest",
-            timestamp: Date.now(),
-          },
-          cwd: state.workspaceDir,
-        },
-      );
-      await appendTranscriptEvent(
-        { agentId: "main", sessionId, sessionKey, storePath },
-        {
-          type: "custom",
-          customType: "openclaw:bootstrap-context:full",
-          data: { runId: "embedded-run" },
-        },
-      );
-      attempt.onSuccessfulAuthProfile?.({});
-      return makeEmbeddedResult(sessionId, "OVERRIDE-OK");
-    });
-
-    await agentCommandFromGatewayIngress(
-      {
-        message: "Reply with exactly: OVERRIDE-OK",
-        sessionId,
-        sessionKey,
-        cwd: state.workspaceDir,
-        allowModelOverride: false,
-      },
-      ...GATEWAY_INGRESS_ARGS,
-    );
-
-    await waitForSessionMaintenance(sessionKey);
-    const events = (await loadTranscriptEvents({
-      agentId: "main",
-      sessionId,
-      storePath,
-    })) as Array<{
-      type?: unknown;
-      customType?: unknown;
-      message?: { role?: unknown; api?: unknown };
-    }>;
-    const assistantEvents = events.filter(
-      (event) => event.type === "message" && event.message?.role === "assistant",
-    );
-    expect(assistantEvents).toHaveLength(1);
-    expect(assistantEvents.filter((event) => event.message?.api === "cli")).toHaveLength(0);
-    expect(
-      events.filter(
-        (event) =>
-          event.type === "custom" && event.customType === "openclaw:bootstrap-context:full",
-      ),
-    ).toHaveLength(1);
-    expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledOnce();
-    expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionEntry: expect.objectContaining({ totalTokens: 180_000 }) }),
-    );
   });
 
   it.each(

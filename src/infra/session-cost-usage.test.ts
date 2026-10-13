@@ -7,9 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/remote-overlay.test-support.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
-import * as usageFormat from "../utils/usage-format.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import { prepareSessionCostUsageRefreshLock } from "./session-cost-usage-cache.sqlite.js";
 import {
@@ -27,8 +25,11 @@ import {
   loadSessionUsageTimeSeries,
 } from "./session-cost-usage.js";
 
+const defaultConfig: OpenClawConfig = {};
+
 async function refreshSessionCostUsageForTest(sessionFile: string): Promise<void> {
   await refreshCostUsageCacheForAgent({
+    config: defaultConfig,
     agentId: "main",
     sessionFiles: [sessionFile],
   });
@@ -85,64 +86,6 @@ describe("session cost usage", () => {
       ].join("\n"),
       "utf-8",
     );
-
-  it("aggregates daily totals with log cost and pricing fallback", async () => {
-    const sessionFile = path.join(sessionsDir, "sess-1.jsonl");
-
-    const now = new Date();
-    const older = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
-
-    const entries = [
-      transcriptEntry(now.toISOString(), {
-        role: "assistant",
-        provider: "openai",
-        model: "gpt-5.4",
-        usage: {
-          input: 10,
-          output: 20,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 30,
-          cost: { total: 0.03 },
-        },
-      }),
-      transcriptEntry(now.toISOString(), {
-        role: "assistant",
-        provider: "openai",
-        model: "gpt-5.4",
-        usage: {
-          input: 10,
-          output: 10,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 20,
-        },
-      }),
-      transcriptEntry(older.toISOString(), {
-        role: "assistant",
-        provider: "openai",
-        model: "gpt-5.4",
-        usage: billed(5, 5, 10, 0.01),
-      }),
-    ];
-
-    await writeEntries(sessionFile, entries);
-
-    const config = pricingConfig("openai", "gpt-5.4", {
-      input: 1,
-      output: 2,
-      cacheRead: 0,
-      cacheWrite: 0,
-    });
-
-    const summary = await loadCostUsageSummary({ agentId: "main", config });
-
-    expect(summary.daily.length).toBe(summary.days);
-    const populated = summary.daily.filter((d) => d.totalTokens > 0);
-    expect(populated).toHaveLength(1);
-    expect(summary.totals.totalTokens).toBe(50);
-    expect(summary.totals.totalCost).toBeCloseTo(0.03003, 5);
-  });
 
   it("prices and aggregates usage with each row's agent-local registry", async () => {
     const provider = "demo-agent-scope";
@@ -209,111 +152,6 @@ describe("session cost usage", () => {
     expect(unscoped.totals.totalCost).toBeCloseTo(2.25, 8);
   });
 
-  it("keeps rollup rows bounded with a multi-megabyte hosted pricing catalog", async () => {
-    const sessionFile = path.join(sessionsDir, "large-pricing.jsonl");
-    await writeEntries(sessionFile, [
-      transcriptEntry("2026-07-28T12:00:00.000Z", {
-        role: "assistant",
-        provider: "openai",
-        model: "catalog-model-0",
-        usage: { input: 10, output: 20, totalTokens: 30 },
-      }),
-    ]);
-    const pricing = Object.fromEntries(
-      Array.from({ length: 40_000 }, (_, index) => [
-        `openai/catalog-model-${index}`,
-        { input: index + 1, output: index + 2, cacheRead: index + 3 },
-      ]),
-    );
-    const bundleJson = JSON.stringify({
-      schemaVersion: 1,
-      generatedAt: 200,
-      minVersion: "2026.7.0",
-      sourceCommit: "large-rollup-pricing-test",
-      providers: {
-        openai: { models: [{ id: "catalog-model-0", cost: { input: 1, output: 2 } }] },
-      },
-      pricing,
-    });
-    expect(Buffer.byteLength(bundleJson)).toBeGreaterThan(2 * 1024 * 1024);
-    setRemoteModelCatalogOverlaySourcesForTest({
-      bundledGeneratedAt: () => 100,
-      readStoredCatalog: () => ({
-        id: 1,
-        source_url: "https://catalog.openclaw.ai/models/v2/catalog.json",
-        bundle_json: bundleJson,
-        generated_at: 200,
-        min_version: "2026.7.0",
-        etag: null,
-        last_modified: null,
-        checked_at: 200,
-      }),
-    });
-    const config = pricingConfig("openai", "catalog-model-0", {
-      input: 1,
-      output: 2,
-      cacheRead: 3,
-      cacheWrite: 0,
-    });
-
-    try {
-      const pricingFingerprint = usageFormat.resolveModelCostConfigFingerprint(config);
-      expect(pricingFingerprint).toMatch(/^[0-9a-f]{64}$/u);
-
-      await refreshCostUsageCacheForAgent({
-        agentId: "main",
-        config,
-        sessionFiles: [sessionFile],
-      });
-
-      const row = readSessionCostUsageRollupRows("main").find(
-        (candidate) => candidate.key === sessionFile,
-      );
-      expect(Buffer.byteLength(row?.valueJson ?? "")).toBeLessThan(32 * 1024);
-      expect(JSON.parse(row?.valueJson ?? "null")).toMatchObject({
-        pricingFingerprint,
-      });
-    } finally {
-      setRemoteModelCatalogOverlaySourcesForTest();
-    }
-  });
-
-  it("breaks missing costs down by raw provider and model attribution", async () => {
-    const sessionFile = path.join(sessionsDir, "sess-missing-by-model.jsonl");
-    const timestamp = Date.now() - 1_000;
-    const entries = [
-      ["custom", "unpriced-a"],
-      ["custom", "unpriced-a"],
-      ["other", "unpriced-b"],
-    ].map(([provider, model], index) =>
-      transcriptEntry(new Date(timestamp + index).toISOString(), {
-        role: "assistant",
-        provider,
-        model,
-        usage: {
-          input: 1,
-          output: 0,
-          totalTokens: 1,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-      }),
-    );
-    await writeEntries(sessionFile, entries);
-
-    const summary = await loadCostUsageSummary({ agentId: "main" });
-    expect(summary.totals.missingCostEntries).toBe(3);
-    expect(summary.totals.missingCostByModel).toEqual({
-      "custom/unpriced-a": 2,
-      "other/unpriced-b": 1,
-    });
-
-    const sessionSummary = await loadSessionCostSummary({ agentId: "main", sessionFile });
-    expect(sessionSummary?.missingCostByModel).toEqual(summary.totals.missingCostByModel);
-    expect(sessionSummary?.dailyBreakdown?.[0]?.missingCostByModel).toEqual(
-      summary.totals.missingCostByModel,
-    );
-  });
-
   it("excludes untimestamped entries from direct bounded session ranges", async () => {
     const sessionFile = path.join(root, "session.jsonl");
     const assistantEntry = (
@@ -344,6 +182,7 @@ describe("session cost usage", () => {
 
     const rangeEndMs = Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1;
     const ranged = await loadSessionCostSummary({
+      config: defaultConfig,
       agentId: "main",
       sessionFile,
       startMs: Date.UTC(2026, 1, 5, 12, 0, 0, 30),
@@ -357,6 +196,7 @@ describe("session cost usage", () => {
     expect(ranged?.modelUsage?.map((entry) => entry.model)).toEqual(["gpt-5.5"]);
 
     const upperBounded = await loadSessionCostSummary({
+      config: defaultConfig,
       agentId: "main",
       sessionFile,
       endMs: rangeEndMs,
@@ -365,6 +205,7 @@ describe("session cost usage", () => {
     expect(upperBounded?.modelUsage?.some((entry) => entry.model === "glm-5")).toBe(false);
 
     const allRange = await loadSessionCostSummary({
+      config: defaultConfig,
       agentId: "main",
       sessionFile,
       startMs: 0,
@@ -402,6 +243,7 @@ describe("session cost usage", () => {
     const session = { sessionId: "sess-v8-upgrade", sessionFile };
     await refreshSessionCostUsageForTest(sessionFile);
     const current = await loadSessionCostSummariesFromCache({
+      config: defaultConfig,
       sessions: [session],
       agentId: "main",
       requestRefresh: false,
@@ -428,6 +270,7 @@ describe("session cost usage", () => {
       await prepare();
       await refreshSessionCostUsageForTest(sessionFile);
       const result = await loadSessionCostSummariesFromCache({
+        config: defaultConfig,
         sessions: [session],
         agentId: "main",
         startMs: Date.UTC(2026, 1, 5),
@@ -456,6 +299,7 @@ describe("session cost usage", () => {
     expect(appendedRollup.rollup.untimestamped.totals.totalTokens).toBe(1_000);
 
     const allTime = await loadSessionCostSummariesFromCache({
+      config: defaultConfig,
       sessions: [session],
       agentId: "main",
       startMs: 0,
@@ -486,6 +330,7 @@ describe("session cost usage", () => {
     const startMs = Date.UTC(2026, 1, 11, 2);
     const endMs = Date.UTC(2026, 1, 12, 1, 59, 59, 999);
     const summary = await loadCostUsageSummary({
+      config: defaultConfig,
       agentId: "main",
       startMs,
       endMs,
@@ -499,6 +344,7 @@ describe("session cost usage", () => {
 
   it("fills every calendar day across a spring-forward DST transition", async () => {
     const summary = await loadCostUsageSummary({
+      config: defaultConfig,
       agentId: "main",
       startMs: Date.UTC(2026, 2, 8, 6, 30),
       endMs: Date.UTC(2026, 2, 14, 5, 30),
@@ -569,13 +415,15 @@ describe("session cost usage", () => {
       }),
     );
 
-    await loadCostUsageSummary({ agentId: "main" });
+    await loadCostUsageSummary({ config: defaultConfig, agentId: "main" });
     const rowsBefore = readSessionCostUsageRollupRows("main");
     const movedSessionsDir = path.join(root, "saved-sessions");
     await fs.rename(sessionsDir, movedSessionsDir);
     try {
       await fs.writeFile(sessionsDir, "not a directory");
-      await expect(loadCostUsageSummary({ agentId: "main" })).rejects.toMatchObject({
+      await expect(
+        loadCostUsageSummary({ config: defaultConfig, agentId: "main" }),
+      ).rejects.toMatchObject({
         code: "ENOTDIR",
       });
     } finally {
@@ -611,10 +459,12 @@ describe("session cost usage", () => {
     );
 
     await refreshCostUsageCacheForAgent({
+      config: defaultConfig,
       agentId: "main",
       startMs: Date.UTC(2026, 1, 5),
     });
     const summary = await loadCostUsageSummaryFromCache({
+      config: defaultConfig,
       agentId: "main",
       startMs: Date.UTC(2026, 1, 5),
       endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
@@ -624,6 +474,7 @@ describe("session cost usage", () => {
     await vi.waitFor(
       async () => {
         const refreshed = await loadCostUsageSummaryFromCache({
+          config: defaultConfig,
           agentId: "main",
           startMs: Date.UTC(2026, 1, 5),
           endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
@@ -652,7 +503,7 @@ describe("session cost usage", () => {
       expect(await lock.acquire()).toBe(true);
       released = delay(40).then(lock.release);
       const [summary] = await Promise.all([
-        loadSessionCostSummary({ agentId: "main", sessionFile }),
+        loadSessionCostSummary({ config: defaultConfig, agentId: "main", sessionFile }),
         released,
       ]);
       expect(summary?.totalTokens).toBe(12);
@@ -690,7 +541,11 @@ describe("session cost usage", () => {
 
     await writeEntries(sessionFile, entries);
 
-    const summary = await loadSessionCostSummary({ agentId: "main", sessionFile });
+    const summary = await loadSessionCostSummary({
+      config: defaultConfig,
+      agentId: "main",
+      sessionFile,
+    });
     expect(summary?.messageCounts).toEqual({
       total: 2,
       user: 1,
@@ -731,7 +586,11 @@ describe("session cost usage", () => {
       }),
     );
 
-    const summary = await loadSessionCostSummary({ agentId: "main", sessionFile });
+    const summary = await loadSessionCostSummary({
+      config: defaultConfig,
+      agentId: "main",
+      sessionFile,
+    });
     expect(summary?.messageCounts).toEqual({
       total: 0,
       user: 0,
@@ -752,7 +611,11 @@ describe("session cost usage", () => {
       transcriptEntry(new Date(startedAt).toISOString(), { role: "user", content: "go" }),
     );
 
-    const first = await loadSessionCostSummary({ agentId: "main", sessionFile });
+    const first = await loadSessionCostSummary({
+      config: defaultConfig,
+      agentId: "main",
+      sessionFile,
+    });
     expect(first?.latency).toBeUndefined();
     expect(readSessionCostUsageRollupRows()[0]?.valueJson).not.toContain('"min":null');
 
@@ -766,7 +629,11 @@ describe("session cost usage", () => {
         }),
       )}\n`,
     );
-    const appended = await loadSessionCostSummary({ agentId: "main", sessionFile });
+    const appended = await loadSessionCostSummary({
+      config: defaultConfig,
+      agentId: "main",
+      sessionFile,
+    });
 
     expect(appended?.latency?.count).toBe(1);
     expect(appended?.latency?.minMs).toBe(5_000);
@@ -787,6 +654,7 @@ describe("session cost usage", () => {
       ]);
     }
     const lookup = {
+      config: defaultConfig,
       agentId: "main",
       sessionId: "sess-mixed",
       sessionFile: path.join(root, "sess-mixed.jsonl"),
@@ -807,6 +675,7 @@ describe("session cost usage", () => {
           transcriptEntry("2026-02-21T17:47:00.000Z", {
             role: "user",
             content: [
+              "    [message_id: literal]",
               markInboundContextLabel("Conversation info:"),
               "```json",
               '{"message_id":"abc123"}',
@@ -836,20 +705,7 @@ describe("session cost usage", () => {
     const logs = await loadSessionLogs({ agentId: "main", sessionFile });
     expect(logs).toHaveLength(1);
     expect(logs?.[0]?.role).toBe("user");
-    expect(logs?.[0]?.content).toBe("hello there");
-  });
-
-  it("preserves indented message-ID code in user usage logs", async () => {
-    const sessionFile = path.join(root, "session.jsonl");
-    await writeEntries(sessionFile, [
-      transcriptEntry("2026-02-21T17:47:00Z", {
-        role: "user",
-        content: "    [message_id: literal]",
-      }),
-    ]);
-    const logs = await loadSessionLogs({ agentId: "main", sessionFile });
-    expect(logs).toHaveLength(1);
-    expect(logs?.[0]?.content).toBe("[message_id: literal]");
+    expect(logs?.[0]?.content).toBe("[message_id: literal]\n\nhello there");
   });
 
   it("does not split surrogate pairs when truncating session log content", async () => {
@@ -931,7 +787,11 @@ describe("session cost usage", () => {
 
     await writeEntries(sessionFile, entries);
 
-    const summary = await loadSessionCostSummary({ agentId: "main", sessionFile });
+    const summary = await loadSessionCostSummary({
+      config: defaultConfig,
+      agentId: "main",
+      sessionFile,
+    });
     expect(summary?.utcQuarterHourTokenUsage).toEqual([
       {
         date: "2026-03-15",

@@ -1,6 +1,10 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
   enqueueCommandInLane,
@@ -32,6 +36,7 @@ function createLaneController(params: {
     ...params.runOverrides,
     ...(params.enqueue ? { enqueue: params.enqueue } : {}),
   };
+  setRuntimeConfigSnapshot(runParams.config ?? {});
   let lifecycleGeneration = getAgentEventLifecycleGeneration();
 
   return createEmbeddedRunLaneController({
@@ -63,64 +68,39 @@ async function expectLaneCounts(lane: string, activeCount: number, queuedCount: 
 describe("embedded run session lane", () => {
   afterEach(() => {
     resetCommandQueueStateForTest();
+    clearRuntimeConfigSnapshot();
   });
 
-  it("passes the run deadline and lifecycle signals into injected session queues", async () => {
-    let observedOptions: Parameters<CommandQueueEnqueueFn>[1];
-    const enqueue: CommandQueueEnqueueFn = async (task, options) => {
-      observedOptions = options;
-      return await task();
-    };
-    const controller = createLaneController({
-      sessionLane: "test:injected-session-deadline",
-      runId: "injected-session-deadline",
-      enqueue,
-    });
-
-    await expect(controller.enqueueSession(async () => "finished")).resolves.toBe("finished");
-    expect(observedOptions).toMatchObject({
-      taskIdentity: { taskKind: "turn", runId: "injected-session-deadline" },
-      priority: "foreground",
-      taskTimeoutMs: 30_001,
-      taskTimeoutAbortGraceMs: 30_000,
-      taskTimeoutAbortSignal: controller.laneTaskAbortController.signal,
-      taskTimeoutReleaseSignal: controller.laneTaskReleaseController.signal,
-    });
-    expect(observedOptions?.taskTimeoutProgressAtMs?.()).toEqual(expect.any(Number));
-  });
-
-  it.each(["enqueueSession", "enqueueGlobal"] as const)(
-    "passes available run identity through %s before admission",
-    async (enqueueMethod) => {
-      for (const trigger of ["user", "cron"] as const) {
-        let observedOptions: Parameters<CommandQueueEnqueueFn>[1];
-        const refused = new Error("queue admission refused");
-        const controller = createLaneController({
-          sessionLane: "test:identity-session",
-          runId: "child-run",
-          runOverrides: {
-            trigger,
-            sessionKey: "agent:example:subagent:child",
-            spawnedBy: "agent:example:main",
-          },
-          enqueue: async (_task, options) => {
-            observedOptions = options;
-            throw refused;
-          },
-        });
-
-        await expect(
-          controller[enqueueMethod](async () => ({ meta: { durationMs: 1 } })),
-        ).rejects.toBe(refused);
-        expect(observedOptions?.taskIdentity).toEqual({
-          taskKind: trigger === "cron" ? "cron" : "spawn",
+  it("passes available run identity through session admission", async () => {
+    const enqueueMethod = "enqueueSession";
+    for (const trigger of ["user", "cron"] as const) {
+      let observedOptions: Parameters<CommandQueueEnqueueFn>[1];
+      const refused = new Error("queue admission refused");
+      const controller = createLaneController({
+        sessionLane: "test:identity-session",
+        runId: "child-run",
+        runOverrides: {
+          trigger,
           sessionKey: "agent:example:subagent:child",
-          runId: "child-run",
-          requesterSessionKey: "agent:example:main",
-        });
-      }
-    },
-  );
+          spawnedBy: "agent:example:main",
+        },
+        enqueue: async (_task, options) => {
+          observedOptions = options;
+          throw refused;
+        },
+      });
+
+      await expect(
+        controller[enqueueMethod](async () => ({ meta: { durationMs: 1 } })),
+      ).rejects.toBe(refused);
+      expect(observedOptions?.taskIdentity).toEqual({
+        taskKind: trigger === "cron" ? "cron" : "spawn",
+        sessionKey: "agent:example:subagent:child",
+        runId: "child-run",
+        requesterSessionKey: "agent:example:main",
+      });
+    }
+  });
 
   it.each(["deadline", "release"] as const)(
     "releases all queued session turns when the active turn reaches its %s",

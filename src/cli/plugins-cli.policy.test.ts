@@ -296,31 +296,27 @@ describe("plugins cli policy mutations", () => {
     expect(configWriteMock).not.toHaveBeenCalled();
   });
 
-  it.each(["enable", "disable"])(
-    "applies %s in order using the previously committed config",
-    async (command) => {
-      const enabled = command === "enable";
-      mockCurrentConfig({
-        plugins: { entries: { alpha: { enabled: !enabled }, beta: { enabled: !enabled } } },
-      });
-      mockPluginRegistry(["alpha", "beta"]);
+  it("applies enable in order using the previously committed config", async () => {
+    mockCurrentConfig({
+      plugins: { entries: { alpha: { enabled: false }, beta: { enabled: false } } },
+    });
+    mockPluginRegistry(["alpha", "beta"]);
 
-      await runPluginsCommand(["plugins", command, "beta", "alpha"]);
+    await runPluginsCommand(["plugins", "enable", "beta", "alpha"]);
 
-      expect(configWriteMock.mock.calls).toEqual([
-        [{ plugins: { entries: { alpha: { enabled: !enabled }, beta: { enabled } } } }],
-        [{ plugins: { entries: { alpha: { enabled }, beta: { enabled } } } }],
-      ]);
-      expect(refreshPluginRegistryMock).toHaveBeenNthCalledWith(
-        1,
-        expect.objectContaining({ policyPluginIds: ["beta"] }),
-      );
-      expect(refreshPluginRegistryMock).toHaveBeenNthCalledWith(
-        2,
-        expect.objectContaining({ policyPluginIds: ["alpha"] }),
-      );
-    },
-  );
+    expect(configWriteMock.mock.calls).toEqual([
+      [{ plugins: { entries: { alpha: { enabled: false }, beta: { enabled: true } } } }],
+      [{ plugins: { entries: { alpha: { enabled: true }, beta: { enabled: true } } } }],
+    ]);
+    expect(refreshPluginRegistryMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ policyPluginIds: ["beta"] }),
+    );
+    expect(refreshPluginRegistryMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ policyPluginIds: ["alpha"] }),
+    );
+  });
 
   it("toggles mixed-case manifest ids using their canonical policy key", async () => {
     mockCurrentConfig({

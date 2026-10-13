@@ -38,16 +38,17 @@ import { createSessionCapability, type SessionCapability } from "../../lib/sessi
 import { createSessionArchiveState } from "../../lib/sessions/session-archive-state.ts";
 import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
 import { ControlUiPluginRuntime } from "../../plugins/control-ui-runtime.ts";
+import { createNavigationPreferencesFixture } from "../../test-helpers/application-context.ts";
 import {
   createTestGatewayClient,
   type GatewayRequestHandler,
 } from "../../test-helpers/gateway-client.ts";
-import "./chat-pane.ts";
 import {
   gatewayHelloForMethods,
   SESSION_MUTATION_TEST_METHODS,
   sessionMutationGatewayHello,
 } from "../../test-helpers/gateway-methods.ts";
+import "./chat-pane.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import { ChatPane } from "./chat-pane-render.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
@@ -67,6 +68,7 @@ import type {
   ChatTaskSuggestionTrayProps,
   TaskSuggestionStartMode,
 } from "./components/chat-task-suggestions.ts";
+import type { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import type { SidebarLayout } from "./sidebar-layout.ts";
@@ -87,6 +89,7 @@ export function createPaneHeaderWorkspaceFixture(
 }
 
 export interface TestChatPane extends HTMLElement, ReactiveControllerHost {
+  readonly transcript: ChatTranscriptController;
   catalogMessages: unknown[];
   active: boolean;
   presented: boolean;
@@ -95,7 +98,7 @@ export interface TestChatPane extends HTMLElement, ReactiveControllerHost {
   sessionSnapshotStore?: SessionSnapshotStore;
   chatState: Pick<
     ChatStateController<ChatPageHost>,
-    "attach" | "composerPersistence" | "createRenderLifecycle"
+    "attach" | "composerPersistence" | "createRenderLifecycle" | "requestBackgroundUpdate"
   >;
   context: ApplicationContext;
   state: ChatPageHost;
@@ -160,7 +163,7 @@ export interface TestChatPane extends HTMLElement, ReactiveControllerHost {
   typingOverflow?: ChatTypingOverflow;
   clearTypingActors: () => void;
   typingActorViews: () => ChatTypingActorView[];
-  sendTypingState: (typing: boolean, preview?: string) => void;
+  sendTypingState: (typing: boolean, preview?: string, cursor?: number) => void;
   refreshSessionSuggestions: () => Promise<void>;
   resolveCurrentSessionSuggestion: (
     suggestion: SessionSuggestion,
@@ -192,7 +195,7 @@ export interface TestChatPane extends HTMLElement, ReactiveControllerHost {
   loadingOlder: boolean;
   catalogCursor: string | undefined;
   olderCursorsSeen: Set<string>;
-  headerEditing: boolean;
+  headerRenameSession: Pick<GatewaySessionRow, "key" | "sessionId" | "label"> | null;
   headerRenameValue: string;
   beginHeaderRename: (row: GatewaySessionRow) => void;
   handleHeaderSessionAction: (action: HeaderMenuAction, row: GatewaySessionRow) => Promise<void>;
@@ -214,8 +217,10 @@ export interface TestChatPane extends HTMLElement, ReactiveControllerHost {
   headerPlacementMovingKey: string | null;
   headerPlacementReclaimingKey: string | null;
   headerPlacementRestartingKey: string | null;
-  changeHeaderPlacement: (row: GatewaySessionRow, mode: "move" | "recover") => Promise<void>;
-  reclaimHeaderPlacement: (row: GatewaySessionRow) => Promise<void>;
+  changeHeaderPlacement: (
+    row: GatewaySessionRow,
+    mode: "move" | "recover" | "reclaim",
+  ) => Promise<void>;
   markSessionRead: (row: GatewaySessionRow | undefined) => void;
   applySessionsState: (stateValue: ApplicationContext["sessions"]["state"]) => void;
   renderPaneHeader: (
@@ -293,6 +298,7 @@ function withLiveCapabilities(
     ...context,
     chatAttachmentHandoff,
     connectionBootstrap,
+    navigation: createNavigationPreferencesFixture(),
     theme,
     agents,
     sessions,
@@ -327,6 +333,7 @@ export function createInitializationContext(client?: GatewayBrowserClient): Appl
       },
     },
     config: {
+      subscribe: () => () => {},
       current: {
         assistantIdentity: {
           agentId: null,
@@ -386,6 +393,7 @@ export function createSessionCapabilityFixture(
   return {
     captureConnectionScope: () => null,
     isConnectionScopeCurrent: () => false,
+    subscribe: () => () => undefined,
     deletionState: () => undefined,
     think: () => undefined,
     settingsPreview: () => undefined,
@@ -462,6 +470,7 @@ export function createSessionContext(
       },
     },
     config: {
+      subscribe: () => () => {},
       current: {
         assistantIdentity: { name: "Molty" },
         terminalEnabled: false,

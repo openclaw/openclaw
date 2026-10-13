@@ -2,9 +2,18 @@ import { describe, expect, it } from "vitest";
 import { compileConfigRegex } from "../security/config-regex.js";
 import { parseRedactPatternSource } from "./redact-pattern-runtime.js";
 import { AWS_SECRET_ACCESS_KEY_MATCHER, DEFAULT_REDACT_PATTERNS } from "./redact-patterns.js";
-import { redactSensitiveText, resolveRedactOptions } from "./redact.js";
+import { redactSensitiveFieldValue, redactSensitiveText, resolveRedactOptions } from "./redact.js";
 
 describe("default pattern table", () => {
+  it.each(["--token", "--password", "--api-key", "--security-code"])(
+    "masks a standalone spaced %s argument without another field delimiter",
+    (flag) => {
+      const input = `${flag} fixtureValue1234567890`;
+      const expected = `${flag} fixtur…7890`;
+      expect(redactSensitiveText(input, { mode: "tools" })).toBe(expected);
+      expect(redactSensitiveFieldValue("content", input, { mode: "tools" })).toBe(expected);
+    },
+  );
   // A default pattern the safe-regex guard rejects is dropped silently at runtime, which disables
   // that whole redaction family; fail here with the offending source instead.
   it("compiles every default string pattern under the safe-regex guard", () => {

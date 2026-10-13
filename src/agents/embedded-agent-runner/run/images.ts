@@ -86,22 +86,29 @@ export function detectImageReferences(prompt: string): MediaFileRef[] {
     " ".repeat(marker.length),
   );
 
-  const addPathRef = (raw: string) => {
+  const addPathRef = (raw: string, fileUrl: boolean) => {
     const trimmed = raw.trim();
     const dedupeKey = normalizeRefForDedupe(trimmed);
     if (!trimmed || seen.has(dedupeKey)) {
       return;
     }
     // An extension-only basename is a dotfile even though the regex accepts it.
-    if (!path.extname(trimmed)) {
+    if (!fileUrl && !path.extname(trimmed)) {
       return;
     }
+    let resolved = trimmed;
     try {
-      assertNoWindowsNetworkPath(trimmed, "Image path");
+      if (fileUrl) {
+        resolved = safeFileURLToPath(trimmed);
+      } else {
+        assertNoWindowsNetworkPath(trimmed, "Image path");
+      }
     } catch {
       return;
     }
-    const resolved = trimmed.startsWith("~") ? resolveUserPath(trimmed) : trimmed;
+    if (!fileUrl && trimmed.startsWith("~")) {
+      resolved = resolveUserPath(trimmed);
+    }
     if (isOpenClawCliImageCachePath(resolved)) {
       return;
     }
@@ -109,38 +116,43 @@ export function detectImageReferences(prompt: string): MediaFileRef[] {
     refs.push({ raw: trimmed, type: "path", resolved });
   };
 
-  FILE_URL_PATTERN.lastIndex = 0;
-  WINDOWS_DRIVE_PATH_PATTERN.lastIndex = 0;
-  PATH_PATTERN.lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = FILE_URL_PATTERN.exec(pathPrompt)) !== null) {
-    const raw = match[0];
-    const dedupeKey = normalizeRefForDedupe(raw);
-    if (seen.has(dedupeKey)) {
-      continue;
-    }
-    try {
-      const resolved = safeFileURLToPath(raw);
-      if (isOpenClawCliImageCachePath(resolved)) {
-        continue;
-      }
-      seen.add(dedupeKey);
-      refs.push({ raw, type: "path", resolved });
-    } catch {
-      continue;
-    }
-  }
-
-  for (const pattern of [WINDOWS_DRIVE_PATH_PATTERN, PATH_PATTERN]) {
+  for (const [pattern, group, fileUrl] of [
+    [FILE_URL_PATTERN, 0, true],
+    [WINDOWS_DRIVE_PATH_PATTERN, 1, false],
+    [PATH_PATTERN, 1, false],
+  ] as const) {
+    pattern.lastIndex = 0;
+    let match: RegExpExecArray | null;
     while ((match = pattern.exec(pathPrompt)) !== null) {
-      if (match[1]) {
-        addPathRef(match[1]);
+      if (match[group]) {
+        addPathRef(match[group], fileUrl);
       }
     }
   }
 
   return refs;
+}
+
+function applySandboxStagedImagePaths(
+  selected: MediaFact[],
+  attemptMedia: readonly MediaFact[] | undefined,
+): MediaFact[] {
+  const stagedByUrl = new Map<string, string>();
+  for (const fact of attemptMedia ?? []) {
+    if (fact.staged === true && fact.path && fact.url?.startsWith("media://")) {
+      stagedByUrl.set(fact.url, fact.path);
+    }
+  }
+  if (stagedByUrl.size === 0) {
+    return selected;
+  }
+  return selected.map((fact) => {
+    const stagedPath = fact.url ? stagedByUrl.get(fact.url) : undefined;
+    if (!stagedPath || fact.hydrationSuppressed === true) {
+      return fact;
+    }
+    return { ...fact, path: stagedPath, staged: true };
+  });
 }
 
 function refDedupeKey(ref: MediaFileRef, workspaceDir?: string): string {
@@ -249,21 +261,22 @@ export async function detectAndLoadPromptImages(
   loadedCount: number;
   skippedCount: number;
 }> {
+  const counts = { failedMediaCount: 0, loadedCount: 0, skippedCount: 0 };
   if (!params.model.input?.includes("image")) {
     return {
       images: [],
       imageFactIndexes: [],
       detectedRefs: [],
-      failedMediaCount: 0,
-      loadedCount: 0,
-      skippedCount: 0,
+      ...counts,
     };
   }
   // Deferred transcript preparation can carry fresher facts than the recorder's
   // initial message. Resolve without persisting before choosing image ownership.
+  // Sandbox staging is newer than that snapshot and is the only copy the bridge can read.
   const message = await params.userTurnTranscriptRecorder?.resolveMessage();
-  const media = normalizeMediaFacts(
-    (message ? readPersistedMediaFacts(message) : undefined) ?? params.media,
+  const media = applySandboxStagedImagePaths(
+    normalizeMediaFacts((message ? readPersistedMediaFacts(message) : undefined) ?? params.media),
+    params.sandbox ? params.media : undefined,
   );
   const mediaImageLayout =
     (message ? readPersistedMediaImageLayout(message) : undefined) ?? params.mediaImageLayout;
@@ -327,10 +340,7 @@ export async function detectAndLoadPromptImages(
     factIndex: number | undefined,
     allowUnowned: boolean,
   ): PromptImageEntry | undefined => {
-    const exact =
-      factIndex === undefined
-        ? -1
-        : unusedExisting.findIndex((entry) => entry.factIndex === factIndex);
+    const exact = unusedExisting.findIndex((entry) => entry.factIndex === factIndex);
     const index =
       exact >= 0
         ? exact
@@ -364,9 +374,6 @@ export async function detectAndLoadPromptImages(
     ),
     ...promptRefs,
   ];
-  let loadedCount = 0;
-  let failedMediaCount = 0;
-  let skippedCount = 0;
   const loadRef = async (ref: MediaFileRef & { workspaceDir?: string }, attachment = false) => {
     const loadedMedia = await loadMediaFromRef(
       ref,
@@ -375,7 +382,7 @@ export async function detectAndLoadPromptImages(
       attachment,
     );
     if (!loadedMedia || loadedMedia.kind !== "image") {
-      skippedCount++;
+      counts.skippedCount++;
       return null;
     }
     const image: ImageContent = {
@@ -383,7 +390,7 @@ export async function detectAndLoadPromptImages(
       data: loadedMedia.buffer.toString("base64"),
       mimeType: loadedMedia.contentType ?? "image/jpeg",
     };
-    loadedCount++;
+    counts.loadedCount++;
     log.debug(`Native image: loaded ${ref.type} ${ref.resolved}`);
     return image;
   };
@@ -399,7 +406,7 @@ export async function detectAndLoadPromptImages(
     const ref = slot.factIndex === undefined ? undefined : refsByFact.get(slot.factIndex);
     const image = ref?.hydrate ? await loadRef(ref, true) : null;
     if ((ref?.hydrate || slot.kind === "inline") && !image) {
-      failedMediaCount++;
+      counts.failedMediaCount++;
     }
     if (image) {
       promptImages.push({ image, factIndex: ref?.factIndex ?? null });
@@ -415,6 +422,7 @@ export async function detectAndLoadPromptImages(
   const imageSanitization = {
     maxBytes: params.maxBytes,
     maxDimensionPx: params.maxDimensionPx,
+    verifyDecodability: true,
   };
   const sanitized: PromptImageEntry[] = [];
   let dropped = 0;
@@ -426,7 +434,7 @@ export async function detectAndLoadPromptImages(
     }
     dropped += result.dropped;
     if (result.dropped > 0 && entry.factIndex !== null) {
-      failedMediaCount++;
+      counts.failedMediaCount++;
     }
   }
   if (dropped > 0) {
@@ -436,9 +444,7 @@ export async function detectAndLoadPromptImages(
   return {
     ...finalizeRuntimePromptImages(sanitized),
     detectedRefs,
-    failedMediaCount,
-    loadedCount,
-    skippedCount,
+    ...counts,
   };
 }
 

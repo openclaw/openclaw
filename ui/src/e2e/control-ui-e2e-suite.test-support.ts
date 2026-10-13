@@ -386,6 +386,7 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
           "Control UI E2E context arrived after teardown began",
         );
       }
+      context.on("page", installControlUiRpcDiagnostics);
       context.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
       return context;
     });
@@ -523,24 +524,26 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
               const { startControlUiE2eServer } = await import("../test-helpers/control-ui-e2e.ts");
               return startControlUiE2eServer();
             });
+          const launchBrowser = () =>
+            chromium.launch({
+              ...options.browserLaunchOptions,
+              // Full-tile CPU rasterization: GPU raster left paint-history-dependent edge pixels.
+              args: [
+                "--disable-partial-raster",
+                "--disable-gpu-rasterization",
+                ...(options.browserLaunchOptions?.args ?? []),
+              ],
+              executablePath: chromiumExecutablePath,
+            });
           setupPromise = Promise.resolve().then(async () => {
             if (options.startServerBeforeBrowser) {
               server = await startServer();
               if (stopping) {
                 return;
               }
-              browser = await chromium.launch({
-                ...options.browserLaunchOptions,
-                // Full tile rasterization reduced cross-pass stroke noise in the capture fixtures.
-                args: ["--disable-partial-raster", ...(options.browserLaunchOptions?.args ?? [])],
-                executablePath: chromiumExecutablePath,
-              });
+              browser = await launchBrowser();
             } else {
-              browser = await chromium.launch({
-                ...options.browserLaunchOptions,
-                args: ["--disable-partial-raster", ...(options.browserLaunchOptions?.args ?? [])],
-                executablePath: chromiumExecutablePath,
-              });
+              browser = await launchBrowser();
               if (stopping) {
                 return;
               }
@@ -618,7 +621,6 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
           async () => {
             const page = await context.newPage();
             fixture = { context, page };
-            installControlUiRpcDiagnostics(page);
             // A CDP session attached after a test's own session clears that session's
             // emulation overrides (such as safe-area insets) on the next navigation.
             await installControlUiE2eRendererStallProbe(page);

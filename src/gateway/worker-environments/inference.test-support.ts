@@ -5,13 +5,9 @@ import type {
   WorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
 import type { WorkerInferenceStore } from "./inference-store.js";
-import {
-  createWorkerInferenceManager,
-  type WorkerInferenceExecutor,
-  type WorkerInferenceSink,
-} from "./inference.js";
+import { createWorkerInferenceManager, type WorkerInferenceSink } from "./inference.js";
 
 export function waitForFast<T>(
   callback: () => T | Promise<T>,

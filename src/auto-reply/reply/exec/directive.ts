@@ -1,4 +1,3 @@
-// Parses execution directives for approval, sandbox, and target settings.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   type ExecAsk,
@@ -38,48 +37,42 @@ export function extractExecDirective(rawBody?: string): ExecDirectiveParse {
   const body = rawBody ?? "";
   const re = /(?<!\S)\/exec(?=$|\s|:)/i;
   const match = re.exec(body);
-  if (!match) {
-    return {
-      cleaned: body,
-      hasDirective: false,
-      hasExecOptions: false,
-      invalidHost: false,
-      invalidSecurity: false,
-      invalidAsk: false,
-      invalidNode: false,
-    };
-  }
-  const start = match.index;
-  const argsStart = start + "/exec".length;
-  const raw = body.slice(argsStart);
-  let i = skipDirectiveArgPrefix(raw);
-  let consumed = i;
   const parsed: ExecDirectiveParse = {
     cleaned: body,
-    hasDirective: true,
-    execHost: undefined,
-    execSecurity: undefined,
-    execAsk: undefined,
-    execNode: undefined,
-    rawExecHost: undefined,
-    rawExecSecurity: undefined,
-    rawExecAsk: undefined,
-    rawExecNode: undefined,
+    hasDirective: match !== null,
+    ...(match
+      ? {
+          execHost: undefined,
+          execSecurity: undefined,
+          execAsk: undefined,
+          execNode: undefined,
+          rawExecHost: undefined,
+          rawExecSecurity: undefined,
+          rawExecAsk: undefined,
+          rawExecNode: undefined,
+        }
+      : {}),
     hasExecOptions: false,
     invalidHost: false,
     invalidSecurity: false,
     invalidAsk: false,
     invalidNode: false,
   };
+  if (!match) {
+    return parsed;
+  }
+  const start = match.index;
+  const argsStart = start + "/exec".length;
+  const raw = body.slice(argsStart);
+  let i = skipDirectiveArgPrefix(raw);
+  let consumed = i;
   while (i < raw.length) {
     const { token, nextIndex } = takeDirectiveToken(raw, i);
     i = nextIndex;
     if (!token) {
       break;
     }
-    const eq = token.indexOf("=");
-    const colon = token.indexOf(":");
-    const separator = eq === -1 ? colon : colon === -1 ? eq : Math.min(eq, colon);
+    const separator = token.search(/[=:]/);
     if (separator === -1) {
       break;
     }

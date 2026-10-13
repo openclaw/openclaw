@@ -143,8 +143,8 @@ export function renderTriagePrompt(params: {
     failure?.gateway === "preserve"
       ? "Do not start or restart the Gateway: this invocation did not authorize activation. Preserve --no-restart and intentional stops. Use read-only status checks and report live health verification as deferred while it is intentionally stopped."
       : "Only activate a Gateway intended to run. For managed recovery, use atomic `openclaw gateway restart` when needed, never stop then start: an explicit stop after native scope attachment cancels this recovery and its children. Preserve later operator stops and report cancellation or infeasibility instead of claiming recovery.",
-    "For a running Gateway, verify this installation with `openclaw health --json` AND `openclaw status --all` or `openclaw gateway status --deep`. Verify the running version matches the expected version above when supplied, and reproduce the original symptom to confirm it is resolved.",
-    "A valid config, process PID, repair command exit 0, or health snapshot's top-level ok alone is not success. Inspect relevant health/status failures. End with a concise report of changes, verification commands and evidence, and any remaining blocker. Do not claim recovery without that evidence.",
+    "For a running Gateway, verify this installation with `openclaw health --json` AND `openclaw gateway status --deep --require-rpc`. Verify the running version matches the expected version above when supplied, and reproduce the original symptom to confirm it is resolved.",
+    "Default gateway status exit 0 means diagnostics completed, not health. `--require-rpc` proves read-scope RPC, not plugin/channel readiness. A valid config, process PID, repair command exit 0, or health snapshot's top-level ok alone is not success. Inspect relevant health/status failures. End with a concise report of changes, verification commands and evidence, and any remaining blocker. Do not claim recovery without that evidence.",
     "",
   );
 

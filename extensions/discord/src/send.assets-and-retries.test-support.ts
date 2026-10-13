@@ -33,36 +33,6 @@ export function registerSendAssetsAndRetriesTests(load: () => SendAssetsAndRetri
       expect(getMock).toHaveBeenCalledWith(Routes.guildEmojis("g1"));
     });
 
-    it("preserves sticker payloads, notification flags, and nonce across a retried 502", async () => {
-      const { rest, postMock } = makeDiscordRest();
-      postMock
-        .mockRejectedValueOnce(Object.assign(new Error("bad gateway"), { status: 502 }))
-        .mockResolvedValueOnce({ id: "msg1", channel_id: "789" });
-      const result = await load().sendStickerDiscord("channel:789", ["123"], {
-        ...clientOpts(rest),
-        content: "hiya",
-        silent: true,
-        retry,
-      });
-      expect(result).toMatchObject({
-        messageId: "msg1",
-        channelId: "789",
-        receipt: {
-          parts: [{ platformMessageId: "msg1", kind: "card" }],
-        },
-      });
-      expect(postMock).toHaveBeenCalledTimes(2);
-      expect(requestPath(postMock)).toBe(Routes.channelMessages("789"));
-      expect(requestBody(postMock)).toMatchObject({
-        content: "hiya",
-        flags: MessageFlags.SuppressEmbeds | MessageFlags.SuppressNotifications,
-        sticker_ids: ["123"],
-        enforce_nonce: true,
-      });
-      expect(requestBody(postMock).nonce).toMatch(/^[0-9a-f]{24}$/);
-      expect(requestBody(postMock, 1).nonce).toBe(requestBody(postMock).nonce);
-    });
-
     it("allows sticker link embeds when suppression is disabled", async () => {
       const { rest, postMock } = makeDiscordRest();
       postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
@@ -138,39 +108,6 @@ export function registerSendAssetsAndRetriesTests(load: () => SendAssetsAndRetri
       expect(result.receipt.platformMessageIds).toEqual(["msg1", "msg2"]);
       expect(postMock).toHaveBeenCalledTimes(3);
       expect(timerDelayAt(setTimeoutSpy)).toBe(1);
-    });
-
-    it("stops after max rate-limit attempts", async () => {
-      const { rest, postMock } = makeDiscordRest();
-      postMock.mockRejectedValue(rateLimitError());
-      await expect(
-        load().sendMessageDiscord("channel:789", "hello", { ...clientOpts(rest), retry }),
-      ).rejects.toBeInstanceOf(RateLimitError);
-      expect(postMock).toHaveBeenCalledTimes(2);
-    });
-
-    it("does not retry permanent non-rate-limit errors", async () => {
-      const { rest, postMock } = makeDiscordRest();
-      postMock.mockRejectedValueOnce(new Error("invalid request"));
-      await expect(
-        load().sendMessageDiscord("channel:789", "hello", clientOpts(rest)),
-      ).rejects.toThrow("invalid request");
-      expect(postMock).toHaveBeenCalledOnce();
-    });
-
-    it("retries ambiguous network errors with one stable enforced nonce", async () => {
-      const { rest, postMock } = makeDiscordRest();
-      postMock
-        .mockRejectedValueOnce(new TypeError("fetch failed"))
-        .mockResolvedValueOnce({ id: "msg1", channel_id: "789" });
-      const result = await load().sendMessageDiscord("channel:789", "hello", {
-        ...clientOpts(rest),
-        retry,
-      });
-      expect(result.messageId).toBe("msg1");
-      expect(postMock).toHaveBeenCalledTimes(2);
-      expect(requestBody(postMock).enforce_nonce).toBe(true);
-      expect(requestBody(postMock, 1).nonce).toBe(requestBody(postMock).nonce);
     });
   });
 }

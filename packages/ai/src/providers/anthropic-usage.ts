@@ -39,6 +39,49 @@ type AnthropicBilledUsage = {
   cacheWrite1h: number;
 };
 
+const BILLED_USAGE_KEYS = ["input", "output", "cacheRead", "cacheWrite", "cacheWrite1h"] as const;
+
+function readAnthropicBilledUsage(
+  usage: AnthropicUsagePayload,
+  missingCacheTokens?: 0,
+): Partial<AnthropicBilledUsage> {
+  return {
+    input: readAnthropicUsageTokenCount(usage.input_tokens),
+    output: readAnthropicUsageTokenCount(usage.output_tokens),
+    cacheRead: readAnthropicUsageTokenCount(usage.cache_read_input_tokens ?? missingCacheTokens),
+    cacheWrite: readAnthropicUsageTokenCount(
+      usage.cache_creation_input_tokens ?? missingCacheTokens,
+    ),
+    cacheWrite1h: readAnthropicCacheWriteUsage(usage).cacheWrite1h,
+  };
+}
+
+function applyAnthropicBilledUsage(target: Usage, resolved: Partial<AnthropicBilledUsage>): void {
+  for (const key of BILLED_USAGE_KEYS) {
+    const value = resolved[key];
+    if (value !== undefined) {
+      target[key] = value;
+    }
+  }
+  target.totalTokens = target.input + target.output + target.cacheRead + target.cacheWrite;
+}
+
+function readAnthropicIterationUsage(value: unknown): AnthropicBilledUsage | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const { input, output, cacheRead, cacheWrite, cacheWrite1h } = readAnthropicBilledUsage(value);
+  if (
+    input === undefined ||
+    output === undefined ||
+    cacheRead === undefined ||
+    cacheWrite === undefined
+  ) {
+    return undefined;
+  }
+  return { input, output, cacheRead, cacheWrite, cacheWrite1h: cacheWrite1h ?? 0 };
+}
+
 export function readAnthropicUsageTokenCount(value: unknown): number | undefined {
   return asNonNegativeFiniteNumber(value);
 }
@@ -87,29 +130,16 @@ export function readLastAnthropicIterationUsage(
   }
   // Anthropic documents the final iteration as the true context window.
   // Top-level cache fields remain cumulative billing totals across iterations.
-  const iteration = usage.iterations.at(-1);
-  if (!iteration || typeof iteration !== "object" || Array.isArray(iteration)) {
+  const iteration = readAnthropicIterationUsage(usage.iterations.at(-1));
+  if (!iteration) {
     return { state: "invalid" };
   }
-  const record = iteration as AnthropicUsagePayload;
-  const input = readAnthropicUsageTokenCount(record.input_tokens);
-  const cacheRead = readAnthropicUsageTokenCount(record.cache_read_input_tokens);
-  const cacheWrite = readAnthropicUsageTokenCount(record.cache_creation_input_tokens);
-  const outputTokens = readAnthropicUsageTokenCount(record.output_tokens);
-  if (
-    input === undefined ||
-    cacheRead === undefined ||
-    cacheWrite === undefined ||
-    outputTokens === undefined
-  ) {
-    return { state: "invalid" };
-  }
-  const contextPromptTokens = input + cacheRead + cacheWrite;
+  const contextPromptTokens = iteration.input + iteration.cacheRead + iteration.cacheWrite;
   return {
     state: "valid",
     usage: {
       contextPromptTokens,
-      totalTokens: contextPromptTokens + outputTokens,
+      totalTokens: contextPromptTokens + iteration.output,
     },
   };
 }
@@ -127,28 +157,14 @@ function readAnthropicCompactionBilledUsage(iterations: unknown): AnthropicBille
     cacheWrite1h: 0,
   };
   for (const iteration of iterations) {
-    if (!iteration || typeof iteration !== "object" || Array.isArray(iteration)) {
+    const resolved = readAnthropicIterationUsage(iteration);
+    if (!resolved) {
       return undefined;
     }
-    const record = iteration as AnthropicUsagePayload & { type?: unknown };
-    const input = readAnthropicUsageTokenCount(record.input_tokens);
-    const output = readAnthropicUsageTokenCount(record.output_tokens);
-    const cacheRead = readAnthropicUsageTokenCount(record.cache_read_input_tokens);
-    const cacheWrite = readAnthropicUsageTokenCount(record.cache_creation_input_tokens);
-    if (
-      input === undefined ||
-      output === undefined ||
-      cacheRead === undefined ||
-      cacheWrite === undefined
-    ) {
-      return undefined;
+    sawCompaction ||= iteration.type === "compaction";
+    for (const key of BILLED_USAGE_KEYS) {
+      billed[key] += resolved[key];
     }
-    sawCompaction ||= record.type === "compaction";
-    billed.input += input;
-    billed.output += output;
-    billed.cacheRead += cacheRead;
-    billed.cacheWrite += cacheWrite;
-    billed.cacheWrite1h += readAnthropicCacheWriteUsage(record).cacheWrite1h ?? 0;
   }
   return sawCompaction ? billed : undefined;
 }
@@ -162,34 +178,9 @@ export function applyAnthropicMessageStartUsage(
   const promptTokens = promptUsage
     ? promptUsage.input + promptUsage.cacheRead + promptUsage.cacheWrite
     : 0;
-  const inputTokens = readAnthropicUsageTokenCount(payload.input_tokens);
-  if (inputTokens !== undefined) {
-    target.input = inputTokens;
-  }
-  const outputTokens = readAnthropicUsageTokenCount(payload.output_tokens);
-  if (outputTokens !== undefined) {
-    target.output = outputTokens;
-  }
-  const cacheReadTokens =
-    payload.cache_read_input_tokens == null
-      ? 0
-      : readAnthropicUsageTokenCount(payload.cache_read_input_tokens);
-  if (cacheReadTokens !== undefined) {
-    target.cacheRead = cacheReadTokens;
-  }
-  const cacheWriteTokens =
-    payload.cache_creation_input_tokens == null
-      ? 0
-      : readAnthropicUsageTokenCount(payload.cache_creation_input_tokens);
-  if (cacheWriteTokens !== undefined) {
-    target.cacheWrite = cacheWriteTokens;
-  }
-  const { cacheWrite1h } = readAnthropicCacheWriteUsage(payload);
-  if (cacheWrite1h !== undefined) {
-    target.cacheWrite1h = cacheWrite1h;
-  }
-  target.totalTokens = target.input + target.output + target.cacheRead + target.cacheWrite;
-  if (promptTokens > 0 && outputTokens !== undefined) {
+  const resolved = readAnthropicBilledUsage(payload, 0);
+  applyAnthropicBilledUsage(target, resolved);
+  if (promptTokens > 0 && resolved.output !== undefined) {
     target.contextUsage = {
       state: "available",
       promptTokens,
@@ -209,25 +200,9 @@ export function applyAnthropicMessageDeltaUsage(
     return;
   }
   const billedIterations = readAnthropicCompactionBilledUsage(usage.iterations);
-  const inputTokens = readAnthropicUsageTokenCount(usage.input_tokens);
-  const outputTokens = readAnthropicUsageTokenCount(usage.output_tokens);
-  const cacheReadTokens = readAnthropicUsageTokenCount(usage.cache_read_input_tokens);
-  const cacheWriteTokens = readAnthropicUsageTokenCount(usage.cache_creation_input_tokens);
-  const resolved: Partial<AnthropicBilledUsage> = billedIterations ?? {
-    input: inputTokens,
-    output: outputTokens,
-    cacheRead: cacheReadTokens,
-    cacheWrite: cacheWriteTokens,
-    cacheWrite1h: readAnthropicCacheWriteUsage(usage).cacheWrite1h,
-  };
+  const reported = readAnthropicBilledUsage(usage);
   // Match the SDK accumulator: absent or null cache counters preserve prior values.
-  for (const key of ["input", "output", "cacheRead", "cacheWrite", "cacheWrite1h"] as const) {
-    const value = resolved[key];
-    if (value !== undefined) {
-      target[key] = value;
-    }
-  }
-  target.totalTokens = target.input + target.output + target.cacheRead + target.cacheWrite;
+  applyAnthropicBilledUsage(target, billedIterations ?? reported);
   const iterationUsage = readLastAnthropicIterationUsage(usage);
   if (iterationUsage.state === "valid") {
     target.contextUsage = {
@@ -238,9 +213,9 @@ export function applyAnthropicMessageDeltaUsage(
   } else if (iterationUsage.state === "invalid") {
     target.contextUsage = { state: "unavailable" };
   } else if (
-    outputTokens !== undefined &&
+    reported.output !== undefined &&
     (messageStartPromptUsage !== undefined ||
-      ((cacheReadTokens !== undefined || cacheWriteTokens !== undefined) &&
+      ((reported.cacheRead !== undefined || reported.cacheWrite !== undefined) &&
         readAnthropicPromptUsageSnapshot(usage) !== undefined))
   ) {
     const promptTokens = target.input + target.cacheRead + target.cacheWrite;

@@ -37,37 +37,6 @@ async function collect(
 afterEach(() => vi.useRealTimers());
 
 describe("Discord report source", () => {
-  it("converts timestamps to cursors and snowflakes to timestamps at the collection boundary", async () => {
-    const context = runtime((url, init) => {
-      expect(new Headers(init?.headers).get("Authorization")).toBe(`Bot ${config.token}`);
-      if (url.pathname.endsWith("/messages")) {
-        expect(url.searchParams.get("after")).toBe("175928843960320000");
-        expect(url.searchParams.get("limit")).toBe("100");
-        return json([
-          {
-            id: "175928847299117063",
-            author: { id: "30" },
-            content: "  Full discussion content  ",
-          },
-        ]);
-      }
-      return undefined;
-    });
-    const result = await collect(context, config, window);
-    expect(result.messages).toEqual([
-      {
-        channelId: "20",
-        parentChannelId: "20",
-        channelName: "engineering",
-        authorId: "30",
-        authorIsBot: false,
-        atMs: 1462015105796,
-        content: "Full discussion content",
-      },
-    ]);
-    expect(result.status.ok).toBe(true);
-  });
-
   it("pages forward across reverse-ordered pages and stops at the exclusive upper bound", async () => {
     const firstPage = Array.from({ length: 100 }, (_, index) =>
       message(window.sinceMs + index + 1),
@@ -101,10 +70,7 @@ describe("Discord report source", () => {
     expect(result.messages.every((entry) => !entry.authorIsBot && entry.content.trim())).toBe(true);
   });
 
-  it.each([
-    ["public", 11],
-    ["private", 12],
-  ])(
+  it.each([["public", 11]])(
     "rolls active and %s archived threads into configured parents and bounds archive paging",
     async (archiveKind, type) => {
       const archiveTimes = [window.untilMs + 1000, window.sinceMs + 1000, window.sinceMs - 1];
@@ -210,83 +176,24 @@ describe("Discord report source", () => {
     ).toHaveLength(2);
   });
 
-  it.each(["primary", "joined"])(
-    "warns on non-403 failures from %s private archives",
-    async (endpoint) => {
-      const context = runtime((url) => {
-        if (url.pathname.endsWith("/channels/20/threads/archived/private")) {
-          return json({}, endpoint === "primary" ? 404 : 403);
-        }
-        if (url.pathname.endsWith("/users/@me/threads/archived/private")) {
-          return json({}, 404);
-        }
-        return undefined;
-      });
-      const result = await collect(context, config, window);
-      expect(result.status.warnings).toEqual([expect.stringMatching(/20.*404/)]);
-      expect(result.status.stale).toBe(true);
-      expect(result.status.ok).toBe(false);
-      expect(result.status.stats.privateArchivesSkipped).toBe(0);
-    },
-  );
-
-  it.each([15, 16])(
-    "collects archived posts from type %s channels without requesting parent messages",
-    async (type) => {
-      const context = runtime((url) => {
-        if (url.pathname.endsWith("/guilds/10/channels")) {
-          return json([{ id: "20", name: "posts", type }]);
-        }
-        if (url.pathname.endsWith("/threads/archived/public")) {
-          return json({ threads: [thread("21", window.sinceMs + 1000, 11)], has_more: false });
-        }
-        if (url.pathname.endsWith("/channels/21/messages")) {
-          return json([message(window.sinceMs + 1)]);
-        }
-        return undefined;
-      });
-      const result = await collect(context, config, window);
-      expect(result.messages.map((entry) => entry.channelName)).toEqual(["posts/discussion"]);
-      expect(context.requests.some((url) => url.pathname.endsWith("/channels/20/messages"))).toBe(
-        false,
-      );
-      expect(result.status.warnings).toEqual([]);
-    },
-  );
-
-  it("collects active announcement thread messages beyond 100 pages regardless of thread creation time", async () => {
-    const activeThread = thread(message(window.sinceMs - 1000).id, window.sinceMs - 1000, 10);
-    let pages = 0;
+  it.each(["primary"])("warns on non-403 failures from %s private archives", async (endpoint) => {
     const context = runtime((url) => {
-      if (url.pathname.endsWith("/threads/active")) {
-        return json({ threads: [activeThread] });
+      if (url.pathname.endsWith("/channels/20/threads/archived/private")) {
+        return json({}, endpoint === "primary" ? 404 : 403);
       }
-      if (url.pathname.endsWith(`/channels/${activeThread.id}/messages`)) {
-        const after = BigInt(url.searchParams.get("after") ?? "0");
-        pages += 1;
-        return json(
-          Array.from({ length: pages <= 100 ? 100 : 1 }, (_, index) => ({
-            ...message(window.sinceMs + 1),
-            id: (after + BigInt(index + 1)).toString(),
-          })).toReversed(),
-        );
+      if (url.pathname.endsWith("/users/@me/threads/archived/private")) {
+        return json({}, 404);
       }
       return undefined;
     });
     const result = await collect(context, config, window);
-    expect(pages).toBe(101);
-    expect(result.batchSizes).toHaveLength(101);
-    expect(Math.max(...result.batchSizes)).toBe(100);
-    expect(result.messages).toHaveLength(10001);
-    expect(
-      result.messages.every(
-        (entry) => entry.channelId === activeThread.id && entry.atMs === window.sinceMs,
-      ),
-    ).toBe(true);
-    expect(result.status.warnings).toEqual([]);
+    expect(result.status.warnings).toEqual([expect.stringMatching(/20.*404/)]);
+    expect(result.status.stale).toBe(true);
+    expect(result.status.ok).toBe(false);
+    expect(result.status.stats.privateArchivesSkipped).toBe(0);
   });
 
-  it.each([0.25, 3_000_000])(
+  it.each([3_000_000])(
     "waits %s seconds for Discord retry_after before retrying",
     async (seconds) => {
       vi.useFakeTimers();

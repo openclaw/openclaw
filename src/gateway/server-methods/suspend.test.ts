@@ -1,7 +1,7 @@
 // Covers suspension RPC validation and coordinator response mapping.
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { suspendHandlers } from "./suspend.js";
 
 const coordinator = vi.hoisted(() => ({
@@ -43,6 +43,10 @@ function invoke(method: keyof typeof suspendHandlers, params: unknown) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("gateway suspend handlers", () => {
@@ -134,6 +138,7 @@ describe("gateway suspend handlers", () => {
   });
 
   it("returns a draining status without exposing its owner's suspension id", async () => {
+    vi.useFakeTimers();
     const result = {
       status: "draining",
       expiresAtMs: 123_000,
@@ -149,11 +154,13 @@ describe("gateway suspend handlers", () => {
       ],
       writeCustody: [{ phase: "terminal-persistence", count: 1 }],
     };
-    coordinator.status.mockReturnValueOnce(result);
+    coordinator.status.mockReturnValue(result);
 
-    const { respond, info } = await invoke("gateway.suspend.status", {
+    const response = invoke("gateway.suspend.status", {
       suspensionId: "suspension-draining",
     });
+    await vi.advanceTimersByTimeAsync(15_000);
+    const { respond, info } = await response;
 
     expect(coordinator.status).toHaveBeenCalledWith("suspension-draining", false);
     expect(respond).toHaveBeenCalledWith(true, result);
@@ -169,7 +176,7 @@ describe("gateway suspend handlers", () => {
       retryAfterMs: 1_000,
     };
     coordinator.prepare.mockReturnValueOnce(recovering);
-    coordinator.status.mockReturnValueOnce(recovering);
+    coordinator.status.mockReturnValue(recovering);
 
     const prepared = await invoke("gateway.suspend.prepare", { requestId: "request-recovery" });
     const status = await invoke("gateway.suspend.status", { suspensionId: "stale-id" });

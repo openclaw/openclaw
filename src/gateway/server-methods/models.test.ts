@@ -1456,9 +1456,7 @@ describe("models.list", () => {
                     },
                     available,
                     tags: ["configured"],
-                    ...(!authenticated && catalogComplete
-                      ? { unavailableReason: "missing-auth" }
-                      : {}),
+                    ...(authenticated ? {} : { unavailableReason: "missing-auth" }),
                   },
                 ],
               },

@@ -272,14 +272,14 @@ function collectCorruptFeishuStateJsonFindings(feishuStateDir: string): FeishuDo
   return findings;
 }
 
-function resolveSessionTranscriptCandidates(params: {
+function resolveSessionTranscriptPath(params: {
   agentId: string;
   storePath: string;
   entry: FeishuSessionEntry;
-}): string[] {
+}): string | undefined {
   const candidate = params.entry.sessionFile;
   if (typeof candidate !== "string" || !candidate.trim()) {
-    return [];
+    return undefined;
   }
   const sessionsDir = path.dirname(params.storePath);
   const agentSessionsDir = resolveFeishuAgentSessionsDir(params.agentId);
@@ -291,8 +291,8 @@ function resolveSessionTranscriptCandidates(params: {
     resolved !== agentSessionsDir &&
     (isPathStrictlyInside(sessionsDir, resolved) ||
       isPathStrictlyInside(agentSessionsDir, resolved))
-    ? [resolved]
-    : [];
+    ? resolved
+    : undefined;
 }
 
 function isSessionHeader(value: unknown): boolean {
@@ -472,9 +472,11 @@ function collectFeishuSessionFindings(params: {
     });
     return finding ? [finding] : [];
   }
-  const transcriptCandidates = resolveSessionTranscriptCandidates(params);
-  const existing = transcriptCandidates.filter(existsFile);
-  if (transcriptCandidates.length > 0 && existing.length === 0) {
+  const transcriptPath = resolveSessionTranscriptPath(params);
+  if (!transcriptPath) {
+    return [];
+  }
+  if (!existsFile(transcriptPath)) {
     return [
       {
         kind: "missing-session-transcript",
@@ -484,18 +486,12 @@ function collectFeishuSessionFindings(params: {
     ];
   }
 
-  const findings: FeishuDoctorFinding[] = [];
-  for (const transcriptPath of existing) {
-    const finding = inspectSessionTranscript({
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-      transcriptPath,
-    });
-    if (finding) {
-      findings.push(finding);
-    }
-  }
-  return findings;
+  const finding = inspectSessionTranscript({
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    transcriptPath,
+  });
+  return finding ? [finding] : [];
 }
 
 function hasCorruptFeishuStateJsonFinding(inspection: FeishuDoctorInspection): boolean {
@@ -630,16 +626,15 @@ function collectSessionArtifactPaths(params: {
   storePath: string;
   entry: FeishuSessionEntry;
 }): string[] {
-  const artifacts = new Set<string>();
-  for (const transcriptPath of resolveSessionTranscriptCandidates(params)) {
-    artifacts.add(transcriptPath);
-    if (transcriptPath.endsWith(".jsonl")) {
-      const base = transcriptPath.slice(0, -".jsonl".length);
-      artifacts.add(`${base}.trajectory.jsonl`);
-      artifacts.add(`${base}.trajectory-path.json`);
-    }
+  const transcriptPath = resolveSessionTranscriptPath(params);
+  if (!transcriptPath) {
+    return [];
   }
-  return [...artifacts].toSorted();
+  if (!transcriptPath.endsWith(".jsonl")) {
+    return [transcriptPath];
+  }
+  const base = transcriptPath.slice(0, -".jsonl".length);
+  return [transcriptPath, `${base}.trajectory.jsonl`, `${base}.trajectory-path.json`].toSorted();
 }
 
 function archiveSessionArtifacts(params: {

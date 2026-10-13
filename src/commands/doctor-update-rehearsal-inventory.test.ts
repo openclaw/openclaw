@@ -13,12 +13,10 @@ import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
 import * as commands from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as databasePreflight from "./doctor-database-preflight.js";
-import * as workshop from "./doctor-update-rehearsal-workshop.js";
 import {
   preflightUpdateDoctorCli,
   rehearseDeferredUpdateDoctorSchema,
@@ -370,43 +368,6 @@ it("retains a copy when the admitted child cannot confirm settlement", async () 
     await expect(f.invoke()).rejects.toThrow(/did not settle/);
     expect(f.cleanup).not.toHaveBeenCalled();
     expect(fs.existsSync(f.statePath)).toBe(true);
-  });
-});
-
-it("joins all inventory work before cleaning a rejected rehearsal", async () => {
-  await fixture(async (f) => {
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    let settled = false;
-    vi.spyOn(workshop, "collectDoctorSkillWorkshopBackupResources").mockImplementation(async () => {
-      entered.resolve();
-      await release.promise;
-      settled = true;
-      return [];
-    });
-    selection.entries = [
-      {
-        pluginId: "invalid",
-        migration: migration("invalid", () => [{ path: "relative", kind: "file" }]),
-      },
-    ];
-    const pending = f.invoke();
-    void pending.catch(() => {});
-    try {
-      await entered.promise;
-      // One task boundary lets the rejected collector propagate; no elapsed-time wait.
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(f.cleanup).not.toHaveBeenCalled();
-      expect(fs.existsSync(f.statePath)).toBe(true);
-    } finally {
-      release.resolve();
-      await expect(pending).rejects.toThrow(/Invalid migration/);
-    }
-    expect(settled).toBe(true);
-    expect(f.cleanup).toHaveBeenCalledOnce();
-    expect(f.launch).not.toHaveBeenCalled();
   });
 });
 

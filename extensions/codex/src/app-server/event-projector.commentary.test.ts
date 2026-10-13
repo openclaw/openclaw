@@ -155,86 +155,121 @@ describe("CodexAppServerEventProjector commentary projection", () => {
     ).toBeUndefined();
   });
 
-  it("streams commentary with a distinct completion even when the last delta has the same text", async () => {
-    const onAgentEvent = vi.fn();
-    const onPartialReply = vi.fn();
-    const commentaryText = [
-      "Checking the app-server stream",
-      "",
-      "| Intent | Command |",
-      "| --- | --- |",
-      "| Session only | `/model opus` |",
-      "",
-      "```text",
-      "BEFORE  /model opus  → persistent",
-      "AFTER   /model opus  → session only",
-      "```",
-    ].join("\n");
-    const projector = await createProjector({
-      ...(await createParams()),
-      onAgentEvent,
-      onPartialReply,
-    });
+  it.each(["started", "completed"])(
+    "hands off formatted commentary identified at item/%s",
+    async (phaseKnownAt) => {
+      const onAgentEvent = vi.fn();
+      const onPartialReply = vi.fn();
+      const commentaryText = [
+        "Checking the app-server stream",
+        "",
+        "| Intent | Command |",
+        "| --- | --- |",
+        "| Session only | `/model opus` |",
+        "",
+        "```text",
+        "BEFORE  /model opus  → persistent",
+        "AFTER   /model opus  → session only",
+        "```",
+      ].join("\n");
+      const projector = await createProjector({
+        ...(await createParams()),
+        onAgentEvent,
+        onPartialReply,
+      });
 
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: commentaryItem("msg-commentary"),
-      }),
-    );
-    await projector.handleNotification(agentMessageDelta("Checking", "msg-commentary"));
-    await projector.handleNotification(
-      agentMessageDelta(commentaryText.slice("Checking".length), "msg-commentary"),
-    );
-    // The completion boundary lets channels buffer their first notification;
-    // text-only dedupe must not erase it after the final identical snapshot.
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: commentaryItem("msg-commentary", commentaryText),
-      }),
-    );
-    await projector.handleNotification(
-      turnCompleted([
-        { type: "agentMessage", id: "msg-final", phase: "final_answer", text: "final answer" },
-        commentaryItem("msg-commentary", commentaryText),
-      ]),
-    );
+      await projector.handleNotification(
+        forCurrentTurn("item/started", {
+          item:
+            phaseKnownAt === "started"
+              ? commentaryItem("msg-commentary")
+              : { type: "agentMessage", id: "msg-commentary", text: "" },
+        }),
+      );
+      await projector.handleNotification(agentMessageDelta("Checking", "msg-commentary"));
+      await projector.handleNotification(
+        agentMessageDelta(commentaryText.slice("Checking".length), "msg-commentary"),
+      );
+      if (phaseKnownAt === "completed") {
+        expect(onAgentEvent.mock.calls.at(-1)?.[0]).toMatchObject({
+          stream: "assistant",
+          data: { itemId: "msg-commentary", text: commentaryText },
+        });
+      }
+      // The completion boundary lets channels buffer their first notification;
+      // text-only dedupe must not erase it after the final identical snapshot.
+      await projector.handleNotification(
+        forCurrentTurn("item/completed", {
+          item: commentaryItem("msg-commentary", commentaryText),
+        }),
+      );
+      if (phaseKnownAt === "completed") {
+        expect(
+          onAgentEvent.mock.calls
+            .map(([event]) => event)
+            .filter((event) => event.stream === "assistant" || event.stream === "item")
+            .slice(-2),
+        ).toMatchObject([
+          {
+            stream: "assistant",
+            data: { itemId: "msg-commentary", text: "", delta: "", replace: true },
+          },
+          {
+            stream: "item",
+            data: { kind: "preamble", itemId: "msg-commentary", progressText: commentaryText },
+          },
+        ]);
+      }
+      await projector.handleNotification(
+        turnCompleted([
+          { type: "agentMessage", id: "msg-final", phase: "final_answer", text: "final answer" },
+          commentaryItem("msg-commentary", commentaryText),
+        ]),
+      );
 
-    const progressEvents = onAgentEvent.mock.calls
-      .map((call) => call[0])
-      .filter((event) => event.stream === "item" && event.data.kind === "preamble");
+      const progressEvents = onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .filter((event) => event.stream === "item" && event.data.kind === "preamble");
 
-    expect(onPartialReply).not.toHaveBeenCalled();
-    const preamble = {
-      itemId: "msg-commentary",
-      kind: "preamble",
-      title: "Preamble",
-      source: "codex-app-server",
-    };
-    expect(progressEvents.map((event) => event.data)).toEqual([
-      { ...preamble, phase: "update", progressText: "Checking" },
-      { ...preamble, phase: "update", progressText: commentaryText },
-      { ...preamble, phase: "end", progressText: commentaryText },
-    ]);
-
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-    expect(result.assistantTexts).toEqual(["final answer"]);
-    const commentary = result.messagesSnapshot.find(
-      (message) =>
-        (message as { openclawStreamFallback?: { itemId?: unknown } }).openclawStreamFallback
-          ?.itemId === "msg-commentary",
-    );
-    expect(commentary).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: commentaryText }],
-      openclawStreamFallback: {
-        replacementText: commentaryText,
-        source: "segment",
+      expect(onPartialReply).not.toHaveBeenCalled();
+      const preamble = {
         itemId: "msg-commentary",
-      },
-      __openclaw: { mirrorIdentity: `${TURN_ID}:commentary:msg-commentary` },
-    });
-    expect((commentary as { phase?: unknown } | undefined)?.phase).toBeUndefined();
-  });
+        kind: "preamble",
+        title: "Preamble",
+        source: "codex-app-server",
+      };
+      expect(progressEvents.map((event) => event.data)).toEqual([
+        ...(phaseKnownAt === "started"
+          ? [
+              { ...preamble, phase: "update", progressText: "Checking" },
+              { ...preamble, phase: "update", progressText: commentaryText },
+            ]
+          : []),
+        { ...preamble, phase: "end", progressText: commentaryText },
+      ]);
+
+      const result = projector.buildResult(buildEmptyToolTelemetry());
+      expect(result.assistantTexts).toEqual(["final answer"]);
+      const commentary = result.messagesSnapshot.find(
+        (message) =>
+          requireRecord(
+            requireRecord(message, "assistant snapshot").openclawStreamFallback ?? {},
+            "commentary fallback",
+          ).itemId === "msg-commentary",
+      );
+      expect(commentary).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: commentaryText }],
+        openclawStreamFallback: {
+          replacementText: commentaryText,
+          source: "segment",
+          itemId: "msg-commentary",
+        },
+        __openclaw: { mirrorIdentity: `${TURN_ID}:commentary:msg-commentary` },
+      });
+      expect(requireRecord(commentary, "commentary message").phase).toBeUndefined();
+    },
+  );
 
   it("omits durable commentary when the operator explicitly disables persistence", async () => {
     const params = await createParams();

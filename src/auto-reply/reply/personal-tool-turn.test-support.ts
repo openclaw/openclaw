@@ -179,7 +179,7 @@ export async function withPersonalToolTurn<T>(
     sessionKey: run.run.sessionKey,
     sessionId: run.run.sessionId,
   });
-  operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
+  await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
   const runId = params.runId ?? "personal-tool-run";
   const admission = params.admittedRunContext
     ? undefined

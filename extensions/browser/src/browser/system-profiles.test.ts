@@ -21,7 +21,7 @@ vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => ({
 
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
-  getRuntimeConfig: () => ({ browser: {} }),
+  readRuntimeConfig: () => ({ browser: {} }),
 }));
 
 vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
@@ -58,8 +58,8 @@ vi.mock("./server-context.js", () => ({
   },
 }));
 
-const { readSystemProfileCookies } = await import("../system-profile-api.js");
-const { importSystemProfileCookies } = await import("./system-profiles.js");
+const { readSystemProfileCookies, importSystemProfileCookies } =
+  await import("./system-profiles.js");
 
 const KEYCHAIN_FIXTURE = "fixture-value";
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;

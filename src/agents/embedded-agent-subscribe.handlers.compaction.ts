@@ -12,23 +12,8 @@ import type { AgentSessionEvent } from "./sessions/index.js";
 
 type SessionCompactionStartEvent = Extract<AgentSessionEvent, { type: "compaction_start" }>;
 type SessionCompactionEndEvent = Extract<AgentSessionEvent, { type: "compaction_end" }>;
-type CompactionReason = SessionCompactionStartEvent["reason"];
 
-type CompactionStartEvent =
-  | SessionCompactionStartEvent
-  | {
-      type: "compaction_start";
-      reason?: unknown;
-      itemId?: string;
-    };
-
-// Unknown reasons come from external runtimes or older sessions. Treat them as
-// threshold compaction so logs and event payloads stay on the closed reason set.
-function normalizeCompactionReason(reason: unknown): CompactionReason {
-  return reason === "manual" || reason === "threshold" || reason === "overflow"
-    ? reason
-    : "threshold";
-}
+type CompactionStartEvent = Omit<SessionCompactionStartEvent, "reason"> & { reason?: unknown };
 
 function emitCompactionAgentEvent(
   ctx: EmbeddedAgentSubscribeContext,
@@ -41,6 +26,7 @@ function emitCompactionAgentEvent(
         willRetry: boolean;
         outcome: SessionCompactionEndEvent["outcome"]["status"];
         reason?: string;
+        qualityDegraded?: true;
       },
 ): void {
   const event = { stream: "compaction" as const, data };
@@ -89,7 +75,13 @@ export function handleCompactionStart(
   ctx: EmbeddedAgentSubscribeContext,
   evt: CompactionStartEvent,
 ) {
-  const reason = normalizeCompactionReason(evt.reason);
+  // Unknown reasons come from external runtimes or older sessions. Treat them as
+  // threshold compaction so logs and event payloads stay on the closed reason set.
+  const rawReason = evt.reason;
+  const reason =
+    rawReason === "manual" || rawReason === "threshold" || rawReason === "overflow"
+      ? rawReason
+      : "threshold";
   const kind = reason === "manual" ? "manual compaction" : "auto-compaction";
   ctx.state.compactionInFlight = true;
   ctx.state.livenessState = "paused";
@@ -104,7 +96,9 @@ export function handleCompactionStart(
 
   // Hooks are fire-and-forget so compaction state updates and liveness pauses
   // cannot be delayed by plugin work.
-  runBestEffortCompactionHook(ctx, "before");
+  if (!evt.hooksHandled) {
+    runBestEffortCompactionHook(ctx, "before");
+  }
 }
 
 export function handleCompactionEnd(
@@ -206,11 +200,7 @@ export function handleCompactionEnd(
         (reasonClass === "no_compactable_entries" ||
           reasonClass === "below_threshold" ||
           reasonClass === "already_compacted"));
-    if (benign) {
-      ctx.log.info(`embedded run ${kind} ${outcome.status}`, metadata);
-    } else {
-      ctx.log.warn(`embedded run ${kind} ${outcome.status}`, metadata);
-    }
+    ctx.log[benign ? "info" : "warn"](`embedded run ${kind} ${outcome.status}`, metadata);
   }
   emitCompactionAgentEvent(ctx, {
     phase: "end",
@@ -218,12 +208,13 @@ export function handleCompactionEnd(
     completed,
     willRetry,
     outcome: outcome.status,
+    ...(completed && outcome.qualityDegraded ? { qualityDegraded: true } : {}),
     ...(outcomeReason ? { reason: outcomeReason } : {}),
   });
 
   // after_compaction runs only once the run will not retry, matching the visible
   // post-compaction session state plugin authors observe.
-  if (completed && !willRetry) {
+  if (completed && !willRetry && !evt.hooksHandled) {
     runBestEffortCompactionHook(ctx, "after");
   }
   return recording;

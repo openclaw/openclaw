@@ -290,7 +290,6 @@
   background: var(--bg-elevated);
 }
 
-.channels-wizard__note--code,
 .channels-wizard__output--code {
   font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
@@ -300,20 +299,6 @@
   color: var(--text-strong);
   font-weight: 620;
   line-height: 1.4;
-}
-
-.channels-wizard__text,
-.channels-wizard__secret {
-  width: 100%;
-  margin-top: 10px;
-}
-
-.channels-wizard__text {
-  display: flex;
-}
-
-.channels-wizard__text > .input {
-  min-height: 44px;
 }
 
 .channels-wizard__options {
@@ -355,7 +340,8 @@
   font-weight: 620;
 }
 
-.channels-wizard__option-hint {
+.channels-wizard__option-hint,
+.channels-wizard__spinner {
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
 }
@@ -395,11 +381,6 @@
   border-radius: var(--radius-md);
   background: var(--brand-logo-chip-bg);
   padding: var(--space-2);
-}
-
-.channels-wizard__spinner {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
 }
 
 /* Text/tile area of an available row doubles as the detail opener. */

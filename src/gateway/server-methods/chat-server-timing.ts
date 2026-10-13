@@ -11,12 +11,6 @@ type ChatSendTimingContext = {
   session: { clientRunId: string; sessionKey: string; agentId: string; sessionLoadMs: number };
 };
 
-type ChatSendAckServerTiming = {
-  receivedToAckMs: number;
-  loadSessionMs: number;
-  prepareAttachmentsMs?: number;
-};
-
 type ChatSendServerTimingPhase =
   | "dispatch-started"
   | "model-selected"
@@ -27,21 +21,6 @@ type ChatSendServerTimingPhase =
 
 export function roundedChatSendTimingMs(value: number): number {
   return Math.max(0, Math.round(value * 1000) / 1000);
-}
-
-function chatSendAckServerTimingAttributes(
-  timing: ChatSendAckServerTiming | undefined,
-): Record<string, number> {
-  if (!timing) {
-    return {};
-  }
-  return {
-    serverReceivedToAckMs: timing.receivedToAckMs,
-    serverLoadSessionMs: timing.loadSessionMs,
-    ...(timing.prepareAttachmentsMs !== undefined
-      ? { serverPrepareAttachmentsMs: timing.prepareAttachmentsMs }
-      : {}),
-  };
 }
 
 export function prepareChatSendAckTiming({
@@ -81,7 +60,15 @@ export function prepareChatSendAckTiming({
       attributes: {
         ...chatSendTraceAttributes,
         ackStatus,
-        ...chatSendAckServerTimingAttributes(serverTiming),
+        ...(serverTiming
+          ? {
+              serverReceivedToAckMs: serverTiming.receivedToAckMs,
+              serverLoadSessionMs: serverTiming.loadSessionMs,
+              ...(serverTiming.prepareAttachmentsMs !== undefined
+                ? { serverPrepareAttachmentsMs: serverTiming.prepareAttachmentsMs }
+                : {}),
+            }
+          : {}),
       },
     }),
   };
@@ -124,7 +111,7 @@ export function createOperatorChatSendServerTiming({
   const connId = client?.connId?.trim();
   const recipients =
     connId && isOperatorUiClient(client?.connect?.client) ? new Set([connId]) : undefined;
-  let firstAssistantEventSent = false;
+  const assistantTiming = chatSendTiming ?? { firstAssistantEventSent: false };
   const emit = (
     phase: ChatSendServerTimingPhase,
     extra?: Record<string, string | number>,
@@ -156,13 +143,10 @@ export function createOperatorChatSendServerTiming({
     emit,
     dispatchStartedAtMs: startedAtMs,
     emitFirstAssistant: () => {
-      if (firstAssistantEventSent || chatSendTiming?.firstAssistantEventSent) {
+      if (assistantTiming.firstAssistantEventSent) {
         return;
       }
-      firstAssistantEventSent = true;
-      if (chatSendTiming) {
-        chatSendTiming.firstAssistantEventSent = true;
-      }
+      assistantTiming.firstAssistantEventSent = true;
       emit("first-assistant-event", undefined, startedAtMs);
     },
   };

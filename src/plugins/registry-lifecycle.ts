@@ -41,7 +41,7 @@ type PluginRegistryLifecycleStore = {
   retiredRegistries: WeakSet<PluginRegistry>;
   activatedRegistries: WeakSet<PluginRegistry>;
   registryEpochs: WeakMap<PluginRegistry, PluginRegistryLifecycleState>;
-  preparation?: AsyncLocalStorage<{ registry: PluginRegistry; active: boolean }>;
+  preparation?: AsyncLocalStorage<{ registry: PluginRegistry | undefined; active: boolean }>;
   loaderCaches?: WeakMap<PluginRegistry, Set<PluginLoaderCacheState<PluginRegistry>>>;
   registryLoads?: WeakMap<PluginCache, PluginLoaderCacheState<PluginRegistry>>;
   registryResourceOwners?: WeakMap<PluginRegistry, PluginRegistry>;
@@ -138,20 +138,11 @@ export function getPluginRegistryGatewayOwner(
   return gatewayOwners.get(getPluginRegistryResourceOwner(registry)) ?? undefined;
 }
 
-/** Retired callbacks may still need their admitting Gateway to recognize removed plugins. */
-export function getPluginInstanceGatewayOwner(owner: PluginInstanceOwner) {
-  return owner.registry
-    ? getPluginRegistryGatewayOwner(owner.registry)
-    : owner.retiredGatewayOwner?.deref();
-}
-
 /** Drop the back-reference only after physical cleanup and all admitted work have settled. */
 export function releasePluginInstanceRegistry(owner: PluginInstanceOwner): void {
   if (!owner.revoked) {
     throw new Error("Cannot release an active plugin instance registry");
   }
-  const gateway = getPluginInstanceGatewayOwner(owner);
-  owner.retiredGatewayOwner = gateway ? new WeakRef(gateway) : undefined;
   owner.registry = undefined;
 }
 
@@ -428,7 +419,10 @@ export function withPluginRegistryPreparationScope<T>(
   if (retiredRegistries.has(registry)) {
     throw new Error("Cannot prepare a retired plugin registry");
   }
-  const scope = { registry, active: true };
+  const scope: { registry: PluginRegistry | undefined; active: boolean } = {
+    registry,
+    active: true,
+  };
   return preparation.run(scope, () => {
     let pending = false;
     try {
@@ -437,12 +431,14 @@ export function withPluginRegistryPreparationScope<T>(
         pending = true;
         return Promise.resolve(result).finally(() => {
           scope.active = false;
+          scope.registry = undefined;
         }) as T; // SAFETY: Preserves the callback's resolved value and async shape.
       }
       return result;
     } finally {
       if (!pending) {
         scope.active = false;
+        scope.registry = undefined;
       }
     }
   });

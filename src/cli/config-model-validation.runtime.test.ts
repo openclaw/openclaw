@@ -14,6 +14,7 @@ import {
   loadOpenClawPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -27,6 +28,11 @@ const providerIds = ["pin-alpha", "pin-beta", "pin-unrelated"];
 async function clearRuntimeState() {
   await resetPreparedModelRuntimeSnapshotsForTest();
   clearPluginLoaderCache();
+  // Detached cache retirement must release capture tokens before fixture state is removed.
+  const { failures } = await waitForPluginCacheRetirement();
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "Plugin cache retirement failed during test cleanup");
+  }
 }
 
 async function withProviderFixtures(

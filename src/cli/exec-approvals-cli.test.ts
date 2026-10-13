@@ -495,6 +495,7 @@ describe("exec approvals CLI", () => {
     const saved = requireRecord(localSnapshot.file, "saved approvals");
     expect(updateExecApprovals).toHaveBeenCalledWith(
       expect.objectContaining({ baseHash: "hash-local" }),
+      expect.anything(),
     );
     if (requireRecord(saved.agents, "saved agents").main === undefined) {
       throw new Error("Expected main exec approval agent entry");
@@ -558,6 +559,7 @@ describe("exec approvals CLI", () => {
     const saved = requireRecord(localSnapshot.file, "saved approvals");
     expect(updateExecApprovals).toHaveBeenCalledWith(
       expect.objectContaining({ baseHash: "hash-local" }),
+      expect.anything(),
     );
     expectFields(saved, "saved approvals", {
       version: 1,

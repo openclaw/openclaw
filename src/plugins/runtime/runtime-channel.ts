@@ -56,6 +56,11 @@ import {
 } from "../../channels/plugins/conversation-bindings.js";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import { recordInboundSession } from "../../channels/session.js";
+import type {
+  ChannelTurnDeliveryAdapter,
+  ChannelTurnResult,
+  RunChannelTurnParams,
+} from "../../channels/turn/types.js";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
@@ -66,11 +71,7 @@ import {
   resolveSessionEntryResetFreshness,
   resolveSessionEntryResetFreshnessAsync,
 } from "../../config/sessions/entry-freshness.js";
-import {
-  readSessionUpdatedAtCore,
-  recordInboundSessionMeta,
-  updateSessionLastRoute,
-} from "../../config/sessions/session-accessor.js";
+import { recordInboundSessionMeta } from "../../config/sessions/session-accessor.js";
 import { readSessionUpdatedAtInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
 import { readRemoteMediaBuffer, saveRemoteMedia, saveResponseMedia } from "../../media/fetch.js";
@@ -81,6 +82,16 @@ import {
   removeChannelAllowFromStoreEntry,
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
+import {
+  publicChannelTurn,
+  publicChannelTurnParams,
+  type PublicChannelTurnParams,
+} from "../../plugin-sdk/reply-options.js";
+import {
+  readSessionUpdatedAt,
+  updateLastRoute,
+  updateLastRouteWithAuthority,
+} from "../../plugin-sdk/session-store-runtime.js";
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { createChannelRuntimeContextRegistry } from "./channel-runtime-contexts.js";
@@ -112,14 +123,23 @@ const runChannelTurn = createLazyRuntimeMethod(
   createLazyRuntimeModule(() => import("../../channels/turn/run-channel-turn.js")),
   (runtime) => runtime.runChannelTurn,
   // SAFETY: Forwarding async overloads unchanged preserves the raw-event and dispatch-result generics.
-) as PluginRuntime["channel"]["inbound"]["run"];
+) as typeof import("../../channels/turn/run-channel-turn.js").runChannelTurn;
 
 export function createRuntimeChannel(options?: {
-  dispatchReplyFromConfig?: PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"];
+  dispatchReplyFromConfig?: typeof dispatchLowLevelChannelReplyFromConfig;
 }): PluginRuntime["channel"] {
+  const runInbound = <TRaw, TResult>(
+    params: PublicChannelTurnParams<TRaw, TResult, ChannelTurnDeliveryAdapter>,
+  ): Promise<ChannelTurnResult<TResult>> => {
+    // SAFETY: Core's implementation handles both delivery adapters while preserving the result type.
+    const run = runChannelTurn as (
+      value: RunChannelTurnParams<TRaw, TResult, ChannelTurnDeliveryAdapter>,
+    ) => Promise<ChannelTurnResult<TResult>>;
+    return run(publicChannelTurnParams(params));
+  };
   const dispatchInbound: PluginRuntime["channel"]["inbound"]["dispatch"] = async (params) =>
     (await loadChannelTurnLifecycle()).dispatchRoutedChannelTurn({
-      ...params,
+      ...publicChannelTurn(params),
       ...(options?.dispatchReplyFromConfig
         ? { dispatchReplyFromConfig: options.dispatchReplyFromConfig }
         : {}),
@@ -131,20 +151,21 @@ export function createRuntimeChannel(options?: {
       resolveStable: resolveStableChannelIngressPolicy,
     },
     buildContext: buildChannelInboundEventContext,
-    run: runChannelTurn,
+    run: runInbound,
     runPreparedReply: runPreparedChannelTurn,
     dispatch: dispatchInbound,
-    dispatchReply: dispatchAssembledChannelTurn,
+    dispatchReply: (params) => dispatchAssembledChannelTurn(publicChannelTurn(params)),
   } satisfies PluginRuntime["channel"]["inbound"];
   const sessionRuntime = {
     resolveStorePath: resolveSessionStorePathCore,
-    readSessionUpdatedAt: readSessionUpdatedAtCore,
+    readSessionUpdatedAt,
     readSessionUpdatedAtAsync: readSessionUpdatedAtInWorker,
     // Plugin runtime property names are a shipped contract; the implementations
     // route through the session accessor boundary.
     recordSessionMetaFromInbound: recordInboundSessionMeta,
     recordInboundSession,
-    updateLastRoute: updateSessionLastRoute,
+    updateLastRoute,
+    updateLastRouteWithAuthority,
     resolveEntryResetFreshness: resolveSessionEntryResetFreshness,
     resolveEntryResetFreshnessAsync: resolveSessionEntryResetFreshnessAsync,
   };
@@ -162,12 +183,15 @@ export function createRuntimeChannel(options?: {
       convertMarkdownTables,
     },
     reply: {
-      dispatchReplyWithBufferedBlockDispatcher: dispatchReplyWithBufferedBlockDispatcherCore,
+      dispatchReplyWithBufferedBlockDispatcher: (params) =>
+        dispatchReplyWithBufferedBlockDispatcherCore(publicChannelTurn(params)),
       createReplyDispatcherWithTyping,
       resolveEffectiveMessagesConfig,
       resolveHumanDelayConfig,
-      dispatchReplyFromConfig:
-        options?.dispatchReplyFromConfig ?? dispatchLowLevelChannelReplyFromConfig,
+      dispatchReplyFromConfig: (params) =>
+        (options?.dispatchReplyFromConfig ?? dispatchLowLevelChannelReplyFromConfig)(
+          publicChannelTurn(params),
+        ),
       withReplyDispatcher,
       settleReplyDispatcher,
       finalizeInboundContext,

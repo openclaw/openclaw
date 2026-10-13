@@ -156,7 +156,7 @@ For hosted execution, file handling, and connected tools in chat, see the
 ## Decision models
 
 The bundled `openai` plugin supports the beta
-[OpenAI Decisions API](https://developers.openai.com/api/reference/resources/decisions/methods/create)
+[OpenAI Decisions API](https://developers.openai.com/api/docs/guides/decisions)
 through OpenClaw's [Decision model role](/concepts/decision-models).
 Configure `OPENAI_API_KEY` or an `openai` API-key auth profile, then select
 `openai/gpt-6-luna` in the Decision picker or set:

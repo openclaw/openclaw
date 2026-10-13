@@ -46,6 +46,7 @@ export async function loadUsageResultCached<T extends object>(params: {
   revision: string | number;
   load: () => Promise<T>;
   isComplete?: (value: T) => boolean;
+  revisionOnly?: boolean;
 }): Promise<T> {
   const { cache, cacheKey, configRef, revision } = params;
   const now = Date.now();
@@ -55,7 +56,11 @@ export async function loadUsageResultCached<T extends object>(params: {
   if (cached) {
     cached.lastAccessedAt = now;
   }
-  if (cached?.value && cached.updatedAt && now - cached.updatedAt < USAGE_CACHE_TTL_MS) {
+  if (
+    cached?.value &&
+    cached.updatedAt !== undefined &&
+    (params.revisionOnly || now - cached.updatedAt < USAGE_CACHE_TTL_MS)
+  ) {
     return cached.value;
   }
   if (cached?.inFlight) {
@@ -68,9 +73,6 @@ export async function loadUsageResultCached<T extends object>(params: {
     params
       .load()
       .then((value) => {
-        if (cache.get(cacheKey) !== entry) {
-          return value;
-        }
         if (params.isComplete?.(value) ?? true) {
           entry.value = value;
           entry.updatedAt = Date.now();
@@ -88,11 +90,8 @@ export async function loadUsageResultCached<T extends object>(params: {
         throw error;
       })
       .finally(() => {
-        const current = cache.get(cacheKey);
-        if (current === entry && current.inFlight === inFlight) {
-          current.inFlight = undefined;
-          current.lastAccessedAt = Date.now();
-        }
+        entry.inFlight = undefined;
+        entry.lastAccessedAt = Date.now();
       }),
   );
 

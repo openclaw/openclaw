@@ -1,3 +1,5 @@
+import { readMockUserText } from "./mock-inference-facts.ts";
+
 function inputText(content) {
   if (typeof content === "string") {
     return content;
@@ -12,15 +14,11 @@ function inputText(content) {
 
 function currentUserTurn(input) {
   for (let index = input.length - 1; index >= 0; index -= 1) {
-    if (input[index]?.role !== "user") {
-      continue;
-    }
-    let text = inputText(input[index].content);
-    // This exact carrier follows its owner; it is not another user turn.
-    if (
-      text.startsWith("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n") &&
-      text.endsWith("\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>")
-    ) {
+    let text = readMockUserText({
+      role: input[index]?.role,
+      content: inputText(input[index]?.content),
+    });
+    if (text === undefined) {
       continue;
     }
     if (

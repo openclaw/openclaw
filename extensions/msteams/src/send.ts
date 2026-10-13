@@ -11,6 +11,7 @@ import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-run
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import type { OutboundMediaLoadOptions } from "openclaw/plugin-sdk/outbound-media";
 import { loadOutboundMediaFromUrl, type OpenClawConfig } from "../runtime-api.js";
+import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import {
   classifyMSTeamsSendError,
   formatMSTeamsSendErrorHint,
@@ -51,6 +52,7 @@ type MSTeamsSendOptions = MSTeamsSendHandoff & {
 
 type SendMSTeamsMessageParams = {
   cfg: OpenClawConfig;
+  accountId?: string | null;
   /** Conversation ID or user ID to send to */
   to: string;
   text: string;
@@ -134,15 +136,14 @@ function createMSTeamsSendResult(params: {
   kind: MessageReceiptPartKind;
   pendingUploadId?: string;
 }): SendMSTeamsMessageResult {
-  const platformMessageIds = [params.messageId]
-    .map((messageId) => messageId.trim())
-    .filter((messageId) => messageId && messageId !== "unknown");
+  const platformMessageId = params.messageId.trim();
   return {
     messageId: params.messageId,
     conversationId: params.conversationId,
     receipt: createMSTeamsSendReceipt({
       conversationId: params.conversationId,
-      platformMessageIds,
+      platformMessageIds:
+        platformMessageId && platformMessageId !== "unknown" ? [platformMessageId] : [],
       kind: params.kind,
     }),
     ...(params.pendingUploadId ? { pendingUploadId: params.pendingUploadId } : {}),
@@ -151,6 +152,7 @@ function createMSTeamsSendResult(params: {
 
 type SendMSTeamsPollParams = {
   cfg: OpenClawConfig;
+  accountId?: string | null;
   /** Conversation ID or user ID to send to */
   to: string;
   question: string;
@@ -159,22 +161,39 @@ type SendMSTeamsPollParams = {
   maxSelections?: number;
 } & MSTeamsSendHandoff;
 
-type SendMSTeamsCardParams = Pick<SendMSTeamsMessageParams, "cfg" | "to"> & {
+type SendMSTeamsCardParams = Pick<SendMSTeamsMessageParams, "cfg" | "accountId" | "to"> & {
   card: Record<string, unknown>;
 } & MSTeamsSendOptions;
+
+function resolveMSTeamsMarkdownTableMode(cfg: OpenClawConfig, accountId?: string | null) {
+  return resolveMarkdownTableMode({
+    cfg: {
+      ...cfg,
+      channels: { ...cfg.channels, msteams: resolveMSTeamsAccountConfig(cfg, accountId) },
+    },
+    channel: "msteams",
+  });
+}
 
 /** Proactive delivery requires a conversation reference captured from an earlier inbound turn. */
 export async function sendMessageMSTeams(
   params: SendMSTeamsMessageParams,
 ): Promise<SendMSTeamsMessageResult> {
   assertMSTeamsSendHandoff(params);
-  const { cfg, to, text, mediaUrl, filename, mediaAccess, mediaLocalRoots, mediaReadFile } = params;
-  const tableMode = resolveMarkdownTableMode({
+  const {
     cfg,
-    channel: "msteams",
-  });
+    accountId,
+    to,
+    text,
+    mediaUrl,
+    filename,
+    mediaAccess,
+    mediaLocalRoots,
+    mediaReadFile,
+  } = params;
+  const tableMode = resolveMSTeamsMarkdownTableMode(cfg, accountId);
   const messageText = formatMSTeamsMarkdown(text ?? "", tableMode);
-  const ctx = await resolveMSTeamsSendContext({ cfg, to });
+  const ctx = await resolveMSTeamsSendContext({ cfg, accountId, to });
   const { conversationId, log, conversationType, tokenProvider, sharePointSiteId } = ctx;
 
   log.debug?.("sending proactive message", {
@@ -355,6 +374,7 @@ async function sendTextWithMedia(
   const acceptedKinds: MessageReceiptPartKind[] = [];
   try {
     platformMessageIds = await sendMSTeamsMessages({
+      accountId: ctx.accountId,
       assertDirectAdapterHandoff: options.assertDirectAdapterHandoff,
       onPlatformSendDispatch: options.onPlatformSendDispatch,
       onMessageSent: async (messageId, messageIndex) => {
@@ -424,6 +444,7 @@ async function sendProactiveActivityRaw({
 }: ProactiveActivityRawParams): Promise<string> {
   const baseRef = buildConversationReference(ctx.ref);
   const response = await sendMSTeamsActivityWithReference(ctx.app, baseRef, activity, {
+    accountId: ctx.accountId,
     assertDirectAdapterHandoff,
     onPlatformSendDispatch,
     ...(ctx.threadActivityId ? { threadActivityId: ctx.threadActivityId } : {}),
@@ -442,9 +463,10 @@ async function sendProactiveActivity(params: ProactiveActivityParams): Promise<s
 
 export async function sendPollMSTeams(params: SendMSTeamsPollParams) {
   assertMSTeamsSendHandoff(params);
-  const { cfg, to, question, options, maxSelections } = params;
+  const { cfg, accountId, to, question, options, maxSelections } = params;
   const ctx = await resolveMSTeamsSendContext({
     cfg,
+    accountId,
     to,
   });
   const { conversationId, log } = ctx;
@@ -484,9 +506,10 @@ export async function sendAdaptiveCardMSTeams(
   params: SendMSTeamsCardParams,
 ): Promise<SendMSTeamsMessageResult> {
   assertMSTeamsSendHandoff(params);
-  const { cfg, to, card } = params;
+  const { cfg, accountId, to, card } = params;
   const ctx = await resolveMSTeamsSendContext({
     cfg,
+    accountId,
     to,
   });
   const { conversationId, log } = ctx;
@@ -521,6 +544,7 @@ export async function sendAdaptiveCardMSTeams(
 
 type MSTeamsMessageMutationParams = {
   cfg: OpenClawConfig;
+  accountId?: string | null;
   /** Conversation ID or user ID */
   to: string;
   /** Activity ID of the message to edit or delete */
@@ -534,7 +558,7 @@ export async function editMessageMSTeams(params: MSTeamsMessageMutationParams & 
       ...buildMSTeamsMessageActivity(
         formatMSTeamsMarkdown(
           params.text,
-          resolveMarkdownTableMode({ cfg: params.cfg, channel: "msteams" }),
+          resolveMSTeamsMarkdownTableMode(params.cfg, params.accountId),
         ),
       ),
       id: params.activityId,
@@ -561,9 +585,10 @@ export async function deleteMessageMSTeams(params: MSTeamsMessageMutationParams)
 async function mutateMSTeamsMessageActivity(
   params: MSTeamsMessageMutationParams & { activity?: Record<string, unknown> },
 ) {
-  const { cfg, to, activityId, activity } = params;
+  const { cfg, accountId, to, activityId, activity } = params;
   const { app, conversationId, ref, log, sdkCloudOptions } = await resolveMSTeamsSendContext({
     cfg,
+    accountId,
     to,
   });
 

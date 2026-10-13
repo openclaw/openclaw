@@ -2,6 +2,7 @@ import { once } from "node:events";
 import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
+import { buildSlackProgressCommentaryRun } from "../../live-transports/slack/slack-live.scenario-fixtures.js";
 import { readQaMockRequestCursor } from "../shared/debug-request-cursor.js";
 import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
 import type { StreamEvent } from "./mock-openai-contracts.js";
@@ -728,14 +729,18 @@ describe("qa mock openai server", () => {
 
   it("dispatches structured Slack commentary, exec, and final phases", async () => {
     const server = await startMockServer();
-    const suffix = "A1B2C3D4";
+    const run = buildSlackProgressCommentaryRun("U_SUT", {
+      commentary: "standalone",
+      toolProgress: "absent",
+    });
+    const finalMarker = run.matchText;
+    const suffix = finalMarker.slice("SLACK-QA-COMMENTARY-DONE-".length);
     const commentaryMarker = `SLACK-QA-COMMENTARY-${suffix}`;
     const toolMarker = `SLACK-QA-TOOL-${suffix}`;
-    const finalMarker = `SLACK-QA-COMMENTARY-DONE-${suffix}`;
-    const command = `grep '${toolMarker}' /dev/null || sleep 5`;
-    const prompt = `${commentaryMarker} ${command} ${finalMarker}`;
+    const command = `printf '%s' '${toolMarker}' >/dev/null; sleep 5; printf '%s\\n' 'SLACK-QA-OUTPUT-${suffix}'`;
+    const prompt = run.input.replaceAll(">", "&gt;");
     const stalePrompt =
-      "SLACK-QA-COMMENTARY-11112222 grep 'SLACK-QA-TOOL-11112222' /dev/null || sleep 5 SLACK-QA-COMMENTARY-DONE-11112222";
+      "SLACK-QA-COMMENTARY-11112222 printf '%s' 'SLACK-QA-TOOL-11112222' >/dev/null; sleep 5; printf '%s\\n' 'SLACK-QA-OUTPUT-11112222' SLACK-QA-COMMENTARY-DONE-11112222";
     const currentEnvelope = `${stalePrompt}\n${prompt}`;
 
     const planResponse = await expectStreamingResponses(server, {
@@ -789,7 +794,7 @@ describe("qa mock openai server", () => {
       tools: [{ type: "function", name: "exec" }],
       input: [
         makeUserInput(
-          "SLACK-QA-COMMENTARY-A1B2C3D4 grep 'SLACK-QA-TOOL-11112222' /dev/null || sleep 5 SLACK-QA-COMMENTARY-DONE-A1B2C3D4",
+          "SLACK-QA-COMMENTARY-A1B2C3D4 printf '%s' 'SLACK-QA-TOOL-11112222' >/dev/null; sleep 5; printf '%s\\n' 'SLACK-QA-OUTPUT-A1B2C3D4' SLACK-QA-COMMENTARY-DONE-A1B2C3D4",
         ),
       ],
     });
@@ -1840,7 +1845,7 @@ describe("qa mock openai server", () => {
     expect(outputItems(settled).some((item) => item.type === "function_call")).toBe(false);
   });
 
-  it.each(["tool_call"])(
+  it.each(["dispatch_action"])(
     "makes the empty terminal worker terminal after one %s side effect",
     async (wireName) => {
       const server = await startMockServer();
@@ -1850,7 +1855,7 @@ describe("qa mock openai server", () => {
         input: [makeUserInput("Subagent terminal reply QA worker: empty.")],
       });
       const call = outputToolCall(kickoff, wireName);
-      if (wireName === "tool_call") {
+      if (wireName === "dispatch_action") {
         expect(outputToolArgsFromItem(call)).toMatchObject({
           id: "write",
           args: { path: "qa-terminal-empty-side-effect.txt" },
@@ -1874,7 +1879,7 @@ describe("qa mock openai server", () => {
           call,
           makeToolOutputWithCallId(
             String(writeRequest.plannedToolCallId),
-            wireName === "tool_call"
+            wireName === "dispatch_action"
               ? JSON.stringify({
                   tool: { id: "write", name: "write", source: "core" },
                   result: { content: [{ type: "text", text: "Wrote 40 bytes" }] },
@@ -2836,7 +2841,7 @@ describe("qa mock openai server", () => {
   it.each([
     {
       name: "calls the selected catalog tool after a structured batch search",
-      tools: ["tool_search", "tool_call"],
+      tools: ["tool_search", "dispatch_action"],
       callName: "tool_search",
       callId: "call_tool_search_1",
       args: { queries: catalogQueries },
@@ -2847,7 +2852,7 @@ describe("qa mock openai server", () => {
     },
     {
       name: "does not call a catalog tool when structured search returns no matching candidate",
-      tools: ["tool_search", "tool_call"],
+      tools: ["tool_search", "dispatch_action"],
       callName: "tool_search",
       callId: "call_tool_search_1",
       args: { queries: [{ query: catalogTarget, limit: 1 }] },
@@ -2868,10 +2873,10 @@ describe("qa mock openai server", () => {
     const item = outputItem(payload);
     if (invokes) {
       expect(item.type).toBe("function_call");
-      expect(item.name).toBe("tool_call");
+      expect(item.name).toBe("dispatch_action");
       expect(JSON.parse(String(item.arguments))).toMatchObject({ id: catalogTarget });
     } else {
-      expect(item.name).not.toBe("tool_call");
+      expect(item.name).not.toBe("dispatch_action");
     }
   });
 

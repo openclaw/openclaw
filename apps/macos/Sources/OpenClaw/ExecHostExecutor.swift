@@ -109,12 +109,13 @@ enum ExecHostExecutor {
         }
 
         if request.needsScreenRecording == true,
-           await PermissionManager.grantedStatus([.screenRecording])[.screenRecording] != true
+           let error = await PermissionManager.missingPermissions([.screenRecording])
         {
-            return self.errorResponse(
-                code: "UNAVAILABLE",
-                message: "PERMISSION_MISSING: screenRecording",
-                reason: "permission:screenRecording")
+            return self.errorResponse(ExecHostError(
+                code: error.code.rawValue,
+                message: error.message,
+                reason: "permission:screenRecording",
+                details: error.details), type: "exec-res")
         }
 
         // Awaited policy, approval, and permission work cannot revive a closed caller.

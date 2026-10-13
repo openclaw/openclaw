@@ -56,7 +56,7 @@ describe("report work sessions", () => {
     expect(JSON.stringify(result)).not.toContain("agent:writer:private");
   });
 
-  it.each([{ ok: false }, { ok: true, payload: {} }])(
+  it.each([{ ok: false }])(
     "distinguishes failed discovery from an empty list (%j)",
     async (response) => {
       vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce(response);

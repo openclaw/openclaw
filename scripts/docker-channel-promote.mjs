@@ -50,8 +50,6 @@ const VARIANTS = Object.freeze([
  */
 
 /**
- * Build the version-specific source to moving-alias promotion plan.
- *
  * @param {DockerPromotionParams} params
  */
 export function createDockerChannelPromotionPlan({
@@ -198,8 +196,6 @@ function preventChannelRollback(resolved, version, execFileSyncImpl) {
 }
 
 /**
- * Promote every planned alias and verify the registry result.
- *
  * @param {DockerPromotionParams} params
  * @param {DockerPromotionOptions} [options]
  */

@@ -1,4 +1,5 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { spawnOomScoreAdjusted as spawn } from "openclaw/plugin-sdk/process-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatBoundedChildOutput } from "./bounded-child-output.js";
 import type { VoiceCallStreamExposurePath } from "./config.js";
@@ -71,11 +72,8 @@ interface TunnelConfig {
 }
 
 export interface TunnelResult {
-  /** The public URL */
   publicUrl: string;
-  /** Function to stop the tunnel */
   stop: () => Promise<void>;
-  /** Tunnel provider name */
   provider: string;
 }
 

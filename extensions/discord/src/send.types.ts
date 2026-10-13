@@ -15,9 +15,7 @@ export class DiscordSendError extends Error {
   constructor(message: string, opts?: Partial<DiscordSendError>) {
     super(message);
     this.name = "DiscordSendError";
-    if (opts) {
-      Object.assign(this, opts);
-    }
+    Object.assign(this, opts);
   }
 
   override toString() {
@@ -61,7 +59,6 @@ export type DiscordReactOpts = {
   timeoutMs?: number;
 };
 
-/** Guild asset upload options: client access plus the sender-scoped media read policy. */
 export type DiscordAssetUploadOpts = DiscordReactOpts & DiscordOutboundMediaOpts;
 
 export type DiscordReactionRuntimeContext = DiscordRuntimeAccountContext & {

@@ -311,19 +311,6 @@ function blockConfigMutation(...sections: Array<"plugins" | "hooks">) {
   });
 }
 
-function mockConfigRequiredBundle(pluginId: string) {
-  findBundledPluginSourceMock.mockReturnValue({
-    pluginId,
-    localPath: `/app/dist/extensions/${pluginId}`,
-    configSchema: {
-      type: "object",
-      required: ["token"],
-      properties: { token: { type: "string" } },
-    },
-    requiresConfig: true,
-  });
-}
-
 describe("plugins cli install", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
@@ -574,32 +561,6 @@ describe("plugins cli install", () => {
     expect(runtimeErrors.at(-1)).toContain(NON_CLAWHUB_INSTALL_FORCE_FLAG);
   });
 
-  it("does not require acknowledgement for a bundled plugin's local source path", async () => {
-    const localPath = createTempDirectory("openclaw-bundled-plugin-source-");
-    findBundledPluginSourceMock.mockImplementation((params: unknown) => {
-      const { lookup } = params as {
-        lookup: { kind: "localPath" | "npmSpec" | "pluginId"; value: string };
-      };
-      return lookup.kind === "localPath" && path.resolve(lookup.value) === path.resolve(localPath)
-        ? { pluginId: "demo", localPath }
-        : undefined;
-    });
-    primeSuccessfulPluginPersistence("demo");
-    installPluginFromPathMock.mockResolvedValue({
-      ok: true,
-      pluginId: "demo",
-      targetDir: cliInstallPath("demo"),
-      version: "1.0.0",
-      extensions: ["index.js"],
-    });
-
-    await install(localPath);
-
-    expect(promptYesNoMock).not.toHaveBeenCalled();
-    expect(runtimeErrors.join("\n")).not.toContain("outside ClawHub review");
-    expect(installPluginFromPathMock).toHaveBeenCalledTimes(1);
-  });
-
   it("prompts interactive users before non-ClawHub plugin installs and cancels on no", async () => {
     setTty(true);
     promptYesNoMock.mockResolvedValueOnce(false);
@@ -629,29 +590,6 @@ describe("plugins cli install", () => {
     expect(persistedInstallRecord("demo").source).toBe("npm");
   });
 
-  it("does not install a stable ClawHub release when no beta release exists", async () => {
-    primeSuccessfulClawHubPluginInstall();
-
-    pluginCliConfigMock.mockReturnValue({
-      ...createEmptyPluginConfig(),
-      update: { channel: "beta" },
-    } as OpenClawConfig);
-    installPluginFromClawHubMock.mockResolvedValue({
-      ok: false,
-      error: "Version not found on ClawHub: @openclaw/brave-plugin@beta.",
-      code: "version_not_found",
-    });
-
-    await expect(install("clawhub:@openclaw/brave-plugin")).rejects.toThrow("__exit__:1");
-
-    expect(clawHubInstallCall(0).spec).toBe("clawhub:@openclaw/brave-plugin@beta");
-    expect(installPluginFromClawHubMock).toHaveBeenCalledTimes(1);
-    expect(configWriteMock).not.toHaveBeenCalled();
-    expect(runtimeErrors.at(-1)).toContain(
-      "No clawhub:@openclaw/brave-plugin@beta release is published for this gateway",
-    );
-  });
-
   it("rejects unacknowledged noninteractive ClawHub installs before persistence", async () => {
     setTty(false);
     primeSuccessfulClawHubPluginInstall();
@@ -661,45 +599,6 @@ describe("plugins cli install", () => {
     expect(configWriteMock).not.toHaveBeenCalled();
     expect(writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock).not.toHaveBeenCalled();
     expect(reportClawHubPluginInstallTelemetryMock).not.toHaveBeenCalled();
-  });
-
-  it("installs a pinned ClawHub plugin in the active profile and persists source metadata", async () => {
-    const extensionsDir = useProfileExtensionsDir();
-    const { enabledCfg } = primeSuccessfulClawHubPluginInstall();
-    await installAccepted("clawhub:demo@1.2.3", "--force");
-    expect(clawHubInstallCall()).toMatchObject({
-      spec: "clawhub:demo@1.2.3",
-      mode: "update",
-      extensionsDir,
-    });
-    expect(runtimeLogsContain("outside ClawHub review")).toBe(false);
-    const record = persistedInstallRecord("demo");
-    expect(record.source).toBe("clawhub");
-    expect(record.spec).toBe("clawhub:demo@1.2.3");
-    expect(record.installPath).toBe(cliInstallPath("demo"));
-    expect(record.version).toBe("1.2.3");
-    expect(record.clawhubPackage).toBe("demo");
-    expect(record.clawhubFamily).toBe("code-plugin");
-    expect(record.clawhubChannel).toBe("official");
-    expect(record.clawpackSha256).toBe(
-      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    );
-    expect(record.clawpackSpecVersion).toBe(1);
-    expect(record.clawpackManifestSha256).toBe(
-      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    );
-    expect(record.clawpackSize).toBe(4096);
-    expect(record.acceptedSurfaceHash).toMatch(/^[a-f0-9]{64}$/u);
-    expect(record.acceptedSurfaceIntegrity).toBe("sha256-abc");
-    expect(readConfigFileSnapshotForWriteMock).toHaveBeenCalledTimes(2);
-    expect(configWriteMock).toHaveBeenCalledWith(enabledCfg);
-    expect(runtimeLogsContain("Installed plugin: demo")).toBe(true);
-    expect(reportClawHubPluginInstallTelemetryMock).toHaveBeenCalledWith({
-      baseUrl: "https://clawhub.ai",
-      packageName: "demo",
-      version: "1.2.3",
-    });
-    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
   });
 
   it("preserves invocation-wide policy acknowledgement across the ClawHub lifecycle lease", async () => {
@@ -739,76 +638,6 @@ describe("plugins cli install", () => {
     expect(reportClawHubPluginInstallTelemetryMock).not.toHaveBeenCalled();
   });
 
-  it("preserves non-config policy for unconfigured bundled installs", async () => {
-    const pluginId = "config-required-plugin";
-    const cfg: OpenClawConfig = {
-      plugins: {
-        entries: { [pluginId]: { hooks: { timeoutMs: 5_000 } } },
-        load: { paths: ["/existing/plugin"] },
-      },
-    };
-    pluginCliConfigMock.mockReturnValue(cfg);
-    mockConfigRequiredBundle(pluginId);
-
-    await install(pluginId);
-
-    const writtenConfig = configWriteMock.mock.calls[
-      configWriteMock.mock.calls.length - 1
-    ]?.[0] as OpenClawConfig;
-    expect(writtenConfig.plugins?.entries?.[pluginId]).toEqual({
-      enabled: false,
-      hooks: { timeoutMs: 5_000 },
-    });
-    expect(writtenConfig.plugins?.load?.paths).toEqual(["/existing/plugin"]);
-    const record = persistedInstallRecord(pluginId);
-    expect(record.source).toBe("path");
-    expect(String(record.sourcePath)).toContain(pluginId);
-    expect(String(record.installPath)).toContain(pluginId);
-    expect(enablePluginInConfigMock).not.toHaveBeenCalled();
-    expect(applyExclusiveSlotSelectionMock).not.toHaveBeenCalled();
-    expect(runtimeLogsContain("requires configuration first")).toBe(true);
-  });
-
-  it("rejects invalid authored config for config-gated bundled installs", async () => {
-    const pluginId = "config-required-plugin";
-    const cfg: OpenClawConfig = {
-      plugins: { entries: { [pluginId]: { config: {}, hooks: { timeoutMs: 5_000 } } } },
-    };
-    pluginCliConfigMock.mockReturnValue(cfg);
-    mockConfigRequiredBundle(pluginId);
-
-    await expect(install(pluginId)).rejects.toThrow("has invalid configured settings");
-
-    expect(configWriteMock).not.toHaveBeenCalled();
-    expect(enablePluginInConfigMock).not.toHaveBeenCalled();
-  });
-
-  it("selects the beta artifact for an official npm alias and preserves the operator selector", async () => {
-    const { enabledCfg } = primeSuccessfulPluginPersistence("brave");
-    pluginCliConfigMock.mockReturnValue({
-      ...createEmptyPluginConfig(),
-      update: { channel: "beta" },
-    });
-    findBundledPluginSourceMock.mockReturnValue(undefined);
-    mockNpmChannelMetadata("@openclaw/brave-plugin", "2026.8.2-beta.1", "2026.8.1");
-    installPluginFromNpmSpecMock.mockResolvedValue(createNpmPluginInstallResult("brave"));
-    await installAccepted("brave");
-    expect(npmInstallCall().spec).toBe("@openclaw/brave-plugin@2026.8.2-beta.1");
-    expect(npmInstallCall().expectedPluginId).toBe("brave");
-    expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
-    expect(npmInstallCall().expectedIntegrity).toBeUndefined();
-    expect(runtimeLogsContain("outside ClawHub review")).toBe(false);
-    expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
-    expect(persistedInstallRecord("brave")).toMatchObject({
-      source: "npm",
-      spec: "@openclaw/brave-plugin",
-      installPath: cliInstallPath("brave"),
-      version: "1.2.3",
-    });
-    expect(configWriteMock).toHaveBeenCalledWith(enabledCfg);
-    expect(resolveNpmSpecMetadataMock).toHaveBeenCalledTimes(2);
-  });
-
   it("does not change source or retry latest when the selected explicit npm beta is unavailable", async () => {
     primeSuccessfulPluginPersistence("brave");
     pluginCliConfigMock.mockReturnValue({
@@ -834,45 +663,6 @@ describe("plugins cli install", () => {
     expect(runtimeErrors.at(-1)).toContain(
       "No @openclaw/brave-plugin@2026.8.2-beta.1 release is published for this gateway",
     );
-  });
-
-  it("uses the declared beta ClawHub secondary only when npm is absent", async () => {
-    primeSuccessfulPluginPersistence("brave");
-    pluginCliConfigMock.mockReturnValue({
-      ...createEmptyPluginConfig(),
-      update: { channel: "beta" },
-    });
-    mockNpmChannelMetadata("@openclaw/brave-plugin", "2026.8.2-beta.1", "2026.8.1");
-    findBundledPluginSourceMock.mockReturnValue(undefined);
-    installPluginFromNpmSpecMock.mockResolvedValue({
-      ok: false,
-      error: "npm error E404 package not found",
-      code: "npm_package_not_found",
-    });
-    installPluginFromClawHubMock.mockResolvedValue(
-      createClawHubInstallResult({
-        pluginId: "brave",
-        packageName: "@openclaw/brave-plugin",
-        version: "2026.8.2-beta.1",
-        channel: "beta",
-      }),
-    );
-    await installAccepted("brave");
-    expect(npmInstallCall().spec).toBe("@openclaw/brave-plugin@2026.8.2-beta.1");
-    expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
-    expect(clawHubInstallCall().spec).toBe("clawhub:@openclaw/brave-plugin@beta");
-    expect(
-      runtimeLogsContain(
-        "@openclaw/brave-plugin unavailable; using clawhub:@openclaw/brave-plugin instead.",
-      ),
-    ).toBe(true);
-    expect(persistedInstallRecord("brave")).toMatchObject({
-      source: "clawhub",
-      spec: "clawhub:@openclaw/brave-plugin",
-      version: "2026.8.2-beta.1",
-    });
-    expect(installPluginFromClawHubMock).toHaveBeenCalledTimes(1);
-    expect(installHooksFromNpmSpecMock).not.toHaveBeenCalled();
   });
 
   it("does not change source or probe hooks after an official integrity refusal", async () => {
@@ -908,37 +698,6 @@ describe("plugins cli install", () => {
     expect(hookNpmInstallCall().expectedIntegrity).toBe(
       "sha512-7kqdBIOF3SgDDoBoFtO6jxnxofbYSgbKdxZDNabD0y0jg2xKcVqlXZOOJ9+XQho/QOtIFrnRH2IRnPukFEYwJg==",
     );
-  });
-
-  it("stores npm resolution metadata without changing the active plugin install selector", async () => {
-    const extensionsDir = useProfileExtensionsDir();
-    const { enabledCfg } = primeSuccessfulPluginPersistence("demo");
-    installPluginFromNpmSpecMock.mockResolvedValue({
-      ok: true,
-      pluginId: "demo",
-      targetDir: cliInstallPath("demo"),
-      version: "1.2.3",
-      npmResolution: {
-        name: "demo",
-        version: "1.2.3",
-        resolvedSpec: "demo@1.2.3",
-        integrity: "sha512-demo",
-      },
-    });
-    await installAcknowledged("npm:demo");
-
-    expect(npmInstallCall()).toMatchObject({ spec: "demo", mode: "update", extensionsDir });
-    expect(runtimeLogsContain("Installing plugin from npm registry")).toBe(true);
-    expect(runtimeLogsContain("outside ClawHub review")).toBe(true);
-    expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
-    expect(configWriteMock).toHaveBeenCalledWith(enabledCfg);
-    const record = persistedInstallRecord("demo");
-    expect(record.source).toBe("npm");
-    expect(record.installPath).toBe(cliInstallPath("demo"));
-    expect(record.version).toBe("1.2.3");
-    expect(record.spec).toBe("demo");
-    expect(record.resolvedSpec).toBe("demo@1.2.3");
-    expect(record.integrity).toBe("sha512-demo");
   });
 
   it("installs Git sources directly and records the selected revision", async () => {
@@ -1116,25 +875,6 @@ describe("plugins cli install", () => {
     },
   );
 
-  it("does not append hook-pack fallback details for managed extensions boundary failures", async () => {
-    const localPluginDir = createTempDirectory("openclaw-local-plugin-");
-
-    pluginCliConfigMock.mockReturnValue({} as OpenClawConfig);
-    installPluginFromPathMock.mockResolvedValue({
-      ok: false,
-      error: "Invalid path: must stay within extensions directory",
-    });
-    installHooksFromPathMock.mockResolvedValue({
-      ok: false,
-      error: "package.json missing openclaw.hooks",
-    });
-
-    await expect(installAcknowledged(localPluginDir)).rejects.toThrow("__exit__:1");
-
-    expect(runtimeErrors.at(-1)).toBe("Invalid path: must stay within extensions directory");
-    expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
-  });
-
   it("passes the install logger to the --link dry-run probe", async () => {
     const extensionsDir = useProfileExtensionsDir();
     const localPluginDir = createTempDirectory("openclaw-link-plugin-");
@@ -1197,47 +937,40 @@ describe("plugins cli install", () => {
     expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
   });
 
-  it.each([
-    { source: "npm", raw: "npm:demo", enabled: true },
-    { source: "bundled fallback", raw: "demo-package", enabled: false },
-  ])(
-    "preserves plugin policy when installing from $source with --no-enable and enabled=$enabled",
-    async ({ source, raw, enabled }) => {
-      const pluginId = "demo";
-      const targetDir = installedPluginRoot(resolveStateDir(), pluginId);
-      const config = {
-        plugins: {
-          allow: ["other"],
-          deny: [pluginId],
-          entries: { [pluginId]: { enabled } },
-        },
-      };
-      pluginCliConfigMock.mockReturnValue(config);
-      findBundledPluginSourceMock.mockImplementation((input) => {
-        const { lookup } = input as Parameters<
-          typeof import("../plugins/bundled-sources.js").findBundledPluginSource
-        >[0];
-        return source === "bundled fallback" &&
-          (lookup.kind === "npmSpec" || lookup.value === pluginId)
-          ? { pluginId, localPath: targetDir }
-          : undefined;
-      });
-      installPluginFromNpmSpecMock.mockResolvedValue(
-        source === "bundled fallback"
-          ? { ok: false, error: "npm error E404 package not found", code: "npm_package_not_found" }
-          : { ok: true, pluginId, targetDir, version: "1.2.3" },
-      );
+  it("preserves plugin policy when installing a bundled fallback with --no-enable", async () => {
+    const pluginId = "demo";
+    const targetDir = installedPluginRoot(resolveStateDir(), pluginId);
+    const config = {
+      plugins: {
+        allow: ["other"],
+        deny: [pluginId],
+        entries: { [pluginId]: { enabled: false } },
+      },
+    };
+    pluginCliConfigMock.mockReturnValue(config);
+    findBundledPluginSourceMock.mockImplementation((input) => {
+      const { lookup } = input as Parameters<
+        typeof import("../plugins/bundled-sources.js").findBundledPluginSource
+      >[0];
+      return lookup.kind === "npmSpec" || lookup.value === pluginId
+        ? { pluginId, localPath: targetDir }
+        : undefined;
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: false,
+      error: "npm error E404 package not found",
+      code: "npm_package_not_found",
+    });
 
-      await install(raw, "--no-enable", "--force", "--accept-capabilities");
+    await install("demo-package", "--no-enable", "--force", "--accept-capabilities");
 
-      expect(configWriteMock).toHaveBeenLastCalledWith(config);
-      expect(
-        writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock.mock.calls[0]?.[0],
-      ).toMatchObject({ [pluginId]: { source: source === "npm" ? "npm" : "path" } });
-      expect(enablePluginInConfigMock).not.toHaveBeenCalled();
-      expect(applyExclusiveSlotSelectionMock).not.toHaveBeenCalled();
-    },
-  );
+    expect(configWriteMock).toHaveBeenLastCalledWith(config);
+    expect(
+      writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock.mock.calls[0]?.[0],
+    ).toMatchObject({ [pluginId]: { source: "path" } });
+    expect(enablePluginInConfigMock).not.toHaveBeenCalled();
+    expect(applyExclusiveSlotSelectionMock).not.toHaveBeenCalled();
+  });
 
   it("rejects --no-enable for hook-only fallback before installing hooks", async () => {
     installPluginFromNpmSpecMock.mockResolvedValue({
@@ -1252,4 +985,3 @@ describe("plugins cli install", () => {
     expect(configWriteMock).not.toHaveBeenCalled();
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

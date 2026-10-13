@@ -1,6 +1,6 @@
 // Program smoke tests cover core CLI command registration and startup behavior.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildProgram } from "./program.js";
 import {
   programGatewayCallMock,
   configureCommand,
@@ -11,6 +11,7 @@ import {
   systemAgentRunMock,
   tuiRunMock,
 } from "./program.test-mocks.js";
+import { buildProgram } from "./program/build-program.js";
 
 vi.mock("./config-cli.js", () => ({
   registerConfigCli: (program: {
@@ -54,11 +55,9 @@ describe("cli program (smoke)", () => {
     const options = firstMockArg(tuiRunMock) as {
       timeoutMs?: number;
       historyLimit?: number;
-      forceProcessExitOnReturn?: boolean;
     };
     expect(options?.timeoutMs).toBe(45000);
     expect(options?.historyLimit).toBe(200);
-    expect(options?.forceProcessExitOnReturn).toBe(true);
     expect(options).not.toHaveProperty("agentId");
   });
 

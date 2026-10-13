@@ -108,6 +108,10 @@ import {
 } from "./restart-sentinel-store.js";
 import {
   clearRestartSentinelIfRevision,
+  markUpdateFailureReportReceiptPending,
+  markUpdateFailureReportReceiptPrepared,
+  readUpdateFailureReportReceipt,
+  reserveUpdateFailureReportReceipt,
   finalizeUpdateRestartSentinelRunningVersion,
   formatRestartSentinelMessage,
   hasRestartSentinel,
@@ -300,6 +304,49 @@ describe("restart sentinel", () => {
       );
     });
   });
+
+  it.each(["transaction", "commit"])(
+    "keeps the report prepared when publication authority retires at %s admission",
+    async (stage) => {
+      await withRestartSentinelStateDir(async () => {
+        const attemptId = `receipt-refusal-${stage}`;
+        const reservationId = "report-owner";
+        const digest = "a".repeat(64);
+        await reserveUpdateFailureReportReceipt(attemptId, reservationId, digest);
+        await markUpdateFailureReportReceiptPrepared(attemptId, reservationId, digest);
+        let current = true;
+        admission.beforeGrant = (requested) => {
+          if (requested === stage) {
+            current = false;
+          }
+        };
+        const refusal = new Error("Report publisher retired");
+        try {
+          await expect(
+            markUpdateFailureReportReceiptPending(
+              attemptId,
+              reservationId,
+              digest,
+              process.env,
+              undefined,
+              () => {
+                if (!current) {
+                  throw refusal;
+                }
+              },
+            ),
+          ).rejects.toBe(refusal);
+        } finally {
+          admission.beforeGrant = undefined;
+        }
+        await expect(readUpdateFailureReportReceipt(attemptId)).resolves.toMatchObject({
+          status: "prepared",
+          reservationId,
+          previewDigest: digest,
+        });
+      });
+    },
+  );
 
   it("ignores legacy files without mutating them", async () => {
     await withRestartSentinelStateDir(

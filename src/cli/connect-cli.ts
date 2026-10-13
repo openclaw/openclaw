@@ -1,6 +1,8 @@
 // One-paste node onboarding from setup codes or single-use Gateway join URLs.
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import {
   buildCloudflareAccessHeaders,
@@ -9,7 +11,7 @@ import {
   type CloudflareAccessCredentials,
 } from "../../packages/gateway-client/src/cloudflare-access.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { getRuntimeConfig, mutateConfigFileWithRetry } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, mutateConfigFileWithRetry } from "../config/config.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
@@ -191,7 +193,7 @@ async function resolveConnectTarget(
   if (target) {
     return target;
   }
-  const filePath = targetFile?.trim();
+  const filePath = readNonBlankString(targetFile);
   if (!filePath) {
     return undefined;
   }
@@ -211,6 +213,9 @@ async function resolveConnectTarget(
       `Could not read --target-file ${filePath} (max ${MAX_TARGET_FILE_BYTES} bytes): ${cause}`,
       { cause: error },
     );
+  }
+  if (!isUtf8(buffer)) {
+    throw new Error("Connect target file must be valid UTF-8.");
   }
   const value = buffer.toString("utf8").trim();
   if (!value) {
@@ -248,7 +253,7 @@ async function runConnectCommand(
   }
   const joinCredentials = await resolveNodeHostCloudflareAccess({
     value: initialCloudflareAccess,
-    config: getRuntimeConfig(),
+    config: await captureRuntimeConfigAsyncReader()(),
     env: process.env,
   });
   const payload = joinTarget

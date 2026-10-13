@@ -66,9 +66,7 @@ export function createTelegramActionGate(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): (key: keyof TelegramActionConfig, defaultValue?: boolean) => boolean {
-  const accountId = normalizeAccountId(
-    params.accountId ?? resolveDefaultTelegramAccountId(params.cfg),
-  );
+  const accountId = params.accountId ?? resolveDefaultTelegramAccountId(params.cfg);
   return createAccountActionGate({
     baseActions: params.cfg.channels?.telegram?.actions,
     accountActions: resolveTelegramAccountConfig(params.cfg, accountId)?.actions,
@@ -112,6 +110,19 @@ export function resolveTelegramPollActionGateState(
   };
 }
 
+export function resolveTelegramAccountFallback<T extends { tokenSource: string }>(
+  params: { cfg: OpenClawConfig; accountId?: string | null },
+  resolvePrimary: (accountId: string) => T,
+): T {
+  return resolveAccountWithDefaultFallback({
+    accountId: params.accountId ?? resolveDefaultTelegramAccountId(params.cfg),
+    normalizeAccountId,
+    resolvePrimary,
+    hasCredential: (account) => account.tokenSource !== "none",
+    resolveDefaultAccountId: () => resolveDefaultTelegramAccountId(params.cfg),
+  });
+}
+
 export function resolveTelegramAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -141,14 +152,7 @@ export function resolveTelegramAccount(params: {
     } satisfies ResolvedTelegramAccount;
   };
 
-  const resolvedAccountId = params.accountId ?? resolveDefaultTelegramAccountId(params.cfg);
-  return resolveAccountWithDefaultFallback({
-    accountId: resolvedAccountId,
-    normalizeAccountId,
-    resolvePrimary: resolve,
-    hasCredential: (account) => account.tokenSource !== "none",
-    resolveDefaultAccountId: () => resolveDefaultTelegramAccountId(params.cfg),
-  });
+  return resolveTelegramAccountFallback(params, resolve);
 }
 
 export function listEnabledTelegramAccounts(cfg: OpenClawConfig): ResolvedTelegramAccount[] {

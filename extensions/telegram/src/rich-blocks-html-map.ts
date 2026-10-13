@@ -46,9 +46,9 @@ type HtmlContentRenderer = (nodes: readonly HtmlNode[]) => InputRichBlock[];
 
 // True when a container holds meaningful content outside its allowed children;
 // such islands stay literal instead of silently dropping the stray content.
-function hasStrayContent(nodes: readonly HtmlNode[], allowed: ReadonlySet<string>): boolean {
+function hasStrayContent(nodes: readonly HtmlNode[], allowed?: ReadonlySet<string>): boolean {
   return nodes.some((node) =>
-    node.kind === "text" ? node.text.trim() !== "" : !node.closed || !allowed.has(node.name),
+    node.kind === "text" ? node.text.trim() !== "" : !node.closed || !allowed?.has(node.name),
   );
 }
 
@@ -60,18 +60,14 @@ function mediaBlockFromElement(
   const src = attrs.get("src") ?? "";
   // Media islands are content-free (src only); any authored body — text or
   // nested elements — would be silently lost from rich output and fallback.
-  const hasBody = node.children.some((child) =>
-    child.kind === "text" ? child.text.trim() !== "" : true,
-  );
-  if (!MEDIA_SRC_RE.test(src) || hasBody) {
+  if (!MEDIA_SRC_RE.test(src) || hasStrayContent(node.children)) {
     return undefined;
   }
   const withCaption = caption ? { caption } : {};
   // GIF sources render as looping animations, matching the old rich HTML
   // pipeline where Telegram inferred the media kind from the URL.
-  const isGif = /\.gif(?:[?#]|$)/i.test(src);
   if (node.name === "img" || node.name === "video") {
-    if (isGif) {
+    if (/\.gif(?:[?#]|$)/i.test(src)) {
       return { type: "animation", animation: { type: "animation", media: src }, ...withCaption };
     }
     return node.name === "img"
@@ -105,24 +101,24 @@ function findClosedChild(nodes: readonly HtmlNode[], name: string) {
   );
 }
 
-function captionFromFigcaption(nodes: readonly HtmlNode[]): RichBlockCaption | undefined {
-  const figcaption = nodes.find(
-    (node): node is Extract<HtmlNode, { kind: "element" }> =>
-      node.kind === "element" && node.name === "figcaption",
-  );
-  if (!figcaption) {
-    return undefined;
-  }
-  const cite = findClosedChild(figcaption.children, "cite");
-  const textNodes = figcaption.children.filter((node) => node !== cite);
-  const text = htmlNodesToRichText(textNodes);
-  if (text === "" && !cite) {
+function captionFromChildren(
+  nodes: readonly HtmlNode[],
+  allowCreditOnly = false,
+): RichBlockCaption | undefined {
+  const cite = findClosedChild(nodes, "cite");
+  const text = htmlNodesToRichText(nodes.filter((node) => node !== cite));
+  if (text === "" && (!allowCreditOnly || !cite)) {
     return undefined;
   }
   return {
     text,
     ...(cite ? { credit: htmlNodesToRichText(cite.children) } : {}),
   };
+}
+
+function captionFromFigcaption(nodes: readonly HtmlNode[]): RichBlockCaption | undefined {
+  const figcaption = findClosedChild(nodes, "figcaption");
+  return figcaption ? captionFromChildren(figcaption.children, true) : undefined;
 }
 
 const FIGURE_CHILDREN = new Set(["img", "video", "audio", "tg-map", "figcaption"]);
@@ -183,15 +179,12 @@ function listToBlock(
         item.is_checked = true;
       }
     }
-    items.push(item);
+    items.push(node.name === "ol" ? { ...item, value: items.length + 1 } : item);
   }
   if (items.length === 0) {
     return undefined;
   }
-  return {
-    type: "list",
-    items: node.name === "ol" ? items.map((item, index) => ({ ...item, value: index + 1 })) : items,
-  };
+  return { type: "list", items };
 }
 
 function tableCellFromElement(
@@ -217,15 +210,16 @@ function tableCellFromElement(
 // Live-verified: >20 effective columns → RICH_MESSAGE_TABLE_COLS_TOO_MANY.
 const TABLE_COLUMN_LIMIT = 20;
 
-function tableColumnCount(cells: readonly RichBlockTableCell[][]): number {
+function tableExceedsColumnLimit(cells: readonly RichBlockTableCell[][]): boolean {
   // Rowspans occupy width in later rows too; ignoring the carryover would
   // under-count and emit tables Telegram rejects with TABLE_COLS_TOO_MANY.
   let carryover: Array<{ span: number; rows: number }> = [];
-  let max = 0;
   for (const row of cells) {
     const carried = carryover.reduce((total, cell) => total + cell.span, 0);
     const own = row.reduce((total, cell) => total + (cell.colspan ?? 1), 0);
-    max = Math.max(max, carried + own);
+    if (carried + own > TABLE_COLUMN_LIMIT) {
+      return true;
+    }
     carryover = [
       ...carryover
         .map((cell) => ({ span: cell.span, rows: cell.rows - 1 }))
@@ -235,7 +229,7 @@ function tableColumnCount(cells: readonly RichBlockTableCell[][]): number {
         .map((cell) => ({ span: cell.colspan ?? 1, rows: (cell.rowspan ?? 1) - 1 })),
     ];
   }
-  return max;
+  return false;
 }
 
 const TABLE_CHILDREN = new Set(["caption", "thead", "tbody", "tfoot", "tr"]);
@@ -252,12 +246,8 @@ function tableToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBl
   let stray = false;
   const visitRows = (parent: Extract<HtmlNode, { kind: "element" }>, inHeader: boolean) => {
     for (const child of parent.children) {
-      if (child.kind !== "element") {
-        stray ||= child.text.trim() !== "";
-        continue;
-      }
-      if (!child.closed) {
-        stray = true;
+      if (child.kind !== "element" || !child.closed) {
+        stray ||= child.kind === "element" || child.text.trim() !== "";
         continue;
       }
       if (child.name === "caption") {
@@ -293,7 +283,7 @@ function tableToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBl
   if (stray || cells.length === 0) {
     return undefined;
   }
-  if (tableColumnCount(cells) > TABLE_COLUMN_LIMIT) {
+  if (tableExceedsColumnLimit(cells)) {
     // Mirror the markdown table path: over-wide tables degrade to a readable
     // monospace grid instead of an API-rejected table block.
     const gridRows = cells.map((row) =>
@@ -457,16 +447,8 @@ function elementToBlock(
         : { type: "blockquote", blocks };
     }
     case "aside": {
-      const cite = findClosedChild(node.children, "cite");
-      const text = htmlNodesToRichText(node.children.filter((child) => child !== cite));
-      if (text === "") {
-        return undefined;
-      }
-      return {
-        type: "pullquote",
-        text,
-        ...(cite ? { credit: htmlNodesToRichText(cite.children) } : {}),
-      };
+      const caption = captionFromChildren(node.children);
+      return caption ? { type: "pullquote", ...caption } : undefined;
     }
     case "footer": {
       const text = htmlNodesToRichText(node.children);
@@ -519,10 +501,6 @@ export function findTelegramHtmlIslands(
     }
     const attrs = parseHtmlAttrs(node.raw);
     // Hrefs and labelled links stay inline so they cannot split a sentence.
-    return (
-      attrs.has("name") &&
-      !attrs.has("href") &&
-      node.children.every((child) => child.kind === "text" && !child.text.trim())
-    );
+    return attrs.has("name") && !attrs.has("href") && !hasStrayContent(node.children);
   });
 }

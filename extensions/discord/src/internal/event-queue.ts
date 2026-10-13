@@ -78,11 +78,6 @@ export class DiscordEventQueue {
   }
 
   private takeNextJob(): DiscordEventQueueJob | undefined {
-    if (this.queueHead >= this.queue.length) {
-      this.queue.length = 0;
-      this.queueHead = 0;
-      return undefined;
-    }
     const job = this.queue[this.queueHead];
     this.queueHead += 1;
     if (this.queueHead >= this.queue.length) {
@@ -140,14 +135,16 @@ export class DiscordEventQueue {
         listenerPromise,
         this.options.listenerTimeout,
         () => {
-          throw createListenerTimeoutError(this.options.listenerTimeout);
+          const error = new Error(`Listener timeout after ${this.options.listenerTimeout}ms`);
+          error.name = "DiscordEventQueueListenerTimeoutError";
+          throw error;
         },
         { ref: false },
       );
       this.logSlowListener(job, Date.now() - startedAt);
       return "completed";
     } catch (error) {
-      if (isListenerTimeoutError(error)) {
+      if (error instanceof Error && error.name === "DiscordEventQueueListenerTimeoutError") {
         this.timeoutCount += 1;
         console.error(
           `[EventQueue] Listener ${job.listenerName} timed out after ${this.options.listenerTimeout}ms for event ${job.eventType}`,
@@ -177,14 +174,4 @@ function normalizePositiveInteger(value: number | undefined, fallback: number): 
     return fallback;
   }
   return Math.max(1, Math.floor(value));
-}
-
-function createListenerTimeoutError(timeoutMs: number): Error {
-  const error = new Error(`Listener timeout after ${timeoutMs}ms`);
-  error.name = "DiscordEventQueueListenerTimeoutError";
-  return error;
-}
-
-function isListenerTimeoutError(error: unknown): boolean {
-  return error instanceof Error && error.name === "DiscordEventQueueListenerTimeoutError";
 }

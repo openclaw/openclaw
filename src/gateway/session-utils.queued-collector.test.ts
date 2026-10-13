@@ -32,6 +32,7 @@ import {
 import { onAgentEvent } from "../infra/agent-events.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import { captureAsyncWorkTracker } from "../shared/async-work-scope.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
 import { handleChatSend } from "./server-methods/chat-send-handler.js";
@@ -78,33 +79,12 @@ function expectAborted(respond: ReturnType<typeof vi.fn>, runId: string | undefi
 }
 
 describe("queued collector session projection", () => {
-  it("rejects an already-cancelled collector before starting spawn effects", async () => {
-    const effectsStarted = vi.fn();
-    await expect(
-      nativeSpawn.spawnSubagentDirect(
-        { task: "cancelled collector", collect: true, context: "isolated" },
-        {
-          agentSessionKey: parentKey,
-          requesterRunId: "parent-turn",
-          assertActive: () => {
-            throw new Error("requester already cancelled");
-          },
-          onSpawnEffectsStart: effectsStarted,
-        },
-      ),
-    ).resolves.toEqual({
-      status: "error",
-      error: "sessions_spawn could not read the requester session: requester already cancelled",
-    });
-    expect(effectsStarted).not.toHaveBeenCalled();
-    expect(launchedRunIds).toEqual([]);
-  });
-
   it("lists both labeled collectors before the second launches without inventing its runtime", async () => {
     const context = requestContext();
     const broadcast = vi.fn();
     const publications: Promise<void>[] = [];
     const reservationReleases: Promise<void>[] = [];
+    const trackPublication = captureAsyncWorkTracker();
     const publishLifecycle = createLifecycleEventBroadcastHandler({
       broadcastToConnIds: broadcast,
       sessionEventSubscribers: { getAll: () => new Set(["observer"]) },
@@ -112,7 +92,8 @@ describe("queued collector session projection", () => {
       getSessionRowProjection: () => getSessionRowProjection(context),
     });
     const unsubscribe = onSessionLifecycleEvent((event) => {
-      publications.push(publishLifecycle(event));
+      // The observer is joined by this fixture, not the short-lived launch that emits the event.
+      publications.push(trackPublication(() => publishLifecycle(event)));
     });
     try {
       const results = await spawnCollectors();

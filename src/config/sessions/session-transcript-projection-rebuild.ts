@@ -66,7 +66,7 @@ type ProjectionDeleteChunkResult = {
   owned: boolean;
 };
 
-export type SessionTranscriptProjectionRow = {
+type SessionTranscriptProjectionRow = {
   event_json: string;
   seq: number;
   created_at: number;
@@ -261,22 +261,6 @@ function prepareProjectionSource(
   return metadata ? { ...metadata, activeRows, ftsRows } : undefined;
 }
 
-/** The worker owns these ordered raw rows; memory-backed transcripts never reopen a path. */
-export function prepareMemorySessionTranscriptProjection(
-  sessionId: string,
-  transcriptUpdatedAt: number | null,
-  rows: ReadonlyMap<number, SessionTranscriptProjectionRow>,
-  transcriptGeneration: string | null = null,
-): PreparedSessionTranscriptProjection | undefined {
-  return prepareProjectionSource({
-    sessionId,
-    transcriptGeneration,
-    transcriptUpdatedAt,
-    rows: () => rows.values(),
-    row: (seq) => rows.get(seq),
-  });
-}
-
 /** Reads and resolves one projection on a worker-owned SQLite snapshot. */
 export function prepareSessionTranscriptProjection(
   db: DatabaseSync,
@@ -373,35 +357,13 @@ function projectionClaimIsOwned(db: DatabaseSync, sessionId: string, claimId: nu
   return row?.needs_rebuild !== 0 && row?.updated_at === claimId;
 }
 
-/** Claims a prepared snapshot. Later chunks publish only while this claim remains current. */
+/** Claims projection work; finalization validates its source before publishing. */
 export function claimPreparedSessionTranscriptProjectionInTransaction(
   db: DatabaseSync,
   plan: PreparedSessionTranscriptProjectionMetadata,
   claimId: number,
 ): boolean {
-  const sourceSnapshot = readProjectionSourceSnapshot(db, plan.sessionId);
-  const exactSnapshot = sourceSnapshotMatches(sourceSnapshot, plan);
-  if (
-    !exactSnapshot &&
-    (plan.sourceHasInvalidLeafControl || !projectionTailFitsCatchUpBounds(db, plan, sourceSnapshot))
-  ) {
-    return false;
-  }
   const kysely = getProjectionKysely(db);
-  const current = executeSqliteQueryTakeFirstSync(
-    db,
-    kysely
-      .selectFrom("session_transcript_index_state")
-      .select(["indexed_seq", "needs_rebuild"])
-      .where("session_id", "=", plan.sessionId),
-  );
-  if (
-    current?.needs_rebuild === 0 &&
-    current.indexed_seq === sourceSnapshot.latestSeq &&
-    !hasUnclassifiedSessionTranscriptEvents(db, plan.sessionId)
-  ) {
-    return false;
-  }
   const claim = {
     active_event_count: 0,
     active_message_count: 0,
@@ -410,14 +372,36 @@ export function claimPreparedSessionTranscriptProjectionInTransaction(
     needs_rebuild: 1,
     updated_at: claimId,
   };
-  executeSqliteQuerySync(
+  const result = executeSqliteQuerySync(
     db,
     kysely
       .insertInto("session_transcript_index_state")
-      .values({ ...claim, session_id: plan.sessionId })
+      .columns([
+        "session_id",
+        "active_event_count",
+        "active_message_count",
+        "indexed_seq",
+        "leaf_event_id",
+        "needs_rebuild",
+        "updated_at",
+      ])
+      .expression(
+        kysely
+          .selectFrom("session_windows")
+          .select((eb) => [
+            "session_id",
+            eb.val(claim.active_event_count).as("active_event_count"),
+            eb.val(claim.active_message_count).as("active_message_count"),
+            eb.val(claim.indexed_seq).as("indexed_seq"),
+            eb.val(claim.leaf_event_id).as("leaf_event_id"),
+            eb.val(claim.needs_rebuild).as("needs_rebuild"),
+            eb.val(claim.updated_at).as("updated_at"),
+          ])
+          .where("session_id", "=", plan.sessionId),
+      )
       .onConflict((conflict) => conflict.column("session_id").doUpdateSet(claim)),
   );
-  return true;
+  return Number(result.numAffectedRows ?? 0n) > 0;
 }
 
 /** Deletes old rows in bounded rowid batches while the prepared claim is current. */
@@ -576,19 +560,6 @@ export function finalizePreparedSessionTranscriptProjectionInTransaction(
   claimId: number,
 ): boolean {
   if (!projectionClaimIsOwned(db, plan.sessionId, claimId)) {
-    return false;
-  }
-  const baseActiveRows = executeSqliteQueryTakeFirstSync(
-    db,
-    getProjectionKysely(db)
-      .selectFrom("session_transcript_active_events")
-      .select((eb) => eb.fn.countAll<number>().as("count"))
-      .where("session_id", "=", plan.sessionId),
-  );
-  if (
-    baseActiveRows?.count !== plan.activeEventCount ||
-    hasUnclassifiedSessionTranscriptEvents(db, plan.sessionId)
-  ) {
     return false;
   }
   const snapshot = readProjectionSourceSnapshot(db, plan.sessionId);

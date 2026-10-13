@@ -266,7 +266,7 @@ describe("explicit direct Responses continuation", () => {
         { type: "message", role: "user", content: [{ type: "input_text", text: steer }] },
         {
           type: "message",
-          role: "system",
+          role: "user",
           content: [
             {
               type: "input_text",
@@ -304,11 +304,15 @@ describe("explicit direct Responses continuation", () => {
       { type: "message", role: "user", content: [{ type: "input_text", text: steer }] },
       {
         type: "message",
-        role: "system",
+        role: "user",
         content: [
           {
             type: "input_text",
-            text: "Plugin runtime context\n(image omitted: model does not support images)",
+            text: "Plugin runtime context",
+          },
+          {
+            type: "input_text",
+            text: "(image omitted: model does not support images)",
           },
         ],
       },

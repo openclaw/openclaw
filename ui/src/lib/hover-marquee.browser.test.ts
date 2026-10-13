@@ -1,5 +1,5 @@
 import { html, nothing, render } from "lit";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { userEvent } from "vitest/browser";
 import "../test-helpers/load-styles.ts";
 import { renderHoverMarquee } from "./hover-marquee.ts";
@@ -26,6 +26,7 @@ beforeEach(() => {
 afterEach(() => {
   render(nothing, container);
   container.remove();
+  vi.useRealTimers();
 });
 
 describe("hover marquee lifecycle", () => {
@@ -45,6 +46,7 @@ describe("hover marquee lifecycle", () => {
   });
 
   it("cancels a pending reveal on disconnection and reconnects the same title", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const label = show(longTitle);
     const host = container.querySelector<HTMLElement>("a")!;
     await expect.poll(() => getComputedStyle(label).maskImage).not.toBe("none");
@@ -57,13 +59,18 @@ describe("hover marquee lifecycle", () => {
     part.setConnected(false);
     const disconnectedLabel = container.querySelector<HTMLElement>(".hover-marquee")!;
     const before = disconnectedLabel.getAttribute("style");
-    await new Promise((resolve) => {
-      setTimeout(resolve, 650);
-    });
+    await vi.advanceTimersByTimeAsync(650);
     expect(disconnectedLabel.classList.contains("hover-marquee--scrolling")).toBe(false);
     expect(disconnectedLabel.getAttribute("style")).toBe(before);
     part.setConnected(true);
     container.querySelector<HTMLElement>("a")!.focus();
+    // Native visibility and layout callbacks arm the reveal timer after reconnecting.
+    await expect
+      .poll(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+        return disconnectedLabel.classList.contains("hover-marquee--scrolling");
+      })
+      .toBe(true);
     const text = disconnectedLabel.querySelector<HTMLElement>(".hover-marquee__text")!;
     await expect
       .poll(() => new DOMMatrixReadOnly(getComputedStyle(text).transform).m41)

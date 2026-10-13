@@ -12,7 +12,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
-import { appendSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.sqlite.js";
+import { appendSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.test-support.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
 import { sessionsTailCommand } from "./sessions-tail.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -22,8 +22,14 @@ const mocks = vi.hoisted(() => ({
   callGatewayFromCliWithTransport: vi.fn(),
 }));
 
+// mock-isolation: Session-tail fixtures select synthetic Gateway settings without reading operator state.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
+  loadConfig: mocks.getRuntimeConfig,
+  captureRuntimeConfigAsyncReader:
+    (...args: Parameters<typeof mocks.getRuntimeConfig>) =>
+    async () =>
+      mocks.getRuntimeConfig(...args),
 }));
 
 // mock-isolation: Exercise CLI selection without connecting to an operator Gateway.
@@ -113,7 +119,7 @@ describe("sessionsTailCommand", () => {
     );
   }
 
-  it("renders compact redacted progress lines", async () => {
+  it("renders compact progress lines with tool arguments", async () => {
     const runtime = createTestRuntime();
     await writeSessionEntry();
     await appendEvents([
@@ -121,6 +127,11 @@ describe("sessionsTailCommand", () => {
         type: "tool.call",
         ts: "2026-05-18T12:04:18.000Z",
         data: { name: "bash", arguments: { command: "echo SECRET" } },
+      }),
+      makeEvent({
+        type: "tool.call",
+        ts: "2026-05-18T12:04:19.000Z",
+        data: { name: "read", args: { path: ".env", expression: "API_TOKEN = computeToken()" } },
       }),
       makeEvent({
         type: "tool.result",
@@ -138,14 +149,14 @@ describe("sessionsTailCommand", () => {
     await sessionsTailCommand({ agent: "main", store: storePath, sessionKey }, runtime);
 
     const output = runtimeOutput(runtime);
-    expect(output).toContain("12:04:18");
+    expect(output).toContain("12:04:18Z");
     expect(output).toContain("tool.call");
-    expect(output).toContain("bash {...redacted...}");
+    expect(output).toContain('bash {"command":"echo SECRET"}');
+    expect(output).toContain('read {"path":".env","expression":"API_TOKEN = computeToken()"}');
     expect(output).toContain("tool.result");
     expect(output).toContain("bash ok");
     expect(output).toContain("model.completed");
     expect(output).toContain("openai/gpt-5.2 done");
-    expect(output).not.toContain("SECRET");
   });
 
   it.each<[string, TrajectoryEvent["data"], string]>([
@@ -184,33 +195,43 @@ describe("sessionsTailCommand", () => {
   });
 
   it.each([
-    ["CJK", "中文", "中文"],
-    ["truncated emoji", `${"a".repeat(17)}👩🏽‍💻-incident`, `${"a".repeat(17)}…`],
-  ])("keeps progress columns aligned with %s session keys", async (_name, suffix, displayed) => {
-    const runtime = createTestRuntime();
-    const key = `agent:main:${suffix}`;
-    await writeSessionEntry(key);
-    await appendEvents(
-      [
-        makeEvent({
-          type: "tool.result",
-          ts: "2026-05-18T12:04:21.000Z",
-          data: { name: "proof", success: true },
-        }),
-      ],
-      { key },
-    );
+    ["CJK", "invalid", "--:--:--", "中文", "中文"],
+    [
+      "truncated emoji",
+      "2026-05-18T12:04:21.000Z",
+      "12:04:21Z",
+      `${"a".repeat(17)}👩🏽‍💻-incident`,
+      `${"a".repeat(17)}…`,
+    ],
+  ])(
+    "keeps progress columns aligned with %s session keys",
+    async (_name, ts, timestamp, suffix, displayed) => {
+      const runtime = createTestRuntime();
+      const key = `agent:main:${suffix}`;
+      await writeSessionEntry(key);
+      await appendEvents(
+        [
+          makeEvent({
+            type: "tool.result",
+            ts,
+            data: { name: "proof", success: true },
+          }),
+        ],
+        { key },
+      );
 
-    await sessionsTailCommand({ agent: "main", store: storePath, sessionKey: key }, runtime);
+      await sessionsTailCommand({ agent: "main", store: storePath, sessionKey: key }, runtime);
 
-    const line = runtimeOutput(runtime);
-    expect(line.split("\n")).toHaveLength(1);
-    expect(line).toContain(` agent:main:${displayed} `);
-    expect(line).toContain("tool.result");
-    expect(line.endsWith("proof ok")).toBe(true);
-    const previewOffset = line.indexOf("proof ok");
-    expect(visibleWidth(line.slice(0, previewOffset))).toBe(57);
-  });
+      const line = runtimeOutput(runtime);
+      expect(line.split("\n")).toHaveLength(1);
+      expect(line.startsWith(`${timestamp} `)).toBe(true);
+      expect(line).toContain(` agent:main:${displayed} `);
+      expect(line).toContain("tool.result");
+      expect(line.endsWith("proof ok")).toBe(true);
+      const previewOffset = line.indexOf("proof ok");
+      expect(visibleWidth(line.slice(0, previewOffset))).toBe(58);
+    },
+  );
 
   it.each([
     ["CSI inside", "a\u001b[31mb", "custom\u001b[31m", "ab", "custom"],
@@ -241,7 +262,7 @@ describe("sessionsTailCommand", () => {
       expect(line).toContain(` ${displayedType} `);
       expect(line).toContain(` agent:main:${displayed} `);
       expect(line.endsWith(" proof")).toBe(true);
-      expect(visibleWidth(line.slice(0, line.lastIndexOf(" proof") + 1))).toBe(57);
+      expect(visibleWidth(line.slice(0, line.lastIndexOf(" proof") + 1))).toBe(58);
     },
   );
 

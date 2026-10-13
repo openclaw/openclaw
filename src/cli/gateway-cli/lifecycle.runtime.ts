@@ -22,11 +22,8 @@ export {
   rollbackGatewayRestartSignalAdmission,
   scheduleGatewayRestart,
 } from "../../infra/restart.js";
-export {
-  consumeGatewayRestartIntentPayloadSync,
-  consumeGatewayRestartIntentSync,
-} from "../../infra/restart-intent.js";
-export { writeGatewayRestartHandoffSync } from "../../infra/restart-handoff.js";
+export { prepareGatewayRestartIntentConsumption } from "../../infra/restart-intent.js";
+export { writeGatewayRestartHandoff } from "../../infra/restart-handoff.js";
 export {
   cancelManagedServiceUpdateHandoff,
   claimManagedServiceUpdateHandoff,

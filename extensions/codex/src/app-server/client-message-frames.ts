@@ -19,7 +19,10 @@ export function createCodexAppServerMessageWriter(options: {
     const child = options.getTransport();
     const id = "id" in message ? message.id : undefined;
     const method = "method" in message ? message.method : undefined;
-    const frame = stringifyCodexAppServerMessage(message);
+    const frame =
+      JSON.stringify(message, (_key, value) =>
+        typeof value === "string" ? value.replace(UNPAIRED_SURROGATE_RE, "") : value,
+      ) ?? "null";
     // Reject locally before declaring a possible write. Images count toward the
     // transport frame limit even though Codex's text-input limit excludes them.
     if (child.maxFrameBytes && Buffer.byteLength(frame) > child.maxFrameBytes) {
@@ -225,12 +228,4 @@ export function readCodexCatalogDecodeRoute(line: Buffer): CodexCatalogDecodeRou
     }
   }
   return response || route ? "unresolved" : undefined;
-}
-
-function stringifyCodexAppServerMessage(message: RpcRequest | RpcResponse): string {
-  return (
-    JSON.stringify(message, (_key, value) =>
-      typeof value === "string" ? value.replace(UNPAIRED_SURROGATE_RE, "") : value,
-    ) ?? "null"
-  );
 }

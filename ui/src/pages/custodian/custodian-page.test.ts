@@ -1,6 +1,10 @@
 /* @vitest-environment jsdom */
 
-import type { SystemAgentChatResult } from "@openclaw/gateway-protocol";
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
+import {
+  buildSystemAgentSessionInvalidatedErrorDetails,
+  type SystemAgentChatResult,
+} from "@openclaw/gateway-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -818,5 +822,217 @@ describe("custodian page", () => {
     ]);
     expect(page.querySelector("openclaw-option-card")).not.toBeNull();
     expect(page.textContent).toContain("Choose the next step.");
+  });
+});
+
+describe("custodian page session lifecycle", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+    vi.restoreAllMocks();
+  });
+
+  const question = {
+    id: "credential",
+    header: "Credential",
+    question: "Choose authentication.",
+    options: [{ label: "Enter credential", reply: "enter" }, { label: "Use environment" }],
+  };
+  const step = { id: "credential", type: "text", message: "Credential", sensitive: true };
+  const secret = "test-token-placeholder";
+  const reply = (text: string) => ({ sessionId: "engine-session", reply: text, action: "none" });
+  const invalidated = (code: "UNAVAILABLE" | "INVALID_REQUEST" = "UNAVAILABLE") =>
+    new GatewayProtocolRequestError({
+      code,
+      message: "The live session was lost.",
+      details: buildSystemAgentSessionInvalidatedErrorDetails(),
+    });
+
+  async function mountReady(request: ReturnType<typeof vi.fn>) {
+    const { page } = await mount(request);
+    await waitForFast(() => expect(page.textContent).toContain("Ready."));
+    return page;
+  }
+
+  it.each([false, true])(
+    "keeps the live session after a failed ordinary send (sent=%s)",
+    async (sent) => {
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce(reply("Ready."))
+        .mockImplementationOnce((_method, _params, options?: { onSent?: () => void }) => {
+          if (sent) {
+            options?.onSent?.();
+          }
+          return Promise.reject(
+            new GatewayProtocolRequestError({
+              code: "UNAVAILABLE",
+              message: "Temporary request failure.",
+            }),
+          );
+        })
+        .mockResolvedValueOnce(reply("Still together."));
+      const page = await mountReady(request);
+      await fill(page, "textarea", "first try");
+      button(page, ".chat-send-btn").click();
+      await waitForFast(() => expect(page.textContent).toContain("Temporary request failure."));
+      expect(page.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe(
+        sent ? "" : "first try",
+      );
+      expect(page.store.messages.filter((message) => message.role === "user")).toHaveLength(
+        sent ? 1 : 0,
+      );
+      await fill(page, "textarea", "second try");
+      button(page, ".chat-send-btn").click();
+      await waitForFast(() => expect(page.textContent).toContain("Still together."));
+      expect(request).toHaveBeenCalledTimes(3);
+      expect(request.mock.calls[2]?.[1]).toMatchObject({
+        sessionId: "engine-session",
+        message: "second try",
+      });
+    },
+  );
+
+  it("retires sensitive input when cancelling an invalidated session", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ ...reply("Ready."), sensitive: true, question })
+      .mockRejectedValueOnce(invalidated())
+      .mockResolvedValueOnce(reply("Fresh session."));
+    const page = await mountReady(request);
+    await fill(page, 'input[type="password"]', secret);
+    button(page, ".option-card__skip").click();
+    await waitForFast(() => expect(page.textContent).toContain("Fresh session."));
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request.mock.calls[2]?.[1]).toMatchObject({
+      sessionId: expect.stringMatching(/^control-ui-onboarding-/),
+    });
+    expect(request.mock.calls[2]?.[1]).not.toHaveProperty("message");
+    expect(page.textContent).toContain("Earlier");
+    expect(page.textContent).toContain("started a fresh session");
+    const composer = page.querySelector<HTMLTextAreaElement>("textarea")!;
+    expect(composer.value).toBe("");
+    composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await page.updateComplete;
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(page.textContent).not.toContain(secret);
+    expect(request.mock.calls.some(([, params]) => params.message === secret)).toBe(false);
+  });
+
+  it.each(["submit", "cancel"])(
+    "clears sensitive wizard input on %s admission even if the reply fails",
+    async (action) => {
+      const pending = createDeferred<never>();
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce({ ...reply("Ready."), wizardInputPending: true, step })
+        .mockReturnValueOnce(pending.promise);
+      const page = await mountReady(request);
+      await fill(page, 'input[type="password"]', secret);
+      button(
+        page,
+        action === "submit" ? ".custodian__wizard-step .btn.primary" : ".custodian__wizard-cancel",
+      ).click();
+      await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+      await page.updateComplete;
+      expect(page.querySelector<HTMLInputElement>('input[type="password"]')!.value).toBe("");
+      pending.reject(new Error("Temporary request failure."));
+      await waitForFast(() => expect(page.textContent).toContain("Temporary request failure."));
+      expect(page.querySelector<HTMLInputElement>('input[type="password"]')!.value).toBe("");
+      expect(page.textContent).not.toContain(secret);
+      expect(request).toHaveBeenCalledTimes(2);
+      const sent = request.mock.calls[1]?.[1];
+      if (action === "submit") {
+        expect(sent.wizardAnswer.value).toBe(secret);
+      } else {
+        expect(sent).toMatchObject({
+          sessionId: "engine-session",
+          wizardCancel: { stepId: "credential" },
+        });
+        expect(sent).not.toHaveProperty("message");
+        expect(JSON.stringify(sent)).not.toContain(secret);
+      }
+    },
+  );
+
+  it("restores an ordinary draft after a sensitive invalidated wizard", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ ...reply("Ready."), question })
+      .mockResolvedValueOnce({
+        ...reply("Enter credential."),
+        sensitive: true,
+        wizardInputPending: true,
+        step,
+      })
+      .mockRejectedValueOnce(invalidated())
+      .mockResolvedValue(reply("Ready again."));
+    const page = await mountReady(request);
+    const draft = "Keep my ordinary question";
+    await fill(page, "textarea", draft);
+    button(page, ".option-card__choice").click();
+    await waitForFast(() => expect(page.querySelector('input[type="password"]')).not.toBeNull());
+    expect(page.querySelector<HTMLInputElement>('input[type="password"]')!.value).toBe("");
+    expect(request.mock.calls[1]?.[1]?.message).toBe("enter");
+    await fill(page, 'input[type="password"]', secret);
+    button(page, ".custodian__wizard-cancel").click();
+    await waitForFast(() => expect(page.textContent).toContain("Ready again."));
+    const restored = page.querySelector<HTMLTextAreaElement>("textarea")!;
+    expect(restored.value).toBe(draft);
+    expect(page.textContent).not.toContain(secret);
+    expect(request.mock.calls.some(([, params]) => params.message === secret)).toBe(false);
+    expect(request.mock.calls[3]?.[1]).not.toHaveProperty("wizardCancel");
+    restored.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await waitForFast(() => expect(request.mock.calls.at(-1)?.[1]?.message).toBe(draft));
+    await page.updateComplete;
+    expect(restored.value).toBe("");
+  });
+
+  it("starts fresh after the gateway evicts a typed wizard session", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ...reply("Ready."),
+        wizardInputPending: true,
+        step: {
+          id: "channel",
+          type: "select",
+          message: "Which channel?",
+          options: [
+            { label: "Slack", value: "slack" },
+            { label: "Twitch", value: "twitch" },
+          ],
+        },
+      })
+      .mockRejectedValueOnce(invalidated("INVALID_REQUEST"))
+      .mockResolvedValueOnce(reply("Fresh session."));
+    const page = await mountReady(request);
+    [...page.querySelectorAll<HTMLButtonElement>(".custodian__wizard-step button:not([disabled])")]
+      .find((option) => option.textContent?.trim() === "Twitch")!
+      .click();
+    await waitForFast(() => expect(page.textContent).toContain("Fresh session."));
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request.mock.calls[1]?.[1]).toMatchObject({
+      sessionId: "engine-session",
+      wizardAnswer: { stepId: "channel", value: "twitch" },
+    });
+    expect(request.mock.calls[2]?.[1]).not.toHaveProperty("message");
+    expect(request.mock.calls[2]?.[1]).not.toHaveProperty("wizardAnswer");
+    expect(request.mock.calls[2]?.[1]?.sessionId).not.toBe("engine-session");
+    expect(page.querySelector(".custodian__wizard-step")).toBeNull();
+  });
+
+  it("stops after one rotation when the fresh session failure is also marked", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(reply("Ready."))
+      .mockRejectedValueOnce(invalidated())
+      .mockRejectedValueOnce(invalidated());
+    const page = await mountReady(request);
+    await fill(page, "textarea", "status please");
+    button(page, ".chat-send-btn").click();
+    await waitForFast(() => expect(page.store.sending).toBe(false));
+    expect(page.textContent).toContain("The live session was lost.");
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request.mock.calls[2]?.[1]).not.toHaveProperty("message");
   });
 });

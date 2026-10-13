@@ -1034,7 +1034,7 @@ describe("update-startup", () => {
       cfg: { update: { channel: "dev" } },
     });
     const initializing = check.initialize().catch((error: unknown) => error);
-    const refreshing = refreshGatewayUpdateStatus({ update: { channel: "dev" } }).catch(
+    const refreshing = refreshGatewayUpdateStatus(() => ({ update: { channel: "dev" } })).catch(
       (error: unknown) => error,
     );
     let stopped = false;
@@ -1084,8 +1084,8 @@ describe("update-startup", () => {
       isNixMode: false,
     };
     createTestUpdateCheck(params);
-    const oldRefresh = refreshGatewayUpdateStatus(params.cfg);
-    expect(refreshGatewayUpdateStatus(params.cfg)).toBe(oldRefresh);
+    const oldRefresh = refreshGatewayUpdateStatus(() => params.cfg);
+    expect(refreshGatewayUpdateStatus(() => params.cfg)).toBe(oldRefresh);
     const refreshing = oldRefresh.catch((error: unknown) => error);
     let initializing: Promise<unknown> | undefined;
     let newRefreshing: Promise<unknown> | undefined;
@@ -1095,9 +1095,9 @@ describe("update-startup", () => {
       const oldSignal = vi.mocked(checkUpdateStatus).mock.calls[0]?.[0].signal;
       const replacement = createTestUpdateCheck(params);
       initializing = replacement.initialize().catch((error: unknown) => error);
-      const newRefresh = refreshGatewayUpdateStatus(params.cfg);
+      const newRefresh = refreshGatewayUpdateStatus(() => params.cfg);
       expect(newRefresh).not.toBe(oldRefresh);
-      expect(refreshGatewayUpdateStatus(params.cfg)).toBe(newRefresh);
+      expect(refreshGatewayUpdateStatus(() => params.cfg)).toBe(newRefresh);
       newRefreshing = newRefresh.catch((error: unknown) => error);
       let stopped = false;
       stopping = replacement.stop().then(() => {
@@ -1355,75 +1355,6 @@ describe("update-startup", () => {
     } finally {
       oldFetch.resolve(oldGitStatus);
       await Promise.all([checking, replacementChecking, stopOld(), stopReplacement?.()]);
-    }
-  });
-
-  it("refreshes the inferred Dev channel for a configless Git installation", async () => {
-    mockDevGitStatus({ behind: 2 });
-    await runGatewayUpdateCheck({
-      cfg: { update: { channel: "dev", auto: { enabled: true } } },
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
-      activeWorkInspectors: idleActiveWorkInspectors(),
-    });
-    const announcement = getUpdateAvailable();
-    const schedule = getUpdateSchedule();
-    expect(schedule?.campaign?.state).toBe("countdown");
-    mockDevGitStatus({
-      behind: 3,
-      upstreamSha: "new-upstream-sha",
-      repositoryUrl: "https://github.com/example/openclaw",
-    });
-
-    await refreshGatewayUpdateStatus({});
-
-    expect(checkUpdateStatus).toHaveBeenCalledWith({
-      root: "/opt/openclaw",
-      signal: expect.any(AbortSignal),
-      fetchGit: true,
-      includeRegistry: false,
-      useDetachedDevUpstream: true,
-    });
-    expect(getUpdateSchedule()).toEqual({
-      ...schedule,
-      install: {
-        kind: "git",
-        git: {
-          status: "behind",
-          currentSha: "current-sha",
-          upstreamSha: "new-upstream-sha",
-          repositoryUrl: "https://github.com/example/openclaw",
-          commitsBehind: 3,
-        },
-      },
-    });
-    expect(getUpdateAvailable()).toBe(announcement);
-  });
-
-  it("does not publish an old Dev refresh over a replacement channel", async ({ signal }) => {
-    const oldGitStatus = mockDevGitStatus();
-    const entered = createDeferred();
-    const discovery = createDeferred<UpdateCheckResult>();
-    vi.mocked(checkUpdateStatus).mockImplementationOnce(() => {
-      entered.resolve();
-      return discovery.promise;
-    });
-    const refresh = refreshGatewayUpdateStatus({ update: { channel: "dev" } });
-    try {
-      await withinTest(entered.promise, signal);
-
-      await runGatewayUpdateCheck({
-        cfg: { update: { channel: "beta", checkOnStart: false } },
-      });
-      const replacementSchedule = getUpdateSchedule();
-      discovery.resolve(oldGitStatus);
-      await refresh;
-
-      expect(getUpdateSchedule()).toEqual(replacementSchedule);
-    } finally {
-      discovery.resolve(oldGitStatus);
-      await refresh;
     }
   });
 

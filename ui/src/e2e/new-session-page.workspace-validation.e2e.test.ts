@@ -1,6 +1,6 @@
 import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
@@ -670,12 +670,7 @@ suite.define(() => {
             // The provisional route cannot adopt selection while its preview module is blocked.
             await expect
               .poll(() =>
-                page.locator("openclaw-app").evaluate((element) => {
-                  const app = element as HTMLElement & {
-                    runtime: { context: ApplicationContext };
-                  };
-                  return app.runtime.context.gateway.snapshot.sessionKey;
-                }),
+                evaluateControlUiContext(page, (context) => context.gateway.snapshot.sessionKey),
               )
               .toBe("agent:main:main");
             await chatModule.request;
@@ -791,12 +786,10 @@ suite.define(() => {
         if (change === "process restarts") {
           await gateway.setGatewayBootId("different-gateway-process");
         } else {
-          const hello = await page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime: { context: ApplicationContext };
-            };
-            return app.runtime.context.gateway.snapshot.hello;
-          });
+          const hello = await evaluateControlUiContext(
+            page,
+            (context) => context.gateway.snapshot.hello,
+          );
           await gateway.setMethodResponse("connect", {
             ...hello,
             auth: {

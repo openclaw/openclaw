@@ -109,6 +109,7 @@ export async function serveControlUiSessionEntry(
     res.statusCode = isCurrent() ? 204 : 403;
     res.end();
   } else {
+    res.setHeader("X-OpenClaw-Session-Entry", "1");
     await params.serveApp(path, isCurrent);
   }
   return true;

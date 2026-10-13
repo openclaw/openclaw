@@ -12,6 +12,14 @@
   --radius-xl: 6px;
   --radius: 3px;
   --openclaw-corner-radius-scale: 0.25;
+  --overlay-shadow: var(--shadow-md);
+
+  /* One face for the whole console, prose included — same opt-in character
+     decision as Phosphor; the mono choice is why this theme is not a default. */
+  --mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
+  --font-body: var(--mono);
+  --font-chat: var(--mono);
 }
 
 :root[data-theme="crt"] {
@@ -88,16 +96,8 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.55);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.65);
-  --overlay-shadow: var(--shadow-md);
 
   --grid-line: rgba(235, 235, 235, 0.04);
-
-  /* One face for the whole console, prose included — same opt-in character
-     decision as Phosphor; the mono choice is why this theme is not a default. */
-  --mono:
-    "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
-  --font-body: var(--mono);
-  --font-chat: var(--mono);
 }
 
 :root[data-theme="crt-light"] {
@@ -167,12 +167,6 @@
   --shadow-sm: 0 1px 2px rgba(20, 20, 20, 0.05);
   --shadow-md: 0 4px 12px rgba(20, 20, 20, 0.07);
   --shadow-lg: 0 12px 28px rgba(20, 20, 20, 0.09);
-  --overlay-shadow: var(--shadow-md);
 
   --grid-line: rgba(20, 20, 20, 0.04);
-
-  --mono:
-    "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
-  --font-body: var(--mono);
-  --font-chat: var(--mono);
 }

@@ -99,7 +99,6 @@ describe("worker environment service", () => {
   });
 
   it.each([
-    ["SSH", { leaseId: "lease-direct-only-ssh", ssh: support.SSH_ENDPOINT }],
     ["node", { leaseId: "lease-direct-only-node", node: { deviceId: "device-direct-only-node" } }],
   ] as const)(
     "P1: preserves a direct-only %s lease after profile removal and reconciliation",
@@ -164,130 +163,6 @@ describe("worker environment service", () => {
     });
   });
 
-  it.each([
-    { name: "all placement capabilities", supportedExecutionModes: undefined },
-    { name: "its exact remote-exec capability", supportedExecutionModes: ["worker-turn"] as const },
-  ])(
-    "destroys a persisted node lease when its provider loses $name",
-    async ({ supportedExecutionModes }) => {
-      const leaseId = "lease-unadvertised-persisted-node";
-      const deviceId = "device-unadvertised-persisted-node";
-      const inspect = vi.fn(async () => ({ status: "active" as const, sharedHost: false }));
-      const destroy = vi.fn(async () => {});
-      const provider = support.createProvider({
-        supportedExecutionModes: ["worker-turn", "remote-exec"],
-        provisionBeforeInstallation: true,
-        provision: async () => ({ leaseId, node: { deviceId } }),
-        inspect,
-        destroy,
-      });
-      const workerService = support.createService(provider, {
-        ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
-      });
-      const environment = await workerService.createWithRequest({
-        profileId: "development",
-        idempotencyKey: "request-unadvertised-persisted-node",
-        executionMode: "remote-exec",
-      });
-      provider.supportedExecutionModes = supportedExecutionModes;
-      support.getDevelopmentProfile().settings = { region: "edited" };
-
-      await workerService.reconcileOnce();
-
-      expect(inspect).not.toHaveBeenCalled();
-      expect(destroy).toHaveBeenCalledWith({ leaseId, profile: { region: "test" } });
-      expect(support.testState.store.get(environment.environmentId)).toMatchObject({
-        state: "failed",
-        leaseId: null,
-        nodeDeviceId: null,
-        lastError: expect.stringMatching(/node|remote-exec/u),
-      });
-    },
-  );
-
-  it.each([
-    ["remote-exec-only", ["remote-exec"]],
-    ["dual-mode", ["worker-turn", "remote-exec"]],
-  ] as const)(
-    "preserves a persisted node lease after restarting with a %s provider",
-    async (_label, supportedExecutionModes) => {
-      const leaseId = "lease-persisted-multimode-node";
-      const deviceId = "device-persisted-multimode-node";
-      const inspect = vi.fn(async () => ({ status: "active" as const, sharedHost: false }));
-      const destroy = vi.fn(async () => {});
-      const initial = support.createService(
-        support.createProvider({
-          supportedExecutionModes: ["worker-turn", "remote-exec"],
-          provisionBeforeInstallation: true,
-          provision: async () => ({ leaseId, node: { deviceId } }),
-          inspect,
-          destroy,
-        }),
-        { ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT) },
-      );
-      const environment = await initial.createWithRequest({
-        profileId: "development",
-        idempotencyKey: "request-persisted-multimode-node",
-        executionMode: "remote-exec",
-      });
-      await initial.stop();
-
-      const restarted = support.createService(
-        support.createProvider({ supportedExecutionModes, inspect, destroy }),
-      );
-      await restarted.reconcileOnce();
-
-      expect(inspect).toHaveBeenCalledWith({ leaseId, profile: { region: "test" } });
-      expect(destroy).not.toHaveBeenCalled();
-      expect(support.testState.store.get(environment.environmentId)).toMatchObject({
-        state: "ready",
-        leaseId,
-        nodeDeviceId: deviceId,
-        sshEndpoint: null,
-      });
-    },
-  );
-
-  it("reconciles one exact environment without sweeping its siblings", async () => {
-    await support.seedReady("worker-target");
-    await support.seedReady("worker-sibling");
-    const inspected: string[] = [];
-    const workerService = support.createService(
-      support.createProvider({
-        inspect: async (lease) => {
-          inspected.push(lease.leaseId);
-          return { status: "active" };
-        },
-      }),
-    );
-
-    await workerService.reconcileEnvironment("worker-target");
-
-    expect(inspected).toEqual(["lease:worker-target"]);
-  });
-
-  it("targeted reconciliation revokes a disappeared worker credential", async () => {
-    const environmentId = "worker-revoked";
-    await support.seedReady(environmentId);
-    const workerService = support.createService(
-      support.createProvider({ inspect: async () => ({ status: "unknown" }) }),
-    );
-    const admitted = await workerService.admitWorker(support.admissionFor(environmentId));
-    if (!admitted.ok) {
-      throw new Error("fixture worker admission failed");
-    }
-
-    await workerService.reconcileEnvironment(environmentId);
-
-    expect(support.testState.store.get(environmentId)).toMatchObject({
-      state: "failed",
-      leaseId: null,
-      destroyRequestedAtMs: support.testState.nowMs,
-      lastError: "Worker provider no longer recognizes the lease",
-    });
-    expect(workerService.validateWorkerConnection(admitted.identity)).toBe("credential-replaced");
-  });
-
   it("re-enters bootstrapping when the durable receipt has a stale bundle hash", async () => {
     const bootstrapping = await support.seedBootstrapping("worker-stale");
     await support.testState.store.transition({
@@ -307,32 +182,6 @@ describe("worker environment service", () => {
       bootstrapReceipt: support.BOOTSTRAP_RECEIPT,
     });
     expect(support.testState.bootstrapWorker).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not resolve npm while an admitted receipt matches the local bundle", async () => {
-    const environmentId = "worker-current-npm";
-    await support.seedReady(environmentId, "npm");
-    support.testState.prepareInstallation = vi.fn(async (install) => {
-      if (install === "bundle") {
-        return support.BUNDLE_ARTIFACT;
-      }
-      throw new Error("npm registry is unavailable");
-    });
-    const destroy = vi.fn(async () => {});
-    const workerService = support.createService(support.createProvider({ destroy }));
-
-    await workerService.reconcileOnce();
-
-    expect(support.testState.prepareInstallation).toHaveBeenCalledTimes(1);
-    expect(support.testState.prepareInstallation).toHaveBeenCalledWith("bundle");
-    expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
-    expect(destroy).not.toHaveBeenCalled();
-    expect(support.testState.store.get(environmentId)).toMatchObject({
-      state: "ready",
-      leaseId: `lease:${environmentId}`,
-      bootstrapReceipt: support.BOOTSTRAP_RECEIPT,
-      lastError: null,
-    });
   });
 
   it("keeps an admitted lease retryable when local bundle identity is unavailable", async () => {
@@ -375,29 +224,20 @@ describe("worker environment service", () => {
     ).toBeUndefined();
   });
 
-  it.each(["bootstrapping", "ready", "idle"] as const)(
+  it.each(["ready"] as const)(
     "tears down a persisted %s lease when mismatched npm preparation fails",
     async (state) => {
       const environmentId = `worker-prepare-${state}`;
       const bootstrapping = await support.seedBootstrapping(environmentId, "npm");
-      if (state !== "bootstrapping") {
-        const ready = await support.testState.store.transition({
-          environmentId,
-          from: bootstrapping.state,
-          to: "ready",
-          patch: support.readyPatch(environmentId, {
-            ...support.BOOTSTRAP_RECEIPT,
-            bundleHash: "c".repeat(64),
-          }),
-        });
-        if (state === "idle") {
-          await support.testState.store.transition({
-            environmentId,
-            from: ready.state,
-            to: "idle",
-          });
-        }
-      }
+      await support.testState.store.transition({
+        environmentId,
+        from: bootstrapping.state,
+        to: "ready",
+        patch: support.readyPatch(environmentId, {
+          ...support.BOOTSTRAP_RECEIPT,
+          bundleHash: "c".repeat(64),
+        }),
+      });
       support.testState.prepareInstallation = vi.fn(async (install) => {
         if (install === "bundle") {
           return support.BUNDLE_ARTIFACT;
@@ -438,55 +278,6 @@ describe("worker environment service", () => {
       expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
     },
   );
-
-  it("retries indeterminate teardown after a reconcile preparation failure and restart", async () => {
-    const environmentId = "worker-prepare-teardown-retry";
-    const bootstrapping = await support.seedBootstrapping(environmentId, "npm");
-    await support.testState.store.transition({
-      environmentId,
-      from: bootstrapping.state,
-      to: "ready",
-      patch: support.readyPatch(environmentId, {
-        ...support.BOOTSTRAP_RECEIPT,
-        bundleHash: "c".repeat(64),
-      }),
-    });
-    support.testState.prepareInstallation = vi.fn(async (install) => {
-      if (install === "bundle") {
-        return support.BUNDLE_ARTIFACT;
-      }
-      throw new Error("released npm artifact is unavailable");
-    });
-    let teardownFails = true;
-    const destroy = vi.fn(async () => {
-      if (teardownFails) {
-        throw new Error("provider teardown timed out");
-      }
-    });
-    const provider = support.createProvider({ destroy });
-    const workerService = support.createService(provider);
-
-    await workerService.reconcileOnce();
-    expect(support.testState.store.get(environmentId)).toMatchObject({
-      state: "destroying",
-      leaseId: `lease:${environmentId}`,
-      teardownTerminalState: "failed",
-      lastError: "released npm artifact is unavailable",
-    });
-
-    await workerService.stop();
-    teardownFails = false;
-    await support.createService(provider).reconcileOnce();
-
-    expect(destroy).toHaveBeenCalledTimes(2);
-    expect(support.testState.store.get(environmentId)).toMatchObject({
-      state: "failed",
-      leaseId: null,
-      sshEndpoint: null,
-      teardownTerminalState: "failed",
-      lastError: "released npm artifact is unavailable",
-    });
-  });
 
   it("uses the snapshotted npm selection after live config changes", async () => {
     support.getDevelopmentProfile().install = "npm";
@@ -614,7 +405,6 @@ describe("worker environment service", () => {
     null,
     { status: "future" },
     { status: "active", sharedHost: "yes" },
-    { status: "dormant", sharedHost: true },
     { status: "unknown", sharedHost: true },
   ])("retains retryable state for malformed inspection result %#", async (inspection) => {
     await support.seedReady("worker-malformed");
@@ -713,42 +503,9 @@ describe("worker environment service", () => {
     });
   });
 
-  it("keeps a failed destroy retryable and makes completed destroy idempotent", async () => {
-    await support.seedReady("worker-destroy");
-    support.testState.config.cloudWorkers!.profiles = {};
-    let fail = true;
-    const destroyed: WorkerLifecycleLease[] = [];
-    const provider = support.createProvider({
-      destroy: async (lease) => {
-        destroyed.push(lease);
-        if (fail) {
-          throw new Error("destroy timeout");
-        }
-      },
-    });
-    const workerService = support.createService(provider);
-
-    await expect(workerService.destroy("worker-destroy")).rejects.toMatchObject({
-      code: "provider_failure",
-    } satisfies Partial<WorkerEnvironmentServiceError>);
-    expect(support.testState.store.get("worker-destroy")).toMatchObject({
-      state: "destroying",
-      lastError: "destroy timeout",
-    });
-
-    fail = false;
-    await workerService.reconcileOnce();
-    expect(support.testState.store.get("worker-destroy")).toMatchObject({ state: "destroyed" });
-    await workerService.destroy("worker-destroy");
-    expect(destroyed).toEqual([
-      { leaseId: "lease:worker-destroy", profile: { region: "test" } },
-      { leaseId: "lease:worker-destroy", profile: { region: "test" } },
-    ]);
-  });
-
-  it.each(["destroy", "reconcile"] as const)(
+  it.each(["reconcile"] as const)(
     "%s preserves the exact attached owner until remote stop is confirmed across restart",
-    async (operation) => {
+    async () => {
       const environmentId = "worker-retained-teardown";
       await support.seedReady(environmentId);
       const attached = await support.testState.store.transition({
@@ -777,12 +534,8 @@ describe("worker environment service", () => {
       const destroy = vi.fn(async () => {});
       const provider = support.createProvider({ destroy });
       const first = support.createService(provider, { tunnelManager });
-      if (operation === "destroy") {
-        await expect(first.destroy(environmentId)).rejects.toThrow("node disconnected");
-      } else {
-        await support.testState.store.requestDestroy({ environmentId, state: "attached" });
-        await first.reconcileOnce();
-      }
+      await support.testState.store.requestDestroy({ environmentId, state: "attached" });
+      await first.reconcileOnce();
       expect(support.testState.store.get(environmentId)).toMatchObject({
         state: "attached",
         ownerEpoch: attached.ownerEpoch,

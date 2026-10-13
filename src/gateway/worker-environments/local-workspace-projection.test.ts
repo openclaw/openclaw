@@ -8,6 +8,11 @@ import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { deleteRegistryWorktree } from "../../agents/worktrees/registry.js";
+import { getRegistryWorktree } from "../../agents/worktrees/registry.test-support.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,
@@ -73,6 +78,7 @@ beforeEach(async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", stateRoot);
   vi.stubEnv("GIT_CONFIG_GLOBAL", os.devNull);
   vi.stubEnv("GIT_CONFIG_SYSTEM", os.devNull);
+  setRuntimeConfigSnapshot({});
   const repo = path.join(root, "source");
   const checkout = path.join(root, "canonical");
   await fs.mkdir(repo);
@@ -128,10 +134,11 @@ afterEach(async () => {
       await fs.rm(path.dirname(row.projection_path), { recursive: true, force: true });
     }
   });
-  deleteRegistryWorktree(process.env, owner.worktree.id);
+  await deleteRegistryWorktree(process.env, owner.worktree.id);
   if (process.env.OPENCLAW_STATE_DIR !== stateRoot) {
     await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath());
   }
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
   await fs.rm(root, { recursive: true, force: true });
 });
@@ -596,12 +603,7 @@ describe("local sandbox workspace reconciliation", () => {
     "preserves accepted ignored files, symlinks and empty directories through archive: %s",
     async (mode) => {
       const [
-        {
-          insertRegistryWorktree,
-          getRegistryWorktree,
-          getRegistryWorktreeProvisionedState,
-          updateRegistryWorktree,
-        },
+        { insertRegistryWorktree, getRegistryWorktreeProvisionedState, updateRegistryWorktree },
         { ManagedWorktreeService, SNAPSHOT_RETENTION_MS },
         { restoreProvisionedFiles },
       ] = await Promise.all([

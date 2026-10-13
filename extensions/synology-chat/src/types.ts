@@ -1,7 +1,3 @@
-/**
- * Type definitions for the Synology Chat channel plugin.
- */
-
 type SynologyChatConfigFields = {
   enabled?: boolean;
   token?: string;
@@ -28,7 +24,6 @@ export interface SynologyChatChannelConfig extends SynologyChatConfigFields {
 /** Raw per-account config (overrides base config) */
 export interface SynologyChatAccountRaw extends SynologyChatConfigFields {}
 
-/** Fully resolved account config with defaults applied */
 export type ResolvedSynologyChatAccount = Required<
   Omit<SynologyChatConfigFields, "allowedUserIds">
 > & {

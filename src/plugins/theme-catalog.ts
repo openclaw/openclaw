@@ -19,12 +19,22 @@ function pluginThemes(plugin: PluginManifestRecord): ThemeCatalogEntry[] {
   }
   const themes: ThemeCatalogEntry[] = [];
   for (const { id, definition, artwork } of plugin.themeDefinitions ?? []) {
-    const resourceUrl = (kind: "hat" | "critter", artId: string, svg: string) => {
+    const resourceUrl = (kind: "icon" | "hat" | "critter", artId: string, svg: string) => {
       const hash = createHash("sha256").update(svg).digest("hex").slice(0, 12);
       return `${buildControlUiResourcePath("pluginThemeArt", "", plugin.id, [id, kind, artId])}?v=${hash}`;
     };
     const projected: ThemeArtwork | undefined = artwork
       ? {
+          ...(artwork.icons
+            ? {
+                icons: Object.fromEntries(
+                  Object.entries(artwork.icons).map(([artId, art]) => [
+                    artId,
+                    { url: resourceUrl("icon", artId, art.svg) },
+                  ]),
+                ),
+              }
+            : {}),
           ...(artwork.hats
             ? {
                 hats: Object.fromEntries(
@@ -52,6 +62,15 @@ function pluginThemes(plugin: PluginManifestRecord): ThemeCatalogEntry[] {
       name: definition.name,
       description: definition.description,
       ...(definition.mascot !== undefined ? { mascot: definition.mascot } : {}),
+      ...(definition.brandName !== undefined ? { brandName: definition.brandName } : {}),
+      ...(definition.brandIcon !== undefined ? { brandIcon: definition.brandIcon } : {}),
+      ...(definition.workingIndicator !== undefined
+        ? { workingIndicator: definition.workingIndicator }
+        : {}),
+      ...(definition.lobsterdex !== undefined ? { lobsterdex: definition.lobsterdex } : {}),
+      ...(definition.communityLinks !== undefined
+        ? { communityLinks: definition.communityLinks }
+        : {}),
       ...(definition.workingPhrases !== undefined
         ? { workingPhrases: definition.workingPhrases }
         : {}),
@@ -72,7 +91,7 @@ function pluginThemes(plugin: PluginManifestRecord): ThemeCatalogEntry[] {
 export function resolvePluginThemeArtwork(
   pluginId: string,
   themeId: string,
-  kind: "hat" | "critter",
+  kind: "icon" | "hat" | "critter",
   artId: string,
 ): string | undefined {
   const snapshot = currentSnapshot();
@@ -82,7 +101,12 @@ export function resolvePluginThemeArtwork(
   const theme = snapshot.plugins
     .find((plugin) => plugin.id === pluginId)
     ?.themeDefinitions?.find((entry) => entry.id === themeId);
-  const artwork = kind === "hat" ? theme?.artwork?.hats : theme?.artwork?.critters;
+  const artwork =
+    kind === "icon"
+      ? theme?.artwork?.icons
+      : kind === "hat"
+        ? theme?.artwork?.hats
+        : theme?.artwork?.critters;
   return artwork && Object.hasOwn(artwork, artId) ? artwork[artId]?.svg : undefined;
 }
 

@@ -207,6 +207,8 @@ export async function createRegisteredCompletionPair(context: GatewayRequestCont
       registerSubagentRun({
         runId: first.runId,
         childSessionKey,
+        childAgentId: "main",
+        sessionEntry: { sessionId: childSessionId, lifecycleRevision: childLifecycleRevision },
         requesterSessionKey,
         requesterAgentId: "main",
         requesterDisplayKey: requesterSessionKey,

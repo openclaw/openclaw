@@ -13,6 +13,7 @@ import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
 } from "../test-helpers.js";
+import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import { MemoryIndexManager } from "./manager.js";
 import * as settling from "./watch-settle.js";
 
@@ -81,7 +82,11 @@ describe("Memory watch configuration", () => {
     await configureMemoryCoreDreamingStateForTests(state.env);
     const cfg = config();
     const debounceMs = resolveMemorySearchConfig(cfg, "main")!.sync.watchDebounceMs;
-    manager = await MemoryIndexManager.get({ cfg, agentId: "main" });
+    manager = await MemoryIndexManager.get({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
     if (!manager) {
       throw new Error("memory manager unavailable");
     }
@@ -175,7 +180,11 @@ describe("Memory watch configuration", () => {
     const file = path.join(state.workspaceDir, "memory", "note.md");
     await fs.writeFile(file, "Amber lantern baseline.");
     await configureMemoryCoreDreamingStateForTests(state.env);
-    manager = await MemoryIndexManager.get({ cfg: config(), agentId: "main" });
+    manager = await MemoryIndexManager.get({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg: config(),
+      agentId: "main",
+    });
     if (!manager) {
       throw new Error("memory manager unavailable");
     }

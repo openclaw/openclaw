@@ -19,7 +19,9 @@ These projects do not inherit root pnpm overrides. The Vercel project uses appro
 
 ## Check dependency advisories
 
-The production audit pre-commit hook and ordinary CI's `security-fast` job remain zero-install, npm-only checks of the product production graph. They query npm bulk advisory data, not upstream repository advisories. A passing result is limited to that source and graph; it does not establish that dependencies are unaffected by all known vulnerabilities. CI runs dispatched by Full Release Validation or release publication record a failing audit as a warning instead of failing: advisories never block a release.
+Ordinary pull-request, push, and scheduled CI do not run the production dependency audit. The `security-fast` job runs it only for `workflow_dispatch` IDs beginning with `full-release-validation-` or `release-native-android-`. These release checks and the optional production audit pre-commit hook print audit findings and turn every audit failure into a warning with exit code 0, including unavailable or invalid advisory data. Dependency advisories never block CI, local commits, or release verification.
+
+The separate daily [Dependency Audit workflow](/ci/scheduled-workflows#dependency-audit) remains strict: findings, unavailable advisories, or invalid data can leave it red as a triage signal, but it is not a required PR check. Investigate that signal and follow up with a dependency bump on `main`. These zero-install checks query npm bulk advisory data for the product production graph, not upstream repository advisories. A passing result is limited to that source and graph; it does not establish that dependencies are unaffected by all known vulnerabilities.
 
 `pnpm deps:vuln:gate`, used by release dependency evidence, audits the target's product pnpm lock plus each release-tool lock whose package is present in that target. It checks npm advisory data and adds published security advisories from verified public GitHub repositories. Repository mappings come from the manifests for exact locked npm package versions, not a package's latest manifest. The gate verifies that each repository is public before requesting advisories with the explicit `state=published` filter. It does not scan private repositories or unpublished advisories.
 
@@ -29,7 +31,7 @@ Release automation reuses its existing standard `GH_TOKEN` only for GitHub API r
 
 ### Interpret coverage
 
-Release artifacts and the GitHub Actions step summary show npm coverage as `checked`, upstream coverage as `checked` or `partial`, mapped package-version counts, checked repository counts, coverage issues, and upstream-only findings. Findings identify their source as `npm-bulk` or `github-repository`; upstream findings also record matched locked versions. Even `checked` coverage is limited to these advisory sources, not comprehensive vulnerability clearance.
+Release artifacts and the GitHub Actions step summary show npm coverage as `checked`, upstream coverage as `checked` or `partial`, mapped package-version counts, checked repository counts, coverage issues, and upstream-only findings. Findings identify their source as `npm-bulk` or `github-repository`; upstream findings also record matched locked versions. Even `checked` coverage is limited to these advisory sources, not a guarantee that all vulnerabilities have been ruled out.
 
 The upstream scan has fixed bounds: 2,500 exact package versions, 4,000 HTTP requests, and five minutes per run. It uses four concurrent requests, up to five pages of 100 advisories per repository, and at most 10,000 advisories per run. Each response is limited to 2 MiB and each request to 15 seconds. It does not retry or reuse stale cached results.
 

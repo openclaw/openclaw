@@ -1,23 +1,13 @@
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-contract.js";
-import {
-  readSessionTranscriptContextMessages,
-  type readSessionTranscriptModelContext,
-  validateSessionTranscriptContextAdmission,
-  validateSessionTranscriptContextVersion,
-} from "../../config/sessions/session-accessor.sqlite-model-context.js";
+import type { readSessionTranscriptModelContext } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import type {
   SessionModelContextLimits,
   SessionTranscriptContextSnapshot,
 } from "../../config/sessions/session-history-read.types.js";
-import type { IncognitoContextReadResult } from "../../config/sessions/session-incognito-history-contract.js";
-import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
 import { readSessionTranscriptModelContextAsync } from "../../config/sessions/session-transcript-context-read.js";
-import {
-  prepareIncognitoSessionTranscriptHydration,
-  prepareSessionTranscriptHydration,
-} from "../../config/sessions/session-transcript-hydration.js";
+import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import {
   resolveSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
@@ -25,151 +15,74 @@ import {
 } from "../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "../../config/sessions/session-transcript-read-source.js";
 import { readSessionTranscriptContextMessagesInWorker } from "../../config/sessions/session-transcript-read-worker-runtime.js";
+import type { SessionHistoryWorkerLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
-import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import {
+  captureOwnedTranscriptWriteAssertion,
+  getOwnedSessionTranscriptActor,
+  getOwnedSessionTranscriptWriterFence,
+} from "../../config/sessions/transcript-write-context.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
-import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
+import { captureSessionManagerIncognitoBinding } from "./session-manager-incognito-scope.js";
 import {
-  isIncognitoOpenClawAgentSqlitePath,
-  resolveIncognitoOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.paths.js";
-import {
-  captureSessionManagerIncognitoAdmissionAssertion,
-  captureSessionManagerIncognitoBinding,
-} from "./session-manager-incognito-scope.js";
+  prepareSessionManagerMemoryHydration,
+  prepareSessionManagerMemoryRead,
+} from "./session-manager-memory-read.js";
+
+/** Exact owner postimages can validate metadata, never replace bounded payload reads. */
+export function readSessionManagerActorTranscript(
+  target: SessionTranscriptRuntimeTarget,
+  version: SessionTranscriptContextVersion | undefined,
+) {
+  // Anchors do not carry roles; an admitted user boundary keeps its full validator.
+  if (!version || resolveSessionTranscriptReadFence(target)) {
+    return undefined;
+  }
+  const binding = getOwnedSessionTranscriptActor(target);
+  if (!binding) {
+    return undefined;
+  }
+  const assertCurrent = captureOwnedTranscriptWriteAssertion(target);
+  const state = binding.actor.snapshot({ assertCurrent, authorize: assertCurrent });
+  const fence = getOwnedSessionTranscriptWriterFence({ sessionTarget: target });
+  if (
+    !state ||
+    state.target.sessionKey !== target.sessionKey ||
+    state.entry?.sessionId !== target.sessionId ||
+    (fence &&
+      (state.entry.lifecycleRevision !== fence.expectedLifecycleRevision ||
+        state.entry.activeWriterRunId !== fence.expectedWriterRunId)) ||
+    state.transcript.anchorsState !== "resident" ||
+    state.transcript.version.generation !== version.generation ||
+    state.transcript.version.rawSeq !== version.rawSeq ||
+    state.transcript.version.updatedAt !== version.updatedAt
+  ) {
+    return undefined;
+  }
+  return state.transcript;
+}
 
 /** SessionManager planning uses the same actor as its subsequent metadata command. */
 export function prepareSessionManagerHydration(
   source: SessionTranscriptRuntimeTarget,
-  limits?: { maxBytes: number; maxEvents: number },
-  signal?: AbortSignal,
-  manager?: object,
-  retarget = false,
+  options: {
+    limits?: { maxBytes: number; maxEvents: number };
+    signal?: AbortSignal;
+    manager?: object;
+    retarget?: boolean;
+    lane?: SessionHistoryWorkerLane;
+  } = {},
 ) {
+  const { limits, signal, manager, retarget = false, lane } = options;
   const target = captureSessionTranscriptTargetBinding(source);
   const incognitoBinding = captureSessionManagerIncognitoBinding(target, manager, retarget);
   if (!incognitoBinding) {
-    return { ...prepareSessionTranscriptHydration(target, limits, signal), incognitoBinding };
+    return { ...prepareSessionTranscriptHydration(target, limits, signal, lane), incognitoBinding };
   }
-  const assertAdmission = captureSessionManagerIncognitoAdmissionAssertion(incognitoBinding);
-  const actor = incognitoBinding.actor;
-  const assertOwned = captureOwnedTranscriptWriteAssertion(target);
-  const assertCurrent = () => {
-    assertAdmission();
-    assertOwned();
-  };
-  assertCurrent();
-  const lifecycleRevision = actor.sessions.readSharing(target.sessionKey)?.entry?.lifecycleRevision;
-  const hydration = prepareIncognitoSessionTranscriptHydration({
-    actor,
-    authority: { assertCurrent },
-    target: {
-      sessionKey: target.sessionKey,
-      sessionId: target.sessionId,
-      lifecycleRevision,
-      admission: resolveSessionTranscriptReadFence(target),
-    },
-    limits,
-    signal,
-  });
-  // Keep the manager's captured writer binding and environment across hydration adoption.
-  return { ...hydration, target, incognitoBinding };
-}
-
-function prepareSessionManagerIncognitoContext(
-  target: SessionTranscriptRuntimeTarget,
-  signal?: AbortSignal,
-  manager?: object,
-) {
-  const binding = captureSessionManagerIncognitoBinding(target, manager);
-  if (!binding) {
-    return undefined;
-  }
-  const assertAdmission = captureSessionManagerIncognitoAdmissionAssertion(binding);
-  assertAdmission();
-  const actor = binding.actor;
-  const assertOwned = captureOwnedTranscriptWriteAssertion(target);
-  const claim = actor.sessions.captureCurrent(target.sessionKey);
-  const input = {
-    sessionKey: target.sessionKey,
-    sessionId: target.sessionId,
-    lifecycleRevision: actor.sessions.readSharing(target.sessionKey)?.entry?.lifecycleRevision,
-    admission: resolveSessionTranscriptReadFence(target),
-  };
-  const assertCurrent = () => {
-    assertAdmission();
-    signal?.throwIfAborted();
-    assertOwned();
-    claim.assertCurrent();
-    actor.assertReadable();
-  };
-  const authority = { assertCurrent };
-  const check = <Value>(result: IncognitoContextReadResult<Value>) => {
-    assertCurrent();
-    if (!result.ok) {
-      throw new SessionTranscriptReadFenceError(result.message);
-    }
-    return result.value;
-  };
-  const checked = async <Value>(pending: Promise<IncognitoContextReadResult<Value>>) =>
-    check(await pending);
   return {
-    binding: { actor, authority, target: input },
-    retain: async <T>(operation: () => Promise<T>) => {
-      const value = await actor.sessions.withSharedState(operation);
-      assertCurrent();
-      return value;
-    },
-    readMessages: () =>
-      checked(
-        actor.sessions.history(
-          authority,
-          {
-            type: "session.history.native-context",
-            input,
-          },
-          signal,
-        ),
-      ),
-    validate: (
-      version?: SessionTranscriptContextVersion,
-      through?: TranscriptEntryAnchor,
-      onRead?: () => void,
-    ) =>
-      checked(
-        actor.sessions.history(
-          authority,
-          {
-            type: "session.history.native-context-current",
-            input: { ...input, version, through },
-          },
-          signal,
-          onRead
-            ? (result) => {
-                check(result);
-                onRead();
-              }
-            : undefined,
-        ),
-      ),
-    assertCurrent,
-  };
-}
-
-function captureNativeContextOwner(
-  target: ReturnType<typeof captureSessionTranscriptTargetBinding>,
-) {
-  const pathname = resolveIncognitoOpenClawAgentSqlitePath(target);
-  const readOwner = () => getOpenIncognitoAgentDatabase(target.agentId, pathname);
-  const owner = readOwner();
-  return () => {
-    if (readOwner() !== owner) {
-      throw new SessionTranscriptReadFenceError(
-        "Session transcript incognito database owner is no longer current",
-      );
-    }
+    ...prepareSessionManagerMemoryHydration(incognitoBinding, limits, signal),
+    incognitoBinding,
   };
 }
 
@@ -190,39 +103,32 @@ export async function readSessionManagerModelContextAsync<T>(
   const through = options.through ? { ...options.through } : undefined;
   const limits = options.limits ? { ...options.limits } : undefined;
   options.signal?.throwIfAborted();
-  const actor = withSessionContextAdmission(readTarget, admission, () =>
-    prepareSessionManagerIncognitoContext(readTarget, options.signal, manager),
-  );
-  if (actor) {
-    return readSessionTranscriptModelContextAsync(
+  const selected = captureSessionManagerIncognitoBinding(readTarget, manager);
+  if (selected) {
+    const reader = prepareSessionManagerMemoryRead(selected, options.signal);
+    const context = await reader.read("session.history.context", {
+      sessionId: readTarget.sessionId,
+      admission,
+      through,
+      limits,
+    });
+    reader.assertCurrent();
+    const value = await consume(context);
+    reader.assertCurrent();
+    return value;
+  }
+  const result = await withSessionContextAdmission(readTarget, admission, () =>
+    readSessionTranscriptModelContextAsync(
       readTarget,
       consume,
       admission,
       options.signal,
       through,
       limits,
-      actor.binding,
-    );
-  }
-  const native =
-    isIncognitoSessionKey(readTarget.sessionKey) ||
-    isIncognitoOpenClawAgentSqlitePath(readTarget.storePath, readTarget);
-  const assertNative = native ? captureNativeContextOwner(readTarget) : undefined;
-  const result = await withSessionContextAdmission(readTarget, admission, () =>
-    readSessionTranscriptModelContextAsync(
-      readTarget,
-      (context) => {
-        assertNative?.();
-        return consume(context);
-      },
-      admission,
-      options.signal,
-      through,
-      limits,
+      true,
     ),
   );
   options.signal?.throwIfAborted();
-  assertNative?.();
   return result;
 }
 
@@ -238,17 +144,32 @@ export async function readSessionManagerContextAsync<T>(
   const signal = options.signal;
   signal?.throwIfAborted();
   assertOwned();
+  const selected = captureSessionManagerIncognitoBinding(captured);
+  if (selected) {
+    const reader = prepareSessionManagerMemoryRead(selected, signal);
+    const snapshot = await reader.read("session.history.context-messages", {
+      sessionId: captured.sessionId,
+      admission,
+    });
+    const messages = (function* () {
+      for (const message of snapshot.messages) {
+        reader.assertCurrent();
+        yield message;
+      }
+    })();
+    try {
+      reader.assertCurrent();
+      const value = await read(messages, snapshot.header);
+      reader.assertCurrent();
+      return value;
+    } finally {
+      messages.return(undefined);
+    }
+  }
   return withSessionContextAdmission(captured, admission, async () => {
-    const actor = prepareSessionManagerIncognitoContext(captured, signal);
-    const native =
-      isIncognitoSessionKey(captured.sessionKey) ||
-      isIncognitoOpenClawAgentSqlitePath(captured.storePath, captured);
-    const assertNative = native && !actor ? captureNativeContextOwner(captured) : undefined;
     const assertCurrent = () => {
       signal?.throwIfAborted();
       assertOwned();
-      actor?.assertCurrent();
-      assertNative?.();
     };
     const consumeSnapshot = async (
       snapshot: SessionTranscriptContextSnapshot,
@@ -267,35 +188,10 @@ export async function readSessionManagerContextAsync<T>(
         messages.return(undefined);
       }
     };
-    const consume = async () => {
-      assertCurrent();
-      const snapshot = actor
-        ? await actor.readMessages()
-        : readSessionTranscriptContextMessages(captured, (messages, header, version) => ({
-            messages: [...messages],
-            header,
-            version,
-          }));
-      assertCurrent();
-      const result = await consumeSnapshot(snapshot);
-      assertCurrent();
-      if (actor) {
-        await actor.validate(snapshot.version);
-      } else if (admission) {
-        validateSessionTranscriptContextAdmission(captured, admission);
-      } else {
-        validateSessionTranscriptContextVersion(captured, snapshot.version);
-      }
-      assertCurrent();
-      return result;
-    };
-    if (actor) {
-      return actor.retain(consume);
-    }
     return withSessionTranscriptReadSource(
       captured,
-      consume,
-      async ({ scope, expectedIdentity, owner, assertCurrent: assertReadOwner }) => {
+      async (source) => {
+        const { scope, expectedIdentity, owner, assertCurrent: assertReadOwner } = source;
         const readTarget = {
           ...scope,
           sessionId: captured.sessionId,
@@ -306,6 +202,11 @@ export async function readSessionManagerContextAsync<T>(
           assertReadOwner();
         };
         assertDurable();
+        if (admission && !expectedIdentity) {
+          throw new SessionTranscriptReadFenceError(
+            "Session transcript changed during context read",
+          );
+        }
         const snapshot = await readSessionTranscriptContextMessagesInWorker(
           readTarget,
           admission,
@@ -313,29 +214,9 @@ export async function readSessionManagerContextAsync<T>(
           expectedIdentity,
         );
         assertDurable();
-        const result = await consumeSnapshot(snapshot, owner.assertCurrent);
+        const result = await consumeSnapshot(snapshot, () => owner.assertCurrent());
         assertDurable();
-        let accepted: { value: T } | undefined;
-        await readSessionTranscriptAnchorsAsync(
-          readTarget,
-          { entryIds: [], contextValidation: { version: snapshot.version, admission } },
-          signal,
-          (facts) => {
-            assertDurable();
-            if (!facts.contextValidated && (snapshot.version || admission)) {
-              throw new SessionTranscriptReadFenceError(
-                "Session transcript changed during context read",
-              );
-            }
-            accepted = { value: result };
-          },
-        );
-        if (!accepted) {
-          throw new SessionTranscriptReadFenceError(
-            "Session transcript changed during context read",
-          );
-        }
-        return accepted.value;
+        return result;
       },
       signal,
     );

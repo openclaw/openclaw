@@ -5,7 +5,7 @@ import {
   getRealtimeVoiceProvider,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION,
-  resolveConfiguredRealtimeVoiceProvider,
+  resolveConfiguredRealtimeVoiceProviderAsync,
   type RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
@@ -133,7 +133,7 @@ export async function resolveFaceTimeRealtimeProvider(params: {
       }),
     ),
   );
-  return resolveConfiguredRealtimeVoiceProvider({
+  return resolveConfiguredRealtimeVoiceProviderAsync({
     configuredProviderId,
     providerConfigs: providers,
     providerConfigOverrides: params.config.realtime.voice

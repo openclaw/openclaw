@@ -1,3 +1,5 @@
+import { setImmediate } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -13,6 +15,41 @@ function fixture() {
 }
 
 describe("plugin service scheduling", () => {
+  it.each([false, true])(
+    "releases its runner after root cleanup (pending child: %s)",
+    async (pending) => {
+      class RunnerOwner {
+        run(work: () => void | Promise<unknown>) {
+          return work();
+        }
+      }
+      const time = createGatewaySchedulerClock(1_000);
+      const gateway = createTestGatewayScheduler(time.clock);
+      const control = (() => {
+        const runner = new RunnerOwner();
+        return createPluginServiceScheduler(gateway, runner.run.bind(runner));
+      })();
+      const child = control.scheduler.scope();
+      const work = createDeferredCore();
+      let wake: ReturnType<typeof time.wake>;
+      if (pending) {
+        child.schedule({ id: "work", delayMs: 0, run: () => work.promise });
+        wake = time.wake();
+      }
+      try {
+        const stopping = control.scheduler.stop();
+        work.resolve();
+        await Promise.all([stopping, wake]);
+        await setImmediate();
+        expect(queryObjects(RunnerOwner)).toBe(0);
+        expect(() => child.schedule({ id: "late", delayMs: 0, run() {} })).toThrow("closed");
+      } finally {
+        work.resolve();
+        await Promise.all([control.scheduler.stop(), wake, gateway.stop()]);
+      }
+    },
+  );
+
   it("replaces IDs only within their service or child lifetime", async () => {
     const { time, gateway, owner } = fixture();
     const { scheduler: sibling } = createPluginServiceScheduler(gateway);

@@ -248,6 +248,7 @@ suite.define(() => {
         expect(JSON.parse(write.raw).transcripts.autoStart).toEqual([
           { ...source, title: "Weekly design review" },
         ]);
+        await gateway.deferNext("transcripts.list");
         await capture.getByRole("button", { name: /Transcript library/ }).click();
         await library.getByRole("status").getByText("Loading meetings…").waitFor();
         await gateway.resolveDeferred("transcripts.list");
