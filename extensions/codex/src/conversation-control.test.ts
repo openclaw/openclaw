@@ -1,18 +1,15 @@
 import path from "node:path";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "openclaw/plugin-sdk/model-session-runtime";
 import {
+  deleteSessionEntry,
   getSessionEntry,
   resolveStorePath,
   upsertSessionEntry,
   type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { captureOpenClawAgentDatabaseExecution } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   observeHostDataSql,
-  openIncognitoTestActor,
   useSessionStoreTempDirs,
-  withIncognitoSessionActor,
-  withIncognitoSessionBinding,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -116,61 +113,37 @@ describe("codex conversation controls", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each(["native", "bound"] as const)(
-    "reads %s private permission policy through its selected owner",
-    async (mode) => {
-      const env = { OPENCLAW_STATE_DIR: tempDir };
-      const session = {
-        agentId: "main",
-        sessionId: "private-policy",
-        sessionKey: "agent:main:dashboard:incognito-policy",
-      };
-      const storePath = resolveStorePath(undefined, { agentId: session.agentId });
-      const authority = { assertCurrent() {} };
-      const actor = mode === "bound" ? await openIncognitoTestActor(env, authority) : undefined;
-      const entry: SessionEntry = {
-        sessionId: session.sessionId,
-        updatedAt: 1,
-        incognito: true,
-        permissionMode: "full",
-      };
+  it("reads private permission policy from memory and rejects a deleted session", async () => {
+    const session = {
+      agentId: "main",
+      sessionId: "private-policy",
+      sessionKey: "agent:main:dashboard:incognito-policy",
+    };
+    const storePath = resolveStorePath(undefined, { agentId: session.agentId });
+    const entry: SessionEntry = {
+      sessionId: session.sessionId,
+      updatedAt: 1,
+      incognito: true,
+      permissionMode: "full",
+    };
+    await upsertSessionEntry({ ...session, storePath, entry });
+    try {
+      const sql = observeHostDataSql();
       try {
-        if (actor) {
-          await actor.sessions.create(authority, { sessionKey: session.sessionKey, entry });
-        } else {
-          await upsertSessionEntry({ ...session, storePath, entry });
-        }
-        const read = async () => {
-          const sql = observeHostDataSql();
-          try {
-            await expect(
-              setCodexConversationPermissionsImpl({ session, storePath, assertCurrent() {} }),
-            ).resolves.toBe("Codex permissions: full access.");
-            if (actor) {
-              expect(sql.queries).toEqual([]);
-            }
-          } finally {
-            sql.restore();
-          }
-        };
-        if (actor) {
-          await withIncognitoSessionActor(actor, read);
-        } else {
-          await read();
-          expect(captureOpenClawAgentDatabaseExecution.listIncognito(env)).toEqual([]);
-        }
-      } finally {
-        await actor?.close();
-      }
-      if (actor) {
         await expect(
-          withIncognitoSessionBinding({ actor }, () =>
-            setCodexConversationPermissionsImpl({ session, storePath, assertCurrent() {} }),
-          ),
-        ).rejects.toMatchObject({ code: "INCOGNITO_SESSION_ENDED" });
+          setCodexConversationPermissionsImpl({ session, storePath, assertCurrent() {} }),
+        ).resolves.toBe("Codex permissions: full access.");
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
       }
-    },
-  );
+    } finally {
+      await deleteSessionEntry({ ...session, storePath });
+    }
+    await expect(
+      setCodexConversationPermissionsImpl({ session, storePath, assertCurrent() {} }),
+    ).rejects.toThrow("Codex session changed while reading the permission mode");
+  });
 
   it("persists fast mode on the binding and permissions on the session", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");

@@ -30,9 +30,7 @@ wa-select.settings-select::part(expand-icon),
 
 wa-select.settings-select::part(listbox),
 .picker-select__menu {
-  /* Keep Web Awesome's collision-aware bound in the cap; replacing it outright
-     would let the listbox overflow when the popup has little room to open. */
-  max-height: min(320px, var(--auto-size-available-height, calc(100vh - 48px)));
+  max-height: min(320px, var(--oc-overlay-available-height, calc(100dvh - 48px)));
   padding: 6px;
   border: 1px solid var(--overlay-border);
   border-radius: var(--radius-md);
@@ -175,9 +173,18 @@ openclaw-select-picker {
   margin-inline-start: auto;
 }
 
-.picker-select wa-popup::part(popup) {
-  z-index: var(--z-dropdown);
-  min-width: max-content;
+.picker-select__menu.oc-overlay {
+  /* Keep the picker budget when the shared overlay stylesheet loads later. */
+  max-height: min(320px, var(--oc-overlay-available-height, calc(100dvh - 48px)));
+  min-width: anchor-size(width);
+  width: max-content;
+}
+
+.picker-select__menu[hidden],
+.picker-select__menu:not(:popover-open):not([data-phase="opening"]):not([data-phase="open"]):not(
+    [data-phase="closing"]
+  ) {
+  display: none;
 }
 
 .picker-select__menu {

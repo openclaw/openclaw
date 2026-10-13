@@ -71,7 +71,7 @@ const TOAST_SCENARIO: ControlUiMockGatewayScenario = {
 suite.define(() => {
   const openPage = createNativeNavPageOpener(suite);
 
-  it("keeps the web expand/collapse controls in plain browsers", async () => {
+  it("keeps sidebar rail toggles in plain browsers", async () => {
     const page = await openPage({ nativeNav: false });
     const titlebarRequest = controlUiE2eBuiltModuleRequest(
       "ui/src/components/macos-titlebar-controls.runtime-solid.tsx",
@@ -98,13 +98,13 @@ suite.define(() => {
         swipeRequest.source,
       ),
     ).toBe(false);
-    const collapse = page.locator(".sidebar-session-toolbar__collapse");
-    await expect.poll(() => collapse.isVisible()).toBe(true);
-    await collapse.click();
-    const expand = page.locator(".shell-chrome-controls__nav-toggle");
-    await expect.poll(() => expand.getAttribute("aria-label")).toBe("Expand sidebar");
-    await expand.click();
-    await expect.poll(() => collapse.isVisible()).toBe(true);
+    const toggle = page.locator('[data-navigation-view="sessions"]');
+    const sidebarPanel = page.locator(".sidebar-shell");
+    await expect.poll(() => sidebarPanel.isVisible()).toBe(true);
+    await toggle.click();
+    await expect.poll(() => sidebarPanel.isVisible()).toBe(false);
+    await toggle.click();
+    await expect.poll(() => sidebarPanel.isVisible()).toBe(true);
 
     await page.locator(".sidebar-issues-button").click();
     const desktopInbox = page.locator("#sidebar-issues-panel");
@@ -115,8 +115,10 @@ suite.define(() => {
 
   it("keeps restored sidebar focus from opening its tooltip", async () => {
     const page = await openPage({ hasTouch: true, nativeNav: false });
-    const toggle = page.locator('[data-navigation-view][aria-pressed="true"]');
-    await expect.poll(() => toggle.isVisible()).toBe(true);
+    const toggle = page.locator('[data-navigation-view="sessions"]');
+    const sidebarPanel = page.locator(".sidebar-shell");
+    const openTooltip = page.locator("openclaw-tooltip[open]");
+    await expect.poll(() => sidebarPanel.isVisible()).toBe(true);
 
     // Safari does not focus buttons on tap. Reproduce that ordering so the
     // shell's post-collapse focus, rather than the pointer itself, owns focus.
@@ -127,34 +129,34 @@ suite.define(() => {
       (element as HTMLElement).click();
     });
 
-    const expand = page.locator(".shell-chrome-controls__nav-toggle");
-    const tooltip = expand.locator("xpath=..");
-    await expect.poll(() => expand.getAttribute("aria-label")).toBe("Expand sidebar");
+    await expect.poll(() => sidebarPanel.isVisible()).toBe(false);
     await expect
-      .poll(() => expand.evaluate((element) => element === document.activeElement))
+      .poll(() => toggle.evaluate((element) => element === document.activeElement))
       .toBe(true);
-    await expect.poll(() => tooltip.getAttribute("open")).toBeNull();
+    await expect.poll(() => openTooltip.count()).toBe(0);
 
     await page.keyboard.press("Enter");
-    await expect.poll(() => toggle.isVisible()).toBe(true);
-    expect(await page.locator("openclaw-tooltip[open]").count()).toBe(0);
+    await expect.poll(() => sidebarPanel.isVisible()).toBe(true);
+    expect(await openTooltip.count()).toBe(0);
 
     await page.evaluate(() => {
       window.dispatchEvent(new CustomEvent("openclaw:native-toggle-sidebar"));
     });
-    await expect.poll(() => expand.getAttribute("aria-label")).toBe("Expand sidebar");
+    await expect.poll(() => sidebarPanel.isVisible()).toBe(false);
     await expect
-      .poll(() => expand.evaluate((element) => element === document.activeElement))
+      .poll(() => toggle.evaluate((element) => element === document.activeElement))
       .toBe(true);
-    await expect.poll(() => tooltip.getAttribute("open")).toBeNull();
+    await expect.poll(() => openTooltip.count()).toBe(0);
 
     // A later, explicit keyboard return still reveals the accessible hint.
     await page.keyboard.press("Tab");
     await page.keyboard.press("Shift+Tab");
-    await expect.poll(() => tooltip.getAttribute("open")).toBe("");
+    await expect
+      .poll(() => openTooltip.locator(".tooltip-content").textContent())
+      .toContain("Sessions · Expand sidebar");
     await page.keyboard.press("Enter");
-    await expect.poll(() => toggle.isVisible()).toBe(true);
-    expect(await page.locator("openclaw-tooltip[open]").count()).toBe(0);
+    await expect.poll(() => sidebarPanel.isVisible()).toBe(true);
+    expect(await openTooltip.count()).toBe(0);
   });
 
   it("hides the web chrome cluster when the native titlebar toggle is present", async () => {
@@ -208,10 +210,13 @@ suite.define(() => {
       )
       .toBe(true);
     await expect.poll(() => page.locator(".shell-chrome-controls").isVisible()).toBe(false);
-    // With the in-page expand control hidden, collapse anchors keyboard focus
-    // on the content column instead of stranding it on the body.
+    // The persistent rail remains a keyboard path back to the collapsed list.
     await expect
-      .poll(() => page.evaluate(() => document.activeElement?.classList.contains("content")))
+      .poll(() =>
+        page
+          .locator('[data-navigation-view="sessions"]')
+          .evaluate((element) => element === document.activeElement),
+      )
       .toBe(true);
 
     await page.evaluate(() => {

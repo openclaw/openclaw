@@ -140,6 +140,7 @@ it("does not persist or project a fallback for the selected model's wire identit
   const { context } = fixture;
   const entry = context.activeSessionEntry!;
   context.cfg.agents = { defaults: { model: { primary: "arcee/trinity-large-preview" } } };
+  setRuntimeConfigSnapshot(context.cfg);
   entry.fallbackNotice = {
     kind: "active",
     selectedModel: "arcee/trinity-large-preview",
@@ -210,6 +211,7 @@ it.each([false, true])(
     context.cfg.agents = {
       defaults: { model: { primary: `${diagnostic.provider}/${diagnostic.model}` } },
     };
+    setRuntimeConfigSnapshot(context.cfg);
     context.execution.resolved = { provider: "fallback-fixture", model: "plain" };
     context.execution.fallback.attempts = [
       {

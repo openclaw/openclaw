@@ -267,9 +267,11 @@ it("counts caller-visible conversations once through direct and delegated work b
             assignedBy: actor(ada),
           },
         );
-        await patchSessionEntryCore({ agentId: "main", sessionKey: running }, () => ({
-          visibility: "draft",
-        }));
+        await patchSessionEntryCore(
+          { agentId: "main", sessionKey: running },
+          () => ({ visibility: "draft" }),
+          { skipMaintenance: true },
+        );
         await ensure();
       });
       expect(await listSessions({ client, context, request })).toMatchObject({

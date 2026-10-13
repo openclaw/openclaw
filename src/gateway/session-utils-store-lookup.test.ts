@@ -6,6 +6,7 @@ import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/con
 import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import {
   addSessionMember,
   removeSessionMember,
@@ -13,7 +14,6 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
@@ -51,6 +51,8 @@ import {
   withGatewaySessionStoreTarget,
 } from "./session-utils-store-lookup.js";
 import { withQualifiedGatewaySessionStoreTarget } from "./session-utils-store-retained.js";
+
+afterEach(() => memorySessionActorOwners.reset());
 
 vi.mock("./github-publication-availability.js", async () => {
   const actual = await vi.importActual<typeof import("./github-publication-availability.js")>(
@@ -434,7 +436,7 @@ describe("retained exact row publications", () => {
     },
   );
 
-  it("checks incognito snapshots without SQL and fences keyed writes and handle retirement", async () => {
+  it("reads current incognito snapshots without SQL and rejects released consumers and closed owners", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
       setRuntimeConfigSnapshot(cfg, cfg);
@@ -472,17 +474,6 @@ describe("retained exact row publications", () => {
             sessionChanges.emit({ all: true, scope: "agent-runs" });
             sessionChanges.emit({ all: true, scope: "profiles" });
             assertCurrent();
-            sessionChanges.emit({
-              sessionKey: key,
-              storePath,
-              facts: {
-                kind: "member",
-                sessionId: "incognito-retained",
-                identityId: "revoked-member",
-                present: false,
-              },
-            });
-            expect(assertCurrent).toThrow("Incognito session source changed");
             expect(sql.queries).toEqual([]);
           } finally {
             sql.restore();
@@ -490,10 +481,15 @@ describe("retained exact row publications", () => {
         },
       );
       expect(retained).toBeTypeOf("function");
-      expect(retained).toThrow("Incognito session source changed");
-      await withGatewaySessionStoreTarget({ cfg, key }, (_target, _members, assertCurrent) => {
-        expect(closeOpenClawAgentDatabaseByPath(storePath, "main")).toBe(true);
-        expect(assertCurrent).toThrow("Incognito session source changed");
+      expect(retained).toThrow("Incognito session source is no longer retained");
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: key, storePath },
+        { sessionId: "incognito-retained", updatedAt: 2, incognito: true, label: "Current" },
+      );
+      await withGatewaySessionStoreTarget({ cfg, key }, (target, _members, assertCurrent) => {
+        expect(target.store[key]?.label).toBe("Current");
+        memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath });
+        expect(assertCurrent).toThrow("closed");
       });
     });
   });

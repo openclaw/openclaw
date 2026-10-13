@@ -99,16 +99,11 @@ const numericTotals: Array<Exclude<keyof CostUsageTotals, "missingCostByModel" |
 export function partitionUsageCostRollup(
   entry: UsageCostRollupEntry,
   inheritedCanonicalNumbers = false,
-  ephemeral = false,
 ): {
   valueJson: string;
   blob: Uint8Array<ArrayBuffer>;
   partitions: Array<UsageCostPartition & { blob: Uint8Array<ArrayBuffer> }>;
 } {
-  // The legacy incognito owner is process-held; only durable stores persist date projections.
-  if (ephemeral) {
-    return { ...encodeUsageCostRollup(entry), partitions: [] };
-  }
   const months = new Map<string, SessionUsageRollupData>();
   let canonicalNumbers = inheritedCanonicalNumbers;
   let regrouped = false;

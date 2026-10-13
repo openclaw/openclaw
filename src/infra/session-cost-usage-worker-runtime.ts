@@ -1,6 +1,4 @@
 import path from "node:path";
-import { setImmediate as yieldImmediate } from "node:timers/promises";
-import type { Transferable } from "node:worker_threads";
 import {
   collectErrorGraphCandidates,
   toErrorObject,
@@ -12,47 +10,30 @@ import {
   parseSqliteSessionFileMarker,
   type SqliteSessionFileMarker,
 } from "../config/sessions/legacy-sqlite-marker.js";
-import { listSessionTranscriptInstances } from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { readTranscriptStatsBatchFromDatabase } from "../config/sessions/session-accessor.sqlite-transcript-stats.js";
 import {
-  getSessionActorStorageBinding,
+  captureSessionActorStorageOwner,
   type SessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
 import { restoreSessionColdTranscript } from "../config/sessions/session-cold-storage.js";
 import { listDurableSqliteTargetPathsForSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
-import { createMemoryTranscriptProjectionSource } from "../config/sessions/session-transcript-reconcile-memory.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
-import {
-  getOpenClawAgentDatabaseIfOpen,
-  isIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
-} from "../state/openclaw-agent-db.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
-import {
-  readSessionCostUsageRollupByteRowsInDatabase,
-  readSessionCostUsageRollupBodyInDatabase,
-  type SessionCostUsageRollupSnapshot,
-} from "./session-cost-usage-cache.kernel.js";
+import type { SessionCostUsageRollupSnapshot } from "./session-cost-usage-cache.kernel.js";
 import { prepareSessionCostUsageRefreshLock } from "./session-cost-usage-cache.sqlite.js";
-import {
-  createIncognitoUsageCostAdapter,
-  createUsageCostIncognitoReadObservation,
-  captureUsageCostIncognitoBinding,
-  type UsageCostIncognitoBinding,
-} from "./session-cost-usage-incognito.js";
 import { runSessionActorUsage } from "./session-cost-usage-memory.js";
 import {
   createUsageCostResolver,
@@ -82,8 +63,8 @@ export type PreparedUsageCostWorker = {
   agentDir: string;
   databases: Array<OpenClawAgentDatabaseOptions & { agentId: string; path: string }>;
   archiveStorePaths: string[];
-  incognito?: UsageCostIncognitoBinding;
   sessionActor?: SessionActorStorageBinding;
+  memory?: NonNullable<ReturnType<typeof captureSessionActorStorageOwner>>;
 };
 
 export function prepareUsageCostWorker(params: {
@@ -95,31 +76,41 @@ export function prepareUsageCostWorker(params: {
   sessionsDir?: string;
   sessionFiles?: readonly string[];
   env?: NodeJS.ProcessEnv;
-  incognito?: UsageCostIncognitoBinding;
   sessionActor?: SessionActorStorageBinding;
 }): PreparedUsageCostWorker {
-  const sessionActor = getSessionActorStorageBinding({
-    ...params,
-    storePath: params.storePath ?? params.databasePath,
-  });
-  if (sessionActor) {
+  const signal = getAsyncWorkSignal();
+  const authority = { assertCurrent: () => signal?.throwIfAborted(), authorize() {} };
+  let memory: ReturnType<typeof captureSessionActorStorageOwner>;
+  for (const scope of [
+    { ...params, storePath: params.storePath ?? params.databasePath },
+    ...(params.sessionFiles ?? []).flatMap((file) => {
+      const marker = parseSqliteSessionFileMarker(file);
+      return marker ? [{ ...marker, env: params.env }] : [];
+    }),
+  ]) {
+    memory = captureSessionActorStorageOwner(scope, authority);
+    if (memory) {
+      break;
+    }
+  }
+  if (memory) {
     const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
     env.OPENCLAW_STATE_DIR = resolveStateDir(env);
     return {
       location: {
-        agentId: sessionActor.agentId,
-        databasePath: sessionActor.path,
-        storePath: sessionActor.path,
+        agentId: memory.agentId,
+        databasePath: memory.path,
+        storePath: memory.path,
         env: { ...env },
       },
       config: params.config,
-      agentDir: params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionActor.agentId),
+      agentDir: params.agentDir ?? resolveAgentDir(params.config ?? {}, memory.agentId),
       databases: [],
       archiveStorePaths: [],
-      sessionActor,
+      sessionActor: memory.binding,
+      memory,
     };
   }
-  const incognito = captureUsageCostIncognitoBinding(params);
   const agentId = normalizeAgentId(params.agentId);
   const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
@@ -129,7 +120,6 @@ export function prepareUsageCostWorker(params: {
       env,
       storePath:
         params.storePath ??
-        incognito?.actor.path ??
         (params.sessionsDir ? path.join(params.sessionsDir, "sessions.json") : undefined),
     },
     params.config,
@@ -179,7 +169,6 @@ export function prepareUsageCostWorker(params: {
     agentDir: params.agentDir ?? resolveAgentDir(params.config ?? {}, agentId),
     databases: [...databases.values()],
     archiveStorePaths,
-    incognito,
   };
 }
 
@@ -242,9 +231,8 @@ type UsageCostWorkerRequest =
 export async function runUsageCostWorker(
   prepared: PreparedUsageCostWorker,
   operation: UsageCostWorkerRequest,
-  suppliedIncognito?: UsageCostIncognitoBinding,
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
-  if (prepared.sessionActor) {
+  if (prepared.memory) {
     const pricing =
       operation.kind === "refresh"
         ? await prepareUsageCostPricing(prepared.config, prepared.agentDir)
@@ -254,156 +242,49 @@ export async function runUsageCostWorker(
         ? { ...operation, pricingFingerprint: pricing!.fingerprint() }
         : operation;
     return runSessionActorUsage(
-      prepared.sessionActor,
+      prepared.memory,
       request,
       createUsageCostResolver(prepared, pricing),
     );
   }
-  const incognito = suppliedIncognito ?? prepared.incognito;
-  if (!incognito) {
-    return runPreparedUsageCostWorker(prepared, operation);
-  }
-  incognito.admissionSignal?.throwIfAborted();
-  const captured = {
-    ...prepared,
-    location: structuredClone(prepared.location),
-    databases: structuredClone(prepared.databases),
-  };
-  const capturedOperation = structuredClone(operation);
-  const target = structuredClone(incognito.target);
-  const { agentId, path: databasePath } = incognito.actor;
-  if (
-    captured.location.agentId !== agentId ||
-    !captured.databases.some((entry) => entry.agentId === agentId && entry.path === databasePath) ||
-    captured.databases.some(
-      (entry) =>
-        isIncognitoOpenClawAgentSqlitePath(entry.path, entry) &&
-        (entry.agentId !== agentId || entry.path !== databasePath),
-    )
-  ) {
-    throw new Error("Usage actor does not own the prepared database");
-  }
-  const marker = { agentId, storePath: databasePath };
-  const selectedFiles =
-    capturedOperation.kind === "sessions"
-      ? capturedOperation.sessions.map((entry) => entry.sessionFile)
-      : "sessionFiles" in capturedOperation
-        ? (capturedOperation.sessionFiles ?? [])
-        : [];
-  if (
-    [
-      ...selectedFiles,
-      ...(capturedOperation.kind === "refresh"
-        ? (capturedOperation.rebuildRows?.map((row) => row.key) ?? [])
-        : []),
-    ].some((file) => {
-      const selected = parseSqliteSessionFileMarker(file);
-      return (
-        !selected ||
-        selected.agentId !== agentId ||
-        path.resolve(selected.storePath) !== databasePath ||
-        (target && selected.sessionId !== target.sessionId)
-      );
-    })
-  ) {
-    throw new Error("Usage request contains another incognito session");
-  }
-  const observation =
-    capturedOperation.kind === "refresh"
-      ? undefined
-      : createUsageCostIncognitoReadObservation(incognito);
-  const result = await incognito.actor.sessions.withCompute(
-    incognito.authority,
-    target,
-    async (compute) => {
-      const instances = target
-        ? [{ ...target, updatedAtMs: 0 }]
-        : await compute.execute({ type: "session.compute.store.inventory", input: {} });
-      instances.forEach(({ sessionKey }) => {
-        incognito.retainSource?.(sessionKey);
-      });
-      return runPreparedUsageCostWorker(
-        captured,
-        capturedOperation,
-        createIncognitoUsageCostAdapter(compute, target, marker, instances),
-      );
-    },
-    operation.kind === "refresh" ? undefined : (incognito.admissionSignal ?? getAsyncWorkSignal()),
-    observation?.onRead,
-  );
-  observation?.assertCurrent();
-  return result;
+  return runPreparedUsageCostWorker(prepared, operation);
 }
 
 async function runPreparedUsageCostWorker(
   prepared: PreparedUsageCostWorker,
   operation: UsageCostWorkerRequest,
-  incognito?: ReturnType<typeof createIncognitoUsageCostAdapter>,
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
   const location = structuredClone(prepared.location);
   const archiveStorePaths = [...prepared.archiveStorePaths];
   const capturedOperation = structuredClone(operation);
   const signal = getAsyncWorkSignal();
   return withSessionCostUsageWorkerDatabases(prepared.databases, async (scope) => {
-    const actorOwnsCache = incognito?.owns(location.agentId, location.databasePath) === true;
-    const bindings = prepared.databases.map((options) => {
-      const memory = isIncognitoOpenClawAgentSqlitePath(options.path, options);
-      return {
-        options,
-        memory,
-        database: memory && !incognito ? getOpenClawAgentDatabaseIfOpen(options) : undefined,
-      };
-    });
     const assertCurrent = () => {
-      incognito?.assertCurrent();
       scope.assertCurrent();
       signal?.throwIfAborted();
     };
-    const resolveBinding = (
-      target: Pick<SqliteSessionFileMarker, "agentId" | "storePath">,
-      memoryOnly = false,
-    ) => {
+    const resolveBinding = (target: Pick<SqliteSessionFileMarker, "agentId" | "storePath">) => {
       const options = toDatabaseOptions(resolveSqliteReadScope({ ...target, env: location.env }));
       const databasePath = resolveOpenClawAgentSqlitePath(options);
-      const binding = bindings.find(
-        (entry) => entry.options.agentId === options.agentId && entry.options.path === databasePath,
+      const binding = prepared.databases.find(
+        (entry) => entry.agentId === options.agentId && entry.path === databasePath,
       );
       if (!binding) {
         throw new Error("Usage worker requested an unowned transcript database");
       }
-      if (memoryOnly && !binding.memory) {
-        throw new Error("Usage worker requested an unowned memory database");
-      }
-      if (binding.memory && !incognito) {
-        binding.database ??= getOpenClawAgentDatabaseIfOpen(binding.options);
-      }
       return binding;
     };
-    const sources = new Map<string, ReturnType<typeof createMemoryTranscriptProjectionSource>>();
     const pruneRows: SessionCostUsageRollupSnapshot[] = [];
-    scope.retainCleanup(async () => {
-      for (const source of sources.values()) {
-        source.clear();
-      }
-      sources.clear();
-      pruneRows.length = 0;
-    });
-    const hostLock =
-      capturedOperation.kind === "refresh" && !actorOwnsCache
+    const lock =
+      capturedOperation.kind === "refresh"
         ? prepareSessionCostUsageRefreshLock(location.agentId, location.databasePath, {
             env: location.env,
             assertCurrent,
           })
         : undefined;
-    if (hostLock) {
-      scope.retainCleanup(hostLock.release);
+    if (lock) {
+      scope.retainCleanup(lock.release);
     }
-    const lock =
-      capturedOperation.kind === "refresh"
-        ? actorOwnsCache
-          ? incognito?.lock
-          : hostLock
-        : undefined;
     const requireLock = (action: string) => {
       if (!lock) {
         throw new Error(`Usage report cannot ${action}`);
@@ -433,13 +314,12 @@ async function runPreparedUsageCostWorker(
     const hostErrors = new Map<number, unknown>();
     let errorSequence = 0;
     try {
-      const failureEntries =
-        lock && !incognito
-          ? await failures.entries().catch((error: unknown) => {
-              logger.warn("Could not read usage refresh failure history", { error });
-              return [];
-            })
-          : [];
+      const failureEntries = lock
+        ? await failures.entries().catch((error: unknown) => {
+            logger.warn("Could not read usage refresh failure history", { error });
+            return [];
+          })
+        : [];
       const failedKeys = new Set(failureEntries.map((entry) => entry.key));
       const result = await scope.run(
         {
@@ -448,7 +328,6 @@ async function runPreparedUsageCostWorker(
           operation: workerOperation,
           databases: [],
           archiveStorePaths,
-          transcriptFiles: incognito?.filePaths,
         },
         {
           signal,
@@ -457,7 +336,6 @@ async function runPreparedUsageCostWorker(
             2 * JSON.stringify({ location, operation: workerOperation, archiveStorePaths }).length,
           timeoutMs: USAGE_COST_WORKER_TIMEOUT_MS,
           onRequest: async (value, context) => {
-            const transferList: Transferable[] = [];
             let reply: UsageCostWorkerHostReply;
             try {
               const assertRequestCurrent = () => {
@@ -472,156 +350,64 @@ async function runPreparedUsageCostWorker(
               const request = value as UsageCostWorkerHostRequest;
               let output: UsageCostWorkerHostEffects[keyof UsageCostWorkerHostEffects]["output"] =
                 undefined;
-              if (incognito && request.kind.startsWith("memory-")) {
-                output = await incognito.read(request, context.signal);
-              } else {
-                switch (request.kind) {
-                  case "refresh-session":
-                    requireLock("refresh sessions");
-                    activeSessionFile = request.input.sessionFile;
-                    break;
-                  case "pricing":
-                    output = request.input.map(resolveCost);
-                    break;
-                  case "restore": {
-                    if (incognito) {
-                      throw new Error("Incognito transcripts have no cold storage");
-                    }
-                    const binding = resolveBinding(request.input);
-                    await restoreSessionColdTranscript(
-                      { ...request.input, storePath: binding.options.path, env: location.env },
-                      assertRequestCurrent,
-                      undefined,
-                      undefined,
-                      context.signal,
-                    );
-                    break;
-                  }
-                  case "memory-instances": {
-                    const binding = resolveBinding(request.input, true);
-                    output = binding.database
-                      ? listSessionTranscriptInstances({
-                          ...request.input,
-                          storePath: binding.options.path,
-                          env: location.env,
-                          projection: "list",
-                        }).map(({ agentId, sessionId, updatedAtMs }) => ({
-                          agentId,
-                          sessionId,
-                          updatedAtMs,
-                        }))
-                      : [];
-                    break;
-                  }
-                  case "memory-stats":
-                    output = request.input.map((marker) => {
-                      const binding = resolveBinding(marker, true);
-                      return binding.database
-                        ? readTranscriptStatsBatchFromDatabase(binding.database, [
-                            marker.sessionId,
-                          ])[0]
-                        : undefined;
-                    });
-                    break;
-                  case "memory-cache": {
-                    const binding = resolveBinding(
-                      { agentId: location.agentId, storePath: location.databasePath },
-                      true,
-                    );
-                    output = binding.database
-                      ? readSessionCostUsageRollupByteRowsInDatabase(
-                          binding.database.db,
-                          request.input.filePaths,
-                        )
-                      : [];
-                    for (const row of output) {
-                      if (!(row.valueJson.buffer instanceof ArrayBuffer)) {
-                        throw new TypeError("Usage cache row bytes are not transferable");
-                      }
-                      transferList.push(row.valueJson.buffer);
-                    }
-                    break;
-                  }
-                  case "memory-transcript": {
-                    await yieldImmediate(undefined, { signal: context.signal });
-                    assertRequestCurrent();
-                    const binding = resolveBinding(request.input.marker, true);
-                    if (!binding.database) {
-                      throw new Error("Usage memory transcript is no longer available");
-                    }
-                    const key = JSON.stringify(request.input);
-                    let source = sources.get(key);
-                    if (!source) {
-                      source = createMemoryTranscriptProjectionSource(
-                        binding.database,
-                        binding.options,
-                        request.input,
-                      );
-                      sources.set(key, source);
-                    }
-                    const frame = source.read(request.input.marker.sessionId);
-                    output = frame;
-                    if (frame.type === "source-frame") {
-                      transferList.push(frame.bytes.buffer);
-                    }
-                    break;
-                  }
-                  case "memory-cache-body": {
-                    const binding = resolveBinding(
-                      { agentId: location.agentId, storePath: location.databasePath },
-                      true,
-                    );
-                    const row = binding.database
-                      ? readSessionCostUsageRollupBodyInDatabase(binding.database.db, request.input)
-                      : undefined;
-                    // Copy native bytes into a standalone allocation before transferring custody.
-                    const blob = row?.blob ? Uint8Array.from(row.blob) : null;
-                    output = row ? { blob } : undefined;
-                    if (blob) {
-                      transferList.push(blob.buffer);
-                    }
-                    break;
-                  }
-                  case "prune-row":
-                    requireLock("prune cache rows");
-                    pruneRows.push({
-                      key: request.input.key,
-                      valueJson: request.input.value,
-                      updatedAt: request.input.updatedAt,
-                    });
-                    break;
-                  case "prune":
-                    await requireLock("prune cache rows").pruneRows(pruneRows, context.signal);
-                    pruneRows.length = 0;
-                    break;
-                  case "write":
-                    output = await requireLock("write cache rows").writeRollup(
-                      {
-                        rollupId: request.input.key,
-                        valueJson: request.input.value,
-                        blob: request.input.blob,
-                        updatedAt: request.input.updatedAt,
-                        partitions: request.input.partitions,
-                        removedDates: request.input.removedDates,
-                        replacePartitions: request.input.replacePartitions,
-                      },
-                      context.signal,
-                    );
-                    if (output && failedKeys.has(failureKey(request.input.key))) {
-                      await failures
-                        .delete(failureKey(request.input.key), {
-                          assertCurrent: assertRequestCurrent,
-                          signal: context.signal,
-                        })
-                        .catch((error: unknown) => {
-                          logger.warn("Could not clear usage refresh failure fact", { error });
-                        });
-                    }
-                    activeSessionFile = undefined;
-                    break;
-                  default:
-                    throw new Error("Unknown usage worker host request");
+              switch (request.kind) {
+                case "refresh-session":
+                  requireLock("refresh sessions");
+                  activeSessionFile = request.input.sessionFile;
+                  break;
+                case "pricing":
+                  output = request.input.map(resolveCost);
+                  break;
+                case "restore": {
+                  const binding = resolveBinding(request.input);
+                  await restoreSessionColdTranscript(
+                    { ...request.input, storePath: binding.path, env: location.env },
+                    assertRequestCurrent,
+                    undefined,
+                    undefined,
+                    context.signal,
+                  );
+                  break;
                 }
+                case "prune-row":
+                  requireLock("prune cache rows");
+                  pruneRows.push({
+                    key: request.input.key,
+                    valueJson: request.input.value,
+                    updatedAt: request.input.updatedAt,
+                  });
+                  break;
+                case "prune":
+                  await requireLock("prune cache rows").pruneRows(pruneRows, context.signal);
+                  pruneRows.length = 0;
+                  break;
+                case "write":
+                  output = await requireLock("write cache rows").writeRollup(
+                    {
+                      rollupId: request.input.key,
+                      valueJson: request.input.value,
+                      blob: request.input.blob,
+                      updatedAt: request.input.updatedAt,
+                      partitions: request.input.partitions,
+                      removedDates: request.input.removedDates,
+                      replacePartitions: request.input.replacePartitions,
+                    },
+                    context.signal,
+                  );
+                  if (output && failedKeys.has(failureKey(request.input.key))) {
+                    await failures
+                      .delete(failureKey(request.input.key), {
+                        assertCurrent: assertRequestCurrent,
+                        signal: context.signal,
+                      })
+                      .catch((error: unknown) => {
+                        logger.warn("Could not clear usage refresh failure fact", { error });
+                      });
+                  }
+                  activeSessionFile = undefined;
+                  break;
+                default:
+                  throw new Error("Unknown usage worker host request");
               }
               assertRequestCurrent();
               reply = { ok: true, value: output };
@@ -634,7 +420,7 @@ async function runPreparedUsageCostWorker(
                 message: toErrorObject(error, "Usage host effect failed").message,
               };
             }
-            return { input: reply, transferList, timeoutMs: USAGE_COST_WORKER_TIMEOUT_MS };
+            return { input: reply, timeoutMs: USAGE_COST_WORKER_TIMEOUT_MS };
           },
         },
       );
@@ -642,7 +428,7 @@ async function runPreparedUsageCostWorker(
       return result;
     } catch (error) {
       let failure = restoreWorkerFailure(error, hostErrors);
-      if (activeSessionFile && !signal?.aborted && !incognito) {
+      if (activeSessionFile && !signal?.aborted) {
         try {
           await failures.register(
             failureKey(activeSessionFile),

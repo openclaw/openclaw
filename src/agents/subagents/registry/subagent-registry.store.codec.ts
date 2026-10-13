@@ -3,7 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionStateNotice } from "../../../sessions/session-state-events.kernel.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
-import { subagentRunRowVersion, type SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
+import type { SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
 import type {
   SubagentRegistryWrite,
   SubagentRegistryWriteReceipt,
@@ -100,30 +100,12 @@ export function bindSubagentRunRecord(entry: SubagentRunRecord): SubagentRunSqli
   };
 }
 
-const recordVersions = new WeakMap<SubagentRunRecord, string>();
-
-export function rememberSubagentRunVersion(entry: SubagentRunRecord, version: string): void {
-  recordVersions.set(entry, version);
-}
-
-export function subagentRunRecordVersion(entry: SubagentRunRecord | undefined): string | null {
-  return entry
-    ? (recordVersions.get(entry) ?? subagentRunRowVersion(bindSubagentRunRecord(entry)))
-    : null;
-}
-
 export function parseSubagentRegistryWriteReceipt(
   value: unknown,
   write: SubagentRegistryWrite,
 ): SubagentRegistryWriteReceipt {
   if (!isRecord(value) || value.writeId !== write.writeId) {
     throw new Error("Registry acknowledgement identifies another write");
-  }
-  if (
-    Array.isArray(value.conflictRunIds) &&
-    value.conflictRunIds.every((id) => typeof id === "string")
-  ) {
-    return { writeId: write.writeId, conflictRunIds: value.conflictRunIds };
   }
   if (!(value.versions instanceof Map) || !Array.isArray(value.notices)) {
     throw new Error("Registry acknowledgement is missing commit facts");

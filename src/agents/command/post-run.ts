@@ -3,11 +3,11 @@ import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/rep
 import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../../config/sessions/restart-recovery-types.js";
-import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import {
-  captureIncognitoSessionSource,
-  withIncognitoSessionEntry,
-} from "../../config/sessions/session-incognito-binding.js";
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../config/sessions/session-actor-storage-binding.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -108,7 +108,13 @@ export async function finalizeEmbeddedAgentCommand(params: {
     runId,
   } = params.prepared;
   const sessionSource = sessionKey
-    ? captureIncognitoSessionSource({ agentId: sessionAgentId, storePath, sessionKey })
+    ? captureSessionActorStorageOwner(
+        { agentId: sessionAgentId, storePath, sessionKey },
+        {
+          assertCurrent: () => assertSourceCurrent?.(),
+          authorize() {},
+        },
+      )
     : undefined;
   const {
     fallbackProvider,
@@ -158,13 +164,12 @@ export async function finalizeEmbeddedAgentCommand(params: {
   let terminalError: string | undefined;
   let maintenanceRequest: SessionMaintenanceRequest | undefined;
   let { runOwnedSessionId, sessionReboundDuringRun } = params.sessionOwnership;
-  const publishSessionOwnership = (committedCompactionSessionId?: string) => {
-    // Outer restart-recovery cleanup runs even after later delivery failures.
+  // Outer restart-recovery cleanup runs even after later delivery failures.
+  const publishSessionOwnership = (committedCompactionSessionId?: string) =>
     params.onSessionOwnershipChanged(
       { runOwnedSessionId, sessionReboundDuringRun },
       committedCompactionSessionId,
     );
-  };
 
   try {
     await fallbackTrajectoryRecorder?.flush();
@@ -330,13 +335,9 @@ export async function finalizeEmbeddedAgentCommand(params: {
               operatorAuthority?.assertCurrent();
               assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
             };
+            assertCurrent();
             const freshEntry = sessionSource
-              ? await withIncognitoSessionEntry(
-                  sessionSource,
-                  normalizeStoreSessionKey(sessionKey),
-                  assertCurrent,
-                  async (entry) => entry,
-                )
+              ? readCapturedSessionActorEntry(sessionSource, normalizeStoreSessionKey(sessionKey))
               : await readSessionEntryReadOnlyInWorker(
                   {
                     agentId: sessionAgentId,
@@ -518,11 +519,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
           },
     );
     const { deliverAgentCommandResult } = await loadDeliveryRuntime();
-    const deliverySource = composeSessionSourceAssertion([assertSourceCurrent], (check) => {
-      check();
-      params.opts.abortSignal?.throwIfAborted();
-      assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-    });
     const deliveryParams = {
       cfg,
       deps: params.deps,
@@ -532,7 +528,11 @@ export async function finalizeEmbeddedAgentCommand(params: {
       sessionEntry,
       result,
       payloads,
-      assertDeliveryCurrent: deliverySource,
+      assertDeliveryCurrent: composeSessionSourceAssertion([assertSourceCurrent], (check) => {
+        check();
+        params.opts.abortSignal?.throwIfAborted();
+        assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+      }),
       onDeliveryResult: (
         delivered: AgentCommandDeliveryResult,
         deliveryPayloads: ReplyPayload[],

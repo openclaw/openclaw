@@ -92,7 +92,7 @@ function fixture(
   const context = captureOpenClawStateWorkerContext({ env, path: shared.path });
   const physical = kind === "agent" ? readOpenClawAgentDatabaseIdentity(database) : undefined;
   const identity = physical
-    ? `file:${String(physical.identity)}:${physical.birthtime ?? ""}`
+    ? `file:${physical.identity}:${physical.birthtime ?? ""}`
     : `${context.admission.identity.key}:${context.admission.identity.birthtime ?? ""}`;
   const capture = () =>
     captureAuthProfileCredentialAuthority(

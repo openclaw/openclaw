@@ -42,6 +42,14 @@ export function invalidateStandingIntentLifecycle(db: DatabaseSync): void {
   lifecycleDeadlines.delete(db);
 }
 
+export function getStandingIntentLifecycleDeadline(db: DatabaseSync): number | null {
+  return lifecycleDeadlines.get(db)?.nextDueAt ?? null;
+}
+
+export function hasNoActiveStandingIntents(db: DatabaseSync): boolean {
+  return lifecycleDeadlines.get(db)?.hasActiveIntents === false;
+}
+
 export function maintainStandingIntentLifecycle(db: DatabaseSync, nowMs: number): void {
   const deadline = lifecycleDeadlines.get(db);
   if (deadline && nowMs >= deadline.observedAt && nowMs < deadline.nextDueAt) {
@@ -187,7 +195,7 @@ export function matchStandingIntentsInDatabase(
   const nowMs = params.nowMs ?? Date.now();
   maintainStandingIntentLifecycle(db, nowMs);
   // The lifecycle owner invalidates this absence fact on every write and rollback.
-  if (lifecycleDeadlines.get(db)?.hasActiveIntents === false) {
+  if (hasNoActiveStandingIntents(db)) {
     return [];
   }
   const kysely = getNodeSqliteKysely<StandingIntentMatchDatabase>(db);

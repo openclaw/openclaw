@@ -2,6 +2,7 @@ import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dro
 import { Portal } from "@solidjs/web";
 import { Show, createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import type { MenuHandle } from "../../../components/solid/menu.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
 import { ChatDetailsProgress } from "./chat-details-progress.tsx";
@@ -32,6 +33,7 @@ export const ChatDetails = defineSolidBridge<Props>(
     const panelId = `chat-details-${++nextId}`;
     let panel!: HTMLDivElement;
     let trigger!: HTMLButtonElement;
+    let progressMenu: MenuHandle | undefined;
     const position = () => {
       const footer = frame?.querySelector(".chat-footer");
       const bounds = frame?.getBoundingClientRect();
@@ -67,6 +69,7 @@ export const ChatDetails = defineSolidBridge<Props>(
       panel.style.maxHeight = `${Math.max(0, bottom - top)}px`;
     };
     const hide = () => {
+      progressMenu?.overlay.request(false);
       for (const menu of surface.querySelectorAll<WaDropdown>("wa-dropdown")) {
         menu.open = false;
       }
@@ -102,12 +105,12 @@ export const ChatDetails = defineSolidBridge<Props>(
       }
     };
     const escape = (event: KeyboardEvent) => {
-      // Dropdown properties change before Lit reflects their attributes.
       if (
         event.key === "Escape" &&
         opened() &&
         (!docked() || panel.contains(document.activeElement)) &&
         !event.defaultPrevented &&
+        !progressMenu?.overlay.open &&
         ![...surface.querySelectorAll<WaDropdown>("wa-dropdown")].some((menu) => menu.open)
       ) {
         event.preventDefault();
@@ -235,6 +238,9 @@ export const ChatDetails = defineSolidBridge<Props>(
                   <ChatDetailsSession props={props.props} presented={props.presented && opened()} />
                   <Show when={props.props?.progressCard || props.props?.progressCardInitialLoading}>
                     <ChatDetailsProgress
+                      menuRef={(menu) => {
+                        progressMenu = menu;
+                      }}
                       props={props.props}
                       presented={props.presented && opened()}
                     />
