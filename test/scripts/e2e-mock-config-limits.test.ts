@@ -1375,7 +1375,7 @@ describe("mock OpenAI response markers", () => {
         { content: "agent plugin bundle qa check", role: "user" },
         runtimeContext,
       ];
-      const controls = ["tool_search", "tool_describe", "tool_call"];
+      const controls = ["tool_search", "tool_describe", "dispatch_action"];
       const request = async (names = controls) => {
         const response = await fetch(`${baseUrl}/v1/responses`, {
           method: "POST",
@@ -1463,7 +1463,7 @@ describe("mock OpenAI response markers", () => {
         { type: "message", content: [{ type: "output_text", text: "OPENCLAW_E2E_OK" }] },
       ]);
       const call = await request();
-      expect(call).toMatchObject({ type: "function_call", name: "tool_call" });
+      expect(call).toMatchObject({ type: "function_call", name: "dispatch_action" });
       expect(JSON.parse(call.arguments)).toEqual({ id: target.id, args: {} });
       appendResult(call, {
         tool: target,
