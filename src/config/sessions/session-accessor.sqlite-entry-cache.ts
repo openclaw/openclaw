@@ -20,9 +20,7 @@ import {
 } from "./session-accessor.sqlite-entry-cache-projection.js";
 import {
   emitPreparedSessionSharingChange,
-  invalidateSessionEntryPublication,
   publishSessionSharingEntryChange,
-  publishSessionSharingFieldChange,
 } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
   publishTrackedCacheUpdate,
@@ -394,46 +392,6 @@ export function publishSessionEntryCacheInvalidation(
           },
         }
       : { kind: "marker", sharingChange },
-  );
-}
-
-/** The category worker publishes only its changed field; native freshness tokens still expose other commits. */
-export function publishSessionEntryCacheCategoryUpdate(
-  database: SessionEntryCacheDatabase,
-  rows: ReadonlyArray<{ sessionKey: string; sessionId: string }>,
-  category: string | undefined,
-): void {
-  for (const { sessionKey, sessionId } of rows) {
-    publishSessionSharingFieldChange(database, sessionKey, {
-      kind: "category",
-      sessionId,
-      category: category ?? null,
-    });
-  }
-  publishTrackedCacheUpdate(
-    database,
-    () => {
-      const cached = sessionEntryCaches.get(database.db);
-      for (const { sessionKey, sessionId } of rows) {
-        const current = cached?.entries.get(sessionKey);
-        if (!current || current.sessionId !== sessionId) {
-          continue;
-        }
-        const next = { ...current };
-        if (category === undefined) {
-          delete next.category;
-        } else {
-          next.category = category;
-        }
-        cached?.entries.set(sessionKey, freezeJsonSnapshot(next));
-      }
-    },
-    undefined,
-    () => {
-      for (const { sessionKey } of rows) {
-        invalidateSessionEntryPublication(database, sessionKey);
-      }
-    },
   );
 }
 

@@ -508,6 +508,7 @@ async function finalizeInput(
       },
       {
         candidateRuntime: true,
+        adoptedFinalization: true,
         onGatewayStartAttempted: () => {
           candidateStartAttempted = true;
         },
