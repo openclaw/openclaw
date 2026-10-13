@@ -1,187 +1,27 @@
 import { createHash } from "node:crypto";
-import { access, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { access, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import type {
   CliBackendExecuteContext,
-  CliBackendLiveSessionCapability,
-  CliBackendLiveSessionHandle,
   CliBackendPreparedExecution,
   CliBackendToolPermissionResult,
 } from "openclaw/plugin-sdk/cli-backend";
 import { formatErrorMessageForDisplay } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import {
-  fixtureReceiptClientSource,
-  openFixtureReceiptChannel,
-  withinTest,
-  type FixtureReceiptChannel,
-} from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
+import { describe, expect, it, vi } from "vitest";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
-import { CLAUDE_PROTOCOL_FIXTURE } from "./cli-runtime.test-support.js";
+import {
+  collect,
+  installClaudeProtocolHarness,
+  resultDetail,
+  waitForProcessExit,
+} from "./cli-runtime-harness.test-support.js";
 import { executeClaudeCli } from "./cli.runtime.js";
 
-const roots: string[] = [];
-const handles = new Set<CliBackendLiveSessionHandle>();
-let receipts: FixtureReceiptChannel;
-beforeAll(async () => {
-  receipts = await openFixtureReceiptChannel();
-});
-afterAll(async () => {
-  await receipts.close();
-});
-
-afterEach(async () => {
-  for (const handle of handles) {
-    handle.close("restart");
-    await handle.waitForExit();
-  }
-  handles.clear();
-  vi.restoreAllMocks();
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
-});
-
-async function createContext(
-  scenario = "normal",
-  overrides: Partial<CliBackendExecuteContext> = {},
-): Promise<CliBackendExecuteContext> {
-  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "openclaw-claude-protocol-")));
-  roots.push(root);
-  const fixture = path.join(root, "claude.mjs");
-  await writeFile(
-    fixture,
-    `${fixtureReceiptClientSource(receipts.endpoint)}
-${CLAUDE_PROTOCOL_FIXTURE}`,
-  );
-  return {
-    command: process.execPath,
-    args: [fixture],
-    cwd: root,
-    env: {
-      PATH: process.env.PATH ?? "",
-      HOME: root,
-      CLAUDE_CONFIG_DIR: root,
-      CLAUDE_FIXTURE_SCENARIO: scenario,
-    },
-    prompt: "synthetic user input",
-    systemPrompt: "synthetic operator instructions",
-    modelId: "claude-sonnet-4-6",
-    useResume: false,
-    liveSession: createLiveSession(),
-    timeoutMs: 10_000,
-    abortSignal: AbortSignal.timeout(10_000),
-    requestToolPermission: vi.fn<CliBackendExecuteContext["requestToolPermission"]>(async () => ({
-      behavior: "deny",
-      message: "Fixture denied.",
-    })),
-    requestUserInput: vi.fn<CliBackendExecuteContext["requestUserInput"]>(async () => ({
-      status: "cancelled",
-      message: "No question expected.",
-    })),
-    ...overrides,
-  };
-}
-
-function createLiveSession(cleanup?: () => Promise<void>): CliBackendLiveSessionCapability {
-  let current: CliBackendLiveSessionHandle | undefined;
-  let retiredCleanup: Promise<void> | undefined;
-  return {
-    fingerprint: "synthetic-process-policy",
-    current: () => current,
-    restart: async () => {
-      const previous = current;
-      previous?.close("restart");
-      await previous?.waitForExit();
-      await retiredCleanup;
-    },
-    register: (handle) => {
-      if (retiredCleanup) {
-        throw new Error("Previous CLI live session cleanup has not settled.");
-      }
-      current = handle;
-      handles.add(handle);
-    },
-    activate: () => {},
-    remove: (handle) => {
-      if (current === handle) {
-        current = undefined;
-        if (cleanup) {
-          retiredCleanup = handle
-            .waitForExit()
-            .then(cleanup)
-            .then(() => {
-              retiredCleanup = undefined;
-            });
-        }
-      }
-    },
-  };
-}
-
-async function collect(context: CliBackendExecuteContext) {
-  const records: Record<string, unknown>[] = [];
-  for await (const record of executeClaudeCli(context)) {
-    records.push(record);
-  }
-  return records;
-}
-
-function resultDetail(records: Record<string, unknown>[]): Record<string, unknown> {
-  const result = records.findLast((record) => record.type === "result");
-  expect(result).toEqual(
-    expect.objectContaining({ subtype: "success", result: expect.any(String) }),
-  );
-  return JSON.parse(String(result?.result)) as Record<string, unknown>;
-}
-
-async function fixtureReadyBeforeSettlement(
-  context: CliBackendExecuteContext,
-  fileName: string,
-  operation: PromiseLike<unknown>,
-  signal: AbortSignal,
-): Promise<void> {
-  const readyPath = path.join(context.cwd, fileName);
-  const recorded = async () => {
-    expect(await readFile(readyPath, "utf8")).toBe("ready");
-  };
-  // The fixture writes this record before replying; receipt and protocol pipes are unordered.
-  const settled = Promise.resolve(operation).then(recorded, async (error: unknown) => {
-    try {
-      await recorded();
-    } catch {
-      throw error;
-    }
-  });
-  await withinTest(Promise.race([receipts.waitFor(readyPath, "ready"), settled]), signal);
-}
-
-// Native transport joins its root and signal dispatch, not foreign descendant extinction.
-async function waitForProcessExit(pids: number[], signal: AbortSignal): Promise<void> {
-  try {
-    for (;;) {
-      if (
-        pids.every((pid) => {
-          try {
-            process.kill(pid, 0);
-            return false;
-          } catch {
-            return true;
-          }
-        })
-      ) {
-        return;
-      }
-      await waitForProcessTick(10, undefined, { signal });
-    }
-  } catch (cause) {
-    throw new Error(`Claude process tree ${pids.join(", ")} did not exit before the test aborted`, {
-      cause,
-    });
-  }
-}
+const { createContext, createLiveSession, fixtureReadyBeforeSettlement } =
+  installClaudeProtocolHarness();
 
 describe("Claude native stdio boundary", () => {
   it.for([
@@ -300,37 +140,83 @@ describe("Claude native stdio boundary", () => {
     await expect(access(path.join(context.cwd, "fixture.pid"))).rejects.toThrow();
   });
 
-  it.each(["background-success", "background-agent-subagent-bash"])(
-    "keeps an interim result open until native background agents report their final answer (%s)",
+  it.each([
+    "background-success",
+    "background-agent-subagent-bash-completed",
+    "background-agent-subagent-bash-stopped",
+    "background-parent-stopped-child-completed",
+    "background-parent-stopped-child-stopped",
+    "background-agent-foreground-bash",
+    "background-agent-foreground-bash-run-ids",
+  ])("preserves parent result ownership and warm reuse for %s", async (scenario) => {
+    const liveSession = createLiveSession();
+    const release = createDeferred<CliBackendToolPermissionResult>();
+    const decision = { behavior: "deny" as const, message: "Fixture released." };
+    const context = await createContext(scenario, {
+      liveSession,
+      requestToolPermission: () => release.promise,
+    });
+    const results: Record<string, unknown>[] = [];
+    try {
+      for await (const record of executeClaudeCli(context)) {
+        if (record.type !== "result") {
+          continue;
+        }
+        results.push(record);
+        if (results.length === 1) {
+          expect(record).toHaveProperty("openclaw_interim_result", true);
+          expect(liveSession.current()?.isIdle()).toBe(false);
+          release.resolve(decision);
+        }
+      }
+    } finally {
+      release.resolve(decision);
+    }
+    expect(results).toHaveLength(
+      scenario.startsWith("background-parent-stopped")
+        ? 4
+        : scenario === "background-success" || scenario.startsWith("background-agent-foreground")
+          ? 2
+          : 3,
+    );
+    for (const result of results.slice(0, -1)) {
+      expect(result).toHaveProperty("openclaw_interim_result", true);
+    }
+    expect(results.at(-1)).not.toHaveProperty("openclaw_interim_result");
+    const detail = resultDetail(results);
+    expect(detail.finalBackgroundAnswer).toBe(true);
+    const handle = liveSession.current();
+    expect(handle?.isIdle()).toBe(true);
+    const next = resultDetail(await collect({ ...context, prompt: "next input", useResume: true }));
+    expect(next).toMatchObject({ pid: detail.pid, turn: 2, user: "next input" });
+    expect(liveSession.current()).toBe(handle);
+  });
+
+  it.each(["late-child", "late-child-run-ids"])(
+    "keeps a prior turn's resumed Agent and late child out of later inputs for %s",
     async (scenario) => {
       const liveSession = createLiveSession();
-      const release = createDeferred<CliBackendToolPermissionResult>();
-      const decision = { behavior: "deny" as const, message: "Fixture released." };
-      const context = await createContext(scenario, {
-        liveSession,
-        requestToolPermission: () => release.promise,
-      });
-      const results: Record<string, unknown>[] = [];
-      try {
-        for await (const record of executeClaudeCli(context)) {
-          if (record.type !== "result") {
-            continue;
-          }
-          results.push(record);
-          if (results.length === 1) {
-            expect(record).toHaveProperty("openclaw_interim_result", true);
-            expect(liveSession.current()?.isIdle()).toBe(false);
-            release.resolve(decision);
-          } else {
-            expect(resultDetail([record]).finalBackgroundAnswer).toBe(true);
-            expect(record).not.toHaveProperty("openclaw_interim_result");
-          }
-        }
-      } finally {
-        release.resolve(decision);
+      const context = await createContext(scenario, { liveSession });
+      const turns: Record<string, unknown>[][] = [];
+      for (const prompt of ["first input", "warm input", "next input"]) {
+        turns.push(await collect({ ...context, prompt, useResume: turns.length > 0 }));
+        expect(liveSession.current()?.isIdle()).toBe(true);
       }
-      expect(results).toHaveLength(2);
-      expect(liveSession.current()?.isIdle()).toBe(true);
+      // The old child resumes its Agent during the warm input and that Agent's deferred
+      // answer arrives during the next one; neither settles nor holds a later input.
+      const results = turns.map((records) => records.filter((record) => record.type === "result"));
+      expect(results.map((list) => list.length)).toEqual([2, 1, scenario.endsWith("ids") ? 3 : 2]);
+      for (const list of results) {
+        expect(list.slice(0, -1).every((result) => result.openclaw_interim_result)).toBe(true);
+        expect(list.at(-1)).not.toHaveProperty("openclaw_interim_result");
+      }
+      const [first, warm, next] = turns.map((records) => resultDetail(records));
+      if (!first) {
+        throw new Error("Expected a first-turn result.");
+      }
+      expect(first.childLaunched).toBe(true);
+      expect(warm).toMatchObject({ warmAnswer: true, turn: 2, user: "warm input", pid: first.pid });
+      expect(next).toMatchObject({ finalBackgroundAnswer: true, turn: 3, pid: first.pid });
     },
   );
 
@@ -415,6 +301,121 @@ describe("Claude native stdio boundary", () => {
             : { permissionDecisionReason: decision.message }),
         },
       });
+    },
+  );
+
+  it.each(["background-bash-stopped", "background-bash-stopped-overlap"])(
+    "settles %s without replay receipts or draining a live sibling",
+    async (scenario) => {
+      const context = await createContext(scenario, { liveSession: createLiveSession() });
+      context.env.CLAUDE_FIXTURE_REPLAY_RECEIPTS = "0";
+      await writeFile(path.join(context.cwd, "background.release"), "release");
+      const records = await collect(context);
+      const results = records.filter((record) => record.type === "result");
+      expect(results).toHaveLength(scenario.endsWith("-overlap") ? 3 : 2);
+      for (const result of results.slice(0, -1)) {
+        expect(result).toHaveProperty("openclaw_interim_result", true);
+      }
+      expect(results.at(-1)).not.toHaveProperty("openclaw_interim_result");
+      expect(records.some((record) => record.type === "user" && record.isReplay === true)).toBe(
+        false,
+      );
+      const detail = resultDetail(records);
+      expect(context.liveSession?.current()?.isIdle()).toBe(true);
+      const next = resultDetail(
+        await collect({ ...context, prompt: "next input", useResume: true }),
+      );
+      expect(next).toMatchObject({ pid: detail.pid, turn: 2, user: "next input" });
+    },
+  );
+
+  it.for(["background-bash-captured-stopped", "background-bash-captured-stopped-overlap"])(
+    "settles captured 2.1.286 shape for %s with same-process reuse",
+    async (scenario, { signal }) => {
+      const barrierReached = createDeferred<void>();
+      const release = createDeferred<CliBackendToolPermissionResult>();
+      const decision = { behavior: "deny" as const, message: "Fixture released." };
+      const context = await createContext(scenario, {
+        liveSession: createLiveSession(),
+        requestToolPermission: async ({ toolCallId, toolInput }) => {
+          if (toolCallId !== "captured-release") {
+            return { behavior: "allow", updatedInput: toolInput };
+          }
+          barrierReached.resolve();
+          return release.promise;
+        },
+      });
+      let settled = false;
+      const running = collect(context).then((records) => {
+        settled = true;
+        return records;
+      });
+      void running.catch(() => {});
+      try {
+        await withinTest(Promise.race([barrierReached.promise, running]), signal);
+        expect(settled).toBe(false);
+      } finally {
+        release.resolve(decision);
+      }
+      const records = await withinTest(running, signal);
+      const results = records.filter((record) => record.type === "result");
+      expect(results).toHaveLength(scenario.endsWith("-overlap") ? 2 : 1);
+      if (scenario.endsWith("-overlap")) {
+        expect(results[0]).toHaveProperty("openclaw_interim_result", true);
+      }
+      expect(results.at(-1)).not.toHaveProperty("openclaw_interim_result");
+      expect(
+        records
+          .filter((record) => record.subtype === "task_started")
+          .every((record) => record.is_backgrounded === true),
+      ).toBe(true);
+      expect(records.some((record) => record.type === "user" && record.isReplay === true)).toBe(
+        false,
+      );
+      expect(resultDetail(records).capturedShapeAnswered).toBe(true);
+      const detail = resultDetail(records);
+      expect(context.liveSession?.current()?.isIdle()).toBe(true);
+      const next = resultDetail(
+        await collect({ ...context, prompt: "next input", useResume: true }),
+      );
+      expect(next).toMatchObject({ pid: detail.pid, turn: 2, user: "next input" });
+    },
+  );
+
+  it.for([
+    "background-bash-stopped-final",
+    "background-bash-stopped-final-run-ids",
+    "background-bash-stopped-final-slow",
+    "background-bash-stopped-final-slow-run-ids",
+  ])(
+    "accepts the final answer after a TaskStopped auto-backgrounded Bash for %s",
+    async (scenario, { signal }) => {
+      const liveSession = createLiveSession();
+      const context = await createContext(scenario, {
+        liveSession,
+        requestToolPermission: async ({ toolInput }) => ({
+          behavior: "allow",
+          updatedInput: toolInput,
+        }),
+      });
+      // Native sends nothing after this result; holding it would wait for the no-output watchdog.
+      const records = await withinTest(collect(context), signal);
+      const results = records.filter((record) => record.type === "result");
+      expect(results).toHaveLength(1);
+      expect(results[0]).not.toHaveProperty("openclaw_interim_result");
+      expect(records.at(-2)).toMatchObject({
+        type: "assistant",
+        message: { stop_reason: "end_turn" },
+      });
+      const detail = resultDetail(records);
+      expect(detail).toMatchObject({ stoppedBashFinal: true, turn: 1 });
+      const handle = liveSession.current();
+      expect(handle?.isIdle()).toBe(true);
+      const next = resultDetail(
+        await collect({ ...context, prompt: "next input", useResume: true }),
+      );
+      expect(next).toMatchObject({ pid: detail.pid, turn: 2, user: "next input" });
+      expect(liveSession.current()).toBe(handle);
     },
   );
 

@@ -61,7 +61,6 @@ type ClaudeCliTurn = {
   foregroundTaskIds: Set<string>;
   foregroundBashToolUseIds: Set<string>;
   pendingBackgroundTaskIds: Set<string>;
-  subagentTaskIds: Set<string>;
   taskNotifications: Map<string, "queued" | "replayed">;
   error?: Error;
 };
@@ -73,6 +72,12 @@ type ClaudeCliSession = {
   idleTimer?: ReturnType<typeof setTimeout>;
   hasInputLifecycle: boolean;
   closed: boolean;
+  // Native tasks outlive their turn: a child Bash can finish during a later input and
+  // resume the same Agent task. Ownership is the input admitted when a task was first seen.
+  taskOwners: Map<string, string>;
+  // Claude Code 2.1.296+ names each task run; a notification result's origin.runId names its task.
+  taskRuns: Map<string, string>;
+  subagentTaskIds: Set<string>;
 };
 const sessions = new WeakMap<CliBackendLiveSessionHandle, ClaudeCliSession>();
 
@@ -231,10 +236,48 @@ function completeTurn(session: ClaudeCliSession, turn: ClaudeCliTurn) {
   }
 }
 
+function recordTaskOwnership(session: ClaudeCliSession, message: Record<string, unknown>) {
+  const turn = session.currentTurn;
+  // Work first seen between admitted inputs belongs to no input.
+  const owner = turn && (!session.hasInputLifecycle || turn.inputStarted) ? turn.inputUuid : "";
+  const tasks =
+    message.subtype === "background_tasks_changed"
+      ? Array.isArray(message.tasks)
+        ? message.tasks
+        : []
+      : [message];
+  for (const task of tasks) {
+    if (!isRecord(task) || typeof task.task_id !== "string" || !task.task_id) {
+      continue;
+    }
+    if (!session.taskOwners.has(task.task_id)) {
+      const parentOwner =
+        typeof task.parent_task_id === "string"
+          ? session.taskOwners.get(task.parent_task_id)
+          : undefined;
+      session.taskOwners.set(task.task_id, parentOwner ?? owner);
+    }
+    if (typeof task.run_id === "string" && task.run_id) {
+      session.taskRuns.set(task.run_id, task.task_id);
+    }
+  }
+  if (
+    message.subtype === "task_started" &&
+    message.owned_by_subagent === true &&
+    typeof message.task_id === "string" &&
+    message.task_id
+  ) {
+    session.subagentTaskIds.add(message.task_id);
+  }
+}
+
 async function acceptMessage(session: ClaudeCliSession, message: Record<string, unknown>) {
   if (message.type === "system" && message.subtype === "init") {
     session.hasInputLifecycle =
       Array.isArray(message.capabilities) && message.capabilities.includes("msg_lifecycle_v1");
+  }
+  if (message.type === "system") {
+    recordTaskOwnership(session, message);
   }
   const turn = session.currentTurn;
   if (!turn) {
@@ -254,27 +297,35 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
   ) {
     return;
   }
-  if (message.type === "system" && message.subtype === "task_started") {
-    if (message.owned_by_subagent === true) {
-      if (typeof message.task_id === "string" && message.task_id) {
-        turn.subagentTaskIds.add(message.task_id);
-      }
-    } else if (typeof message.task_id === "string" && message.task_id) {
-      // task_type is optional here; the background task list names it later.
-      if (message.is_backgrounded === false) {
-        turn.foregroundTaskIds.add(message.task_id);
-      }
-      const foregroundBash =
-        typeof message.tool_use_id === "string" &&
-        turn.foregroundBashToolUseIds.delete(message.tool_use_id);
-      if (foregroundBash && message.is_backgrounded === true) {
-        turn.pendingBackgroundTaskIds.add(message.task_id);
-      }
+  // A prior input's Agent can resume under its old task ID; it never holds this input.
+  const ownsTask = (taskId: string) => session.taskOwners.get(taskId) === turn.inputUuid;
+  if (
+    message.type === "system" &&
+    message.subtype === "task_started" &&
+    message.owned_by_subagent !== true &&
+    typeof message.task_id === "string" &&
+    message.task_id &&
+    ownsTask(message.task_id)
+  ) {
+    // task_type is optional here; the background task list names it later.
+    if (message.is_backgrounded === false) {
+      turn.foregroundTaskIds.add(message.task_id);
+    }
+    const foregroundBash =
+      typeof message.tool_use_id === "string" &&
+      turn.foregroundBashToolUseIds.delete(message.tool_use_id);
+    if (foregroundBash && message.is_backgrounded === true) {
+      turn.pendingBackgroundTaskIds.add(message.task_id);
     }
   }
   if (message.type === "system" && message.subtype === "background_tasks_changed") {
     for (const task of Array.isArray(message.tasks) ? message.tasks : []) {
-      if (!isRecord(task) || typeof task.task_id !== "string" || !task.task_id) {
+      if (
+        !isRecord(task) ||
+        typeof task.task_id !== "string" ||
+        !task.task_id ||
+        !ownsTask(task.task_id)
+      ) {
         continue;
       }
       if (
@@ -300,11 +351,28 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
     message.subtype === "task_notification" &&
     typeof message.task_id === "string" &&
     message.task_id &&
-    // Subagent completions have no parent result and must not consume its queue slots.
-    !turn.subagentTaskIds.delete(message.task_id)
+    // Subagent completions have no parent result and must not consume its queue slots,
+    // including a prior input's child finishing during this one.
+    !session.subagentTaskIds.delete(message.task_id)
   ) {
-    // Include non-held tasks: each queued notification has its own ordered result.
-    turn.taskNotifications.set(message.task_id, "queued");
+    if (message.status === "stopped") {
+      // Native cancellation is an authoritative task-ID receipt, not an answer
+      // waiting for a later notification query. Never let its slot consume another
+      // task's successful notification result.
+      turn.pendingBackgroundTaskIds.delete(message.task_id);
+      turn.foregroundTaskIds.delete(message.task_id);
+      turn.taskNotifications.delete(message.task_id);
+    } else if (
+      turn.foregroundTaskIds.has(message.task_id) &&
+      !turn.pendingBackgroundTaskIds.has(message.task_id)
+    ) {
+      // A task that finished in the foreground answered in its own tool result.
+      turn.foregroundTaskIds.delete(message.task_id);
+    } else {
+      // Include non-held and prior-input tasks: each queued notification has its own
+      // ordered result, and a prior input's result must consume only its own slot.
+      turn.taskNotifications.set(message.task_id, "queued");
+    }
   }
   let completesTurn = false;
   if (message.type === "result") {
@@ -316,15 +384,25 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
       isRecord(message.origin) &&
       message.origin.kind === "task-notification" &&
       message.origin.subkind === undefined;
-    if (taskNotification && message.subtype === "success" && !failed) {
+    const runTaskId =
+      taskNotification && isRecord(message.origin) && typeof message.origin.runId === "string"
+        ? session.taskRuns.get(message.origin.runId)
+        : undefined;
+    const notifiedTaskId = taskNotification
+      ? (runTaskId ?? turn.taskNotifications.keys().next().value)
+      : undefined;
+    // A prior input's continuation answers that input, not this one. Without a run ID
+    // the queue order is the only correlation, so a failure still ends this turn.
+    const priorInputResult =
+      notifiedTaskId !== undefined &&
+      !ownsTask(notifiedTaskId) &&
+      (!failed || runTaskId !== undefined);
+    if (taskNotification && message.subtype === "success" && !failed && notifiedTaskId) {
       // A later task can finish during this query. Consume one notification, not all
       // completed tasks; retain pending work on failure so completeTurn retires it.
-      const taskId = turn.taskNotifications.keys().next().value;
-      if (taskId) {
-        turn.taskNotifications.delete(taskId);
-        turn.pendingBackgroundTaskIds.delete(taskId);
-        turn.foregroundTaskIds.delete(taskId);
-      }
+      turn.taskNotifications.delete(notifiedTaskId);
+      turn.pendingBackgroundTaskIds.delete(notifiedTaskId);
+      turn.foregroundTaskIds.delete(notifiedTaskId);
     }
     // Inline receipts have no separate result. The query just answered them too.
     for (const [taskId, state] of turn.taskNotifications) {
@@ -340,9 +418,11 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
       message.result === "" &&
       message.stop_reason === null &&
       message.terminal_reason === undefined;
-    turn.sawTerminalResult = true;
-    // Background work holds successful interim results, never terminal failures.
-    completesTurn = (turn.pendingBackgroundTaskIds.size === 0 && !queuedContinuation) || failed;
+    if (!priorInputResult) {
+      turn.sawTerminalResult = true;
+      // Background work holds successful interim results, never terminal failures.
+      completesTurn = (turn.pendingBackgroundTaskIds.size === 0 && !queuedContinuation) || failed;
+    }
   }
   // The transport owns continuation lifetime; the completed answer can be
   // delivered through normal reply hooks without waiting for the children.
@@ -363,6 +443,9 @@ function createSession(capability?: CliBackendLiveSessionCapability): ClaudeCliS
     capability,
     hasInputLifecycle: false,
     closed: false,
+    taskOwners: new Map(),
+    taskRuns: new Map(),
+    subagentTaskIds: new Set(),
     handle: {
       generation: randomUUID(),
       fingerprint: capability?.fingerprint ?? randomUUID(),
@@ -409,7 +492,6 @@ export async function* executeClaudeCli(
     foregroundTaskIds: new Set(),
     foregroundBashToolUseIds: new Set(),
     pendingBackgroundTaskIds: new Set(),
-    subagentTaskIds: new Set(),
     taskNotifications: new Map(),
   };
   session.currentTurn = turn;
