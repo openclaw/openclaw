@@ -501,12 +501,15 @@ describe("settlePreparedCliRun per-turn send ledger terminal cleanup", () => {
     // terminal candidate here; "omit" models an embedded/command-rpc dispatched candidate
     // or a direct runCliAgent call that never sets the flag.
     const finalFallback = params.isFinalFallbackAttempt ?? true;
-    // SAFETY: settlePreparedCliRun reads only params.{cleanup*, sessionId, provider,
-    // runId, isFinalFallbackAttempt}, turnSendLedgerScope, and — when the auth-profile
-    // settlement path is exercised — context.{effectiveAuthProfileId, authProfileStore,
-    // agentDir, modelId}; the rest of the prepared context is unused.
+    const context = buildPreparedCliRunContext({
+      provider: "claude-cli",
+      runId: params.runId,
+      sessionId: "session-1",
+    });
     return {
+      ...context,
       params: {
+        ...context.params,
         cleanupCliLiveSessionOnRunEnd: false,
         cleanupBundleMcpOnRunEnd: false,
         sessionId: "session-1",
@@ -522,7 +525,7 @@ describe("settlePreparedCliRun per-turn send ledger terminal cleanup", () => {
         : {}),
       ...(params.authProfileStore ? { authProfileStore: params.authProfileStore } : {}),
       ...(params.withScope === false ? {} : { turnSendLedgerScope: params.scope ?? scope }),
-    } as unknown as PreparedCliRunContext;
+    };
   }
 
   const okResult = { payloads: [], meta: {} } as unknown as EmbeddedAgentRunResult;
