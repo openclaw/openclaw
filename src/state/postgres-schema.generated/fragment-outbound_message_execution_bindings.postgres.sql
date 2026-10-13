@@ -1,10 +1,6 @@
--- Generated lazy feature; create dependencies first.
+-- Generated runtime DDL; the owner supplies search_path and the transaction.
 
-BEGIN;
-
-SET LOCAL standard_conforming_strings = on;
-
-CREATE TABLE "openclaw_state"."outbound_message_execution_bindings" (
+CREATE TABLE "outbound_message_execution_bindings" (
   "event_id" text COLLATE "C" NOT NULL,
   "context_id" text COLLATE "C" NOT NULL,
   "execution_id" text COLLATE "C" NOT NULL,
@@ -15,8 +11,6 @@ CREATE TABLE "openclaw_state"."outbound_message_execution_bindings" (
   CHECK ((char_length("run_id") BETWEEN 1 AND 256))
 );
 
-CREATE INDEX "outbound_message_execution_bindings_execution_event_idx" ON "openclaw_state"."outbound_message_execution_bindings" (("context_id") ASC NULLS FIRST, ("execution_id") ASC NULLS FIRST, ("run_id") ASC NULLS FIRST, ("event_id") ASC NULLS FIRST);
+CREATE INDEX "outbound_message_execution_bindings_execution_event_idx" ON "outbound_message_execution_bindings" (("context_id") ASC NULLS FIRST, ("execution_id") ASC NULLS FIRST, ("run_id") ASC NULLS FIRST, ("event_id") ASC NULLS FIRST);
 
-ALTER TABLE "openclaw_state"."outbound_message_execution_bindings" ADD FOREIGN KEY ("event_id") REFERENCES "openclaw_state"."audit_events" ("event_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
-
-COMMIT;
+ALTER TABLE "outbound_message_execution_bindings" ADD FOREIGN KEY ("event_id") REFERENCES "audit_events" ("event_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;

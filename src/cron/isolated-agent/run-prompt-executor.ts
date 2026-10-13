@@ -208,15 +208,17 @@ export function createCronPromptExecutor(
     // from session keys or run ids. Cleared when the run settles. A job whose
     // config cannot be canonicalized simply keeps standing grants inert; the
     // run itself must never fail for this diagnostic-side registration.
-    let unregisterCronRunExecSource = () => {};
+    using cronRunExecSource = new DisposableStack();
     try {
-      unregisterCronRunExecSource = registerCronRunExecSource(runId, {
-        agentId: params.agentId,
-        jobId: params.job.id,
-        jobConfigRevision: resolveCronJobConfigRevision(params.job),
-        jobName: params.job.name,
-        standingGrantAuthority: cronAdmission.standingGrantAuthority,
-      });
+      cronRunExecSource.defer(
+        registerCronRunExecSource(runId, {
+          agentId: params.agentId,
+          jobId: params.job.id,
+          jobConfigRevision: resolveCronJobConfigRevision(params.job),
+          jobName: params.job.name,
+          standingGrantAuthority: cronAdmission.standingGrantAuthority,
+        }),
+      );
     } catch {
       // Non-canonicalizable job config: no grant registration for this run.
     }
@@ -626,7 +628,7 @@ export function createCronPromptExecutor(
         throw error;
       })
       .finally(() => {
-        unregisterCronRunExecSource();
+        cronRunExecSource.dispose();
       });
     const executionError =
       params.lifecycle.getDeferredError() ??

@@ -96,6 +96,7 @@ export async function loadSessionEntryForAdmission(
   preparation: {
     signal?: AbortSignal;
     assertCurrent?: () => void;
+    onRegistryChange?: AgentDatabaseRequestExecutionSource["onRegistryChange"];
     incognito?: SessionCollaborationScope["incognito"];
   } = {},
 ): Promise<{ entry: SessionEntry | undefined; databaseClaim: SessionAdmissionDatabaseClaim }> {
@@ -318,7 +319,10 @@ export async function loadSessionEntryForAdmission(
             };
             const source: AgentDatabaseRequestExecutionSource = {
               assertCurrent: assertSourceCurrent,
-              onRegistryChange: owner.onRegistryChange,
+              onRegistryChange(change) {
+                owner.onRegistryChange(change);
+                preparation.onRegistryChange?.(change);
+              },
               createAdmission(admissionBinding) {
                 return () => ({
                   nativeLocations: admissionBinding.nativeLocations,

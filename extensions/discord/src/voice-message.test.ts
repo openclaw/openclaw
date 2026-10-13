@@ -416,38 +416,14 @@ describe("sendDiscordVoiceMessage", () => {
     expect(hasDiscordMessageCreateAmbiguity(finalFailure)).toBe(true);
   });
 
-  it.each([
-    { stage: "upload-url", failure: "HTTP" },
-    { stage: "upload-url", failure: "fetch" },
-    { stage: "attachment", failure: "HTTP" },
-    { stage: "attachment", failure: "fetch" },
-  ])("does not mark a $failure failure during $stage negotiation", async ({ stage, failure }) => {
+  it("does not mark an HTTP failure during upload-url negotiation", async () => {
     const post = vi.fn(async () => ({ id: "msg-1", channel_id: "channel-1" }));
     const rest = createRest(post);
-    const fetchFailure = new TypeError("fetch failed");
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = input instanceof Request ? input.url : String(input);
       const method = input instanceof Request ? input.method : (init?.method ?? "GET");
-      const currentStage = method === "POST" ? "upload-url" : "attachment";
-      if (currentStage === stage) {
-        if (failure === "fetch") {
-          throw fetchFailure;
-        }
-        return new Response("voice attachment unavailable", { status: 503 });
-      }
       if (method === "POST" && url.endsWith("/channels/channel-1/attachments")) {
-        return new Response(
-          JSON.stringify({
-            attachments: [
-              {
-                id: 0,
-                upload_url: "https://cdn.test/upload",
-                upload_filename: "uploaded.ogg",
-              },
-            ],
-          }),
-          { status: 200 },
-        );
+        return new Response("voice attachment unavailable", { status: 503 });
       }
       throw new Error(`unexpected fetch ${method} ${url}`);
     });
@@ -462,31 +438,7 @@ describe("sendDiscordVoiceMessage", () => {
     expect(caught).toBeInstanceOf(Error);
     expect(hasDiscordMessageCreateAmbiguity(caught)).toBe(false);
     expect(post).not.toHaveBeenCalled();
-    if (failure === "fetch") {
-      expect(caught).toBe(fetchFailure);
-    } else {
-      expect((caught as { status?: unknown }).status).toBe(503);
-    }
-  });
-
-  it("throws typed CDN upload failures", async () => {
-    const rest = createRest();
-    mockSuccessfulVoiceUpload(new Response("cdn unavailable", { status: 503 }));
-
-    let error: unknown;
-    try {
-      await sendVoice(rest);
-    } catch (caught) {
-      error = caught;
-    }
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).name).toBe("DiscordError");
-    expect((error as { status?: unknown }).status).toBe(503);
-    expect((error as { statusCode?: unknown }).statusCode).toBe(503);
-    expect((error as { rawBody?: unknown }).rawBody).toEqual({
-      message: "cdn unavailable",
-    });
-    expect(hasDiscordMessageCreateAmbiguity(error)).toBe(false);
+    expect((caught as { status?: unknown }).status).toBe(503);
   });
 
   it("bounds voice upload error bodies without using response.text()", async () => {

@@ -183,10 +183,12 @@ appends, content rewrites, rewind, compaction, archive/restore, deletion, and un
 writes retain their session-scoped invalidation or committed actor update.
 
 Activity-summary batches also reuse the actor's complete retained linear context
-at its committed write token. The replica and worker share incremental batch
-selection, including byte limits and omitted-content handling. Incomplete or
-invalidated context uses the bounded worker reader; the replica adds no separate
-cache, stored format, retention rule, or permission grant.
+at its committed write token, including canonical model snapshots and runtime-context
+metadata. The replica and worker share transcript projection semantics and incremental
+batch selection, including byte limits and omitted-content handling. Incomplete or
+invalidated context, unsupported entries, and reset, rewind, or compaction boundaries
+use the bounded worker reader; the replica adds no separate cache, stored format,
+retention rule, or permission grant.
 
 Parent forks use the existing session-entry worker for both transcript copying
 and child-row commits. Internal fork transformations are data patches, not native
@@ -1004,8 +1006,9 @@ Bookkeeping operations check coordinator lifetime before dispatch and apply thei
 execution predicates in the worker transaction, without transaction or commit
 handshakes back to the host. An accepted write may finish after caller revocation;
 its receipt grants no authority for another GitHub action. FIFO writes and shutdown
-still join native settlement. An unknown outcome remains an error for that write,
-but does not disable later operations that reread the current durable state.
+still join native settlement. An unknown outcome remains an error for that write;
+bookkeeping may reread durable state, but retained lifecycle authority stays denied
+until its physical owner closes and restarts.
 Reporting and claim deferral each use one worker transaction across the relevant
 publication kinds, including when one kind has no stored requests.
 
@@ -1058,6 +1061,17 @@ coordinators only await operations and apply committed facts. See the
 [SDK migration guide](/plugins/sdk-migration/how-to-migrate#await-github-publication-operations)
 for method pairs. Personal OAuth `cancelAuthorization` and `disconnect` keep their
 separate compatibility contract.
+
+The receipt owner retains immutable shared/personal lifecycle bindings separately
+from mutable request status. Cold preparation uses `githubPublication.lifecycle`;
+final availability and executor guards read only memory. Pending publication
+writes deny those guards before dispatch, including personal-session cleanup.
+Committed postimages and tombstones install before denial is released. Confirmed
+rollback releases only its own pending operation; uncertainty stays denied, and
+delete/reinsert never revives a retained binding. Pending writes also revoke
+unadmitted source capabilities; already-admitted writes retain their existing
+native source reservations through destination settlement. The database-worker
+custody guard enumerates every request/lifecycle writer and its owner entry.
 
 Publication execution is owned by the coordinator's per-request promise and
 workspace exclusion. Its worker transaction retains execution predicates, while
@@ -1150,10 +1164,17 @@ an overlapping read; it still validates its exact context at acceptance.
 
 Initial bounded hydration can also supply model context when it contains the whole
 active path. The manager retains detached, sanitized bytes and consumes them only
-under its existing source, writer FIFO, and native-mutation checks while the
-physical store's write revision remains unchanged. Truncated or changed views use
-the normal worker reader. Hydration and anchors share the projection's version
-and watermark in their existing snapshot.
+while its view and the physical store's receipt-owned write revision remain
+unchanged, under the current writer and selected reader. This synchronous handoff
+does not reacquire a history worker, recapture file identity, join the writer FIFO,
+or rebuild a second manager. A later pending write may complete after snapshot
+acceptance; writes and external effects keep their own authority checks. Truncated,
+changed, or admission-fenced views use the normal worker reader. Reset, compaction,
+fork, and retargeting invalidate through the same receipts or manager view. The
+writable manager, callbacks, resource extensions, and transport authority remain
+attempt-scoped; history replicas and provider connections retain their existing
+session owners. Hydration and anchors share the projection's version and watermark
+in their existing snapshot.
 
 Turn writers carry current entry facts into source and custody checks. Publication
 can reuse a writer-certified entry postimage while its transaction revision still
@@ -3995,9 +4016,8 @@ survives cleanup failure while the failed native owner retires. Use `run` when
 dependent commands share a binding or host publication must stay inside the
 same FIFO interval.
 
-Memory source-state reads, cache pruning, standing-intent operations, and session
-collaboration writes without a preparation callback use that single-command
-path. Memory bindings reuse the canonical connection's installed policy. Small
+Memory cache pruning, standing-intent operations, and session collaboration
+writes without a preparation callback use that single-command path. Memory bindings reuse the canonical connection's installed policy. Small
 source replacements and embedding-cache writes carry a bounded inline batch in
 one request through the same tombstone, capacity, and commit checks.
 Larger inputs retain bounded fragment messages and stage one publication in worker
@@ -4153,9 +4173,11 @@ binary values and is discarded after settlement or owner closure. Source-file in
 host. Cache pruning uses that same worker for its live count and oldest-row deletion,
 with a transaction recheck before each batch of at most 100 rows. The host releases
 admission and yields between batches; only definite pre-entry lock failures retry.
-Cache and source-hash reads use the retained publication worker, checking that
-its handle is open at admission. Source snapshots use that same publication owner;
-read-only diagnostics use the retrieval worker. Shadow session publication prepares
+Published source hashes, chunks, embedding-cache rows, session tombstones, and
+index/source snapshots use the existing retrieval worker's read-only connection.
+They retain their physical source and caller lifetime without reserving the agent
+writer FIFO. Private shadow databases keep their publication worker and private
+queue for read-your-writes. Both adapters use the same read kernels. Shadow session publication prepares
 its current tombstone predicate in the original published worker while retaining
 the workspace lock through commit. Ordinary publication checks that predicate only
 inside its committing transaction. The shadow's empty tombstone table never grants
@@ -5964,8 +5986,18 @@ are unchanged.
 
 GitHub publication preparation and per-turn tool availability read the selected
 live worktree through the existing worktree reader and shared-state worker. They
-capture the physical store before yielding, recheck session identity after the
-read, and refresh worktree facts after identity or repository preparation. Those
+refresh discovery on identity, configuration, and workspace-binding changes;
+otherwise a read refreshes facts older than one minute instead of polling idle
+sessions. The first read after expiry retains the availability hint but retires
+credentials until asynchronous preparation finishes, so an expired token cannot
+authorize a worker launch. The upstream session monitor likewise skips its
+watched-link query when no catalog can check upstream activity.
+
+Automatic health refresh warms its cache once, then skips collection while no
+clients are connected. Health requests still refresh stale snapshots on demand.
+
+Publication readers capture the physical store before yielding, recheck session
+identity after the read, and refresh worktree facts after identity or repository preparation. Those
 facts select inputs and retain the worktree owner's mutation generation through
 publication effects. Synchronous guards still check current session, credential,
 and placement authority; worktree identity checks use the prepared generation.

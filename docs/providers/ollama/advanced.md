@@ -131,7 +131,9 @@ Other balance failures include guidance for checking the server or its access pe
     top-level request fields instead of nested `options`. Local native chat
     requests default to `truncate: false` and `shift: false`, so supporting
     servers reject overflowing input instead of silently dropping history.
-    OpenClaw then attempts compaction and retries, or reports the failure.
+    OpenClaw then attempts compaction and retries. If recovery cannot make the
+    request fit, a replay-safe turn can use the configured model fallback chain,
+    preferring candidates with known context headroom; otherwise it reports the failure.
     Generation that fills the window can still produce a labeled partial reply.
     This behavior is verified with Ollama 0.33.3; older servers may ignore the
     fields. Explicit per-model values override these defaults. Hosted models

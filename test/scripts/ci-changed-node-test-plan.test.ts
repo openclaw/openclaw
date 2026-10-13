@@ -14,6 +14,7 @@ import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-code
 import {
   createNodeTestShardBundles,
   createSelectedNodeTestShardBundles,
+  isRuntimeTestFileIncluded,
   type CompactNodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import {
@@ -164,6 +165,35 @@ it.each(["archive", "untracked", "symlink"])(
 );
 
 describe("CI changed Node test plan", () => {
+  it("keeps the native warm cleanup proof in its extension release tier", () => {
+    const source = "extensions/codex/src/app-server/thread-lifecycle-warm.ts";
+    const native = "extensions/codex/src/app-server/thread-lifecycle.warm-cleanup.native.test.ts";
+    const options = {
+      includeReleaseOnlyRuntimeTests: false,
+      selectionMode: "aggressive" as const,
+    };
+    // Explicit owner opt-ins remain intact; unselected automatic sweeps defer this tier.
+    expect(isRuntimeTestFileIncluded(native, options)).toBe(false);
+    expect(isRuntimeTestFileIncluded(native, { ...options, changedPaths: [native] })).toBe(true);
+
+    for (const [changedPath, includeReleaseOnlyRuntimeTests] of [
+      [native, false],
+      [source, true],
+    ] as const) {
+      const admitted = createChangedNodeTestShards([changedPath], {
+        ...options,
+        includeReleaseOnlyRuntimeTests,
+      });
+      const owners = fallbackGroups(expectDefined(admitted, "native warm cleanup plan")).filter(
+        (group) => group.includePatterns?.includes(native),
+      );
+      expect(owners, changedPath).toHaveLength(1);
+      expect(owners[0]?.configs).toEqual([
+        "test/vitest/vitest.extension-database-workers.config.ts",
+      ]);
+    }
+  });
+
   it("retains changed-owner proof tiers and direct test opt-in without unrelated areas", () => {
     const cwd = argvTempDirs.make("changed-owner-proof-tiers-");
     const areaSource = "src/infra/owner-entry.ts";

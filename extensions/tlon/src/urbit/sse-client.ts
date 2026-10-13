@@ -219,10 +219,13 @@ export class UrbitSSEClient {
     const { response, release } = stream;
     this.streamRelease = release;
 
-    if (!response.ok) {
+    if (!response.ok || !response.body) {
       this.streamRelease = null;
       await release();
-      throw new UrbitHttpError({ operation: "Stream connection", status: response.status });
+      if (!response.ok) {
+        throw new UrbitHttpError({ operation: "Stream connection", status: response.status });
+      }
+      return;
     }
 
     this.processStream(response.body).catch((error: unknown) => {

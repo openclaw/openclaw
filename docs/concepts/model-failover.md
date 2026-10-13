@@ -378,6 +378,7 @@ OpenClaw builds the candidate list from the currently requested `provider/model`
     - When no explicit fallback override is supplied to the fallback runner, the configured primary is appended at the end. The chain can then settle back onto the normal default once earlier candidates are exhausted.
     - When a caller supplies `fallbacksOverride`, the runner uses exactly the requested model plus that override list. An empty list disables model fallback and prevents the configured primary from being appended as a hidden retry target.
     - Plugins can return `fallbacksOverride` from `before_model_resolve` to select a run-scoped chain, including `[]` to fail on the selected model instead of trying configured fallbacks. See [local model routing](/plugins/hooks/prompt-and-session#restrict-a-run-to-local-models).
+    - After context overflow recovery is exhausted, remaining candidates with known sufficient context are preferred, preserving configured order within each group. Effective `contextTokens` caps apply. If the provider supplies no token count, a larger known window is preferred; metadata is a hint, and each candidate still performs its own context checks. Unknown or smaller-window candidates remain eligible afterward.
 
   </Accordion>
 </AccordionGroup>
@@ -392,6 +393,7 @@ OpenClaw builds the candidate list from the currently requested `provider/model`
     - timeout-shaped failover errors
     - billing disables
     - `model_not_found`, including eligible HTTP 404 responses
+    - model context overflow after active-model compaction and oversized-tool-result recovery cannot make the request fit, including a single message that compaction cannot shrink. The turn must still be safe to replay. Existing model locks, explicit empty fallback overrides, and operator restrictions continue to apply
     - `LiveSessionModelSwitchError` for a stale current or earlier candidate. Later configured targets redirect directly, while targets outside the chain return to the bounded session-model retry owner
     - a provider request-size ceiling reaching the fallback boundary, which happens when a transport-owning plugin harness bypasses embedded recovery. The ceiling belongs to the refusing provider's quota rather than to any model's context window, so a differently provisioned candidate may still admit the request
     - other unrecognized errors when there are still remaining candidates
@@ -399,13 +401,15 @@ OpenClaw builds the candidate list from the currently requested `provider/model`
   </Tab>
   <Tab title="Does not continue on">
     - explicit aborts that are not timeout/failover-shaped
-    - context overflow errors that should stay inside compaction/retry logic (for example `request_too_large`, `input token count exceeds the maximum number of input tokens`, `input exceeds the maximum number of tokens`, `input too long for the model`, or `ollama error: context length exceeded`)
-    - context overflow inside an embedded run that has already been declared terminal, including a provider request-size ceiling (for example Groq's `413 ... on tokens per minute (TPM): Limit 8000, Requested 8098`), which the runner stops on rather than compacting
+    - context overflow after committed tool effects or delivered replies that cannot safely be replayed
+    - a provider request-size ceiling inside an embedded run (for example Groq's `413 ... on tokens per minute (TPM): Limit 8000, Requested 8098`), which remains terminal rather than compacting
     - a final unknown error when there are no candidates left
     - final provider refusals. Eligible Anthropic direct API-key requests handle refusal fallback within the provider request instead (see [Anthropic](/providers/anthropic#safety-refusal-fallback-claude-opus-5-and-fable-5))
 
   </Tab>
 </Tabs>
+
+Successful context-overflow fallback records the answering model and the overflow reason in fallback diagnostics and emits a visible warning. If no candidate succeeds, the original overflow guidance is preserved.
 
 A final provider refusal ends the current turn. OpenClaw surfaces it without automatic recovery turns, compaction retries, or switching to an unrelated model. Except for a misalignment precaution, a queued or later user message still starts its own turn.
 

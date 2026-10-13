@@ -236,8 +236,8 @@ describe("local agent avatar files", () => {
         body: Buffer.from("modified"),
         stat: {
           ctimeMs,
-          dev: originalStat.dev,
-          ino: originalStat.ino,
+          dev: String(originalStat.dev),
+          ino: String(originalStat.ino),
           mtimeMs: originalStat.mtimeMs,
           size: originalStat.size,
         },

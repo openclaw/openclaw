@@ -167,6 +167,13 @@ own active chat runs and queued turns, and waits on the process-wide pending-rep
 count. Both report remaining work as named counts; categories can overlap and
 should not be added as distinct turns.
 
+Transcript index reconciliation gets five seconds to finish during final cleanup.
+After that, shutdown logs the stalled worker, cancels further projection work,
+and terminates its native task. It still waits for accepted writes and database
+lease cleanup before closing agent databases. Committed transcripts remain intact;
+unfinished index work is rediscovered after restart. Idle pools close immediately.
+This also applies to update restarts once the running Gateway contains this fix.
+
 When Gateway connection shutdown begins, session observer event subscriptions
 stop before the observer closes. Accepted observer work still settles, while
 chat events and terminal session writes continue through their own drain.
