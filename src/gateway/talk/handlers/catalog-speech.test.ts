@@ -17,7 +17,8 @@ vi.mock("../../../tts/provider-registry.js", async (importOriginal) => ({
   getSpeechProvider: () => undefined,
 }));
 
-vi.mock("../../../talk/provider-registry.js", () => ({
+vi.mock("../../../talk/provider-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../talk/provider-registry.js")>()),
   listRealtimeVoiceProviders: () => registry.realtime,
   canonicalizeRealtimeVoiceProviderId: (id: string | undefined) => id,
   getRealtimeVoiceProvider: (id: string | undefined) =>
