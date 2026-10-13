@@ -41,6 +41,42 @@ describe("devices exec approvals rendering", () => {
     );
   });
 
+  it("preserves authored wildcard and agent overrides above owner defaults", () => {
+    const container = renderDevicesContainer({
+      execApprovalsSnapshot: {
+        path: "/tmp/exec-approvals.json",
+        exists: false,
+        hash: "missing:empty",
+        file: {
+          version: 1,
+          agents: {
+            "*": { security: "allowlist", ask: "always" },
+            main: { ask: "on-miss" },
+          },
+        },
+        resolvedDefaults: {
+          security: "full",
+          ask: "off",
+          askFallback: "deny",
+          autoAllowSkills: false,
+        },
+      },
+      execApprovalsSelectedAgent: "main",
+    });
+    const section = getSection(container, "Exec approvals");
+    const security = getSettingsRow(section, "Security").querySelector<HTMLSelectElement>("select");
+    const ask = getSettingsRow(section, "Ask").querySelector<HTMLSelectElement>("select");
+    const fallback = getSettingsRow(section, "Ask fallback").querySelector<HTMLSelectElement>(
+      "select",
+    );
+
+    expect(security?.selectedOptions[0]?.textContent?.trim()).toBe("Use default (allowlist)");
+    expect(ask?.value).toBe("on-miss");
+    expect(fallback?.selectedOptions[0]?.textContent?.trim()).toBe("Use default (deny)");
+    expect(section.textContent).not.toContain("Using default");
+    expect(getSettingsRow(section, "Security").querySelector(".settings-row__desc")).toBeNull();
+  });
+
   it("keeps the selected node until its owner accepts a target change", () => {
     const onExecApprovalsTargetChange = vi.fn();
     const props = {

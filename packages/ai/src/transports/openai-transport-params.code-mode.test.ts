@@ -35,7 +35,7 @@ describe("OpenAI Code Mode payload tool names", () => {
 describe("OpenAI Code Mode payload tool filtering", () => {
   const visibleToolNames = new Set(["exec", "wait", "computer"]);
 
-  it.each(["functionDeclarations"] as const)(
+  it.each(["functionDeclarations", "function_declarations"] as const)(
     "filters grouped %s without admitting provider-native tools",
     (field) => {
       const payload: { tools: unknown[] } = {
@@ -127,7 +127,7 @@ describe("OpenAI Code Mode payload tool filtering", () => {
     });
   });
 
-  it.each(["functionDeclarations"] as const)(
+  it.each(["functionDeclarations", "function_declarations"] as const)(
     "rejects and removes grouped %s from final OpenAI payloads",
     (field) => {
       const payload = {

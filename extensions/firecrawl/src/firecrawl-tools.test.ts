@@ -440,6 +440,36 @@ describe("firecrawl tools", () => {
     expect(authHeader).toBe("Bearer firecrawl-test-key");
   });
 
+  it("omits Firecrawl authorization for keyless scrape requests", async () => {
+    let capturedInit: RequestInit | undefined;
+    global.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedInit = init;
+      return Response.json({
+        success: true,
+        data: {
+          markdown: "# Keyless",
+          metadata: {
+            sourceURL: "https://example.com/keyless-firecrawl",
+            statusCode: 200,
+          },
+        },
+      });
+    }) as typeof fetch;
+
+    await runActualFirecrawlScrape({
+      cfg: firecrawlConfig({
+        webFetch: {
+          baseUrl: "https://api.firecrawl.dev",
+        },
+      }),
+      url: "https://example.com/keyless-firecrawl",
+      extractMode: "markdown",
+      access: "keyless",
+    });
+
+    expect(new Headers(capturedInit?.headers).has("Authorization")).toBe(false);
+  });
+
   it("requires credentials for direct scrape requests", async () => {
     await expect(
       runActualFirecrawlScrape({

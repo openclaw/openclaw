@@ -9,6 +9,12 @@ import {
 } from "./redact-sensitive-url.js";
 
 describe("redactSensitiveUrl", () => {
+  it("redacts encoded and invisible-spliced sensitive query param names", () => {
+    expect(
+      redactSensitiveUrl("https://example.com/mcp?client%5Fse%E2%80%8Bcret=secret&safe=value"),
+    ).toBe("https://example.com/mcp?client_se%E2%80%8Bcret=***&safe=value");
+  });
+
   it("redacts signed and x-* auth aliases without matching adjacent metadata", () => {
     expect(
       redactSensitiveUrl(

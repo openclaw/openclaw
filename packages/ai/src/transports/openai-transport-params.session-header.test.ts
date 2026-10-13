@@ -40,6 +40,19 @@ describe("buildOpenAIClientHeaders session_id affinity header", () => {
     expect(sessionHeader?.startsWith("internal-session-effects-session-companion-")).toBe(true);
   });
 
+  it("omits generated Responses session headers when caching is disabled", () => {
+    const headers = buildOpenAIClientHeaders(
+      proxyResponsesModel,
+      context,
+      undefined,
+      undefined,
+      "proxy-session-123",
+      "none",
+    );
+
+    expect(headers.session_id).toBeUndefined();
+  });
+
   it.each(["short"] as const)(
     "preserves a mixed-case caller header with %s retention",
     (cacheRetention) => {
