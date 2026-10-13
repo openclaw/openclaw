@@ -4,22 +4,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import type { SecretEgressProxyHandle } from "./egress-proxy/proxy-server.js";
+import type { SecretEgressProxyWorkerHandle } from "./egress-proxy/proxy-worker.js";
 import { withConfiguredModelEgress } from "./model-egress.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "./sentinel.js";
 
 const startProxy = vi.hoisted(() =>
-  vi.fn<typeof import("./egress-proxy/proxy-server.js").startSecretEgressProxyServer>(),
+  vi.fn<typeof import("./egress-proxy/proxy-worker.js").startSecretEgressProxyWorker>(),
 );
-vi.mock("./egress-proxy/proxy-server.js", () => ({
-  startSecretEgressProxyServer: startProxy,
+vi.mock("./egress-proxy/proxy-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./egress-proxy/proxy-worker.js")>()),
+  startSecretEgressProxyWorker: startProxy,
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const credential = "synthetic-model-egress-api-key";
 const publicCa = "synthetic-public-ca-bundle";
 let config: OpenClawConfig;
-let proxy: SecretEgressProxyHandle;
+let proxy: SecretEgressProxyWorkerHandle;
 const revoke = vi.fn();
 
 beforeEach(async () => {
@@ -48,12 +49,12 @@ beforeEach(async () => {
   proxy = {
     caCertPath: caPath,
     proxyOrigin: "http://127.0.0.1:12345",
-    getCertificateStatus: () => ({
+    getCertificateStatus: async () => ({
       state: "ready",
       caExpiresAt: "2030-01-01",
       failedCertificates: 0,
     }),
-    registerProcess: vi.fn(() => ({
+    registerProcess: vi.fn(async () => ({
       env: {
         HTTPS_PROXY: "http://openclaw:synthetic-proxy-token@127.0.0.1:12345",
         NODE_EXTRA_CA_CERTS: caPath,

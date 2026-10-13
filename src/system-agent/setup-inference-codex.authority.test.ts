@@ -6,6 +6,7 @@ import { readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as records from "../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
 import * as update from "../plugins/update.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import * as worker from "../state/openclaw-state-lease-worker-operation.js";
@@ -15,8 +16,84 @@ import {
   SetupInferenceCancelledError,
   throwIfSetupInferenceCancelled,
 } from "./setup-inference-core.js";
+import { pluginRecord } from "./verified-inference.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("binds automatic Codex path trust to the selected bundle", async () => {
+  await withOpenClawTestState(
+    {
+      label: "codex-bundled-path-trust",
+      env: {
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: "1",
+      },
+    },
+    async (state) => {
+      const rootDir = state.statePath("bundled", "codex");
+      const cfg: OpenClawConfig = {};
+      await state.writeConfig(cfg);
+      const snapshot = await readConfigFileSnapshot();
+      const metadata = createEmptyPluginMetadataSnapshot(state.workspaceDir);
+      for (const { sourceMatches, installMatches, origin, accepted } of [
+        { sourceMatches: true, installMatches: true, origin: "bundled", accepted: true },
+        { sourceMatches: false, installMatches: true, origin: "bundled", accepted: false },
+        { sourceMatches: true, installMatches: false, origin: "bundled", accepted: false },
+        { sourceMatches: true, installMatches: true, origin: "config", accepted: false },
+      ] as const) {
+        const staged = await stageCodexCandidate(
+          {
+            cfg,
+            snapshot,
+            workspace: state.workspaceDir,
+            agentDir: state.agentDir(),
+            routeAgentId: "main",
+            params: {
+              kind: "codex-cli",
+              automaticSetup: true,
+              surface: "gateway",
+              runtime: createNonExitingRuntime(),
+            },
+            deps: {
+              resolvePluginMetadataSnapshot: () => ({
+                ...metadata,
+                index: {
+                  ...metadata.index,
+                  plugins: [pluginRecord("codex", { origin, rootDir })],
+                  installRecords: {
+                    codex: {
+                      source: "path",
+                      sourcePath: sourceMatches ? rootDir : state.statePath("foreign", "codex"),
+                      installPath: installMatches ? rootDir : state.statePath("foreign", "codex"),
+                    },
+                  },
+                },
+              }),
+              ensureCodexRuntimePlugin: async ({ cfg: config }) => ({
+                ok: true,
+                cfg: config,
+                required: false,
+              }),
+            },
+            effects: { credentialsSaved: false },
+            beforePersistentEffect: async () => {},
+          },
+          "openai/fixture",
+        );
+        if (accepted) {
+          expect(staged).toMatchObject({
+            agentRuntimeId: "codex",
+            config: {
+              plugins: { entries: { codex: { config: { appServer: { homeScope: "user" } } } } },
+            },
+          });
+        } else {
+          expect(staged).toMatchObject({ error: expect.stringContaining("official Codex plugin") });
+        }
+      }
+    },
+  );
+});
 
 it.each([
   { candidate: false, revoke: false },

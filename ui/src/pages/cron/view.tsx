@@ -9,7 +9,6 @@ import "../../styles/chat/text.css";
 import "../../styles/cron.css";
 import "../../components/agent-row-chip.tsx";
 import "../../components/tooltip.ts";
-import "../../components/web-awesome.ts";
 registerEnglishCatalog(registerCronEnglish);
 export function CronView(props: CronProps) {
   const mode = () => (props.editingJob ? "job" : props.createOpen ? "create" : "overview");

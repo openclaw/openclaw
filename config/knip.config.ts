@@ -59,6 +59,10 @@ const repositoryScriptEntries = [
   "scripts/bench-control-ui-cold-load.ts!",
   // The channel-turn benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-channel-turn.mts!",
+  // Maintainers invoke this isolated transcript-rewrite benchmark by path.
+  "scripts/bench-session-manager-rewrite.ts",
+  // The team-shaped fixture README invokes this measurement CLI by path.
+  "scripts/perf/team-shape-measure.ts",
   "scripts/bundle-a2ui.mts!",
   "scripts/build-discord-activity-sdk.mts!",
   // Plugin package asset hooks invoke the browser builder by path.
@@ -238,6 +242,8 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/ci-dispatch.mjs!",
   // review.sh invokes the corrected-candidate review validator by path.
   "scripts/pr-lib/correction-review.mjs!",
+  // prepare-core.sh invokes correction continuation and recovery by path.
+  "scripts/pr-lib/correction-continuation.mjs!",
   "scripts/pr-lib/gh-api-preflight.mjs!",
   "scripts/pr-lib/materialize-dependencies.mjs!",
   "scripts/pr-lib/merge-body.mjs!",
@@ -760,6 +766,11 @@ const config = {
   // Script exports are checked with every script as an entry and entry-export
   // reporting enabled. Suppress them only in this application-production scan.
   ignoreIssues: {
+    // P3-6c.1 stages manifest write/archive and typed replacement outcomes for P3-6c.2.
+    // Remove these production-only exceptions when the offline port caller lands;
+    // the full-tree audit still checks all exports against their boundary tests.
+    "src/infra/database-port-recovery.ts": ["exports"],
+    "src/infra/sqlite-snapshot.ts": ["exports"],
     "scripts/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
     // PR2a admits physical facts now; PR2b routes state maintenance to these capabilities.
     // The full-tree test-aware scan still audits their boundary-test consumers.
@@ -852,6 +863,9 @@ const config = {
         // Solid plugin builds createRequire the compiler from the plugin author's package.json;
         // the host never resolves or ships it (docs/plugins/feature-plugins.md).
         "@solidjs/compiler",
+        // Canvas bundling resolves these from extensions/canvas/package.json.
+        "@solidjs/web",
+        "solid-js",
         "playwright-core",
         "partial-json",
         // The native Canvas bundle falls back without optional Markdown support.
@@ -1007,9 +1021,7 @@ const config = {
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/canvas`]: bundledPluginWorkspace([
       // Package build/copy scripts are invoked from package.json.
-      "scripts/bundle-a2ui.mjs!",
       "scripts/copy-a2ui.mjs!",
-      "scripts/pnpm-runner.mjs!",
       // Rolldown consumes this config and its browser bootstrap entry.
       "src/host/a2ui-app/rolldown.config.mjs!",
       "src/host/a2ui-app/bootstrap.jsx!",

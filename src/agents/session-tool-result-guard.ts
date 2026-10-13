@@ -445,6 +445,11 @@ export function installSessionToolResultGuard(
     const callerInvalidatesCache = callerOptions?.invalidateSerializedPrefixCache === true;
     let nextMessage = message;
     if (message.role === "assistant") {
+      // Publish the owning run before storage clones the message or hooks project it.
+      // Already-admitted immutable replay messages retain their recorded envelope.
+      if (!Object.isFrozen(message)) {
+        Object.assign(message, attachSessionTranscriptRunId(message, transcriptRunId));
+      }
       const sanitized = sanitizeToolCallInputs([message], {
         allowedToolNames: opts?.allowedToolNames,
       });

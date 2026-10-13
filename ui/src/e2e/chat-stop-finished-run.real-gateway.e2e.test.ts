@@ -1,4 +1,4 @@
-// Withhold this run's terminal notifications and delay terminal descriptors until Stop recovers from the Gateway's no-active-run answer.
+// Withhold this run's terminal observations until Stop recovers from the Gateway's no-active-run answer.
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -203,6 +203,7 @@ suite.define(() => {
         let dropped = 0;
         let delayTerminalDescriptors = true;
         let delayedTerminalDescriptors = 0;
+        let delayedTerminalHistories = 0;
         const deferredDescriptors: Array<() => void> = [];
         let stage = "create session";
         const call = async (method: string, params: Record<string, unknown>) => {
@@ -326,6 +327,17 @@ suite.define(() => {
                       socket.send(message);
                     };
                     const session = frame.payload?.session;
+                    const historySession = frame.payload?.sessionInfo;
+                    const abortIndex = sent.findIndex((entry) => entry.method === "chat.abort");
+                    const hasPreStopTerminalHistory =
+                      request !== undefined &&
+                      ["chat.startup", "chat.history"].includes(request.method ?? "") &&
+                      request.params?.sessionKey === sessionKey &&
+                      historySession?.key === sessionKey &&
+                      historySession.lastRunId === runId &&
+                      historySession.hasActiveRun === false &&
+                      historySession.status === "done" &&
+                      (abortIndex < 0 || sent.indexOf(request) < abortIndex);
                     const hasTerminalDescriptor =
                       (request?.method === "sessions.describe" &&
                         request.params?.key === sessionKey &&
@@ -343,11 +355,14 @@ suite.define(() => {
                       runId &&
                       frame.type === "res" &&
                       frame.ok === true &&
-                      hasTerminalDescriptor
+                      (hasTerminalDescriptor || hasPreStopTerminalHistory)
                     ) {
-                      // Shared descriptor observations can settle ownership before Stop.
-                      // Delay this exact terminal fact, then deliver the real reply unchanged.
+                      // Pre-Stop history also settles ownership. Keep its real reply held
+                      // until recovery; only history requested after Stop can prove recovery.
                       delayedTerminalDescriptors += 1;
+                      if (hasPreStopTerminalHistory) {
+                        delayedTerminalHistories += 1;
+                      }
                       deferredDescriptors.push(deliver);
                     } else {
                       deliver();
@@ -590,6 +605,7 @@ suite.define(() => {
                 proof.connectRequests = sent.filter((frame) => frame.method === "connect").length;
                 proof.droppedTerminalNotifications = dropped;
                 proof.delayedTerminalDescriptors = delayedTerminalDescriptors;
+                proof.delayedTerminalHistories = delayedTerminalHistories;
                 proof.pendingTerminalDescriptors = deferredDescriptors.length;
                 proof.abortRequests = sent.filter((frame) => frame.method === "chat.abort").length;
                 proof.pendingBrowserRequests = pending.size;

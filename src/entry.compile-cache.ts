@@ -118,7 +118,10 @@ export function enableOpenClawCompileCache(params: {
 }): void {
   if (!isSourceEntry(params.currentFile)) {
     enableInstallCompileCache({
-      directory: resolveOpenClawCompileCacheDirectory(params),
+      directory: resolveOpenClawCompileCacheDirectory({
+        ...params,
+        foregroundGateway: isForegroundGatewayRunArgv(process.argv),
+      }),
       env: params.env,
     });
   }

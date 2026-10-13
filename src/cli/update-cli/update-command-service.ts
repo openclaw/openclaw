@@ -177,6 +177,7 @@ export async function maybeRestartService(params: {
     if (params.opts.run !== run || run?.executorFence !== executor) {
       throw new Error("Native restart lost its original update executor.");
     }
+    run?.deadline?.signal.throwIfAborted();
     executor?.assertCurrent();
   };
   assertCurrent();
@@ -193,6 +194,14 @@ export async function maybeRestartService(params: {
     }
   };
   let verificationObserved = false;
+  let lastProgressAt = -Infinity;
+  const onProgress = (stage: string, reason: string) => {
+    if (performance.now() - lastProgressAt < 30_000) {
+      return;
+    }
+    lastProgressAt = performance.now();
+    defaultRuntime[params.opts.json ? "error" : "log"](`Gateway readiness (${stage}): ${reason}`);
+  };
   const failed = async (outcome: "failed" | "restart-health-failed" = "failed") => {
     // A restart can fail before health verification starts; recovery owns that phase.
     recordPhase("verifying");
@@ -218,6 +227,7 @@ export async function maybeRestartService(params: {
   }
   let activation = {
     ...params,
+    signal: run?.deadline?.signal,
     // A default update step must not truncate a Windows service's cold-start budget.
     timeoutMs:
       process.platform === "win32" && params.opts.timeout === undefined
@@ -300,7 +310,8 @@ export async function maybeRestartService(params: {
     if (failure instanceof ServiceStartRefusalError) {
       return failure.refusal;
     }
-    const deadline = createGatewayRestartDeadline({ timeoutMs: activation.timeoutMs });
+    const deadline =
+      run?.deadline ?? createGatewayRestartDeadline({ timeoutMs: activation.timeoutMs });
     try {
       const runtime = await deadline.run(() =>
         deadline.read("service startup refusal", () =>
@@ -321,7 +332,9 @@ export async function maybeRestartService(params: {
       assertCurrent();
       return error instanceof ServiceStartRefusalError ? error.refusal : undefined;
     } finally {
-      deadline.dispose();
+      if (!run?.deadline) {
+        deadline.dispose();
+      }
     }
   };
   let activationAccepted = false;
@@ -343,6 +356,7 @@ export async function maybeRestartService(params: {
       serviceEnv: activation.serviceEnv,
       gatewayPort: activation.gatewayPort,
       timeoutMs: activation.timeoutMs,
+      onProgress,
       expectedVersion: expectedGatewayVersion,
       expectedBuildId: expectedGatewayBuildId,
       requireRunningService: opts.requireRunningService,
@@ -395,6 +409,7 @@ export async function maybeRestartService(params: {
           service: resolveGatewayService(),
           port: activation.gatewayPort,
           timeoutMs: activation.timeoutMs,
+          onProgress,
           expectedVersion: expectedGatewayVersion,
           ...(expectedGatewayBuildId ? { expectedBuildId: expectedGatewayBuildId } : {}),
           env: activation.serviceEnv,
@@ -484,6 +499,8 @@ export async function maybeRestartService(params: {
             healthOnly: true,
             gatewayPort: activation.gatewayPort,
             timeoutMs: activation.timeoutMs,
+            deadline: run?.deadline,
+            onProgress,
             expectedVersion: expectedGatewayVersion,
             ...(expectedGatewayBuildId ? { expectedBuildId: expectedGatewayBuildId } : {}),
             requirePluginHealth: false,
@@ -548,7 +565,8 @@ export async function maybeRestartService(params: {
             },
           });
           assertCurrent();
-          const deadline = createGatewayRestartDeadline({ timeoutMs: activation.timeoutMs });
+          const deadline =
+            run?.deadline ?? createGatewayRestartDeadline({ timeoutMs: activation.timeoutMs });
           try {
             activation = {
               ...activation,
@@ -568,7 +586,9 @@ export async function maybeRestartService(params: {
             }
             throw error;
           } finally {
-            deadline.dispose();
+            if (!run?.deadline) {
+              deadline.dispose();
+            }
           }
           assertCurrent();
           expectedGatewayVersion = normalizeOptionalString(activation.result.after?.version);

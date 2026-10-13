@@ -1,13 +1,17 @@
-import { isMainThread } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayErrorDetailCodes } from "../../packages/gateway-protocol/src/index.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import * as profileReader from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -16,7 +20,13 @@ import { sessionCompanionHandlers } from "./session-companion-rpc.js";
 import type { SessionCompanionService } from "./session-companion.js";
 import { roleClient, rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
 
-afterEach(() => closeOpenClawAgentDatabasesForTest());
+const memoryOwners: Array<{ agentId: string; path: string }> = [];
+afterEach(() => {
+  for (const owner of memoryOwners.splice(0)) {
+    memorySessionActorOwners.closeDatabase(owner);
+  }
+  closeOpenClawAgentDatabasesForTest();
+});
 
 async function invoke(
   method: keyof typeof sessionCompanionHandlers,
@@ -42,8 +52,7 @@ async function invoke(
 }
 
 describe("session companion RPC", () => {
-  it("keeps an incognito source native through captured operator authority for durable side chat writes", async () => {
-    expect(isMainThread).toBe(true);
+  it("keeps a memory incognito source current through operator authority for durable side chat writes", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await captureRuntimeConfigAsyncReader()();
       const profile = ensureProfileForEmail("incognito-companion@example.test");
@@ -52,16 +61,31 @@ describe("session companion RPC", () => {
         connId: "incognito-companion-connection",
       };
       const sessionKey = "agent:main:dashboard:incognito-companion-source";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
+      const location = {
+        agentId: "main",
+        path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+      };
+      memoryOwners.push(location);
+      const created = await withSessionActorStorage(
+        { agentId: "main", sessionKey, storePath: location.path },
         {
-          sessionId: "incognito-companion-source",
-          updatedAt: Date.now(),
-          incognito: true,
-          visibility: "shared",
-          createdActor: { type: "human", source: "profile", id: profile.id },
+          lifetime: { assertCurrent() {}, assertReadable() {} },
+          authority: { assertCurrent() {}, authorize() {} },
+          create: true,
         },
+        () =>
+          upsertSessionEntryCore(
+            { agentId: "main", sessionKey },
+            {
+              sessionId: "incognito-companion-source",
+              updatedAt: Date.now(),
+              incognito: true,
+              visibility: "shared",
+              createdActor: { type: "human", source: "profile", id: profile.id },
+            },
+          ),
       );
+      expect(created?.sessionId).toBe("incognito-companion-source");
       const target = { agentId: "main", sessionKey: "agent:main:companion-durable-target" };
       await upsertSessionEntryCore(target, {
         sessionId: "companion-durable-target",
@@ -305,6 +329,65 @@ describe("session companion RPC", () => {
       );
     },
   );
+
+  it("reads companion visibility while an unrelated writer remains admitted", async ({
+    signal,
+  }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      await captureRuntimeConfigAsyncReader()();
+      const owner = ensureProfileForEmail("companion-owner@example.test");
+      const client = { ...roleClient("view", "companion-reader"), connId: "reader-connection" };
+      using _ = {
+        [Symbol.dispose]: (await profileReader.prepareUserProfileCatalog()).release,
+      };
+      const cfg = rolePolicyConfig();
+      cfg.agents = { entries: { main: {} } };
+      const keys = ["agent:main:companion-shared", "agent:main:companion-draft"];
+      for (const [index, visibility] of (["shared", "draft"] as const).entries()) {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: keys[index]!, env },
+          {
+            sessionId: `companion-${visibility}`,
+            updatedAt: 1,
+            visibility,
+            createdActor: { type: "human", source: "profile", id: owner.id },
+          },
+        );
+      }
+      const exchanges = [{ question: "Why?", answer: "Because.", ts: 10 }];
+      const state = vi.fn(() => ({ exchanges }));
+      const read = (sessionKey: string) =>
+        invoke("sessions.companion.state", { sessionKey }, { state }, client, undefined, cfg);
+      await read(keys[0]!);
+      state.mockClear();
+
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const writer = runOpenClawAgentWriteAdmission({ agentId: "main", env }, async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      const reads: Array<ReturnType<typeof read>> = [];
+      try {
+        await withinTest(entered.promise, signal);
+        reads.push(...keys.map(read));
+        const [visible, hidden] = await withinTest(Promise.all(reads), signal);
+        expect(visible).toHaveBeenCalledWith(true, { exchanges });
+        expect(hidden).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "INVALID_REQUEST" }),
+        );
+        expect(state).toHaveBeenCalledExactlyOnceWith({
+          agentId: "main",
+          sessionKey: keys[0],
+        });
+      } finally {
+        release.resolve();
+        await Promise.allSettled([writer, ...reads]);
+      }
+    });
+  });
 
   it.each(["sessions.companion.ask", "sessions.companion.state"] as const)(
     "hides a foreign draft before dispatching %s",

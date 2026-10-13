@@ -7,6 +7,7 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readSessionNodesGeneration } from "../config/sessions/session-accessor.sqlite-entry-revision.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import type { SqliteWorkerExecutionAuthority } from "../infra/sqlite-worker-contract.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
@@ -57,7 +58,6 @@ import {
 } from "./openclaw-agent-execution-authority.js";
 import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-native.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
-import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -129,7 +129,6 @@ it.each(["before handoff", "after handoff"] as const)(
       () => context.admission.assertCurrent(),
       undefined,
       () => {},
-      () => async () => {},
     );
     let validation: ReturnType<typeof getOpenClawAgentDatabaseValidationForTransfer>;
     const publish = () => {
@@ -322,12 +321,12 @@ it("admits cold storage in its worker and lends facts to every later native hand
   expect(freshValidation.schema?.facts.textEncoding).toBe("UTF-8");
   expect(Atomics.load(new Int32Array(freshValidation.canonicalReady), 0)).toBe(1);
 
-  // A synchronous caller shares the live worker admission; final close retires its catalog.
+  // Native handles share the worker's physical admission across orderly close.
   expectAdmittedSchemaObjects(openOpenClawAgentDatabase(options).db);
   expect(inspections).toEqual([]);
   await closeOpenClawAgentDatabaseByPathAsync(pathname);
   expectAdmittedSchemaObjects(openOpenClawAgentDatabase(options).db);
-  expect(inspections).toEqual([expect.stringMatching(/\bFROM main\.sqlite_schema\b/iu)]);
+  expect(inspections).toEqual([]);
 });
 
 it("publishes freshly verified proof to a previously admitted alias after stale lease cleanup", async () => {
@@ -549,7 +548,7 @@ it.each([
         fs.renameSync(`${pathname}.replacement`, pathname);
       }
       if (change === "damage") {
-        clearOpenClawAgentIntegrityVerification(pathname, options.env);
+        revokeSqliteDatabaseAdmissionsForPath(pathname);
         fs.writeFileSync(pathname, "damaged SQLite fixture");
       } else if (change !== "warm-schema") {
         const editor = openNodeSqliteDatabase(pathname);

@@ -24,6 +24,9 @@ message alone cannot restore missing sender authority.
 This includes automation turns running in dashboard main sessions. If a restart
 exhausts its drain budget, cancellation preserves restart recovery even when the
 provider reports an error and the turn settles before shutdown discovers it.
+The next visible message preserves an interrupted turn's recovery claim even
+when its saved status is failed, timed out, or killed. Recovery resumes the
+interrupted work before the new message takes foreground ownership.
 
 This page describes what survives a restart, how interrupted work is detected,
 and what the automatic resume looks like.
@@ -465,6 +468,14 @@ when a busy gateway defers only the channel restart. This keeps stale sockets fr
 waiting for their normal expiry without interrupting an active reply or agent
 startup when a busy event loop caused the timer gap.
 
+Sleep and backward wall-clock adjustments do not by themselves revoke state
+ownership. After a heartbeat gap, the Gateway verifies its lock's physical
+identity and acquisition bytes before renewing it. A removed or replaced lock,
+or a renewal that still fails, fences state access. Locally authorized recovery
+still restarts the Gateway when the fenced database cannot supply the stored
+restart intent; raw unauthorized restart signals retain their existing policy.
+No configuration or database migration is needed when updating to this behavior.
+
 The macOS app and Linux companion cooperate with a local gateway by preparing a
 short suspension lease before the host sleeps and resuming it after wake. Remote
 gateways are not suspended when the app host sleeps. A deliberate suspension
@@ -720,10 +731,14 @@ interrupted by a restart and to continue from the existing transcript. If a
 final reply had already been produced but not delivered, its text is included
 so the agent can deliver it instead of redoing the work.
 
-Startup recovery prepares and admits one continuation at a time to bound database
-and worker pressure. Once execution starts, the normal main lane owns concurrency;
-a long recovered turn does not hold a separate startup slot. Deferred database
-admissions join the same startup scheduler. Shutdown stops new preparation and
+Startup recovery prepares one continuation at a time. Automatic continuations
+execute in the one-wide background command lane, retaining its slot until the turn
+finishes. Interactive turns use the main lane, so a large recovery backlog cannot
+fill their execution slots. Later interrupted turns keep their durable claims
+while waiting; a long recovered turn delays other automatic continuations.
+Optional startup database maintenance and page-cache warming wait for this
+backlog to drain; runtime timers and cron startup proceed independently. Deferred
+database admissions join the same startup scheduler. Shutdown stops new preparation and
 joins the current pass, leaving unstarted interruptions available for the next boot.
 
 Recovery follows retained transcript-window ownership when a session moves to a

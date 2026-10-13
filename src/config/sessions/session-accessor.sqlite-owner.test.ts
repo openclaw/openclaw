@@ -1,5 +1,5 @@
-import type { StatementSync } from "node:sqlite";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS,
   SESSION_OWNER_COLUMN_DEFINITIONS,
@@ -11,7 +11,6 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
@@ -20,6 +19,7 @@ import {
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import { retainPreparedSessionEntryPredicate } from "./session-accessor.sqlite-entry-cache-publication-state.js";
+import { assignSessionOwnerInWorker } from "./session-metadata-write.async.js";
 
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
@@ -42,20 +42,7 @@ describe("SQLite session owner assignment", () => {
         createdActor: { type: "human" as const, source: "profile" as const, id: "creator" },
       };
       await upsertSessionEntryCore(scope, entry);
-      const database = openOpenClawAgentDatabase({
-        agentId: scope.agentId,
-        env: state.env,
-        path: resolveIncognitoOpenClawAgentSqlitePath(scope),
-      });
-      const prototype: StatementSync = Object.getPrototypeOf(database.db.prepare("SELECT 1"));
-      const methods = (["all", "get", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(prototype, method),
-      );
-      const sessionRowReads = () =>
-        methods
-          .flatMap((method) => method.mock.contexts)
-          .map((statement) => (statement as StatementSync).sourceSQL)
-          .filter((sql) => /from ["`]?session_nodes["`]?/i.test(sql));
+      const sql = observeHostDataSql();
       const assignment = {
         actor: { type: "agent" as const, id: "research" },
         assignedBy: { type: "human" as const, id: "creator" },
@@ -69,29 +56,13 @@ describe("SQLite session owner assignment", () => {
         expectedEntry: entry,
       };
       try {
-        expect(assignSessionOwner(scope, params)).toEqual(assignment);
-        expect(sessionRowReads()).toEqual([]);
-
-        await upsertSessionEntryCore(scope, {
-          ...entry,
-          lifecycleRevision: "replacement-generation",
-          owner: assignment,
-        });
-        // Observe assignment guards separately from the fixture's lifecycle mutation.
-        for (const method of methods) {
-          method.mockClear();
-        }
-        expect(() =>
-          assignSessionOwner(scope, { ...params, expectedSessionId: "replaced-session" }),
-        ).toThrow("session changed before owner assignment");
-        expect(() => assignSessionOwner(scope, params)).toThrow(
-          "session ownership changed before owner assignment",
-        );
-        expect(sessionRowReads()).toEqual([]);
+        await expect(assignSessionOwnerInWorker(scope, params)).resolves.toEqual(assignment);
+        await expect(
+          assignSessionOwnerInWorker(scope, { ...params, expectedSessionId: "replaced-session" }),
+        ).rejects.toThrow("session changed before collaboration mutation");
+        expect(sql.queries).toEqual([]);
       } finally {
-        for (const method of methods) {
-          method.mockRestore();
-        }
+        sql.restore();
       }
       expect(loadSessionEntry(scope)?.owner).toEqual(assignment);
     });

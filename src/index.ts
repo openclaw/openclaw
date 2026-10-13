@@ -129,7 +129,10 @@ if (!isMain) {
 
 const shouldRunCli = isMain && !handledRootVersion && !handledAdmission;
 const compileCacheDirectory = shouldRunCli
-  ? resolveOpenClawCompileCacheDirectory({ installRoot: fileURLToPath(packageRootUrl) })
+  ? resolveOpenClawCompileCacheDirectory({
+      installRoot: fileURLToPath(packageRootUrl),
+      foregroundGateway: isForegroundGatewayRunArgv(process.argv),
+    })
   : undefined;
 const compileCacheRespawnEnv =
   shouldRunCli &&
@@ -202,7 +205,7 @@ if (shouldRunCli && !compileCacheRespawnEnv) {
       console.error("[openclaw]", message);
     }
     restoreRuntimeTerminalState("uncaught exception", { resumeStdinIfPaused: false });
-    exitAfterSignalExitBarriers(1);
+    exitAfterSignalExitBarriers(1, "uncaught exception");
   });
 
   void runCliWithExitFinalization({

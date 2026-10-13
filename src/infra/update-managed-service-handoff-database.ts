@@ -19,6 +19,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
+import { packageUpdateRefusal } from "./package-update-refusal.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import {
   isSqliteLockError,
@@ -70,7 +71,8 @@ function assertRecordedDatabasePath(
   existingIdentity?: ManagedUpdateLeaseDatabaseIdentity,
 ): void {
   if (existingIdentity && databasePath !== existingIdentity.databasePath) {
-    throw new Error(
+    throw packageUpdateRefusal(
+      "managed-handoff-lease-identity-changed",
       identityChangedMessage(databasePath, [
         `path (recorded ${existingIdentity.databasePath}; current ${databasePath})`,
       ]),
@@ -358,7 +360,10 @@ export function captureManagedUpdateLeaseDatabaseIdentity(
       );
     }
     if (changes.length) {
-      throw new Error(identityChangedMessage(databasePath, changes));
+      throw packageUpdateRefusal(
+        "managed-handoff-lease-identity-changed",
+        identityChangedMessage(databasePath, changes),
+      );
     }
   }
   return Object.freeze({

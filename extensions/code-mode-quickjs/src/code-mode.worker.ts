@@ -1,4 +1,5 @@
 /** QuickJS worker for Code Mode guest execution and suspended VM snapshots. */
+import { threadId } from "node:worker_threads";
 import {
   CODE_MODE_CONTROLLER_SOURCE,
   boundCodeModeError,
@@ -55,6 +56,18 @@ class CodeModeWorkerFailure extends Error {
   }
 }
 
+function notifyWorkerFailure(channel: WorkerTaskChannel | undefined, error: unknown): void {
+  channel?.notify({
+    status: "failure",
+    error:
+      error instanceof Error
+        ? { name: error.name, message: error.message, stack: error.stack }
+        : String(error),
+    failurePhase:
+      error instanceof CodeModeWorkerFailure ? (error.failurePhase ?? "guest") : "guest",
+  });
+}
+
 function isQuickJsInterruptedError(error: unknown): boolean {
   return error instanceof JSException && error.message === "interrupted";
 }
@@ -100,10 +113,7 @@ function errorMessage(error: unknown, location?: SourceLocation): string {
   if (error instanceof JSException) {
     return formatQuickJsError(error.name, error.message, error.stack, location);
   }
-  if (error instanceof Error) {
-    return error.message || String(error);
-  }
-  return String(error);
+  return error instanceof Error ? error.message || String(error) : String(error);
 }
 
 function trackPromiseRejection(
@@ -575,6 +585,7 @@ async function runVmExecution(params: {
       }
     }
   } catch (error) {
+    notifyWorkerFailure(params.channel, error);
     return workerFailureResult({
       error,
       didTimeout: params.didTimeout,
@@ -675,6 +686,7 @@ async function main(
   input: unknown,
   channel?: WorkerTaskChannel,
 ): Promise<CodeModeWorkerThreadResult> {
+  channel?.notify({ status: "worker", workerId: `code-mode-quickjs:${threadId}` });
   if (
     !isRecord(input) ||
     !isRecord(input.config) ||
@@ -741,6 +753,7 @@ async function main(
       input.retainFinalValue === true,
     );
   } catch (error) {
+    notifyWorkerFailure(channel, error);
     const timedOut = isQuickJsInterruptedError(error);
     const code = timedOut
       ? "timeout"

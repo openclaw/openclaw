@@ -704,29 +704,36 @@ describe("update status abandoned-run reporting", () => {
     expect(() => listUpdateRuns({ limit: 1 })).toThrow();
   });
 
-  it("reports abandoned history read-only when its driver died", async () => {
-    const now = Date.now();
-    const lastActivity = now - ABANDONED_UPDATE_RUN_MS - 10;
-    const driver = readUpdateRunDriver();
-    if (!driver) {
-      throw new Error("Test process identity is unavailable");
-    }
-    vi.spyOn(Date, "now").mockReturnValue(lastActivity);
-    const created = createUpdateRun({
-      trigger: "control-ui",
-      before: { version: "2026.9.2" },
-      origin: {
-        driver: { ...driver, startIdentity: String(Number(driver.startIdentity) + 1) },
-      },
-    });
-    const recorded = recordUpdateRunPhase(created.runId, "staging");
-    vi.mocked(Date.now).mockReturnValue(now);
-    await updateStatusCommand({});
-    expect(getUpdateRun(created.runId)).toEqual(recorded);
-    const output = runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
-    expect(output).not.toContain("update in progress:");
-    expect(output).toContain("Abandoned update detected;");
-    expect(output).toContain("openclaw update repair");
-    expect(output).not.toContain("update failed:");
-  });
+  it.each([undefined, "work"])(
+    "reports abandoned history read-only when its driver died (profile=%s)",
+    async (profile) => {
+      vi.stubEnv("OPENCLAW_PROFILE", profile);
+      const now = Date.now();
+      const lastActivity = now - ABANDONED_UPDATE_RUN_MS - 10;
+      const driver = readUpdateRunDriver();
+      if (!driver) {
+        throw new Error("Test process identity is unavailable");
+      }
+      vi.spyOn(Date, "now").mockReturnValue(lastActivity);
+      const created = createUpdateRun({
+        trigger: "control-ui",
+        before: { version: "2026.9.2" },
+        origin: {
+          driver: { ...driver, startIdentity: String(Number(driver.startIdentity) + 1) },
+        },
+      });
+      const recorded = recordUpdateRunPhase(created.runId, "staging");
+      vi.mocked(Date.now).mockReturnValue(now);
+      await updateStatusCommand({});
+      expect(getUpdateRun(created.runId)).toEqual(recorded);
+      const output = runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
+      expect(output).not.toContain("update in progress:");
+      expect(output).toContain("Abandoned update detected;");
+      expect(output).toContain(
+        `Stop the Gateway first (openclaw${profile ? " --profile work" : ""} gateway stop)`,
+      );
+      expect(output).toContain(`openclaw${profile ? " --profile work" : ""} update repair`);
+      expect(output).not.toContain("update failed:");
+    },
+  );
 });

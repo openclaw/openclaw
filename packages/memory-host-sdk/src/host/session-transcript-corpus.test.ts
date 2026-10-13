@@ -262,6 +262,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
 
   it("reads worker content revisions without claiming an agent database lease", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:revision-corpus";
       const storePath = path.join(state.sessionsDir(), "sessions.json");
       await upsertSessionEntryCore(
@@ -275,6 +276,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       const admitted = new Set(leases.all(agentPath).map((row) => row.lease_id));
 
       const entries = await listSessionTranscriptCorpusEntriesForAgent("main", {
+        config: { session: { store: storePath } },
         includeContentRevision: true,
       });
 

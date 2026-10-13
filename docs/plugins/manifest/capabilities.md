@@ -78,6 +78,7 @@ Each list is optional. For `speechProviders` and `realtimeVoiceProviders`, list 
 | `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                                                                                             |
 | `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                                                                                            |
 | `workerProviders`                | `string[]` | Cloud-worker provider ids this plugin owns for provisioning and profile-backed lease lifecycle.                                      |
+| `workerProfileSuggestions`       | `string[]` | Worker provider ids with a lightweight [profile suggestion artifact](/plugins/manifest#cloud-worker-profile-suggestions).            |
 | `storageProviders`               | `string[]` | Storage transport ids registered with `api.registerStorageProvider`; selected by named storage locations.                            |
 | `usageProviders`                 | `string[]` | Provider ids whose usage-auth and usage-snapshot hooks this plugin owns.                                                             |
 | `migrationProviders`             | `string[]` | Import provider ids this plugin owns for [`openclaw migrate`](/cli/migrate).                                                         |

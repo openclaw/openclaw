@@ -106,12 +106,14 @@ is no longer available on reattachment, local setup becomes available again.
 An unreadable service ownership record blocks automatic installation instead
 of being treated as a missing service; check the LaunchAgent and retry.
 
-Chrome-extension preparation also runs automatically for the default app
-profile, including remote-only and attach-only Macs. It uses the validated
-private runtime, registers the native helper before requesting the Store
-extension, and leaves Chrome’s permission approval to you. Browser setup does not
-run Gateway-wide Doctor or migrate Gateway state. The Dashboard’s **Set up Chrome
-on this device** action retries the same serialized operation. See
+Choose **Settings → This Mac → Set up Chrome on this device** in the Dashboard to
+prepare the Chrome extension, including on remote-only and attach-only Macs.
+Startup does not inspect or change Chrome data. After you start setup, the default
+app profile maintains registration on CLI updates during that app session.
+Setup uses the validated private runtime, registers the native helper before
+requesting the Store extension, and leaves Chrome’s permission approval to you.
+It does not run Gateway-wide Doctor or migrate Gateway state. The same action
+retries setup when needed. See
 [Chrome extension](/tools/chrome-extension).
 
 ## Manual recovery

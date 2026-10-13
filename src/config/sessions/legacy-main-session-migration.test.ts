@@ -43,6 +43,40 @@ type LegacyMainSessionMigrationOutcomeKind = Awaited<
 >["outcomes"][number]["kind"];
 
 describe("legacy main session migration", () => {
+  it("scales legacy store path inspection linearly with the fleet", async () => {
+    const inspectionCounts: number[] = [];
+    for (const size of [16, 32]) {
+      const agentIds = Array.from({ length: size }, (_, index) => `agent-${index}`);
+      const fixture = createFixture({
+        agents: {
+          ownership: "explicit",
+          entries: Object.fromEntries(agentIds.map((agentId) => [agentId, {}])),
+        },
+      });
+      const paths = new Set(agentIds.map((agentId) => databasePath(fixture.stateDir, agentId)));
+      for (const pathname of paths) {
+        fs.mkdirSync(path.dirname(pathname), { recursive: true });
+      }
+      const realpath = vi.spyOn(fs.realpathSync, "native");
+      try {
+        const result = await migrateLegacyMainSessionKeys({
+          cfg: fixture.cfg,
+          env: fixture.env,
+          mode: "detect",
+        });
+        expect(result).toMatchObject({ complete: true, outcomes: [{ kind: "no-legacy-rows" }] });
+        const inspected = realpath.mock.calls
+          .map(([pathname]) => String(pathname))
+          .filter((pathname) => paths.has(pathname));
+        expect(new Set(inspected).size).toBe(size);
+        inspectionCounts.push(inspected.length);
+      } finally {
+        realpath.mockRestore();
+      }
+    }
+    expect(inspectionCounts[1]).toBeLessThanOrEqual(inspectionCounts[0]! * 2);
+  });
+
   it("migrates an in-place alias atomically to the owner key", async () => {
     const storePath = path.join(tempDirs.make("in-place-migration-"), "sessions.sqlite");
     const fixture = createFixture({

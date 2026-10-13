@@ -33,6 +33,7 @@ async function deliver(params: {
   payloads?: Record<string, unknown>[];
   sendMessage?: SendMessage;
   onDeliveryResult?: Parameters<typeof deliverSubagentAnnouncement>[0]["onDeliveryResult"];
+  onDeliveryError?: Parameters<typeof deliverSubagentAnnouncement>[0]["onDeliveryError"];
 }) {
   const sendMessage = params.sendMessage ?? vi.fn<SendMessage>(async () => sent);
   const queue = vi.fn((sessionId: string) => ({
@@ -76,6 +77,7 @@ async function deliver(params: {
     sourceSessionKey: childSessionKey,
     sourceTool: "subagent_announce",
     onDeliveryResult: params.onDeliveryResult,
+    onDeliveryError: params.onDeliveryError,
   });
   expect(queue).toHaveBeenCalled();
   return { result, sendMessage: vi.mocked(sendMessage) };
@@ -87,6 +89,20 @@ afterEach(() => {
 });
 
 describe("subagent completion media after requester wake failure", () => {
+  it("retains the original failed text fallback error", async () => {
+    const failure = Object.assign(new Error("synthetic channel failure"), { code: "ECONNRESET" });
+    const onDeliveryError = vi.fn();
+    const sendMessage = vi.fn<SendMessage>().mockRejectedValue(failure);
+    const { result } = await deliver({ sendMessage, onDeliveryError });
+    expect(onDeliveryError).toHaveBeenCalledExactlyOnceWith(failure);
+    expect(result).toMatchObject({
+      delivered: false,
+      path: "direct",
+      error: "text completion direct delivery failed: synthetic channel failure",
+    });
+    expect(sendMessage).toHaveBeenCalledOnce();
+  });
+
   it.each<{
     name: string;
     event?: Partial<AgentInternalEvent>;

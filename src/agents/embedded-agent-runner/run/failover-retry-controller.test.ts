@@ -84,6 +84,20 @@ describe("createEmbeddedRunFailoverRetryController", () => {
     rateLimitContext.logFallbackDecision.mockClear();
   });
 
+  it("reports the one output-limit continuation independently of transient attempts", async () => {
+    const controller = createController(vi.fn(async () => false));
+    await controller.maybeRetryTransient({ reason: "server_error" });
+    const onRetry = vi.fn();
+    expect(await controller.maybeRetryTransient({ reason: "output_limit", onRetry })).toBe(true);
+    expect(mocks.warn).toHaveBeenLastCalledWith(
+      expect.stringContaining("output-limit continuation 1/1"),
+    );
+    expect(onRetry).toHaveBeenCalledWith(
+      expect.objectContaining({ attempt: 1, maxRetries: 1, reason: "output_limit" }),
+    );
+    expect(await controller.maybeRetryTransient({ reason: "output_limit" })).toBe(false);
+  });
+
   it("reports bounded retry-owner reasons without provider or credential metadata", async () => {
     const emit = vi.spyOn(diagnosticsTimeline, "emitDiagnosticsTimelineEvent");
     try {

@@ -332,11 +332,13 @@ export const TalkSessionSteerParamsSchema = closedObject({
 
 export const TalkSessionCloseParamsSchema = closedObject({
   sessionId: NonEmptyString,
+  discard: Type.Optional(Type.Boolean()),
 });
 
 export const TalkCatalogParamsSchema = closedObject({
   provider: Type.Optional(NonEmptyString),
   model: Type.Optional(NonEmptyString),
+  sessionKey: Type.Optional(NonEmptyString),
 });
 
 const TalkCatalogAudioFormatProperties = {

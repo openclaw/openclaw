@@ -387,10 +387,18 @@ vi.mock("../../config/sessions/paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/paths.js")>()),
   resolveSessionStorePathCore: sessionStoreMocks.resolveSessionStorePathCore,
 }));
-// mock-isolation: Dispatch fixtures own storage through the patch adapter without starting actors.
-vi.mock("../../config/sessions/session-actor-scope.js", () => ({
-  withSessionActor: async () => undefined,
-}));
+// mock-isolation: Durable fixtures use fake rows; explicitly bound memory actors run real commands.
+vi.mock("../../config/sessions/session-actor-scope.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../config/sessions/session-actor-scope.js")>();
+  const { getSessionActorStorageBinding } =
+    await import("../../config/sessions/session-actor-storage-binding.js");
+  return {
+    ...actual,
+    withSessionActor: async (...args: Parameters<typeof actual.withSessionActor>) =>
+      getSessionActorStorageBinding(args[0]) ? actual.withSessionActor(...args) : undefined,
+  };
+});
 vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/session-entry-read-runtime.js")>()),
   readSessionEntryReadOnlyInWorker: async (
@@ -410,11 +418,16 @@ vi.mock("../../config/sessions/session-accessor.sqlite-entry.js", async (importO
     await importOriginal<typeof import("../../config/sessions/session-accessor.sqlite-entry.js")>();
   const { projectSessionEntryPatch } =
     await import("../../config/sessions/session-entry-patch-operation.js");
+  const { getSessionActorStorageBinding } =
+    await import("../../config/sessions/session-actor-storage-binding.js");
   return {
     ...actual,
     applySessionEntryOperation: async (
       ...[scope, operation, options]: Parameters<typeof actual.applySessionEntryOperation>
     ) => {
+      if (getSessionActorStorageBinding(scope)) {
+        return actual.applySessionEntryOperation(scope, operation, options);
+      }
       let wrote = false;
       const result = await sessionStoreMocks.updateSessionEntry(scope, (entry) => {
         const currentEntry = { sessionId: "", updatedAt: 0, ...entry };

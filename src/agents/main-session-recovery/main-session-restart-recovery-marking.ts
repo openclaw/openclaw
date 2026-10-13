@@ -237,6 +237,15 @@ export async function markRestartAbortedMainSessions(params: {
                 run.sessionId === entry.sessionId &&
                 (entry.lifecycleRunId === run.runId ||
                   entry.restartRecoveryDeliveryRunId === run.runId ||
+                  // Terminal persistence clears lifecycleRunId but retains this paired fence.
+                  (entry.status === "interrupted" &&
+                    entry.abortedLastRun === true &&
+                    entry.lastRunId === run.runId &&
+                    entry.restartRecoveryRuns?.some(
+                      (fence) =>
+                        fence.runId === (run.sourceRunId ?? run.runId) &&
+                        fence.lifecycleGeneration === run.lifecycleGeneration,
+                    )) ||
                   run.observedAt === undefined ||
                   asFiniteNumber(entry.updatedAt) === undefined ||
                   (entry.updatedAt < run.observedAt &&
@@ -344,11 +353,12 @@ type OrphanMarkParams = {
   lifecycleGeneration: string;
 };
 
-function hasOrphanedMainSessionWork(entry: SessionEntry): boolean {
+function hasOrphanedMainSessionWork(entry: SessionEntry, sessionKey: string): boolean {
   return (
-    hasMainSessionRecoveryClaim(entry) ||
-    entry.abortedLastRun === true ||
-    entry.status === "interrupted"
+    isMainRestartRecoveryCandidate(entry, sessionKey) &&
+    (hasMainSessionRecoveryClaim(entry) ||
+      entry.abortedLastRun === true ||
+      entry.status === "interrupted")
   );
 }
 
@@ -366,10 +376,10 @@ async function markOrphanedMainSessionStore(
   let sessionKeys: string[];
   if (key) {
     const entry = await readSessionEntryReadOnlyInWorker({ ...params.target, sessionKey: key });
-    sessionKeys = entry && hasOrphanedMainSessionWork(entry) ? [key] : [];
+    sessionKeys = entry && hasOrphanedMainSessionWork(entry, key) ? [key] : [];
   } else {
     sessionKeys = (await readSessionEntrySummariesInWorker(params.target))
-      .filter(({ entry }) => hasOrphanedMainSessionWork(entry))
+      .filter(({ entry, sessionKey }) => hasOrphanedMainSessionWork(entry, sessionKey))
       .map(({ sessionKey }) => sessionKey);
   }
   if (sessionKeys.length === 0) {
@@ -405,7 +415,7 @@ async function markOrphanedMainSessionStore(
     plan: (entry, sessionKey) => {
       params.assertCommitAllowed?.();
       if (
-        !hasOrphanedMainSessionWork(entry) ||
+        !hasOrphanedMainSessionWork(entry, sessionKey) ||
         entry.archivedAt !== undefined ||
         isRetryableUnadoptedChatClaim(entry) ||
         entry.mainRestartRecovery?.tombstone ||

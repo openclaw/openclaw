@@ -1,5 +1,4 @@
 /* @vitest-environment jsdom */
-import { html, render } from "lit";
 import { flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { GatewayUrlConfirmation } from "./solid/gateway-url-confirmation.tsx";
@@ -20,27 +19,19 @@ it("loads the modal only for a pending gateway and retains its confirmation acti
   document.body.append(container);
   const confirm = vi.fn();
   const cancel = vi.fn();
+  const host = new GatewayUrlConfirmation.Element();
   const show = (pendingGatewayUrl: string | null) => {
-    render(
-      html`<openclaw-gateway-url-confirmation
-        .props=${{
-          pendingGatewayUrl,
-          currentGatewayUrl: "https://current.example",
-          linkCarriesToken: false,
-          onConfirm: confirm,
-          onCancel: cancel,
-        }}
-      ></openclaw-gateway-url-confirmation>`,
-      container,
-    );
-    const host = container.firstElementChild;
-    if (!(host instanceof GatewayUrlConfirmation.Element)) {
-      throw new Error("Gateway confirmation did not upgrade");
-    }
-    return host;
+    host.props = {
+      pendingGatewayUrl,
+      currentGatewayUrl: "https://current.example",
+      linkCarriesToken: false,
+      onConfirm: confirm,
+      onCancel: cancel,
+    };
   };
 
-  const host = show(null);
+  show(null);
+  container.append(host);
   await host.updateComplete;
   expect(modalModule.load).not.toHaveBeenCalled();
   expect(host.querySelector("openclaw-modal-dialog")).toBeNull();

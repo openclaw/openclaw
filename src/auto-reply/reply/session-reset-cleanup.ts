@@ -1,11 +1,11 @@
 import { clearPreparedEmbeddedAgentSettings } from "../../agents/agent-project-settings.js";
+import { clearEmbeddedSessionForkSnapshot } from "../../agents/embedded-agent-runner/session-fork.js";
 import { clearEmbeddedSessionPromptStates } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import { killSessionSubagentRuns } from "../../agents/subagents/registry/subagent-control-kill.js";
-import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { retainPreparedSessionGenerationFacts } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { projectSessionSharingEntry } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { withSessionEntriesFromStoreInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionOperation } from "../../config/sessions/session-incognito-binding.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import {
@@ -14,7 +14,6 @@ import {
 } from "../../infra/system-events.js";
 import {
   agentSessionKeysMatchByRequestKey,
-  isIncognitoSessionKey,
   normalizeAgentId,
   normalizeOptionalAgentId,
   parseAgentSessionKey,
@@ -35,7 +34,7 @@ export async function prepareSessionResetCleanupGuard(params: {
   expectedSession: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined;
   assertCurrent?: () => void;
 }): Promise<{ assertCurrent: () => void; release: () => void }> {
-  const binding = captureIncognitoSessionOperation(params);
+  const memory = captureSessionEntryMetadataRead(params, () => {});
   const assertEntry = (
     current: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | null | undefined,
   ) => {
@@ -49,23 +48,9 @@ export async function prepareSessionResetCleanupGuard(params: {
       );
     }
   };
-  if (binding) {
+  if (memory) {
     return {
-      assertCurrent: () =>
-        assertEntry(binding.actor.sessions.readSharing(params.sessionKey)?.entry),
-      release() {},
-    };
-  }
-  if (isIncognitoSessionKey(params.sessionKey)) {
-    return {
-      assertCurrent: () =>
-        assertEntry(
-          loadExactSessionEntryReadOnly({
-            storePath: params.storePath,
-            sessionKey: params.sessionKey,
-            clone: false,
-          })?.entry,
-        ),
+      assertCurrent: () => assertEntry(memory.readCurrent()),
       release() {},
     };
   }
@@ -163,6 +148,9 @@ export function clearSessionResetRuntimeState(
   opts.assertCurrent();
   clearEmbeddedSessionPromptStates([opts.activeReplySessionId]);
   clearPreparedEmbeddedAgentSettings([opts.activeReplySessionId]);
+  if (opts.activeReplySessionId) {
+    clearEmbeddedSessionForkSnapshot(opts.activeReplySessionId);
+  }
   const cleared = clearSessionLifecycleQueues({
     keys,
     agentId: opts.agentId,

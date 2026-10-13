@@ -163,6 +163,7 @@ assert_policy() { :; }
 assert_exclusive_owner() { :; }
 capture_generation() { service_pid=123; service_generation=456; }
 capture_service_generation() { capture_generation; }
+assert_single_listener() { :; }
 recheck_generation() { :; }
 rollback_armed=1
 predecessor_stopped=1
@@ -609,7 +610,8 @@ for (const mode of ["runtime", "deploy"]) test(`successor convergence: ${mode} w
   const { result, rows, journal, started, afterStart } = successorActivation(t, { mode, rpcAt });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /SUCCESS /);
-  assert.match(result.stderr, /stage=convergence.generation/);
+  assert.equal((result.stderr.match(/VERIFICATION_WAITING stage=convergence.listener/g) ?? []).length, 1);
+  assert.doesNotMatch(result.stderr, /VERIFICATION_FAILED stage=convergence.generation/);
   if (rpcAt > 60) assert.match(result.stderr, /stage=convergence.process-rpc/);
   assert.equal(started, 1094);
   assert.equal(rows.find(row => row.event === "marker").at - started, rpcAt);
@@ -630,6 +632,8 @@ for (const fault of ["", "exit-at-budget"]) test(`successor convergence: missing
   const { result, rows, journal, started, afterStart } = successorActivation(t, { listenerAt: 9999, fault, retrySeconds: 17 });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /stage=wait-for-live.budget/);
+  assert.equal((result.stderr.match(/VERIFICATION_WAITING stage=convergence.listener/g) ?? []).length, 1);
+  assert.doesNotMatch(result.stderr, /VERIFICATION_FAILED stage=convergence.generation/);
   assert.doesNotMatch(result.stdout, /SUCCESS /);
   const rollback = rows.filter(row => row.event === "rollback-compatibility");
   assert.equal(rollback.length, 1);

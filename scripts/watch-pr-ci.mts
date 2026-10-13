@@ -15,7 +15,7 @@ import {
 import { createPrMetadataReader } from "./pr-lib/github.mjs";
 
 const USAGE =
-  "Usage: node scripts/watch-pr-ci.mjs <pr-number> <head-sha> [--repo owner/repo] [--after run-id] [--attach-timeout 900] [--timeout 3600] [--interval 120] [--completion rollup|ci-run]";
+  "Usage: node scripts/watch-pr-ci.mjs <pr-number> <head-sha> [--repo owner/repo] [--after run-id] [--attach-timeout 900] [--timeout 3600] [--interval 120] [--completion rollup|ci-run] [--once]";
 
 const optional = <T,>(schema: z.ZodType<T>) => schema.optional().catch(undefined);
 const optionalNullable = <T,>(schema: z.ZodType<T>) => optional(schema.nullable());
@@ -129,6 +129,7 @@ export function parseArgs(argv: string[]) {
         timeout: { type: "string", default: "3600" },
         interval: { type: "string", default: "120" },
         completion: { type: "string", default: "rollup" },
+        once: { type: "boolean", default: false },
       },
     });
   } catch {
@@ -153,6 +154,7 @@ export function parseArgs(argv: string[]) {
     timeout: positiveInteger(parsed.values.timeout, "--timeout"),
     interval: positiveInteger(parsed.values.interval, "--interval"),
     completion,
+    once: parsed.values.once,
   };
   if (!/^[0-9a-f]{40}$/u.test(args.headSha)) {
     throw new Error("head-sha must be a full 40-character commit SHA");
@@ -671,18 +673,21 @@ export async function pollUntilDeadline<T>({
   deadline,
   interval,
   poll,
+  once = false,
   now = Date.now,
   wait = sleep,
 }: {
   deadline: number;
   interval: number;
   poll: () => T | undefined | Promise<T | undefined>;
+  // One-shot callers keep the deadline as the evidence-read budget, not a wait.
+  once?: boolean;
   now?: () => number;
   wait?: (milliseconds: number) => Promise<void>;
 }): Promise<T | undefined> {
   while (true) {
     const result = await poll();
-    if (result !== undefined) {
+    if (result !== undefined || once) {
       return result;
     }
     const remaining = deadline - now();
@@ -736,6 +741,7 @@ async function main(argv = process.argv.slice(2)) {
   const attachment = await pollUntilDeadline({
     deadline: attachDeadline,
     interval: args.interval,
+    once: args.once,
     poll: () => {
       try {
         const blocked = precheck(readPr(args.pr, readMetadata), args.headSha);
@@ -789,6 +795,7 @@ async function main(argv = process.argv.slice(2)) {
   const watchResult = await pollUntilDeadline({
     deadline: watchDeadline,
     interval: args.interval,
+    once: args.once,
     poll: () => {
       try {
         if (args.completion === "ci-run") {

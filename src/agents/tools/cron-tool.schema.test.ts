@@ -5,6 +5,7 @@ import {
 import { validateToolArguments } from "@openclaw/llm-core/validation";
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
+import { createCronToolSchema } from "./cron-tool-schema.js";
 import { createCronTool } from "./cron-tool.js";
 
 function propertyAt(schema: unknown, path: string): Record<string, unknown> | undefined {
@@ -22,6 +23,26 @@ const tool = createCronTool();
 const schema = tool.parameters;
 
 describe("cron model schema regressions", () => {
+  it("reuses policy-equivalent schemas across sessions and refreshes changed policy", () => {
+    const first = createCronToolSchema({ agentSessionKey: "agent:one:main" });
+    expect(createCronToolSchema({ agentSessionKey: "agent:two:main" })).toBe(first);
+    expect(propertyAt(first, "job.agentId")).toBeUndefined();
+    const unscoped = createCronToolSchema();
+    expect(unscoped).not.toBe(first);
+    expect(propertyAt(unscoped, "job.agentId")).toBeDefined();
+    for (const options of [
+      { triggersEnabled: false },
+      { management: "only" as const },
+      { management: "also" as const },
+      { selfRemoveOnly: true },
+    ]) {
+      const changed = createCronToolSchema(options);
+      expect(changed).not.toBe(unscoped);
+      expect(changed).not.toEqual(unscoped);
+      expect(createCronToolSchema({ ...options })).toBe(changed);
+    }
+  });
+
   it("does not advertise forbidden automation management inside a scheduled run", () => {
     const restricted = createCronTool({ selfRemoveOnlyJobId: "current", runId: "run-current" });
     expect(restricted.parameters).toHaveProperty("properties.action.enum", [

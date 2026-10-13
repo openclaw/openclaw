@@ -70,7 +70,7 @@ suite.define(() => {
               2;
             return [
               ...element.querySelectorAll<HTMLElement>(
-                ".sidebar-agent-card__main, [data-navigation-view], .sidebar-brand__search, .sidebar-footer-bar__home, .sidebar-issues-button, .sidebar-identity-card",
+                ".sidebar-agent-card__main, .sidebar-new-session, [data-navigation-view], .sidebar-brand__search, .sidebar-footer-bar__home, .sidebar-issues-button, .sidebar-identity-card",
               ),
             ].map((control) => {
               const box = control.getBoundingClientRect();

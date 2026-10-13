@@ -4,10 +4,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
+import type * as ConfigIO from "../config/io.js";
 import {
+  captureRuntimeConfigAsyncReader as captureFixtureRuntimeConfigAsyncReader,
   clearRuntimeConfigSnapshot as clearFixtureRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot as setFixtureRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
+} from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTestPluginServiceScheduler } from "../plugin-sdk/plugin-test-api.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -41,19 +43,16 @@ const { MEMORY_DREAMING_SYSTEM_EVENT_TEXT } = loadHost(
 ) as typeof import("../plugin-sdk/memory-core-host-status.js");
 
 // The SDK reads config through the native host, outside the transformed fixture graph.
-const configRuntime = tryNativeRequireModule(
-  path.join(repository, "src/config/runtime-snapshot.ts"),
-  {
-    aliasMap: preparePluginLoaderAliases({
-      modulePath: memorySource,
-      devSourceRoot: repository,
-      pluginSdkResolution: "src",
-    }).resolveAlias,
-  },
-);
+const configRuntime = tryNativeRequireModule(path.join(repository, "src/config/io.ts"), {
+  aliasMap: preparePluginLoaderAliases({
+    modulePath: memorySource,
+    devSourceRoot: repository,
+    pluginSdkResolution: "src",
+  }).resolveAlias,
+});
 assert(configRuntime.ok, "Expected the native config runtime fixture");
-const { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
-  configRuntime.moduleExport as typeof import("../config/runtime-snapshot.js");
+const { captureRuntimeConfigAsyncReader, clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
+  configRuntime.moduleExport as typeof ConfigIO;
 
 it("keeps successor sweeps and diary publication owned after another registration retires", async () => {
   const state = await createOpenClawTestState({ label: "memory-dreaming-reload" });
@@ -68,10 +67,13 @@ it("keeps successor sweeps and diary publication owned after another registratio
   setRuntimeConfigSnapshot(config, config);
   // The host-owned runtime facade uses Vitest's config graph; SDK modules use the native graph.
   setFixtureRuntimeConfigSnapshot(config, config);
+  await captureRuntimeConfigAsyncReader()();
+  await captureFixtureRuntimeConfigAsyncReader()();
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   const load = () => {
     const subagent = {
       complete: vi.fn(() => completion.promise),
+      forkSession: vi.fn(async () => ({ text: "" })),
       run: vi.fn(async () => ({ runId: "unused" })),
       waitForRun: vi.fn(async () => ({ status: "ok" as const })),
       getSessionMessages: vi.fn(async () => ({ messages: [] })),

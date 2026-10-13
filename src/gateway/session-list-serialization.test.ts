@@ -699,3 +699,89 @@ it("retains each embedded reader's identity when their shared row presentation i
     ]);
   });
 });
+
+it("omits swarm detail reads from sidebar and dashboard pages while authorizing compact members", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    ensureUserProfilesSchema({});
+    using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    void profileCatalog;
+    const context = requestContext(rolePolicyConfig());
+    const client = roleClient("view", "swarm-list-reader");
+    const creator = ensureProfileForEmail("swarm-list-owner@example.test");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    prepareGatewayRecipientProfile(client);
+    const parent = "agent:main:dashboard:swarm-parent";
+    const children = ["agent:main:subagent:visible", "agent:main:subagent:hidden"];
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: parent },
+      { sessionId: "swarm-parent", updatedAt: Date.now(), visibility: "shared" },
+    );
+    for (const [index, child] of children.entries()) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: child },
+        {
+          sessionId: `swarm-child-${index}`,
+          updatedAt: Date.now(),
+          visibility: index === 0 ? "shared" : "draft",
+          createdActor: { type: "human", source: "profile", id: creator.id },
+        },
+      );
+      const runId = `swarm-list-${index}`;
+      subagentRuns.set(
+        runId,
+        createSubagentRunRecord({
+          runId,
+          childSessionKey: child,
+          requesterSessionKey: parent,
+          requesterAgentId: "main",
+          swarmRequesterSessionKey: parent,
+          collect: true,
+          groupId: "list-group",
+          execution: { status: "terminal", startedAt: 1, endedAt: 2 },
+          collectorCompletion: { status: "done" },
+        }),
+      );
+    }
+    const release = retainSessionListForegroundWork();
+    const read = (rowMode: "sidebar" | "dashboard" | "compact") =>
+      listSessions({
+        context,
+        client,
+        acceptsSerializedJson: true,
+        request: { rowMode, excludeSubagents: true },
+      });
+    try {
+      await initializeSessionReadContext(context);
+      const projection = getSessionRowProjection(context)!;
+      await projection.ensureMaterialized();
+      for (const rowMode of ["sidebar", "dashboard"] as const) {
+        await read(rowMode);
+        const selections = vi.spyOn(projection, "selectEntries");
+        try {
+          const page = await read(rowMode);
+          expect(page.sessions).toHaveLength(1);
+          expect(expandSessionRowFacts(page.sessions, page.sharedFacts)[0]).not.toHaveProperty(
+            "swarm",
+          );
+          // A warmed page must not read children solely for omitted swarm detail.
+          expect(selections).not.toHaveBeenCalled();
+        } finally {
+          selections.mockRestore();
+        }
+      }
+      const sidebar = await read("sidebar");
+      const compact = await read("compact");
+      expect(compact.sessions[0]?.swarm?.groups).toMatchObject([
+        { groupId: "list-group", done: 2, children: [{ sessionKey: children[0], status: "done" }] },
+      ]);
+      expect(compact.sessions[0]?.swarm?.groups[0]?.children).toHaveLength(1);
+      expect((await read("sidebar")).sessions).toBe(sidebar.sessions);
+    } finally {
+      getSessionRowProjection(context)?.dispose();
+      release();
+      for (let index = 0; index < children.length; index++) {
+        subagentRuns.delete(`swarm-list-${index}`);
+      }
+    }
+  });
+});

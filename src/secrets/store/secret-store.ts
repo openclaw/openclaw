@@ -151,6 +151,42 @@ export async function consumeGitHubSetupHandoff(params: {
   return value;
 }
 
+/** Loads only named protected secrets and their policy from one read-worker snapshot. */
+export async function readSelectedSecretStoreEntries(params: {
+  names: readonly string[];
+  database?: Pick<OpenClawStateDatabaseOptions, "path" | "env">;
+  assertCurrent?: () => void;
+}): Promise<Array<{ name: string; value: string; allowedHosts: string[] }>> {
+  const names = [...new Set(params.names)];
+  for (const name of names) {
+    assertSecretStoreEnvName(name);
+  }
+  const context = captureOpenClawStateReadWorkerContext(params.database);
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "secrets.selected", input: { names } },
+    { context, preferIndependentWarmRead: true },
+  );
+  if (reply && (!reply.ok || reply.type !== "secrets.selected")) {
+    throw new Error("Unexpected selected secret store result.");
+  }
+  context.admission.assertCurrent();
+  params.assertCurrent?.();
+  return (reply?.rows ?? []).map((row) => {
+    if (isRedactedSecretValue(row.value)) {
+      throw new Error(
+        `Secret store entry "${row.name}" contains a redaction placeholder. Replace it with a real value.`,
+      );
+    }
+    registerSecretValueForRedaction(row.value);
+    return {
+      name: row.name,
+      value: row.value,
+      allowedHosts: parseSecretAllowedHosts(row.allowed_hosts),
+    };
+  });
+}
+
 /** Captures one coherent team-store snapshot for an agent run's exec environment. */
 export async function readSecretStoreExecEnvironment(params: {
   includeSecretSentinels: boolean;

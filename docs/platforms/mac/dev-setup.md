@@ -54,8 +54,14 @@ Packaging builds the JavaScript runtime and Control UI, then stages the full
 standard package with production dependencies under
 `Contents/Resources/runtime/lib/node_modules/openclaw`. It retains the published
 package's `files` filter, including its CLI, Gateway, Control UI, npm, and
-optional `sqlite-vec`; on-demand plugins excluded from that package remain
-excluded. The root tarball uses the repository-pinned pnpm packer; Corepack-only
+optional `sqlite-vec`. Builds at an exact release tag retain the published plugin
+layout. Other commits also stage official external plugins built with that
+commit, including their target-architecture dependencies. If their estimated
+additional size exceeds 300 MiB, packaging stages only Codex for automatic setup.
+The installer prefers these staged copies and records their bundled paths, so
+development builds do not mix a newer SDK with older registry plugins. Plugin
+updates and Doctor retain the same-build copies until the app itself is updated.
+The root tarball uses the repository-pinned pnpm packer; Corepack-only
 setups are supported. `scripts/stage-mac-runtime.sh` installs the package with
 build-time Node and npm, then stages Bun and SQLite. No Node executable or
 npm/corepack/npx shims ship in the app.

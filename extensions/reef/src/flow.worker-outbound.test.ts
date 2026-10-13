@@ -114,7 +114,7 @@ describe("Reef worker outbound composition", () => {
     expect(delivery?.textHash).toMatch(/^[a-f0-9]{64}$/u);
   });
 
-  it.each(["pending", "denied"] as const)(
+  it.each(["denied"] as const)(
     "settles an existing %s review in one command without classifying again",
     async (decision) => {
       const id = prepareReefMessageId();

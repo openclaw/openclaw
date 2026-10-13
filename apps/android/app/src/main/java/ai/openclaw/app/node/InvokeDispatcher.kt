@@ -137,15 +137,7 @@ class InvokeDispatcher(
     return binding.invoke(paramsJson)
   }
 
-  fun buildInvokeCommands(): List<String> {
-    // A settings change must not split a command family within one connect payload.
-    val availability = mutableMapOf<CommandGate, Boolean>()
-    return commands
-      .filter { command ->
-        val gate = command.gate
-        gate == null || availability.getOrPut(gate, gate.isAdvertised)
-      }.map(Command::name)
-  }
+  fun buildInvokeCommands(): List<String> = commands.filter { it.gate?.isAdvertised?.invoke() != false }.map(Command::name)
 
   fun buildCapabilities(): List<String> =
     buildList {

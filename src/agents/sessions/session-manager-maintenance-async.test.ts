@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
@@ -50,6 +52,78 @@ async function openSession(lifecycleRevision?: string) {
 async function appendUser(manager: SessionManager, text: string): Promise<string> {
   return (await manager.appendMessageWithTranscriptAnchorAsync(makeUserMessage(text, 1))).entryId;
 }
+
+it("prepares and publishes a 50 MiB transcript without copying immutable payloads", async () => {
+  const manager = SessionManager.inMemory("/synthetic");
+  const id = await manager.appendCustomEntryAsync("large-tool-output", {
+    chunks: Array.from({ length: 50 * 1024 }, () => ({ text: "x".repeat(1024) })),
+  });
+  const original = manager.getEntry(id);
+  if (original?.type !== "custom" || !isRecord(original.data)) {
+    throw new Error("Missing large transcript payload");
+  }
+  const started = performance.now();
+  const rewrite = await manager.prepareTranscriptRewriteAsync();
+  expect(performance.now() - started).toBeLessThan(50);
+  expect(rewrite.sessionManager.getEntry(id)).toBe(original);
+  expect(Object.isFrozen(original)).toBe(true);
+  expect(Object.isFrozen(original.data)).toBe(true);
+  expect(Reflect.set(original.data, "chunks", [])).toBe(false);
+  const replacementId = await appendUser(rewrite.sessionManager, "replacement");
+  expect(manager.getEntry(replacementId)).toBeUndefined();
+  const publishing = performance.now();
+  await rewrite.commit(new Map());
+  expect(performance.now() - publishing).toBeLessThan(50);
+  expect(manager.getEntry(id)).toBe(original);
+  expect(manager.getEntry(replacementId)).toMatchObject({
+    appendMode: "side",
+    message: { content: "replacement" },
+  });
+  await appendUser(rewrite.sessionManager, "later");
+  expect(manager.getBranch()).toHaveLength(2);
+});
+
+it.each([false, true])("isolates rewrite payloads with opaque SDK data: %s", async (opaque) => {
+  const shared = { text: "original" };
+  const buffer = new ArrayBuffer(3);
+  const manager = SessionManager.fromEntries([
+    { type: "session", version: 4, id: "snapshot", cwd: "/synthetic" },
+    { type: "custom", id: "data", parentId: null, customType: "fixture", data: shared },
+    {
+      type: "opaque",
+      id: "opaque",
+      shared,
+      ...(opaque ? { buffer, bytes: new Uint8Array(buffer) } : {}),
+    },
+  ]);
+  const rewrite = await manager.prepareTranscriptRewriteAsync();
+  const entry = rewrite.sessionManager.getEntry("data");
+  if (entry?.type !== "custom" || !isRecord(entry.data)) {
+    throw new Error("Missing custom entry");
+  }
+  const record = rewrite.sessionManager
+    .getPersistedEntries()
+    .find((value) => isRecord(value) && value.type === "opaque");
+  if (!isRecord(record)) {
+    throw new Error("Missing opaque record");
+  }
+  expect(record.shared).toBe(entry.data);
+  if (opaque) {
+    if (!(record.bytes instanceof Uint8Array)) {
+      throw new Error("Missing opaque bytes");
+    }
+    expect(record.bytes.buffer).toBe(record.buffer);
+    expect(record.buffer).not.toBe(buffer);
+  }
+  entry.data.text = "prepared";
+  expect(manager.getEntry("data")).toMatchObject({ data: { text: "original" } });
+  await rewrite.commit(new Map());
+  const committed = manager.getEntry("data");
+  expect(committed).toMatchObject({ data: { text: "prepared" } });
+  expect(committed).not.toBe(entry);
+  entry.data.text = "later";
+  expect(committed).toMatchObject({ data: { text: "prepared" } });
+});
 
 it("settles queued suffix removals in order and rebuilds the pending branch projection", async () => {
   const { scope, manager } = await openSession();
@@ -161,11 +235,34 @@ it.each(["same", "independent"] as const)(
   "commits an awaited rewrite and refuses a stale rewrite after a %s manager writes",
   async (writerKind) => {
     const { scope, manager } = await openSession();
-    const sourceId = await appendUser(manager, "original");
+    const sourceId = await manager.appendMessageAsync({
+      role: "user",
+      content: [{ type: "text", text: "original" }],
+      timestamp: 1,
+    });
+    if (!sourceId) {
+      throw new Error("Missing source message ID");
+    }
+    await manager.reloadPersistedTranscriptAsync();
+    const source = manager.getEntry(sourceId);
+    if (source?.type !== "message" || source.message.role !== "user") {
+      throw new Error("Missing hydrated source message");
+    }
+    expect(Object.isFrozen(source)).toBe(false);
+    expect(Object.isFrozen(source.message.content)).toBe(true);
     vi.spyOn(manager, "prepareTranscriptRewrite").mockImplementation(() => {
       throw new Error("sync compatibility adapter used");
     });
     const rewrite = await manager.prepareTranscriptRewriteAsync();
+    const snapshot = rewrite.sessionManager.getEntry(sourceId);
+    if (snapshot?.type !== "message" || snapshot.message.role !== "user") {
+      throw new Error("Missing rewrite source message");
+    }
+    expect(snapshot).not.toBe(source);
+    expect(snapshot.message).not.toBe(source.message);
+    expect(snapshot.message.content).toBe(source.message.content);
+    source.message.content = "local replacement";
+    expect(snapshot.message.content).toEqual([{ type: "text", text: "original" }]);
     await rewrite.sessionManager.resetLeafAsync();
     const replacementId = await appendUser(rewrite.sessionManager, "replacement");
     await rewrite.commit(new Map([[sourceId, replacementId]]));

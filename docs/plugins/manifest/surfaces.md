@@ -448,7 +448,9 @@ revision even when browser code is unchanged.
 the Control UI. Paths are relative to the plugin root and must name compiled
 JavaScript and CSS. Assets follow the Gateway's authentication policy, are
 captured as immutable revisions, and refresh only through the explicit UI reload
-flow.
+flow. Bundled plugins and Nix-store plugins in Nix mode can load hardlinked
+assets and reload hardlinked manifests under the shared plugin-file policy.
+Mutable external plugin roots and CLI packing still reject hardlinks.
 
 User-installed native UI requires **Settings → Labs → Custom plugin UI**
 (`gateway.controlUi.experimental.customPlugins`, default `false`). Native UI

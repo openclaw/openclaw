@@ -1,4 +1,6 @@
 import path from "node:path";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { isPathInside } from "../infra/path-guards.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -10,6 +12,11 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 export async function closeGatewayTestHomeDatabases(home: string): Promise<void> {
   // External stores can still have queued writes using this home's state.
   await drainOpenClawAgentWriteQueuesForTest();
+  for (const owner of memorySessionActorOwners.list()) {
+    if (isPathInside(home, owner.path)) {
+      memorySessionActorOwners.closeDatabase(owner);
+    }
+  }
   // Release leases before deleting their store, and revoke trust in recreated paths.
   await closeOpenClawAgentDatabasesAsync(home);
   closeOpenClawAgentDatabasesForTest(home);

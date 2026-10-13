@@ -631,8 +631,9 @@ export function emitAgentRunOutputTokens(params: {
   runId: string;
   lifecycleGeneration: string;
   outputTokens: number;
+  usageReport?: { state: "available" | "unavailable" };
   sessionKey?: string;
-}): { outputTokens: number } | undefined {
+}): { outputTokens: number; usageReport?: { state: "available" | "unavailable" } } | undefined {
   return recordAgentRunOutputTokens({
     ...params,
     emit: (data) =>

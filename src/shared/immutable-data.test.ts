@@ -1,7 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "./immutable-data.js";
+import { freezeJsonSnapshot, isDeeplyFrozenPlainData, isPlainData } from "./immutable-data.js";
 
 describe("immutable plain data", () => {
+  it("inspects mutable plain data without freezing or memoizing it", () => {
+    const value = { child: { field: 1 } };
+    expect(isPlainData(value)).toBe(true);
+    expect(isDeeplyFrozenPlainData(value)).toBe(false);
+    Object.defineProperty(value.child, "field", { get: () => 2 });
+    expect(isPlainData(value)).toBe(false);
+    expect(Object.isFrozen(value)).toBe(false);
+  });
+
   it("freezes shared and cyclic snapshots without retaining mutable aliases", () => {
     const child = { value: 1 };
     const snapshot = { child, children: [child], self: {} };

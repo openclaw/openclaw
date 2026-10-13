@@ -3074,7 +3074,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         runnerBackend === "github" ? { OPENCLAW_VITEST_MAX_WORKERS: "2" } : undefined,
       );
       expect(plan.map((job) => job.planConcurrency)).toEqual([1]);
-      if (owner === "agentic-cli" && runnerBackend !== "github") {
+      if (runnerBackend !== "github") {
         expect(plan.map((job) => job.runner)).toEqual(["blacksmith-16vcpu-ubuntu-2404"]);
       }
       if (owner === "agentic-gateway-core-2") {

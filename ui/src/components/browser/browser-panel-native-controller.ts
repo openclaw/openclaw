@@ -68,7 +68,6 @@ export class BrowserPanelNativeController {
   readonly presentation: BrowserPanelNativePresentation;
   private allNativeTabs: NativeBrowserTab[] = [];
   private unsubscribeState?: () => void;
-  private revision = -1;
   private pendingActivation: string | null = null;
   private pendingCommand: NativeBrowserMessage | null = null;
   /** New-tab request whose address field should be cleared and focused once it is selected. */
@@ -104,7 +103,6 @@ export class BrowserPanelNativeController {
       return;
     }
     presenters.add(this);
-    this.revision = -1;
     const initial = readNativeBrowserState();
     if (initial) {
       this.acceptState(initial, false);
@@ -130,12 +128,8 @@ export class BrowserPanelNativeController {
   }
 
   private acceptState(state: NativeBrowserState, activatePopups: boolean): void {
-    if (state.revision <= this.revision) {
-      return;
-    }
     const previous = new Set(this.nativeTabs.map((tab) => tab.id));
     const activeBefore = this.activeTab;
-    this.revision = state.revision;
     this.allNativeTabs = state.tabs;
     this.controller.setState("tabs", this.mergeRemoteTabs(this.controller.tabs));
     const view = this.controller.view;

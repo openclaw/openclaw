@@ -8,6 +8,7 @@ const LATE_CALLABLE_PLUGIN_API_METHODS: ReadonlySet<string> = new Set<keyof Open
   "clearRunContext",
   "emitAgentEvent",
   "enqueueNextTurnInjection",
+  "steerActiveRun",
   "getRunContext",
   "sendSessionAttachment",
   "scheduleSessionTurn",

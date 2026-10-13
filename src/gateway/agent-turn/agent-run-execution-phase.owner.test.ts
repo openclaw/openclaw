@@ -31,6 +31,7 @@ import {
   beginSessionWorkAdmission,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../../sessions/session-lifecycle-admission.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
 import * as abortLifecycle from "../chat-abort-lifecycle-internal.js";
 import {
@@ -43,6 +44,7 @@ import { createChatAbortContext } from "../server-methods/chat.abort.test-helper
 import * as sessionChange from "../server-methods/session-change-event.js";
 import { prepareSessionLifecycleDrain } from "../server-methods/sessions-lifecycle-drain.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
+import { expectSuccessorWorkspaceRead } from "../workspace-readiness.test-support.js";
 import { replayAgentTurnIfCached } from "./agent-dedupe.js";
 import { resolveAgentDeliveryPhase } from "./agent-delivery-phase.js";
 import * as agentHandlerHelpers from "./agent-handler-helpers.js";
@@ -220,6 +222,29 @@ function bindFollowupCompletion(execution: ReturnType<typeof createExecution>) {
 }
 
 describe("startAgentRunExecution Gateway ownership", () => {
+  it("reads the workspace after resuming from a retired same-session preparation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const execution = createExecution();
+      const sessionKey = "agent:main:resumed-workspace";
+      execution.params.resolvedSessionKey = sessionKey;
+      await expectSuccessorWorkspaceRead({
+        workspaceDir: state.workspaceDir,
+        sessionKey,
+        run: async (readWorkspace) => {
+          dispatchAgentRunFromGateway.mockImplementationOnce(async (dispatch) => {
+            try {
+              await readWorkspace();
+            } finally {
+              await dispatch.cleanupAbortController();
+            }
+          });
+          await startAgentRunExecution(execution.params);
+          expect(dispatchAgentRunFromGateway).toHaveBeenCalledOnce();
+        },
+      });
+    });
+  });
+
   beforeEach(() => {
     dispatchAgentRunFromGateway.mockReset();
     agentCommand.mockReset();

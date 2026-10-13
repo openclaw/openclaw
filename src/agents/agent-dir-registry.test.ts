@@ -1,10 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   isPathOwnedByAnotherRegisteredAgent,
+  normalizeAgentDirRegistryPath,
   registerResolvedAgentDir,
   resolveRegisteredAgentIdForDir,
   unregisterResolvedAgentDir,
@@ -104,6 +105,58 @@ describe("agent directory registry", () => {
       expect(resolveRegisteredAgentIdForDir(agentDir, env)).toBe("main");
     } finally {
       unregisterResolvedAgentDir({ agentId: "main", agentDir, env });
+    }
+  });
+
+  it("reuses prepared directory identity for repeated registration and reverse lookup", () => {
+    const agentDir = tempDirs.make("openclaw-agent-dir-prepared-");
+    registerResolvedAgentDir({ agentId: "main", agentDir });
+    const realpath = vi.spyOn(fs.realpathSync, "native");
+    try {
+      for (let i = 0; i < 10; i++) {
+        expect(registerResolvedAgentDir({ agentId: "main", agentDir })).toBe(false);
+        expect(resolveRegisteredAgentIdForDir(agentDir)).toBe("main");
+      }
+      expect(realpath).not.toHaveBeenCalled();
+      // Destructive admission callers still request a current physical path.
+      expect(normalizeAgentDirRegistryPath(agentDir)).toBe(fs.realpathSync.native(agentDir));
+      expect(realpath).toHaveBeenCalled();
+    } finally {
+      realpath.mockRestore();
+      unregisterResolvedAgentDir({ agentId: "main", agentDir });
+    }
+  });
+
+  it("invalidates a prepared alias after its parent is replaced", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const root = tempDirs.make("openclaw-agent-dir-replaced-");
+    const original = path.join(root, "original");
+    const replacement = path.join(root, "replacement");
+    const alias = path.join(root, "alias");
+    for (const dir of [original, replacement]) {
+      fs.mkdirSync(path.join(dir, "agent"), { recursive: true });
+    }
+    fs.symlinkSync(original, alias, process.platform === "win32" ? "junction" : "dir");
+    const agentDir = path.join(alias, "agent");
+    registerResolvedAgentDir({ agentId: "main", agentDir });
+    try {
+      expect(resolveRegisteredAgentIdForDir(agentDir)).toBe("main");
+      fs.unlinkSync(alias);
+      fs.symlinkSync(replacement, alias, process.platform === "win32" ? "junction" : "dir");
+      expect(unregisterResolvedAgentDir({ agentId: "main", agentDir })).toBe(false);
+      expect(isPathOwnedByAnotherRegisteredAgent({ agentId: "other", pathname: original })).toBe(
+        true,
+      );
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(resolveRegisteredAgentIdForDir(agentDir)).toBeUndefined();
+      expect(resolveRegisteredAgentIdForDir(path.join(original, "agent"))).toBe("main");
+      registerResolvedAgentDir({ agentId: "replacement", agentDir });
+      expect(unregisterResolvedAgentDir({ agentId: "main", agentDir })).toBe(false);
+      expect(resolveRegisteredAgentIdForDir(agentDir)).toBe("replacement");
+    } finally {
+      unregisterResolvedAgentDir({ agentId: "replacement", agentDir });
+      unregisterResolvedAgentDir({ agentId: "main", agentDir: path.join(original, "agent") });
+      vi.useRealTimers();
     }
   });
 });

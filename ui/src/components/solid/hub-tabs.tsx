@@ -19,7 +19,7 @@ export type HubTabsProps<T extends string> = {
   }[];
   ariaLabel: string;
   panelId: string;
-  className?: string;
+  class?: string;
   carapace?: boolean;
   variant?: "primary" | "sub";
   onSelect: (value: T) => void;
@@ -72,7 +72,7 @@ export function HubTabs<T extends string>(props: HubTabsProps<T>) {
         `hub-tabs--${props.variant ?? "primary"}`,
         `${props.id}-hub-tabs`,
         { "oc-segmented": props.carapace },
-        props.className,
+        props.class,
       ]}
       onActivate={(value, element, event) => {
         const tab = props.tabs.find((entry) => entry.value === value);

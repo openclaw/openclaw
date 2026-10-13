@@ -13,12 +13,12 @@ import { withSessionManagerWrite } from "../agents/sessions/session-manager-writ
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
-import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Message, ImageContent } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveChatAttachmentMaxBytes } from "./chat-attachment-policy.js";
 import { parseMessageWithAttachments, type ChatAttachment } from "./chat-attachments.js";
@@ -408,7 +408,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     const sessionKey = request.sessionKey.trim();
     const agentId = request.agentId.trim();
     const question = request.question.trim();
-    const incognitoSource = captureIncognitoSessionSource({ sessionKey, agentId });
+    const incognito = isIncognitoSessionKey(sessionKey);
     if (!sessionKey || !agentId || !question || params.isDisposed() || request.signal?.aborted) {
       throw new SessionCompanionAskError("unavailable", "Side chat is unavailable.");
     }
@@ -626,7 +626,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       );
     } finally {
       // Actor source authority must outlive accepted writes to the separate durable run.
-      if (incognitoSource) {
+      if (incognito) {
         await execution.catch(() => undefined);
       }
       clearTimeout(timeout);

@@ -267,6 +267,9 @@ main model can read the screenshot directly.
 - Headless managed Chrome still uses the conservative `--disable-gpu` default.
   The diagnostics do not enable acceleration, add a global acceleration setting,
   or grant sandbox browser device access.
+- Headless Chromium cannot show Chrome's passkey dialog, so OpenClaw answers
+  passkey requests in headless browsers as dismissed and the page stays usable.
+  See [Passkeys in headless browsers](/tools/browser-login#passkeys-in-headless-browsers).
 - `executablePath` can be set globally or per local managed profile. Per-profile values override `browser.executablePath`, so different managed profiles can launch different Chromium-based browsers. Both forms accept `~` for your OS home directory.
 - Default profile is `openclaw` (managed standalone). Use `defaultProfile: "user"` to opt into the signed-in user browser.
 - Auto-detect order: system default browser if Chromium-based; otherwise Chrome, Brave, Edge, Chromium, Chrome Canary.

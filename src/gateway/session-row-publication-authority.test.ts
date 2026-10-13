@@ -1,7 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
-import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -29,6 +33,7 @@ it.each(["child and swarm links", "sharing role", "incognito"] as const)(
         agents: "*",
         scopes: ["operator.admin"],
       };
+      setRuntimeConfigSnapshot(cfg);
       const [allowed, restricted] = ["allowed", "restricted"].map((name) =>
         ensureProfileForEmail(`${name}@publication-authority.test`),
       );
@@ -42,7 +47,7 @@ it.each(["child and swarm links", "sharing role", "incognito"] as const)(
             : "agent:main:publication",
       };
       const childKey = "agent:main:publication-child";
-      replaceSessionEntrySync(
+      await replaceSessionEntry(
         { agentId: query.agentId, sessionKey: query.key },
         {
           sessionId: "publication-session",

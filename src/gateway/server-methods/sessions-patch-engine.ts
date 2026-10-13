@@ -184,7 +184,7 @@ export async function executeSessionPatchMutations(params: {
       fullPatch,
       index,
       ...(initialEntry ? { initialEntry } : {}),
-      initialStoreKeys: [...candidateKeys],
+      initialTarget: resolved,
       key,
       lifecycleIdentities: [key, canonicalKey, ...candidateKeys, initialEntry?.sessionId],
       ...(requestedAgentId ? { requestedAgentId } : {}),
@@ -233,8 +233,11 @@ export async function executeSessionPatchMutations(params: {
   );
 
   if (activePrepared.length > 0) {
-    const releaseArchiveDrains = async () =>
-      activePrepared.forEach((target) => releaseSessionPatchArchive(target.archivePreparation));
+    const releaseArchiveDrains = async () => {
+      await Promise.all(
+        activePrepared.map((target) => releaseSessionPatchArchive(target.archivePreparation)),
+      );
+    };
     try {
       // Cloud reclaim precedes every mutation mutex; an earlier Move may need one.
       timing?.mark("archive");
@@ -298,7 +301,7 @@ export async function executeSessionPatchMutations(params: {
                 const selectedSessionKeys = group.flatMap((target) => [
                   target.key,
                   target.canonicalKey,
-                  ...target.initialStoreKeys,
+                  ...target.initialTarget.storeKeys,
                 ]);
                 const archiveTransitions = new Map<number, ArchiveTransition>();
                 const createdSessions: Parameters<
@@ -457,6 +460,7 @@ export async function executeSessionPatchMutations(params: {
                             lifecycleIdentities: target.lifecycleIdentities,
                           })
                         : undefined;
+                      groupTiming?.mark("runtimeSelection");
                       const runtimeSelection =
                         await modelSelection.prepareSessionPatchRuntimeSelection({
                           cfg,
@@ -469,6 +473,7 @@ export async function executeSessionPatchMutations(params: {
                           validateModelSelection: projected.validateModelSelection,
                           placement: { context: params.context, sessionKey: primaryKey },
                         });
+                      groupTiming?.mark("projection");
                       if (!runtimeSelection.ok) {
                         projectedOutcomes.push(runtimeSelection);
                         continue;
@@ -494,7 +499,9 @@ export async function executeSessionPatchMutations(params: {
                           existingEntry.archivedAt !== undefined ||
                           target.fullPatch.archived)
                       ) {
-                        const worktreeTiming = params.diagnostics?.scope("worktree");
+                        const worktreeTiming = params.diagnostics?.scope(
+                          target.fullPatch.archived ? "archivePlacement" : "worktree",
+                        );
                         let transition: ArchiveTransition;
                         try {
                           transition = await prepareSessionPatchArchiveTransition({
@@ -671,6 +678,7 @@ export async function executeSessionPatchMutations(params: {
     context: params.context,
     callerScopes,
     callerCanManageCron: callerIsAdmin,
+    diagnostics: params.diagnostics,
     targets: activePrepared.flatMap((target) => {
       const outcome = outcomes[target.index];
       return outcome?.ok && outcome.applied

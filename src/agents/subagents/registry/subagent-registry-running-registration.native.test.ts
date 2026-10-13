@@ -11,10 +11,10 @@ import * as workerCpu from "../../../infra/worker-cpu.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { holdStateDatabaseWriteTransaction } from "../../../test-utils/state-database-contention.js";
-import { prepareSubagentRegistrationRows } from "./subagent-registration-rows.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
+import { prepareSubagentRegistrationRows } from "./subagent-registry-state.js";
 import { registerSubagentRun } from "./subagent-registry.js";
 
 const fixture = useSubagentPersistenceFixture();

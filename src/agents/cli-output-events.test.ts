@@ -6,16 +6,7 @@ import type {
   CliToolUseStartDelta,
 } from "./cli-output-contracts.js";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
-
-function joinJsonlFrames(...frames: unknown[]) {
-  return frames
-    .map((frame) => (typeof frame === "string" ? frame : JSON.stringify(frame)))
-    .join("\n");
-}
-
-function claudeStreamEvent(event: Record<string, unknown>) {
-  return { type: "stream_event", event };
-}
+import { claudeStreamEvent, claudeTextDelta, joinJsonlFrames } from "./cli-output.test-helpers.js";
 
 function claudeMessageStop() {
   return claudeStreamEvent({ type: "message_stop" });
@@ -26,14 +17,6 @@ function claudeBlockStart(contentBlock: Record<string, unknown>, index?: number)
     type: "content_block_start",
     ...(index === undefined ? {} : { index }),
     content_block: contentBlock,
-  });
-}
-
-function claudeTextDelta(text: string, index?: number | string) {
-  return claudeStreamEvent({
-    type: "content_block_delta",
-    ...(index === undefined ? {} : { index }),
-    delta: { type: "text_delta", text },
   });
 }
 
