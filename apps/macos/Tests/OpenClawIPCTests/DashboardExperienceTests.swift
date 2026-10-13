@@ -12,6 +12,7 @@ struct DashboardExperienceTests {
     func `first run owns its dashboard handoff across controller replacement`(
         existingDashboard: Bool, cancelled: Bool) async throws
     {
+        _ = AppKitTestSupport.application
         let gate = DashboardWindowOwnershipPresentationGate()
         let server = try await DashboardHTTPFixture.start(
             html: """
