@@ -506,16 +506,18 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                   activeRunAbort.controller.signal,
                 )
               : dispatchWithRetry();
-          const preparedWorkspace = workspacePreparation;
-          const dispatchResult = await (preparedWorkspace
-            ? runWithAgentWorkspaceReadiness(preparedWorkspace, async () => {
-                try {
-                  return await runDispatch();
-                } finally {
-                  await preparedWorkspace.waitUntilReady();
-                }
-              })
-            : runDispatch());
+          // A ready workspace still needs a fresh scope: internal continuations may retain
+          // the previous chat run's preparation even after its ownership has ended.
+          const dispatchResult = await runWithAgentWorkspaceReadiness(
+            workspacePreparation,
+            async () => {
+              try {
+                return await runDispatch();
+              } finally {
+                await workspacePreparation?.waitUntilReady();
+              }
+            },
+          );
           if (dispatchResult.beforeAgentRunBlocked === true) {
             userTurnRecorder.markBlocked();
           }
