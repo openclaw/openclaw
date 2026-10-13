@@ -211,6 +211,7 @@ describe("createCopilotClientPool", () => {
   });
 
   it("concurrent acquire dedupes", async () => {
+    vi.useFakeTimers();
     const clientDeferred = createDeferred<CopilotClient>();
     const sdkFactory = vi.fn(async () => clientDeferred.promise);
     const pool = createCopilotClientPool({ sdkFactory });
@@ -236,6 +237,13 @@ describe("createCopilotClientPool", () => {
 
     expect(first.client).toBe(second.client);
     expect(sdkFactory.mock.calls.length).toBe(1);
+    await pool.release(first);
+    await vi.runAllTimersAsync();
+    expect(client.stop).not.toHaveBeenCalled();
+
+    await pool.release(second);
+    await vi.runAllTimersAsync();
+    expect(client.stop).toHaveBeenCalledOnce();
   });
 
   it("synchronous constructor failure is not cached", async () => {

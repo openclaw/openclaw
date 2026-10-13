@@ -1503,7 +1503,6 @@
 ["extensions/tavily/src/tavily-client.test.ts","./config.js","a934fdf586f6588937aab7999a5ef3a48e4cf18d64db8f9ea86e8fa763fb3fe4",1]
 ["extensions/tavily/src/tavily-client.test.ts","openclaw/plugin-sdk/secret-input-runtime","7c3fc8eb65bd84c798175e2d77e083546154c6d323c6de56f17cfcf7c4ca11c8",1]
 ["extensions/tavily/src/tavily-tools.test.ts","./tavily-client.js","4f012c09ba0ff05b3694ae0fff55634405227d8c5786c97bce5ea1f76deaf464",1]
-["extensions/team-reports/index.test.ts","./src/store.js","34be25b30ebddb39c30b1cc41b122547266031b0186fe26dfb513ca6c83cb8e6",1]
 ["extensions/team-reports/src/http.test.ts","openclaw/plugin-sdk/gateway-method-runtime","582c1f3a654cd86d2299cc6c511433c3d6aa394677d74f159d5ef8559c9b44f8",1]
 ["extensions/team-reports/src/http.test.ts","openclaw/plugin-sdk/plugin-runtime","32f2f89c9a6d249ede27d2de8bf92e73ac7692b39e818622f1e26d84499798eb",1]
 ["extensions/team-reports/src/sources/github/transport.test.ts","openclaw/plugin-sdk/ssrf-runtime","a46aca887b2bb22c2f8bc6cf593475f3ee49fc558d2df86a21b1acb2319f2422",1]
