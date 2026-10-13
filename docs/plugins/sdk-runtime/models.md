@@ -78,13 +78,16 @@ host.
 ## Low-level completions
 
 `resolveApiKeyForProfile` from `openclaw/plugin-sdk/agent-runtime` returns a
-non-enumerable `readCurrentCredential` capability for personal accounts. Retain
-it with the resolved token and call it synchronously at the transport's final
-authorization boundary, after asynchronous preparation. It reads Gateway-owned
-facts without SQL, rejects pending or revoked authority, and remains valid after
-resolution completes. Reconnect retires old capabilities; an ordinary OAuth
-refresh publishes its new credential through the same owner. Shared and agent
-profiles return `null` and retain their existing persisted-authority checks.
+non-enumerable `readCurrentCredential` capability for personal accounts and for
+persisted shared or agent profiles using `chatgpt-token-sharing`. Retain it with
+the resolved token and call it synchronously at the transport's final
+authorization boundary, after asynchronous preparation. Validate the returned
+credential against the selected profile and expected identity; an absent
+credential must prevent dispatch. It reads Gateway-owned facts without SQL,
+rejects pending or unavailable authority, and remains valid after resolution
+completes. Personal-account reconnect retires old capabilities; an ordinary OAuth
+refresh publishes its new credential through the same owner. Profiles without a
+retained authority capability return `null`.
 
 The `complete` and `completeSimple` helpers from `openclaw/plugin-sdk/llm` accept
 an optional fourth `assertCurrent` callback. It runs after transport setup and

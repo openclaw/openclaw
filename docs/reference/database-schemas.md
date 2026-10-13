@@ -35,6 +35,12 @@ CLI, Doctor, cron, and plugin child processes must route mutations through the
 Gateway or acquire exclusive ownership while it is stopped. First admission,
 migration, repair, and final live-authority checks retain their existing owners.
 
+Admitted updater mutation guards read current recovery rows directly rather than
+starting a synchronous snapshot subprocess for every effect. Explicit
+artifact-preserving inspection still uses private snapshots. Initial recovery
+admission, finalization checks, executor authority, and refusal of newly committed
+recovery remain unchanged; no recovery decision is cached across an await.
+
 Agent deletion status is loaded on first admission and retained per agent in the
 physical shared database's process-owned facts. Journal writers publish pending,
 completed, and removed status at commit through the existing worker fact transport;

@@ -34,6 +34,7 @@ import {
 } from "../../state/user-model-account-authority.js";
 import { withEnv } from "../../test-utils/env.js";
 import { createExternalAuthRuntime } from "./external-auth.js";
+import { noteCommittedSharedAuthStoreOwnership } from "./path-resolve.js";
 import { coercePersistedAuthProfileStore } from "./persisted-store.js";
 import { deleteAuthProfileJsonCell, writeAuthProfileJsonCell } from "./sqlite-json-write.js";
 import { readAuthProfileJsonCellText } from "./sqlite-json.js";
@@ -42,6 +43,7 @@ import {
   captureAuthProfileStorePersistenceSnapshot,
   createAuthProfileStoreRuntime,
   restoreAuthProfileStorePersistenceSnapshot,
+  withAuthProfileStoreAgentDir,
 } from "./store.js";
 import type { AuthProfileCredential } from "./types.js";
 
@@ -711,5 +713,154 @@ describe.each(["shared-state", "agent"] as const)("%s released SDK credential wr
     );
     expect(cold.profiles[profileId]).toEqual(credential("upserted"));
     expect(current.authority.readCurrentCredential()).toEqual(cold.profiles[profileId]);
+  });
+});
+
+describe("prepared persisted credential readers", () => {
+  it.each([false, true])(
+    "retains local and inherited ownership after read-scope cleanup (local initially present=%s)",
+    async (localPresent) => {
+      const shared = fixture("shared-state");
+      const agentDir = path.join(shared.env.OPENCLAW_STATE_DIR, "agents", "child", "agent");
+      const localPath = path.join(agentDir, "openclaw-agent.sqlite");
+      agentPaths.push(localPath);
+      vi.stubEnv("OPENCLAW_STATE_DIR", shared.env.OPENCLAW_STATE_DIR);
+      vi.stubEnv("OPENCLAW_AGENT_DIR", undefined);
+      const writeLocal = (key?: string) =>
+        runAuthProfileWriteTransaction(
+          agentDir,
+          ({ db }) =>
+            key
+              ? writeAuthProfileJsonCell(db, "store", "agent", store(key))
+              : deleteAuthProfileJsonCell(db, "store", "agent"),
+          { env: shared.env },
+        );
+      try {
+        if (localPresent) {
+          writeLocal("local-original");
+        }
+        const read = await nativeRuntime.prepareAuthProfileCredentialRead({
+          agentDir,
+          profileId,
+          store: store("snapshot-must-not-win"),
+        });
+        expect(read?.()).toEqual(credential(localPresent ? "local-original" : "original"));
+        writeLocal("local-new");
+        expect(read?.()).toEqual(credential("local-new"));
+        writeLocal();
+        expect(read?.()).toEqual(credential("original"));
+        shared.write("shared-new");
+        expect(read?.()).toEqual(credential("shared-new"));
+        const cold = await nativeRuntime.findPersistedAuthProfileCredentialAsync({
+          agentDir,
+          profileId,
+        });
+        expect(read?.()).toEqual(cold);
+        await closeOpenClawAgentDatabaseByPathAsync(localPath);
+        expect(() => read?.()).toThrow("authority is unavailable");
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
+  it("retains scoped legacy-main credentials without consulting ambient shared ownership", async () => {
+    const current = fixture("agent");
+    const agentDir = path.dirname(current.database.path);
+    noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" }, current.env);
+    const ambient = fixture("shared-state");
+    ambient.write("ambient");
+    vi.stubEnv("OPENCLAW_STATE_DIR", ambient.env.OPENCLAW_STATE_DIR);
+    vi.stubEnv("OPENCLAW_AGENT_DIR", undefined);
+    try {
+      const read = await withAuthProfileStoreAgentDir(
+        agentDir,
+        current.env.OPENCLAW_STATE_DIR,
+        async () => {
+          const retained = await nativeRuntime.prepareAuthProfileCredentialRead({
+            agentDir,
+            profileId,
+            store: store("snapshot"),
+          });
+          expect(retained?.()).toEqual(
+            await nativeRuntime.findPersistedAuthProfileCredentialAsync({ agentDir, profileId }),
+          );
+          return retained;
+        },
+      );
+      expect(read?.()).toEqual(credential("original"));
+      current.write("updated");
+      expect(read?.()).toEqual(credential("updated"));
+      current.transact(({ db }) => deleteAuthProfileJsonCell(db, "store", "agent"));
+      expect(read?.()).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("retains current scoped shared authority and does not revive a deleted persisted snapshot", async () => {
+    const shared = fixture("shared-state");
+    const ambient = fixture("shared-state");
+    ambient.write("ambient");
+    const agentDir = path.join(shared.env.OPENCLAW_STATE_DIR, "agents", "scoped", "agent");
+    agentPaths.push(path.join(agentDir, "openclaw-agent.sqlite"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", ambient.env.OPENCLAW_STATE_DIR);
+    vi.stubEnv("OPENCLAW_AGENT_DIR", undefined);
+    try {
+      const read = await withAuthProfileStoreAgentDir(agentDir, shared.env.OPENCLAW_STATE_DIR, () =>
+        nativeRuntime.prepareAuthProfileCredentialRead({
+          agentDir,
+          profileId,
+          store: store("snapshot"),
+        }),
+      );
+      expect(read?.()).toEqual(credential("original"));
+      shared.write("shared-new");
+      expect(read?.()).toEqual(credential("shared-new"));
+      shared.transact(({ db }) => deleteAuthProfileJsonCell(db, "store", "shared-state"));
+      expect(read?.()).toBeUndefined();
+      for (const excluded of [
+        { ...credential("private"), copyToAgents: false },
+        {
+          type: "oauth",
+          provider: "fixture",
+          access: "synthetic-access",
+          refresh: "synthetic-refresh",
+          expires: Date.now() + 3_600_000,
+          copyToAgents: true,
+        },
+      ]) {
+        shared.transact(({ db }) =>
+          writeAuthProfileJsonCell(db, "store", "shared-state", {
+            version: 1,
+            profiles: { [profileId]: excluded },
+          }),
+        );
+        expect(read?.()).toBeUndefined();
+      }
+      shared.write("original");
+      runAuthProfileWriteTransaction(
+        agentDir,
+        ({ db }) => writeAuthProfileJsonCell(db, "store", "agent", store("scoped-local")),
+        { env: shared.env },
+      );
+      expect(read?.()).toEqual(credential("scoped-local"));
+      shared.transact(({ db }) => deleteAuthProfileJsonCell(db, "store", "shared-state"));
+      vi.stubEnv("OPENCLAW_STATE_DIR", shared.env.OPENCLAW_STATE_DIR);
+      expect(
+        await nativeRuntime.prepareAuthProfileCredentialRead({
+          profileId,
+          store: store("ephemeral"),
+        }),
+      ).toBeNull();
+      const persisted = await nativeRuntime.prepareAuthProfileCredentialRead({
+        profileId,
+        store: { ...store("deleted"), runtimePersistedProfileIds: [profileId] },
+      });
+      expect(persisted).toBeTypeOf("function");
+      expect(persisted?.()).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

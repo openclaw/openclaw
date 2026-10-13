@@ -90,7 +90,7 @@ those conversations stay isolated even under `main`. See
 
 <Tip>
 If the same person contacts you from multiple channels, use
-`session.identityLinks` to map their identities to one canonical peer id so
+`session.identityLinks` to map their identities to one shared peer id so
 they share a session.
 </Tip>
 
@@ -233,6 +233,9 @@ Opt into automatic resets globally, then override them per chat type or channel:
 When a Gateway restart interrupts an admitted turn, including one still waiting
 in the queue or preparing to execute, OpenClaw tries to continue the existing
 session automatically. Shutdown records recovery before canceling queued work.
+If restart cancellation finishes a collected run before that record commits,
+shutdown retains its recovery custody unless the session or run owner changes.
+Skipped sessions are logged with a reason, including when other sessions recover.
 Three attempts that fail to start a backend turn exhaust the recovery budget.
 Once a real backend turn starts,
 the budget refreshes, so a later Gateway restart does not consume the old allowance.

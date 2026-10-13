@@ -541,9 +541,7 @@ export function configureSqliteWalMaintenance(
         // Worker retirement owns the explicit final checkpoint.
         return false;
       }
-      // Cache eviction passes PASSIVE: a TRUNCATE close-checkpoint waits on
-      // readers and has starved the event loop for seconds under fleet churn.
-      // Orderly dispose/delete keeps TRUNCATE so sidecars are flushed for unlink.
+      // The connection's lifecycle owner selects its final checkpoint policy.
       return runMaintenance(() => runCheckpoint(closeOptions?.checkpointMode ?? checkpointMode));
     },
   };

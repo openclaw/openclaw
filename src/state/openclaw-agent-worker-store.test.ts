@@ -309,7 +309,8 @@ it.each([false, true])(
       const exec = vi.spyOn(db, "exec");
       await closeOpenClawAgentDatabasesAsync(root);
       expect(prepare).not.toHaveBeenCalled();
-      expect(exec).not.toHaveBeenCalled();
+      // Retirement may change lock policy, but must not run host-thread data SQL.
+      expect(exec.mock.calls).toEqual([["PRAGMA busy_timeout = 0"]]);
       expect(readOpenClawAgentIntegrityVerification(options.path)?.clean_close).toBe(
         pinned ? 0 : 1,
       );

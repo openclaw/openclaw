@@ -81,10 +81,49 @@ it.each([
     "barrel export",
     "export { connectUserModelAccount as write } from './state/user-model-accounts.js';",
   ],
-  ["dynamic import", "const writers = await import('./state/user-model-accounts.js');"],
+  [
+    "dynamic import escape",
+    "export const writers = await import('./state/user-model-accounts.js');",
+  ],
   ["wildcard export", "export * from './state/user-model-accounts.js';"],
   ["namespace export", "export * as accounts from './state/user-model-accounts.js';"],
 ])("rejects an unowned %s", (_name, consumer) => {
+  expect(inspect({ "src/consumer.ts": consumer })).toEqual(
+    expect.arrayContaining([
+      expect.stringContaining("unreviewed personal credential writer reference"),
+    ]),
+  );
+});
+
+it.each([
+  "const { SELECT: selected } = await import('./state/user-model-accounts.js'); selected();",
+  "const accounts = await import('./state/user-model-accounts.js'); accounts.SELECT();",
+  "(await import('./state/user-model-accounts.js'))['SELECT']();",
+  "const [{ SELECT: selected }] = await Promise.all([import('./state/user-model-accounts.js')]); selected();",
+  "import('./state/user-model-accounts.js').then(({ SELECT: selected }) => selected());",
+  "Promise.all([import('./state/user-model-accounts.js')]).then(([accounts]) => accounts.SELECT());",
+])("checks a selected dynamic import without charging unused sibling exports: %s", (consumer) => {
+  const source = `${owner}\nexport function listUserProfileAuthLinksAsync() {}`;
+  const selected = (name: string) =>
+    inspect(
+      {
+        "src/consumer.ts": consumer.replaceAll("SELECT", name),
+      },
+      source,
+    );
+  expect(selected("listUserProfileAuthLinksAsync")).toEqual([]);
+  expect(selected("connectUserModelAccount")).toEqual([
+    expect.stringContaining("unreviewed personal credential writer reference"),
+  ]);
+});
+
+it.each([
+  "const accounts = await import('./state/user-model-accounts.js'); export const escaped = accounts;",
+  "export const [accounts] = await Promise.all([import('./state/user-model-accounts.js')]);",
+  "const { ...accounts } = await import('./state/user-model-accounts.js'); consume(accounts);",
+  "const accounts = await import('./state/user-model-accounts.js'); accounts[unknownKey]();",
+  "const { [unknownKey]: writer } = await import('./state/user-model-accounts.js'); writer();",
+])("rejects an unbounded dynamic namespace or export: %s", (consumer) => {
   expect(inspect({ "src/consumer.ts": consumer })).toEqual(
     expect.arrayContaining([
       expect.stringContaining("unreviewed personal credential writer reference"),
@@ -437,13 +476,342 @@ it("requires the host publication adapter for direct and aliased machine-state c
   }`;
   expect(inspect({ "src/state/config-machine-state-async.ts": source })).toEqual([]);
   expect(inspect({ "src/new-writer.ts": source })).toEqual([
-    expect.stringContaining("machine-state credential writes require the host publication adapter"),
+    expect.stringContaining(
+      "machineState.write credential writes require the host publication adapter",
+    ),
   ]);
   expect(
     inspect({
       "src/new-writer.ts": source.replace("type: command", "type: 'machineState.write'"),
     }),
   ).toEqual([
-    expect.stringContaining("machine-state credential writes require the host publication adapter"),
+    expect.stringContaining(
+      "machineState.write credential writes require the host publication adapter",
+    ),
   ]);
+});
+
+const authRuntime = "src/agents/auth-profiles/store-runtime.ts";
+const authStore = "src/agents/auth-profiles/store.ts";
+const authCells = "src/agents/auth-profiles/sqlite-json-write.ts";
+
+it("tracks nested native writer declarations and permits only the reviewed factory return", () => {
+  const source = `export function createAuthProfileStoreRuntime() {
+    function saveAuthProfileStoreInTransaction() {}
+    function saveAuthProfileStore() { saveAuthProfileStoreInTransaction(); }
+    return { saveAuthProfileStore };
+  }`;
+  expect(inspect({ [authStore]: source })).toEqual([]);
+  expect(
+    inspect({
+      [authStore]: source.replace(
+        "return { saveAuthProfileStore };",
+        "function bypass() { saveAuthProfileStoreInTransaction(); } return { saveAuthProfileStore };",
+      ),
+    }),
+  ).toEqual([
+    expect.stringContaining(
+      "from src/agents/auth-profiles/store.ts:createAuthProfileStoreRuntime/bypass",
+    ),
+  ]);
+  expect(
+    inspect({
+      [authStore]: source.replace(
+        "return { saveAuthProfileStore };",
+        "const escaped = saveAuthProfileStore; return { saveAuthProfileStore };",
+      ),
+    }),
+  ).toEqual([expect.stringContaining("unreviewed personal credential writer reference")]);
+});
+
+it.each([
+  "import { saveAuthProfileStore as save } from './plugin-sdk/agent-runtime.js'; save();",
+  "import * as sdk from './plugin-sdk/agent-runtime.js'; sdk.saveAuthProfileStore();",
+  "import * as sdk from './plugin-sdk/agent-runtime.js'; sdk['saveAuthProfileStore']();",
+  "export { saveAuthProfileStore } from './plugin-sdk/agent-runtime.js';",
+])("rejects a new ordinary worker entry through the released sync SDK: %s", (consumer) => {
+  const sources = {
+    [authRuntime]: `export const saveAuthProfileStore = () => {};`,
+    "src/agents/auth-profiles.ts": `export { saveAuthProfileStore } from './auth-profiles/store-runtime.js';`,
+    "src/plugin-sdk/agent-runtime.ts": `export { saveAuthProfileStore } from '../agents/auth-profiles.js';`,
+  };
+  expect(inspect(sources)).toEqual([]);
+  expect(inspect({ ...sources, "src/new-writer.worker.ts": consumer })).toEqual([
+    expect.stringContaining("unreviewed personal credential writer reference"),
+  ]);
+});
+
+it("protects destructured facade writers and native readers that can synchronize credentials", () => {
+  const sources = {
+    [authRuntime]: `
+      const runtime = { saveAuthProfileStoreWithPreparedOwner() {}, ensureAuthProfileStore() {} };
+      export const { saveAuthProfileStoreWithPreparedOwner } = runtime;
+      export const ensureAuthProfileStore = runtime.ensureAuthProfileStore;
+    `,
+    "src/new-writer.worker.ts": `
+      import { saveAuthProfileStoreWithPreparedOwner, ensureAuthProfileStore } from './agents/auth-profiles/store-runtime.js';
+      saveAuthProfileStoreWithPreparedOwner();
+      ensureAuthProfileStore();
+    `,
+  };
+  expect(inspect(sources)).toEqual([
+    expect.stringContaining("saveAuthProfileStoreWithPreparedOwner"),
+    expect.stringContaining("ensureAuthProfileStore"),
+  ]);
+});
+
+it("preserves the released provider-auth package barrel without admitting a new facade", () => {
+  const sources = {
+    [authRuntime]: `export function ensureAuthProfileStore() {}`,
+    "src/plugin-sdk/provider-auth.ts": `export { ensureAuthProfileStore } from '../agents/auth-profiles/store-runtime.js';`,
+    "packages/plugin-sdk/src/provider-auth.ts": `export * from '../../../src/plugin-sdk/provider-auth.js';`,
+  };
+  expect(inspect(sources)).toEqual([]);
+  expect(
+    inspect({
+      ...sources,
+      "src/new-facade.ts": `export * from './plugin-sdk/provider-auth.js';`,
+    }),
+  ).toEqual([expect.stringContaining("unreviewed personal credential writer reference")]);
+});
+
+it("permits the exact native reader dependency forwards without opening sibling callers", () => {
+  const sources = {
+    [authRuntime]: `export function ensureAuthProfileStore() {} export function loadAuthProfileStoreForRuntime() {}`,
+    "extensions/codex/src/app-server/auth-profile.ts": `
+      import { ensureAuthProfileStore } from '../../../../src/agents/auth-profiles/store-runtime.js';
+      const selection = createCodexAuthProfileSelection({ ensureAuthProfileStore });
+    `,
+    "src/agents/cli-execution-auth.ts": `
+      import { loadAuthProfileStoreForRuntime } from './auth-profiles/store-runtime.js';
+      export function resolveCliExecutionAuthProfileId(params) {
+        const loadStore = params.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime;
+        return loadStore();
+      }
+    `,
+    "src/system-agent/setup-inference-profile.ts": `
+      import { loadAuthProfileStoreForRuntime } from '../agents/auth-profiles/store-runtime.js';
+      export function resolveSetupInferenceProfileError(deps) {
+        const loadStore = deps.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime;
+        return loadStore();
+      }
+    `,
+    "src/system-agent/verified-inference.ts": `
+      import { loadAuthProfileStoreForRuntime } from '../agents/auth-profiles/store-runtime.js';
+      function loadRouteAuthProfileStore(deps) {
+        return (deps.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime)();
+      }
+    `,
+  };
+  expect(inspect(sources)).toEqual([]);
+  expect(
+    inspect({
+      ...sources,
+      "src/agents/cli-execution-auth.ts": sources["src/agents/cli-execution-auth.ts"].replace(
+        "resolveCliExecutionAuthProfileId",
+        "newReader",
+      ),
+    }),
+  ).toEqual([expect.stringContaining("from src/agents/cli-execution-auth.ts:newReader")]);
+});
+
+it("bounds reviewed lazy imports by loader, declaration scope and selected export", () => {
+  const file = "src/media-understanding/runner.ts";
+  const sources = {
+    [authRuntime]: `export function ensureAuthProfileStore() {}`,
+    "src/agents/model-auth.ts": `export { ensureAuthProfileStore } from './auth-profiles/store-runtime.js';`,
+  };
+  const source = `const loadHasAvailableAuthForProvider = createLazyRuntimeNamedExport(
+    () => import('../agents/model-auth.js'), 'hasAvailableAuthForProvider');`;
+  expect(inspect({ ...sources, [file]: source })).toEqual([]);
+  for (const changed of [
+    source.replace("'hasAvailableAuthForProvider'", "'ensureAuthProfileStore'"),
+    source.replace("createLazyRuntimeNamedExport", "newLoader"),
+    `function newLoader() { ${source} }`,
+  ]) {
+    expect(inspect({ ...sources, [file]: changed })).toEqual([
+      expect.stringContaining("unreviewed personal credential writer reference"),
+    ]);
+  }
+});
+
+it("closes raw-store and worker-kernel entries while preserving the named update dispatchers", () => {
+  const sources = {
+    [authCells]: `export function writeAuthProfileJsonCell() {}`,
+    "src/agents/auth-profiles/store-update-kernel.ts": `
+      import { writeAuthProfileJsonCell } from './sqlite-json-write.js';
+      export function updateAuthProfileStoreInDatabase() { writeAuthProfileJsonCell(); }
+    `,
+    "src/agents/auth-profiles/store.worker.ts": `
+      import { updateAuthProfileStoreInDatabase } from './store-update-kernel.js';
+      export const operations = { 'authProfiles.update': () => updateAuthProfileStoreInDatabase() };
+    `,
+  };
+  expect(inspect(sources)).toEqual([]);
+  expect(
+    inspect({
+      ...sources,
+      "src/new-writer.worker.ts": `
+        import { updateAuthProfileStoreInDatabase } from './agents/auth-profiles/store-update-kernel.js';
+        updateAuthProfileStoreInDatabase();
+      `,
+    }),
+  ).toEqual([expect.stringContaining("unreviewed personal credential writer reference")]);
+});
+
+it.each([
+  "writeConfigMachineState('authProfiles.store', {});",
+  "const key = ' authProfiles.store '; writeConfigMachineState(key, {});",
+  "writeConfigMachineState(command.input.key, {});",
+  "export const write = writeConfigMachineState;",
+])("rejects a generic machine-state entry with credential access: %s", (consumer) => {
+  expect(
+    inspect({
+      "src/state/config-machine-state-write.ts": `export function writeConfigMachineState() {}`,
+      "src/new-writer.worker.ts": `
+        import { writeConfigMachineState } from './state/config-machine-state-write.js';
+        ${consumer}
+      `,
+    }),
+  ).toEqual([expect.stringContaining("unreviewed personal credential writer reference")]);
+});
+
+it("permits fixed noncredential generic writer keys without granting a caller exemption", () => {
+  expect(
+    inspect({
+      "src/state/config-machine-state-write.ts": `export function writeConfigMachineState() {}`,
+      "src/new-writer.worker.ts": `
+        import { writeConfigMachineState } from './state/config-machine-state-write.js';
+        const stateKey = 'authProfiles.state';
+        writeConfigMachineState(stateKey, {});
+      `,
+    }),
+  ).toEqual([]);
+});
+
+it("requires host publication for auth-store commands, including literal aliases", () => {
+  const source = `async function runPreparedAuthProfileStoreUpdate() {
+    const type = 'authProfiles.update' as const;
+    await scope.execute({ type, input: {} });
+  }`;
+  expect(inspect({ "src/agents/auth-profiles/store-update.ts": source })).toEqual([]);
+  expect(inspect({ "src/new-writer.worker.ts": source })).toEqual([
+    expect.stringContaining(
+      "authProfiles.update credential writes require the host publication adapter",
+    ),
+  ]);
+});
+
+it("keeps catalog capture and worker write custody behind the reviewed batch entry", () => {
+  const sources = {
+    "src/agents/auth-profiles/runtime-scope.ts": `export function withWorkerAuthProfileWrites() {}`,
+    "src/state/user-model-account-authority.ts": `export function captureAuthProfileCredentialCommits() {}`,
+    "src/agents/prepared-model-catalog.worker.ts": `
+      import { withWorkerAuthProfileWrites } from './auth-profiles/runtime-scope.js';
+      import { captureAuthProfileCredentialCommits } from '../state/user-model-account-authority.js';
+      captureAuthProfileCredentialCommits(() => withWorkerAuthProfileWrites());
+    `,
+  };
+  expect(inspect(sources)).toEqual([]);
+  expect(
+    inspect({
+      ...sources,
+      "src/new-writer.worker.ts": `
+        import { withWorkerAuthProfileWrites } from './agents/auth-profiles/runtime-scope.js';
+        withWorkerAuthProfileWrites();
+      `,
+    }),
+  ).toEqual([expect.stringContaining("unreviewed personal credential writer reference")]);
+});
+
+it("does not expose the onboarding mutation callback outside its bounded-key adapter", () => {
+  const file = "src/state/onboarding-recommendations.kernel.ts";
+  const source = `
+    function writeOnboardingRecommendationsOffer() {}
+    function recommendationOperation(callback) { return callback; }
+    export const operations = {
+      'onboardingRecommendations.writeOffer': recommendationOperation(writeOnboardingRecommendationsOffer),
+    };
+  `;
+  expect(inspect({ [file]: source })).toEqual([]);
+  expect(
+    inspect({
+      [file]: source + `export function bypass() { writeOnboardingRecommendationsOffer(); }`,
+    }),
+  ).toEqual([expect.stringContaining("unreviewed personal credential writer reference")]);
+});
+
+it("permits supplied-database SDK save custody without granting sibling factory access", () => {
+  const source = `
+    import { withAuthProfileCredentialWriteCustody } from './credential-write-custody.js';
+    export function createAuthProfileStoreRuntime() {
+      function saveAuthProfileStore() { withAuthProfileCredentialWriteCustody(); }
+      return { saveAuthProfileStore };
+    }
+  `;
+  const sources = {
+    "src/agents/auth-profiles/credential-write-custody.ts": `export function withAuthProfileCredentialWriteCustody() {}`,
+    [authStore]: source,
+  };
+  expect(inspect(sources)).toEqual([]);
+  expect(
+    inspect({
+      ...sources,
+      [authStore]: source.replace(
+        "return { saveAuthProfileStore };",
+        "function bypass() { withAuthProfileCredentialWriteCustody(); } return { saveAuthProfileStore };",
+      ),
+    }),
+  ).toEqual([expect.stringContaining("createAuthProfileStoreRuntime/bypass")]);
+});
+
+const authStorageSources = {
+  "src/agents/sessions/auth-storage.ts": `
+    export class AuthStorage {
+      static forAgent() { return new AuthStorage(); }
+      static create() { return AuthStorage.forAgent(); }
+      static forAgentAsync() { return new AuthStorage(); }
+      static fromStorage() { return new AuthStorage(); }
+      static inMemory() { return new AuthStorage(); }
+      set() {}
+      remove() {}
+    }
+  `,
+  "src/agents/sessions/index.ts": `export * from './auth-storage.js';`,
+  "src/plugin-sdk/agent-sessions.ts": `export { AuthStorage } from '../agents/sessions/index.js';`,
+};
+
+it("preserves the released AuthStorage barrel and nonnative constructors", () => {
+  expect(
+    inspect({
+      ...authStorageSources,
+      "src/new-reader.worker.ts": `
+        import { AuthStorage as Storage } from './plugin-sdk/agent-sessions.js';
+        import * as sdk from './plugin-sdk/agent-sessions.js';
+        Storage.forAgentAsync();
+        sdk.AuthStorage.inMemory();
+        sdk.AuthStorage['fromStorage']();
+        const { AuthStorage: DynamicStorage } = await import('./plugin-sdk/agent-sessions.js');
+        DynamicStorage.forAgentAsync();
+      `,
+    }),
+  ).toEqual([]);
+});
+
+it.each([
+  "import { AuthStorage } from './plugin-sdk/agent-sessions.js'; AuthStorage.forAgent().set();",
+  "import { AuthStorage as Storage } from './plugin-sdk/agent-sessions.js'; Storage.create().remove();",
+  "import * as sdk from './plugin-sdk/agent-sessions.js'; sdk.AuthStorage.forAgent().set();",
+  "import * as sdk from './plugin-sdk/agent-sessions.js'; sdk.AuthStorage['create']().remove();",
+  "import { AuthStorage } from './plugin-sdk/agent-sessions.js'; const { forAgent } = AuthStorage; forAgent().set();",
+  "import { AuthStorage } from './plugin-sdk/agent-sessions.js'; export const Storage = AuthStorage;",
+  "export { AuthStorage as Storage } from './plugin-sdk/agent-sessions.js';",
+  "const { AuthStorage: Storage } = await import('./plugin-sdk/agent-sessions.js'); Storage.forAgent().set();",
+  "const [{ AuthStorage: { forAgent: createStorage } }] = await Promise.all([import('./plugin-sdk/agent-sessions.js')]); createStorage().set();",
+])("rejects a new native AuthStorage SDK entry or escape: %s", (consumer) => {
+  expect(inspect({ ...authStorageSources, "src/new-writer.worker.ts": consumer })).toEqual(
+    expect.arrayContaining([
+      expect.stringContaining("unreviewed personal credential writer reference"),
+    ]),
+  );
 });
