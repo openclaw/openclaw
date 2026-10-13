@@ -151,10 +151,15 @@ export async function auditScheduledTaskDefinition(
     "Settings.DisallowStartOnRemoteAppSession": "false",
     "Settings.Volatile": "false",
   };
-  // Task Scheduler rewrites UseUnifiedSchedulingEngine on registration regardless of
-  // the submitted XML (it returns as true), so its value is scheduler-owned rather
-  // than an operator edit (#167778).
-  const nativeManaged = new Set<string>(["Settings.UseUnifiedSchedulingEngine"]);
+  // Task Scheduler can populate UseUnifiedSchedulingEngine on registration, and
+  // `schtasks /Create /XML` rejects the element, so the installer can neither author
+  // nor reproduce it (#167778). Suppress it only while reporting drift; when the caller
+  // supplies the prepared definition (replacement or publication verification), leave it
+  // reported so a rewrite that cannot retain the value stays protected.
+  const nativeManaged =
+    expectedCommand || expectedXml
+      ? undefined
+      : new Set<string>(["Settings.UseUnifiedSchedulingEngine"]);
   const released: Record<string, string> = {
     "Settings.DisallowStartIfOnBatteries": "true",
     "Settings.StopIfGoingOnBatteries": "true",
@@ -228,7 +233,7 @@ export async function auditScheduledTaskDefinition(
       continue;
     }
     if (
-      (!canonical && (nativeManaged.has(key) || nativeDefaults[key] === current)) ||
+      (!canonical && ((nativeManaged?.has(key) ?? false) || nativeDefaults[key] === current)) ||
       (canonical &&
         (node.children.length || canonical.children.length || current === canonical.textContent))
     ) {

@@ -783,6 +783,7 @@ it.each([
 
 async function auditRewrittenTaskXml(
   rewrite: (xml: string) => string,
+  options: { published?: boolean } = {},
 ): Promise<ServiceDefinitionDrift[]> {
   const home = dirs.make("scheduler-rewrite-");
   const env = { USERPROFILE: home, OPENCLAW_STATE_DIR: home, USERNAME: "fixture" };
@@ -790,20 +791,21 @@ async function auditRewrittenTaskXml(
     { OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1" },
     resolveTaskScriptPath(env),
   );
-  native.task.mockResolvedValue({
-    code: 0,
-    stderr: "",
-    stdout: rewrite(
-      buildScheduledTaskXml({
-        taskDescription: "OpenClaw Gateway",
-        taskUser: "fixture",
-        interactive: true,
-        launchPath: hiddenPath,
-      }),
-    ),
+  const prepared = buildScheduledTaskXml({
+    taskDescription: "OpenClaw Gateway",
+    taskUser: "fixture",
+    interactive: true,
+    launchPath: hiddenPath,
   });
+  native.task.mockResolvedValue({ code: 0, stderr: "", stdout: rewrite(prepared) });
   const findings: ServiceDefinitionDrift[] = [];
-  await auditScheduledTaskDefinition(env, findings);
+  await auditScheduledTaskDefinition(
+    env,
+    findings,
+    undefined,
+    undefined,
+    options.published ? prepared : undefined,
+  );
   return findings;
 }
 
@@ -816,5 +818,19 @@ it("tolerates the scheduler-forced UseUnifiedSchedulingEngine value", async () =
   );
   expect(findings).not.toContainEqual(
     expect.objectContaining({ key: "Settings.UseUnifiedSchedulingEngine" }),
+  );
+});
+
+it("keeps the scheduler engine setting protected during replacement", async () => {
+  const findings = await auditRewrittenTaskXml(
+    (xml) =>
+      xml.replace(
+        "<Priority>7</Priority>",
+        "<Priority>7</Priority>\n    <UseUnifiedSchedulingEngine>true</UseUnifiedSchedulingEngine>",
+      ),
+    { published: true },
+  );
+  expect(findings).toContainEqual(
+    expect.objectContaining({ kind: "unknown-edit", key: "Settings.UseUnifiedSchedulingEngine" }),
   );
 });
